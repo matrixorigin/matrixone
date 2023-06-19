@@ -257,6 +257,61 @@ drop table test01;
 drop role role_r1;
 drop user role_u1;
 
+-- transaction: automatic
+drop table if exists transaction01;
+create table transaction01 (c int primary key,d int);
+begin;
+insert into transaction01 values(1,1);
+insert into transaction01 values(2,2);
+alter table transaction01 add column colf int first;
+rollback;
+show create table transaction01;
+drop table transaction01;
+
+-- transaction: isolation
+drop table if exists transaction03;
+create table transaction03 (c int primary key,d int);
+insert into transaction03 values(1,1);
+insert into transaction03 values(2,2);
+begin;
+insert into transaction03 values(3,1);
+insert into transaction03 values(4,2);
+alter table transaction03 add column decimal after c;
+show create table transaction03;
+-- @session:id=1{
+use isolation;
+show create table transaction03;
+-- @session}
+commit;
+-- @session:id=1{
+alter table transaction03 drop column d;
+show create table transaction03;
+-- @session}
+drop table transaction03;
+
+-- transcation: w-w conflict
+drop table if exists transaction05;
+create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
+insert into transaction05(b,c) values ('aaaa','2020-09-08');
+insert into transaction05(b,c) values ('aaaa','2020-09-08');
+
+begin;
+alter table transaction05 rename to `conflict_test`;
+
+-- @session:id=1{
+use ww_conflict;
+begin;
+alter table conflict_test drop column b;
+-- @session}
+commit;
+-- @session:id=1{
+alter table conflict_test add column colf int first;
+-- @session}
+select * from conflict_test;
+show create table conflict_test;
+drop table conflict_test;
+
+
 
 -- rename table
 -- update and delete
@@ -338,6 +393,61 @@ drop table rename06;
 alter table system.statement_info rename to statement_info01;
 alter table mo_catalog.mo_account rename to mo_account01;
 alter table mysql.procs_priv rename to `procs_priv01`;
+
+-- transaction: automatic
+drop table if exists transaction01;
+create table transaction01 (c int primary key,d int);
+begin;
+insert into test_11 values(1,1);
+insert into test_11 values(2,2);
+alter table transaction01 rename to `test_transaction`;
+rollback;
+select * from transaction01;
+select * from test_transaction;
+
+drop table test_transaction;
+
+-- transaction: isolation
+drop table if exists transaction03;
+create table transaction03 (c int primary key,d int);
+insert into transaction03 values(1,1);
+insert into transaction03 values(2,2);
+begin;
+insert into transaction03 values(3,1);
+insert into transaction03 values(4,2);
+alter table transaction03 rename to `transaction04`;
+select * from transaction04;
+
+-- @session:id=1{
+use isolation;
+select * from transaction04;
+-- @session}
+commit;
+
+select * from transaction04;
+drop table transaction04;
+
+-- transcation: w-w conflict
+drop table if exists transaction05;
+create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
+insert into transaction05(b,c) values ('aaaa','2020-09-08');
+insert into transaction05(b,c) values ('aaaa','2020-09-08');
+
+begin;
+alter table transaction05 rename to `conflict_test`;
+
+-- @session:id=1{
+use ww_conflict;
+begin;
+alter table conflict_test add column colf int first;
+-- @session}
+commit;
+-- @session:id=1{
+alter table conflict_test add column colf int first;
+-- @session}
+select * from conflict_test;
+show create table conflict_test;
+drop table conflict_test;
 
 -- check if special characters work and duplicates are detected.
 drop table if exists `t+1`;
