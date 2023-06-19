@@ -165,7 +165,6 @@ insert into varchar01 values(4, 'hejwkvrewvre', 778455100);
 insert into varchar01 values(5, '**&', 789451);
 insert into varchar01 values(6, '12345', null );
 insert into varchar01 values(7, 'database', null);
-select * from varchar01;
 select *, rank() over (partition by col3 order by col1) as tmp from varchar01;
 select dense_rank() over (partition by col3 order by col1) as tmp from varchar01;
 drop table varchar01;
