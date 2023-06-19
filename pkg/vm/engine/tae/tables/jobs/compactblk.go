@@ -171,16 +171,6 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		return err
 	}
 	oldBlkData := oldBMeta.GetBlockData()
-	var deletes *containers.Batch
-	if !oldBMeta.IsAppendable() {
-		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
-		if err != nil {
-			return
-		}
-		if deletes != nil {
-			defer deletes.Close()
-		}
-	}
 
 	if !empty {
 		createOnSeg := seg
@@ -204,15 +194,17 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 
 		if _, err = task.createAndFlushNewBlock(
-			createOnSeg, preparer, deletes,
+			createOnSeg, preparer,
 		); err != nil {
 			return
 		}
 	}
 
 	table := task.meta.GetSegment().GetTable()
-	// write ablock
+	// write old block
+	var deletes *containers.Batch
 	if oldBMeta.IsAppendable() {
+		// for ablk, flush data and deletes
 		var data *containers.Batch
 		dataVer, errr := oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
 		if errr != nil {
@@ -257,6 +249,31 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				ablockTask.blocks[1].GetExtent(),
 				uint32(deletes.Length()),
 				ablockTask.blocks[1].GetID())
+
+			if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
+				return err
+			}
+		}
+	} else {
+		// for nablk, flush deletes
+		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
+		if err != nil {
+			return
+		}
+		if deletes != nil {
+			defer deletes.Close()
+			deleteTask := NewFlushDeletesTask(tasks.WaitableCtx, 0, nil, oldBlkData.GetFs(), oldBMeta, deletes)
+			if err = task.rt.Scheduler.Schedule(deleteTask); err != nil {
+				return
+			}
+			if err = deleteTask.WaitDone(); err != nil {
+				return
+			}
+			deltaLoc := blockio.EncodeLocation(
+				deleteTask.name,
+				deleteTask.blocks[0].GetExtent(),
+				uint32(deletes.Length()),
+				deleteTask.blocks[0].GetID())
 
 			if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
 				return err
@@ -308,7 +325,6 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 func (task *compactBlockTask) createAndFlushNewBlock(
 	seg handle.Segment,
 	preparer *model.PreparedCompactedBlockData,
-	deletes *containers.Batch,
 ) (newBlk handle.Block, err error) {
 	newBlk, err = seg.CreateNonAppendableBlock(nil)
 	if err != nil {
@@ -325,7 +341,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		newBlkData.GetFs(),
 		newMeta,
 		preparer.Columns,
-		deletes)
+		nil)
 	if err = task.rt.Scheduler.Schedule(ioTask); err != nil {
 		return
 	}
@@ -342,17 +358,6 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	logutil.Debugf("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
-	}
-	if deletes != nil {
-		deltaLoc := blockio.EncodeLocation(
-			ioTask.name,
-			ioTask.blocks[1].GetExtent(),
-			uint32(deletes.Length()),
-			ioTask.blocks[1].GetID())
-
-		if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
-			return
-		}
 	}
 
 	err = newBlkData.Init()
