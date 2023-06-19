@@ -289,9 +289,9 @@ show create table transaction03;
 -- @session}
 drop table transaction03;
 
+-- @bvt:issue#10118
 -- transcation: w-w conflict
 drop table if exists transaction05;
--- @bvt:issue#10118
 create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
 insert into transaction05(b,c) values ('aaaa','2020-09-08');
 insert into transaction05(b,c) values ('aaaa','2020-09-08');
@@ -558,5 +558,5 @@ drop table newRename;
 drop role role_r1;
 drop user role_u1;
 
-drop database test;
 -- @bvt:issue
+drop database test;
