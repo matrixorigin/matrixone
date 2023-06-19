@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -111,15 +112,313 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 		return setInsertValueString(proc, numVal, vec)
 	case types.T_json:
 		return setInsertValueJSON(proc, numVal, vec)
+	case types.T_uuid:
+		return setInsertValueUuid(proc, numVal, vec)
 	case types.T_time:
-
+		return setInsertValueTime(proc, numVal, vec)
+	case types.T_date:
+		return setInsertValueDate(proc, numVal, vec)
 	case types.T_datetime:
-
+		return setInsertValueDateTime(proc, numVal, vec)
 	case types.T_timestamp:
-
+		return setInsertValueTimeStamp(proc, numVal, vec)
 	}
 
 	return false, nil
+}
+
+func setInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, vec *vector.Vector) (canInsert bool, err error) {
+	canInsert = true
+
+	appendIntegerTimeStamp := func(val int64) error {
+		if val < 0 || uint64(val) > 32536771199 {
+			return vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+		}
+		result := types.UnixToTimestamp(val)
+		return vector.AppendFixed(vec, result, false, proc.Mp())
+	}
+
+	switch numVal.ValType {
+	case tree.P_null:
+		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+
+	case tree.P_int64:
+		val, ok := constant.Int64Val(numVal.Value)
+		if !ok {
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+		}
+		err = appendIntegerTimeStamp(val)
+
+	case tree.P_uint64:
+		val, ok := constant.Uint64Val(numVal.Value)
+		if !ok {
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+		}
+		err = appendIntegerTimeStamp(int64(val))
+
+	case tree.P_decimal:
+		canInsert = false
+
+	case tree.P_float64:
+		canInsert = false
+
+	case tree.P_hexnum:
+		var val uint64
+		val, err = hexToInt(numVal.OrigString())
+		if err != nil {
+			return false, err
+		}
+		err = appendIntegerTimeStamp(int64(val))
+
+	case tree.P_char:
+		s := numVal.OrigString()
+		if len(s) == 0 {
+			err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+		} else {
+			typ := vec.GetType()
+			var val types.Timestamp
+			zone := time.Local
+			if proc != nil {
+				zone = proc.SessionInfo.TimeZone
+			}
+			val, err = types.ParseTimestamp(zone, s, typ.Scale)
+			if err != nil {
+				return
+			}
+			err = vector.AppendFixed(vec, val, false, proc.Mp())
+		}
+
+	case tree.P_bool:
+		canInsert = false
+	case tree.P_ScoreBinary:
+		canInsert = false
+	case tree.P_bit:
+		canInsert = false
+	case tree.P_nulltext:
+		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+	default:
+		canInsert = false
+	}
+	return
+}
+
+func setInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, vec *vector.Vector) (canInsert bool, err error) {
+	canInsert = true
+
+	switch numVal.ValType {
+	case tree.P_null:
+		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+
+	case tree.P_int64:
+		canInsert = false
+
+	case tree.P_uint64:
+		canInsert = false
+
+	case tree.P_decimal:
+		canInsert = false
+
+	case tree.P_float64:
+		canInsert = false
+
+	case tree.P_hexnum:
+		canInsert = false
+
+	case tree.P_char:
+		s := numVal.OrigString()
+		if len(s) == 0 {
+			err = vector.AppendFixed[types.Datetime](vec, 0, true, proc.GetMPool())
+		} else {
+			typ := vec.GetType()
+			var val types.Datetime
+			val, err = types.ParseDatetime(s, typ.Scale)
+			if err != nil {
+				return
+			}
+			err = vector.AppendFixed(vec, val, false, proc.Mp())
+		}
+
+	case tree.P_bool:
+		canInsert = false
+	case tree.P_ScoreBinary:
+		canInsert = false
+	case tree.P_bit:
+		canInsert = false
+	case tree.P_nulltext:
+		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+	default:
+		canInsert = false
+	}
+	return
+}
+
+func setInsertValueTime(proc *process.Process, numVal *tree.NumVal, vec *vector.Vector) (canInsert bool, err error) {
+	canInsert = true
+
+	appendIntegerTime := func(val int64) error {
+		typ := vec.GetType()
+		if val < types.MinInputIntTime || val > types.MaxInputIntTime {
+			return moerr.NewOutOfRange(proc.Ctx, "time", "value %d", val)
+		}
+		result, err := types.ParseInt64ToTime(val, typ.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, result, false, proc.Mp())
+	}
+
+	switch numVal.ValType {
+	case tree.P_null:
+		err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
+
+	case tree.P_int64:
+		val, ok := constant.Int64Val(numVal.Value)
+		if !ok {
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+		}
+		err = appendIntegerTime(val)
+
+	case tree.P_uint64:
+		val, ok := constant.Uint64Val(numVal.Value)
+		if !ok {
+			return false, moerr.NewInvalidInput(proc.Ctx, "invalid uint value '%s'", numVal.Value.String())
+		}
+		err = appendIntegerTime(int64(val))
+
+	case tree.P_decimal:
+		canInsert = false
+
+	case tree.P_float64:
+		canInsert = false
+
+	case tree.P_hexnum:
+		var val uint64
+		val, err = hexToInt(numVal.OrigString())
+		if err != nil {
+			return false, err
+		}
+		err = appendIntegerTime(int64(val))
+
+	case tree.P_char:
+		s := numVal.OrigString()
+		if len(s) == 0 {
+			err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
+		} else {
+			typ := vec.GetType()
+			var val types.Time
+			val, err = types.ParseTime(s, typ.Scale)
+			if err != nil {
+				return
+			}
+			err = vector.AppendFixed(vec, val, false, proc.Mp())
+		}
+
+	case tree.P_bool:
+		canInsert = false
+	case tree.P_ScoreBinary:
+		canInsert = false
+	case tree.P_bit:
+		canInsert = false
+	case tree.P_nulltext:
+		err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
+	default:
+		canInsert = false
+	}
+	return
+}
+
+func setInsertValueDate(proc *process.Process, numVal *tree.NumVal, vec *vector.Vector) (canInsert bool, err error) {
+	canInsert = true
+
+	switch numVal.ValType {
+	case tree.P_null:
+		err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
+
+	case tree.P_int64:
+		canInsert = false
+
+	case tree.P_uint64:
+		canInsert = false
+
+	case tree.P_decimal:
+		canInsert = false
+
+	case tree.P_float64:
+		canInsert = false
+
+	case tree.P_hexnum:
+		canInsert = false
+
+	case tree.P_char:
+		s := numVal.OrigString()
+		var val types.Date
+		if len(s) == 0 {
+			err = vector.AppendFixed[types.Date](vec, 0, true, proc.GetMPool())
+		} else {
+			val, err = types.ParseDateCast(s)
+			if err != nil {
+				return
+			}
+			err = vector.AppendFixed(vec, val, false, proc.Mp())
+		}
+
+	case tree.P_bool:
+		canInsert = false
+	case tree.P_ScoreBinary:
+		canInsert = false
+	case tree.P_bit:
+		canInsert = false
+	case tree.P_nulltext:
+		err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
+	default:
+		canInsert = false
+	}
+	return
+}
+
+func setInsertValueUuid(proc *process.Process, numVal *tree.NumVal, vec *vector.Vector) (canInsert bool, err error) {
+	canInsert = true
+
+	switch numVal.ValType {
+	case tree.P_null:
+		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+
+	case tree.P_int64:
+		canInsert = false
+
+	case tree.P_uint64:
+		canInsert = false
+
+	case tree.P_decimal:
+		canInsert = false
+
+	case tree.P_float64:
+		canInsert = false
+
+	case tree.P_hexnum:
+		canInsert = false
+
+	case tree.P_char:
+		s := numVal.OrigString()
+		var val types.Uuid
+		val, err = types.ParseUuid(s)
+		if err != nil {
+			return
+		}
+		err = vector.AppendFixed(vec, val, false, proc.Mp())
+
+	case tree.P_bool:
+		canInsert = false
+	case tree.P_ScoreBinary:
+		canInsert = false
+	case tree.P_bit:
+		canInsert = false
+	case tree.P_nulltext:
+		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+	default:
+		canInsert = false
+	}
+	return
 }
 
 func hexToInt(hex string) (uint64, error) {
@@ -313,8 +612,10 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 
 	case tree.P_decimal:
 		canInsert = false
+
 	case tree.P_float64:
 		canInsert = false
+
 	case tree.P_hexnum:
 		var val uint64
 		val, err = hexToInt(numVal.OrigString())
@@ -326,6 +627,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 			return false, err
 		}
 		err = vector.AppendFixed(vec, T(val), false, proc.Mp())
+
 	case tree.P_ScoreBinary:
 		canInsert = false
 	case tree.P_bit:
