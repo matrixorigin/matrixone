@@ -540,6 +540,8 @@ func (e *Engine) setPushClientStatus(ready bool) {
 	e.Lock()
 	defer e.Unlock()
 
+	client.NoticeCnStatus(e.cli, ready)
+
 	e.pClient.receivedLogTailTime.ready.Store(false)
 	if e.pClient.subscriber != nil {
 		if ready {
@@ -548,7 +550,6 @@ func (e *Engine) setPushClientStatus(ready bool) {
 			e.pClient.subscriber.setNotReady()
 		}
 	}
-	client.NoticeCnStatus(e.cli, ready)
 }
 
 func (e *Engine) abortAllRunningTxn() {
