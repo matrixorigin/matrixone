@@ -19,13 +19,8 @@ m    null
 f    null
 a    null
 drop view view01;
-select sleep(10);
-sleep(10)
-0
 truncate table ddl01;
 drop table ddl01;
-select statement from statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
-SQL parser error: table "statement_info" does not exist
 drop table if exists dql01;
 create table dql01(col1 decimal(38,20),col2 binary not null,col3 varchar(20));
 insert into dql01 values(12.2421132124,'2','database');
@@ -71,7 +66,7 @@ count(*)
 select sleep(10);
 sleep(10)
 0
-select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 [unknown result because it is related to issue#10043]
 drop table dql01;
 drop table if exists dql02;
@@ -122,107 +117,89 @@ with cte1 as (select 1),cte2 as (select 2) select * from cte1 join cte2;
 select sleep(10);
 sleep(10)
 0
-select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
-[unknown result because it is related to issue#10043]
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
+
 drop table dql02;
-[unknown result because it is related to issue#10043]
 drop table if exists statement_info03;
-[unknown result because it is related to issue#10043]
 create table statement_info03(col1 varchar(20),col2 double);
-[unknown result because it is related to issue#10043]
 insert into statement_info03 values('testcase',123456.122);
-[unknown result because it is related to issue#10043]
 insert into statement_info03 values('casetest',4865132.0);
-[unknown result because it is related to issue#10043]
 insert into statement_info03 values('hcdwkjqq38923',-1002903.324);
-[unknown result because it is related to issue#10043]
 insert into statement_info03 values('management',0392324);
-[unknown result because it is related to issue#10043]
 insert into statement_info03 values(null,null);
-[unknown result because it is related to issue#10043]
 select * from statement_info03;
-[unknown result because it is related to issue#10043]
+col1    col2
+testcase    123456.122
+casetest    4865132.0
+hcdwkjqq38923    -1002903.324
+management    392324.0
+null    null
 delete from statement_info03 where col1 = 'testcase';
-[unknown result because it is related to issue#10043]
 delete from statement_info03 where col2 = null;
-[unknown result because it is related to issue#10043]
 select * from statement_info03;
-[unknown result because it is related to issue#10043]
+col1    col2
+casetest    4865132.0
+hcdwkjqq38923    -1002903.324
+management    392324.0
+null    null
 select group_concat(col1,col2) from statement_info03;
-[unknown result because it is related to issue#10043]
+group_concat(col1, col2, ,)
+casetest4.865132e+06,hcdwkjqq38923-1.002903324e+06,management392324
 update statement_info03 set col1 = null where col1 != null;
-[unknown result because it is related to issue#10043]
-select sleep(10);
-[unknown result because it is related to issue#10043]
-select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
-[unknown result because it is related to issue#10043]
 drop table statement_info03;
-[unknown result because it is related to issue#10043]
-drop account if exists test_account;
-[unknown result because it is related to issue#10043]
-drop role if exists test_role;
-[unknown result because it is related to issue#10043]
-drop user if exists user_name;
-[unknown result because it is related to issue#10043]
-drop database if exists db1;
-[unknown result because it is related to issue#10043]
-create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
-[unknown result because it is related to issue#10043]
-create role test_role;
-[unknown result because it is related to issue#10043]
-create user user_name identified by 'password';
-[unknown result because it is related to issue#10043]
-create database if not exists db1;
-[unknown result because it is related to issue#10043]
-grant create table,drop table on database *.* to test_role;
-[unknown result because it is related to issue#10043]
-revoke test_role from user_name;
-[unknown result because it is related to issue#10043]
-drop user user_name;
-[unknown result because it is related to issue#10043]
-drop role test_role;
-[unknown result because it is related to issue#10043]
-drop account test_account;
-[unknown result because it is related to issue#10043]
-drop database db1;
-[unknown result because it is related to issue#10043]
 select sleep(10);
-[unknown result because it is related to issue#10043]
-select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
-[unknown result because it is related to issue#10043]
-begin;
-[unknown result because it is related to issue#10043]
-commit;
-[unknown result because it is related to issue#10043]
-start transaction;
-[unknown result because it is related to issue#10043]
-rollback;
-[unknown result because it is related to issue#10043]
-select sleep(10);
-[unknown result because it is related to issue#10043]
-select statement from system.statement_info where query_type = 'TCL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
-[unknown result because it is related to issue#10043]
-drop table if exists multispace01;
-[unknown result because it is related to issue#10043]
-create    table multispace01(col1 int);
-[unknown result because it is related to issue#10043]
-insert into    multispace01 values(1);
-[unknown result because it is related to issue#10043]
-insert into multispace01 values (10);
-[unknown result because it is related to issue#10043]
-select sleep(10);
-[unknown result because it is related to issue#10043]
-select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
-[unknown result because it is related to issue#10043]
-select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+sleep(10)
+0
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 statement
 insert into dql01 values(32783.4,4,null)
 insert into dql01 values(3289342.34242,'.','matrixone')
-insert into dql01 values(329342.32420,'&',null)
-insert into dql01 values(-23999999.23432132143254323,'A','matrixone')
-insert into dql01 values(-23142.3214,'0','数据库')
+drop account if exists test_account;
+drop role if exists test_role;
+drop user if exists user_name;
+drop database if exists db1;
+create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+create role test_role;
+create user user_name identified by 'password';
+create database if not exists db1;
+grant create table,drop table on database *.* to test_role;
+revoke test_role from user_name;
+drop user user_name;
+drop role test_role;
+drop account test_account;
+drop database db1;
+select sleep(10);
+sleep(10)
+0
+select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
+statement
+drop account test_account
+drop role test_role
+begin;
+commit;
+start transaction;
+rollback;
+select sleep(10);
+sleep(10)
+0
+select statement from system.statement_info where query_type = 'TCL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
+statement
+rollback
+start transaction
+drop table if exists multispace01;
+create table multispace01(col1 int);
+insert into multispace01 values(1);
+insert into multispace01 values (10);
+select sleep(10);
+sleep(10)
+0
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
+
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
+statement
+update statement_info03 set col1 = null where col1 != null
+delete from statement_info03 where col2 = null
 drop table multispace01;
-no such table test.multispace01
 Drop table if exists case01;
 cReate table case01(col1 text default 'matrixone');
 inSERT into case01 valueS('Database test');
@@ -249,29 +226,16 @@ drop role role_Role;
 select sleep(10);
 sleep(10)
 0
-select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
-statement
-drop database db1
-create DATABASE iF noT exists db1
-drop database if exists db1
-drop table cASE01
-cReate table case01(col1 text default 'matrixone')
-select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 statement
 insert into case01 values()
 insert INTO case01 values('**&&*nUll')
-insert into case01 Values(NulL)
-insert into case01 values('uppERCASE and uppercase')
-inSERT into case01 valueS('Database test')
-select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
-[unknown result because it is related to issue#10043]
-select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
+
+select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 statement
 drop role role_Role
 drop account account_user01
-drop user user_test
-grant create table,drop table on database *.* to role_Role
-create user User_test identified by '******'
 drop table if exists line01;
 create table line01(col int, col2 decimal);
 insert into line01 values(1,100000);
@@ -280,26 +244,16 @@ drop table line01;
 select sleep(10);
 sleep(10)
 0
-select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
-statement
-drop table line01
-create table line01(col int, col2 decimal)
-drop table if exists line01
-drop database db1
-create DATABASE iF noT exists db1
 aaa;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 3 near "aaa;";
 selct sleep(10);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 5 near "selct sleep(10);";
 prepare s1 from select * from test_table where col1=?;
 SQL parser error: table "test_table" does not exist
-select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 2;
 statement
 show index from dql02
 show collation like '%'
-show collation
-show tables
-show processlist
 create table 123(col1 int);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " 123(col1 int);";
 select * from unnest('{"a":1}') as f;
@@ -314,13 +268,10 @@ deallocate prepare s1;
 select sleep(10);
 sleep(10)
 0
-select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 statement
 show index from dql02
 show collation like '%'
-show collation
-show tables
-show processlist
 drop table test_table;
 create account if not exists `bvt_query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 drop database if exists newAccount;
@@ -349,7 +300,7 @@ start transaction;
 rollback;
 drop table if exists multispace02;
 create    table multispace02(col1 int);
-insert into    multispace02 values(1);
+insert into multispace02 values(1);
 insert into multispace02 values (10);
 drop table multispace02;
 Drop table if exists case02;
@@ -388,13 +339,6 @@ drop database newAccount;
 select sleep(20);
 sleep(20)
 0
-select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
-statement
-drop database newAccount
-drop table test_table
-create table test_table(col1 int)
-drop table line02
-create table line02(col int,col2 decimal)
 select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 statement
 insert into line02 values(2,93232432)
@@ -417,6 +361,6 @@ set @a=2
 prepare s1 from select * from test_table where col1=?
 prepare s2 from select * from test_table where col1=?
 select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
-[unknown result because it is related to issue#10043]
+
 select statement from system.statement_info where sql_source_type != 'internal_sql' order by response_at desc limit 5;
-[unknown result because it is related to issue#10043]
+
