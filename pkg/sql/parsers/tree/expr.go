@@ -322,25 +322,25 @@ func (node *ComparisonExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *ComparisonExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *ComparisonExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
 
-	n = newNode.(*ComparisonExpr)
-	node, ok := n.Left.Accept(v)
+	node = newNode.(*ComparisonExpr)
+	tmpNode, ok := node.Left.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Left = node
+	node.Left = tmpNode
 
-	node, ok = n.Right.Accept(v)
+	tmpNode, ok = node.Right.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Right = node
-	return v.Exit(n)
+	node.Right = tmpNode
+	return v.Exit(node)
 }
 
 func NewComparisonExpr(op ComparisonOp, l, r Expr) *ComparisonExpr {
@@ -770,18 +770,18 @@ func (node *IsNotFalseExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *IsNotFalseExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *IsNotFalseExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*IsNotFalseExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*IsNotFalseExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewIsNotFalseExpr(e Expr) *IsNotFalseExpr {
@@ -810,7 +810,7 @@ func (node *Subquery) Format(ctx *FmtCtx) {
 	node.Select.Format(ctx)
 }
 
-func (n *Subquery) Accept(v Visitor) (Expr, bool) {
+func (node *Subquery) Accept(v Visitor) (Expr, bool) {
 	panic("unimplement Subquery Accept")
 }
 
