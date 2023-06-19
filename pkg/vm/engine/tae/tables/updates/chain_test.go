@@ -40,7 +40,7 @@ func TestDeleteChain1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog(nil)
+	c := catalog.MockCatalog()
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)

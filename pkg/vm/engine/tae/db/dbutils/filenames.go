@@ -12,31 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package dbutils
 
 import (
-	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"fmt"
+	"path"
 )
 
-var (
-	ErrClose = moerr.NewInternalErrorNoCtx("closed")
-)
+const LockSuffix = ".lock"
 
-type Closable interface {
-	IsClosed() bool
-	TryClose() bool
-}
-
-type ClosedState struct {
-	closed atomic.Int32
-}
-
-func (c *ClosedState) IsClosed() bool {
-	return c.closed.Load() == int32(1)
-}
-
-func (c *ClosedState) TryClose() bool {
-	return c.closed.CompareAndSwap(0, 1)
+func MakeLockFileName(dirname string, name string) string {
+	return path.Join(dirname, fmt.Sprintf("%s%s", name, LockSuffix))
 }
