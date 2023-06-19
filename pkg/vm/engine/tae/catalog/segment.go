@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
@@ -413,10 +412,6 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 		}
 	}
 	return
-}
-
-func (entry *SegmentEntry) GetScheduler() tasks.TaskScheduler {
-	return entry.GetTable().GetCatalog().GetScheduler()
 }
 
 func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntryImpl[*MetadataMVCCNode]) bool, blockFilter func(be *BlockEntry) bool) []*BlockEntry {

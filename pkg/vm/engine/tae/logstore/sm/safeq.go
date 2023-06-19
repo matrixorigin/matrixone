@@ -19,8 +19,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
@@ -118,12 +116,12 @@ func (q *safeQueue) waitStop() {
 
 func (q *safeQueue) Enqueue(item any) (any, error) {
 	if q.state.Load() != Running {
-		return item, common.ErrClose
+		return item, ErrClose
 	}
 	q.pending.Add(1)
 	if q.state.Load() != Running {
 		q.pending.Add(-1)
-		return item, common.ErrClose
+		return item, ErrClose
 	}
 	q.queue <- item
 	return item, nil

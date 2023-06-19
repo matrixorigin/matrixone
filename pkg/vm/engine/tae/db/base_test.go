@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -259,7 +258,7 @@ func (e *testEngine) incrementalCheckpoint(
 		assert.NoError(e.t, err)
 		assert.NoError(e.t, entry.WaitDone())
 		testutils.WaitExpect(1000, func() bool {
-			return e.Scheduler.GetPenddingLSNCnt() == 0
+			return e.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 		})
 	}
 	return nil
@@ -416,7 +415,7 @@ func checkAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, ap
 
 func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDelete bool) int {
 	rows := 0
-	forEachColumnView(rel, colIdx, func(view *model.ColumnView) (err error) {
+	forEachColumnView(rel, colIdx, func(view *containers.ColumnView) (err error) {
 		if applyDelete {
 			view.ApplyDeletes()
 		}
@@ -427,7 +426,7 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 	return rows
 }
 
-func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
+func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *containers.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
 		view, err := blk.GetColumnDataById(context.Background(), colIdx)
 		if view == nil {
@@ -543,7 +542,7 @@ func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *
 	_ = txn.Commit(context.Background())
 	for _, meta := range metas {
 		txn, _ := getRelation(t, tenantID, e, dbName, schema.Name)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Runtime)
 		if skipConflict && err != nil {
 			_ = txn.Rollback(context.Background())
 			continue
@@ -600,7 +599,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 			it.Next()
 		}
 		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Scheduler)
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Runtime)
 		if skipConflict && err != nil {
 			_ = txn.Rollback(context.Background())
 			continue
