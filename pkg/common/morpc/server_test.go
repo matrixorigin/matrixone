@@ -132,9 +132,9 @@ func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
 		assert.NoError(t, err)
 
 		defer f.Close()
-		resp, err := f.Get()
-		assert.Error(t, ctx.Err(), err)
-		assert.Nil(t, resp)
+		_, err = f.Get()
+		assert.Error(t, err)
+		assert.Equal(t, backendClosed, err)
 	})
 }
 
