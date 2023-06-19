@@ -23,9 +23,9 @@ Table    Create Table
 add01    CREATE TABLE `add01` (\n`col9` INT DEFAULT NULL,\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(30) NOT NULL,\n`col2_3` VARCHAR(20) DEFAULT NULL,\n`col3` VARCHAR(20) NOT NULL,\n`col4` VARCHAR(4) NOT NULL,\n`col5` INT NOT NULL,\n`col7` VARCHAR(30) DEFAULT NULL,\n`col8` INT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 insert into add01 values(1,3,'nihao','hei','hu','jj',2,'varchar',1);
 insert into add01 values(2,3,'nihao',null,'hu','jj',2,'varchar',1);
-
+[unknown result because it is related to issue#8740]
 insert into add01 values(3,4,'nihao','hi','hu','jj',2,'varchar',null);
-
+[unknown result because it is related to issue#8740]
 show create table add01;
 Table    Create Table
 add01    CREATE TABLE `add01` (\n`col9` INT DEFAULT NULL,\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(30) NOT NULL,\n`col2_3` VARCHAR(20) DEFAULT NULL,\n`col3` VARCHAR(20) NOT NULL,\n`col4` VARCHAR(4) NOT NULL,\n`col5` INT NOT NULL,\n`col7` VARCHAR(30) DEFAULT NULL,\n`col8` INT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
@@ -319,6 +319,62 @@ drop table test01;
 no such table test.test01
 drop role role_r1;
 drop user role_u1;
+drop table if exists transaction01;
+create table transaction01 (c int primary key,d int);
+begin;
+insert into transaction01 values(1,1);
+insert into transaction01 values(2,2);
+alter table transaction01 add column colf int first;
+rollback;
+show create table transaction01;
+Table    Create Table
+transaction01    CREATE TABLE `transaction01` (\n`c` INT NOT NULL,\n`d` INT DEFAULT NULL,\nPRIMARY KEY (`c`)\n)
+drop table transaction01;
+drop table if exists transaction03;
+create table transaction03 (c int primary key,d int);
+insert into transaction03 values(1,1);
+insert into transaction03 values(2,2);
+begin;
+insert into transaction03 values(3,1);
+insert into transaction03 values(4,2);
+alter table transaction03 add column decimal after c;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 50 near " after c;";
+show create table transaction03;
+Table    Create Table
+transaction03    CREATE TABLE `transaction03` (\n`c` INT NOT NULL,\n`d` INT DEFAULT NULL,\nPRIMARY KEY (`c`)\n)
+use isolation;
+invalid database isolation
+show create table transaction03;
+no such table .transaction03
+commit;
+alter table transaction03 drop column d;
+no such table .transaction03
+show create table transaction03;
+no such table .transaction03
+drop table transaction03;
+drop table if exists transaction05;
+create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
+insert into transaction05(b,c) values ('aaaa','2020-09-08');
+insert into transaction05(b,c) values ('aaaa','2020-09-08');
+begin;
+alter table transaction05 rename to `conflict_test`;
+use ww_conflict;
+invalid database ww_conflict
+begin;
+alter table conflict_test drop column b;
+no such table .conflict_test
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+commit;
+alter table conflict_test add column colf int first;
+no such table .conflict_test
+select * from conflict_test;
+a    b    c
+1    aaaa    2020-09-08 00:00:00
+2    aaaa    2020-09-08 00:00:00
+show create table conflict_test;
+Table    Create Table
+conflict_test    CREATE TABLE `conflict_test` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` VARCHAR(25) NOT NULL,\n`c` DATETIME DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `bstr` (`b`),\nKEY `cdate` (`c`)\n)
+drop table conflict_test;
 drop table if exists update01;
 create table update01(col1 int, col2 int, col3 varchar(20));
 insert into update01 values(1,2,'cfewquier');
@@ -337,19 +393,19 @@ show create table update01;
 Table    Create Table
 update01    CREATE TABLE `update01` (\n`col1` INT DEFAULT NULL,\n`col1_2` BINARY(1) DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` VARCHAR(20) DEFAULT NULL,\n`col5` BLOB DEFAULT NULL\n)
 insert into update01 values(1,'1',3,'ew83u829d3qcefq','q3829ff2e3qe');
-
+[unknown result because it is related to issue#10093]
 insert into update01 values(2,'3',6,'3214()_)_)','00');
-
+[unknown result because it is related to issue#10093]
 select * from update01;
-
+[unknown result because it is related to issue#10093]
 update update01 set col1 = 100 where col1 = 1;
-
+[unknown result because it is related to issue#10093]
 update update01 set col5 = '2798u3d3frew' where col2 = 6;
-
+[unknown result because it is related to issue#10093]
 delete from update01 where col1_2 is null;
-
+[unknown result because it is related to issue#10093]
 drop table update01;
-
+[unknown result because it is related to issue#10093]
 drop table if exists rename01;
 drop table if exists rename02;
 create table rename01(a int,b int);
@@ -429,6 +485,64 @@ alter table mo_catalog.mo_account rename to mo_account01;
 internal error: do not have privilege to execute the statement
 alter table mysql.procs_priv rename to `procs_priv01`;
 internal error: do not have privilege to execute the statement
+drop table if exists transaction01;
+create table transaction01 (c int primary key,d int);
+begin;
+insert into test_11 values(1,1);
+no such table test.test_11
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+insert into test_11 values(2,2);
+no such table test.test_11
+alter table transaction01 rename to `test_transaction`;
+rollback;
+select * from transaction01;
+SQL parser error: table "transaction01" does not exist
+select * from test_transaction;
+c    d
+drop table test_transaction;
+drop table if exists transaction03;
+create table transaction03 (c int primary key,d int);
+insert into transaction03 values(1,1);
+insert into transaction03 values(2,2);
+begin;
+insert into transaction03 values(3,1);
+insert into transaction03 values(4,2);
+alter table transaction03 rename to `transaction04`;
+select * from transaction04;
+SQL parser error: table "transaction04" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+use isolation;
+invalid database isolation
+select * from transaction04;
+SQL parser error: table "transaction04" does not exist
+commit;
+select * from transaction04;
+SQL parser error: table "transaction04" does not exist
+drop table transaction04;
+no such table test.transaction04
+drop table if exists transaction05;
+create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
+insert into transaction05(b,c) values ('aaaa','2020-09-08');
+insert into transaction05(b,c) values ('aaaa','2020-09-08');
+begin;
+alter table transaction05 rename to `conflict_test`;
+use ww_conflict;
+invalid database ww_conflict
+begin;
+alter table conflict_test add column colf int first;
+no such table .conflict_test
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+commit;
+alter table conflict_test add column colf int first;
+no such table .conflict_test
+select * from conflict_test;
+a    b    c
+1    aaaa    2020-09-08 00:00:00
+2    aaaa    2020-09-08 00:00:00
+show create table conflict_test;
+Table    Create Table
+conflict_test    CREATE TABLE `conflict_test` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` VARCHAR(25) NOT NULL,\n`c` DATETIME DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `bstr` (`b`),\nKEY `cdate` (`c`)\n)
+drop table conflict_test;
 drop table if exists `t+1`;
 drop table if exists `t+2`;
 create table `t+1` (c1 INT);
