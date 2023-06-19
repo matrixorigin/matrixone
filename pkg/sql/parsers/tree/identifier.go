@@ -80,6 +80,15 @@ func (node *UnresolvedName) Format(ctx *FmtCtx) {
 	}
 }
 
+// Accept implements NodeChecker Accept interface.
+func (n *UnresolvedName) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	return v.Exit(newNode)
+}
+
 // GetNames dbName, tableName, colName
 func (node *UnresolvedName) GetNames() (string, string, string) {
 	return node.Parts[2], node.Parts[1], node.Parts[0]
