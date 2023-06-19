@@ -674,11 +674,20 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 			return nil, moerr.NewInfo(ctx, fmt.Sprintf("constructValueScanBatch failed, node id: %s", nodeId.String()))
 		}
 	}
+	params := proc.GetPrepareParams()
 	if len(colsData) > 0 {
 		exprs := proc.GetPrepareExprList()
 		for i := 0; i < colCount; i++ {
 			if exprs != nil {
 				exprList = exprs.([][]colexec.ExpressionExecutor)[i]
+			}
+			for _, row := range colsData[i].Data {
+				if row.Pos >= 0 {
+					if err := bat.Vecs[i].Copy(params, int64(row.RowPos),
+						int64(row.Pos-1), proc.Mp()); err != nil {
+						return nil, err
+					}
+				}
 			}
 			if err := evalRowsetData(ctx, proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
 				bat.Clean(proc.Mp())

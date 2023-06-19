@@ -151,6 +151,14 @@ func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
 }
 
+func (proc *Process) GetPrepareParams() *vector.Vector {
+	return proc.prepareParams
+}
+
+func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
+	proc.prepareParams = prepareParams
+}
+
 func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
 	proc.prepareBatch = bat
 }
