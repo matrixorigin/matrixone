@@ -609,30 +609,37 @@ dense_rank() over (partition by col2 order by col1)    sum(col1) over (partition
 drop table bool01;
 drop table varchar01 if exists;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 23 near " if exists;";
-create table varchar01(col1 int, col2 varchar(12) primary key, col3 binary(20));
-insert into varchar01 values(1, 'dhwenfewrfew', 84151);
-insert into varchar01 values(2, 'wyeuijdew', 778455100);
-insert into varchar01 values(3, '数据库', 84151);
-insert into varchar01 values(4, 'hejwkvrewvre', 778455100);
-insert into varchar01 values(5, '**&', 789451);
-insert into varchar01 values(6, '12345', null );
-insert into varchar01 values(7, 'database', null);
-select * from varchar01;
-col1    col2    col3
-1    dhwenfewrfew    84151
-2    wyeuijdew    778455100
-3    数据库    84151
-4    hejwkvrewvre    778455100
-5    **&    789451
-6    12345    null
-7    database    null
-select *, rank() over (partition by col3 order by col1) as tmp from varchar01;
-not supported: BINARY
-select dense_rank() over (partition by col3 order by col1) as tmp from varchar01;
-not supported: BINARY
+create table varchar01(col1 int, col2 varchar(12) primary key);
+insert into varchar01 values(1, 'dhwenfewrfew');
+insert into varchar01 values(2, 'wyeuijdew');
+insert into varchar01 values(3, '数据库');
+insert into varchar01 values(4, 'hejwkvrewvre');
+insert into varchar01 values(5, '**&');
+insert into varchar01 values(6, '12345');
+insert into varchar01 values(7, 'database');
+select *, rank() over (partition by col2 order by col1) as tmp from varchar01;
+col1    col2    tmp
+5    **&    1
+6    12345    1
+7    database    1
+1    dhwenfewrfew    1
+4    hejwkvrewvre    1
+2    wyeuijdew    1
+3    数据库    1
+select dense_rank() over (partition by col2 order by col1) as tmp from varchar01;
+tmp
+1
+1
+1
+1
+1
+1
+1
 drop table varchar01;
 drop table if exists char01;
 create table char01 (col1 integer, col2 char(1));
+create table char01 (col1 integer, col2 char(1));
+table char01 already exists
 insert into char01 values (1, 'm');
 insert into char01 values (2, 'f');
 insert into char01 values (3, 'f');
@@ -854,9 +861,9 @@ null    null    1.0
 2.0    4.0    2.3333333333333335
 3.0    3.0    2.5
 select d, max(d) over (partition by d), avg(d) over () from double01;
-
+[unknown result because it is related to issue#10043]
 select d, sum(d) over (partition by d order by d), avg(d) over () from double01;
-
+[unknown result because it is related to issue#10043]
 truncate double01;
 select * from double01;
 d
@@ -914,7 +921,7 @@ null
 select avg(d) over (partition by d) from decimal01;
 invalid input: Decimal128 Div overflow: 28888888888888888888888888888888888123(Scale:3)/1(Scale:0)
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
-
+[unknown result because it is related to issue#10043]
 drop table decimal01;
 drop table if exists date01;
 create table date01(id date);
@@ -1036,7 +1043,7 @@ i    j    max(j) over (partition by i order by j rows unbounded preceding)
 2    1    1
 2    2    2
 select i, j, min(j) over (partition by i order by j rows unbounded preceding) from test01;
-
+[unknown result because it is related to issue#10043]
 drop table test01;
 drop table if exists row01;
 create table row01(i int,j int);
@@ -1122,9 +1129,9 @@ i    j    foo
 1    2    5
 1    1    2
 select i, j, sum(i+j) over (order by j rows between 2 preceding and 1 preceding) foo from row01 order by foo desc;
-
+[unknown result because it is related to issue#10043]
 select i, j, sum(i+j) over (order by j rows between 2 following and 1 following) foo from row01 order by foo desc;
-
+[unknown result because it is related to issue#10043]
 select i, j, sum(i+j) over (order by j rows between -1 following and 1 following) foo from row01 order by foo desc;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 53 near " -1 following and 1 following) foo from row01 order by foo desc;";
 select i, j, sum(i+j) over (order by j rows between 2 preceding and -10 following) foo from row01 order by foo desc;
@@ -1760,13 +1767,13 @@ select avg(id), sum(avg(id)) over (order by avg(id) rows unbounded preceding) fr
 avg(id)    sum(avg(id)) over (order by avg(id) rows unbounded preceding)
 5.142857142857143    5.142857142857143
 select sex, id, rank() over (partition by sex order by id desc) from dense_rank01;
-
+[unknown result because it is related to issue#10043]
 select sex, id, dense_rank() over (partition by sex order by id desc) from dense_rank01;
-
+[unknown result because it is related to issue#10043]
 select sex, id, rank() over (partition by sex order by id asc) from dense_rank01;
-
+[unknown result because it is related to issue#10043]
 select sex, id, dense_rank() over (partition by sex order by id asc) from dense_rank01;
-
+[unknown result because it is related to issue#10043]
 select sex, id, sum(id) over (partition by sex order by id asc rows unbounded preceding) summ,
 rank() over (partition by sex order by id asc rows unbounded preceding) `rank` from dense_rank01;
 sex    id    summ    rank
@@ -2238,10 +2245,10 @@ d    sum(d) over (order by d range between 2 preceding and 2 following)    avg(d
 10.0    27.0    9.0
 select d, sum(d) over (order by d range between current row and 2 following),
 avg(d) over (order by d range between current row and 2 following) from wf01;
-
+[unknown result because it is related to issue#10043]
 select d, sum(d) over (order by d range between 2 preceding and 2 following),
 avg(d) over (order by d range between current row and 2 following) from wf01;
-
+[unknown result because it is related to issue#10043]
 insert into wf01 select * from wf01;
 select * from wf01;
 d
@@ -2359,10 +2366,10 @@ d    sum(d) over (order by d range between 1 preceding and 2 following)    avg(d
 10.0    38.0    9.0
 select d, sum(d) over (order by d range between current row and 2 following),
 avg(d) over (order by d range between current row and 2 following) from wf01;
-
+[unknown result because it is related to issue#10043]
 select d, sum(d) over (order by d range between current row and 2 following),
 avg(d) over (order by d range between current row and 2 following) from wf01;
-
+[unknown result because it is related to issue#10043]
 drop table wf01;
 drop table if exists wf02;
 create table wf02 (id integer, sex varchar(10));
@@ -2384,10 +2391,10 @@ id    sex
 11    null
 select row_number() over (partition by sex order by id rows between unbounded preceding and unbounded following), id,
 sum(id) over (partition by sex order by id rows between 1 following and 2 following), sex from wf02;
-
+[unknown result because it is related to issue#10043]
 select row_number() over (partition by sex order by id rows between 1 following and 2 following), sum(id) over (partition by sex order by id
 rows between 1 following and 2 following) from wf02;
-
+[unknown result because it is related to issue#10043]
 insert into wf02 values (10, null);
 select rank() over (partition by sex order by id), id, sum(id) over (partition by sex order by id), sex from wf02;
 rank() over (partition by sex order by id)    id    sum(id) over (partition by sex order by id)    sex
@@ -2400,19 +2407,19 @@ rank() over (partition by sex order by id)    id    sum(id) over (partition by s
 1    1    1    moolol
 2    5    6    moolol
 select id, sex, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as a from wf02;
-
+[unknown result because it is related to issue#10025]
 select id, sex, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as a,
 row_number() over (partition by sex order by id rows between 2 preceding and 1 following) as b,
 rank() over (partition by sex order by id rows between 2 preceding and 1 following) as c  from wf02;
-
+[unknown result because it is related to issue#10025]
 select id, sex, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as a,
 row_number() over (partition by sex order by id rows between 2 preceding and 1 following) as b from wf02;
-
+[unknown result because it is related to issue#10025]
 select row_number() over (partition by sex order by id rows between unbounded preceding and unbounded following), id,
 sex from wf02;
-
+[unknown result because it is related to issue#10025]
 select row_number() over (partition by sex order by id rows between 1 preceding and 2 following), sum(id) over (partition by sex order by id
 rows between 1 preceding and 2 following) from wf02;
-
+[unknown result because it is related to issue#10025]
 drop table wf02;
 drop database test;
