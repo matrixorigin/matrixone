@@ -16,7 +16,6 @@ package motrace
 
 import (
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sync"
 	"time"
 
@@ -68,8 +67,6 @@ type tracerProviderConfig struct {
 	writerFactory table.WriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
 	// disableSqlWriter
 	disableSqlWriter bool // set by WithSQLWriterDisable
-	// fs
-	fs fileservice.FileService
 
 	// skipRunningStmt
 	skipRunningStmt bool // set by WithSkipRunningStmt
@@ -153,12 +150,6 @@ func EnableTracer(enable bool) tracerProviderOption {
 func WithFSWriterFactory(f table.WriterFactory) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.writerFactory = f
-	})
-}
-
-func WithFileService(fs fileservice.FileService) tracerProviderOption {
-	return tracerProviderOption(func(cfg *tracerProviderConfig) {
-		cfg.fs = fs
 	})
 }
 
