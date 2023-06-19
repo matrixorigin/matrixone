@@ -681,11 +681,13 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 			if exprs != nil {
 				exprList = exprs.([][]colexec.ExpressionExecutor)[i]
 			}
-			for _, row := range colsData[i].Data {
-				if row.Pos >= 0 {
-					if err := bat.Vecs[i].Copy(params, int64(row.RowPos),
-						int64(row.Pos-1), proc.Mp()); err != nil {
-						return nil, err
+			if params != nil {
+				for _, row := range colsData[i].Data {
+					if row.Pos >= 0 {
+						if err := bat.Vecs[i].Copy(params, int64(row.RowPos),
+							int64(row.Pos-1), proc.Mp()); err != nil {
+							return nil, err
+						}
 					}
 				}
 			}
