@@ -39,7 +39,7 @@ type metaFile struct {
 
 func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err error) {
 	ctx := r.ctx
-	dirs, err := r.fs.ListDir(CheckpointDir)
+	dirs, err := r.rt.Fs.ListDir(CheckpointDir)
 	if err != nil {
 		return
 	}
@@ -61,7 +61,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	})
 	targetIdx := metaFiles[len(metaFiles)-1].index
 	dir := dirs[targetIdx]
-	reader, err := blockio.NewFileReader(r.fs.Service, CheckpointDir+dir.Name)
+	reader, err := blockio.NewFileReader(r.rt.Fs.Service, CheckpointDir+dir.Name)
 	if err != nil {
 		return
 	}
@@ -117,11 +117,11 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 		var err2 error
 		if prefetch {
-			if datas[i], err2 = checkpointEntry.Prefetch(ctx, r.fs); err2 != nil {
+			if datas[i], err2 = checkpointEntry.Prefetch(ctx, r.rt.Fs); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 			}
 		} else {
-			if datas[i], err2 = checkpointEntry.Read(ctx, r.fs); err2 != nil {
+			if datas[i], err2 = checkpointEntry.Read(ctx, r.rt.Fs); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 				emptyFileMu.Lock()
 				emptyFile = append(emptyFile, checkpointEntry)
@@ -135,7 +135,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	for i := 0; i < bat.Length(); i++ {
 		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
 
-		err = blockio.PrefetchMeta(r.fs.Service, metaLoc)
+		err = blockio.PrefetchMeta(r.rt.Fs.Service, metaLoc)
 		if err != nil {
 			return
 		}

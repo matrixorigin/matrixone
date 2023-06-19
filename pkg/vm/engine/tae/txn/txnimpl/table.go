@@ -137,7 +137,7 @@ func (tbl *txnTable) PrePreareTransfer(phase string) (err error) {
 func (tbl *txnTable) TransferDeleteIntent(
 	id *common.ID,
 	row uint32) (changed bool, nid *common.ID, nrow uint32, err error) {
-	pinned, err := tbl.store.transferTable.Pin(*id)
+	pinned, err := tbl.store.rt.TransferTable.Pin(*id)
 	if err != nil {
 		err = nil
 		return
@@ -170,7 +170,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 }
 
 func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
-	if tbl.store.transferTable == nil {
+	if tbl.store.rt.TransferTable == nil {
 		return
 	}
 	if len(tbl.deleteNodes) == 0 {
@@ -234,7 +234,7 @@ func (tbl *txnTable) recurTransferDelete(
 		BlockID: blockID,
 	}
 	if page2, ok = memo[blockID]; !ok {
-		page2, err := tbl.store.transferTable.Pin(*newID)
+		page2, err := tbl.store.rt.TransferTable.Pin(*newID)
 		if err == nil {
 			memo[blockID] = page2
 		}
@@ -304,7 +304,7 @@ func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32, phase stri
 		}
 	}()
 
-	pinned, err := tbl.store.transferTable.Pin(*id)
+	pinned, err := tbl.store.rt.TransferTable.Pin(*id)
 	// cannot find a transferred record. maybe the transferred record was TTL'ed
 	// here we can convert the error back to r-w conflict
 	if err != nil {
@@ -636,7 +636,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					tbl.store.dataFactory.Fs.Service,
+					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
 				)
@@ -951,7 +951,7 @@ func (tbl *txnTable) quickSkipThisBlock(
 	keysZM index.ZM,
 	meta *catalog.BlockEntry,
 ) (ok bool, err error) {
-	zm, err := meta.GetPKZoneMap(ctx, tbl.store.dataFactory.Fs.Service)
+	zm, err := meta.GetPKZoneMap(ctx, tbl.store.rt.Fs.Service)
 	if err != nil {
 		return
 	}
@@ -975,8 +975,8 @@ func (tbl *txnTable) tryGetCurrentObjectBF(
 	currBf, err = blockio.LoadBF(
 		ctx,
 		currLocation,
-		tbl.store.indexCache,
-		tbl.store.dataFactory.Fs.Service,
+		tbl.store.rt.Cache.FilterIndex,
+		tbl.store.rt.Fs.Service,
 		false,
 	)
 	return
@@ -1118,7 +1118,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					tbl.store.dataFactory.Fs.Service,
+					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
 				)

@@ -96,8 +96,8 @@ func TestReplayCatalog1(t *testing.T) {
 	}
 	wg.Wait()
 	logutil.Info(tae.Catalog.SimplePPString(common.PPL1))
-	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
-	t.Logf("GetCheckpointed: %d", tae.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	t.Logf("GetCheckpointed: %d", tae.Runtime.Scheduler.GetCheckpointedLSN())
 	tae.Close()
 
 	tae2, err := Open(ctx, tae.Dir, nil)
@@ -904,7 +904,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	printCheckpointStats(t, tae)
 	assert.Equal(t, tae.Wal.GetCurrSeqNum(), tae.Wal.GetCheckpointed())

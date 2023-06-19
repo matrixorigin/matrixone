@@ -14,12 +14,10 @@
 
 package batchstoredriver
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-)
+import "github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 const (
-	DefaultRotateCheckerMaxSize = int(common.M) * 64
+	DefaultRotateCheckerMaxSize = int(mpool.MB) * 64
 )
 
 type MaxSizeRotateChecker struct {

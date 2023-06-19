@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model
+package containers
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type BaseView struct {
 	DeleteMask *nulls.Bitmap
 }
 
+// TODO: remove this BlockView later
+// Use Batch instead
 type BlockView struct {
 	*BaseView
 	Columns map[int]*ColumnView
@@ -35,23 +36,23 @@ func NewBlockView() *BlockView {
 	}
 }
 
-func (view *BlockView) Orphan(i int) containers.Vector {
+func (view *BlockView) Orphan(i int) Vector {
 	col := view.Columns[i]
 	return col.Orphan()
 }
 
-func (view *BlockView) SetBatch(bat *containers.Batch) {
+func (view *BlockView) SetBatch(bat *Batch) {
 	for i, col := range bat.Vecs {
 		view.SetData(i, col)
 	}
 }
 
-func (view *BlockView) GetColumnData(i int) containers.Vector {
+func (view *BlockView) GetColumnData(i int) Vector {
 	return view.Columns[i].GetData()
 }
 
 // FIXME: i should not be idx in schema
-func (view *BlockView) SetData(i int, data containers.Vector) {
+func (view *BlockView) SetData(i int, data Vector) {
 	col := view.Columns[i]
 	if col == nil {
 		col = NewColumnView(i)
