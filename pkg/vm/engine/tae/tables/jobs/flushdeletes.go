@@ -28,29 +28,23 @@ import (
 
 type flushDeletesTask struct {
 	*tasks.BaseTask
-	delta     *containers.Batch
-	meta      *catalog.BlockEntry
-	fs        *objectio.ObjectFS
-	name      objectio.ObjectName
-	blocks    []objectio.BlockObject
-	schemaVer uint32
-	seqnums   []uint16
+	delta  *containers.Batch
+	meta   *catalog.BlockEntry
+	fs     *objectio.ObjectFS
+	name   objectio.ObjectName
+	blocks []objectio.BlockObject
 }
 
 func NewFlushDeletesTask(
 	ctx *tasks.Context,
-	schemaVer uint32,
-	seqnums []uint16,
 	fs *objectio.ObjectFS,
 	meta *catalog.BlockEntry,
 	delta *containers.Batch,
 ) *flushDeletesTask {
 	task := &flushDeletesTask{
-		schemaVer: schemaVer,
-		seqnums:   seqnums,
-		meta:      meta,
-		fs:        fs,
-		delta:     delta,
+		meta:  meta,
+		fs:    fs,
+		delta: delta,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -61,7 +55,7 @@ func (task *flushDeletesTask) Scope() *common.ID { return task.meta.AsCommonID()
 func (task *flushDeletesTask) Execute(ctx context.Context) error {
 	name := task.meta.BuildDeleteObjectName()
 	task.name = name
-	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, task.schemaVer, task.seqnums)
+	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, 0, nil)
 	if err != nil {
 		return err
 	}

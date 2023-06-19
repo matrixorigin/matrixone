@@ -262,7 +262,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 		if deletes != nil {
 			defer deletes.Close()
-			deleteTask := NewFlushDeletesTask(tasks.WaitableCtx, 0, nil, oldBlkData.GetFs(), oldBMeta, deletes)
+			deleteTask := NewFlushDeletesTask(tasks.WaitableCtx, oldBlkData.GetFs(), oldBMeta, deletes)
 			if err = task.rt.Scheduler.Schedule(deleteTask); err != nil {
 				return
 			}
