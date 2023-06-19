@@ -7435,3 +7435,62 @@ func TestRW(t *testing.T) {
 		assert.NoError(t, txn.Commit(ctx))
 	}
 }
+
+func TestReplayDeletes(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 250
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	bats := bat.Split(5)
+	tae.createRelAndAppend(bats[0], true)
+	//nablk
+	tae.compactBlocks(false)
+	//deletes
+	txn, rel := tae.getRelation()
+	blkIt := rel.MakeBlockIt()
+	blk := blkIt.GetBlock()
+	blk.RangeDelete(1, 50, handle.DT_Normal)
+	assert.NoError(t, txn.Commit(context.Background()))
+	//the next blk to compact
+	tae.DoAppend(bats[1])
+	//keep the segment appendable
+	tae.DoAppend(bats[2])
+	//compact nablk and its next blk
+	txn2, rel := tae.getRelation()
+	blkIt = rel.MakeBlockIt()
+	blkEntry := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry)
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	task, err := jobs.NewCompactBlockTask(nil, txn, blkEntry, tae.Runtime)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	assert.NoError(t, txn2.Commit(context.Background()))
+	//replay and check nextObjectIdx
+	t.Log(tae.Catalog.SimplePPString(3))
+	db, err := tae.Catalog.GetDatabaseByID(blkEntry.AsCommonID().DbID)
+	assert.NoError(t, err)
+	tbl, err := db.GetTableEntryByID(blkEntry.AsCommonID().TableID)
+	assert.NoError(t, err)
+	seg, err := tbl.GetSegmentByID(blkEntry.AsCommonID().SegmentID())
+	segString1 := seg.Repr()
+	assert.NoError(t, err)
+	tae.restart(context.Background())
+	t.Log(tae.Catalog.SimplePPString(3))
+	db, err = tae.Catalog.GetDatabaseByID(blkEntry.AsCommonID().DbID)
+	assert.NoError(t, err)
+	tbl, err = db.GetTableEntryByID(blkEntry.AsCommonID().TableID)
+	assert.NoError(t, err)
+	seg, err = tbl.GetSegmentByID(blkEntry.AsCommonID().SegmentID())
+	segString2 := seg.Repr()
+	assert.Equal(t, segString1, segString2)
+}
