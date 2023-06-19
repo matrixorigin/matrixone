@@ -38,7 +38,7 @@ const (
 
 func TestCreateDB1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog(nil)
+	catalog := MockCatalog()
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -126,7 +126,7 @@ func TestCreateDB1(t *testing.T) {
 //	[TXN1]: CREATE DB1 [OK] | GET DB [OK]
 func TestTableEntry1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog(nil)
+	catalog := MockCatalog()
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -201,7 +201,7 @@ func TestTableEntry1(t *testing.T) {
 
 func TestTableEntry2(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog(nil)
+	catalog := MockCatalog()
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -265,7 +265,7 @@ func TestTableEntry2(t *testing.T) {
 
 func TestDB1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog(nil)
+	catalog := MockCatalog()
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -301,7 +301,7 @@ func TestDB1(t *testing.T) {
 
 func TestTable1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog(nil)
+	catalog := MockCatalog()
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
@@ -354,7 +354,7 @@ func TestTable1(t *testing.T) {
 // 5. Start Txn4, scan "tb" and both "seg1" and "seg2" found
 func TestSegment1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	catalog := MockCatalog(nil)
+	catalog := MockCatalog()
 	defer catalog.Close()
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
 	txnMgr.Start(context.Background())
