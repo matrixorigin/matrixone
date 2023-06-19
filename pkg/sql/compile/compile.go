@@ -682,10 +682,13 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 				exprList = exprs.([][]colexec.ExpressionExecutor)[i]
 			}
 			if params != nil {
+				vs := vector.MustFixedCol[types.Varlena](params)
 				for _, row := range colsData[i].Data {
 					if row.Pos >= 0 {
-						if err := bat.Vecs[i].Copy(params, int64(row.RowPos),
-							int64(row.Pos-1), proc.Mp()); err != nil {
+						isNull := params.GetNulls().Contains(uint64(row.Pos - 1))
+						str := vs[row.Pos-1].GetString(params.GetArea())
+						if err := util.SetBytesToAnyVector(ctx, str, int(row.RowPos), isNull, bat.Vecs[i],
+							proc); err != nil {
 							return nil, err
 						}
 					}
@@ -2737,95 +2740,6 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	return parts1[0] == parts2[0]
 }
 
-/*
-func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
-	rowCount := len(exprs)
-	if rowCount == 0 {
-		return nil, moerr.NewInternalError(ctx, "rowsetData do not have rows")
-	}
-	var typ types.Type
-	var vec *vector.Vector
-	for _, e := range exprs {
-		if e.Typ.Id != int32(types.T_any) {
-			typ = plan2.MakeTypeByPlan2Type(e.Typ)
-			vec = vector.NewVec(typ)
-			break
-		}
-	}
-	if vec == nil {
-		typ = types.T_int32.ToType()
-		vec = vector.NewVec(typ)
-	}
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	defer bat.Clean(proc.Mp())
-
-	executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, exprs)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		for _, e := range executors {
-			e.Free()
-		}
-	}()
-
-	for i, executor := range executors {
-		tmp, err := executor.Eval(proc, []*batch.Batch{bat})
-		if err != nil {
-			return nil, err
-		}
-		if tmp.IsConstNull() || tmp.GetNulls().Contains(0) {
-			vector.AppendFixed(vec, 0, true, proc.Mp())
-			continue
-		}
-		switch typ.Oid {
-		case types.T_bool:
-			vector.AppendFixed(vec, vector.MustFixedCol[bool](tmp)[0], false, proc.Mp())
-		case types.T_int8:
-			vector.AppendFixed(vec, vector.MustFixedCol[int8](tmp)[0], false, proc.Mp())
-		case types.T_int16:
-			vector.AppendFixed(vec, vector.MustFixedCol[int16](tmp)[0], false, proc.Mp())
-		case types.T_int32:
-			vector.AppendFixed(vec, vector.MustFixedCol[int32](tmp)[0], false, proc.Mp())
-		case types.T_int64:
-			vector.AppendFixed(vec, vector.MustFixedCol[int64](tmp)[0], false, proc.Mp())
-		case types.T_uint8:
-			vector.AppendFixed(vec, vector.MustFixedCol[uint8](tmp)[0], false, proc.Mp())
-		case types.T_uint16:
-			vector.AppendFixed(vec, vector.MustFixedCol[uint16](tmp)[0], false, proc.Mp())
-		case types.T_uint32:
-			vector.AppendFixed(vec, vector.MustFixedCol[uint32](tmp)[0], false, proc.Mp())
-		case types.T_uint64:
-			vector.AppendFixed(vec, vector.MustFixedCol[uint64](tmp)[0], false, proc.Mp())
-		case types.T_float32:
-			vector.AppendFixed(vec, vector.MustFixedCol[float32](tmp)[0], false, proc.Mp())
-		case types.T_float64:
-			vector.AppendFixed(vec, vector.MustFixedCol[float64](tmp)[0], false, proc.Mp())
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
-			vector.AppendBytes(vec, tmp.GetBytesAt(0), false, proc.Mp())
-		case types.T_date:
-			vector.AppendFixed(vec, vector.MustFixedCol[types.Date](tmp)[0], false, proc.Mp())
-		case types.T_datetime:
-			vector.AppendFixed(vec, vector.MustFixedCol[types.Datetime](tmp)[0], false, proc.Mp())
-		case types.T_time:
-			vector.AppendFixed(vec, vector.MustFixedCol[types.Time](tmp)[0], false, proc.Mp())
-		case types.T_timestamp:
-			vector.AppendFixed(vec, vector.MustFixedCol[types.Timestamp](tmp)[0], false, proc.Mp())
-		case types.T_decimal64:
-			vector.AppendFixed(vec, vector.MustFixedCol[types.Decimal64](tmp)[0], false, proc.Mp())
-		case types.T_decimal128:
-			vector.AppendFixed(vec, vector.MustFixedCol[types.Decimal128](tmp)[0], false, proc.Mp())
-		case types.T_uuid:
-			vector.AppendFixed(vec, vector.MustFixedCol[types.Uuid](tmp)[0], false, proc.Mp())
-		default:
-			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", exprs[i]))
-		}
-	}
-	return vec, nil
-}
-*/
-
 func (s *Scope) affectedRows() uint64 {
 	affectedRows := uint64(0)
 	for _, in := range s.Instructions {
@@ -2865,10 +2779,7 @@ func evalRowsetData(ctx context.Context, proc *process.Process,
 	var bats []*batch.Batch
 
 	vec.ResetArea()
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	defer bat.Clean(proc.Mp())
-	bats = []*batch.Batch{bat}
+	bats = []*batch.Batch{batch.EmptyForConstFoldBatch}
 	if len(exprExecs) > 0 {
 		for i, expr := range exprExecs {
 			val, err := expr.Eval(proc, bats)
@@ -2881,6 +2792,9 @@ func evalRowsetData(ctx context.Context, proc *process.Process,
 		}
 	} else {
 		for _, expr := range exprs {
+			if expr.Pos >= 0 {
+				continue
+			}
 			val, err := colexec.EvalExpressionOnce(proc, expr.Expr, bats)
 			if err != nil {
 				return err

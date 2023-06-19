@@ -71,14 +71,11 @@ func (v *Vector) SetSorted(b bool) {
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
 	v.class = FLAT
-	//v.data = v.data[:0]
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
-	//	v.nsp = nulls.Nulls{}
 
 	v.length = 0
-	//v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.nsp.Reset()
 	v.sorted = false
 }

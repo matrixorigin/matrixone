@@ -1947,20 +1947,22 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 
 func checkPlanIsInsertValues(proc *process.Process,
 	p *plan.Plan) (bool, [][]colexec.ExpressionExecutor) {
-	var err error
-
 	qry := p.GetQuery()
 	if qry != nil {
 		for _, node := range qry.Nodes {
 			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
 				exprList := make([][]colexec.ExpressionExecutor, len(node.RowsetData.Cols))
 				for i, col := range node.RowsetData.Cols {
-					exprList[i] = make([]colexec.ExpressionExecutor, len(col.Data))
-					for j, data := range col.Data {
-						exprList[i][j], err = colexec.NewExpressionExecutor(proc, data.Expr)
+					exprList[i] = make([]colexec.ExpressionExecutor, 0, len(col.Data))
+					for _, data := range col.Data {
+						if data.Pos >= 0 {
+							continue
+						}
+						expr, err := colexec.NewExpressionExecutor(proc, data.Expr)
 						if err != nil {
 							return false, nil
 						}
+						exprList[i] = append(exprList[i], expr)
 					}
 				}
 				return true, exprList

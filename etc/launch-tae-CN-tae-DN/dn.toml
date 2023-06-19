@@ -60,4 +60,3 @@ rpc-enable-checksum = true
 logtail-collect-interval = "2ms"
 logtail-response-send-timeout = "10s"
 max-logtail-fetch-failure = 5
-

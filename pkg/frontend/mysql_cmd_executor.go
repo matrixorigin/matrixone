@@ -3487,7 +3487,6 @@ func SetNewResponse(category int, status uint16, cmd int, d interface{}, cwIndex
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *Response, err error) {
-
 	defer func() {
 		if e := recover(); e != nil {
 			moe, ok := e.(*moerr.Error)

@@ -299,7 +299,7 @@ func (vp *vectorPool) putVector(vec *vector.Vector) bool {
 	vp.Lock()
 	defer vp.Unlock()
 	key := uint8(vec.GetType().Oid)
-	if len(vp.vecs[key]) < VectorLimit {
+	if len(vp.vecs[key]) > VectorLimit {
 		return false
 	}
 	vp.vecs[key] = append(vp.vecs[key], vec)

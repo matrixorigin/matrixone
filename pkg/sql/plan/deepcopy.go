@@ -523,6 +523,7 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	}
 	for i, e := range col.Data {
 		newCol.Data[i] = &plan.RowsetExpr{
+			Pos:    e.Pos,
 			RowPos: e.RowPos,
 			Expr:   DeepCopyExpr(e.Expr),
 		}
