@@ -130,7 +130,7 @@ func (entry *compactBlockEntry) ApplyCommit() (err error) {
 	if !entry.from.IsAppendableBlock() {
 		return
 	}
-	entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().GCInMemeoryDeletesByTS(entry.txn.GetCommitTS())
+	entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().GCInMemeoryDeletesByTS(entry.from.GetDeltaPersistedTS())
 	return
 }
 
