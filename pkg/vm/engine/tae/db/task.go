@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -62,6 +63,7 @@ func (task *ScheduledTxnTask) Execute(ctx context.Context) (err error) {
 	}
 	err = txnTask.OnExec(task.db.Opts.Ctx)
 	if err != nil {
+		logutil.Warnf("Task[%d] exec error: %v", task.ID(), err)
 		err2 := txn.Rollback(ctx)
 		if err2 != nil {
 			panic(err)
