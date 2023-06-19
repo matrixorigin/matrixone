@@ -542,7 +542,7 @@ func (e *Engine) setPushClientStatus(ready bool) {
 
 	client.NoticeCnStatus(e.cli, ready)
 
-	e.pClient.receivedLogTailTime.ready.Store(false)
+	e.pClient.receivedLogTailTime.ready.Store(ready)
 	if e.pClient.subscriber != nil {
 		if ready {
 			e.pClient.subscriber.setReady()
