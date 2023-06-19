@@ -473,26 +473,26 @@ func (node *OrExpr) Format(ctx *FmtCtx) {
 	ctx.PrintExpr(node, node.Right, false)
 }
 
-func (n *OrExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *OrExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
 
-	n = newNode.(*OrExpr)
-	node, ok := n.Left.Accept(v)
+	node = newNode.(*OrExpr)
+	tmpNode, ok := node.Left.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Left = node
+	node.Left = tmpNode
 
-	node, ok = n.Right.Accept(v)
+	tmpNode, ok = node.Right.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Right = node
+	node.Right = tmpNode
 
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 func NewOrExpr(l, r Expr) *OrExpr {
@@ -1435,18 +1435,18 @@ func (node *DefaultVal) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *DefaultVal) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *DefaultVal) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*DefaultVal)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*DefaultVal)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewDefaultVal(e Expr) *DefaultVal {
@@ -1550,10 +1550,10 @@ func NewMaxValue() *MaxValue {
 }
 
 // Accept implements NodeChecker interface
-func (n *MaxValue) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *MaxValue) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	return v.Exit(n)
+	return v.Exit(node)
 }
