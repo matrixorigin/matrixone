@@ -1025,26 +1025,39 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if bat == nil || bat.Length() == 0 {
 		return nil
 	}
-
-	// Write S3 Block
-	if bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
-		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
-		if err != nil {
-			return err
-		}
-		fileName := location.Name().String()
+	// for writing S3 Block
+	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
+		blkInfo := catalog.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0))
+		fileName := blkInfo.MetaLocation().Name().String()
 		ibat, err := bat.Dup(tbl.db.txn.proc.Mp())
 		if err != nil {
 			return err
 		}
-		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[0])
+		return tbl.db.txn.WriteFile(
+			INSERT,
+			tbl.db.databaseId,
+			tbl.tableId,
+			tbl.db.databaseName,
+			tbl.tableName,
+			fileName,
+			ibat,
+			tbl.db.txn.dnStores[0])
 	}
 	ibat, err := bat.Dup(tbl.db.txn.proc.Mp())
 	if err != nil {
 		return err
 	}
-	if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
+	if err := tbl.db.txn.WriteBatch(
+		INSERT,
+		tbl.db.databaseId,
+		tbl.tableId,
+		tbl.db.databaseName,
+		tbl.tableName,
+		ibat,
+		tbl.db.txn.dnStores[0],
+		tbl.primaryIdx,
+		false,
+		false); err != nil {
 		return err
 	}
 	/*
@@ -1066,7 +1079,7 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 //	blkId(string)     deltaLoc(string)                   type(int)
 //
 // |-----------|-----------------------------------|----------------|
-// |  blk_id   |   batch.Marshal(metaLoc)          |  FlushMetaLoc  | DN Block
+// |  blk_id   |   batch.Marshal(deltaLoc)         |  FlushDeltaLoc | DN Block
 // |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
 // |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | DN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
@@ -1077,13 +1090,14 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		return err
 	}
 	switch typ {
-	case deletion.FlushMetaLoc:
+	case deletion.FlushDeltaLoc:
 		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
 		if err != nil {
 			return err
 		}
 		fileName := location.Name().String()
 		copBat := CopyBatch(tbl.db.txn.proc.Ctx, tbl.db.txn.proc, bat)
+		//copBat.Attrs = {catalog.BlockMeta_DeltaLoc}
 		if err := tbl.db.txn.WriteFile(DELETE, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.dnStores[0]); err != nil {
 			return err
@@ -1152,7 +1166,14 @@ func (tbl *txnTable) compaction() error {
 			tbl.seqnums = idxs
 			tbl.typs = typs
 		}
-		bat, e := blockio.BlockCompactionRead(tbl.db.txn.proc.Ctx, location, deleteOffsets, tbl.seqnums, tbl.typs, tbl.db.txn.engine.fs, tbl.db.txn.proc.GetMPool())
+		bat, e := blockio.BlockCompactionRead(
+			tbl.db.txn.proc.Ctx,
+			location,
+			deleteOffsets,
+			tbl.seqnums,
+			tbl.typs,
+			tbl.db.txn.engine.fs,
+			tbl.db.txn.proc.GetMPool())
 		if e != nil {
 			err = e
 			return false
@@ -1175,18 +1196,30 @@ func (tbl *txnTable) compaction() error {
 	}
 
 	if batchNums > 0 {
-		metaLocs, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
+		blkInfos, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
 		if err != nil {
 			return err
 		}
 		new_bat := batch.NewWithSize(1)
-		new_bat.Attrs = []string{catalog.BlockMeta_MetaLoc}
+		new_bat.Attrs = []string{catalog.BlockMeta_BlockInfo}
 		new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-		for _, metaLoc := range metaLocs {
-			vector.AppendBytes(new_bat.GetVector(0), []byte(metaLoc), false, tbl.db.txn.proc.GetMPool())
+		for _, blkInfo := range blkInfos {
+			vector.AppendBytes(
+				new_bat.GetVector(0),
+				catalog.EncodeBlockInfo(blkInfo),
+				false,
+				tbl.db.txn.proc.GetMPool())
 		}
-		new_bat.SetZs(len(metaLocs), tbl.db.txn.proc.GetMPool())
-		err = tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, name.String(), new_bat, tbl.db.txn.dnStores[0])
+		new_bat.SetZs(len(blkInfos), tbl.db.txn.proc.GetMPool())
+		err = tbl.db.txn.WriteFile(
+			INSERT,
+			tbl.db.databaseId,
+			tbl.tableId,
+			tbl.db.databaseName,
+			tbl.tableName,
+			name.String(),
+			new_bat,
+			tbl.db.txn.dnStores[0])
 		if err != nil {
 			return err
 		}
@@ -1195,6 +1228,7 @@ func (tbl *txnTable) compaction() error {
 	// delete old block info
 	for idx, offsets := range mp {
 		bat := tbl.db.txn.writes[idx].bat
+		tbl.db.txn.delPosForCNBlock(bat.GetVector(0), offsets)
 		bat.AntiShrink(offsets)
 		// update txn.cnBlkId_Pos
 		tbl.db.txn.updatePosForCNBlock(bat.GetVector(0), idx)
@@ -1230,7 +1264,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 		// we use 2 now.
 		return tbl.compaction()
 	}
-	// remoteDelete
+	//for S3 delete
 	if name != catalog.Row_ID {
 		return tbl.EnhanceDelete(bat, name)
 	}

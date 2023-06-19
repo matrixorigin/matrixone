@@ -72,19 +72,19 @@ func (arg *Argument) GetMetaLocBat(name string) {
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	arg.GetMetaLocBat(bat.Attrs[1])
 	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
-	metaLocs := vector.MustStrCol(bat.GetVector(1))
+	blockInfos := vector.MustStrCol(bat.GetVector(1))
 	for i := range tblIdx {
 		if tblIdx[i] >= 0 {
-			location, err := blockio.EncodeLocationFromString(metaLocs[i])
+			location, err := blockio.EncodeLocationFromString(blockInfos[i])
 			if err != nil {
 				return err
 			}
 			arg.affectedRows += uint64(location.Rows())
-			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
+			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(blockInfos[i]), false, proc.GetMPool())
 		} else {
 			idx := int(-(tblIdx[i] + 1))
 			newBat := &batch.Batch{}
-			if err := newBat.UnmarshalBinary([]byte(metaLocs[i])); err != nil {
+			if err := newBat.UnmarshalBinary([]byte(blockInfos[i])); err != nil {
 				return err
 			}
 			newBat.Cnt = 1

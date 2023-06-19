@@ -34,12 +34,15 @@ import (
 )
 
 type PartitionReader struct {
-	typsMap              map[string]types.Type
-	inserts              []*batch.Batch
-	deletes              map[types.Rowid]uint8
-	skipBlocks           map[types.Blockid]uint8
-	iter                 logtailreplay.RowsIter
-	sourceBatchNameIndex map[string]int
+	typsMap map[string]types.Type
+	inserts []*batch.Batch
+	deletes map[types.Rowid]uint8
+	iter    logtailreplay.RowsIter
+
+	// used for prefetch
+	//infos       [][]*catalog.BlockInfo
+	//steps       []int
+	//currentStep int
 
 	// the following attributes are used to support cn2s3
 	procMPool       *mpool.MPool
@@ -117,6 +120,7 @@ func (p *PartitionReader) getTyps(colNames []string) (res []types.Type) {
 	return
 }
 
+// TODO::refactor
 func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if p == nil {
 		return nil, nil
@@ -129,6 +133,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		p.inserts = p.inserts[1:]
 		return batch.EmptyBatch, nil
 	}
+	//TODO:: 1. refactor
+	//       2. read block on S3 by blockio.BlockRead, how to construct blockinfo?
 	if len(p.inserts) > 0 || p.blockBatch.hasRows() {
 		var bat *batch.Batch
 		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc { // boyu should handle delete for s3 block
@@ -185,6 +191,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			}
 			sid := location.Name().SegmentId()
 			blkid := objectio.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
+			//TODO:: use blockio.BlockRead has already generated rowid to read block
 			if hasRowId {
 				// add rowId col for rbat
 				lens := rbat.Length()
@@ -241,6 +248,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			return b, nil
 		}
 	}
+
 	const maxRows = 8192
 	b := batch.NewWithSize(len(colNames))
 	b.SetAttributes(colNames)
@@ -260,22 +268,11 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
 		}
 	}
-
+	//read rows from partitionState.rows.
 	for p.iter.Next() {
 		entry := p.iter.Entry()
 		if _, ok := p.deletes[entry.RowID]; ok {
 			continue
-		}
-		if p.skipBlocks != nil {
-			if _, ok := p.skipBlocks[entry.BlockID]; ok {
-				continue
-			}
-		}
-		if p.sourceBatchNameIndex == nil {
-			p.sourceBatchNameIndex = make(map[string]int)
-			for i, name := range entry.Batch.Attrs {
-				p.sourceBatchNameIndex[name] = i
-			}
 		}
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
