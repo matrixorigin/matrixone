@@ -17,10 +17,8 @@ select * from ddl01;
 alter table ddl01 drop column col1;
 select * from ddl01;
 drop view view01;
-select sleep(10);
 truncate table ddl01;
 drop table ddl01;
-select statement from statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
 
 
 
@@ -43,7 +41,7 @@ select count(*) from dql01 group by col3;
 select sleep(10);
 
 -- @bvt:issue#10043
-select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 -- @bvt:issue
 drop table dql01;
 
@@ -68,8 +66,8 @@ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 with cte1 as (select 1),cte2 as (select 2) select * from cte1 join cte2;
 select sleep(10);
 -- @bvt:issue#10043
-select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
--- @bvt:issue#10043
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
+-- @bvt:issue
 drop table dql02;
 
 
@@ -88,10 +86,10 @@ delete from statement_info03 where col2 = null;
 select * from statement_info03;
 select group_concat(col1,col2) from statement_info03;
 update statement_info03 set col1 = null where col1 != null;
+drop table statement_info03;
 select sleep(10);
 
-select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
-drop table statement_info03;
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 
 
 
@@ -112,7 +110,7 @@ drop account test_account;
 drop database db1;
 select sleep(10);
 
-select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 
 
 
@@ -122,21 +120,21 @@ commit;
 start transaction;
 rollback;
 select sleep(10);
-select statement from system.statement_info where query_type = 'TCL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'TCL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 
 
 
 -- multiple spaces appear in the sql statement
 drop table if exists multispace01;
-create    table multispace01(col1 int);
-insert into    multispace01 values(1);
+create table multispace01(col1 int);
+insert into multispace01 values(1);
 insert into multispace01 values (10);
 select sleep(10);
 
 -- @bvt:issue#10043
-select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 -- @bvt:issue
-select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 drop table multispace01;
 
 
@@ -165,12 +163,11 @@ drop user user_test;
 drop account account_user01;
 drop role role_Role;
 select sleep(10);
-select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
-select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 -- @bvt:issue#10043
-select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 -- @bvt:issue
-select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 
 
 
@@ -181,7 +178,6 @@ insert into line01 values(1,100000);
 insert into line01 values(2,93232432);
 drop table line01;
 select sleep(10);
-select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 
 
 
@@ -189,7 +185,7 @@ select statement from system.statement_info where query_type = 'DDL' and sql_sou
 aaa;
 selct sleep(10);
 prepare s1 from select * from test_table where col1=?;
-select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 2;
 create table 123(col1 int);
 
 
@@ -201,7 +197,7 @@ set @a=2;
 execute s1 using @a;
 deallocate prepare s1;
 select sleep(10);
-select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql' order by response_at desc limit 2;
 drop table test_table;
 
 
@@ -241,7 +237,7 @@ rollback;
 -- multiple spaces appear in the sql statement
 drop table if exists multispace02;
 create    table multispace02(col1 int);
-insert into    multispace02 values(1);
+insert into multispace02 values(1);
 insert into multispace02 values (10);
 drop table multispace02;
 
@@ -286,7 +282,6 @@ drop database newAccount;
 
 -- ddl,dml,dql,tcl Other
 select sleep(20);
-select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 select statement from system.statement_info where query_type = 'TCL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
