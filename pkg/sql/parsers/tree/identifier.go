@@ -81,8 +81,8 @@ func (node *UnresolvedName) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker Accept interface.
-func (n *UnresolvedName) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *UnresolvedName) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}

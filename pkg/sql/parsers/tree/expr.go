@@ -182,18 +182,18 @@ func (e *UnaryExpr) Format(ctx *FmtCtx) {
 	ctx.PrintExpr(e, e.Expr, true)
 }
 
-func (n *UnaryExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (e *UnaryExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(e)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*UnaryExpr)
-	node, ok := n.Expr.Accept(v)
+	e = newNode.(*UnaryExpr)
+	node, ok := e.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return e, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	e.Expr = node
+	return v.Exit(e)
 }
 
 func (e *UnaryExpr) String() string {
@@ -642,18 +642,18 @@ func (node *IsNotUnknownExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *IsNotUnknownExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *IsNotUnknownExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*IsNotUnknownExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*IsNotUnknownExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewIsNotUnknownExpr(e Expr) *IsNotUnknownExpr {
@@ -669,18 +669,18 @@ type IsTrueExpr struct {
 }
 
 // Accept implements NodeChecker interface
-func (n *IsTrueExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *IsTrueExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*IsTrueExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*IsTrueExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func (node *IsTrueExpr) Format(ctx *FmtCtx) {

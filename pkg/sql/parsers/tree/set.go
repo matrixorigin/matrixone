@@ -32,7 +32,7 @@ func (node *SetVar) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface.
-func (n *SetVar) Accept(v Visitor) (Expr, bool) {
+func (node *SetVar) Accept(v Visitor) (Expr, bool) {
 	//TODO: unimplement Accept interface
 	panic("tree.SetVar Unimplement Accept")
 }

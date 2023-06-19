@@ -169,7 +169,7 @@ func (node *StrVal) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker Accept interface.
-func (n *StrVal) Accept(v Visitor) (Expr, bool) {
+func (node *StrVal) Accept(v Visitor) (Expr, bool) {
 	panic("unimplement StrVal Accept")
 }
 
