@@ -157,20 +157,19 @@ drop table bool01;
 
 -- partition by follows char/varchar/text
 drop table varchar01 if exists;
-create table varchar01(col1 int, col2 varchar(12) primary key);
-insert into varchar01 values(1, 'dhwenfewrfew');
-insert into varchar01 values(2, 'wyeuijdew');
-insert into varchar01 values(3, '数据库');
-insert into varchar01 values(4, 'hejwkvrewvre');
-insert into varchar01 values(5, '**&');
-insert into varchar01 values(6, '12345');
-insert into varchar01 values(7, 'database');
-select *, rank() over (partition by col2 order by col1) as tmp from varchar01;
-select dense_rank() over (partition by col2 order by col1) as tmp from varchar01;
+create table varchar01(col1 int, col2 varchar(12) primary key, col3 binary(20));
+insert into varchar01 values(1, 'dhwenfewrfew', 84151);
+insert into varchar01 values(2, 'wyeuijdew', 778455100);
+insert into varchar01 values(3, '数据库', 84151);
+insert into varchar01 values(4, 'hejwkvrewvre', 778455100);
+insert into varchar01 values(5, '**&', 789451);
+insert into varchar01 values(6, '12345', null );
+insert into varchar01 values(7, 'database', null);
+select *, rank() over (partition by col3 order by col1) as tmp from varchar01;
+select dense_rank() over (partition by col3 order by col1) as tmp from varchar01;
 drop table varchar01;
 
 drop table if exists char01;
-create table char01 (col1 integer, col2 char(1));
 create table char01 (col1 integer, col2 char(1));
 insert into char01 values (1, 'm');
 insert into char01 values (2, 'f');
