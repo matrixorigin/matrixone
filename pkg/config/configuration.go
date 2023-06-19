@@ -608,8 +608,8 @@ type ObservabilityParameters struct {
 	// Seconds to aggregate the statements
 	AggregationWindow toml.Duration `toml:"aggregationWindow"`
 
-	// Seconds to aggregate the statements
-	SelectAggrThreshold toml.Duration `toml:"aggregationWindow"`
+	// Duration to filter statements for aggregation
+	SelectAggrThreshold toml.Duration `toml:"selectAggrThreshold"`
 
 	OBCollectorConfig
 }
