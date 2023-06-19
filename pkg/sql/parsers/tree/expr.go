@@ -432,26 +432,26 @@ func (node *XorExpr) Format(ctx *FmtCtx) {
 	ctx.PrintExpr(node, node.Right, false)
 }
 
-func (n *XorExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *XorExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
 
-	n = newNode.(*XorExpr)
-	node, ok := n.Left.Accept(v)
+	node = newNode.(*XorExpr)
+	tmpNode, ok := node.Left.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Left = node
+	node.Left = tmpNode
 
-	node, ok = n.Right.Accept(v)
+	tmpNode, ok = node.Right.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Right = node
+	node.Right = tmpNode
 
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 func NewXorExpr(l, r Expr) *XorExpr {
@@ -855,20 +855,20 @@ func (node *ParenExpr) Format(ctx *FmtCtx) {
 	ctx.WriteByte(')')
 }
 
-func (n *ParenExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *ParenExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*ParenExpr)
-	if n.Expr != nil {
-		node, ok := n.Expr.Accept(v)
+	node = newNode.(*ParenExpr)
+	if node.Expr != nil {
+		tmpNode, ok := node.Expr.Accept(v)
 		if !ok {
-			return n, false
+			return node, false
 		}
-		n.Expr = node
+		node.Expr = tmpNode
 	}
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 func NewParenExpr(e Expr) *ParenExpr {
@@ -963,20 +963,20 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *FuncExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *FuncExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*FuncExpr)
-	for i, val := range n.Exprs {
-		node, ok := val.Accept(v)
+	node = newNode.(*FuncExpr)
+	for i, val := range node.Exprs {
+		tmpNode, ok := val.Accept(v)
 		if !ok {
-			return n, false
+			return node, false
 		}
-		n.Exprs[i] = node
+		node.Exprs[i] = tmpNode
 	}
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
