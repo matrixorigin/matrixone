@@ -206,6 +206,7 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 // doProfile is sync op.
 func (s *MOSpan) doProfile() {
 	factory := s.tracer.provider.writerFactory
+	// do profile goroutine txt
 	if s.ProfileGoroutine() {
 		filepath := profile.GetProfileName(profile.GOROUTINE, s.SpanID.String(), s.EndTime)
 		w := factory.GetWriter(s.ctx, filepath)
@@ -219,6 +220,7 @@ func (s *MOSpan) doProfile() {
 			s.AddExtraFields(zap.String(profile.GOROUTINE, filepath))
 		}
 	}
+	// do profile heap pprof
 	if s.ProfileHeap() {
 		filepath := profile.GetProfileName(profile.HEAP, s.SpanID.String(), s.EndTime)
 		w := factory.GetWriter(s.ctx, filepath)

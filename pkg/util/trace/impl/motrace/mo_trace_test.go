@@ -325,7 +325,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 		{
 			name: "goroutine",
 			fields: fields{
-				opts:   []trace.SpanStartOption{trace.WithProfileGoroutine()},
+				opts:   []trace.SpanStartOption{trace.WithProfileGoroutine()}, // it will dump file into ETL folder.
 				ctx:    ctx,
 				tracer: tracer,
 			},
