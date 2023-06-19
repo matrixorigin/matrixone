@@ -63,8 +63,6 @@ type NodeFormatter interface {
 	Format(ctx *FmtCtx)
 }
 
-// ------------------------------------------------------------------------------------------------------
-
 // Visitor Design Pattern
 // NodeChecker is abstract tree Node
 type NodeChecker interface {
@@ -94,8 +92,6 @@ type Visitor interface {
 	//if `Exit` method returns OK as false ,means stop visiting.
 	Exit(n Expr) (node Expr, ok bool)
 }
-
-//------------------------------------------------------------------------------------------------------
 
 func String(node NodeFormatter, dialectType dialect.DialectType) string {
 	if node == nil {

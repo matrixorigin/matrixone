@@ -45,15 +45,6 @@ func (hpb *hashPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 	}
 
 	//step 3: build partition expr
-	//planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
-	//if err != nil {
-	//	return err
-	//}
-	//
-	//partitionDef.PartitionExpr = &plan.PartitionExpr{
-	//	Expr:    planExpr,
-	//	ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
-	//}
 	err = buildPartitionExpr(ctx, tableDef, partitionBinder, partitionDef, partitionType.Expr)
 	if err != nil {
 		return err

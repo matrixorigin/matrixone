@@ -45,14 +45,6 @@ func (rpb *rangePartitionBuilder) build(ctx context.Context, partitionBinder *Pa
 	// RANGE Partitioning
 	if len(partitionType.ColumnList) == 0 {
 		partitionInfo.Type = plan.PartitionType_RANGE
-		//planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
-		//if err != nil {
-		//	return err
-		//}
-		//partitionInfo.PartitionExpr = &plan.PartitionExpr{
-		//	Expr:    planExpr,
-		//	ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
-		//}
 		err := buildPartitionExpr(ctx, tableDef, partitionBinder, partitionInfo, partitionType.Expr)
 		if err != nil {
 			return err
