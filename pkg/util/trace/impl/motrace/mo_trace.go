@@ -24,14 +24,13 @@ package motrace
 import (
 	"context"
 	"encoding/hex"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
-	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"go.uber.org/zap"
@@ -206,10 +205,14 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 
 // doProfile is sync op.
 func (s *MOSpan) doProfile() {
+	factory := s.tracer.provider.writerFactory
 	if s.ProfileGoroutine() {
 		filepath := profile.GetProfileName(profile.GOROUTINE, s.SpanID.String(), s.EndTime)
-		w := etl.NewBufWriter(s.ctx, etl.NewFSWriter(s.ctx, s.tracer.provider.fs, etl.WithFilePath(filepath)))
+		w := factory.GetWriter(s.ctx, filepath)
 		err := profile.ProfileGoroutine(w, 2)
+		if err == nil {
+			err = w.Close()
+		}
 		if err != nil {
 			s.AddExtraFields(zap.String(profile.GOROUTINE, err.Error()))
 		} else {
@@ -218,8 +221,11 @@ func (s *MOSpan) doProfile() {
 	}
 	if s.ProfileHeap() {
 		filepath := profile.GetProfileName(profile.HEAP, s.SpanID.String(), s.EndTime)
-		w := etl.NewBufWriter(s.ctx, etl.NewFSWriter(s.ctx, s.tracer.provider.fs, etl.WithFilePath(filepath)))
-		err := profile.ProfileHeap(w, 2)
+		w := factory.GetWriter(s.ctx, filepath)
+		err := profile.ProfileHeap(w, 0)
+		if err == nil {
+			err = w.Close()
+		}
 		if err != nil {
 			s.AddExtraFields(zap.String(profile.HEAP, err.Error()))
 		} else {
@@ -229,8 +235,11 @@ func (s *MOSpan) doProfile() {
 	// profile cpu should be the last one op, caused by it will sustain few seconds
 	if s.ProfileCpuSecs() > 0 {
 		filepath := profile.GetProfileName(profile.CPU, s.SpanID.String(), s.EndTime)
-		w := etl.NewBufWriter(s.ctx, etl.NewFSWriter(s.ctx, s.tracer.provider.fs, etl.WithFilePath(filepath)))
-		err := profile.ProfileCPU(w, time.Duration(s.ProfileCpuSecs())*time.Second)
+		w := factory.GetWriter(s.ctx, filepath)
+		err := profile.ProfileCPU(w, s.ProfileCpuSecs())
+		if err == nil {
+			err = w.Close()
+		}
 		if err != nil {
 			s.AddExtraFields(zap.String(profile.CPU, err.Error()))
 		} else {

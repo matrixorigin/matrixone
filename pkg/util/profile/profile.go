@@ -42,7 +42,7 @@ func ProfileCPU(w io.Writer, d time.Duration) error {
 	return nil
 }
 
-const timestampFormatter = "20060102_150405_000000"
+const timestampFormatter = "20060102_150405.000000"
 
 func Time2DatetimeString(t time.Time) string {
 	return t.Format(timestampFormatter)

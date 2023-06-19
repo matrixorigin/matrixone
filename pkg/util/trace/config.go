@@ -160,6 +160,12 @@ func SpanContextWithIDs(tid TraceID, sid SpanID) SpanContext {
 	return SpanContext{TraceID: tid, SpanID: sid, Kind: SpanKindInternal}
 }
 
+const (
+	FlagProfileGoroutine = 1 << iota
+	FlagProfileHeap
+	FlagProfileCpu
+)
+
 // SpanConfig is a group of options for a Span.
 type SpanConfig struct {
 	SpanContext
@@ -174,7 +180,7 @@ type SpanConfig struct {
 	LongTimeThreshold time.Duration `json:"-"`
 	profileGoroutine  bool
 	profileHeap       bool
-	profileCpuSecs    int
+	profileCpuDur     time.Duration
 }
 
 func (c *SpanConfig) Reset() {
@@ -184,7 +190,7 @@ func (c *SpanConfig) Reset() {
 	c.LongTimeThreshold = 0
 	c.profileGoroutine = false
 	c.profileHeap = false
-	c.profileCpuSecs = 0
+	c.profileCpuDur = 0
 }
 
 func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
@@ -199,8 +205,8 @@ func (c *SpanConfig) ProfileHeap() bool {
 	return c.profileHeap
 }
 
-func (c *SpanConfig) ProfileCpuSecs() int {
-	return c.profileCpuSecs
+func (c *SpanConfig) ProfileCpuSecs() time.Duration {
+	return c.profileCpuDur
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
@@ -247,21 +253,23 @@ func WithLongTimeThreshold(d time.Duration) SpanStartOption {
 	})
 }
 
-func WithProfileGoroutine(prof bool) SpanStartOption {
+func WithProfileGoroutine() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileGoroutine = prof
+		cfg.profileGoroutine = true
 	})
 }
 
-func WithProfileHeap(prof bool) SpanStartOption {
+func WithProfileHeap() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileHeap = prof
+		cfg.profileHeap = true
 	})
 }
 
-func WithProfileCpuSecs(secs int) SpanStartOption {
+// WithProfileCpuSecs give duration while do pprof
+// more details in MOSpan.doProfile
+func WithProfileCpuSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileCpuSecs = secs
+		cfg.profileCpuDur = d
 	})
 }
 

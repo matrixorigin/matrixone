@@ -23,15 +23,23 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/prashantv/gostub"
-	"go.uber.org/zap"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 var _1TxnID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
@@ -266,4 +274,83 @@ func TestMOSpan_End(t *testing.T) {
 	require.Equal(t, true, deadlineSpan.(*MOSpan).needRecord)
 	require.Equal(t, 1, len(deadlineSpan.(*MOSpan).ExtraFields))
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan.(*MOSpan).ExtraFields)
+}
+
+type dummyFileWriterFactory struct {
+	fs fileservice.FileService
+}
+
+func (f *dummyFileWriterFactory) GetRowWriter(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+	return &dummyStringWriter{}
+}
+func (f *dummyFileWriterFactory) GetWriter(ctx context.Context, fp string) io.WriteCloser {
+	selfDir, err := filepath.Abs(".")
+	fmt.Printf("root: %s\n", selfDir)
+	dirname := path.Dir(fp)
+	if dirname != "." && dirname != "./" && dirname != "/" {
+		if err := os.Mkdir(dirname, os.ModeType|os.ModePerm); err != nil && !os.IsExist(err) {
+			panic(err)
+		}
+	}
+	fw, err := os.Create(fp)
+	if err != nil {
+		panic(err)
+	}
+	return fw
+}
+
+func TestMOSpan_doProfile(t *testing.T) {
+	type fields struct {
+		opts   []trace.SpanStartOption
+		ctx    context.Context
+		tracer *MOTracer
+	}
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			name: "normal",
+			fields: fields{
+				opts:   nil,
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "goroutine",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileGoroutine()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "heap",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileHeap()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "cpu",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileCpuSecs(time.Second)},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, s := tt.fields.tracer.Start(tt.fields.ctx, "test", tt.fields.opts...)
+			s.End()
+		})
+	}
 }
