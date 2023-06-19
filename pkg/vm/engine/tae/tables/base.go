@@ -602,12 +602,14 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 	t := types.T_int32.ToType()
 	sels := blk.rt.VectorPool.Transient.GetVector(&t)
 	defer sels.Close()
+	selsVec := sels.GetDownstreamVector()
+	mp := sels.GetAllocator()
 	blk.foreachPersistedDeletesCommittedInRange(
 		ctx,
 		start, end,
 		!withAborted,
 		func(row int, rowIdVec *vector.Vector) {
-			sels.Append(int32(row), false)
+			_ = vector.AppendFixed[int32](selsVec, int32(row), false, mp)
 		},
 		func(delBat *containers.Batch) {
 			if sels.Length() == 0 {
