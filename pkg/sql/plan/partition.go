@@ -57,6 +57,96 @@ var _ partitionBuilder = &keyPartitionBuilder{}
 var _ partitionBuilder = &rangePartitionBuilder{}
 var _ partitionBuilder = &listPartitionBuilder{}
 
+// visit partition expression and check the correctness of partition expression
+type partitionExprProcessor func(ctx context.Context, tbInfo *plan.TableDef, expr tree.Expr) error
+
+// partitionExprChecker used to check partition expression legitimacy
+type partitionExprChecker struct {
+	ctx        context.Context
+	processors []partitionExprProcessor
+	tableInfo  *plan.TableDef
+	err        error     // Error occurred during checking partition expression
+	columns    []*ColDef // Columns used in partition expressions
+}
+
+func newPartitionExprChecker(ctx context.Context, tbInfo *plan.TableDef, processor ...partitionExprProcessor) *partitionExprChecker {
+	p := &partitionExprChecker{
+		ctx:        ctx,
+		processors: processor,
+		tableInfo:  tbInfo,
+	}
+	p.processors = append(p.processors, p.extractColumns)
+	return p
+}
+
+func (p *partitionExprChecker) Enter(n tree.Expr) (node tree.Expr, skipChildren bool) {
+	for _, processor := range p.processors {
+		if err := processor(p.ctx, p.tableInfo, n); err != nil {
+			p.err = err
+			return n, true
+		}
+	}
+	return n, false
+}
+
+func (p *partitionExprChecker) Exit(n tree.Expr) (node tree.Expr, ok bool) {
+	return n, p.err == nil
+}
+
+func (p *partitionExprChecker) extractColumns(ctx context.Context, _ *plan.TableDef, expr tree.Expr) error {
+	columnNameExpr, ok := expr.(*tree.UnresolvedName)
+	if !ok {
+		return nil
+	}
+
+	colInfo := findColumnByName(columnNameExpr.Parts[0], p.tableInfo)
+	if colInfo == nil {
+		return moerr.NewBadFieldError(ctx, columnNameExpr.Parts[0], "partition function")
+	}
+
+	p.columns = append(p.columns, colInfo)
+	return nil
+}
+
+// checkPartitionExprValid checks partition expression function validly.
+func checkPartitionExprValid(ctx context.Context, tblInfo *plan.TableDef, expr tree.Expr) error {
+	if expr == nil {
+		return nil
+	}
+	exprChecker := newPartitionExprChecker(ctx, tblInfo, checkPartitionExprArgs, checkPartitionExprAllowed)
+	expr.Accept(exprChecker)
+	if exprChecker.err != nil {
+		return exprChecker.err
+	}
+	if len(exprChecker.columns) == 0 {
+		return moerr.NewWrongExprInPartitionFunc(ctx)
+	}
+	return nil
+}
+
+// buildPartitionColumns enables the use of multiple columns in partitioning keys
+func buildPartitionExpr(ctx context.Context, tblInfo *plan.TableDef, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, pExpr tree.Expr) error {
+	if err := checkPartitionExprValid(ctx, tblInfo, pExpr); err != nil {
+		return err
+	}
+	planExpr, err := partitionBinder.BindExpr(pExpr, 0, true)
+	if err != nil {
+		return err
+	}
+	// TODO: format partition expression
+	//fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
+	//pExpr.Format(fmtCtx)
+	//exprStr := fmtCtx.ToString()
+
+	// Temporary operation
+	exprStr := tree.String(pExpr, dialect.MYSQL)
+	partitionDef.PartitionExpr = &plan.PartitionExpr{
+		Expr:    planExpr,
+		ExprStr: exprStr,
+	}
+	return nil
+}
+
 // getValidPartitionCount checks the subpartition and adjust the number of the partition
 func getValidPartitionCount(ctx context.Context, needPartitionDefs bool, partitionSyntaxDef *tree.PartitionOption) (uint64, error) {
 	var err error
@@ -468,7 +558,7 @@ func checkPartitionExprType(ctx context.Context, _ *PartitionBinder, _ *TableDef
 	if partitionDef.PartitionExpr != nil && partitionDef.PartitionExpr.Expr != nil {
 		expr := partitionDef.PartitionExpr.Expr
 		t := types.T(expr.Typ.Id)
-		if partitionDef.Type == plan.PartitionType_HASH && !t.IsInteger() && !t.IsDecimal() {
+		if partitionDef.Type == plan.PartitionType_HASH && !t.IsInteger() {
 			return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
 		}
 
