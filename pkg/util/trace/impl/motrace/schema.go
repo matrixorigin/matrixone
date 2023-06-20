@@ -62,10 +62,11 @@ var (
 	execPlanCol  = table.TextDefaultColumn("exec_plan", `{}`, "statement execution plan")
 	rowsReadCol  = table.Int64Column("rows_read", "rows read total")
 	bytesScanCol = table.Int64Column("bytes_scan", "bytes scan total")
-	statsCol     = table.TextDefaultColumn("stats", `{}`, "global stats info in exec_plan")
+	statsCol     = table.TextDefaultColumn("stats", `[]`, "global stats info in exec_plan")
 	stmtTypeCol  = table.StringColumn("statement_type", "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]")
 	queryTypeCol = table.StringColumn("query_type", "query type, val in [DQL, DDL, DML, DCL, TCL]")
 	sqlTypeCol   = table.TextColumn("sql_source_type", "sql statement source type")
+	aggrCntCol   = table.Int64Column("aggr_count", "the number of statements aggregated")
 	resultCntCol = table.Int64Column("result_count", "the number of rows of sql execution results")
 
 	SingleStatementTable = &table.Table{
@@ -99,6 +100,7 @@ var (
 			queryTypeCol,
 			roleIdCol,
 			sqlTypeCol,
+			aggrCntCol,
 			resultCntCol,
 		},
 		PrimaryKeyColumn: nil,
