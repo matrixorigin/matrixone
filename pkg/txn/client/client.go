@@ -332,7 +332,7 @@ func (client *txnClient) pushTransaction(txn txn.TxnMeta) error {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	if client.mu.state {
+	if client.mu.state == normal {
 		i := sort.Search(len(client.mu.txns), func(i int) bool {
 			return client.mu.txns[i].SnapshotTS.GreaterEq(txn.SnapshotTS)
 		})
