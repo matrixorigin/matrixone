@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -69,9 +70,11 @@ func (p *PartitionReader) Read(
 			return nil, err
 		}
 		if bat != nil {
-			logutil.Debug(testutil.OperatorCatchBatch(
-				"partition reader[workspace:S3 block]",
-				bat))
+			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+				logutil.Debug(testutil.OperatorCatchBatch(
+					"partition reader[workspace:S3 block]",
+					bat))
+			}
 			return bat, nil
 		}
 	}
@@ -106,9 +109,11 @@ func (p *PartitionReader) Read(
 		//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
 		//		the bat.Length() is not always the right value for the result batch b.
 		b.SetZs(b.Vecs[0].Length(), mp)
-		logutil.Debug(testutil.OperatorCatchBatch(
-			"partition reader[workspace:memory]",
-			b))
+		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+			logutil.Debug(testutil.OperatorCatchBatch(
+				"partition reader[workspace:memory]",
+				b))
+		}
 		return b, nil
 	}
 
@@ -181,9 +186,11 @@ func (p *PartitionReader) Read(
 			return nil, nil
 		}
 		// XXX I'm not sure `normal` is a good description
-		logutil.Debug(testutil.OperatorCatchBatch(
-			"partition reader[snapshot: partitionState.rows]",
-			b))
+		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+			logutil.Debug(testutil.OperatorCatchBatch(
+				"partition reader[snapshot: partitionState.rows]",
+				b))
+		}
 		return b, nil
 	}
 }
