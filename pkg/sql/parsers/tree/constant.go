@@ -77,6 +77,15 @@ func (n *NumVal) Format(ctx *FmtCtx) {
 	}
 }
 
+// Accept implements NodeChecker Accept interface.
+func (n *NumVal) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	return v.Exit(n)
+}
+
 func FormatString(str string) string {
 	var buffer strings.Builder
 	for i, ch := range str {
@@ -161,6 +170,11 @@ type StrVal struct {
 
 func (node *StrVal) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.str)
+}
+
+// Accept implements NodeChecker Accept interface.
+func (node *StrVal) Accept(v Visitor) (Expr, bool) {
+	panic("unimplement StrVal Accept")
 }
 
 func NewStrVal(s string) *StrVal {
