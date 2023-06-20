@@ -49,7 +49,7 @@ var ErrFilteredOut = moerr.NewInternalError(context.Background(), "filtered out"
 
 func (a *Aggregator) Close() {
 	// clean up the Grouped map
-	a.Grouped = nil
+	a.Grouped = make(map[interface{}]Item)
 	// release resources related to the context if necessary
 	a.ctx = nil
 }
