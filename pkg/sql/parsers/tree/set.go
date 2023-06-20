@@ -31,6 +31,12 @@ func (node *SetVar) Format(ctx *FmtCtx) {
 	}
 }
 
+// Accept implements NodeChecker interface.
+func (node *SetVar) Accept(v Visitor) (Expr, bool) {
+	//TODO: unimplement Accept interface
+	panic("tree.SetVar Unimplement Accept")
+}
+
 func (node *SetVar) GetStatementType() string { return "Set Var" }
 func (node *SetVar) GetQueryType() string     { return QueryTypeOth }
 
