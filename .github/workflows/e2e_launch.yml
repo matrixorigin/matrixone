@@ -71,7 +71,7 @@ jobs:
           max_retry=5
           retry=0
           while [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; do
-            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/dump-stacks${retry}.log
+            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks${retry}.log
             pkill -9 mo-service
             retry=$((retry+1))
             if [ ${retry} -ge ${max_retry} ]; then
@@ -98,7 +98,7 @@ jobs:
       - name: Dump restarted mo-service goroutines 
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/restarted-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/restarted-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
           
       - name: generate upload files
         if: ${{ always() }}
@@ -109,7 +109,7 @@ jobs:
           rm -rf ./mo-tester/lib
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/head/dump-stacks.log ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/head/dump-stacks* ${{ github.workspace }}/upload/
 
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
