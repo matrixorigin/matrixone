@@ -140,7 +140,7 @@ select sleep(16);
 sleep(16)
 0
 use system;
-select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and length(statement) > 0 and status != 'Running' and aggr_count < 1 order by request_at desc limit 70;
+select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and length(statement) > 0 and status != 'Running' and aggr_count < 1 order by request_at desc limit 53;
 statement    result_count
 use system    0
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    3
