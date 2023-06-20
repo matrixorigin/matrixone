@@ -68,13 +68,38 @@ jobs:
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
+          max_retry=5
+          retry=0
+          while [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; do
+            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/dump-stacks${retry}.log
+            pkill -9 mo-service
+            retry=$((retry+1))
+            if [ ${retry} -ge ${max_retry} ]; then
+              echo 'after retry, still cannot shutdown mo-service'
+              exit 1
+            fi
+            sleep 2
+          done
 
-      - name: Check mo-service Status
+      - name: Restart the Version of Head of MO
+        run: |
+          cd $GITHUB_WORKSPACE/workspace
+          mv mo-service.log mo-service.r1.log
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-multi-CN-tae-DN
+
+      - name: Start BVT Test for MO with Version of Head Restarted
+        id: bvt_on_latest_head_version_run2
+        run: |
+          export LC_ALL="C.UTF-8"
+          locale
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases/benchmark/tpch 2>&1
+
+      - name: Dump restarted mo-service goroutines 
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
-
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/restarted-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
+          
       - name: generate upload files
         if: ${{ always() }}
         continue-on-error: true
@@ -156,12 +181,38 @@ jobs:
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
+          max_retry=5
+          retry=0
+          while [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; do
+            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/dump-stacks${retry}.log
+            pkill -9 mo-service
+            retry=$((retry+1))
+            if [ ${retry} -ge ${max_retry} ]; then
+              echo 'after retry, still cannot shutdown mo-service'
+              exit 1
+            fi
+            sleep 2
+          done
 
-      - name: Check mo-service Status
+      - name: Restart the Version of Head of MO
+        run: |
+          cd $GITHUB_WORKSPACE/workspace
+          mv mo-service.log mo-service.r1.log
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-CN-tae-DN
+
+      - name: Start BVT Test for MO with Version of Head Restarted
+        id: bvt_on_latest_head_version_run2
+        run: |
+          export LC_ALL="C.UTF-8"
+          locale
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases/benchmark/tpch 2>&1
+
+      - name: Dump restarted mo-service goroutines 
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/restarted-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
+  
 
       - name: generate upload files
         if: ${{ always() }}
