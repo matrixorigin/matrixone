@@ -80,7 +80,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(true, "db", "v").AnyTimes()
 
-	qb := NewQueryBuilder(plan.Query_SELECT, ctx)
+	qb := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	tb := &tree.TableName{}
 	tb.SchemaName = "db"
 	tb.ObjectName = "v"

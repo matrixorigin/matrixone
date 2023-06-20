@@ -287,18 +287,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		   }
 		*/
 	}
-	// else {
-	// var vp *plan2.VisitPlan
-	// if cacheHit {
-	// 	vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess()), plan2.NewRecomputeRealTimeRelatedFuncRule(cwft.ses.GetTxnCompileCtx().GetProcess())})
-	// } else {
-	// 	vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())})
-	// }
-	// err = vp.Visit(requestCtx)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// }
 
 	txnHandler := cwft.ses.GetTxnHandler()
 	var txnCtx context.Context

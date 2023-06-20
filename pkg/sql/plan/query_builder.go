@@ -36,7 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
+func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool) *QueryBuilder {
 	var mysqlCompatible bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
@@ -52,12 +52,13 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 		qry: &Query{
 			StmtType: queryType,
 		},
-		compCtx:         ctx,
-		ctxByNode:       []*BindContext{},
-		nameByColRef:    make(map[[2]int32]string),
-		nextTag:         0,
-		mysqlCompatible: mysqlCompatible,
-		tag2Table:       make(map[int32]*TableDef),
+		compCtx:            ctx,
+		ctxByNode:          []*BindContext{},
+		nameByColRef:       make(map[[2]int32]string),
+		nextTag:            0,
+		mysqlCompatible:    mysqlCompatible,
+		tag2Table:          make(map[int32]*TableDef),
+		isPrepareStatement: isPrepareStatement,
 	}
 }
 
@@ -882,6 +883,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		remapping = childRemapping
 
 	case plan.Node_VALUE_SCAN:
+		node.NotCacheable = true
 		// VALUE_SCAN always have one column now
 		if node.TableDef == nil { // like select 1,2
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
@@ -1540,6 +1542,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
 					RowPos: int32(j),
 					Expr:   planExpr,
+					Pos:    -1,
 				})
 			}
 
@@ -1563,11 +1566,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		bat.SetZs(rowCount, proc.Mp())
 		nodeUUID, _ := uuid.NewUUID()
 		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_VALUE_SCAN,
-			RowsetData:  rowSetData,
-			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewTag()},
-			Uuid:        nodeUUID[:],
+			NodeType:     plan.Node_VALUE_SCAN,
+			RowsetData:   rowSetData,
+			TableDef:     tableDef,
+			BindingTags:  []int32{builder.genNewTag()},
+			Uuid:         nodeUUID[:],
+			NotCacheable: true,
 		}, ctx)
 		if builder.isPrepareStatement {
 			proc.SetPrepareBatch(bat)

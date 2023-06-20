@@ -24,7 +24,7 @@ import (
 func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return BuildPlan(ctx, stmt)
+			return BuildPlan(ctx, stmt, true)
 		}
 	}
 
@@ -34,7 +34,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewPrepareOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt)
+		optimized, err := opt.Optimize(stmt, true)
 		if err != nil {
 			return nil, err
 		}
@@ -44,7 +44,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 			},
 		}, nil
 	default:
-		return BuildPlan(ctx, stmt)
+		return BuildPlan(ctx, stmt, true)
 	}
 }
 
@@ -147,7 +147,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildExecute(stmt *tree.Execute, ctx CompilerContext) (*Plan, error) {
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	binder := NewWhereBinder(builder, &BindContext{})
 
 	args := make([]*Expr, len(stmt.Variables))
@@ -197,7 +197,7 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 	var err error
 	items := make([]*plan.SetVariablesItem, len(stmt.Assignments))
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	binder := NewWhereBinder(builder, &BindContext{})
 
 	for idx, assignment := range stmt.Assignments {
