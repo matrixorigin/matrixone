@@ -70,8 +70,10 @@ func StatementInfoUpdate(existing, new Item) {
 	n := new.(*StatementInfo)
 	// update the stats
 	e.Duration += n.Duration
-	e.StmtBuilder.WriteString("; ")
-	e.StmtBuilder.WriteString(n.Statement)
+	if !GetTracerProvider().disableStmtMerge {
+		e.StmtBuilder.WriteString("; ")
+		e.StmtBuilder.WriteString(n.Statement)
+	}
 	e.AggrCount += 1
 	// reponseAt is the last response time
 	e.ResponseAt = n.ResponseAt

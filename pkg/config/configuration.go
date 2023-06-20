@@ -611,6 +611,9 @@ type ObservabilityParameters struct {
 	// Duration to filter statements for aggregation
 	SelectAggrThreshold toml.Duration `toml:"selectAggrThreshold"`
 
+	// Disable merge statements
+	DisableStmtMerge bool `toml:"disableStmtMerge"`
+
 	OBCollectorConfig
 }
 
