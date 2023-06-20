@@ -316,6 +316,10 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	if task.created != nil {
 		createdStr = task.created.Fingerprint().BlockString()
 	}
+	rows := 0
+	if task.created != nil {
+		rows = task.created.Rows()
+	}
 	logutil.Info("[Done]",
 		common.AnyField("txn-start-ts", task.txn.GetStartTS().ToString()),
 		common.OperationField(task.Name()),
@@ -323,7 +327,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		common.AnyField("created", createdStr),
 		common.AnyField("compactedRows", task.compacted.Rows()),
 		common.AnyField("TotalChanges", task.compacted.GetTotalChanges()),
-		common.AnyField("createdRows", task.created.Rows()),
+		common.AnyField("createdRows", rows),
 		common.DurationField(time.Since(now)))
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Segment.CompactBlock.Add(1)
