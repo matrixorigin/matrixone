@@ -153,6 +153,11 @@ jobs:
           locale
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases/benchmark/tpch 2>&1
+
+      - name: Dump restarted mo-service-new goroutines 
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/new-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
           
       - name: generate upload files
         if: ${{ always() }}
@@ -163,11 +168,6 @@ jobs:
           rm -rf ./mo-tester/lib
           mv ${{ github.workspace }}/workspace ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
-          
-      - name: Dump restarted mo-service-new goroutines 
-        if: ${{ always() && !cancelled() }}
-        run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/new-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
           
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
