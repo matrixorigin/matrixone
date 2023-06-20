@@ -63,6 +63,36 @@ type NodeFormatter interface {
 	Format(ctx *FmtCtx)
 }
 
+// Visitor Design Pattern
+// NodeChecker is abstract tree Node
+type NodeChecker interface {
+	// `Accept` method accepts Visitor to visit itself. Visitor checks the current node
+	// The returned node should replace original node.
+	// The node returned by Accpet should replace the original node.
+	// If OK returns false, it stops accessing other child nodes.
+
+	//	The general implementation logic of the `Accept` method is:
+	//	First, call the Visitor.`Enter` method, and assign the returned `node` to the receiver of the `Accept` method,
+	//	If the returnd `skipChildren` value is true, then it is necessary to stop accessing the receiver's child node
+	//	Otherwise, recursively call the` Accept` of its children nodes,
+	//	Finally, don't forget to call the Visitor's `Exit` method
+	Accept(v Visitor) (node Expr, ok bool)
+}
+
+// Visitor Design Pattern
+// Visitor visits the ast node or sub ast nodes
+type Visitor interface {
+	// Call the 'Enter' method before visiting the children nodes.
+	// The node type returned by the `Enter` method must be the same as the input node type
+	// SkipChildren returning true means that access to child nodes should be skipped.
+	Enter(n Expr) (node Expr, skipChildren bool)
+
+	//`Exit` is called after all children nodes are visited.
+	//The returned node of the `Exit` method is `Expr`, which is of the same type as the input node.
+	//if `Exit` method returns OK as false ,means stop visiting.
+	Exit(n Expr) (node Expr, ok bool)
+}
+
 func String(node NodeFormatter, dialectType dialect.DialectType) string {
 	if node == nil {
 		return "<nil>"
