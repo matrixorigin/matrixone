@@ -18,12 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -119,18 +118,6 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		return table.NewRowRequest(nil)
 	}
 
-	// Initialize aggregator
-	var aggregator *Aggregator
-	if !GetTracerProvider().disableStmtAggregation {
-		aggregator = NewAggregator(
-			ctx,
-			GetTracerProvider().aggregationWindow,
-			StatementInfoNew,
-			StatementInfoUpdate,
-			StatementInfoFilter,
-		)
-	}
-
 	ts := time.Now()
 	writerMap := make(map[string]table.RowWriter, 2)
 	writeValues := func(item table.RowField) {
@@ -155,45 +142,11 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	}
 
 	for _, i := range in {
-		// Check if the item is a StatementInfo
-		if statementInfo, ok := i.(*StatementInfo); ok {
-			// If so, add it to the aggregator
-			var err error
-			if !GetTracerProvider().disableStmtAggregation {
-				_, err = aggregator.AddItem(statementInfo)
-
-			}
-			if err != nil {
-				item, ok := i.(table.RowField)
-				if !ok {
-					panic("not MalCsv, dont support output CSV")
-				}
-				writeValues(item)
-			}
-		} else {
-			// If not, process as before
-			item, ok := i.(table.RowField)
-			if !ok {
-				panic("not MalCsv, dont support output CSV")
-			}
-			writeValues(item)
+		item, ok := i.(table.RowField)
+		if !ok {
+			panic("not MalCsv, dont support output CSV")
 		}
-	}
-
-	// Get the aggregated results
-	if aggregator != nil {
-		groupedResults := aggregator.GetResults()
-
-		for _, i := range groupedResults {
-
-			// If not, process as before
-			item, ok := i.(table.RowField)
-			if !ok {
-				panic("not MalCsv, dont support output CSV")
-			}
-			writeValues(item)
-		}
-		aggregator.Close()
+		writeValues(item)
 	}
 
 	reqs := make(table.ExportRequests, 0, len(writerMap))
