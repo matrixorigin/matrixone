@@ -54,6 +54,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 		nameByColRef:    make(map[[2]int32]string),
 		nextTag:         0,
 		mysqlCompatible: mysqlCompatible,
+		tag2Table:       make(map[int32]*TableDef),
 	}
 }
 
@@ -643,8 +644,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
-		i := 0
-		for _, globalRef := range childRemapping.localToGlobal {
+		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
@@ -661,7 +661,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
-			i++
 		}
 
 		windowTag := node.BindingTags[0]
@@ -680,12 +679,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			remapping.addColRef(globalRef)
 
+			l := len(childProjList)
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
-						ColPos: int32(idx + i),
+						ColPos: int32(idx + l),
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -963,6 +963,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				},
 			})
 		}
+
+		node.LockTargets[0].PrimaryColIdxInBat = int32(len(childProjList) - 1)
 
 		if len(node.ProjectList) == 0 {
 			if len(childRemapping.localToGlobal) > 0 {
@@ -1669,6 +1671,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
 				PrimaryColTyp:      pkTyp,
+				Block:              true,
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
 			}

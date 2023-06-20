@@ -12,8 +12,9 @@ spec:
       - name: dockerhub
     cacheVolume:
       size: 100Gi
+      storageClassName: gp3
     sharedStorageCache:
-      memoryCacheSize: 1Gi
+      memoryCacheSize: 512Mi
       diskCacheSize: 100Gi
     config: |
       [dn.Txn.Storage]
@@ -62,6 +63,7 @@ spec:
     pvcRetentionPolicy: Delete
     volume:
       size: 100Gi
+      storageClassName: gp3
     config: |
       [log]
       level = "info"
@@ -70,6 +72,7 @@ spec:
   tp:
     cacheVolume:
       size: 100Gi
+      storageClassName: gp3
     sharedStorageCache:
       memoryCacheSize: 1Gi
       diskCacheSize: 100Gi
@@ -86,6 +89,8 @@ spec:
       [cn.txn]
       enable-sacrificing-freshness = true
       enable-cn-based-consistency = false
+      [cn.ctl.address]
+      listen-address = "0.0.0.0:19958"
     replicas: 2
     overlay:
       imagePullSecrets:

@@ -23,6 +23,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -100,28 +101,24 @@ func (bat *Batch) GetVectorByName(name string) Vector {
 
 func (bat *Batch) RangeDelete(start, end int) {
 	if bat.Deletes == nil {
-		bat.Deletes = roaring.New()
+		bat.Deletes = nulls.NewWithSize(end)
 	}
 	bat.Deletes.AddRange(uint64(start), uint64(end))
 }
 
 func (bat *Batch) Delete(i int) {
 	if bat.Deletes == nil {
-		bat.Deletes = roaring.BitmapOf(uint32(i))
-	} else {
-		bat.Deletes.Add(uint32(i))
+		bat.Deletes = nulls.NewWithSize(i)
 	}
+	bat.Deletes.Add(uint64(i))
 }
 
 func (bat *Batch) HasDelete() bool {
-	return bat.Deletes != nil && !bat.Deletes.IsEmpty()
+	return !bat.Deletes.IsEmpty()
 }
 
 func (bat *Batch) IsDeleted(i int) bool {
-	if !bat.HasDelete() {
-		return false
-	}
-	return bat.Deletes.ContainsInt(i)
+	return bat.Deletes.Contains(uint64(i))
 }
 
 func (bat *Batch) DeleteCnt() int {
@@ -136,7 +133,7 @@ func (bat *Batch) Compact() {
 		return
 	}
 	for _, vec := range bat.Vecs {
-		vec.Compact(bat.Deletes)
+		vec.CompactByBitmap(bat.Deletes)
 	}
 	bat.Deletes = nil
 }
@@ -153,27 +150,49 @@ func (bat *Batch) Allocated() int {
 	return allocated
 }
 
-func (bat *Batch) WindowDeletes(offset, length int) *roaring.Bitmap {
-	if bat.Deletes != nil && offset+length != bat.Length() {
-		return common.BM32Window(bat.Deletes, offset, offset+length)
+func (bat *Batch) WindowDeletes(offset, length int, deep bool) *nulls.Bitmap {
+	if bat.Deletes.IsEmpty() || length <= 0 {
+		return nil
 	}
-	return bat.Deletes
+	start := offset
+	end := offset + length
+	if end > bat.Length() {
+		panic(fmt.Sprintf("out of range: %d, %d", offset, length))
+	}
+	if start == 0 && end == bat.Length() && !deep {
+		return bat.Deletes
+	}
+	ret := nulls.NewWithSize(length)
+	nulls.Range(bat.Deletes, uint64(start), uint64(end), uint64(start), ret)
+	return ret
 }
 
 func (bat *Batch) Window(offset, length int) *Batch {
 	win := new(Batch)
 	win.Attrs = bat.Attrs
 	win.Nameidx = bat.Nameidx
-	if bat.Deletes != nil && offset+length != bat.Length() {
-		win.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
-	} else {
-		win.Deletes = bat.Deletes
-	}
+	win.Deletes = bat.WindowDeletes(offset, length, false)
 	win.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range win.Vecs {
 		win.Vecs[i] = bat.Vecs[i].Window(offset, length)
 	}
 	return win
+}
+
+func (bat *Batch) CloneWindowWithPool(offset, length int, pool *VectorPool) (cloned *Batch) {
+	cloned = new(Batch)
+	cloned.Attrs = make([]string, len(bat.Attrs))
+	copy(cloned.Attrs, bat.Attrs)
+	cloned.Nameidx = make(map[string]int, len(bat.Nameidx))
+	for k, v := range bat.Nameidx {
+		cloned.Nameidx[k] = v
+	}
+	cloned.Deletes = bat.WindowDeletes(offset, length, true)
+	cloned.Vecs = make([]Vector, len(bat.Vecs))
+	for i := range cloned.Vecs {
+		cloned.Vecs[i] = bat.Vecs[i].CloneWindowWithPool(offset, length, pool)
+	}
+	return
 }
 
 func (bat *Batch) CloneWindow(offset, length int, allocator ...*mpool.MPool) (cloned *Batch) {
@@ -184,9 +203,7 @@ func (bat *Batch) CloneWindow(offset, length int, allocator ...*mpool.MPool) (cl
 	for k, v := range bat.Nameidx {
 		cloned.Nameidx[k] = v
 	}
-	if bat.Deletes != nil {
-		cloned.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
-	}
+	cloned.Deletes = bat.WindowDeletes(offset, length, true)
 	cloned.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range cloned.Vecs {
 		cloned.Vecs[i] = bat.Vecs[i].CloneWindow(offset, length, allocator...)
@@ -221,10 +238,8 @@ func (bat *Batch) Equals(o *Batch) bool {
 	if bat.DeleteCnt() != o.DeleteCnt() {
 		return false
 	}
-	if bat.HasDelete() {
-		if !bat.Deletes.Equals(o.Deletes) {
-			return false
-		}
+	if !common.BitmapEqual(bat.Deletes, o.Deletes) {
+		return false
 	}
 	for i := range bat.Vecs {
 		if bat.Attrs[i] != o.Attrs[i] {
@@ -273,7 +288,7 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	// 4. Deletes
 	var buf []byte
 	if bat.Deletes != nil {
-		if buf, err = bat.Deletes.ToBytes(); err != nil {
+		if buf, err = bat.Deletes.Show(); err != nil {
 			return
 		}
 	}
@@ -334,11 +349,68 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	if size == 0 {
 		return
 	}
-	bat.Deletes = roaring.New()
-	if tmpn, err = bat.Deletes.ReadFrom(r); err != nil {
+	bat.Deletes = &nulls.Bitmap{}
+	buf = make([]byte, size)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	if err = bat.Deletes.ReadNoCopy(buf); err != nil {
+		return
+	}
+	n += int64(size)
+
+	return
+}
+
+// in version1, batch.Deletes is roaring.Bitmap
+func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
+	var tmpn int64
+	buffer := MakeVector(types.T_varchar.ToType())
+	defer buffer.Close()
+	if tmpn, err = buffer.ReadFrom(r); err != nil {
 		return
 	}
 	n += tmpn
+	pos := 0
+	buf := buffer.Get(pos).([]byte)
+	pos++
+	cnt := types.DecodeFixed[uint16](buf)
+	vecTypes := make([]types.Type, cnt)
+	bat.Attrs = make([]string, cnt)
+	for i := 0; i < int(cnt); i++ {
+		buf = buffer.Get(pos).([]byte)
+		pos++
+		bat.Attrs[i] = string(buf)
+		bat.Nameidx[bat.Attrs[i]] = i
+		buf = buffer.Get(pos).([]byte)
+		vecTypes[i] = types.DecodeType(buf)
+		pos++
+	}
+	for _, vecType := range vecTypes {
+		vec := MakeVector(vecType)
+		if tmpn, err = vec.ReadFrom(r); err != nil {
+			return
+		}
+		bat.Vecs = append(bat.Vecs, vec)
+		n += tmpn
+	}
+	// XXX Fix the following read, it is a very twisted way of reading uint32.
+	// Read Deletes
+	buf = make([]byte, int(unsafe.Sizeof(uint32(0))))
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	n += int64(len(buf))
+	size := types.DecodeFixed[uint32](buf)
+	if size == 0 {
+		return
+	}
+	deletes := roaring.New()
+	if tmpn, err = deletes.ReadFrom(r); err != nil {
+		return
+	}
+	n += tmpn
+	bat.Deletes = common.RoaringToMOBitmap(deletes)
 
 	return
 }

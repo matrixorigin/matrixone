@@ -38,7 +38,9 @@ import (
 func TestTables1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 	txn, _ := db.StartTxn(nil)
 	database, _ := txn.CreateDatabase("db", "", "")
@@ -47,7 +49,7 @@ func TestTables1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
-	dataFactory := tables.NewDataFactory(db.Fs, db.IndexCache, db.Scheduler, db.Dir)
+	dataFactory := tables.NewDataFactory(db.Runtime, db.Dir)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
 	handle := table.GetHandle()
@@ -92,16 +94,18 @@ func TestTables1(t *testing.T) {
 	_, _, toAppend, err = appender.PrepareAppend(rows-2*toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
-	err = txn.Rollback()
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+	err = txn.Rollback(context.Background())
 	assert.Nil(t, err)
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestTxn1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchema(3, 2)
@@ -118,7 +122,7 @@ func TestTxn1(t *testing.T) {
 		assert.Nil(t, err)
 		_, err = database.CreateRelation(schema)
 		assert.Nil(t, err)
-		err = txn.Commit()
+		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 	}
 	var wg sync.WaitGroup
@@ -132,7 +136,7 @@ func TestTxn1(t *testing.T) {
 			assert.Nil(t, err)
 			err = rel.Append(context.Background(), b)
 			assert.Nil(t, err)
-			err = txn.Commit()
+			err = txn.Commit(context.Background())
 			assert.Nil(t, err)
 		}
 	}
@@ -181,13 +185,15 @@ func TestTxn1(t *testing.T) {
 		assert.Equal(t, expectSegCnt, segCnt)
 		assert.Equal(t, expectBlkCnt, blkCnt)
 	}
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestTxn2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	var wg sync.WaitGroup
@@ -195,9 +201,9 @@ func TestTxn2(t *testing.T) {
 		defer wg.Done()
 		txn, _ := db.StartTxn(nil)
 		if _, err := txn.CreateDatabase("db", "", ""); err != nil {
-			assert.Nil(t, txn.Rollback())
+			assert.Nil(t, txn.Rollback(context.Background()))
 		} else {
-			assert.Nil(t, txn.Commit())
+			assert.Nil(t, txn.Commit(context.Background()))
 		}
 		t.Log(txn.String())
 	}
@@ -205,13 +211,15 @@ func TestTxn2(t *testing.T) {
 	go run()
 	go run()
 	wg.Wait()
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestTxn4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -231,14 +239,16 @@ func TestTxn4(t *testing.T) {
 		err := rel.Append(context.Background(), bat)
 		t.Log(err)
 		assert.NotNil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 }
 
 func TestTxn5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -254,7 +264,7 @@ func TestTxn5(t *testing.T) {
 		database, _ := txn.CreateDatabase("db", "", "")
 		_, err := database.CreateRelation(schema)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -264,7 +274,7 @@ func TestTxn5(t *testing.T) {
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[0])
 		assert.NotNil(t, err)
-		assert.Nil(t, txn.Rollback())
+		assert.Nil(t, txn.Rollback(context.Background()))
 	}
 
 	{
@@ -273,7 +283,7 @@ func TestTxn5(t *testing.T) {
 		rel, _ := database.GetRelationByName(schema.Name)
 		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -281,7 +291,7 @@ func TestTxn5(t *testing.T) {
 		rel, _ := database.GetRelationByName(schema.Name)
 		err := rel.Append(context.Background(), bats[0])
 		assert.NotNil(t, err)
-		assert.Nil(t, txn.Rollback())
+		assert.Nil(t, txn.Rollback(context.Background()))
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -298,18 +308,20 @@ func TestTxn5(t *testing.T) {
 		err = rel2.Append(context.Background(), bats[2])
 		assert.Nil(t, err)
 
-		assert.Nil(t, txn2.Commit())
-		assert.Error(t, txn.Commit())
+		assert.Nil(t, txn2.Commit(context.Background()))
+		assert.Error(t, txn.Commit(context.Background()))
 		t.Log(txn2.String())
 		t.Log(txn.String())
 	}
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestTxn6(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -326,7 +338,7 @@ func TestTxn6(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -336,24 +348,24 @@ func TestTxn6(t *testing.T) {
 		filter.Op = handle.FilterEq
 		filter.Val = int32(5)
 
-		err := rel.UpdateByFilter(filter, uint16(3), int64(33), false)
+		err := rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(33), false)
 		assert.NoError(t, err)
 
-		err = rel.UpdateByFilter(filter, uint16(3), int64(44), false)
+		err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(44), false)
 		assert.NoError(t, err)
-		v, _, err := rel.GetValueByFilter(filter, 3)
+		v, _, err := rel.GetValueByFilter(context.Background(), filter, 3)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(44), v)
 
 		filter.Val = int32(6)
-		err = rel.UpdateByFilter(filter, uint16(3), int64(77), false)
+		err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(77), false)
 		assert.NoError(t, err)
 
-		err = rel.DeleteByFilter(filter)
+		err = rel.DeleteByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 
 		// Double delete in a same txn -- FAIL
-		err = rel.DeleteByFilter(filter)
+		err = rel.DeleteByFilter(context.Background(), filter)
 		assert.Error(t, err)
 
 		{
@@ -362,31 +374,31 @@ func TestTxn6(t *testing.T) {
 			rel, _ := database.GetRelationByName(schema.Name)
 
 			filter.Val = int32(5)
-			v, _, err := rel.GetValueByFilter(filter, 3)
+			v, _, err := rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.NoError(t, err)
 			assert.NotEqual(t, int64(44), v)
 
-			err = rel.UpdateByFilter(filter, uint16(3), int64(55), false)
+			err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(55), false)
 			assert.Error(t, err)
 
 			filter.Val = int32(7)
-			err = rel.UpdateByFilter(filter, uint16(3), int64(88), false)
+			err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(88), false)
 			assert.NoError(t, err)
 
 			// Update row that has uncommitted delete -- FAIL
 			filter.Val = int32(6)
-			err = rel.UpdateByFilter(filter, uint16(3), int64(55), false)
+			err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(55), false)
 			assert.Error(t, err)
-			_, _, err = rel.GetValueByFilter(filter, 3)
+			_, _, err = rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.NoError(t, err)
-			err = txn.Rollback()
+			err = txn.Rollback(context.Background())
 			assert.NoError(t, err)
 		}
 		filter.Val = int32(7)
-		err = rel.UpdateByFilter(filter, uint16(3), int64(99), false)
+		err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(99), false)
 		assert.NoError(t, err)
 
-		assert.NoError(t, txn.Commit())
+		assert.NoError(t, txn.Commit(context.Background()))
 
 		{
 			txn, _ := db.StartTxn(nil)
@@ -394,17 +406,17 @@ func TestTxn6(t *testing.T) {
 			rel, _ := database.GetRelationByName(schema.Name)
 
 			filter.Val = int32(5)
-			v, _, err := rel.GetValueByFilter(filter, 3)
+			v, _, err := rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(44), v)
 
 			filter.Val = int32(7)
-			v, _, err = rel.GetValueByFilter(filter, 3)
+			v, _, err = rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(99), v)
 
 			filter.Val = int32(6)
-			_, _, err = rel.GetValueByFilter(filter, 3)
+			_, _, err = rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.Error(t, err)
 
 			it := rel.MakeBlockIt()
@@ -425,8 +437,10 @@ func TestTxn6(t *testing.T) {
 func TestMergeBlocks1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := new(options.Options)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 5
@@ -456,7 +470,7 @@ func TestMergeBlocks1(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
 	{
@@ -479,10 +493,10 @@ func TestMergeBlocks1(t *testing.T) {
 			blk := it.GetBlock()
 			err := blk.RangeDelete(4, 4, handle.DT_Normal)
 			assert.Nil(t, err)
-			assert.Nil(t, txn.Commit())
+			assert.Nil(t, txn.Commit(context.Background()))
 		}
 		start := time.Now()
-		factory := jobs.MergeBlocksIntoSegmentTaskFctory(blks, nil, db.Scheduler)
+		factory := jobs.MergeBlocksIntoSegmentTaskFctory(blks, nil, db.Runtime)
 		// err = task.WaitDone()
 		// assert.Nil(t, err)
 		{
@@ -491,9 +505,9 @@ func TestMergeBlocks1(t *testing.T) {
 			err = task.OnExec(context.Background())
 			assert.Nil(t, err)
 		}
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 		t.Logf("MergeSort takes: %s", time.Since(start))
-		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+		t.Log(db.Catalog.SimplePPString(common.PPL1))
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -529,8 +543,10 @@ func TestMergeBlocks1(t *testing.T) {
 func TestMergeBlocks2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
@@ -557,7 +573,7 @@ func TestMergeBlocks2(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	pk.Close()
 	col3.Close()
@@ -576,7 +592,9 @@ func TestMergeBlocks2(t *testing.T) {
 func TestCompaction1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -593,7 +611,7 @@ func TestCompaction1(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -615,7 +633,7 @@ func TestCompaction1(t *testing.T) {
 		rel, _ := database.GetRelationByName(schema.Name)
 		err := rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -636,8 +654,10 @@ func TestCompaction1(t *testing.T) {
 func TestCompaction2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -654,7 +674,7 @@ func TestCompaction2(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
 	testutils.WaitExpect(5000, func() bool {
@@ -717,7 +737,7 @@ func TestCompaction2(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	go func() {
 		txn, _ := db.StartTxn(nil)
@@ -725,7 +745,7 @@ func TestCompaction2(t *testing.T) {
 		rel, _ := database.GetRelationByName(schema.Name)
 		err := rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}()
 	{
 		txn, _ := db.StartTxn(nil)

@@ -321,6 +321,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		createTable.Database = string(stmt.Table.SchemaName)
 	}
 
+	if stmt.Temporary && stmt.PartitionOption != nil {
+		return nil, moerr.NewPartitionNoTemporary(ctx.GetContext())
+	}
+
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			return nil, moerr.NewNoDB(ctx.GetContext())

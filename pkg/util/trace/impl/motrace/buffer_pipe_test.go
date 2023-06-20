@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -66,7 +68,7 @@ func init() {
 		withMOVersion("v0.test.0"),
 		WithNode("node_uuid", trace.NodeTypeStandalone),
 		WithBatchProcessMode(FileService),
-		WithFSWriterFactory(dummyFSWriterFactory),
+		WithFSWriterFactory(&dummyFSWriterFactory{}),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
 		}),
@@ -100,7 +102,18 @@ func (w *dummyStringWriter) FlushAndClose() (int, error) {
 }
 func (w *dummyStringWriter) GetContent() string { return "" }
 
-var dummyFSWriterFactory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+func (w *dummyStringWriter) Write(p []byte) (n int, err error) {
+	return fmt.Printf("dummyStringWriter: %s\n", p)
+}
+
+func (w *dummyStringWriter) Close() error { return nil }
+
+type dummyFSWriterFactory struct{}
+
+func (f *dummyFSWriterFactory) GetRowWriter(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+	return &dummyStringWriter{}
+}
+func (f *dummyFSWriterFactory) GetWriter(ctx context.Context, fp string) io.WriteCloser {
 	return &dummyStringWriter{}
 }
 
@@ -293,9 +306,12 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 }*/
 
 var genFactory = func() table.WriterFactory {
-	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-		return etl.NewCSVWriter(ctx, &dummyStringWriter{})
-	}
+	return table.NewWriterFactoryGetter(
+		func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+			return etl.NewCSVWriter(ctx, &dummyStringWriter{})
+		},
+		nil,
+	)
 }
 
 func Test_genCsvData(t *testing.T) {
@@ -326,7 +342,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",internal
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000001,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",internal
 `,
 		},
 		{
@@ -356,13 +372,14 @@ func Test_genCsvData(t *testing.T) {
 						Duration:   0,
 						tracer:     gTracer.(*MOTracer),
 						//EndTime:    table.ZeroTime,
+						ExtraFields: []zap.Field{zap.String("str", "field"), zap.Int64("int", 0)},
 					},
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",statement
-span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span2,0,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
-span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,empty_end,0,1970-01-01 00:00:00.000001,0001-01-01 00:00:00.000000,0,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000001,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",statement
+span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.001000,,,,{},0,,,span2,0,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
+span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,"{""str"":""field"",""int"":0}",0,,,empty_end,0,1970-01-01 00:00:00.000001,0001-01-01 00:00:00.000000,0,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
 `,
 		},
 		{

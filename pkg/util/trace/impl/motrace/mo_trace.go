@@ -24,12 +24,17 @@ package motrace
 import (
 	"context"
 	"encoding/hex"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 //nolint:revive // revive complains about stutter of `trace.TraceFlags`.
@@ -42,13 +47,14 @@ type MOTracer struct {
 	provider *MOTracerProvider
 }
 
-func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanOption) (context.Context, trace.Span) {
+func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	if !t.IsEnable() {
 		return ctx, trace.NoopSpan{}
 	}
 	span := newMOSpan()
-	span.init(name, opts...)
 	span.tracer = t
+	span.ctx = ctx
+	span.init(name, opts...)
 
 	parent := trace.SpanFromContext(ctx)
 	psc := parent.SpanContext()
@@ -64,7 +70,7 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanOpt
 	return trace.ContextWithSpan(ctx, span), span
 }
 
-func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanOption) (context.Context, trace.Span) {
+func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	if !t.provider.debugMode {
 		return ctx, trace.NoopSpan{}
 	}
@@ -85,8 +91,12 @@ type MOSpan struct {
 	EndTime   time.Time `jons:"end_time"`
 	// Duration
 	Duration time.Duration `json:"duration"`
+	// ExtraFields
+	ExtraFields []zap.Field `json:"extra"`
 
-	tracer *MOTracer `json:"-"`
+	tracer     *MOTracer       `json:"-"`
+	ctx        context.Context `json:"-"`
+	needRecord bool            `json:"-"`
 }
 
 var spanPool = &sync.Pool{New: func() any {
@@ -97,9 +107,10 @@ func newMOSpan() *MOSpan {
 	return spanPool.Get().(*MOSpan)
 }
 
-func (s *MOSpan) init(name string, opts ...trace.SpanOption) {
+func (s *MOSpan) init(name string, opts ...trace.SpanStartOption) {
 	s.Name = name
 	s.StartTime = time.Now()
+	s.LongTimeThreshold = s.tracer.provider.longSpanTime
 	for _, opt := range opts {
 		opt.ApplySpanStart(&s.SpanConfig)
 	}
@@ -114,6 +125,9 @@ func (s *MOSpan) Free() {
 	s.Parent = nil
 	s.Name = ""
 	s.tracer = nil
+	s.ctx = nil
+	s.needRecord = false
+	s.ExtraFields = nil
 	s.StartTime = table.ZeroTime
 	s.EndTime = table.ZeroTime
 	spanPool.Put(s)
@@ -140,22 +154,108 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(spanNameCol, table.StringField(s.Name))
 	row.SetColumnVal(startTimeCol, table.TimeField(s.StartTime))
 	row.SetColumnVal(endTimeCol, table.TimeField(s.EndTime))
+	row.SetColumnVal(timestampCol, table.TimeField(s.EndTime))
 	row.SetColumnVal(durationCol, table.Uint64Field(uint64(s.Duration)))
 	row.SetColumnVal(resourceCol, table.StringField(s.tracer.provider.resource.String()))
+
+	// fill extra fields
+	if len(s.ExtraFields) > 0 {
+		encoder := getEncoder()
+		buf, err := encoder.EncodeEntry(zapcore.Entry{}, s.ExtraFields)
+		if buf != nil {
+			defer buf.Free()
+		}
+		if err != nil {
+			moerr.ConvertGoError(ctx, err)
+		} else {
+			row.SetColumnVal(extraCol, table.StringField(buf.String()))
+		}
+	}
 }
 
+// End record span which meets any of the following condition
+// 1. span's duration >= LongTimeThreshold
+// 2. span's ctx, which specified at the MOTracer.Start, encounters the deadline
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	s.EndTime = time.Now()
+	deadline, hasDeadline := s.ctx.Deadline()
 	s.Duration = s.EndTime.Sub(s.StartTime)
-	if s.Duration < s.tracer.provider.longSpanTime {
+	// check need record
+	if s.Duration >= s.GetLongTimeThreshold() {
+		s.needRecord = true
+	} else if hasDeadline && s.EndTime.After(deadline) {
+		s.needRecord = true
+		s.ExtraFields = append(s.ExtraFields, zap.Error(s.ctx.Err()))
+	}
+	if !s.needRecord {
+		go freeMOSpan(s)
 		return
 	}
+	// do record
 	for _, opt := range options {
 		opt.ApplySpanEnd(&s.SpanConfig)
 	}
+	// do profile
+	s.doProfile()
+	// do Collect
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)
 	}
+}
+
+// doProfile is sync op.
+func (s *MOSpan) doProfile() {
+	factory := s.tracer.provider.writerFactory
+	// do profile goroutine txt
+	if s.ProfileGoroutine() {
+		filepath := profile.GetProfileName(profile.GOROUTINE, s.SpanID.String(), s.EndTime)
+		w := factory.GetWriter(s.ctx, filepath)
+		err := profile.ProfileGoroutine(w, 2)
+		if err == nil {
+			err = w.Close()
+		}
+		if err != nil {
+			s.AddExtraFields(zap.String(profile.GOROUTINE, err.Error()))
+		} else {
+			s.AddExtraFields(zap.String(profile.GOROUTINE, filepath))
+		}
+	}
+	// do profile heap pprof
+	if s.ProfileHeap() {
+		filepath := profile.GetProfileName(profile.HEAP, s.SpanID.String(), s.EndTime)
+		w := factory.GetWriter(s.ctx, filepath)
+		err := profile.ProfileHeap(w, 0)
+		if err == nil {
+			err = w.Close()
+		}
+		if err != nil {
+			s.AddExtraFields(zap.String(profile.HEAP, err.Error()))
+		} else {
+			s.AddExtraFields(zap.String(profile.HEAP, filepath))
+		}
+	}
+	// profile cpu should be the last one op, caused by it will sustain few seconds
+	if s.ProfileCpuSecs() > 0 {
+		filepath := profile.GetProfileName(profile.CPU, s.SpanID.String(), s.EndTime)
+		w := factory.GetWriter(s.ctx, filepath)
+		err := profile.ProfileCPU(w, s.ProfileCpuSecs())
+		if err == nil {
+			err = w.Close()
+		}
+		if err != nil {
+			s.AddExtraFields(zap.String(profile.CPU, err.Error()))
+		} else {
+			s.AddExtraFields(zap.String(profile.CPU, filepath))
+		}
+	}
+}
+
+var freeMOSpan = func(s *MOSpan) {
+	s.Free()
+}
+
+func (s *MOSpan) AddExtraFields(fields ...zap.Field) {
+	s.ExtraFields = append(s.ExtraFields, fields...)
 }
 
 func (s *MOSpan) SpanContext() trace.SpanContext {
@@ -170,4 +270,23 @@ const timestampFormatter = "2006-01-02 15:04:05.000000"
 
 func Time2DatetimeString(t time.Time) string {
 	return t.Format(timestampFormatter)
+}
+
+var jsonEncoder zapcore.Encoder
+var jsonEncoderInit sync.Once
+
+func getEncoder() zapcore.Encoder {
+	jsonEncoderInit.Do(func() {
+		jsonEncoder = zapcore.NewJSONEncoder(zapcore.EncoderConfig{
+			TimeKey:        "",
+			LevelKey:       "",
+			NameKey:        "",
+			CallerKey:      "",
+			FunctionKey:    zapcore.OmitKey,
+			MessageKey:     "",
+			StacktraceKey:  "",
+			SkipLineEnding: true,
+		})
+	})
+	return jsonEncoder.Clone()
 }

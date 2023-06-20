@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 const (
@@ -55,7 +55,6 @@ type localSegment struct {
 	appends     []*appendCtx
 	tableHandle data.TableHandle
 	nseg        handle.Segment
-	//sched  tasks.TaskScheduler
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
@@ -159,14 +158,14 @@ func (seg *localSegment) PrepareApply() (err error) {
 }
 
 func (seg *localSegment) prepareApplyANode(node *anode) error {
-	node.data.Compact()
+	node.Compact()
 	tableData := seg.table.entry.GetTableData()
 	if seg.tableHandle == nil {
 		seg.tableHandle = tableData.GetHandle()
 	}
 	appended := uint32(0)
-	vec := containers.MakeVector(objectio.RowidType)
-	for appended < node.RowsWithoutDeletes() {
+	vec := seg.table.store.rt.VectorPool.Transient.GetVector(&objectio.RowidType)
+	for appended < node.Rows() {
 		appender, err := seg.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
 			segH, err := seg.table.CreateSegment(true)
@@ -195,7 +194,7 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 		//PrepareAppend: It is very important that appending a AppendNode into
 		// block's MVCCHandle before applying data into block.
 		anode, created, toAppend, err := appender.PrepareAppend(
-			node.RowsWithoutDeletes()-appended,
+			node.Rows()-appended,
 			seg.table.store.txn)
 		if err != nil {
 			return err
@@ -213,13 +212,12 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 		if err = vec.ExtendVec(col); err != nil {
 			return err
 		}
-		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
 		ctx := &appendCtx{
 			driver: appender,
 			node:   node,
 			anode:  anode,
-			start:  node.OffsetWithDeletes(appended),
-			count:  toAppendWithDeletes,
+			start:  appended,
+			count:  toAppend,
 		}
 		if created {
 			seg.table.store.IncreateWriteCnt()
@@ -494,19 +492,20 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]
 	return n.GetColumnDataByIds(colIdxes)
 }
 
 func (seg *localSegment) GetColumnDataById(
+	ctx context.Context,
 	blk *catalog.BlockEntry,
 	colIdx int,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]
-	return n.GetColumnDataById(colIdx)
+	return n.GetColumnDataById(ctx, colIdx)
 }
 
 func (seg *localSegment) Prefetch(blk *catalog.BlockEntry, idxes []uint16) error {

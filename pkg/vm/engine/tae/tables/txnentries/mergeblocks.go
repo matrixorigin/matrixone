@@ -18,15 +18,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type mergeBlocksEntry struct {
@@ -34,15 +35,16 @@ type mergeBlocksEntry struct {
 	txn         txnif.AsyncTxn
 	relation    handle.Relation
 	droppedSegs []*catalog.SegmentEntry
-	deletes     []*roaring.Bitmap
+	deletes     []*nulls.Bitmap
 	createdSegs []*catalog.SegmentEntry
 	droppedBlks []*catalog.BlockEntry
 	createdBlks []*catalog.BlockEntry
 	mapping     []uint32
 	fromAddr    []uint32
 	toAddr      []uint32
-	scheduler   tasks.TaskScheduler
 	skippedBlks []int
+
+	rt *dbutils.Runtime
 }
 
 func NewMergeBlocksEntry(
@@ -51,9 +53,10 @@ func NewMergeBlocksEntry(
 	droppedSegs, createdSegs []*catalog.SegmentEntry,
 	droppedBlks, createdBlks []*catalog.BlockEntry,
 	mapping, fromAddr, toAddr []uint32,
-	deletes []*roaring.Bitmap,
+	deletes []*nulls.Bitmap,
 	skipBlks []int,
-	scheduler tasks.TaskScheduler) *mergeBlocksEntry {
+	rt *dbutils.Runtime,
+) *mergeBlocksEntry {
 	return &mergeBlocksEntry{
 		txn:         txn,
 		relation:    relation,
@@ -64,9 +67,9 @@ func NewMergeBlocksEntry(
 		mapping:     mapping,
 		fromAddr:    fromAddr,
 		toAddr:      toAddr,
-		scheduler:   scheduler,
 		deletes:     deletes,
 		skippedBlks: skipBlks,
+		rt:          rt,
 	}
 }
 
@@ -165,7 +168,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 	page := model.NewTransferHashPage(id, time.Now())
 	var (
 		length uint32
-		view   *model.BlockView
+		view   *containers.BlockView
 	)
 
 	posInFromAddr := fromPos - skippedCnt
@@ -185,7 +188,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		delCnt = uint32(deleteMap.GetCardinality())
 	}
 	for ; offsetInOldBlkBeforeApplyDel < delCnt+length; offsetInOldBlkBeforeApplyDel++ {
-		if deleteMap != nil && deleteMap.Contains(offsetInOldBlkBeforeApplyDel) {
+		if deleteMap != nil && deleteMap.Contains(uint64(offsetInOldBlkBeforeApplyDel)) {
 			continue
 		}
 		// add a record
@@ -201,32 +204,22 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		panic("tranfer logic error")
 	}
 
-	_ = entry.scheduler.AddTransferPage(page)
+	_ = entry.rt.TransferTable.AddPage(page)
 
 	dataBlock := dropped.GetBlockData()
 	if view, err = dataBlock.CollectChangesInRange(
+		entry.txn.GetContext(),
 		entry.txn.GetStartTS(),
 		entry.txn.GetCommitTS()); err != nil || view == nil {
 		return
 	}
 
-	deletes := view.DeleteMask
-	for colIdx, column := range view.Columns {
-		view.DeleteMask = compute.ShuffleByDeletes(
-			deletes, entry.deletes[fromPos])
-		for row, v := range column.UpdateVals {
-			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
-			if err = blks[toPos].Update(toRow, uint16(colIdx), v); err != nil {
-				return
-			}
-		}
-	}
 	view.DeleteMask = compute.ShuffleByDeletes(view.DeleteMask, entry.deletes[fromPos])
-	if view.DeleteMask != nil {
-		it := view.DeleteMask.Iterator()
+	if !view.DeleteMask.IsEmpty() {
+		it := view.DeleteMask.GetBitmap().Iterator()
 		for it.HasNext() {
 			row := it.Next()
-			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
+			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, uint32(row))
 			if err = blks[toPos].RangeDelete(toRow, toRow, handle.DT_MergeCompact); err != nil {
 				return
 			}
@@ -271,7 +264,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 	}
 	if err != nil {
 		for _, id := range ids {
-			_ = entry.scheduler.DeleteTransferPage(id)
+			_ = entry.rt.TransferTable.DeletePage(id)
 		}
 	}
 	return
