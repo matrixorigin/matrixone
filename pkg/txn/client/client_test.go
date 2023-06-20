@@ -44,7 +44,9 @@ func TestNewTxn(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
-	c.(TxnClientWithFeature).Resume()
+	if tc, ok := c.(TxnClientWithFeature); ok {
+		tc.Resume()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0))
@@ -63,7 +65,9 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
-	c.(TxnClientWithFeature).Resume()
+	if tc, ok := c.(TxnClientWithFeature); ok {
+		tc.Resume()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0), WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
