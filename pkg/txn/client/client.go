@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -111,7 +110,6 @@ func WithEnableLeakCheck(
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
-	cnReady                    atomic.Bool
 	clock                      clock.Clock
 	sender                     rpc.TxnSender
 	generator                  TxnIDGenerator
@@ -125,6 +123,9 @@ type txnClient struct {
 	mu struct {
 		sync.RWMutex
 		txns []txn.TxnMeta
+
+		// indicate whether the CN can provide service normally.
+		cnReady bool
 
 		// Minimum Active Transaction Timestamp
 		minTS timestamp.Timestamp
@@ -143,11 +144,9 @@ func NewTxnClient(
 	sender rpc.TxnSender,
 	options ...TxnClientCreateOption) TxnClient {
 	c := &txnClient{
-		cnReady: atomic.Bool{},
-		clock:   runtime.ProcessLevelRuntime().Clock(),
-		sender:  sender,
+		clock:  runtime.ProcessLevelRuntime().Clock(),
+		sender: sender,
 	}
-	c.cnReady.Store(false)
 	for _, opt := range options {
 		opt(c)
 	}
@@ -288,6 +287,10 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 	return client.adjustTimestamp(timestamp.Timestamp{})
 }
 
+func NoticeCnStatus(txnCli interface{}, ready bool) {
+
+}
+
 func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
 	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
 	if client.timestampWaiter != nil {
@@ -325,7 +328,7 @@ func (client *txnClient) pushTransaction(txn txn.TxnMeta) error {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	if client.cnReady.Load() {
+	if client.mu.cnReady {
 		i := sort.Search(len(client.mu.txns), func(i int) bool {
 			return client.mu.txns[i].SnapshotTS.GreaterEq(txn.SnapshotTS)
 		})
@@ -343,22 +346,23 @@ func (client *txnClient) pushTransaction(txn txn.TxnMeta) error {
 	return moerr.NewInternalErrorNoCtx("cn service is not ready, plz retry later")
 }
 
-func AbortRunningTxn(txnCli interface{}) {
-	cli, ok := txnCli.(*txnClient)
-	if ok {
-		cli.abortAllRunningTxn()
-	}
+func (client *txnClient) Pause() {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	logutil.Infof("cn ready status changed, ready: false")
+	client.mu.cnReady = false
 }
 
-func NoticeCnStatus(txnCli interface{}, ready bool) {
-	cli, ok := txnCli.(*txnClient)
-	if ok {
-		logutil.Infof("cn ready status changed, ready: %v", ready)
-		cli.cnReady.Store(ready)
-	}
+func (client *txnClient) Resume() {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	logutil.Infof("cn ready status changed, ready: true")
+	client.mu.cnReady = true
 }
 
-func (client *txnClient) abortAllRunningTxn() {
+func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 

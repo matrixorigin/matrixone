@@ -540,7 +540,13 @@ func (e *Engine) setPushClientStatus(ready bool) {
 	e.Lock()
 	defer e.Unlock()
 
-	client.NoticeCnStatus(e.cli, ready)
+	if tc, ok := e.cli.(client.TxnClientWithFeature); ok {
+		if ready {
+			tc.Pause()
+		} else {
+			tc.Resume()
+		}
+	}
 
 	e.pClient.receivedLogTailTime.ready.Store(ready)
 	if e.pClient.subscriber != nil {
@@ -555,9 +561,7 @@ func (e *Engine) setPushClientStatus(ready bool) {
 func (e *Engine) abortAllRunningTxn() {
 	e.Lock()
 	defer e.Unlock()
-
-	// abort all running txn here.
-	client.AbortRunningTxn(e.cli)
+	e.cli.AbortAllRunningTxn()
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {

@@ -42,6 +42,8 @@ type TxnClient interface {
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	// AbortAllRunningTxn set all running txn to be aborted.
+	AbortAllRunningTxn()
 	// Close closes client.sender
 	Close() error
 }
@@ -60,6 +62,10 @@ type TxnClientWithCtl interface {
 // whether certain features are supported.
 type TxnClientWithFeature interface {
 	TxnClient
+	// Pause the txn client to prevent new txn from being created.
+	Pause()
+	// Resume the txn client to allow new txn to be created.
+	Resume()
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
 	RefreshExpressionEnabled() bool
 	// CNBasedConsistencyEnabled return true if cn based consistency feature enabled
