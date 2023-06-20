@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -153,32 +152,29 @@ func (mixin *withFilterMixin) getCompositPKFilter() (filter blockio.ReadFilter) 
 	cnt := getValidCompositePKCnt(pkVals)
 	pkVals = pkVals[:cnt]
 
-	filterFuncs := make([]func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap, len(pkVals))
+	filterFuncs := make([]func(*vector.Vector, []int32, *[]int32), len(pkVals))
 	for i := range filterFuncs {
 		filterFuncs[i] = getCompositeFilterFuncByExpr(pkVals[i], i == 0)
 	}
 
 	filter = func(vecs []*vector.Vector) []int32 {
-		var sels *nulls.Bitmap
+		var (
+			inputSels  []int32
+			outputSels []int32
+		)
 		for i := range filterFuncs {
 			pos := mixin.columns.compPKPositions[i]
 			vec := vecs[pos]
-			sels = filterFuncs[i](vec, sels)
-			if sels.IsEmpty() {
+			outputSels = outputSels[:0]
+			filterFuncs[i](vec, inputSels, &outputSels)
+			if len(outputSels) == 0 {
 				break
 			}
+			inputSels = outputSels
 		}
-		if sels.IsEmpty() {
-			return nil
-		}
-		res := make([]int32, 0, sels.GetCardinality())
-		sels.Foreach(func(i uint64) bool {
-			res = append(res, int32(i))
-			return true
-		})
 		// logutil.Debugf("%s: %d/%d", mixin.tableDef.Name, len(res), vecs[0].Length())
 
-		return res
+		return outputSels
 	}
 
 	mixin.filterState.evaluated = true
