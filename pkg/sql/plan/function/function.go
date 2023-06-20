@@ -171,7 +171,8 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 	for i := range inputTypes {
 		inputTypes[i] = *inputs[i].GetType()
 	}
-	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
+
+	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, f.retType(inputTypes), mp)
 
 	fold := true
 	evaluateLength := length
@@ -187,10 +188,12 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 	}
 
 	if err = result.PreExtendAndReset(evaluateLength); err != nil {
+		result.Free()
 		return nil, err
 	}
 	exec := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength); err != nil {
+		result.Free()
 		return nil, err
 	}
 
@@ -199,7 +202,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		// ToConst is a confused method. it just returns a new pointer to the same memory.
 		// so we need to duplicate it.
 		cvec, er := vec.ToConst(0, length, mp).Dup(mp)
-		vec.Free(mp)
+		result.Free()
 		if er != nil {
 			return nil, er
 		}

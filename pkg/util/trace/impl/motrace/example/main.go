@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"io"
 	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
@@ -57,9 +58,12 @@ func (w *dummyStringWriter) WriteRow(row *table.Row) error {
 func (w *dummyStringWriter) GetContent() string          { return "" }
 func (w *dummyStringWriter) FlushAndClose() (int, error) { return 0, nil }
 
-var dummyFSWriterFactory = func(context.Context, string, *table.Table, time.Time) table.RowWriter {
+type dummyFSWriterFactory struct{}
+
+func (f *dummyFSWriterFactory) GetRowWriter(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 	return &dummyStringWriter{}
 }
+func (f *dummyFSWriterFactory) GetWriter(ctx context.Context, fp string) io.WriteCloser { return nil }
 
 func bootstrap(ctx context.Context) error {
 	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
@@ -71,7 +75,7 @@ func bootstrap(ctx context.Context) error {
 		// nodeType like CN/DN/LogService; id maybe in config.
 		motrace.WithNode("node_uuid", trace.NodeTypeStandalone),
 		// WithFSWriterFactory for config[traceBatchProcessor] = "FileService"
-		motrace.WithFSWriterFactory(dummyFSWriterFactory),
+		motrace.WithFSWriterFactory(&dummyFSWriterFactory{}),
 		// WithSQLExecutor for config[traceBatchProcessor] = "InternalExecutor"
 		motrace.WithSQLExecutor(func() ie.InternalExecutor {
 			return &logOutputExecutor{}
