@@ -106,30 +106,40 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 	preparer.Columns = containers.NewBatch()
 
 	schema := task.schema
-	var view *containers.ColumnView
-	seqnums := make([]uint16, 0, len(schema.ColDefs))
+	colLen := len(schema.ColDefs)
+	seqnums := make([]uint16, 0, colLen)
+	idxs := make([]int, 0, colLen)
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
 		}
-		view, err = task.compacted.GetColumnDataById(ctx, def.Idx)
+		idxs = append(idxs, def.Idx)
+		seqnums = append(seqnums, def.SeqNum)
+	}
+	if len(idxs) > 0 {
+		var views *containers.BlockView
+		views, err = task.compacted.GetColumnDataByIds(ctx, idxs)
 		if err != nil {
 			return
 		}
-		if view == nil {
-			preparer.Close()
-			return nil, true, nil
+		task.deletes = views.DeleteMask
+		views.ApplyDeletes()
+		for i := 0; i < colLen; i++ {
+			if schema.ColDefs[i].IsPhyAddr() {
+				continue
+			}
+			if views.Columns[i] == nil {
+				preparer.Close()
+				return nil, true, nil
+			}
+			vec := views.Columns[i].Orphan()
+			if vec.Length() == 0 {
+				empty = true
+				vec.Close()
+				return
+			}
+			preparer.Columns.AddVector(schema.ColDefs[i].Name, vec)
 		}
-		task.deletes = view.DeleteMask
-		view.ApplyDeletes()
-		vec := view.Orphan()
-		if vec.Length() == 0 {
-			empty = true
-			vec.Close()
-			return
-		}
-		preparer.Columns.AddVector(def.Name, vec)
-		seqnums = append(seqnums, def.SeqNum)
 	}
 	preparer.SchemaVersion = schema.Version
 	preparer.Seqnums = seqnums
@@ -156,11 +166,21 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	defer task.rt.Throttle.ReleaseCompactionQuota()
 	logutil.Info("[Start]", common.OperationField(task.Name()),
 		common.OperandField(task.meta.Repr()))
+	phaseNumber := 0
+	defer func() {
+		if err != nil {
+			logutil.Error("[DoneWithErr]", common.OperationField(task.Name()),
+				common.AnyField("error", err),
+				common.AnyField("phase", phaseNumber),
+			)
+		}
+	}()
 	now := time.Now()
 	seg := task.compacted.GetSegment()
 	defer seg.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
+	phaseNumber = 1
 	preparer, empty, err := task.PrepareData(ctx)
 	if err != nil {
 		return
@@ -169,11 +189,13 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 	defer preparer.Close()
+	phaseNumber = 2
 	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
 	oldBlkData := oldBMeta.GetBlockData()
 	var deletes *containers.Batch
+	phaseNumber = 3
 	if !oldBMeta.IsAppendable() {
 		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
 		if err != nil {
@@ -183,7 +205,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			defer deletes.Close()
 		}
 	}
-
+	phaseNumber = 4
 	if !empty {
 		createOnSeg := seg
 		curSeg := seg.GetMeta().(*catalog.SegmentEntry)
@@ -214,6 +236,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 
 	table := task.meta.GetSegment().GetTable()
 	// write ablock
+	phaseNumber = 5
 	if oldBMeta.IsAppendable() {
 		var data *containers.Batch
 		dataVer, errr := oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
@@ -273,6 +296,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			task.mapping[i] = int32(i)
 		}
 	}
+	phaseNumber = 6
 	txnEntry := txnentries.NewCompactBlockEntry(
 		task.txn,
 		task.compacted,
@@ -291,16 +315,20 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 	createdStr := "nil"
+	rows := 0
 	if task.created != nil {
 		createdStr = task.created.Fingerprint().BlockString()
+		rows = task.created.Rows()
 	}
 	logutil.Info("[Done]",
 		common.AnyField("txn-start-ts", task.txn.GetStartTS().ToString()),
 		common.OperationField(task.Name()),
 		common.AnyField("compacted", task.meta.Repr()),
 		common.AnyField("created", createdStr),
+		common.AnyField("compactedRows", task.compacted.Rows()),
+		common.AnyField("TotalChanges", task.compacted.GetTotalChanges()),
+		common.AnyField("createdRows", rows),
 		common.DurationField(time.Since(now)))
-
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Segment.CompactBlock.Add(1)
 	})
