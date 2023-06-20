@@ -313,7 +313,7 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 	writeValues := func(row *table.Row) error {
 		w, exist := buffer[row.GetAccount()]
 		if !exist {
-			w = s.collector.writerFactory(ctx, row.GetAccount(), SingleMetricTable, ts)
+			w = s.collector.writerFactory.GetRowWriter(ctx, row.GetAccount(), SingleMetricTable, ts)
 			buffer[row.GetAccount()] = w
 		}
 		if err := w.WriteRow(row); err != nil {
