@@ -107,7 +107,7 @@ invalid input: json text
 create table json_table_5(j1 json primary key,j2 json default '{"x": 17, "x": "red"}',j3 json not null );
 not supported: JSON column 'j1' cannot be in primary key
 create table json_table_5(j1 json) partition by hash(j1);
-SQL syntax error: type JSON not allowed in partition clause
+Field 'j1' is of a not allowed type for this type of partitioning
 select j1 from json_table_1 where j1>'{"": "", "123456": "中文mo"}';
 invalid argument operator >, bad value [JSON VARCHAR]
 create table json_table_61(j1 json,a varchar(25),b int);
