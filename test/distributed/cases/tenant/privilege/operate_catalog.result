@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop database mo_catalog;
 internal error: do not have privilege to execute the statement
 drop database system;
@@ -224,3 +225,4 @@ drop table if exists INFORMATION_SCHEMA.TABLES;
 internal error: do not have privilege to execute the statement
 create table INFORMATION_SCHEMA.A(a int);
 internal error: do not have privilege to execute the statement
+set global enable_privilege_cache = on;
