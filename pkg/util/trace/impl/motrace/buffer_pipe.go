@@ -191,6 +191,12 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			if !ok {
 				panic("not MalCsv, dont support output CSV")
 			}
+
+			stmt, stmt_ok := i.(*StatementInfo)
+			if stmt_ok {
+				stmt.Statement = stmt.StmtBuilder.String()
+			}
+
 			writeValues(item)
 		}
 		aggregator.Close()

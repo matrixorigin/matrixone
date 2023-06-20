@@ -59,6 +59,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.BytesScan = 0
 		s.ResultCount = 0
 		s.AggrCount = 1
+		s.StmtBuilder.WriteString(s.Statement)
 		return s
 	}
 	return nil
@@ -69,7 +70,8 @@ func StatementInfoUpdate(existing, new Item) {
 	n := new.(*StatementInfo)
 	// update the stats
 	e.Duration += n.Duration
-	e.Statement = e.Statement + "; " + n.Statement
+	e.StmtBuilder.WriteString("; ")
+	e.StmtBuilder.WriteString(n.Statement)
 	e.AggrCount += 1
 	// reponseAt is the last response time
 	e.ResponseAt = n.ResponseAt
@@ -115,15 +117,16 @@ func StatementInfoFilter(i Item) bool {
 }
 
 type StatementInfo struct {
-	StatementID          [16]byte  `json:"statement_id"`
-	TransactionID        [16]byte  `json:"transaction_id"`
-	SessionID            [16]byte  `jons:"session_id"`
-	Account              string    `json:"account"`
-	User                 string    `json:"user"`
-	Host                 string    `json:"host"`
-	RoleId               uint32    `json:"role_id"`
-	Database             string    `json:"database"`
-	Statement            string    `json:"statement"`
+	StatementID          [16]byte `json:"statement_id"`
+	TransactionID        [16]byte `json:"transaction_id"`
+	SessionID            [16]byte `jons:"session_id"`
+	Account              string   `json:"account"`
+	User                 string   `json:"user"`
+	Host                 string   `json:"host"`
+	RoleId               uint32   `json:"role_id"`
+	Database             string   `json:"database"`
+	Statement            string   `json:"statement"`
+	StmtBuilder          strings.Builder
 	StatementFingerprint string    `json:"statement_fingerprint"`
 	StatementTag         string    `json:"statement_tag"`
 	SqlSourceType        string    `json:"sql_source_type"`
