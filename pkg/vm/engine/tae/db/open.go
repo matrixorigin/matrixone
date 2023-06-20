@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -67,22 +68,20 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	opts = opts.FillDefaults(dirname)
 
-	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
-
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
 		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
 	}
-	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 
 	db = &DB{
-		Dir:        dirname,
-		Opts:       opts,
-		IndexCache: indexCache,
-		Fs:         fs,
-		Closed:     new(atomic.Value),
+		Dir:    dirname,
+		Opts:   opts,
+		Closed: new(atomic.Value),
 	}
+	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
+	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
+	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
@@ -90,26 +89,36 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	case options.LogstoreLogservice:
 		db.Wal = wal.NewDriverWithLogservice(opts.Ctx, opts.Lc)
 	}
-	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	db.Runtime = dbutils.NewRuntime(
+		dbutils.WithRuntimeTransferTable(transferTable),
+		dbutils.WithRuntimeFilterIndexCache(indexCache),
+		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeMemtablePool(dbutils.MakeDefaultMemtablePool("memtable-vector-pool")),
+		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
+		dbutils.WithRuntimeScheduler(scheduler),
+		dbutils.WithRuntimeOptions(db.Opts),
+	)
+
 	dataFactory := tables.NewDataFactory(
-		db.Fs, indexCache, db.Scheduler, db.Dir)
-	if db.Opts.Catalog, err = catalog.OpenCatalog(db.Scheduler, dataFactory); err != nil {
+		db.Runtime, db.Dir,
+	)
+	if db.Catalog, err = catalog.OpenCatalog(); err != nil {
 		return
 	}
-	db.Catalog = db.Opts.Catalog
 	// Init and start txn manager
-	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	txnStoreFactory := txnimpl.TxnStoreFactory(
 		opts.Ctx,
-		db.Opts.Catalog,
+		db.Catalog,
 		db.Wal,
-		db.TransferTable,
-		indexCache,
+		db.Runtime,
 		dataFactory,
-		opts.MaxMessageSize)
-	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
+		opts.MaxMessageSize,
+	)
+	txnFactory := txnimpl.TxnFactory(db.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewManager(
+		db.Runtime,
 		int(db.Opts.LogtailCfg.PageSize),
 		db.TxnMgr.Now,
 	)
@@ -118,9 +127,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		opts.Ctx,
-		db.Fs,
+		db.Runtime,
 		db.Catalog,
-		db.Scheduler,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		db.Wal,
 		checkpoint.WithFlushInterval(opts.CheckpointCfg.FlushInterval),
@@ -161,7 +169,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, fs, db.BGCheckpointRunner, db.Catalog)
 	db.DiskCleaner.Start()
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {
@@ -176,7 +184,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			"clean-transfer-table",
 			opts.CheckpointCfg.FlushInterval,
 			func(_ context.Context) (err error) {
-				db.TransferTable.RunTTL(time.Now())
+				transferTable.RunTTL(time.Now())
 				return
 			}),
 

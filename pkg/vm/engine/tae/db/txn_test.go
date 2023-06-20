@@ -25,6 +25,7 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -243,7 +243,7 @@ func (c *APP1Client) CheckBound() {
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
 	blockIt := rel.MakeBlockIt()
-	var view *model.ColumnView
+	var view *containers.ColumnView
 	found := false
 	for blockIt.Valid() {
 		blk := blockIt.GetBlock()
@@ -485,11 +485,11 @@ func TestApp1(t *testing.T) {
 
 	option := new(options.Options)
 	option.CacheCfg = new(options.CacheCfg)
-	option.CacheCfg.IndexCapacity = common.G
+	option.CacheCfg.IndexCapacity = mpool.GB
 	db := initDB(ctx, t, option)
 	defer db.Close()
 	mgr := db.TxnMgr
-	c := db.Opts.Catalog
+	c := db.Catalog
 
 	app1 := NewApp1(mgr, "app1")
 	app1.Init(1)
@@ -545,7 +545,7 @@ func TestWarehouse(t *testing.T) {
 	err := MockWarehouses("test", 20, txn)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	{
 		txn, _ = db.StartTxn(nil)

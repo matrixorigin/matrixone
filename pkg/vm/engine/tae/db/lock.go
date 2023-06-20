@@ -20,7 +20,7 @@ import (
 	"syscall"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 )
 
 const (
@@ -35,7 +35,7 @@ func createDBLock(dir string) (io.Closer, error) {
 			return nil, err
 		}
 	}
-	fname := common.MakeLockFileName(dir, LockName)
+	fname := dbutils.MakeLockFileName(dir, LockName)
 	f, err := os.Create(fname)
 	if err != nil {
 		return nil, err
