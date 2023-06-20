@@ -83,9 +83,9 @@ jobs:
 
       - name: Restart the Version of Head of MO
         run: |
-          cd $GITHUB_WORKSPACE/workspace
+          cd $GITHUB_WORKSPACE/head
           mv mo-service.log mo-service.r1.log
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-multi-CN-tae-DN
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-multi-CN-tae-DN
 
       - name: Start BVT Test for MO with Version of Head Restarted
         id: bvt_on_latest_head_version_run2
@@ -196,9 +196,9 @@ jobs:
 
       - name: Restart the Version of Head of MO
         run: |
-          cd $GITHUB_WORKSPACE/workspace
+          cd $GITHUB_WORKSPACE/head
           mv mo-service.log mo-service.r1.log
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-CN-tae-DN
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-CN-tae-DN
 
       - name: Start BVT Test for MO with Version of Head Restarted
         id: bvt_on_latest_head_version_run2
