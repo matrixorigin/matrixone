@@ -129,9 +129,7 @@ select col3,col4 from pt_table_44 order by col3,col4;
 create table pt_table_45(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text) partition by list(year(col13))(PARTITION r0 VALUES IN (5732, 9976, 3647, 6216),PARTITION r1 VALUES IN (7031, 6868, 4844, 6438),PARTITION r2 VALUES IN (3114, 1014, 4023, 2008));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_45;
 select col3,col4 from pt_table_45 order by col3,col4;
--- @bvt:issue#8320
 show create table pt_table_45;
--- @bvt:issue
 
 --异常text，datetime，decimal，bool
 create table pt_table_46(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by list(col20) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
