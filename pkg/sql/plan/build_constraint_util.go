@@ -979,7 +979,11 @@ func buildValueScan(
 		BindingTags: []int32{lastTag},
 		Uuid:        nodeId[:],
 	}
-	proc.SetValueScanBatch(nodeId, bat)
+	if builder.isPrepareStatement {
+		proc.SetPrepareBatch(bat)
+	} else {
+		proc.SetValueScanBatch(nodeId, bat)
+	}
 	info.rootId = builder.appendNode(scanNode, bindCtx)
 	err = builder.addBinding(info.rootId, tree.AliasClause{
 		Alias: "_ValueScan",

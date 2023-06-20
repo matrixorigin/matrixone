@@ -1059,9 +1059,7 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt) (*Pr
 		PrepareStmt:         st.Stmt,
 		getFromSendLongData: make(map[int]struct{}),
 	}
-	if bats := ses.GetTxnCompileCtx().GetProcess().GetValueScanBatchs(); len(bats) > 0 {
-		prepareStmt.InsertBat = bats[0]
-	}
+	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 
 	return prepareStmt, err
@@ -1091,10 +1089,7 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 		PreparePlan: preparePlan,
 		PrepareStmt: stmts[0],
 	}
-	if bats := ses.GetTxnCompileCtx().GetProcess().GetValueScanBatchs(); len(bats) > 0 {
-		prepareStmt.InsertBat = bats[0]
-	}
-
+	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 	return prepareStmt, err
 }

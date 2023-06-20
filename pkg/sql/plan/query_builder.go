@@ -1569,7 +1569,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			BindingTags: []int32{builder.genNewTag()},
 			Uuid:        nodeUUID[:],
 		}, ctx)
-		proc.SetValueScanBatch(nodeUUID, bat)
+		if builder.isPrepareStatement {
+			proc.SetPrepareBatch(bat)
+		} else {
+			proc.SetValueScanBatch(nodeUUID, bat)
+		}
 
 		err = builder.addBinding(nodeID, tree.AliasClause{
 			Alias: "_ValueScan",
