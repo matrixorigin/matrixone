@@ -233,8 +233,9 @@ func (tbl *txnTable) recurTransferDelete(
 		TableID: id.TableID,
 		BlockID: blockID,
 	}
+	var err error
 	if page2, ok = memo[blockID]; !ok {
-		page2, err := tbl.store.rt.TransferTable.Pin(*newID)
+		page2, err = tbl.store.rt.TransferTable.Pin(*newID)
 		if err == nil {
 			memo[blockID] = page2
 		}
@@ -247,7 +248,8 @@ func (tbl *txnTable) recurTransferDelete(
 			offset,
 			depth+1)
 	}
-	if err := tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
+
+	if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
 		return err
 	}
 	common.DoIfDebugEnabled(func() {

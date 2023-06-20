@@ -19,6 +19,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -36,6 +39,81 @@ var NilTxnID [16]byte
 var NilSesID [16]byte
 
 // StatementInfo implement export.IBuffer2SqlItem and export.CsvFields
+
+var _ IBuffer2SqlItem = (*StatementInfo)(nil)
+
+func StatementInfoNew(i Item, ctx context.Context) Item {
+	if s, ok := i.(*StatementInfo); ok {
+		// process the execplan
+		s.ExecPlan2Stats(ctx)
+		// remove the plan
+		s.jsonByte = nil
+		s.ExecPlan = nil
+
+		// remove the TransacionID
+		s.TransactionID = NilTxnID
+		s.StatementTag = ""
+		s.StatementFingerprint = ""
+		s.Error = nil
+		s.RowsRead = 0
+		s.BytesScan = 0
+		s.ResultCount = 0
+		s.AggrCount = 1
+		return s
+	}
+	return nil
+}
+func StatementInfoUpdate(existing, new Item) {
+
+	e := existing.(*StatementInfo)
+	n := new.(*StatementInfo)
+	// update the stats
+	e.Duration += n.Duration
+	e.Statement = e.Statement + "; " + n.Statement
+	e.AggrCount += 1
+	// reponseAt is the last response time
+	e.ResponseAt = n.ResponseAt
+	n.ExecPlan2Stats(context.Background())
+	err := mergeStats(e, n)
+
+	if err != nil {
+		// handle error
+		log.Printf("Failed to merge stats: %v", err)
+	}
+}
+
+func StatementInfoFilter(i Item) bool {
+	// Attempt to perform a type assertion to *StatementInfo
+	statementInfo, ok := i.(*StatementInfo)
+
+	if !ok {
+		// The item couldn't be cast to *StatementInfo
+		return false
+	}
+
+	if statementInfo.Status == StatementStatusRunning {
+		return false
+	}
+
+	// Check SqlSourceType
+	switch statementInfo.SqlSourceType {
+	case "internal_sql", "external_sql", "non_cloud_user":
+		// Check StatementType
+		switch statementInfo.StatementType {
+		case "Insert", "Update", "Delete", "Execute":
+			return true
+		case "Select":
+			// For 'select', also check if Duration is longer than 200 milliseconds
+			if statementInfo.Duration < GetTracerProvider().selectAggrThreshold {
+				return true
+			}
+		}
+	}
+
+	// If no conditions matched, return false
+	return false
+}
+
 type StatementInfo struct {
 	StatementID          [16]byte  `json:"statement_id"`
 	TransactionID        [16]byte  `json:"transaction_id"`
@@ -64,6 +142,7 @@ type StatementInfo struct {
 	// RowsRead, BytesScan generated from ExecPlan
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
+	AggrCount int64 `json:"aggr_count"` // see EndStatement
 
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
@@ -90,6 +169,13 @@ type StatementInfo struct {
 	jsonByte, statsJsonByte []byte
 }
 
+type Key struct {
+	SessionID     [16]byte
+	StatementType string
+	Window        time.Time
+	Status        StatementInfoStatus
+}
+
 var stmtPool = sync.Pool{
 	New: func() any {
 		return &StatementInfo{}
@@ -103,6 +189,10 @@ func NewStatementInfo() *StatementInfo {
 type Statistic struct {
 	RowsRead  int64
 	BytesScan int64
+}
+
+func (s *StatementInfo) Key(duration time.Duration) interface{} {
+	return Key{SessionID: s.SessionID, StatementType: s.StatementType, Window: s.RequestAt.Truncate(duration), Status: s.Status}
 }
 
 func (s *StatementInfo) GetName() string {
@@ -194,7 +284,8 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(errCodeCol, table.StringField(fmt.Sprintf("%d", errCode)))
 		row.SetColumnVal(errorCol, table.StringField(fmt.Sprintf("%s", s.Error)))
 	}
-	execPlan, stats := s.ExecPlan2Json(ctx)
+	execPlan := s.ExecPlan2Json(ctx)
+	stats := s.ExecPlan2Stats(ctx)
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
 		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
@@ -207,35 +298,82 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(bytesScanCol, table.Int64Field(s.BytesScan))
 	row.SetColumnVal(stmtTypeCol, table.StringField(s.StatementType))
 	row.SetColumnVal(queryTypeCol, table.StringField(s.QueryType))
+	row.SetColumnVal(aggrCntCol, table.Int64Field(s.AggrCount))
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
 }
 
-// ExecPlan2Json return ExecPlan Serialized json-str
-// and set RowsRead, BytesScan from ExecPlan
-//
-// please used in s.mux.Lock()
-func (s *StatementInfo) ExecPlan2Json(ctx context.Context) ([]byte, []byte) {
-	var stats Statistic
+func mergeStats(e, n *StatementInfo) error {
+	// Convert statsJsonByte back to string and trim the square brackets
+	eStatsStr := strings.Trim(string(e.statsJsonByte), "[]")
+	nStatsStr := strings.Trim(string(n.statsJsonByte), "[]")
 
+	// Split the strings by comma to get the individual elements
+	eStatsElements := strings.Split(eStatsStr, ",")
+	nStatsElements := strings.Split(nStatsStr, ",")
+
+	// Ensure both arrays have the same length
+	if len(eStatsElements) != len(nStatsElements) {
+		return moerr.NewInternalError(context.Background(), "statsJsonByte length mismatch")
+	}
+
+	// Parse the strings to integers and add the values together
+	for i := 1; i < len(eStatsElements); i++ {
+		eVal, err := strconv.Atoi(strings.TrimSpace(eStatsElements[i]))
+		if err != nil {
+			return err
+		}
+
+		nVal, err := strconv.Atoi(strings.TrimSpace(nStatsElements[i]))
+		if err != nil {
+			return err
+		}
+
+		// Store the sum back in eStatsElements
+		eStatsElements[i] = strconv.Itoa(eVal + nVal)
+	}
+
+	// Join eStatsElements with commas and convert back to byte slice
+	e.statsJsonByte = []byte("[" + strings.Join(eStatsElements, ", ") + "]")
+
+	return nil
+}
+
+// ExecPlan2Json return ExecPlan Serialized json-str //
+// please used in s.mux.Lock()
+func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
 	if s.jsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
 		uuidStr := uuid.UUID(s.StatementID).String()
-		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)),
-			[]byte(`{"code":200,"message":"NO ExecPlan"}`)
+		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr))
 	} else {
-		s.jsonByte, s.statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
-		s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
+		s.jsonByte = s.ExecPlan.Marshal(ctx)
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 		//	// get nil ExecPlan json-str
 		//	jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		//}
 	}
-	if len(s.statsJsonByte) == 0 {
-		s.statsJsonByte = []byte("{}")
+endL:
+	return s.jsonByte
+}
+
+// ExecPlan2Stats return Stats Serialized int array str
+// and set RowsRead, BytesScan from ExecPlan
+func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
+	var stats Statistic
+
+	if s.statsJsonByte != nil {
+		goto endL
+	} else if s.ExecPlan == nil {
+		return []byte("[]")
+	} else {
+		s.statsJsonByte, stats = s.ExecPlan.Stats(ctx)
+		s.RowsRead = stats.RowsRead
+		s.BytesScan = stats.BytesScan
+
 	}
 endL:
-	return s.jsonByte, s.statsJsonByte
+	return s.statsJsonByte
 }
 
 func GetLongQueryTime() time.Duration {
@@ -245,8 +383,9 @@ func GetLongQueryTime() time.Duration {
 type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
 
 type SerializableExecPlan interface {
-	Marshal(context.Context) ([]byte, []byte, Statistic)
+	Marshal(context.Context) []byte
 	Free()
+	Stats(ctx context.Context) ([]byte, Statistic)
 }
 
 func (s *StatementInfo) SetSerializableExecPlan(execPlan SerializableExecPlan) {
@@ -285,6 +424,7 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 		// do report
 		s.end = true
 		s.ResultCount = sentRows
+		s.AggrCount = 0
 		s.ResponseAt = time.Now()
 		s.Duration = s.ResponseAt.Sub(s.RequestAt)
 		s.Status = StatementStatusSuccess
