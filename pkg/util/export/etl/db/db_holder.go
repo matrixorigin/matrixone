@@ -52,13 +52,35 @@ const MaxConnectionNumber = 1
 
 const DBConnRetryThreshold = 8
 
-const MaxInsertLen = 100
+const MaxInsertLen = 200
+const MiddleInsertLen = 10
+
+var maxRowBufPool sync.Pool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+
+var middleRowBufPool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+var oneRowBufPool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
 
 type prepareSQLs struct {
-	rowNum    int
-	multiRows string
-	oneRow    string
-	columns   int
+	maxRowNum int
+	maxRows   string
+
+	middleRowNum int
+	middleRows   string
+
+	oneRow  string
+	columns int
 }
 
 type DBUser struct {
@@ -162,7 +184,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	defer cancel()
 
 	done := make(chan error, 1)
-	go bulkInsert(ctx, done, dbConn, records, tbl, MaxInsertLen)
+	go bulkInsert(ctx, done, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
 
 	select {
 	case err := <-done:
@@ -180,38 +202,62 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	return 0, err
 }
 
-func getPrepareSQL(tbl *table.Table, columns int, rowNum int) *prepareSQLs {
+func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen int) *prepareSQLs {
 	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
-	buf := new(bytes.Buffer)
+	oneRowBuf := oneRowBufPool.Get().(*bytes.Buffer)
 	for i := 0; i < columns; i++ {
 		if i == 0 {
-			buf.WriteByte('?')
+			oneRowBuf.WriteByte('?')
 		} else {
-			buf.WriteString(",?")
+			oneRowBuf.WriteString(",?")
 		}
 	}
-	oneRow := fmt.Sprintf("%s (%s)", prefix, buf.String())
+	oneRow := fmt.Sprintf("%s (%s)", prefix, oneRowBuf.String())
 
-	multiRowBuf := new(bytes.Buffer)
-	multiRowBuf.WriteString(prefix)
-	for i := 0; i < rowNum; i++ {
+	maxRowBuf := maxRowBufPool.Get().(*bytes.Buffer)
+	maxRowBuf.WriteString(prefix)
+	for i := 0; i < batchLen; i++ {
 		if i == 0 {
-			multiRowBuf.WriteByte('(')
+			maxRowBuf.WriteByte('(')
 		} else {
-			multiRowBuf.WriteString(",(")
+			maxRowBuf.WriteString(",(")
 		}
-		multiRowBuf.Write(buf.Bytes())
-		multiRowBuf.WriteByte(')')
+		maxRowBuf.Write(oneRowBuf.Bytes())
+		maxRowBuf.WriteByte(')')
 	}
-	return &prepareSQLs{
-		rowNum:    rowNum,
-		multiRows: multiRowBuf.String(),
-		oneRow:    oneRow,
-		columns:   columns,
+
+	middleRowBuf := middleRowBufPool.Get().(*bytes.Buffer)
+	middleRowBuf.WriteString(prefix)
+	for i := 0; i < middleBatchLen; i++ {
+		if i == 0 {
+			middleRowBuf.WriteByte('(')
+		} else {
+			middleRowBuf.WriteString(",(")
+		}
+		middleRowBuf.Write(oneRowBuf.Bytes())
+		middleRowBuf.WriteByte(')')
 	}
+
+	prepareSQLS := &prepareSQLs{
+		maxRowNum: batchLen,
+		maxRows:   maxRowBuf.String(),
+
+		middleRowNum: middleBatchLen,
+		middleRows:   middleRowBuf.String(),
+
+		oneRow:  oneRow,
+		columns: columns,
+	}
+	oneRowBuf.Reset()
+	maxRowBuf.Reset()
+	middleRowBuf.Reset()
+	oneRowBufPool.Put(oneRowBuf)
+	maxRowBufPool.Put(maxRowBuf)
+	middleRowBufPool.Put(middleRowBuf)
+	return prepareSQLS
 }
 
-func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int) {
+func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) {
 	if len(records) == 0 {
 		done <- nil
 		return
@@ -222,11 +268,11 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 	if val, ok := prepareSQLMap.Load(key); ok {
 		sqls = val.(*prepareSQLs)
 		if sqls.columns != len(records[0]) {
-			sqls = getPrepareSQL(tbl, len(records[0]), batchLen)
+			sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
 			prepareSQLMap.Store(key, sqls)
 		}
 	} else {
-		sqls = getPrepareSQL(tbl, len(records[0]), batchLen)
+		sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
 		prepareSQLMap.Store(key, sqls)
 	}
 
@@ -236,15 +282,16 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 		return
 	}
 
-	var stmt10 *sql.Stmt
-	var stmt1 *sql.Stmt
+	var maxStmt *sql.Stmt
+	var middleStmt *sql.Stmt
+	var oneStmt *sql.Stmt
 
 	for {
 		if len(records) == 0 {
 			break
 		} else if len(records) >= batchLen {
-			if stmt10 == nil {
-				stmt10, err = tx.PrepareContext(ctx, sqls.multiRows)
+			if maxStmt == nil {
+				maxStmt, err = tx.PrepareContext(ctx, sqls.maxRows)
 				if err != nil {
 					tx.Rollback()
 					done <- err
@@ -264,7 +311,7 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 					idx++
 				}
 			}
-			_, err := stmt10.ExecContext(ctx, vals...)
+			_, err := maxStmt.ExecContext(ctx, vals...)
 			if err != nil {
 				logutil.Error("sqlWriter batchInsert failed", zap.Error(err))
 				tx.Rollback()
@@ -273,18 +320,67 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 			}
 
 			records = records[batchLen:]
-		} else {
-			if stmt10 != nil {
-				err = stmt10.Close()
+		} else if len(records) >= middleBatchLen {
+			if maxStmt != nil {
+				err = maxStmt.Close()
 				if err != nil {
 					tx.Rollback()
 					done <- err
 					return
 				}
-				stmt10 = nil
+				maxStmt = nil
 			}
-			if stmt1 == nil {
-				stmt1, err = tx.PrepareContext(ctx, sqls.oneRow)
+			if middleStmt == nil {
+				middleStmt, err = tx.PrepareContext(ctx, sqls.middleRows)
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
+			}
+			vals := make([]any, sqls.columns*middleBatchLen)
+			idx := 0
+			for _, row := range records[:middleBatchLen] {
+				for i, field := range row {
+					escapedStr := field
+					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+						vals[idx] = field[:tbl.Columns[i].Scale-1]
+					} else {
+						vals[idx] = field
+					}
+					idx++
+				}
+			}
+			_, err := middleStmt.ExecContext(ctx, vals...)
+			if err != nil {
+				logutil.Error("sqlWriter batchInsert failed", zap.Error(err))
+				tx.Rollback()
+				done <- err
+				return
+			}
+
+			records = records[middleBatchLen:]
+		} else {
+			if maxStmt != nil {
+				err = maxStmt.Close()
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
+				maxStmt = nil
+			}
+			if middleStmt != nil {
+				err = middleStmt.Close()
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
+				middleStmt = nil
+			}
+			if oneStmt == nil {
+				oneStmt, err = tx.PrepareContext(ctx, sqls.oneRow)
 				if err != nil {
 					tx.Rollback()
 					done <- err
@@ -301,14 +397,14 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 						vals[i] = field
 					}
 				}
-				_, err := stmt1.ExecContext(ctx, vals...)
+				_, err := oneStmt.ExecContext(ctx, vals...)
 				if err != nil {
 					tx.Rollback()
 					done <- err
 					return
 				}
 			}
-			err = stmt1.Close()
+			err = oneStmt.Close()
 			if err != nil {
 				tx.Rollback()
 				done <- err

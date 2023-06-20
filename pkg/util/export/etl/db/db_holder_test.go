@@ -32,12 +32,13 @@ func TestGetPrepareSQL(t *testing.T) {
 		Table:    "testTable",
 	}
 	columns := 3
-	rowNum := 10
+	maxRowLen := 10
+	middleRowLen := 2
 
-	sqls := getPrepareSQL(tbl, columns, rowNum)
+	sqls := getPrepareSQL(tbl, columns, maxRowLen, middleRowLen)
 
-	if sqls.rowNum != rowNum {
-		t.Errorf("Expected rowNum to be %d, but got %d", rowNum, sqls.rowNum)
+	if sqls.maxRowNum != maxRowLen {
+		t.Errorf("Expected rowNum to be %d, but got %d", maxRowLen, sqls.maxRowNum)
 	}
 
 	if sqls.columns != columns {
@@ -49,8 +50,8 @@ func TestGetPrepareSQL(t *testing.T) {
 		t.Errorf("Expected oneRow to be %s, but got %s", expectedOneRow, sqls.oneRow)
 	}
 	expectedMultiRows := "INSERT INTO `testDB`.`testTable` VALUES (?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?)"
-	if sqls.multiRows != expectedMultiRows {
-		t.Errorf("Expected multiRows to be %s, but got %s", expectedMultiRows, sqls.multiRows)
+	if sqls.maxRows != expectedMultiRows {
+		t.Errorf("Expected multiRows to be %s, but got %s", expectedMultiRows, sqls.maxRows)
 	}
 }
 
@@ -99,7 +100,7 @@ func TestBulkInsert(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error)
-	go bulkInsert(ctx, done, db, records, tbl, 10)
+	go bulkInsert(ctx, done, db, records, tbl, 10, 1)
 
 	err = <-done
 	if err != nil {
@@ -171,7 +172,7 @@ func TestBulkInsertWithBatch(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error)
-	go bulkInsert(ctx, done, db, records, tbl, 10)
+	go bulkInsert(ctx, done, db, records, tbl, 10, 1)
 
 	select {
 	case err := <-done:
