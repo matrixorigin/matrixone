@@ -124,7 +124,7 @@ min(t1)    max(t2)
 -838:59:59    838:59:59
 drop table time_02;
 create table time_02 (t1 int,t2 time primary key,t3 varchar(25))partition by hash(t2)partitions 4;
-SQL syntax error: type TIME not allowed in partition clause
+Field 't2' is of a not allowed type for this type of partitioning
 create table time_03 (t1 int,t2 time primary key,t3 varchar(25));
 insert into time_03 values (30,"101412","yellow");
 insert into time_03 values (40,"101412","apple");
