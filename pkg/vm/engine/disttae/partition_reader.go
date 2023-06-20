@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -203,8 +204,11 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			if len(deletes) != 0 {
 				rbat.AntiShrink(deletes)
 			}
-			logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
-			logutil.Debug(testutil.OperatorCatchBatch("partition reader[s3]", rbat))
+
+			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+				logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
+				logutil.Debug(testutil.OperatorCatchBatch("partition reader[s3]", rbat))
+			}
 			return rbat, nil
 		} else {
 			bat = p.inserts[0].GetSubBatch(colNames)
@@ -237,7 +241,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
 			//		the bat.Length() is not always the right value for the result batch b.
 			b.SetZs(b.Vecs[0].Length(), mp)
-			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
+			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+				logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
+			}
 			return b, nil
 		}
 	}
@@ -310,6 +316,8 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 		return nil, nil
 	}
 	// XXX I'm not sure `normal` is a good description
-	logutil.Debug(testutil.OperatorCatchBatch("partition reader[normal]", b))
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debug(testutil.OperatorCatchBatch("partition reader[normal]", b))
+	}
 	return b, nil
 }
