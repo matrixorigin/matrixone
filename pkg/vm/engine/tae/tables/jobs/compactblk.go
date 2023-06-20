@@ -313,11 +313,9 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 	createdStr := "nil"
-	if task.created != nil {
-		createdStr = task.created.Fingerprint().BlockString()
-	}
 	rows := 0
 	if task.created != nil {
+		createdStr = task.created.Fingerprint().BlockString()
 		rows = task.created.Rows()
 	}
 	logutil.Info("[Done]",
