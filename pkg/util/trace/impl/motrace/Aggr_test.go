@@ -211,6 +211,6 @@ func TestAggregator(t *testing.T) {
 	}
 	results = aggregator.GetResults()
 
-	assert.Equal(t, "Update 11; Update 11; Update 11; Update 11; Update 11", results[0].(*StatementInfo).Statement)
+	assert.Equal(t, "Update 11; Update 11; Update 11; Update 11; Update 11", results[0].(*StatementInfo).StmtBuilder.String())
 
 }
