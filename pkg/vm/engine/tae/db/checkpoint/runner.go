@@ -666,6 +666,9 @@ func (r *runner) fillDefaults() {
 }
 
 func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, force bool) (err error) {
+	if !r.rt.Throttle.CanCompact() {
+		return
+	}
 	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)

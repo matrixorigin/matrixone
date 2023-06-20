@@ -40,13 +40,8 @@ func WithThrottleCompactionMaxMemUsedLimit(limit int64) ThrottleOption {
 }
 
 type Throttle struct {
-	// to be used in the future
-	Memtable struct {
-		MemUsed         atomic.Int64
-		MaxMemUsedLimit int64
-	}
-
 	Compaction struct {
+		// coarse grained throttle
 		ActiveTasks         atomic.Int32
 		MaxActiveTasksLimit int32
 
@@ -70,10 +65,10 @@ func NewThrottle(opts ...ThrottleOption) *Throttle {
 func (t *Throttle) fillDefaults() {
 	if t.Compaction.MaxActiveTasksLimit <= 0 {
 		cpus := runtime.NumCPU()
-		if cpus <= 1 {
+		if cpus <= 4 {
 			t.Compaction.MaxActiveTasksLimit = 1
 		} else {
-			t.Compaction.MaxActiveTasksLimit = int32(cpus / 2)
+			t.Compaction.MaxActiveTasksLimit = int32(cpus / 4)
 		}
 	}
 
@@ -92,6 +87,7 @@ func (t *Throttle) fillDefaults() {
 	}
 }
 
+// only used for fine grained throttle
 func (t *Throttle) TryApplyCompactionTask() (ok bool) {
 	for {
 		cnt := t.Compaction.ActiveTasks.Load()
@@ -104,8 +100,17 @@ func (t *Throttle) TryApplyCompactionTask() (ok bool) {
 	}
 }
 
-func (t *Throttle) ReleaseCompactionTask() {
+func (t *Throttle) AcquireCompactionQuota() {
+	t.Compaction.ActiveTasks.Add(1)
+}
+
+func (t *Throttle) ReleaseCompactionQuota() {
 	t.Compaction.ActiveTasks.Add(-1)
+}
+
+// coarse grained throttle check
+func (t *Throttle) CanCompact() bool {
+	return t.Compaction.ActiveTasks.Load() < t.Compaction.MaxActiveTasksLimit
 }
 
 func (t *Throttle) String() string {
