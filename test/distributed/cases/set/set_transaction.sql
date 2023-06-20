@@ -1,0 +1,5 @@
+-- just pass syntax check. no actual semantic action.
+set transaction isolation level read committed;
+set global transaction isolation level read committed , read write , isolation level read committed , read only;
+set session transaction isolation level read committed , read write , isolation level read committed , read only;
+set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;
