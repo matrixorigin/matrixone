@@ -147,16 +147,21 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 	}
 	// preceding and following
 	switch ws.Frame.Start.Type {
-	case tree.Preceding:
-		if ws.Frame.End.Type == tree.Preceding {
+	case tree.Following:
+		if ws.Frame.Start.UnBounded {
+			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start cannot be UNBOUNDED FOLLOWING.")
+		}
+		if ws.Frame.End.Type == tree.Preceding || ws.Frame.End.Type == tree.CurrentRow {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
 		}
-	case tree.Following:
-		return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
 	case tree.CurrentRow:
 		if ws.Frame.End.Type == tree.Preceding {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
 		}
+	}
+
+	if ws.Frame.End.Type == tree.Preceding && ws.Frame.End.UnBounded {
+		return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame end cannot be UNBOUNDED PRECEDING.")
 	}
 
 	w.Frame = &plan.FrameClause{
