@@ -18,8 +18,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 var DefaultReadMaxSize = uint64(10)
@@ -53,11 +53,11 @@ func NewDefaultConfig(clientFactory LogServiceClientFactory) *Config {
 		ClientPoolInitSize:    100,
 		GetClientRetryTimeOut: time.Second * 3,
 
-		RecordSize:        int(common.K * 16),
+		RecordSize:        int(mpool.KB * 16),
 		ReadCacheSize:     100,
-		ReadMaxSize:       common.K * 20,
+		ReadMaxSize:       mpool.KB * 20,
 		AppenderMaxCount:  100,
-		NewRecordSize:     int(common.K * 20),
+		NewRecordSize:     int(mpool.KB * 20),
 		NewClientDuration: time.Second * 3,
 		// AppendFrequency:      time.Millisecond * 5,
 		RetryTimeout:         time.Minute * 3,
@@ -75,11 +75,11 @@ func NewTestConfig(ccfg *logservice.ClientConfig) *Config {
 		ClientPoolInitSize:    5,
 		GetClientRetryTimeOut: time.Second,
 
-		RecordSize:       int(common.M * 10),
+		RecordSize:       int(mpool.MB * 10),
 		ReadCacheSize:    10,
-		ReadMaxSize:      common.K * 20,
+		ReadMaxSize:      mpool.KB * 20,
 		AppenderMaxCount: 10,
-		NewRecordSize:    int(common.K * 20),
+		NewRecordSize:    int(mpool.KB * 20),
 		// AppendFrequency:      time.Millisecond /1000,
 		RetryTimeout:         time.Minute,
 		NewClientDuration:    time.Second,

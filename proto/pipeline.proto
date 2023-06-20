@@ -141,6 +141,7 @@ message LockTarget {
 
 message LockOp {
   repeated LockTarget targets = 1;
+  bool                block   = 2;
 }
 
 message PreInsertUnique {
