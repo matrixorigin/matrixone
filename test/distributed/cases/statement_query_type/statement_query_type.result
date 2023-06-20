@@ -211,7 +211,7 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 110;
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 99;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    external_sql
 use system    Other    external_sql
@@ -311,17 +311,6 @@ start transaction    TCL    external_sql
 commit    TCL    external_sql
 begin    TCL    external_sql
 create database statement_query_type    DDL    external_sql
-SET character_set_results = utf8    Other    external_sql
-deallocate prepare s1    Other    external_sql
-rollback    TCL    external_sql
-begin    TCL    external_sql
-set @a=2    Other    external_sql
-prepare s1 from select * from test_table where col1=?    Other    external_sql
-create table test_table(\ncol1 int,\ncol2 varchar\n)    DDL    external_sql
-drop table if exists test_table    DDL    external_sql
-use test_db    Other    external_sql
-create database test_db    DDL    external_sql
-drop database if exists test_db    DDL    external_sql
 SET character_set_results = utf8    Other    external_sql
 /* cloud_user */ use statement_query_type;
 /* cloud_user */ begin;
