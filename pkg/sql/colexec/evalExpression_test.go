@@ -160,7 +160,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 
 		currStart := proc.Mp().CurrNB()
 		fExprExecutor := &FunctionExpressionExecutor{}
-		err := fExprExecutor.Init(proc.Mp(), 2, types.T_int64.ToType(),
+		err := fExprExecutor.Init(proc, 2, types.T_int64.ToType(),
 			func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 				v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
 				v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])

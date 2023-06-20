@@ -115,11 +115,10 @@ func NewFunctionTestCase(
 		}
 	}
 	// new the result
+	f.result = vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, wanted.typ, mp)
 	if len(f.parameters) == 0 {
-		f.result = vector.NewFunctionResultWrapper(wanted.typ, mp)
 		f.fnLength = 1
 	} else {
-		f.result = vector.NewFunctionResultWrapper(wanted.typ, mp)
 		f.fnLength = f.parameters[0].Length()
 	}
 	f.expected = wanted

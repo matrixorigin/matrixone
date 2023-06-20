@@ -142,7 +142,7 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			if factory == nil {
 				factory = GetTracerProvider().writerFactory
 			}
-			w = factory(ctx, account, row.Table, ts)
+			w = factory.GetRowWriter(ctx, account, row.Table, ts)
 			writerMap[row.GetAccount()] = w
 		}
 		w.WriteRow(row)

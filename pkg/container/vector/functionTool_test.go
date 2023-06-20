@@ -21,27 +21,6 @@ import (
 	"testing"
 )
 
-func BenchmarkAppendNew(b *testing.B) {
-	mp := mpool.MustNewZeroNoFixed()
-	vec := NewVec(types.T_bool.ToType())
-
-	vsr := newResultFunc[bool](vec, mp)
-
-	vecSize := 50000
-
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-		err := vsr.PreExtendAndReset(vecSize)
-		require.NoError(b, err)
-		b.StartTimer()
-
-		for j := 0; j < vecSize; j++ {
-			er := vsr.Append(true, false)
-			require.NoError(b, er)
-		}
-	}
-}
-
 func BenchmarkGetStrValue1(b *testing.B) {
 	mp := mpool.MustNewZeroNoFixed()
 
