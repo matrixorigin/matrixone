@@ -49,6 +49,7 @@ func (mixin *withFilterMixin) reset() {
 	mixin.columns.indexOfFirstSortedColumn = -1
 	mixin.columns.seqnums = nil
 	mixin.columns.colTypes = nil
+	mixin.sels = nil
 }
 
 // when the reader.Read is called for a new block, it will always
@@ -159,22 +160,21 @@ func (mixin *withFilterMixin) getCompositPKFilter() (filter blockio.ReadFilter) 
 
 	filter = func(vecs []*vector.Vector) []int32 {
 		var (
-			inputSels  []int32
-			outputSels []int32
+			inputSels []int32
 		)
 		for i := range filterFuncs {
 			pos := mixin.columns.compPKPositions[i]
 			vec := vecs[pos]
-			outputSels = outputSels[:0]
-			filterFuncs[i](vec, inputSels, &outputSels)
-			if len(outputSels) == 0 {
+			mixin.sels = mixin.sels[:0]
+			filterFuncs[i](vec, inputSels, &mixin.sels)
+			if len(mixin.sels) == 0 {
 				break
 			}
-			inputSels = outputSels
+			inputSels = mixin.sels
 		}
 		// logutil.Debugf("%s: %d/%d", mixin.tableDef.Name, len(res), vecs[0].Length())
 
-		return outputSels
+		return mixin.sels
 	}
 
 	mixin.filterState.evaluated = true
