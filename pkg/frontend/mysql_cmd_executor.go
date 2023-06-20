@@ -2510,7 +2510,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 					}
 				}
 
-			case *tree.SetVar:
+			case *tree.SetVar, *tree.SetTransaction:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
@@ -2899,6 +2899,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleShowBackendServers(requestCtx, i, len(cws)); err != nil {
 			return err
 		}
+	case *tree.SetTransaction:
+		selfHandle = true
+		//TODO: handle set transaction
 	}
 
 	if selfHandle {
