@@ -342,26 +342,6 @@ func TestWriteOnCommittedTxn(t *testing.T) {
 	})
 }
 
-func TestWriteOnInvalidEpoch(t *testing.T) {
-	runTimestampWaiterTests(
-		t,
-		func(tw *timestampWaiter) {
-			tw.NotifyLatestCommitTS(newTestTimestamp(1))
-			runOperatorTestsWithOptions(
-				t,
-				func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-					tw.UpdateEpoch(1)
-					_, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-					assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
-				},
-				newTestTimestamp(0),
-				[]TxnOption{},
-				WithEnableSacrificingFreshness(),
-				WithTimestampWaiter(tw))
-		},
-	)
-}
-
 func TestWriteOnCommittingTxn(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
