@@ -423,7 +423,6 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           
-          
           cd $GITHUB_WORKSPACE/mo-tpcc
           mkdir -p report
           cp props.mo props_10.mo
@@ -444,7 +443,6 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           
-          
           cd $GITHUB_WORKSPACE/mo-tpcc
           mkdir -p report
           cp props.mo props_10.mo
@@ -456,11 +454,10 @@ jobs:
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
-
-      - name: Modify Report Database Config
+  
+      - name: Collect Upload files
         if: ${{ always() && !cancelled() }}
         run: |
-          echo ${{ needs.docker_image_build.outputs.version }}
           mkdir -p $GITHUB_WORKSPACE/reports
           mkdir -p $GITHUB_WORKSPACE/reports/mo-ssb
           mkdir -p $GITHUB_WORKSPACE/reports/mo-load-data
@@ -468,13 +465,16 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/reports/mo-load
           mkdir -p $GITHUB_WORKSPACE/reports/mo-tpch
           mkdir -p $GITHUB_WORKSPACE/reports/mo-tester
-          cp -r $GITHUB_WORKSPACE/mo-ssb/report $GITHUB_WORKSPACE/reports/mo-ssb
-          cp -r $GITHUB_WORKSPACE/mo-load-data/report $GITHUB_WORKSPACE/reports/mo-load-data
-          cp -r $GITHUB_WORKSPACE/mo-tpcc/report $GITHUB_WORKSPACE/reports/mo-tpcc
-          cp -r $GITHUB_WORKSPACE/mo-load/report $GITHUB_WORKSPACE/reports/mo-load
-          cp -r $GITHUB_WORKSPACE/mo-tpch/report $GITHUB_WORKSPACE/reports/mo-tpch
-          cp -r $GITHUB_WORKSPACE/mo-tester $GITHUB_WORKSPACE/reports/mo-tester/
+          mkdir -p $GITHUB_WORKSPACE/mo-ssb/report && cp -r $GITHUB_WORKSPACE/mo-ssb/report $GITHUB_WORKSPACE/reports/mo-ssb
+          mkdir -p $GITHUB_WORKSPACE/mo-load-data/report && cp -r $GITHUB_WORKSPACE/mo-load-data/report $GITHUB_WORKSPACE/reports/mo-load-data
+          mkdir -p $GITHUB_WORKSPACE/mo-tpcc/report && cp -r $GITHUB_WORKSPACE/mo-tpcc/report $GITHUB_WORKSPACE/reports/mo-tpcc
+          mkdir -p $GITHUB_WORKSPACE/mo-load/report && cp -r $GITHUB_WORKSPACE/mo-load/report $GITHUB_WORKSPACE/reports/mo-load
+          mkdir -p $GITHUB_WORKSPACE/mo-tpch/report && cp -r $GITHUB_WORKSPACE/mo-tpch/report $GITHUB_WORKSPACE/reports/mo-tpch
+          mkdir -p $GITHUB_WORKSPACE/mo-tester && cp -r $GITHUB_WORKSPACE/mo-tester $GITHUB_WORKSPACE/reports/mo-tester
 
+      - name: Modify Report Database Config
+        if: ${{ always() && !cancelled() }}
+        run: |
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
           sed -i '/  host:*/c\  host: "${{secrets.REPORT_DB_ADDR}}"' config.yml
           sed -i '/  port:*/c\  port: ${{secrets.REPORT_DB_PORT}}' config.yml
