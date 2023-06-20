@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logutil
+package dbutils
 
 import (
-	"testing"
-	"time"
-
-	"github.com/stretchr/testify/require"
+	"fmt"
+	"path"
 )
 
-func TestSlow(t *testing.T) {
-	done := Slow(time.Millisecond*10, "slow")
-	time.Sleep(time.Millisecond * 50)
-	require.True(t, done())
+const LockSuffix = ".lock"
 
-	// done before timeout
-	done = Slow(time.Millisecond*500, "slow")
-	require.False(t, done())
+func MakeLockFileName(dirname string, name string) string {
+	return path.Join(dirname, fmt.Sprintf("%s%s", name, LockSuffix))
 }

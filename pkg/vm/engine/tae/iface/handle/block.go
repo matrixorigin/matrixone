@@ -16,13 +16,13 @@ package handle
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type BlockIt interface {
@@ -57,11 +57,11 @@ type BlockReader interface {
 	ID() types.Blockid
 	String() string
 	IsUncommitted() bool
-	GetByFilter(filter *Filter) (uint32, error)
-	GetColumnDataByNames(attrs []string) (*model.BlockView, error)
-	GetColumnDataByIds(colIdxes []int) (*model.BlockView, error)
-	GetColumnDataByName(context.Context, string) (*model.ColumnView, error)
-	GetColumnDataById(context.Context, int) (*model.ColumnView, error)
+	GetByFilter(ctx context.Context, filter *Filter) (uint32, error)
+	GetColumnDataByNames(ctx context.Context, attrs []string) (*containers.BlockView, error)
+	GetColumnDataByIds(ctx context.Context, colIdxes []int) (*containers.BlockView, error)
+	GetColumnDataByName(context.Context, string) (*containers.ColumnView, error)
+	GetColumnDataById(context.Context, int) (*containers.ColumnView, error)
 	GetMeta() any
 	GetMetaLoc() objectio.Location
 	GetDeltaLoc() objectio.Location

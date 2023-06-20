@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model
+package containers
 
 import (
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
 type BaseView struct {
-	DeleteMask *roaring.Bitmap
+	DeleteMask *nulls.Bitmap
 }
 
+// TODO: remove this BlockView later
+// Use Batch instead
 type BlockView struct {
 	*BaseView
 	Columns map[int]*ColumnView
@@ -35,23 +36,23 @@ func NewBlockView() *BlockView {
 	}
 }
 
-func (view *BlockView) Orphan(i int) containers.Vector {
+func (view *BlockView) Orphan(i int) Vector {
 	col := view.Columns[i]
 	return col.Orphan()
 }
 
-func (view *BlockView) SetBatch(bat *containers.Batch) {
+func (view *BlockView) SetBatch(bat *Batch) {
 	for i, col := range bat.Vecs {
 		view.SetData(i, col)
 	}
 }
 
-func (view *BlockView) GetColumnData(i int) containers.Vector {
+func (view *BlockView) GetColumnData(i int) Vector {
 	return view.Columns[i].GetData()
 }
 
 // FIXME: i should not be idx in schema
-func (view *BlockView) SetData(i int, data containers.Vector) {
+func (view *BlockView) SetData(i int, data Vector) {
 	col := view.Columns[i]
 	if col == nil {
 		col = NewColumnView(i)
@@ -60,31 +61,12 @@ func (view *BlockView) SetData(i int, data containers.Vector) {
 	col.SetData(data)
 }
 
-func (view *BlockView) SetUpdates(i int, mask *roaring.Bitmap, vals map[uint32]any) {
-	col := view.Columns[i]
-	if col == nil {
-		col = NewColumnView(i)
-		view.Columns[i] = col
-	}
-	col.UpdateMask = mask
-	col.UpdateVals = vals
-}
-
-func (view *BlockView) Eval(clear bool) (err error) {
-	for _, col := range view.Columns {
-		if err = col.Eval(clear); err != nil {
-			break
-		}
-	}
-	return
-}
-
 func (view *BlockView) ApplyDeletes() {
-	if view.DeleteMask == nil {
+	if view.DeleteMask.IsEmpty() {
 		return
 	}
 	for _, col := range view.Columns {
-		col.data.Compact(view.DeleteMask)
+		col.data.CompactByBitmap(view.DeleteMask)
 	}
 	view.DeleteMask = nil
 }

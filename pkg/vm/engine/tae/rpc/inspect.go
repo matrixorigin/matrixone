@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/spf13/cobra"
 )
 
@@ -43,12 +44,13 @@ func (i *inspectContext) Set(string) error { return nil }
 func (i *inspectContext) Type() string     { return "ictx" }
 
 type catalogArg struct {
-	ctx     *inspectContext
-	outfile *os.File
-	verbose common.PPLevel
+	ctx       *inspectContext
+	outfile   *os.File
+	tblHandle handle.Relation
+	verbose   common.PPLevel
 }
 
-func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
+func (c *catalogArg) fromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	count, _ := cmd.Flags().GetCount("verbose")
 	var lv common.PPLevel
@@ -64,6 +66,22 @@ func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
 	}
 	c.verbose = lv
 
+	db, _ := cmd.Flags().GetString("db")
+	table, _ := cmd.Flags().GetString("table")
+	if db != "" && table != "" {
+		txn, _ := c.ctx.db.StartTxn(nil)
+		dbHdl, err := txn.GetDatabase(db)
+		if err != nil {
+			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v err: %v", db, err)))
+			return err
+		}
+		tblHdl, err := dbHdl.GetRelationByName(table)
+		if err != nil {
+			cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v err: %v", table, err)))
+			return err
+		}
+		c.tblHandle = tblHdl
+	}
 	file, _ := cmd.Flags().GetString("outfile")
 	if file != "" {
 		if f, err := os.Create(file); err != nil {
@@ -78,14 +96,26 @@ func (c *catalogArg) fromCommand(cmd *cobra.Command) error {
 
 func runCatalog(arg *catalogArg, respWriter io.Writer) {
 	if arg.outfile != nil {
-		ret := arg.ctx.db.Catalog.SimplePPString(arg.verbose)
+		var ret string
+		if arg.tblHandle != nil {
+			meta := arg.tblHandle.GetMeta().(*catalog.TableEntry)
+			ret = meta.PPString(arg.verbose, 0, "")
+		} else {
+			ret = arg.ctx.db.Catalog.SimplePPString(arg.verbose)
+		}
 		arg.outfile.WriteString(ret)
 		defer arg.outfile.Close()
 		respWriter.Write([]byte("write file done"))
 	} else {
-		visitor := newCatalogRespVisitor(arg.verbose)
-		arg.ctx.db.Catalog.RecurLoop(visitor)
-
+		var visitor *catalogRespVisitor
+		if arg.tblHandle != nil {
+			visitor = newTableRespVisitor(arg.verbose)
+			meta := arg.tblHandle.GetMeta().(*catalog.TableEntry)
+			meta.RecurLoop(visitor)
+		} else {
+			visitor = newCatalogRespVisitor(arg.verbose)
+			arg.ctx.db.Catalog.RecurLoop(visitor)
+		}
 		ret, _ := types.Encode(visitor.GetResponse())
 		arg.ctx.resp.Payload = ret
 		arg.ctx.resp.Typ = db.InspectCata
@@ -110,7 +140,7 @@ func (c *addCCmd) fromCommand(cmd *cobra.Command) error {
 	return nil
 }
 
-func runAddC(cmd *addCCmd) error {
+func runAddC(ctx context.Context, cmd *addCCmd) error {
 	txn, _ := cmd.ctx.db.StartTxn(nil)
 	db, _ := txn.GetDatabase(cmd.db)
 	tbl, _ := db.GetRelationByName(cmd.tbl)
@@ -121,12 +151,12 @@ func runAddC(cmd *addCCmd) error {
 	}
 	err := tbl.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, cmd.name, planTyp, int32(cmd.pos)))
 	if err != nil {
-		if txn.Rollback() != nil {
+		if txn.Rollback(ctx) != nil {
 			panic("rollback error are you kidding?")
 		}
 		return err
 	}
-	return txn.Commit()
+	return txn.Commit(ctx)
 }
 
 type dropCCmd struct {
@@ -145,19 +175,19 @@ func (c *dropCCmd) fromCommand(cmd *cobra.Command) error {
 	return nil
 }
 
-func runDropC(cmd *dropCCmd) error {
+func runDropC(ctx context.Context, cmd *dropCCmd) error {
 	txn, _ := cmd.ctx.db.StartTxn(nil)
 	db, _ := txn.GetDatabase(cmd.db)
 	tbl, _ := db.GetRelationByName(cmd.tbl)
 	seqnum := tbl.Schema().(*catalog.Schema).ColDefs[cmd.pos].SeqNum
 	err := tbl.AlterTable(context.TODO(), api.NewRemoveColumnReq(0, 0, uint32(cmd.pos), uint32(seqnum)))
 	if err != nil {
-		if txn.Rollback() != nil {
+		if txn.Rollback(ctx) != nil {
 			panic("rollback error are you kidding?")
 		}
 		return err
 	}
-	return txn.Commit()
+	return txn.Commit(ctx)
 }
 
 type renameTCmd struct {
@@ -175,21 +205,21 @@ func (c *renameTCmd) fromCommand(cmd *cobra.Command) error {
 	return nil
 }
 
-func runRenameT(cmd *renameTCmd) error {
+func runRenameT(ctx context.Context, cmd *renameTCmd) error {
 	txn, _ := cmd.ctx.db.StartTxn(nil)
 	db, _ := txn.GetDatabase(cmd.db)
 	tbl, _ := db.GetRelationByName(cmd.old)
 	err := tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, cmd.old, cmd.new))
 	if err != nil {
-		if txn.Rollback() != nil {
+		if txn.Rollback(ctx) != nil {
 			panic("rollback error are you kidding?")
 		}
 		return err
 	}
-	return txn.Commit()
+	return txn.Commit(ctx)
 }
 
-func initCommand(ctx *inspectContext) *cobra.Command {
+func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use: "inspect",
 	}
@@ -213,7 +243,7 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 			if err := arg.fromCommand(cmd); err != nil {
 				return
 			}
-			err := runAddC(arg)
+			err := runAddC(ctx, arg)
 			if err != nil {
 				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
 			} else {
@@ -230,7 +260,7 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 			if err := arg.fromCommand(cmd); err != nil {
 				return
 			}
-			err := runDropC(arg)
+			err := runDropC(ctx, arg)
 			if err != nil {
 				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
 			} else {
@@ -247,7 +277,7 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 			if err := arg.fromCommand(cmd); err != nil {
 				return
 			}
-			err := runRenameT(arg)
+			err := runRenameT(ctx, arg)
 			if err != nil {
 				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
 			} else {
@@ -256,14 +286,16 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 		},
 	}
 
-	rootCmd.PersistentFlags().VarPF(ctx, "ictx", "", "").Hidden = true
+	rootCmd.PersistentFlags().VarPF(inspectCtx, "ictx", "", "").Hidden = true
 
-	rootCmd.SetArgs(ctx.args)
-	rootCmd.SetErr(ctx.out)
-	rootCmd.SetOut(ctx.out)
+	rootCmd.SetArgs(inspectCtx.args)
+	rootCmd.SetErr(inspectCtx.out)
+	rootCmd.SetOut(inspectCtx.out)
 
 	catalogCmd.Flags().CountP("verbose", "v", "verbose level")
 	catalogCmd.Flags().StringP("outfile", "o", "", "write output to a file")
+	catalogCmd.Flags().StringP("db", "d", "", "database name")
+	catalogCmd.Flags().StringP("table", "t", "", "table name")
 	rootCmd.AddCommand(catalogCmd)
 
 	addCCmd.Flags().StringP("db", "d", "", "database")
@@ -286,8 +318,8 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 	return rootCmd
 }
 
-func RunInspect(ctx *inspectContext) {
-	rootCmd := initCommand(ctx)
+func RunInspect(ctx context.Context, inspectCtx *inspectContext) {
+	rootCmd := initCommand(ctx, inspectCtx)
 	rootCmd.Execute()
 }
 
@@ -302,6 +334,16 @@ func newCatalogRespVisitor(lv common.PPLevel) *catalogRespVisitor {
 		level: lv,
 		stack: []*db.CatalogResp{{Item: "Catalog"}},
 	}
+}
+
+func newTableRespVisitor(lv common.PPLevel) *catalogRespVisitor {
+	v := &catalogRespVisitor{
+		level: lv,
+		stack: []*db.CatalogResp{{Item: "Catalog"}},
+	}
+	v.onstack(0, &db.CatalogResp{Item: "DB"})
+	v.onstack(1, &db.CatalogResp{Item: "Tbl"})
+	return v
 }
 
 func (c *catalogRespVisitor) GetResponse() *db.CatalogResp {

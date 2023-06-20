@@ -30,6 +30,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"io"
+	"time"
 )
 
 type TraceID [16]byte
@@ -159,6 +160,12 @@ func SpanContextWithIDs(tid TraceID, sid SpanID) SpanContext {
 	return SpanContext{TraceID: tid, SpanID: sid, Kind: SpanKindInternal}
 }
 
+const (
+	FlagProfileGoroutine = 1 << iota
+	FlagProfileHeap
+	FlagProfileCpu
+)
+
 // SpanConfig is a group of options for a Span.
 type SpanConfig struct {
 	SpanContext
@@ -168,6 +175,41 @@ type SpanConfig struct {
 	// remote parent span context should be ignored for security.
 	NewRoot bool `json:"NewRoot"` // WithNewRoot
 	Parent  Span `json:"-"`
+
+	// LongTimeThreshold set by WithLongTimeThreshold
+	LongTimeThreshold time.Duration `json:"-"`
+	profileGoroutine  bool
+	profileHeap       bool
+	profileCpuDur     time.Duration
+}
+
+func (c *SpanConfig) Reset() {
+	c.SpanContext.Reset()
+	c.NewRoot = false
+	c.Parent = nil
+	c.LongTimeThreshold = 0
+	c.profileGoroutine = false
+	c.profileHeap = false
+	c.profileCpuDur = 0
+}
+
+func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
+	return c.LongTimeThreshold
+}
+
+// ProfileGoroutine return the value set by WithProfileGoroutine
+func (c *SpanConfig) ProfileGoroutine() bool {
+	return c.profileGoroutine
+}
+
+// ProfileHeap return the value set by WithProfileHeap
+func (c *SpanConfig) ProfileHeap() bool {
+	return c.profileHeap
+}
+
+// ProfileCpuSecs return the value set by WithProfileCpuSecs
+func (c *SpanConfig) ProfileCpuSecs() time.Duration {
+	return c.profileCpuDur
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
@@ -205,6 +247,33 @@ func WithNewRoot(newRoot bool) spanOptionFunc {
 func WithKind(kind SpanKind) spanOptionFunc {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.Kind = kind
+	})
+}
+
+func WithLongTimeThreshold(d time.Duration) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.LongTimeThreshold = d
+	})
+}
+
+func WithProfileGoroutine() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileGoroutine = true
+	})
+}
+
+func WithProfileHeap() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileHeap = true
+	})
+}
+
+// WithProfileCpuSecs give duration while do pprof
+// more details in MOSpan.doProfile.
+// Please carefully to set this value, it will trigger the sync ProfileCpu op
+func WithProfileCpuSecs(d time.Duration) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileCpuDur = d
 	})
 }
 

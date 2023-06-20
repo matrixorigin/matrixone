@@ -12,19 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model
+package containers
 
-import (
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-)
-
+// TODO: remove this ColumnView later
+// Use Batch with one vector instead
 type ColumnView struct {
 	*BaseView
-	ColIdx     int
-	data       containers.Vector
-	UpdateMask *roaring.Bitmap
-	UpdateVals map[uint32]any
+	ColIdx int
+	data   Vector
 }
 
 func NewColumnView(colIdx int) *ColumnView {
@@ -34,44 +29,26 @@ func NewColumnView(colIdx int) *ColumnView {
 	}
 }
 
-func (view *ColumnView) Orphan() containers.Vector {
+func (view *ColumnView) Orphan() Vector {
 	data := view.data
 	view.data = nil
 	return data
 }
 
-func (view *ColumnView) SetData(data containers.Vector) {
+func (view *ColumnView) SetData(data Vector) {
 	view.data = data
 }
 
-func (view *ColumnView) ApplyDeletes() containers.Vector {
-	if view.DeleteMask == nil {
+func (view *ColumnView) ApplyDeletes() Vector {
+	if view.DeleteMask.IsEmpty() {
 		return view.data
 	}
-	view.data.Compact(view.DeleteMask)
+	view.data.CompactByBitmap(view.DeleteMask)
 	view.DeleteMask = nil
 	return view.data
 }
 
-func (view *ColumnView) Eval(clear bool) (err error) {
-	if view.UpdateMask == nil {
-		return
-	}
-	it := view.UpdateMask.Iterator()
-	for it.HasNext() {
-		row := it.Next()
-		// Note: Passing isNull = false is OK here. UpdateMask is not needed any more
-		// https://github.com/matrixorigin/matrixone/pull/8956#discussion_r1163487884
-		view.data.Update(int(row), view.UpdateVals[row], false)
-	}
-	if clear {
-		view.UpdateMask = nil
-		view.UpdateVals = nil
-	}
-	return
-}
-
-func (view *ColumnView) GetData() containers.Vector {
+func (view *ColumnView) GetData() Vector {
 	return view.data
 }
 
@@ -91,10 +68,7 @@ func (view *ColumnView) GetValue(row int) (any, bool) {
 }
 
 func (view *ColumnView) IsDeleted(row int) bool {
-	if view.DeleteMask == nil {
-		return false
-	}
-	return view.DeleteMask.ContainsInt(row)
+	return view.DeleteMask.Contains(uint64(row))
 }
 
 func (view *ColumnView) Close() {
@@ -102,7 +76,5 @@ func (view *ColumnView) Close() {
 		view.data.Close()
 	}
 	view.data = nil
-	view.UpdateMask = nil
-	view.UpdateVals = nil
 	view.DeleteMask = nil
 }

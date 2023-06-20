@@ -40,6 +40,8 @@ const (
 
 func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -48,7 +50,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 	writer, _ := NewBlockWriterNew(service, name, 0, nil)
 
@@ -109,6 +111,8 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 
 func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -117,7 +121,7 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchemaAll(13, 2)

@@ -20,7 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	storeEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -33,7 +33,7 @@ func initEnv(t *testing.T) *baseStore {
 	name := "mock"
 	os.RemoveAll(dir)
 	cfg := &StoreCfg{
-		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+		RotateChecker: NewMaxSizeRotateChecker(int(mpool.KB) * 3),
 	}
 	s, err := NewBaseStore(dir, name, cfg)
 	assert.NoError(t, err)
@@ -48,7 +48,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	// 	logutil.Infof("v%d lsn%v",ver,lsns.Intervals)
 	// }
 	cfg := &StoreCfg{
-		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+		RotateChecker: NewMaxSizeRotateChecker(int(mpool.KB) * 3),
 	}
 	s, err = NewBaseStore(s.dir, s.name, cfg)
 	assert.NoError(t, err)

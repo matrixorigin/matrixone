@@ -68,6 +68,14 @@ type tracerProviderConfig struct {
 	// disableSqlWriter
 	disableSqlWriter bool // set by WithSQLWriterDisable
 
+	// skipRunningStmt
+	skipRunningStmt bool // set by WithSkipRunningStmt
+
+	// stmt aggregation
+	disableStmtAggregation bool          // set by WithStmtAggregationDisable
+	aggregationWindow      time.Duration // WithAggregationWindow
+	selectAggrThreshold    time.Duration // WithSelectThreshold
+
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
 	needInit bool // WithInitAction
@@ -174,9 +182,33 @@ func WithSpanDisable(disable bool) tracerProviderOption {
 	}
 }
 
+func WithSkipRunningStmt(skip bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.skipRunningStmt = skip
+	}
+}
+
 func WithSQLWriterDisable(disable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.disableSqlWriter = disable
+	}
+}
+
+func WithAggregatorDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableStmtAggregation = disable
+	}
+}
+
+func WithAggregatorWindow(window time.Duration) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.aggregationWindow = window
+	}
+}
+
+func WithSelectThreshold(window time.Duration) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.selectAggrThreshold = window
 	}
 }
 

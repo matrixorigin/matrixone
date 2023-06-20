@@ -553,6 +553,7 @@ func constructLockOp(n *plan.Node, proc *process.Process) (*lockop.Argument, err
 				arg.LockTable(target.TableId)
 			}
 		}
+		arg.SetBlock(target.Block)
 	}
 	return arg, nil
 }
