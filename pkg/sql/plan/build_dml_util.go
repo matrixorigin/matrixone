@@ -1050,7 +1050,6 @@ func makeInsertPlan(
 					Children:    []int32{rightId, lastNodeId},
 					JoinType:    plan.Node_RIGHT,
 					OnList:      []*Expr{condExpr},
-					BuildOnLeft: true,
 					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
 					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
 						{
