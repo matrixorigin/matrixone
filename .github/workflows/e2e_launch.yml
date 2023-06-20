@@ -184,7 +184,7 @@ jobs:
           max_retry=5
           retry=0
           while [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; do
-            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/dump-stacks${retry}.log
+            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks${retry}.log
             pkill -9 mo-service
             retry=$((retry+1))
             if [ ${retry} -ge ${max_retry} ]; then
@@ -211,7 +211,7 @@ jobs:
       - name: Dump restarted mo-service goroutines 
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/restarted-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/restarted-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
   
 
       - name: generate upload files
@@ -295,11 +295,6 @@ jobs:
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
-
-      - name: Check mo-service Status
-        if: ${{ always() && !cancelled() }}
-        run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
 
       - name: generate upload files
         if: ${{ always() }}
