@@ -37,12 +37,10 @@ import (
 
 func getVal(val any) string {
 	switch v := val.(type) {
-	/*
-		case float32:
-			return fmt.Sprintf("%e", val)
-		case float64:
-			return fmt.Sprintf("%e", val)
-	*/
+	case float32:
+		return fmt.Sprintf("%e", val)
+	case float64:
+		return fmt.Sprintf("%e", val)
 	case []byte:
 		return string(v)
 	case string:
@@ -323,7 +321,7 @@ func setInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, vec *vec
 
 	switch numVal.ValType {
 	case tree.P_null:
-		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+		err = vector.AppendFixed[types.Datetime](vec, 0, true, proc.GetMPool())
 
 	case tree.P_int64:
 		canInsert = false
@@ -448,7 +446,7 @@ func setInsertValueDate(proc *process.Process, numVal *tree.NumVal, vec *vector.
 
 	switch numVal.ValType {
 	case tree.P_null:
-		err = vector.AppendFixed[types.Time](vec, 0, true, proc.GetMPool())
+		err = vector.AppendFixed[types.Date](vec, 0, true, proc.GetMPool())
 
 	case tree.P_int64:
 		canInsert = false
@@ -497,7 +495,7 @@ func setInsertValueUuid(proc *process.Process, numVal *tree.NumVal, vec *vector.
 
 	switch numVal.ValType {
 	case tree.P_null:
-		err = vector.AppendFixed[types.Timestamp](vec, 0, true, proc.GetMPool())
+		err = vector.AppendFixed[types.Uuid](vec, types.Uuid{}, true, proc.GetMPool())
 
 	case tree.P_int64:
 		canInsert = false

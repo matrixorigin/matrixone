@@ -600,7 +600,7 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=":
 			switch exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C, *plan.Expr_P:
+			case *plan.Expr_C, *plan.Expr_P, *plan.Expr_V:
 				return CheckFilter(exprImpl.F.Args[0])
 			default:
 				return false, nil
