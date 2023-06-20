@@ -29,7 +29,7 @@ func RunTxnTests(fn func(TxnClient, rpc.TxnSender), opts ...TxnClientCreateOptio
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	ts := newTestTxnSender()
 	c := NewTxnClient(ts, opts...)
-	NoticeCnStatus(c, true)
+	c.(TxnClientWithFeature).Resume()
 	fn(c, ts)
 }
 

@@ -344,7 +344,7 @@ func runLockOpTest(
 			require.NoError(t, err)
 
 			c := client.NewTxnClient(s, opts...)
-			client.NoticeCnStatus(c, true)
+			c.(client.TxnClientWithFeature).Resume()
 			defer func() {
 				assert.NoError(t, c.Close())
 			}()
