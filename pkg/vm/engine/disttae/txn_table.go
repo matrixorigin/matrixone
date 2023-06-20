@@ -1591,10 +1591,6 @@ func (tbl *txnTable) newReader(
 		deletes:  deletes,
 		iter:     iter,
 		seqnumMp: seqnumMp,
-		//extendId2s3File: make(map[string]int),
-		//s3FileService:   fs,
-		//procMPool:       txn.proc.GetMPool(),
-		//deletedBlocks: txn.deletedBlocks,
 	}
 	partReader.blockReader.blkDels = blkDels
 	infos, steps := groupBlocksToObjects(blkInfos, 1)
