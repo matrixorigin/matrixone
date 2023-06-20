@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1343,7 +1344,11 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 		for i, rd := range rds0 {
 			mrds[i].rds = append(mrds[i].rds, rd)
 		}
-		rds0, err = tbl.newBlockReader(ctx, num, expr, ranges[1:])
+		blkInfos := make([]*catalog.BlockInfo, 0, len(ranges[1:]))
+		for _, r := range ranges[1:] {
+			blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
+		}
+		rds0, err = tbl.newBlockReader(ctx, num, expr, blkInfos)
 		if err != nil {
 			return nil, err
 		}
@@ -1355,7 +1360,11 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 		}
 		return rds, nil
 	}
-	return tbl.newBlockReader(ctx, num, expr, ranges)
+	blkInfos := make([]*catalog.BlockInfo, 0, len(ranges))
+	for _, r := range ranges {
+		blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
+	}
+	return tbl.newBlockReader(ctx, num, expr, blkInfos)
 }
 
 func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
@@ -1425,25 +1434,28 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	return rds, nil
 }
 
-func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
+func (tbl *txnTable) newBlockReader(
+	ctx context.Context,
+	num int,
+	expr *plan.Expr,
+	blkInfos []*catalog.BlockInfo) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
 
-	if len(ranges) < num || len(ranges) == 1 {
-		for i := range ranges {
-			blk := catalog.DecodeBlockInfo(ranges[i])
+	if len(blkInfos) < num || len(blkInfos) == 1 {
+		for i, blk := range blkInfos {
 			rds[i] = newBlockReader(
 				ctx, tableDef, ts, []*catalog.BlockInfo{blk}, expr, tbl.db.txn.engine.fs,
 			)
 		}
-		for j := len(ranges); j < num; j++ {
+		for j := len(blkInfos); j < num; j++ {
 			rds[j] = &emptyReader{}
 		}
 		return rds, nil
 	}
 
-	infos, steps := groupBlocksToObjects(ranges, num)
+	infos, steps := groupBlocksToObjects(blkInfos, num)
 	blockReaders := newBlockReaders(ctx, tbl.db.txn.engine.fs, tableDef, tbl.primarySeqnum, ts, num, expr)
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
@@ -1468,38 +1480,69 @@ func (tbl *txnTable) newReader(
 		return nil, err
 	}
 
-	//prepared inserts and deletes for partition reader
+	//prepare inserts and deletes for partition reader.
 	//TODO:: put this logic into partitionReader.read.
 	var inserts []*batch.Batch
+	var blkInfos []*catalog.BlockInfo
+	blkDels := make(map[types.Blockid][]int64)
 	var deletes map[types.Rowid]uint8
 	if !txn.readOnly.Load() {
 		inserts = make([]*batch.Batch, 0, len(entries))
 		deletes = make(map[types.Rowid]uint8)
 		for _, entry := range entries {
 			if entry.typ == INSERT {
-				inserts = append(inserts, entry.bat)
-			} else {
-				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-					/*
-						CASE:
-						create table t1(a int);
-						begin;
-						truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-						show tables; // t1 must be shown
-					*/
-					if entry.isGeneratedByTruncate() {
-						continue
+				if entry.bat == nil || entry.bat.Length() == 0 {
+					continue
+				}
+				if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+					metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
+					for _, metaLoc := range metaLocs {
+						location, err := blockio.EncodeLocationFromString(metaLoc)
+						if err != nil {
+							return nil, err
+						}
+						sid := location.Name().SegmentId()
+						blkid := objectio.NewBlockid(
+							&sid,
+							location.Name().Num(),
+							location.ID())
+						pos, ok := txn.cnBlkId_Pos[*blkid]
+						if !ok {
+							panic(fmt.Sprintf("blkid %s not found", blkid.String()))
+						}
+						blkInfos = append(blkInfos, &pos.blkInfo)
+						offsets := txn.deletedBlocks.getDeletedOffsetsByBlock(blkid)
+						if len(offsets) != 0 {
+							blkDels[*blkid] = offsets
+						}
 					}
-					//FIXME:: deletes in txn.Write maybe comes from PartitionState.Rows ,
-					//        PartitionReader need to skip them.
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-					for _, v := range vs {
-						deletes[v] = 0
-					}
+
+				} else {
+					inserts = append(inserts, entry.bat)
+				}
+				continue
+			}
+			//entry.typ == DELETE
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.isGeneratedByTruncate() {
+					continue
+				}
+				//deletes in txn.Write maybe comes from PartitionState.Rows ,
+				// PartitionReader need to skip them.
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
 				}
 			}
 		}
-		//FIXME::deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
+		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
 		tbl.LoadDeletesForBlockIn(state, false, nil, deletes)
 	}
@@ -1536,17 +1579,31 @@ func (tbl *txnTable) newReader(
 	}
 
 	partReader := &PartitionReader{
-		typsMap: mp,
-		//TODO::
-		inserts:         inserts,
-		deletes:         deletes,
-		iter:            iter,
-		seqnumMp:        seqnumMp,
-		extendId2s3File: make(map[string]int),
-		s3FileService:   fs,
-		procMPool:       txn.proc.GetMPool(),
-		deletedBlocks:   txn.deletedBlocks,
+		blockReader: newBlockReader(
+			ctx,
+			tbl.tableDef,
+			ts,
+			nil,
+			expr,
+			fs),
+		typsMap:  mp,
+		inserts:  inserts,
+		deletes:  deletes,
+		iter:     iter,
+		seqnumMp: seqnumMp,
+		//extendId2s3File: make(map[string]int),
+		//s3FileService:   fs,
+		//procMPool:       txn.proc.GetMPool(),
+		//deletedBlocks: txn.deletedBlocks,
 	}
+	partReader.blockReader.blkDels = blkDels
+	infos, steps := groupBlocksToObjects(blkInfos, 1)
+	distributeBlocksToBlockReaders(
+		[]*blockReader{partReader.blockReader},
+		1,
+		infos,
+		steps)
+
 	readers[0] = partReader
 
 	if readerNumber == 1 {

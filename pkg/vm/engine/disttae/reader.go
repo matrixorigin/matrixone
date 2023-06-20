@@ -263,7 +263,8 @@ func newBlockReader(
 			ts:       ts,
 			tableDef: tableDef,
 		},
-		blks: blks,
+		blks:    blks,
+		blkDels: make(map[types.Blockid][]int64),
 	}
 	r.filterState.expr = filterExpr
 	return r
@@ -311,7 +312,7 @@ func (r *blockReader) Read(
 
 	// read the block
 	bat, err := blockio.BlockRead(
-		r.ctx, blockInfo, nil, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
+		r.ctx, blockInfo, r.blkDels[(*blockInfo).BlockID], r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err

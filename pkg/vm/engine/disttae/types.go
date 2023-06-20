@@ -432,8 +432,9 @@ type withFilterMixin struct {
 
 	filterState struct {
 		evaluated bool
-		expr      *plan.Expr
-		filter    blockio.ReadFilter
+		//point select for primary key
+		expr   *plan.Expr
+		filter blockio.ReadFilter
 	}
 }
 
@@ -446,9 +447,11 @@ type blockReader struct {
 	currentStep int
 
 	// block list to scan
-	blks []*catalog.BlockInfo
+	blks    []*catalog.BlockInfo
+	blkDels map[types.Blockid][]int64
 }
 
+// TODO::blockMergeReader should inherit from blockReader.
 type blockMergeReader struct {
 	withFilterMixin
 
