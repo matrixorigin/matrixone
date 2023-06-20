@@ -322,9 +322,9 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		common.AnyField("compacted", task.meta.Repr()),
 		common.AnyField("created", createdStr),
 		common.AnyField("compactedRows", task.compacted.Rows()),
+		common.AnyField("TotalChanges", task.compacted.GetTotalChanges()),
 		common.AnyField("createdRows", task.created.Rows()),
 		common.DurationField(time.Since(now)))
-
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Segment.CompactBlock.Add(1)
 	})
