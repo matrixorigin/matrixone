@@ -63,6 +63,7 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
+	NoticeCnStatus(c, true)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0), WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
