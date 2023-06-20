@@ -77,8 +77,8 @@ func (t *Throttle) fillDefaults() {
 		if err != nil {
 			panic(err)
 		}
-		units := memStats.Total / ObjectMemUnit
-		if units > 20 {
+		units := memStats.Total / mpool.GB
+		if units >= 20 {
 			units = 20
 		} else if units < 1 {
 			units = 1
