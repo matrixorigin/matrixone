@@ -33,7 +33,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
@@ -276,15 +275,16 @@ func TestMOSpan_End(t *testing.T) {
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan.(*MOSpan).ExtraFields)
 }
 
-type dummyFileWriterFactory struct {
-	fs fileservice.FileService
-}
+type dummyFileWriterFactory struct{}
 
 func (f *dummyFileWriterFactory) GetRowWriter(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 	return &dummyStringWriter{}
 }
 func (f *dummyFileWriterFactory) GetWriter(ctx context.Context, fp string) io.WriteCloser {
 	selfDir, err := filepath.Abs(".")
+	if err != nil {
+		panic(err)
+	}
 	fmt.Printf("root: %s\n", selfDir)
 	dirname := path.Dir(fp)
 	if dirname != "." && dirname != "./" && dirname != "/" {
