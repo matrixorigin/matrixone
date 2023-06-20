@@ -152,6 +152,8 @@ func (task *compactBlockTask) Name() string {
 }
 
 func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
+	task.rt.Throttle.AcquireCompactionQuota()
+	defer task.rt.Throttle.ReleaseCompactionQuota()
 	logutil.Info("[Start]", common.OperationField(task.Name()),
 		common.OperandField(task.meta.Repr()))
 	now := time.Now()
