@@ -542,9 +542,9 @@ func (e *Engine) setPushClientStatus(ready bool) {
 
 	if tc, ok := e.cli.(client.TxnClientWithFeature); ok {
 		if ready {
-			tc.Pause()
-		} else {
 			tc.Resume()
+		} else {
+			tc.Pause()
 		}
 	}
 
