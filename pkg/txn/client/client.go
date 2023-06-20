@@ -109,6 +109,13 @@ func WithEnableLeakCheck(
 
 var _ TxnClient = (*txnClient)(nil)
 
+type txnClientStatus bool
+
+const (
+	paused txnClientStatus = false
+	normal txnClientStatus = true
+)
+
 type txnClient struct {
 	clock                      clock.Clock
 	sender                     rpc.TxnSender
@@ -125,7 +132,7 @@ type txnClient struct {
 		txns []txn.TxnMeta
 
 		// indicate whether the CN can provide service normally.
-		cnReady bool
+		state txnClientStatus
 
 		// Minimum Active Transaction Timestamp
 		minTS timestamp.Timestamp
@@ -147,6 +154,7 @@ func NewTxnClient(
 		clock:  runtime.ProcessLevelRuntime().Clock(),
 		sender: sender,
 	}
+	c.mu.state = paused
 	for _, opt := range options {
 		opt(c)
 	}
@@ -324,7 +332,7 @@ func (client *txnClient) pushTransaction(txn txn.TxnMeta) error {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	if client.mu.cnReady {
+	if client.mu.state {
 		i := sort.Search(len(client.mu.txns), func(i int) bool {
 			return client.mu.txns[i].SnapshotTS.GreaterEq(txn.SnapshotTS)
 		})
@@ -346,16 +354,16 @@ func (client *txnClient) Pause() {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	logutil.Infof("cn ready status changed, ready: false")
-	client.mu.cnReady = false
+	logutil.Infof("txn client status changed to paused")
+	client.mu.state = paused
 }
 
 func (client *txnClient) Resume() {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	logutil.Infof("cn ready status changed, ready: true")
-	client.mu.cnReady = true
+	logutil.Infof("txn client status changed to normal")
+	client.mu.state = normal
 }
 
 func (client *txnClient) AbortAllRunningTxn() {

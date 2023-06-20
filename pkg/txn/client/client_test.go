@@ -79,7 +79,7 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 }
 
-func TestTxnClient_AbortAllRunningTxn(t *testing.T) {
+func TestTxnClientAbortAllRunningTxn(t *testing.T) {
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
 		logutil.GetPanicLogger(),
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
@@ -107,7 +107,7 @@ func TestTxnClient_AbortAllRunningTxn(t *testing.T) {
 	}
 }
 
-func TestTxnClient_Pause_Resume(t *testing.T) {
+func TestTxnClientPauseAndResume(t *testing.T) {
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
 		logutil.GetPanicLogger(),
 		runtime.WithClock(clock.NewHLCClock(func() int64 {
@@ -115,15 +115,12 @@ func TestTxnClient_Pause_Resume(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
-	if tc, ok := c.(TxnClientWithFeature); ok {
-		tc.Resume()
-	}
 
 	tcFeature, ok1 := c.(TxnClientWithFeature)
 	tcClient, ok2 := c.(*txnClient)
 	require.Equal(t, true, ok1 && ok2)
 	tcFeature.Pause()
-	require.Equal(t, false, tcClient.mu.cnReady)
+	require.Equal(t, paused, tcClient.mu.state)
 	tcFeature.Resume()
-	require.Equal(t, true, tcClient.mu.cnReady)
+	require.Equal(t, normal, tcClient.mu.state)
 }
