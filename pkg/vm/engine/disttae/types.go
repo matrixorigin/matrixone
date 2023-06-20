@@ -309,13 +309,6 @@ type Entry struct {
 	truncate bool
 }
 
-type tableEntry struct {
-	rows int
-	// offset in transaction writes
-	offsets []int
-	entries []*batch.Batch
-}
-
 // isGeneratedByTruncate denotes the entry is yielded by the truncate operation.
 func (e *Entry) isGeneratedByTruncate() bool {
 	return e.typ == DELETE &&
