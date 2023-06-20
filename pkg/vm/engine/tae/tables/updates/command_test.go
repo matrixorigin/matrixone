@@ -30,7 +30,7 @@ import (
 func TestCompactBlockCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog(nil)
+	c := catalog.MockCatalog()
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
@@ -62,7 +62,7 @@ func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *UpdateCmd) {
 func TestDeleteNodeCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog(nil)
+	c := catalog.MockCatalog()
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)

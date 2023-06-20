@@ -70,7 +70,7 @@ func TestCheckpoint1(t *testing.T) {
 		}
 		processor := new(catalog.LoopProcessor)
 		processor.BlockFn = blockFn
-		err := db.Opts.Catalog.RecurLoop(processor)
+		err := db.Catalog.RecurLoop(processor)
 		assert.NoError(t, err)
 		return blockCnt == 2+3
 	}
@@ -145,9 +145,9 @@ func TestCheckpoint2(t *testing.T) {
 		blk := it.GetBlock()
 		meta = blk.GetMeta().(*catalog.BlockEntry)
 		assert.Equal(t, 10, blk.Rows())
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, meta, tae.Scheduler)
+		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, meta, tae.Runtime)
 		assert.Nil(t, err)
-		err = tae.Scheduler.Schedule(task)
+		err = tae.Runtime.Scheduler.Schedule(task)
 		assert.Nil(t, err)
 		err = task.WaitDone()
 		assert.Nil(t, err)
@@ -160,7 +160,7 @@ func TestCheckpoint2(t *testing.T) {
 	// t.Log(tae.Wal.GetPenddingCnt())
 	// err := meta.GetBlockData().Destroy()
 	// assert.Nil(t, err)
-	// task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Scheduler.GetCheckpointTS()))
+	// task, err := tae.Runtime.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Runtime.Scheduler.GetCheckpointTS()))
 	// assert.Nil(t, err)
 	// err = task.WaitDone()
 	// assert.Nil(t, err)
@@ -191,6 +191,6 @@ func TestSchedule1(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	compactBlocks(t, 0, db, "db", schema, false)
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	db.Close()
 }

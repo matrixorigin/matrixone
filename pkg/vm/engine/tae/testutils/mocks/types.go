@@ -12,38 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package mocks
 
 import (
-	"fmt"
-	"path"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 )
 
-type FileT int
+var testVectorPool *containers.VectorPool
+var testRunTime *dbutils.Runtime
 
-const (
-	FTLock FileT = iota
-)
-
-const (
-	TmpSuffix  = ".tmp"
-	LockSuffix = ".lock"
-)
-
-func MakeFilename(dirname string, ft FileT, name string, isTmp bool) string {
-	var s string
-	switch ft {
-	case FTLock:
-		s = path.Join(dirname, fmt.Sprintf("%s%s", name, LockSuffix))
-	default:
-		panic(fmt.Sprintf("unsupported %d", ft))
-	}
-	if isTmp {
-		s += TmpSuffix
-	}
-	return s
+func init() {
+	testVectorPool = containers.NewVectorPool("for-test", 20)
+	testRunTime = dbutils.NewRuntime(
+		dbutils.WithRuntimeMemtablePool(testVectorPool),
+		dbutils.WithRuntimeTransientPool(testVectorPool),
+	)
 }
 
-func MakeLockFileName(dirname, name string) string {
-	return MakeFilename(dirname, FTLock, name, false)
+func GetTestVectorPool() *containers.VectorPool {
+	return testVectorPool
+}
+
+func GetTestRunTime() *dbutils.Runtime {
+	return testRunTime
 }
