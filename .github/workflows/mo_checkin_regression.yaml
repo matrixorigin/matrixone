@@ -31,7 +31,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           LAST_COMMIT_ID=$(git rev-parse --short HEAD)
-          DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/matrixone
+          DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/matrixone-dev
           VERSION=commit-$LAST_COMMIT_ID
 
           TAGS="${DOCKER_IMAGE}:${VERSION}"
