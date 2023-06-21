@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create role role_r1,role_r2,role_r3;
 create user role_u1 identified by '111', role_u2 identified by '111', role_u3 identified by '111';
 grant role_r1 to role_u1;
@@ -189,3 +190,4 @@ drop role role_r1,role_r2,role_r3;
 drop user role_u1,role_u2,role_u3;
 drop database if exists t;
 drop database if exists d;
+set global enable_privilege_cache = on;

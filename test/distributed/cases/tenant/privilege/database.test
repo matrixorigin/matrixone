@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop database if exists priv_db1;
 create database priv_db1;
 use priv_db1;
@@ -15,3 +16,4 @@ select A.a,B.a from A, B where A.a = B.a order by A.a;
 delete A from A,B where A.a = B.a;
 select A.a from A order by a;
 drop database if exists priv_db1;
+set global enable_privilege_cache = on;
