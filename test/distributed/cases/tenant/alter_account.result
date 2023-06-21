@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop account if exists acc1;
 drop account if exists accx;
 alter account if exists nosys admin_name 'root' identified by '1234';
@@ -30,3 +31,4 @@ alter account accx suspend;
 alter account accx open;
 drop account if exists acc1;
 drop account if exists accx;
+set global enable_privilege_cache = on;

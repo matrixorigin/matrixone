@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 -- @session:id=1&user=default_1:admin&password=111111
 create role role1;
@@ -10,8 +11,10 @@ create table db1.t1(a int);
 insert into db1.t1 values(1);
 select * from db1.t1;
 truncate table db1.t1;
+-- @bvt:issue#10126
 insert into db1.t1 values(2);
 select * from db1.t1;
+-- @bvt:issue
 -- @session
 drop account default_1;
 
@@ -52,3 +55,4 @@ grant all on table db1.t2 to role1;
 select * from db1.t2;
 -- @session
 drop account default_1;
+set global enable_privilege_cache = on;
