@@ -224,7 +224,7 @@ func NewSession(
 		defer ss.wg.Done()
 
 		var cnt int64
-		var timer time.Timer
+		timer := time.NewTimer(100 * time.Second)
 
 		for {
 			select {
