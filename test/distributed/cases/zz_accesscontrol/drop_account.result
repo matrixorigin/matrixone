@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop account if exists drop_account_01;
 drop account if exists drop_account_02;
 drop account if exists drop_account_03;
@@ -43,3 +44,4 @@ drop account if exists drop_account_03;
 drop account if exists drop_account_04;
 drop account if exists drop_account_05;
 drop database if exists drop_acc_db_1;
+set global enable_privilege_cache = on;

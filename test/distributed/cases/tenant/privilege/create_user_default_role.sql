@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop role if exists r1;
 create role r1;
 drop user if exists u1;
@@ -214,3 +215,4 @@ drop database if exists v;
 
 drop role if exists r1;
 drop user if exists u1;
+set global enable_privilege_cache = on;

@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create publication pub1 database t;
 create account acc0 admin_name 'root' identified by '111';
 create account acc1 admin_name 'root' identified by '111';
@@ -220,3 +221,4 @@ drop publication pubname2;
 drop account test_tenant_1;
 drop account test_tenant_2;
 drop database db1;
+set global enable_privilege_cache = on;

@@ -202,17 +202,31 @@ func buildPartitionColumns(ctx context.Context, partitionBinder *PartitionBinder
 		if err != nil {
 			return err
 		}
-		// The permitted data types are shown in the following list:
-		// All integer types
-		// DATE and DATETIME
-		// CHAR, VARCHAR, BINARY, and VARBINARY
-		// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-columns.html
 		t := types.T(columnsExpr[i].Typ.Id)
-		if !t.IsInteger() && !t.IsMySQLString() && !t.IsDateRelate() {
-			return moerr.NewSyntaxError(ctx,
-				"column %s type %s is not allowed in partition clause", tree.String(column, dialect.MYSQL), t.String())
+		columnName := tree.String(column, dialect.MYSQL)
+		//
+		if partitionDef.Type == plan.PartitionType_KEY || partitionDef.Type == plan.PartitionType_LINEAR_KEY {
+			// When partitioning by [LINEAR] KEY, it is possible to use columns of any valid MySQL data type other than TEXT or BLOB
+			// as partitioning keys, because MySQL's internal key-hashing functions produce the correct data type from these types.
+			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-limitations.html
+			if t == types.T_blob || t == types.T_text || t == types.T_json {
+				return moerr.NewBlobFieldInPartFunc(ctx)
+			}
+		} else {
+			// Both `RANGE COLUMNS` partitioning and `LIST COLUMNS` partitioning support the use of non-integer columns for defining value ranges or list members. The permitted data types are shown in the following list:
+			//1. All integer types: TINYINT, SMALLINT, MEDIUMINT, INT (INTEGER), and BIGINT. (This is the same as with partitioning by RANGE and LIST.)
+			//  Other numeric data types (such as DECIMAL or FLOAT) are not supported as partitioning columns.
+			//2. DATE and DATETIME.
+			//	Columns using other data types relating to dates or times are not supported as partitioning columns.
+			//3. The following string types: CHAR, VARCHAR, BINARY, and VARBINARY.
+			//	TEXT and BLOB columns are not supported as partitioning columns.
+			// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-columns.html
+			if t == types.T_float32 || t == types.T_float64 || t == types.T_decimal64 || t == types.T_decimal128 ||
+				t == types.T_timestamp || t == types.T_blob || t == types.T_text || t == types.T_json {
+				return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, columnName)
+			}
 		}
-		partitionColumns[i] = tree.String(column, dialect.MYSQL)
+		partitionColumns[i] = columnName
 	}
 	partitionDef.PartitionColumns = &plan.PartitionColumns{
 		Columns:          columnsExpr,
@@ -558,8 +572,10 @@ func checkPartitionExprType(ctx context.Context, _ *PartitionBinder, _ *TableDef
 	if partitionDef.PartitionExpr != nil && partitionDef.PartitionExpr.Expr != nil {
 		expr := partitionDef.PartitionExpr.Expr
 		t := types.T(expr.Typ.Id)
-		if partitionDef.Type == plan.PartitionType_HASH && !t.IsInteger() {
-			return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
+		if partitionDef.Type == plan.PartitionType_HASH || partitionDef.Type == plan.PartitionType_LINEAR_HASH {
+			if !t.IsInteger() {
+				return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
+			}
 		}
 
 		if partitionDef.Type == plan.PartitionType_RANGE && !t.IsInteger() {
@@ -612,7 +628,8 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 			return moerr.NewSameNamePartition(ctx, dupName)
 		}
 		if !checkUniqueKeyIncludePartKey(partitionKeys, pKeys) {
-			return moerr.NewInvalidInput(ctx, "partition key is not part of primary key")
+			//return moerr.NewInvalidInput(ctx, "partition key is not part of primary key")
+			return moerr.NewUniqueKeyNeedAllFieldsInPf(ctx, "PRIMARY KEY")
 		}
 	}
 
@@ -625,7 +642,8 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 					return moerr.NewSameNamePartition(ctx, dupName)
 				}
 				if !checkUniqueKeyIncludePartKey(partitionKeys, uniqueKeys) {
-					return moerr.NewInvalidInput(ctx, "partition key is not part of unique key")
+					//return moerr.NewInvalidInput(ctx, "partition key is not part of unique key")
+					return moerr.NewUniqueKeyNeedAllFieldsInPf(ctx, "PRIMARY KEY")
 				}
 			}
 		}
@@ -779,7 +797,8 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 					uniqueKeys := make(map[string]int)
 					stringSliceToMap(indexdef.Parts, uniqueKeys)
 					if !checkUniqueKeyIncludePartKey(pkcols, uniqueKeys) {
-						return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
+						//return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
+						return moerr.NewUniqueKeyNeedAllFieldsInPf(partitionBinder.GetContext(), "PRIMARY KEY")
 					}
 				} else {
 					continue
@@ -799,7 +818,8 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 				uniqueKeys := make(map[string]int)
 				stringSliceToMap(indexdef.Parts, uniqueKeys)
 				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, uniqueKeys) {
-					return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
+					//return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
+					return moerr.NewUniqueKeyNeedAllFieldsInPf(partitionBinder.GetContext(), "PRIMARY KEY")
 				}
 			}
 		}
