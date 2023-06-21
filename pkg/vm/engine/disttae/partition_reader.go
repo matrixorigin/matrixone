@@ -31,11 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
-// TODO::refactor it : 1. PartitionReader should inherit from withFilterMixin.
-//  2. Remove blockReader.
+// TODO::PartitionReader should inherit from withFilterMixin.
 type PartitionReader struct {
-	//TODO::remove it
-	*blockReader
+	//*blockReader
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
@@ -65,20 +63,20 @@ func (p *PartitionReader) Read(
 	}
 	//read uncommitted block through cn writing S3.
 	//TODO::remove it
-	{
-		bat, err := p.blockReader.Read(ctx, colNames, expr, mp, vp)
-		if err != nil {
-			return nil, err
-		}
-		if bat != nil {
-			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-				logutil.Debug(testutil.OperatorCatchBatch(
-					"partition reader[workspace:S3 block]",
-					bat))
-			}
-			return bat, nil
-		}
-	}
+	//{
+	//	bat, err := p.blockReader.Read(ctx, colNames, expr, mp, vp)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	if bat != nil {
+	//		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	//			logutil.Debug(testutil.OperatorCatchBatch(
+	//				"partition reader[workspace:S3 block]",
+	//				bat))
+	//		}
+	//		return bat, nil
+	//	}
+	//}
 	//bat is nil , blockReader has read all blocks,then read inserts.
 	if len(p.inserts) > 0 {
 		bat := p.inserts[0].GetSubBatch(colNames)

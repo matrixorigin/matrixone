@@ -357,17 +357,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				}
 				rds = append(rds, memRds...)
 			}
-			//for num, r := range dirtyRanges {
-			//	subrel, err := db.Relation(c.ctx, s.DataSource.PartitionRelationNames[num])
-			//	if err != nil {
-			//		return err
-			//	}
-			//	memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, r)
-			//	if err != nil {
-			//		return err
-			//	}
-			//	rds = append(rds, memRds...)
-			//}
 		}
 		s.NodeInfo.Data = nil
 	}

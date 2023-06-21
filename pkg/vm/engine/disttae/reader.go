@@ -424,6 +424,9 @@ func (r *blockMergeReader) Read(
 			}
 		}
 	}
+	//load deletes from txn.deletedBlocks.
+	txn := r.table.db.txn
+	r.buffer = append(r.buffer, txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID)...)
 
 	filter := r.getReadFilter()
 
