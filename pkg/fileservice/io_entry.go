@@ -153,22 +153,26 @@ func (e *IOEntry) setObjectBytesFromData() error {
 
 func (e *IOEntry) ReadFromOSFile(file *os.File) error {
 	r := io.LimitReader(file, e.Size)
-	data, err := io.ReadAll(r)
+
+	if len(e.Data) < int(e.Size) {
+		e.Data = make([]byte, e.Size)
+	}
+
+	n, err := io.ReadFull(r, e.Data)
 	if err != nil {
 		return err
 	}
-	if len(data) != int(e.Size) {
+	if n != int(e.Size) {
 		return io.ErrUnexpectedEOF
 	}
 
-	e.Data = data
 	if e.WriterForRead != nil {
-		if _, err := e.WriterForRead.Write(data); err != nil {
+		if _, err := e.WriterForRead.Write(e.Data); err != nil {
 			return err
 		}
 	}
 	if e.ReadCloserForRead != nil {
-		*e.ReadCloserForRead = io.NopCloser(bytes.NewReader(data))
+		*e.ReadCloserForRead = io.NopCloser(bytes.NewReader(e.Data))
 	}
 	if err := e.setObjectBytesFromData(); err != nil {
 		return err
