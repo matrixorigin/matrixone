@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -114,7 +115,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 }
 
-func (mixin *withFilterMixin) getReadFilter() (filter blockio.ReadFilter) {
+func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (filter blockio.ReadFilter) {
 	if mixin.filterState.evaluated {
 		filter = mixin.filterState.filter
 		return
@@ -126,12 +127,12 @@ func (mixin *withFilterMixin) getReadFilter() (filter blockio.ReadFilter) {
 		return
 	}
 	if pk.CompPkeyCol == nil {
-		return mixin.getNonCompositPKFilter()
+		return mixin.getNonCompositPKFilter(proc)
 	}
-	return mixin.getCompositPKFilter()
+	return mixin.getCompositPKFilter(proc)
 }
 
-func (mixin *withFilterMixin) getCompositPKFilter() (filter blockio.ReadFilter) {
+func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (filter blockio.ReadFilter) {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if len(mixin.columns.compPKPositions) == 0 || mixin.filterState.expr == nil {
@@ -142,8 +143,8 @@ func (mixin *withFilterMixin) getCompositPKFilter() (filter blockio.ReadFilter) 
 
 	// evaluate
 	pkNames := mixin.tableDef.Pkey.Names
-	pkVals := make([]*plan.Expr_C, len(pkNames))
-	ok := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals)
+	pkVals := make([]*plan.Const, len(pkNames))
+	ok := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
 
 	if !ok || pkVals[0] == nil {
 		mixin.filterState.evaluated = true
@@ -186,7 +187,7 @@ func (mixin *withFilterMixin) getCompositPKFilter() (filter blockio.ReadFilter) 
 	return
 }
 
-func (mixin *withFilterMixin) getNonCompositPKFilter() (filter blockio.ReadFilter) {
+func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (filter blockio.ReadFilter) {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
@@ -207,6 +208,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter() (filter blockio.ReadFilte
 		mixin.filterState.expr,
 		mixin.tableDef.Pkey.PkeyColName,
 		mixin.columns.colTypes[mixin.columns.pkPos].Oid,
+		proc,
 	)
 	if !ok || searchFunc == nil {
 		mixin.filterState.evaluated = true
@@ -255,6 +257,7 @@ func newBlockReader(
 	blks []*catalog.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
+	proc *process.Process,
 ) *blockReader {
 	r := &blockReader{
 		withFilterMixin: withFilterMixin{
@@ -264,6 +267,7 @@ func newBlockReader(
 			tableDef: tableDef,
 		},
 		blks: blks,
+		proc: proc,
 	}
 	r.filterState.expr = filterExpr
 	return r
@@ -307,7 +311,7 @@ func (r *blockReader) Read(
 	}
 
 	// get the block read filter
-	filter := r.getReadFilter()
+	filter := r.getReadFilter(r.proc)
 
 	// read the block
 	bat, err := blockio.BlockRead(
@@ -339,6 +343,7 @@ func newBlockMergeReader(
 	blks []catalog.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
+	proc *process.Process,
 ) *blockMergeReader {
 	r := &blockMergeReader{
 		withFilterMixin: withFilterMixin{
@@ -349,6 +354,7 @@ func newBlockMergeReader(
 		},
 		blks:  blks,
 		table: txnTable,
+		proc:  proc,
 	}
 	r.filterState.expr = filterExpr
 	return r
@@ -431,7 +437,7 @@ func (r *blockMergeReader) Read(
 		}
 	}
 
-	filter := r.getReadFilter()
+	filter := r.getReadFilter(r.proc)
 
 	bat, err := blockio.BlockRead(
 		r.ctx, info, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,

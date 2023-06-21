@@ -575,7 +575,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		tbl.blockInfos,
 		&ranges,
 		&dirtyBlks,
-		tbl.db.txn.proc,
+		tbl.proc,
 	)
 	// TODO: workaround for ISSUE #9897
 	// Remove me later
@@ -1294,7 +1294,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 		for i, rd := range rds0 {
 			mrds[i].rds = append(mrds[i].rds, rd)
 		}
-		rds0, err = tbl.newBlockReader(ctx, num, expr, ranges[1:])
+		rds0, err = tbl.newBlockReader(ctx, num, expr, ranges[1:], tbl.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -1306,7 +1306,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 		}
 		return rds, nil
 	}
-	return tbl.newBlockReader(ctx, num, expr, ranges)
+	return tbl.newBlockReader(ctx, num, expr, ranges, tbl.proc)
 }
 
 func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
@@ -1319,8 +1319,8 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		// right now for composite primary key, the filter expr will not be pushed down
 		// here we try to serialize the composite primary key
 		if pk.CompPkeyCol != nil {
-			pkVals := make([]*plan.Expr_C, len(pk.Names))
-			getCompositPKVals(expr, pk.Names, pkVals)
+			pkVals := make([]*plan.Const, len(pk.Names))
+			getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
 				var packer *types.Packer
@@ -1337,7 +1337,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			}
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
+			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc)
 			if ok {
 				var packer *types.Packer
 				put := tbl.db.txn.engine.packerPool.Get(&packer)
@@ -1376,7 +1376,8 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	return rds, nil
 }
 
-func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
+func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr,
+	ranges [][]byte, proc *process.Process) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
@@ -1386,6 +1387,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 			blk := catalog.DecodeBlockInfo(ranges[i])
 			rds[i] = newBlockReader(
 				ctx, tableDef, ts, []*catalog.BlockInfo{blk}, expr, tbl.db.txn.engine.fs,
+				proc,
 			)
 		}
 		for j := len(ranges); j < num; j++ {
@@ -1395,7 +1397,8 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 	}
 
 	infos, steps := groupBlocksToObjects(ranges, num)
-	blockReaders := newBlockReaders(ctx, tbl.db.txn.engine.fs, tableDef, tbl.primarySeqnum, ts, num, expr)
+	blockReaders := newBlockReaders(ctx, tbl.db.txn.engine.fs, tableDef,
+		tbl.primarySeqnum, ts, num, expr, proc)
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]
@@ -1505,7 +1508,7 @@ func (tbl *txnTable) newReader(
 			readers = append(
 				readers,
 				newBlockMergeReader(
-					ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs,
+					ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs, tbl.proc,
 				),
 			)
 		}
@@ -1515,7 +1518,7 @@ func (tbl *txnTable) newReader(
 	if len(blks) < readerNumber-1 {
 		for i := range blks {
 			readers[i+1] = newBlockMergeReader(
-				ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs,
+				ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs, tbl.proc,
 			)
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {
@@ -1531,11 +1534,11 @@ func (tbl *txnTable) newReader(
 	for i := 1; i < readerNumber; i++ {
 		if i == readerNumber-1 {
 			readers[i] = newBlockMergeReader(
-				ctx, tbl, ts, blks[(i-1)*step:], expr, fs,
+				ctx, tbl, ts, blks[(i-1)*step:], expr, fs, tbl.proc,
 			)
 		} else {
 			readers[i] = newBlockMergeReader(
-				ctx, tbl, ts, blks[(i-1)*step:i*step], expr, fs,
+				ctx, tbl, ts, blks[(i-1)*step:i*step], expr, fs, tbl.proc,
 			)
 		}
 	}

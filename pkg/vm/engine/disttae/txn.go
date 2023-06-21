@@ -218,7 +218,7 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 	if err != nil {
 		return -1, nil, nil, err
 	}
-	tbl, err := database.Relation(txn.proc.Ctx, tableName)
+	tbl, err := database.Relation(txn.proc.Ctx, tableName, nil)
 	if err != nil {
 		return -1, nil, nil, err
 	}

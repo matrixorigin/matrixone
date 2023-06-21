@@ -82,7 +82,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan: %v", err)
 	}
 
-	rel, err := db.Relation(proc.Ctx, tablename)
+	rel, err := db.Relation(proc.Ctx, tablename, nil)
 	if err != nil {
 		return false, err
 	}

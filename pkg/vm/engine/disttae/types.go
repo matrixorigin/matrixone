@@ -393,6 +393,9 @@ type txnTable struct {
 	rowids []types.Rowid
 	//the old table id before truncate
 	oldTableId uint64
+
+	// process for statement
+	proc *process.Process
 }
 
 type column struct {
@@ -456,6 +459,7 @@ type blockReader struct {
 
 	// block list to scan
 	blks []*catalog.BlockInfo
+	proc *process.Process
 }
 
 type blockMergeReader struct {
@@ -464,6 +468,7 @@ type blockMergeReader struct {
 	table  *txnTable
 	blks   []catalog.BlockInfo
 	buffer []int64
+	proc   *process.Process
 }
 
 type mergeReader struct {

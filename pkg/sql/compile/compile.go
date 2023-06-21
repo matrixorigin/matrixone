@@ -1356,14 +1356,14 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		if err != nil {
 			panic(err)
 		}
-		rel, err = db.Relation(ctx, n.TableDef.Name)
+		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 		if err != nil {
 			var e error // avoid contamination of error messages
 			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 			if e != nil {
 				panic(e)
 			}
-			rel, e = db.Relation(c.ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
 			if e != nil {
 				panic(e)
 			}
@@ -2425,7 +2425,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
-	rel, err = db.Relation(ctx, n.TableDef.Name)
+	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 	if err != nil {
 		var e error // avoid contamination of error messages
 		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
@@ -2434,7 +2434,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 
 		// if temporary table, just scan at local cn.
-		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name))
+		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
 		if e != nil {
 			return nil, err
 		}
@@ -2459,7 +2459,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		partitionTableNames := partitionInfo.PartitionTableNames
 		for i := 0; i < partitionNum; i++ {
 			partTableName := partitionTableNames[i]
-			subrelation, err := db.Relation(ctx, partTableName)
+			subrelation, err := db.Relation(ctx, partTableName, c.proc)
 			if err != nil {
 				return nil, err
 			}

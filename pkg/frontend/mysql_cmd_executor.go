@@ -331,7 +331,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
-		r, err := db.Relation(ses.requestCtx, tableName)
+		r, err := db.Relation(ses.requestCtx, tableName, nil)
 		if err != nil {
 			return err
 		}

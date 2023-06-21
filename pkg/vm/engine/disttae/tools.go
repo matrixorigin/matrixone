@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
@@ -1365,11 +1366,13 @@ func groupBlocksToObjects(blocks [][]byte, dop int) ([][]*catalog.BlockInfo, []i
 	return infos, steps
 }
 
-func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primarySeqnum int, ts timestamp.Timestamp, num int, expr *plan.Expr) []*blockReader {
+func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef,
+	primarySeqnum int, ts timestamp.Timestamp, num int, expr *plan.Expr,
+	proc *process.Process) []*blockReader {
 	rds := make([]*blockReader, num)
 	for i := 0; i < num; i++ {
 		rds[i] = newBlockReader(
-			ctx, tblDef, ts, nil, expr, fs,
+			ctx, tblDef, ts, nil, expr, fs, proc,
 		)
 	}
 	return rds

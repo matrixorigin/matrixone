@@ -951,17 +951,23 @@ func GetExprZoneMap(
 				return zms[expr.AuxId]
 			}
 
-			for _, arg := range args {
-				zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
-				if !zms[arg.AuxId].IsInited() {
-					zms[expr.AuxId].Reset()
-					return zms[expr.AuxId]
+			f := func() bool {
+				for _, arg := range args {
+					zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+					if !zms[arg.AuxId].IsInited() {
+						zms[expr.AuxId].Reset()
+						return true
+					}
 				}
+				return false
 			}
 
 			var res, ok bool
 			switch t.F.Func.ObjName {
 			case ">":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGT(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -969,6 +975,9 @@ func GetExprZoneMap(
 				}
 
 			case "<":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyLT(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -976,6 +985,9 @@ func GetExprZoneMap(
 				}
 
 			case ">=":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGE(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -983,6 +995,9 @@ func GetExprZoneMap(
 				}
 
 			case "<=":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyLE(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -990,6 +1005,9 @@ func GetExprZoneMap(
 				}
 
 			case "=":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -997,6 +1015,9 @@ func GetExprZoneMap(
 				}
 
 			case "and":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].And(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -1004,6 +1025,9 @@ func GetExprZoneMap(
 				}
 
 			case "or":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].Or(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -1011,24 +1035,31 @@ func GetExprZoneMap(
 				}
 
 			case "+":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				zms[expr.AuxId] = index.ZMPlus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			case "-":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				zms[expr.AuxId] = index.ZMMinus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			case "*":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				zms[expr.AuxId] = index.ZMMulti(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			default:
 				ivecs := make([]*vector.Vector, len(args))
 				for i, arg := range args {
-					if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
+					if ivecs[i], err = EvalExpressionOnce(proc, arg, []*batch.Batch{batch.EmptyForConstFoldBatch}); err != nil {
 						zms[expr.AuxId].Reset()
 						return zms[expr.AuxId]
 					}
-					ivecs[i] = vecs[arg.AuxId]
 				}
-
 				fn := overload.GetExecuteMethod()
 				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 
