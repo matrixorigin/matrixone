@@ -360,8 +360,8 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		size = int64(last.Offset + last.Size)
 	}
 
-	// reader
-	var r io.Reader
+	// content
+	var content []byte
 	if s.writeDiskCacheOnWrite && s.diskCache != nil {
 		// also write to disk cache
 		w, done, closeW, err := s.diskCache.newFileContentWriter(vector.FilePath)
@@ -375,20 +375,30 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 			}
 			err = done(ctx)
 		}()
-		r = io.TeeReader(
+		r := io.TeeReader(
 			newIOEntriesReader(ctx, vector.Entries),
 			w,
 		)
+		content, err = io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+
+	} else if len(vector.Entries) == 1 &&
+		vector.Entries[0].Size > 0 &&
+		int(vector.Entries[0].Size) == len(vector.Entries[0].Data) {
+		// one piece of data
+		content = vector.Entries[0].Data
 
 	} else {
-		r = newIOEntriesReader(ctx, vector.Entries)
+		r := newIOEntriesReader(ctx, vector.Entries)
+		content, err = io.ReadAll(r)
+		if err != nil {
+			return err
+		}
 	}
 
 	// put
-	content, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
 		expire = &vector.ExpireAt

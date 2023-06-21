@@ -19,6 +19,9 @@ insert into t select * from t;
 select count(*) from t;
 count(*)
 8192
+select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
+mo_ctl(dn, flush, table_func_metadata_scan.t)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 count(*)
 2
