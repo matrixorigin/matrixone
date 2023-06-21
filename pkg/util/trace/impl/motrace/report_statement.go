@@ -70,7 +70,7 @@ func StatementInfoUpdate(existing, new Item) {
 	n := new.(*StatementInfo)
 	// update the stats
 	e.Duration += n.Duration
-	if !GetTracerProvider().disableStmtMerge {
+	if GetTracerProvider().enableStmtMerge {
 		e.StmtBuilder.WriteString("; ")
 		e.StmtBuilder.WriteString(n.Statement)
 	}

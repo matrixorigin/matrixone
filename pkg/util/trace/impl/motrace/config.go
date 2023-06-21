@@ -73,7 +73,7 @@ type tracerProviderConfig struct {
 
 	// stmt aggregation
 	disableStmtAggregation bool          // set by WithStmtAggregationDisable
-	disableStmtMerge       bool          // set by WithStmtMergeDisable
+	enableStmtMerge        bool          // set by WithStmtMergeDisable
 	aggregationWindow      time.Duration // WithAggregationWindow
 	selectAggrThreshold    time.Duration // WithSelectThreshold
 
@@ -201,9 +201,9 @@ func WithAggregatorDisable(disable bool) tracerProviderOption {
 	}
 }
 
-func WithStmtMergeDiable(disable bool) tracerProviderOption {
+func WithStmtMergeEnable(enable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
-		cfg.disableStmtMerge = disable
+		cfg.enableStmtMerge = enable
 	}
 }
 
