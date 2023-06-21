@@ -330,6 +330,11 @@ func doLock(
 		if options.ForwardTo == "" {
 			panic("forward to empty lock service")
 		}
+	} else {
+		// FIXME: in launch model, multi-cn will use same process level runtime. So lockservice will be wrong.
+		if txn.LockService != lockService.GetConfig().ServiceID {
+			lockService = lockservice.GetLockServiceByServiceID(txn.LockService)
+		}
 	}
 
 	result, err := lockService.Lock(
