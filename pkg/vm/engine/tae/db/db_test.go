@@ -7381,5 +7381,57 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 	}
 	cancel()
 	wg.Wait()
+}
 
+func TestRW(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(5, 2)
+	schema.BlockMaxRows = uint32(rows)
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	tae.createRelAndAppend(bat, true)
+
+	txn1, rel1 := tae.getRelation()
+	v := bat.Vecs[2].Get(2)
+	filter := handle.NewEQFilter(v)
+	id, row, err := rel1.GetByFilter(ctx, filter)
+	assert.NoError(t, err)
+	err = rel1.RangeDelete(id, row, row, handle.DT_Normal)
+	assert.NoError(t, err)
+
+	meta := rel1.GetMeta().(*catalog.TableEntry)
+
+	cnt := 3
+	for i := 0; i < cnt; i++ {
+		txn2, rel2 := tae.getRelation()
+		v = bat.Vecs[2].Get(i + 3)
+		filter = handle.NewEQFilter(v)
+		id, row, err = rel2.GetByFilter(ctx, filter)
+		assert.NoError(t, err)
+		err = rel2.RangeDelete(id, row, row, handle.DT_Normal)
+		assert.NoError(t, err)
+		err = txn2.Commit(ctx)
+		assert.NoError(t, err)
+
+		err = tae.FlushTable(
+			ctx, 0, meta.GetDB().ID, meta.ID,
+			types.BuildTS(time.Now().UTC().UnixNano(), 0),
+		)
+		assert.NoError(t, err)
+	}
+
+	err = txn1.Commit(ctx)
+	assert.NoError(t, err)
+
+	{
+		txn, rel := tae.getRelation()
+		rcnt := getColumnRowsByScan(t, rel, 2, true)
+		assert.Equal(t, rows-cnt-1, rcnt)
+		assert.NoError(t, txn.Commit(ctx))
+	}
 }

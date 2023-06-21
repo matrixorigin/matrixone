@@ -73,16 +73,16 @@ func (srv *Server) PutNotifyChIntoUuidMap(u uuid.UUID, p *process.Process) error
 	return nil
 }
 
-func (srv *Server) PutCnSegment(segmentName *objectio.Segmentid, segmentType int32) {
+func (srv *Server) PutCnSegment(sid *objectio.Segmentid, segmentType int32) {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	srv.cnSegmentMap.mp[*segmentName] = segmentType
+	srv.cnSegmentMap.mp[*sid] = segmentType
 }
 
-func (srv *Server) DeleteTxnSegmentIds(segmentNames []objectio.Segmentid) {
+func (srv *Server) DeleteTxnSegmentIds(sids []objectio.Segmentid) {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	for _, segmentName := range segmentNames {
+	for _, segmentName := range sids {
 		delete(srv.cnSegmentMap.mp, segmentName)
 	}
 }
@@ -97,10 +97,10 @@ func (srv *Server) GetCnSegmentMap() map[string]int32 {
 	return new_mp
 }
 
-func (srv *Server) GetCnSegmentType(segmentName *objectio.Segmentid) int32 {
+func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid) int32 {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	return srv.cnSegmentMap.mp[*segmentName]
+	return srv.cnSegmentMap.mp[*sid]
 }
 
 // SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it

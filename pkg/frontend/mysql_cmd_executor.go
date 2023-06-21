@@ -638,6 +638,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 
 func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree.SetVar) error {
 	var err error = nil
+	var ok bool
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
 			if global {
@@ -710,6 +711,43 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 		} else if name == "syspublications" {
 			if !ses.GetTenantInfo().IsSysTenant() {
 				return moerr.NewInternalError(ses.GetRequestContext(), "only system account can set system variable syspublications")
+			}
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
+			}
+		} else if name == "clear_privilege_cache" {
+			//if it is global variable, it does nothing.
+			if !assign.Global {
+				//if the value is 'on or off', just invalidate the privilege cache
+				ok, err = valueIsBoolTrue(value)
+				if err != nil {
+					return err
+				}
+
+				if ok {
+					cache := ses.GetPrivilegeCache()
+					if cache != nil {
+						cache.invalidate()
+					}
+				}
+				err = setVarFunc(assign.System, assign.Global, name, value)
+				if err != nil {
+					return err
+				}
+			}
+		} else if name == "enable_privilege_cache" {
+			ok, err = valueIsBoolTrue(value)
+			if err != nil {
+				return err
+			}
+
+			//disable privilege cache. clean the cache.
+			if !ok {
+				cache := ses.GetPrivilegeCache()
+				if cache != nil {
+					cache.invalidate()
+				}
 			}
 			err = setVarFunc(assign.System, assign.Global, name, value)
 			if err != nil {
@@ -2510,7 +2548,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 					}
 				}
 
-			case *tree.SetVar:
+			case *tree.SetVar, *tree.SetTransaction:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
@@ -2899,6 +2937,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleShowBackendServers(requestCtx, i, len(cws)); err != nil {
 			return err
 		}
+	case *tree.SetTransaction:
+		selfHandle = true
+		//TODO: handle set transaction
 	}
 
 	if selfHandle {
