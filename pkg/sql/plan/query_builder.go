@@ -664,6 +664,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		windowTag := node.BindingTags[0]
+		l := len(childProjList)
+
+		for _, expr := range node.FilterList {
+			builder.remapWindowClause(expr, windowTag, int32(l))
+		}
 
 		for idx, expr := range node.WinSpecList {
 			decreaseRefCnt(expr, colRefCnt)
@@ -679,7 +684,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			remapping.addColRef(globalRef)
 
-			l := len(childProjList)
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{
