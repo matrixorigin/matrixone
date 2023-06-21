@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"unsafe"
 
@@ -406,7 +407,14 @@ func (e *DBEntry) PrettyNameIndex() string {
 	buf.WriteString(fmt.Sprintf("[%d]NameIndex:\n", len(e.nameNodes)))
 	// iterate all nodes in nameNodes, collect node ids to a string
 	ids := make([]uint64, 0)
-	for name, node := range e.nameNodes {
+	// sort e.nameNodes by name
+	names := make([]string, 0, len(e.nameNodes))
+	for name := range e.nameNodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		node := e.nameNodes[name]
 		ids = ids[:0]
 		node.ForEachNodes(func(nn *nameNode[*TableEntry]) bool {
 			ids = append(ids, nn.id)
@@ -568,6 +576,10 @@ func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, nn *nodeLi
 		return
 	}
 	// check name dup
+	if txn == nil {
+		// replay checkpoint
+		return nil
+	}
 	if existEntry, _ := nn.TxnGetNodeLocked(txn, name); existEntry != nil {
 		return moerr.GetOkExpectedDup()
 	}
