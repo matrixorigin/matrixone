@@ -223,11 +223,18 @@ func NewSession(
 	sender := func() {
 		defer ss.wg.Done()
 
+		var cnt int64
+		var timer time.Timer
+
 		for {
 			select {
 			case <-ss.sessionCtx.Done():
 				ss.logger.Error("stop session sender", zap.Error(ss.sessionCtx.Err()))
 				return
+
+			case <-timer.C:
+				ss.logger.Info("send logtail channel blocked", zap.Int64("sendRound", cnt))
+				timer.Reset(10 * time.Second)
 
 			case msg, ok := <-ss.sendChan:
 				if !ok {
@@ -241,7 +248,11 @@ func NewSession(
 					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
 					defer cancel()
 
+					now := time.Now()
 					err := ss.stream.write(ctx, msg.response)
+					if sendCost := time.Since(now); sendCost > 10*time.Second {
+						ss.logger.Info("send logtail too much", zap.Int64("sendRound", cnt), zap.Duration("duration", sendCost))
+					}
 					if err != nil {
 						ss.logger.Error("fail to send logtail response",
 							zap.Error(err),
@@ -256,6 +267,8 @@ func NewSession(
 					ss.notifier.NotifySessionError(ss, err)
 					return
 				}
+				cnt++
+				timer.Reset(10 * time.Second)
 			}
 		}
 	}
