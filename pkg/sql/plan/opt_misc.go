@@ -206,6 +206,29 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 		node.Children[0] = childID
 
+	case plan.Node_WINDOW:
+		windowTag := node.BindingTags[0]
+
+		for _, filter := range filters {
+			if !containsTag(filter, windowTag) {
+				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
+			} else {
+				node.FilterList = append(node.FilterList, filter)
+			}
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
+
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+
+		node.Children[0] = childID
+
 	case plan.Node_FILTER:
 		canPushdown = filters
 		for _, filter := range node.FilterList {
@@ -600,6 +623,22 @@ func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggreg
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			builder.remapHavingClause(arg, groupTag, aggregateTag, groupSize)
+		}
+	}
+}
+
+func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32, projectionSize int32) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if exprImpl.Col.RelPos == windowTag {
+			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, exprImpl.Col.ColPos}]
+			exprImpl.Col.RelPos = -1
+			exprImpl.Col.ColPos += projectionSize
+		}
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			builder.remapWindowClause(arg, windowTag, projectionSize)
 		}
 	}
 }

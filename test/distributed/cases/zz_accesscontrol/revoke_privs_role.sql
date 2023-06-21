@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 --env prepare statement
 drop database if exists revoke_db_01;
 drop role if exists revoke_role_1,revoke_role_2,revoke_role_3,revoke_role_4,revoke_role_5,revoke_role_6,revoke_role_7,revoke_role_8;
@@ -76,3 +77,4 @@ select * from revoke_db_01.revoke_table_1;
 drop database if exists revoke_db_01;
 drop role if exists revoke_role_1,revoke_role_2,revoke_role_3,revoke_role_4,revoke_role_5,revoke_role_6,revoke_role_7,revoke_role_8;
 drop user if exists revoke_user_1,revoke_user_2,revoke_user_3,revoke_user_4,revoke_user_5,revoke_user_6,revoke_user_7;
+set global enable_privilege_cache = on;

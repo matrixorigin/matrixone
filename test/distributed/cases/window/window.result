@@ -570,4 +570,143 @@ value    sum(id) over (rows unbounded preceding)
 3    7
 4    11
 4    15
-5    20 
+5    20
+drop table if exists row01;
+create table row01(i int,j int);
+insert into row01 values(1,1);
+insert into row01 values(1,4);
+insert into row01 values(1,2);
+insert into row01 values(1,4);
+select i, j, sum(i+j) over (order by j rows between 2 preceding and 1 preceding) foo from row01 order by foo desc;
+i    j    foo
+1    4    8
+1    4    5
+1    2    2
+1    1    null
+select i, j, sum(i+j) over (order by j rows between 2 following and 1 following) foo from row01 order by foo desc;
+i    j    foo
+1    1    null
+1    2    null
+1    4    null
+1    4    null
+drop table if exists test01;
+create table test01(i int, j int);
+insert into test01 values (1,null);
+insert into test01 values (1,null);
+insert into test01 values (1,1);
+insert into test01 values (1,null);
+insert into test01 values (1,2);
+insert into test01 values (2,1);
+insert into test01 values (2,2);
+insert into test01 values (2,null);
+insert into test01 values (2,null);
+select i, j, min(j) over (partition by i order by j rows unbounded preceding) from test01;
+i    j    min(j) over (partition by i order by j rows unbounded preceding)
+1    null    null
+1    null    null
+1    null    null
+1    1    1
+1    2    1
+2    null    null
+2    null    null
+2    1    1
+2    2    1
+drop table if exists double01;
+create table double01(d double);
+insert into double01 values (2);
+insert into double01 values (2);
+insert into double01 values (3);
+insert into double01 values (1);
+insert into double01 values (1);
+insert into double01 values (1.2);
+insert into double01 values (null);
+insert into double01 values (null);
+select d, sum(d) over (partition by d order by d), avg(d) over (order by d rows between 1 preceding and 1 following) from double01;
+d    sum(d) over (partition by d order by d)    avg(d) over (order by d rows between 1 preceding and 1 following)
+null    null    null
+null    null    1.0
+1.0    2.0    1.0
+1.0    2.0    1.0666666666666667
+1.2    1.2    1.4000000000000001
+2.0    4.0    1.7333333333333334
+2.0    4.0    2.3333333333333335
+3.0    3.0    2.5
+select d, sum(d) over (partition by d order by d), avg(d) over (order by d rows between 2 preceding and 1 following) from double01;
+d    sum(d) over (partition by d order by d)    avg(d) over (order by d rows between 2 preceding and 1 following)
+null    null    null
+null    null    1.0
+1.0    2.0    1.0
+1.0    2.0    1.0666666666666667
+1.2    1.2    1.3
+2.0    4.0    1.55
+2.0    4.0    2.05
+3.0    3.0    2.3333333333333335
+drop table if exists wf01;
+create table wf01(d float);
+insert into wf01 values (10);
+insert into wf01 values (1);
+insert into wf01 values (2);
+insert into wf01 values (3);
+insert into wf01 values (4);
+insert into wf01 values (5);
+insert into wf01 values (6);
+insert into wf01 values (7);
+insert into wf01 values (8);
+insert into wf01 values (9);
+select d, sum(d) over (order by d range between current row and 2 following), avg(d) over (order by d range between current row and 2 following) from wf01;
+d    sum(d) over (order by d range between current row and 2 following)    avg(d) over (order by d range between current row and 2 following)
+1.0    6.0    2.0
+2.0    9.0    3.0
+3.0    12.0    4.0
+4.0    15.0    5.0
+5.0    18.0    6.0
+6.0    21.0    7.0
+7.0    24.0    8.0
+8.0    27.0    9.0
+9.0    19.0    9.5
+10.0    10.0    10.0
+select d, sum(d) over (order by d range between 2 preceding and 2 following), avg(d) over (order by d range between current row and 2 following) from wf01;
+d    sum(d) over (order by d range between 2 preceding and 2 following)    avg(d) over (order by d range between current row and 2 following)
+1.0    6.0    2.0
+2.0    10.0    3.0
+3.0    15.0    4.0
+4.0    20.0    5.0
+5.0    25.0    6.0
+6.0    30.0    7.0
+7.0    35.0    8.0
+8.0    40.0    9.0
+9.0    34.0    9.5
+10.0    27.0    10.0
+drop table if exists dense_rank01;
+create table dense_rank01 (id integer, sex char(1));
+insert into dense_rank01 values (1, 'm');
+insert into dense_rank01 values (2, 'f');
+insert into dense_rank01 values (3, 'f');
+insert into dense_rank01 values (4, 'f');
+insert into dense_rank01 values (5, 'm');
+select sex, id, rank() over (partition by sex order by id desc) from dense_rank01;
+sex    id    rank() over (partition by sex order by id desc)
+f    4    1
+f    3    2
+f    2    3
+m    5    1
+m    1    2
+select sex, id, dense_rank() over (partition by sex order by id desc) from dense_rank01;
+sex    id    dense_rank() over (partition by sex order by id desc)
+f    4    1
+f    3    2
+f    2    3
+m    5    1
+m    1    2
+drop table if exists sales;
+CREATE TABLE sales (customer_id VARCHAR(1), order_date DATE, product_id INTEGER);
+INSERT INTO sales(customer_id, order_date, product_id) VALUES ('A', '2021-01-01', '1'), ('A', '2021-01-01', '2'), ('A', '2021-01-07', '2'), ('A', '2021-01-10', '3'), ('A', '2021-01-11', '3'), ('A', '2021-01-11', '3'),('B', '2021-01-01', '2'),('B', '2021-01-02', '2'),('B', '2021-01-04', '1'),('B', '2021-01-11', '1'),('B', '2021-01-16', '3'),('B', '2021-02-01', '3'),('C', '2021-01-01', '3'),('C', '2021-01-01', '3'),('C', '2021-01-07', '3');
+drop table if exists menu;
+CREATE TABLE menu (product_id INTEGER,product_name VARCHAR(5),price INTEGER);
+INSERT INTO menu(product_id, product_name, price) VALUES ('1', 'sushi', '10'),('2', 'curry', '15'),('3', 'ramen', '12');
+WITH ordered_sales AS (SELECT sales.customer_id, sales.order_date, menu.product_name,DENSE_RANK() OVER (PARTITION BY sales.customer_id ORDER BY sales.order_date) AS `rank` FROM sales INNER JOIN menu ON sales.product_id = menu.product_id) SELECT customer_id, product_name FROM ordered_sales WHERE `rank` = 1 GROUP BY customer_id, product_name;
+customer_id    product_name
+A    sushi
+A    curry
+B    curry
+C    ramen
