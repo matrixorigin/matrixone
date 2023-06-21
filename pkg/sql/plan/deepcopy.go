@@ -550,19 +550,23 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 }
 
 func DeepCopyPlan(pl *Plan) *Plan {
-	switch pl := pl.Plan.(type) {
+	switch p := pl.Plan.(type) {
 	case *Plan_Query:
 		return &Plan{
 			Plan: &plan.Plan_Query{
-				Query: DeepCopyQuery(pl.Query),
+				Query: DeepCopyQuery(p.Query),
 			},
+			IsPrepare:   pl.IsPrepare,
+			TryRunTimes: pl.TryRunTimes,
 		}
 
 	case *plan.Plan_Ddl:
 		return &Plan{
 			Plan: &plan.Plan_Ddl{
-				Ddl: DeepCopyDataDefinition(pl.Ddl),
+				Ddl: DeepCopyDataDefinition(p.Ddl),
 			},
+			IsPrepare:   pl.IsPrepare,
+			TryRunTimes: pl.TryRunTimes,
 		}
 
 	default:

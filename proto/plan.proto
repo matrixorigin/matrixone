@@ -845,6 +845,7 @@ message Plan {
 		DataControl	dcl			= 4;
 	}
 	int32 try_run_times = 5;
+	bool is_prepare 	= 6;
 }
 
 message column{

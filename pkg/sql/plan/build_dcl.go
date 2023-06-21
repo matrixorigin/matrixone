@@ -57,6 +57,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	case *tree.PrepareStmt:
 		stmtName = string(pstmt.Name)
 		preparePlan, err = getPreparePlan(ctx, pstmt.Stmt)
+		preparePlan.IsPrepare = true
 		if err != nil {
 			return nil, err
 		}
@@ -76,6 +77,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 		stmtName = string(pstmt.Name)
 		preparePlan, err = getPreparePlan(ctx, stmts[0])
+		preparePlan.IsPrepare = true
 		if err != nil {
 			return nil, err
 		}
