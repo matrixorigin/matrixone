@@ -186,6 +186,8 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 }
 
 func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
+	task.rt.Throttle.AcquireCompactionQuota()
+	defer task.rt.Throttle.ReleaseCompactionQuota()
 	logutil.Info("[Start] Mergeblocks", common.OperationField(task.Name()),
 		common.OperandField(task))
 	phaseNumber := 0
