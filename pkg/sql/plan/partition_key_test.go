@@ -16,10 +16,29 @@ package plan
 
 import "testing"
 
+func TestCreateKeyPartitionTable(t *testing.T) {
+	//sql := "create table p_table_18(col1 bigint,col2 varchar(25),col3 decimal(6,4))partition by key(col3)partitions 2;"
+	sql := "create table p_table_18(col1 bigint,col2 varchar(25),col3 decimal(20,4))partition by key(col3)partitions 2;"
+	//sql := "create table p_table_18(col1 bigint,col2 varchar(25),col3 float)partition by key(col3)partitions 2;"
+	//sql := "create table p_table_18(col1 bigint,col2 varchar(25),col3 double)partition by key(col3)partitions 2;"
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	outPutPlan(logicPlan, true, t)
+}
+
 // ---------------------------------- Key Partition ----------------------------------
 func TestKeyPartition(t *testing.T) {
 	// KEY(column_list) Partition
 	sqls := []string{
+		"create table p_table_1(col1 bigint,col2 varchar(25),col3 decimal(6,4))partition by key(col3)partitions 2;",
+		"create table p_table_2(col1 bigint,col2 varchar(25),col3 decimal(20,4))partition by key(col3)partitions 2;",
+		"create table p_table_3(col1 bigint,col2 varchar(25),col3 float)partition by key(col3)partitions 2;",
+		"create table p_table_4(col1 bigint,col2 varchar(25),col3 double)partition by key(col3)partitions 2;",
+		"create table p_table_5(col1 bigint,col2 varchar(25),col3 timestamp)partition by key(col3)partitions 2;",
+		"create table p_table_6(col1 bigint,col2 varchar(25),col3 time)partition by key(col3)partitions 2;",
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4;",
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3);",
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY(col3) PARTITIONS 5;",
@@ -100,6 +119,9 @@ func TestKeyPartition(t *testing.T) {
 
 func TestKeyPartitionError(t *testing.T) {
 	sqls := []string{
+		"create table p_t1(col1 bigint,col2 varchar(25),col3 blob)partition by key(col3)partitions 2;",
+		"create table p_t2(col1 bigint,col2 varchar(25),col3 text)partition by key(col3)partitions 2;",
+		"create table p_t3(col1 bigint,col2 varchar(25),col3 json)partition by key(col3)partitions 2;",
 		"CREATE TABLE ts (id INT, purchased DATE) PARTITION BY KEY( id ) PARTITIONS 4 SUBPARTITION BY HASH( TO_DAYS(purchased) ) SUBPARTITIONS 2;",
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col4) PARTITIONS 4;",
 		"CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 3 (col3);",

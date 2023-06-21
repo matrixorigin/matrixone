@@ -41,7 +41,7 @@ spec:
       limits:
         cpu: 8
         memory: 16Gi
-  imageRepository: matrixorigin/matrixone
+  imageRepository: matrixorigin/matrixone-dev
   logService:
     overlay:
       imagePullSecrets:

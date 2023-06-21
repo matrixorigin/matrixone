@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create database sys_db_1;
 use sys_db_1;
 create table sys_tbl_1(a int primary key );
@@ -19,3 +20,4 @@ create database db7;
 -- @session
 create publication pubname7 database db7 account acc_idx;
 drop account acc_idx;
+set global enable_privilege_cache = on;

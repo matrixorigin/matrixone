@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -755,38 +754,38 @@ func SelectForCommonTenant(
 // 1.1 ordered column type + sorted column
 func EvalSelectedOnOrderedSortedColumnFactory[T types.OrderedT](
 	v T,
-) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
-	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
+) func(*vector.Vector, []int32, *[]int32) {
+	return func(col *vector.Vector, sels []int32, newSels *[]int32) {
 		vals := vector.MustFixedCol[T](col)
 		idx := vector.OrderedFindFirstIndexInSortedSlice(v, vals)
 		if idx < 0 {
-			return nil
+			return
 		}
-		var newSels nulls.Bitmap
-		if sels.IsEmpty() {
+		if len(sels) == 0 {
 			for idx < len(vals) {
 				if vals[idx] != v {
 					break
 				}
-				newSels.Set(uint64(idx))
+				*newSels = append(*newSels, int32(idx))
 				idx++
 			}
 		} else {
 			// sels is not empty
-			for idx < len(vals) {
-				if vals[idx] != v {
+			for valIdx, selIdx := idx, 0; valIdx < len(vals) && selIdx < len(sels); {
+				if vals[valIdx] != v {
 					break
 				}
-				if sels.Contains(uint64(idx)) {
-					newSels.Add(uint64(idx))
+				sel := sels[selIdx]
+				if sel < int32(valIdx) {
+					selIdx++
+				} else if sel == int32(valIdx) {
+					*newSels = append(*newSels, sels[selIdx])
+					selIdx++
+					valIdx++
+				} else {
+					valIdx++
 				}
-				idx++
 			}
-		}
-		if newSels.IsEmpty() {
-			return nil
-		} else {
-			return &newSels
 		}
 	}
 }
@@ -794,38 +793,38 @@ func EvalSelectedOnOrderedSortedColumnFactory[T types.OrderedT](
 // 1.2 fixed size column type + sorted column
 func EvalSelectedOnFixedSizeSortedColumnFactory[T types.FixedSizeTExceptStrType](
 	v T, comp func(T, T) int64,
-) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
-	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
+) func(*vector.Vector, []int32, *[]int32) {
+	return func(col *vector.Vector, sels []int32, newSels *[]int32) {
 		vals := vector.MustFixedCol[T](col)
 		idx := vector.FixedSizeFindFirstIndexInSortedSliceWithCompare(v, vals, comp)
 		if idx < 0 {
-			return nil
+			return
 		}
-		var newSels nulls.Bitmap
-		if sels.IsEmpty() {
+		if len(sels) == 0 {
 			for idx < len(vals) {
 				if comp(vals[idx], v) != 0 {
 					break
 				}
-				newSels.Set(uint64(idx))
+				*newSels = append(*newSels, int32(idx))
 				idx++
 			}
 		} else {
 			// sels is not empty
-			for idx < len(vals) {
-				if comp(vals[idx], v) != 0 {
+			for valIdx, selIdx := idx, 0; valIdx < len(vals) && selIdx < len(sels); {
+				if comp(vals[valIdx], v) != 0 {
 					break
 				}
-				if sels.Contains(uint64(idx)) {
-					newSels.Add(uint64(idx))
+				sel := sels[selIdx]
+				if sel < int32(valIdx) {
+					selIdx++
+				} else if sel == int32(valIdx) {
+					*newSels = append(*newSels, sel)
+					selIdx++
+					valIdx++
+				} else {
+					valIdx++
 				}
-				idx++
 			}
-		}
-		if newSels.IsEmpty() {
-			return nil
-		} else {
-			return &newSels
 		}
 	}
 }
@@ -833,38 +832,38 @@ func EvalSelectedOnFixedSizeSortedColumnFactory[T types.FixedSizeTExceptStrType]
 // 1.3 varlen type column + sorted
 func EvalSelectedOnVarlenSortedColumnFactory(
 	v []byte,
-) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
-	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
+) func(*vector.Vector, []int32, *[]int32) {
+	return func(col *vector.Vector, sels []int32, newSels *[]int32) {
 		idx := vector.FindFirstIndexInSortedVarlenVector(col, v)
 		if idx < 0 {
-			return nil
+			return
 		}
-		var newSels nulls.Bitmap
 		length := col.Length()
-		if sels.IsEmpty() {
+		if len(sels) == 0 {
 			for idx < length {
 				if !bytes.Equal(col.GetBytesAt(idx), v) {
 					break
 				}
-				newSels.Set(uint64(idx))
+				*newSels = append(*newSels, int32(idx))
 				idx++
 			}
 		} else {
 			// sels is not empty
-			for idx < length {
-				if !bytes.Equal(col.GetBytesAt(idx), v) {
+			for valIdx, selIdx := idx, 0; valIdx < length && selIdx < len(sels); {
+				if !bytes.Equal(col.GetBytesAt(valIdx), v) {
 					break
 				}
-				if sels.Contains(uint64(idx)) {
-					newSels.Add(uint64(idx))
+				sel := sels[selIdx]
+				if sel < int32(valIdx) {
+					selIdx++
+				} else if sel == int32(valIdx) {
+					*newSels = append(*newSels, sels[selIdx])
+					selIdx++
+					valIdx++
+				} else {
+					valIdx++
 				}
-				idx++
 			}
-		}
-		if newSels.IsEmpty() {
-			return nil
-		} else {
-			return &newSels
 		}
 	}
 }
@@ -872,28 +871,21 @@ func EvalSelectedOnVarlenSortedColumnFactory(
 // 2.1 fixedSize type column + non-sorted
 func EvalSelectedOnFixedSizeColumnFactory[T types.FixedSizeTExceptStrType](
 	v T,
-) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
-	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
+) func(*vector.Vector, []int32, *[]int32) {
+	return func(col *vector.Vector, sels []int32, newSels *[]int32) {
 		vals := vector.MustFixedCol[T](col)
-		var newSels nulls.Bitmap
-		if sels.IsEmpty() {
+		if len(sels) == 0 {
 			for idx, val := range vals {
 				if val == v {
-					newSels.Set(uint64(idx))
+					*newSels = append(*newSels, int32(idx))
 				}
 			}
 		} else {
-			sels.Foreach(func(i uint64) bool {
-				if vals[i] == v {
-					newSels.Set(i)
+			for _, idx := range sels {
+				if vals[idx] == v {
+					*newSels = append(*newSels, idx)
 				}
-				return true
-			})
-		}
-		if newSels.IsEmpty() {
-			return nil
-		} else {
-			return &newSels
+			}
 		}
 	}
 }
@@ -901,27 +893,20 @@ func EvalSelectedOnFixedSizeColumnFactory[T types.FixedSizeTExceptStrType](
 // 2.2 varlen type column + non-sorted
 func EvalSelectedOnVarlenColumnFactory(
 	v []byte,
-) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
-	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
-		var newSels nulls.Bitmap
-		if sels.IsEmpty() {
+) func(*vector.Vector, []int32, *[]int32) {
+	return func(col *vector.Vector, sels []int32, newSels *[]int32) {
+		if len(sels) == 0 {
 			for idx := 0; idx < col.Length(); idx++ {
 				if bytes.Equal(col.GetBytesAt(idx), v) {
-					newSels.Set(uint64(idx))
+					*newSels = append(*newSels, int32(idx))
 				}
 			}
 		} else {
-			sels.Foreach(func(i uint64) bool {
-				if bytes.Equal(col.GetBytesAt(int(i)), v) {
-					newSels.Set(i)
+			for _, idx := range sels {
+				if bytes.Equal(col.GetBytesAt(int(idx)), v) {
+					*newSels = append(*newSels, idx)
 				}
-				return true
-			})
-		}
-		if newSels.IsEmpty() {
-			return nil
-		} else {
-			return &newSels
+			}
 		}
 	}
 }
@@ -934,7 +919,7 @@ func EvalSelectedOnVarlenColumnFactory(
 // which are evaluated to true
 func getCompositeFilterFuncByExpr(
 	expr *plan.Const, isSorted bool,
-) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
+) func(*vector.Vector, []int32, *[]int32) {
 	switch val := expr.Value.(type) {
 	case *plan.Const_Bval:
 		return EvalSelectedOnFixedSizeColumnFactory(val.Bval)

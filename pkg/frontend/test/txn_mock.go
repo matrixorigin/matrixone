@@ -39,6 +39,18 @@ func (m *MockTxnClient) EXPECT() *MockTxnClientMockRecorder {
 	return m.recorder
 }
 
+// AbortAllRunningTxn mocks base method.
+func (m *MockTxnClient) AbortAllRunningTxn() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "AbortAllRunningTxn")
+}
+
+// AbortAllRunningTxn indicates an expected call of AbortAllRunningTxn.
+func (mr *MockTxnClientMockRecorder) AbortAllRunningTxn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AbortAllRunningTxn", reflect.TypeOf((*MockTxnClient)(nil).AbortAllRunningTxn))
+}
+
 // Close mocks base method.
 func (m *MockTxnClient) Close() error {
 	m.ctrl.T.Helper()
@@ -123,6 +135,18 @@ func NewMockTxnClientWithCtl(ctrl *gomock.Controller) *MockTxnClientWithCtl {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockTxnClientWithCtl) EXPECT() *MockTxnClientWithCtlMockRecorder {
 	return m.recorder
+}
+
+// AbortAllRunningTxn mocks base method.
+func (m *MockTxnClientWithCtl) AbortAllRunningTxn() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "AbortAllRunningTxn")
+}
+
+// AbortAllRunningTxn indicates an expected call of AbortAllRunningTxn.
+func (mr *MockTxnClientWithCtlMockRecorder) AbortAllRunningTxn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AbortAllRunningTxn", reflect.TypeOf((*MockTxnClientWithCtl)(nil).AbortAllRunningTxn))
 }
 
 // Close mocks base method.
@@ -237,6 +261,18 @@ func (m *MockTxnClientWithFeature) EXPECT() *MockTxnClientWithFeatureMockRecorde
 	return m.recorder
 }
 
+// AbortAllRunningTxn mocks base method.
+func (m *MockTxnClientWithFeature) AbortAllRunningTxn() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "AbortAllRunningTxn")
+}
+
+// AbortAllRunningTxn indicates an expected call of AbortAllRunningTxn.
+func (mr *MockTxnClientWithFeatureMockRecorder) AbortAllRunningTxn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AbortAllRunningTxn", reflect.TypeOf((*MockTxnClientWithFeature)(nil).AbortAllRunningTxn))
+}
+
 // CNBasedConsistencyEnabled mocks base method.
 func (m *MockTxnClientWithFeature) CNBasedConsistencyEnabled() bool {
 	m.ctrl.T.Helper()
@@ -314,6 +350,18 @@ func (mr *MockTxnClientWithFeatureMockRecorder) NewWithSnapshot(snapshot interfa
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewWithSnapshot", reflect.TypeOf((*MockTxnClientWithFeature)(nil).NewWithSnapshot), snapshot)
 }
 
+// Pause mocks base method.
+func (m *MockTxnClientWithFeature) Pause() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Pause")
+}
+
+// Pause indicates an expected call of Pause.
+func (mr *MockTxnClientWithFeatureMockRecorder) Pause() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Pause", reflect.TypeOf((*MockTxnClientWithFeature)(nil).Pause))
+}
+
 // RefreshExpressionEnabled mocks base method.
 func (m *MockTxnClientWithFeature) RefreshExpressionEnabled() bool {
 	m.ctrl.T.Helper()
@@ -326,6 +374,18 @@ func (m *MockTxnClientWithFeature) RefreshExpressionEnabled() bool {
 func (mr *MockTxnClientWithFeatureMockRecorder) RefreshExpressionEnabled() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RefreshExpressionEnabled", reflect.TypeOf((*MockTxnClientWithFeature)(nil).RefreshExpressionEnabled))
+}
+
+// Resume mocks base method.
+func (m *MockTxnClientWithFeature) Resume() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Resume")
+}
+
+// Resume indicates an expected call of Resume.
+func (mr *MockTxnClientWithFeatureMockRecorder) Resume() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resume", reflect.TypeOf((*MockTxnClientWithFeature)(nil).Resume))
 }
 
 // MockTxnOperator is a mock of TxnOperator interface.
@@ -1093,6 +1153,7 @@ func (m *MockTimestampWaiter) NotifyLatestCommitTS(appliedTS timestamp.Timestamp
 func (mr *MockTimestampWaiterMockRecorder) NotifyLatestCommitTS(appliedTS interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyLatestCommitTS", reflect.TypeOf((*MockTimestampWaiter)(nil).NotifyLatestCommitTS), appliedTS)
+<<<<<<< HEAD
 }
 
 // UpdateEpoch mocks base method.
@@ -1105,6 +1166,8 @@ func (m *MockTimestampWaiter) UpdateEpoch(epoch uint64) {
 func (mr *MockTimestampWaiterMockRecorder) UpdateEpoch(epoch interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateEpoch", reflect.TypeOf((*MockTimestampWaiter)(nil).UpdateEpoch), epoch)
+=======
+>>>>>>> upstream/main
 }
 
 // MockWorkspace is a mock of Workspace interface.

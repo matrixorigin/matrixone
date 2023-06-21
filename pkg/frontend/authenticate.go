@@ -2152,6 +2152,9 @@ func (pc *privilegeCache) add(objTyp objectType, plt privilegeLevelType, dbName,
 
 // invalidate makes the cache empty
 func (pc *privilegeCache) invalidate() {
+	if pc == nil {
+		return
+	}
 	//total := pc.total.Swap(0)
 	//hit := pc.hit.Swap(0)
 	for i := privilegeLevelStar; i < privilegeLevelEnd; i++ {
@@ -5049,6 +5052,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+	case *tree.SetTransaction:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -5364,7 +5370,8 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	cache *privilegeCache,
 	roleId int64,
 	entry privilegeEntry,
-	pls []privilegeLevelType) (bool, error) {
+	pls []privilegeLevelType,
+	enableCache bool) (bool, error) {
 	var erArray []ExecResult
 	var sql string
 	var yes bool
@@ -5374,9 +5381,11 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 		dbName = ses.GetDatabaseName()
 	}
 	for _, pl := range pls {
-		yes = cache.has(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
-		if yes {
-			return true, nil
+		if cache != nil && enableCache {
+			yes = cache.has(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
+			if yes {
+				return true, nil
+			}
 		}
 		sql, err = getSqlForPrivilege2(ses, roleId, entry, pl)
 		if err != nil {
@@ -5395,7 +5404,9 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 		}
 
 		if execResultArrayHasData(erArray) {
-			cache.add(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
+			if cache != nil && enableCache {
+				cache.add(entry.objType, pl, dbName, entry.tableName, entry.privilegeId)
+			}
 			return true, nil
 		}
 	}
@@ -5404,7 +5415,7 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
-func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege) (bool, error) {
+func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool) (bool, error) {
 	var err error
 	var pls []privilegeLevelType
 
@@ -5432,7 +5443,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					priv.clusterTableOperation)
 
 				if yes2 {
-					yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls)
+					yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls, enableCache)
 					if err != nil {
 						return false, err
 					}
@@ -5488,7 +5499,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 
 							if yes2 {
 								//At least there is one success
-								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls)
+								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls, enableCache)
 								if err != nil {
 									return false, err
 								}
@@ -5518,6 +5529,26 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	var roleB int64
 	var ok bool
 	var grantedIds *btree.Set[int64]
+	var enableCache bool
+
+	//check privilege cache first
+	if len(priv.entries) == 0 {
+		return false, nil
+	}
+
+	enableCache, err = privilegeCacheIsEnabled(ses)
+	if err != nil {
+		return false, err
+	}
+	if enableCache {
+		yes, err = checkPrivilegeInCache(ctx, ses, priv, enableCache)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
+	}
 
 	tenant := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
@@ -5559,7 +5590,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 
 	//Call the algorithm 2.
 	//If the result of the algorithm 2 is true, Then return true;
-	yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv)
+	yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache)
 	if err != nil {
 		return false, err
 	}
@@ -5644,7 +5675,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 
 		//Call the algorithm 2.
 		//If the result of the algorithm 2 is true, Then return true;
-		yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv)
+		yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache)
 		if err != nil {
 			return false, err
 		}

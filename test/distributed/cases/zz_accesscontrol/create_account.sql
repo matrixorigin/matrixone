@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 --env prepare statement
 drop account if exists `test@123456`;
 drop account if exists testaccount;
@@ -144,3 +145,4 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
+set global enable_privilege_cache = on;

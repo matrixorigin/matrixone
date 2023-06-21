@@ -189,6 +189,9 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	// get execute related information
 	// about ap or tp, what and how many compute resource we can use.
 	c.info = plan2.GetExecTypeFromPlan(pn)
+	if pn.IsPrepare {
+		c.info.Typ = plan2.ExecTypeTP
+	}
 
 	// Compile may exec some function that need engine.Engine.
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
@@ -592,6 +595,12 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 			}
 		} else {
 			c.cnListStrategy()
+		}
+	}
+	if c.info.Typ == plan2.ExecTypeTP && len(c.cnList) > 1 {
+		c.cnList = engine.Nodes{engine.Node{
+			Addr: c.addr,
+			Mcpu: c.generateCPUNumber(ncpu, blkNum)},
 		}
 	}
 
@@ -1009,9 +1018,14 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		block := n.LockTargets[0].Block
-		if block {
-			ss = []*Scope{c.newMergeScope(ss)}
+
+		block := false
+		// only pessimistic txn needs to block downstream operators.
+		if c.proc.TxnOperator.Txn().IsPessimistic() {
+			block = n.LockTargets[0].Block
+			if block {
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
@@ -1019,6 +1033,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			if err != nil {
 				return nil, err
 			}
+			lockOpArg.SetBlock(block)
 			if block {
 				ss[i].Instructions[len(ss[i].Instructions)-1] = vm.Instruction{
 					Op:      vm.LockOp,

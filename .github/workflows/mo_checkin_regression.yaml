@@ -8,13 +8,13 @@ on:
       - '**.go'
       - '**.c'
       - '**.h'
-env: 
+env:
    branch: main
 
 jobs:
   docker_image_build:
     if: ${{ github.event.pull_request.merged == true }}
-    runs-on: arm64-runner 
+    runs-on: arm64-runner
     timeout-minutes: 60
     name: BUILD MO DOCKER IMAGE
     outputs:
@@ -31,7 +31,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           LAST_COMMIT_ID=$(git rev-parse --short HEAD)
-          DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/matrixone
+          DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/matrixone-dev
           VERSION=commit-$LAST_COMMIT_ID
 
           TAGS="${DOCKER_IMAGE}:${VERSION}"
@@ -58,6 +58,8 @@ jobs:
     name: SETUP MO TEST ENV
     outputs:
       mo_svc_ip: ${{ steps.get_mo_addr.outputs.mo_svc_ip }}
+      cn_0: ${{ steps.get_mo_addr.outputs.cn_0 }}
+      cn_1: ${{ steps.get_mo_addr.outputs.cn_1 }}
     steps:
       - name: Checkout Matrixorigin/Matrixone
         uses: actions/checkout@v3
@@ -93,7 +95,7 @@ jobs:
 
            aws eks --region us-west-2 update-kubeconfig --name eks-ci --kubeconfig eks-ci
            export KUBECONFIG=$(pwd)/eks-ci
-           if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then export KUBECONFIG=$(pwd)/eks-ci; kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }} ;kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret generic aws-secret --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESSKEY_ID }} --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRETACCESS_KEY }};kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret docker-registry dockerhub --docker-server=$DOCKER_REGISTRY_SERVER --docker-username=$DOCKER_USER --docker-password=$DOCKER_PASSWORD;fi 
+           if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then export KUBECONFIG=$(pwd)/eks-ci; kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }} ;kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret generic aws-secret --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESSKEY_ID }} --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRETACCESS_KEY }};kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret docker-registry dockerhub --docker-server=$DOCKER_REGISTRY_SERVER --docker-username=$DOCKER_USER --docker-password=$DOCKER_PASSWORD;fi
        
       - name: ECHO mo-checkin-regression.yaml
         run: |
@@ -127,19 +129,21 @@ jobs:
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
           mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
-          
           echo mo_svc_ip=$mo_svc_ip
           echo "mo_svc_ip=${mo_svc_ip}" >> $GITHUB_OUTPUT
+          
+          #get cn pod names
+          kubectl get pod -n mo-checkin-regression-${{ github.event.pull_request.number }} -l matrixorigin.io/component=CNSet | awk 'NR>1{arr[a++]=$1} END {for(i in arr){system("echo cn_"i"="arr[i]" >> $GITHUB_OUTPUT")}}'
       
       - name: Prepare Data in cn-0
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
-          kubectl exec -it mo-checkin-regression-tp-cn-0 -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
+          kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_0 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
           apt-get update
           apt-get install git -y
           git clone -b ${{ env.branch }} https://github.com/matrixorigin/matrixone.git
           cd matrixone
-          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }} 
+          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
           exit
           EOF
           exit
@@ -147,12 +151,12 @@ jobs:
       - name: Prepare Data in cn-1
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
-          kubectl exec -it mo-checkin-regression-tp-cn-1 -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
+          kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_1 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
           apt-get update
           apt-get install git -y
           git clone -b ${{ env.branch }} https://github.com/matrixorigin/matrixone.git
           cd matrixone
-          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }} 
+          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
           exit
           EOF
           exit
@@ -234,7 +238,7 @@ jobs:
           cd $GITHUB_WORKSPACE
           git clone -b ${{ env.branch }} https://github.com/matrixorigin/matrixone.git
           cd $GITHUB_WORKSPACE/matrixone
-          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }} 
+          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
           
       - name: Prepare Test EVN
         run: |
@@ -551,7 +555,7 @@ jobs:
     steps:
       - name: Prepare AWS Tools
         run: |
-          sudo apt-get update && sudo apt-get install awscli -y 
+          sudo apt-get update && sudo apt-get install awscli -y
           sudo apt-get install -y ca-certificates curl
       - name: Prepare AWS Kubectl
         uses: azure/setup-kubectl@v3
@@ -572,7 +576,7 @@ jobs:
         run: |
           aws eks --region us-west-2 update-kubeconfig --name eks-ci --kubeconfig eks-ci
           export KUBECONFIG=$(pwd)/eks-ci
-          if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }};fi 
+          if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }};fi
 
       - name: Check MO Status and Clean ENV
         if: ${{ always() && !cancelled() }}
@@ -594,3 +598,4 @@ jobs:
 
           #delete namespace
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
+
