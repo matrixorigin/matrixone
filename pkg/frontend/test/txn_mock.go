@@ -1113,28 +1113,13 @@ func (mr *MockTimestampWaiterMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockTimestampWaiter)(nil).Close))
 }
 
-// Epoch mocks base method.
-func (m *MockTimestampWaiter) Epoch() uint64 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Epoch")
-	ret0, _ := ret[0].(uint64)
-	return ret0
-}
-
-// Epoch indicates an expected call of Epoch.
-func (mr *MockTimestampWaiterMockRecorder) Epoch() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Epoch", reflect.TypeOf((*MockTimestampWaiter)(nil).Epoch))
-}
-
 // GetTimestamp mocks base method.
-func (m *MockTimestampWaiter) GetTimestamp(arg0 context.Context, arg1 timestamp.Timestamp) (uint64, timestamp.Timestamp, error) {
+func (m *MockTimestampWaiter) GetTimestamp(arg0 context.Context, arg1 timestamp.Timestamp) (timestamp.Timestamp, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetTimestamp", arg0, arg1)
-	ret0, _ := ret[0].(uint64)
-	ret1, _ := ret[1].(timestamp.Timestamp)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // GetTimestamp indicates an expected call of GetTimestamp.
@@ -1153,21 +1138,6 @@ func (m *MockTimestampWaiter) NotifyLatestCommitTS(appliedTS timestamp.Timestamp
 func (mr *MockTimestampWaiterMockRecorder) NotifyLatestCommitTS(appliedTS interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyLatestCommitTS", reflect.TypeOf((*MockTimestampWaiter)(nil).NotifyLatestCommitTS), appliedTS)
-<<<<<<< HEAD
-}
-
-// UpdateEpoch mocks base method.
-func (m *MockTimestampWaiter) UpdateEpoch(epoch uint64) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "UpdateEpoch", epoch)
-}
-
-// UpdateEpoch indicates an expected call of UpdateEpoch.
-func (mr *MockTimestampWaiterMockRecorder) UpdateEpoch(epoch interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateEpoch", reflect.TypeOf((*MockTimestampWaiter)(nil).UpdateEpoch), epoch)
-=======
->>>>>>> upstream/main
 }
 
 // MockWorkspace is a mock of Workspace interface.
