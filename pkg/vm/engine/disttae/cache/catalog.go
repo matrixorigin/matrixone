@@ -467,6 +467,20 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		item.Defs = defs
 		item.TableDef = getTableDef(item.Name, defs)
 		item.TableDef.Version = item.Version
+		// add Constraint
+		if len(item.Constraint) != 0 {
+			c := new(engine.ConstraintDef)
+			err := c.UnmarshalBinary(item.Constraint)
+			if err != nil {
+				return
+			}
+			for _, ct := range c.Cts {
+				switch k := ct.(type) {
+				case *engine.PrimaryKeyDef:
+					item.TableDef.Pkey = k.Pkey
+				}
+			}
+		}
 	}
 }
 

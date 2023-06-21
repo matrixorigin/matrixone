@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop user if exists drop_user_1,drop_user_2,drop_user_3,drop_user_4,drop_user_5,drop_user_6,drop_user_7,drop_user_8,drop_user_9,drop_user_10,drop_user_11;
 drop user if exists drop_user_111,drop_user_112;
 drop role if exists drop_u_role_1,drop_u_role_2;
@@ -86,3 +87,4 @@ drop_u_role_2
 drop user if exists drop_user_1,drop_user_2,drop_user_3,drop_user_4,drop_user_5,drop_user_6,drop_user_7,drop_user_8,drop_user_9,drop_user_10,drop_user_11;
 drop user if exists drop_user_111,drop_user_112;
 drop role if exists drop_u_role_1,drop_u_role_2;
+set global enable_privilege_cache = on;

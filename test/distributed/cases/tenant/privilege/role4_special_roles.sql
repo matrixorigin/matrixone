@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 -- cases for moadmin
 drop role if exists rolex;
 create role rolex;
@@ -32,3 +33,4 @@ grant drop account on account * to rolex;
 grant alter account on account * to rolex;
 drop role rolex;
 drop user userx;
+set global enable_privilege_cache = on;
