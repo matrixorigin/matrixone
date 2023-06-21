@@ -195,6 +195,7 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			stmt, stmt_ok := i.(*StatementInfo)
 			if stmt_ok {
 				stmt.Statement = stmt.StmtBuilder.String()
+				stmt.StmtBuilder.Reset()
 			}
 
 			writeValues(item)
