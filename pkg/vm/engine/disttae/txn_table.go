@@ -695,7 +695,7 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
 
-	//collect deletes from PartitionState.dirtyBlocks.
+	//collect dirty blocks from PartitionState.dirtyBlocks.
 	{
 		iter := state.NewDirtyBlocksIter()
 		for iter.Next() {
@@ -822,6 +822,8 @@ func (tbl *txnTable) rangesOnePart(
 		blk.CanRemote = true
 		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
+	//TODO::1. collect uncommitted blocks with deletes through CN writing S3 from txn's workspace into ranges.
+	//      2. collect uncommitted blocks without deletes into ranges.
 	return
 }
 

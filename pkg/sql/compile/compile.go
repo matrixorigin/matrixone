@@ -2496,7 +2496,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		nodes[0].Data = append(nodes[0].Data, ranges...)
 		return nodes, nil
 	}
-	// add dirty blocks in current CN.
+	// put blocks which can't be distributed remotely in current CN.
 	newRanges := make([][]byte, 0, len(ranges))
 	for _, blk := range ranges {
 		blkInfo := catalog.DecodeBlockInfo(blk)
