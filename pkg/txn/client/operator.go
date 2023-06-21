@@ -156,7 +156,6 @@ type txnOperator struct {
 	mu struct {
 		sync.RWMutex
 		closed       bool
-		epoch        uint64
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
@@ -273,13 +272,12 @@ func (tc *txnOperator) UpdateSnapshot(
 		minTS = tc.mu.txn.SnapshotTS
 	}
 
-	epoch, lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
+	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
 		ctx,
 		minTS)
 	if err != nil {
 		return err
 	}
-	tc.mu.epoch = epoch
 	tc.mu.txn.SnapshotTS = lastSnapshotTS
 	return nil
 }
@@ -544,11 +542,6 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 	}
 
 	if tc.mu.closed {
-		return moerr.NewTxnClosedNoCtx(tc.txnID)
-	}
-
-	if tc.timestampWaiter != nil &&
-		tc.timestampWaiter.Epoch() != tc.mu.epoch {
 		return moerr.NewTxnClosedNoCtx(tc.txnID)
 	}
 	return nil
