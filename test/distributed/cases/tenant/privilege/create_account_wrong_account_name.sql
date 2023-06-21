@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create account 43349饪眃887陚9苠33348儵巪5鋇1儹6紀030 admin_name '怋4孲0406乜972胺10' identified by '070261仜菅稒6咍926';
 drop account 43349饪眃887陚9苠33348儵巪5鋇1儹6紀030;
 
@@ -196,3 +197,4 @@ drop account 蕊擉84盄8綿93贻棧68607723瓻樯6芚782595;
 
 create account 83725782魚8秿134繞4崣9軯116刏0寺硄葎55 admin_name '6琬8100穦3狧3状293' identified by '5侍58遱1儂873304牘';
 drop account 83725782魚8秿134繞4崣9軯116刏0寺硄葎55;
+set global enable_privilege_cache = on;

@@ -18,7 +18,7 @@ create table t5(a int,b int) partition by key() partitions 2;
 invalid input: Field in list of fields for partition function not found in table
 create table t6(a int primary key ,b int) partition by key(a) partitions 2;
 create table t7(a int primary key ,b int) partition by key(b) partitions 2;
-invalid input: partition key is not part of primary key
+A PRIMARY KEY must include all columns in the table's partitioning function
 create table t8(a int,b int,primary key (a,b)) partition by key(b) partitions 2;
 create table t9(a int unique key ,b int) partition by key(a) partitions 2;
 create table t10(a int,b int) partition by key(a) partitions 2 (partition x, partition y);

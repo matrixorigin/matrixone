@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop user if exists u1,u2,u3,u4,u5,u6,u7,u8,u9,u10;
 create user u1 identified by '111', u2 identified by '111' default role public;
 create user u3 identified by '111', u4 identified by '111';
@@ -32,3 +33,4 @@ show tables;
 drop database db1;
 -- @session
 drop account acc_idx;
+set global enable_privilege_cache = on;

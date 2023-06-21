@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 use mo_catalog;
 create cluster table t1(a int);
 drop table if exists t1;
@@ -29,3 +30,4 @@ SHOW CREATE TABLE mo_catalog.mo_instance;
 Table    Create Table
 mo_instance    CREATE CLUSTER TABLE `mo_instance` (\n`id` VARCHAR(128) NOT NULL,\n`name` VARCHAR(255) NOT NULL,\n`account_name` VARCHAR(128) NOT NULL,\n`provider` TEXT NOT NULL,\n`provider_id` TEXT DEFAULT NULL,\n`region` TEXT NOT NULL,\n`plan_type` TEXT NOT NULL,\n`version` TEXT DEFAULT NULL,\n`status` TEXT DEFAULT NULL,\n`quota` TEXT DEFAULT NULL,\n`network_policy` TEXT DEFAULT NULL,\n`created_by` TEXT DEFAULT NULL,\n`created_at` DATETIME DEFAULT NULL,\n`account_id` INT UNSIGNED NOT NULL COMMENT 'the account_id added by the mo',\nPRIMARY KEY (`id`,`account_id`),\nUNIQUE KEY `uniq_acc` (`account_name`)\n)
 drop table mo_instance;
+set global enable_privilege_cache = on;
