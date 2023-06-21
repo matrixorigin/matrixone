@@ -149,6 +149,7 @@ const (
 	BlockMeta_Delete_ID       = "block_delete_id"
 	BlockMeta_EntryState      = "entry_state"
 	BlockMeta_Sorted          = "sorted"
+	BlockMeta_BlockInfo       = "%!%mo__block_info"
 	BlockMeta_MetaLoc         = "%!%mo__meta_loc"
 	BlockMeta_DeltaLoc        = "delta_loc"
 	BlockMeta_CommitTs        = "committs"
