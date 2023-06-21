@@ -63,6 +63,7 @@ type BlockReader interface {
 	GetColumnDataByName(context.Context, string) (*containers.ColumnView, error)
 	GetColumnDataById(context.Context, int) (*containers.ColumnView, error)
 	GetMeta() any
+	GetDeltaPersistedTS() types.TS
 	GetMetaLoc() objectio.Location
 	GetDeltaLoc() objectio.Location
 	Fingerprint() *common.ID
