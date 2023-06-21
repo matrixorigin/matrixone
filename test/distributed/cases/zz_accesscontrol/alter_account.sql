@@ -1,3 +1,5 @@
+set global enable_privilege_cache = off;
+-- @setup
 --alter account auth_option: password
 create account if not exists Abc ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment 'comment test';
 alter account abc admin_name='admin'  IDENTIFIED BY '1WERDFT3YG';
@@ -154,3 +156,4 @@ alter account test suspend;
 drop role if exists al_role2;
 drop user if exists al_user_2;
 drop account test;
+set global enable_privilege_cache = on;

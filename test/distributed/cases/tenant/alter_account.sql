@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop account if exists acc1;
 drop account if exists accx;
 --no error, no account nosys
@@ -59,3 +60,4 @@ alter account accx open;
 
 drop account if exists acc1;
 drop account if exists accx;
+set global enable_privilege_cache = on;

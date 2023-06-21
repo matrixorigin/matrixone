@@ -33,7 +33,6 @@ type timestampWaiter struct {
 	stopper   stopper.Stopper
 	notifiedC chan timestamp.Timestamp
 	latestTS  atomic.Pointer[timestamp.Timestamp]
-	epoch     atomic.Uint64
 	mu        struct {
 		sync.Mutex
 		waiters      []*waiter
@@ -54,31 +53,21 @@ func NewTimestampWaiter() TimestampWaiter {
 	return tw
 }
 
-func (tw *timestampWaiter) Epoch() uint64 {
-	return tw.epoch.Load()
-}
-
-func (tw *timestampWaiter) UpdateEpoch(epoch uint64) {
-	tw.epoch.Store(epoch)
-}
-
-func (tw *timestampWaiter) GetTimestamp(
-	ctx context.Context,
-	ts timestamp.Timestamp) (uint64, timestamp.Timestamp, error) {
+func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
 	latest := tw.latestTS.Load()
 	if latest != nil && latest.GreaterEq(ts) {
-		return tw.epoch.Load(), latest.Next(), nil
+		return latest.Next(), nil
 	}
 
 	w := tw.addToWait(ts)
 	if w != nil {
 		defer w.close()
 		if err := w.wait(ctx); err != nil {
-			return 0, timestamp.Timestamp{}, err
+			return timestamp.Timestamp{}, err
 		}
 	}
 	v := tw.latestTS.Load()
-	return tw.epoch.Load(), v.Next(), nil
+	return v.Next(), nil
 }
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {

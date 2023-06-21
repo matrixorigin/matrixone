@@ -355,10 +355,14 @@ func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {
 func (entry *SegmentEntry) ReplayAddEntryLocked(block *BlockEntry) {
 	// bump object idx during replaying.
 	objn, _ := block.ID.Offsets()
+	entry.replayNextObjectIdx(objn)
+	entry.AddEntryLocked(block)
+}
+
+func (entry *SegmentEntry) replayNextObjectIdx(objn uint16) {
 	if objn >= entry.nextObjectIdx {
 		entry.nextObjectIdx = objn + 1
 	}
-	entry.AddEntryLocked(block)
 }
 
 func (entry *SegmentEntry) AsCommonID() *common.ID {
