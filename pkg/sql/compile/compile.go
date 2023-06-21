@@ -104,22 +104,6 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
 	return c
-
-	// return &Compile{
-	// 	e:          e,
-	// 	db:         db,
-	// 	ctx:        ctx,
-	// 	tenant:     tenant,
-	// 	uid:        uid,
-	// 	sql:        sql,
-	// 	proc:       proc,
-	// 	stmt:       stmt,
-	// 	addr:       addr,
-	// 	stepRegs:   make(map[int32][]*process.WaitRegister),
-	// 	isInternal: isInternal,
-	// 	cnLabel:    cnLabel,
-	// }
-
 }
 
 func (c *Compile) clear() {

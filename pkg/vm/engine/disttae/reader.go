@@ -153,7 +153,6 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (filter
 	}
 	cnt := getValidCompositePKCnt(pkVals)
 	pkVals = pkVals[:cnt]
-
 	filterFuncs := make([]func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap, len(pkVals))
 	for i := range filterFuncs {
 		filterFuncs[i] = getCompositeFilterFuncByExpr(pkVals[i], i == 0)
