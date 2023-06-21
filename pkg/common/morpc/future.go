@@ -39,7 +39,7 @@ type Future struct {
 	errC chan error
 	// used to check error for sending message
 	writtenC    chan error
-	sent        atomic.Bool
+	waiting     atomic.Bool
 	releaseFunc func(*Future)
 	mu          struct {
 		sync.Mutex
@@ -53,7 +53,7 @@ func (f *Future) init(send RPCMessage) {
 	if _, ok := send.Ctx.Deadline(); !ok {
 		panic("context deadline not set")
 	}
-	f.sent.Store(false)
+	f.waiting.Store(false)
 	f.send = send
 	f.id = send.Message.GetID()
 	f.mu.Lock()
@@ -98,7 +98,7 @@ func (f *Future) waitSendCompleted() error {
 }
 
 func (f *Future) messageSent(err error) {
-	if f.sent.CompareAndSwap(false, true) {
+	if f.waiting.CompareAndSwap(false, true) {
 		f.writtenC <- err
 		f.unRef()
 	}

@@ -74,14 +74,17 @@ func (s *sqlStore) Allocate(
 	colName string,
 	count int,
 	txnOp client.TxnOperator) (uint64, uint64, error) {
-	var curr, next, step uint64
+	var current, next, step uint64
 	ok := false
 
-	fetchSQL := fmt.Sprintf(`select offset, step from %s where table_id = %d and col_name = '%s'`,
+	fetchSQL := fmt.Sprintf(`select offset, step from %s where table_id = %d and col_name = '%s' for update`,
 		incrTableName,
 		tableID,
 		colName)
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp).
+		WithWaitCommittedLogApplied() // make sure the update is visible to the subsequence txn, wait log tail applied
 	for {
 		err := s.exec.ExecTxn(
 			ctx,
@@ -91,20 +94,20 @@ func (s *sqlStore) Allocate(
 					return err
 				}
 				res.ReadRows(func(cols []*vector.Vector) bool {
-					curr = executor.GetFixedRows[uint64](cols[0])[0]
+					current = executor.GetFixedRows[uint64](cols[0])[0]
 					step = executor.GetFixedRows[uint64](cols[1])[0]
 					return true
 				})
 				res.Close()
 
-				next = getNext(curr, count, int(step))
+				next = getNext(current, count, int(step))
 				res, err = te.Exec(fmt.Sprintf(`update %s set offset = %d 
 					where table_id = %d and col_name = '%s' and offset = %d`,
 					incrTableName,
 					next,
 					tableID,
 					colName,
-					curr))
+					current))
 				if err != nil {
 					return err
 				}
@@ -124,7 +127,7 @@ func (s *sqlStore) Allocate(
 		}
 	}
 
-	from, to := getNextRange(curr, next, int(step))
+	from, to := getNextRange(current, next, int(step))
 	return from, to, nil
 }
 

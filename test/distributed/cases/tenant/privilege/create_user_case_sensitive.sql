@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop user if exists `oE2JKXe7OpQ65ktaAu5C5X`,`LtIFN`,`_De4$6Rj`;
 create user `oE2JKXe7OpQ65ktaAu5C5X` identified by '颐68鼡430731徔盙28',`LtIFN` identified by '4堲穃1074872駻夙92',`_De4$6Rj` identified by '麮62稀9235419灘3鐽';
 create user `oE2JKXe7OpQ65ktaAu5C5X` identified by '颐68鼡430731徔盙28',`LtIFN` identified by '4堲穃1074872駻夙92',`_De4$6Rj` identified by '麮62稀9235419灘3鐽';
@@ -13,3 +14,4 @@ drop user if exists `KI9QW$MHSgc3`;
 create user `KI9QW$MHSgc3` identified by '80604766堩35鞔颡訬';
 drop user `KI9QW$MHSgc3`,`KI9QW$MHSgc3`,`KI9QW$MHSgc3`;
 drop user `KI9QW$MHSgc3`;
+set global enable_privilege_cache = on;

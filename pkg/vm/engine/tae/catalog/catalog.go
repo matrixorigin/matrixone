@@ -671,6 +671,11 @@ func (catalog *Catalog) onReplayUpdateBlock(
 			panic(err)
 		}
 	}
+	if !un.BaseNode.DeltaLoc.IsEmpty() {
+		name := un.BaseNode.DeltaLoc.Name()
+		objn := name.Num()
+		seg.replayNextObjectIdx(objn)
+	}
 	if err == nil {
 		blkun := blk.SearchNode(un)
 		if blkun != nil {
@@ -746,6 +751,11 @@ func (catalog *Catalog) onReplayCreateBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
+	if !deltaloc.IsEmpty() {
+		name := deltaloc.Name()
+		objn := name.Num()
+		seg.replayNextObjectIdx(objn)
+	}
 	blk, _ := seg.GetBlockEntryByID(blkid)
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
@@ -809,6 +819,11 @@ func (catalog *Catalog) onReplayDeleteBlock(
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
+	}
+	if !deltaloc.IsEmpty() {
+		name := deltaloc.Name()
+		objn := name.Num()
+		seg.replayNextObjectIdx(objn)
 	}
 	blk, err := seg.GetBlockEntryByID(blkid)
 	if err != nil {
