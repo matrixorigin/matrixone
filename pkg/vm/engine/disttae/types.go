@@ -436,6 +436,8 @@ type withFilterMixin struct {
 		expr   *plan.Expr
 		filter blockio.ReadFilter
 	}
+
+	sels []int32
 }
 
 type blockReader struct {
