@@ -333,7 +333,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			}
 
 			if len(cleanRanges) > 0 {
-				// create main table readers for reading clean blocks
+				// create readers for reading clean blocks from main table.
 				mainRds, err := rel.NewReader(
 					ctx,
 					mcpu,
@@ -345,18 +345,29 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				rds = append(rds, mainRds...)
 
 			}
-			// create partition table readers for reading dirty blocks.
-			for num, r := range dirtyRanges {
-				subrel, err := db.Relation(c.ctx, s.DataSource.PartitionRelationNames[num])
+			// create readers for reading dirty blocks from partition table.
+			for num, relName := range s.DataSource.PartitionRelationNames {
+				subrel, err := db.Relation(c.ctx, relName)
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, r)
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, dirtyRanges[num])
 				if err != nil {
 					return err
 				}
 				rds = append(rds, memRds...)
 			}
+			//for num, r := range dirtyRanges {
+			//	subrel, err := db.Relation(c.ctx, s.DataSource.PartitionRelationNames[num])
+			//	if err != nil {
+			//		return err
+			//	}
+			//	memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, r)
+			//	if err != nil {
+			//		return err
+			//	}
+			//	rds = append(rds, memRds...)
+			//}
 		}
 		s.NodeInfo.Data = nil
 	}
