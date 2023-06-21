@@ -50,11 +50,52 @@ func TestMergeBlock(t *testing.T) {
 	loc1 := blockio.EncodeLocation(name1, objectio.Extent{}, 15, 0)
 	loc2 := blockio.EncodeLocation(name2, objectio.Extent{}, 15, 0)
 	loc3 := blockio.EncodeLocation(name3, objectio.Extent{}, 15, 0)
+
+	sid1 := loc1.Name().SegmentId()
+	blkInfo1 := catalog.BlockInfo{
+		BlockID: *objectio.NewBlockid(
+			&sid1,
+			loc1.Name().Num(),
+			loc1.ID()),
+		SegmentID: sid1,
+		//non-appendable block
+		EntryState: false,
+	}
+	blkInfo1.SetMetaLocation(loc1)
+
+	sid2 := loc2.Name().SegmentId()
+	blkInfo2 := catalog.BlockInfo{
+		BlockID: *objectio.NewBlockid(
+			&sid2,
+			loc2.Name().Num(),
+			loc2.ID()),
+		SegmentID: sid2,
+		//non-appendable block
+		EntryState: false,
+	}
+	blkInfo2.SetMetaLocation(loc2)
+
+	sid3 := loc3.Name().SegmentId()
+	blkInfo3 := catalog.BlockInfo{
+		BlockID: *objectio.NewBlockid(
+			&sid3,
+			loc3.Name().Num(),
+			loc3.ID()),
+		SegmentID: sid3,
+		//non-appendable block
+		EntryState: false,
+	}
+	blkInfo3.SetMetaLocation(loc3)
+
 	batch1 := &batch.Batch{
-		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc},
+		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil),
-			testutil.MakeTextVector([]string{loc1.String(), loc2.String(), loc3.String()}, nil),
+			testutil.MakeTextVector([]string{
+				string(catalog.EncodeBlockInfo(blkInfo1)),
+				string(catalog.EncodeBlockInfo(blkInfo2)),
+				string(catalog.EncodeBlockInfo(blkInfo3))},
+				nil),
 		},
 		Zs:  []int64{1, 1, 1},
 		Cnt: 1,
@@ -75,7 +116,7 @@ func TestMergeBlock(t *testing.T) {
 		result := argument1.Tbl.(*mockRelation).result
 		// check attr names
 		require.True(t, reflect.DeepEqual(
-			[]string{catalog.BlockMeta_MetaLoc},
+			[]string{catalog.BlockMeta_BlockInfo},
 			result.Attrs,
 		))
 		// check vector

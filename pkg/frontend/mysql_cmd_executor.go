@@ -634,6 +634,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 
 func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree.SetVar) error {
 	var err error = nil
+	var ok bool
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
 			if global {
@@ -706,6 +707,43 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 		} else if name == "syspublications" {
 			if !ses.GetTenantInfo().IsSysTenant() {
 				return moerr.NewInternalError(ses.GetRequestContext(), "only system account can set system variable syspublications")
+			}
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
+			}
+		} else if name == "clear_privilege_cache" {
+			//if it is global variable, it does nothing.
+			if !assign.Global {
+				//if the value is 'on or off', just invalidate the privilege cache
+				ok, err = valueIsBoolTrue(value)
+				if err != nil {
+					return err
+				}
+
+				if ok {
+					cache := ses.GetPrivilegeCache()
+					if cache != nil {
+						cache.invalidate()
+					}
+				}
+				err = setVarFunc(assign.System, assign.Global, name, value)
+				if err != nil {
+					return err
+				}
+			}
+		} else if name == "enable_privilege_cache" {
+			ok, err = valueIsBoolTrue(value)
+			if err != nil {
+				return err
+			}
+
+			//disable privilege cache. clean the cache.
+			if !ok {
+				cache := ses.GetPrivilegeCache()
+				if cache != nil {
+					cache.invalidate()
+				}
 			}
 			err = setVarFunc(assign.System, assign.Global, name, value)
 			if err != nil {
@@ -2507,7 +2545,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 					}
 				}
 
-			case *tree.SetVar:
+			case *tree.SetVar, *tree.SetTransaction:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
@@ -2896,6 +2934,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleShowBackendServers(requestCtx, i, len(cws)); err != nil {
 			return err
 		}
+	case *tree.SetTransaction:
+		selfHandle = true
+		//TODO: handle set transaction
 	}
 
 	if selfHandle {
@@ -3779,30 +3820,25 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 }
 
 type jsonPlanHandler struct {
-	jsonBytes  []byte
-	statsBytes []byte
-	stats      motrace.Statistic
-	buffer     *bytes.Buffer
+	jsonBytes      []byte
+	statsJsonBytes []byte
+	stats          motrace.Statistic
+	buffer         *bytes.Buffer
 }
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan)
-	jsonBytes := h.Marshal(ctx)
-	statsBytes, stats := h.Stats(ctx)
+	jsonBytes, statsJsonBytes, stats := h.Marshal(ctx)
 	return &jsonPlanHandler{
-		jsonBytes:  jsonBytes,
-		statsBytes: statsBytes,
-		stats:      stats,
-		buffer:     h.handoverBuffer(),
+		jsonBytes:      jsonBytes,
+		statsJsonBytes: statsJsonBytes,
+		stats:          stats,
+		buffer:         h.handoverBuffer(),
 	}
 }
 
-func (h *jsonPlanHandler) Stats(ctx context.Context) ([]byte, motrace.Statistic) {
-	return h.statsBytes, h.stats
-}
-
-func (h *jsonPlanHandler) Marshal(ctx context.Context) []byte {
-	return h.jsonBytes
+func (h *jsonPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJsonBytes []byte, stats motrace.Statistic) {
+	return h.jsonBytes, h.statsJsonBytes, h.stats
 }
 
 func (h *jsonPlanHandler) Free() {
@@ -3810,6 +3846,7 @@ func (h *jsonPlanHandler) Free() {
 		releaseMarshalPlanBufferPool(h.buffer)
 		h.buffer = nil
 		h.jsonBytes = nil
+		h.statsJsonBytes = nil
 	}
 }
 
@@ -3866,11 +3903,12 @@ func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
 	marshalPlanBufferPool.Put(b)
 }
 
-func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
+func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
 	var err error
 	if h.marshalPlan != nil {
-		var jsonBytesLen = 0
+		var jsonBytesLen, statsJonsBytesLen = 0, 0
 		h.buffer.Reset()
+		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
 		encoder := json.NewEncoder(h.buffer)
@@ -3886,61 +3924,31 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		} else {
 			jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
 		}
+		// data transform Global to json
+		if len(h.marshalPlan.Steps) > 0 {
+			// if len(h.marshalPlan.Steps) > 1 {
+			// logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(h.marshalPlan.Steps))
+			// }
+			// XXX, `buffer` can be used repeatedly as a global variable in the future
+			global := h.marshalPlan.Steps[0].GraphData.Global
+			err = encoder.Encode(&global)
+			if err != nil {
+				statsJonsBytes = []byte(fmt.Sprintf(`{"code":200,"message":"%q"}`, err.Error()))
+			} else {
+				statsJonsBytesLen = h.buffer.Len()
+			}
+		}
 		// BG: bytes.Buffer maintain buf []byte.
 		// if buf[off:] not enough but len(buf) is enough place, then it will reset off = 0.
 		// So, in here, we need call Next(...) after all data has been written
 		if jsonBytesLen > 0 {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
+		if statsJonsBytesLen > 0 {
+			statsJonsBytes = h.buffer.Next(statsJonsBytesLen - jsonBytesLen)
+		}
 	} else {
 		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
 	return
-}
-
-func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte []byte, stats motrace.Statistic) {
-	if h.marshalPlan != nil && len(h.marshalPlan.Steps) > 0 {
-		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
-		global := h.marshalPlan.Steps[0].GraphData.Global
-		statsValues := getStatsFromGlobal(global, uint64(h.stmt.Duration))
-		statsByte = []byte(fmt.Sprintf("%v", statsValues))
-	} else {
-		statsByte = []byte(fmt.Sprintf("%v", []uint64{1, 0, 0, 0, 0}))
-	}
-	return
-}
-
-func getStatsFromGlobal(global explain.Global, duration uint64) []uint64 {
-	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
-
-	for _, stat := range global.Statistics.Time {
-		if stat.Name == "Time Consumed" {
-			timeConsumed = uint64(stat.Value)
-			break
-		}
-	}
-
-	for _, stat := range global.Statistics.Memory {
-		if stat.Name == "Memory Size" {
-			memorySize = uint64(stat.Value)
-			break
-		}
-	}
-
-	for _, stat := range global.Statistics.IO {
-		if stat.Name == "S3 IO Input Count" {
-			s3IOInputCount = uint64(stat.Value)
-		} else if stat.Name == "S3 IO Output Count" {
-			s3IOOutputCount = uint64(stat.Value)
-		}
-	}
-
-	statsValues := make([]uint64, 5)
-	statsValues[0] = 1 // this is the version number
-	statsValues[1] = timeConsumed
-	statsValues[2] = memorySize * duration
-	statsValues[3] = s3IOInputCount
-	statsValues[4] = s3IOOutputCount
-
-	return statsValues
 }

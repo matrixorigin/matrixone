@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 -- cases for accountadmin
 drop account if exists accx;
 create account accx admin_name 'xcca' identified by '111';
@@ -44,3 +45,4 @@ drop role rolex;
 drop user userx,root,dump;
 -- @session
 drop account if exists accx;
+set global enable_privilege_cache = on;

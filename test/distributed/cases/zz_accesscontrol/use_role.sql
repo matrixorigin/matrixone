@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 --env prepare statement
 drop role if exists use_role_1,use_role_2,use_role_3,use_role_4,use_role_5;
 drop user if exists use_user_1,use_user_2;
@@ -73,3 +74,4 @@ create database if not exists use_db_test;
 drop role if exists use_role_1,use_role_2,use_role_3,use_role_4,use_role_5;
 drop user if exists use_user_1,use_user_2;
 drop database if exists use_db_1;
+set global enable_privilege_cache = on;

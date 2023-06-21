@@ -202,6 +202,8 @@ const (
 	ErrPartitionFuncNotAllowed             uint16 = 20812
 	ErrFieldTypeNotAllowedAsPartitionField uint16 = 20813
 	ErrPartitionNoTemporary                uint16 = 20814
+	ErrBlobFieldInPartFunc                 uint16 = 20815
+	ErrUniqueKeyNeedAllFieldsInPf          uint16 = 20816
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -359,6 +361,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPartitionFuncNotAllowed:             {ER_PARTITION_FUNC_NOT_ALLOWED_ERROR, []string{MySQLDefaultSqlState}, "The %-.192s function returns the wrong type"},
 	ErrFieldTypeNotAllowedAsPartitionField: {ER_FIELD_TYPE_NOT_ALLOWED_AS_PARTITION_FIELD, []string{MySQLDefaultSqlState}, "Field '%-.192s' is of a not allowed type for this type of partitioning"},
 	ErrPartitionNoTemporary:                {ER_PARTITION_NO_TEMPORARY, []string{MySQLDefaultSqlState}, "Cannot create temporary table with partitions"},
+	ErrBlobFieldInPartFunc:                 {ER_BLOB_FIELD_IN_PART_FUNC_ERROR, []string{MySQLDefaultSqlState}, "A BLOB field is not allowed in partition function"},
+	ErrUniqueKeyNeedAllFieldsInPf:          {ER_UNIQUE_KEY_NEED_ALL_FIELDS_IN_PF, []string{MySQLDefaultSqlState}, "A %-.192s must include all columns in the table's partitioning function"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1030,6 +1034,14 @@ func NewFieldTypeNotAllowedAsPartitionField(ctx context.Context, k any) *Error {
 
 func NewPartitionNoTemporary(ctx context.Context) *Error {
 	return newError(ctx, ErrPartitionNoTemporary)
+}
+
+func NewBlobFieldInPartFunc(ctx context.Context) *Error {
+	return newError(ctx, ErrBlobFieldInPartFunc)
+}
+
+func NewUniqueKeyNeedAllFieldsInPf(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrUniqueKeyNeedAllFieldsInPf, k)
 }
 
 var contextFunc atomic.Value

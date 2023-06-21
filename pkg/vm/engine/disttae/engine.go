@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -136,7 +138,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
 	txn := e.getTransaction(op)
-	if txn == nil {
+	if txn == nil || txn.meta.GetStatus() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
 	if v, ok := txn.databaseMap.Load(genDatabaseKey(ctx, name)); ok {
@@ -467,21 +469,25 @@ func (e *Engine) Hints() (h engine.Hints) {
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	if len(ranges) < num || len(ranges) == 1 {
-		for i := range ranges {
-			blk := catalog.DecodeBlockInfo(ranges[i])
+	blkInfos := make([]*catalog.BlockInfo, 0, len(ranges))
+	for _, r := range ranges {
+		blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
+	}
+	if len(blkInfos) < num || len(blkInfos) == 1 {
+		for i, blk := range blkInfos {
+			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
 				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
 			)
 		}
-		for j := len(ranges); j < num; j++ {
+		for j := len(blkInfos); j < num; j++ {
 			rds[j] = &emptyReader{}
 		}
 		return rds, nil
 	}
 
-	infos, steps := groupBlocksToObjects(ranges, num)
+	infos, steps := groupBlocksToObjects(blkInfos, num)
 	blockReaders := newBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr, proc.(*process.Process))
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
@@ -536,10 +542,32 @@ func (e *Engine) getDNServices() []DNStore {
 	return values
 }
 
-func (e *Engine) cleanMemoryTable() {
+func (e *Engine) setPushClientStatus(ready bool) {
 	e.Lock()
 	defer e.Unlock()
-	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+
+	if tc, ok := e.cli.(client.TxnClientWithFeature); ok {
+		if ready {
+			tc.Resume()
+		} else {
+			tc.Pause()
+		}
+	}
+
+	e.pClient.receivedLogTailTime.ready.Store(ready)
+	if e.pClient.subscriber != nil {
+		if ready {
+			e.pClient.subscriber.setReady()
+		} else {
+			e.pClient.subscriber.setNotReady()
+		}
+	}
+}
+
+func (e *Engine) abortAllRunningTxn() {
+	e.Lock()
+	defer e.Unlock()
+	e.cli.AbortAllRunningTxn()
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {

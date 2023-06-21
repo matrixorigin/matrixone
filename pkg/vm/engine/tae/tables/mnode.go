@@ -169,7 +169,7 @@ func (node *memoryNode) GetDataWindow(
 		idx, ok := node.writeSchema.SeqnumMap[col.SeqNum]
 		var vec containers.Vector
 		if !ok {
-			vec = containers.FillConstVector(int(from-to), col.Type, nil)
+			vec = containers.FillConstVector(int(to-from), col.Type, nil)
 		} else {
 			vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
 		}
