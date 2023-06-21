@@ -82,14 +82,14 @@ func TestInsertIndexMetadata(t *testing.T) {
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 
 	indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
-	catalog_database.EXPECT().Relation(gomock.Any(), catalog.MO_INDEXES).Return(indexes_relation, nil).AnyTimes()
+	catalog_database.EXPECT().Relation(gomock.Any(), catalog.MO_INDEXES, gomock.Any()).Return(indexes_relation, nil).AnyTimes()
 	//---------------------------------------------------------------------------------------------------------------------------
 	mock_emp_Relation := mock_frontend.NewMockRelation(ctrl)
 	mock_emp_Relation.EXPECT().TableDefs(gomock.Any()).Return(buildMockTableDefs(mock_emp_table), nil).AnyTimes()
 	mock_emp_Relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(272464)).AnyTimes()
 
 	mock_db1_database := mock_frontend.NewMockDatabase(ctrl)
-	mock_db1_database.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(mock_emp_Relation, nil).AnyTimes()
+	mock_db1_database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(mock_emp_Relation, nil).AnyTimes()
 	mock_db1_database.EXPECT().GetDatabaseId(gomock.Any()).Return("123456").AnyTimes()
 
 	type args struct {
@@ -176,7 +176,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	reader.EXPECT().Close().Return(nil).AnyTimes()
 
 	indexes_relation.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{reader}, nil).AnyTimes()
-	catalog_database.EXPECT().Relation(gomock.Any(), catalog.MO_INDEXES).Return(indexes_relation, nil).AnyTimes()
+	catalog_database.EXPECT().Relation(gomock.Any(), catalog.MO_INDEXES, gomock.Any()).Return(indexes_relation, nil).AnyTimes()
 	//---------------------------------------------------------------------------------------------------------------------------
 
 	mock_emp_Relation := mock_frontend.NewMockRelation(ctrl)
@@ -184,7 +184,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	mock_emp_Relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(272464)).AnyTimes()
 
 	mock_db1_database := mock_frontend.NewMockDatabase(ctrl)
-	mock_db1_database.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(mock_emp_Relation, nil).AnyTimes()
+	mock_db1_database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(mock_emp_Relation, nil).AnyTimes()
 	mock_db1_database.EXPECT().GetDatabaseId(gomock.Any()).Return("123456").AnyTimes()
 
 	type args struct {
