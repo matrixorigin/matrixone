@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create user u_a identified by 'a111', u_b identified by 'b111' default role public lock;
 create user if not exists u_a identified by 'a111', u_b identified by 'b111' default role public lock;
 create user u_c identified by 'a111', u_d identified by 'b111';
@@ -10,3 +11,4 @@ u_d    *97D6A234F2882F45432E3C14150E6B9ACAB2255F
 root    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
 dump    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB
 drop user if exists u_a,u_b,u_c,u_d;
+set global enable_privilege_cache = on;
