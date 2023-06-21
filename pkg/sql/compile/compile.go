@@ -938,9 +938,14 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		block := n.LockTargets[0].Block
-		if block {
-			ss = []*Scope{c.newMergeScope(ss)}
+
+		block := false
+		// only pessimistic txn needs to block downstream operators.
+		if c.proc.TxnOperator.Txn().IsPessimistic() {
+			block = n.LockTargets[0].Block
+			if block {
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
@@ -948,6 +953,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			if err != nil {
 				return nil, err
 			}
+			lockOpArg.SetBlock(block)
 			if block {
 				ss[i].Instructions[len(ss[i].Instructions)-1] = vm.Instruction{
 					Op:      vm.LockOp,

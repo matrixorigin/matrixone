@@ -466,22 +466,25 @@ func (e *Engine) Hints() (h engine.Hints) {
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	if len(ranges) < num || len(ranges) == 1 {
-		for i := range ranges {
-			blk := catalog.DecodeBlockInfo(ranges[i])
-			//FIXME::why set it to false?
+	blkInfos := make([]*catalog.BlockInfo, 0, len(ranges))
+	for _, r := range ranges {
+		blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
+	}
+	if len(blkInfos) < num || len(blkInfos) == 1 {
+		for i, blk := range blkInfos {
+			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
 				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs,
 			)
 		}
-		for j := len(ranges); j < num; j++ {
+		for j := len(blkInfos); j < num; j++ {
 			rds[j] = &emptyReader{}
 		}
 		return rds, nil
 	}
 
-	infos, steps := groupBlocksToObjects(ranges, num)
+	infos, steps := groupBlocksToObjects(blkInfos, num)
 	blockReaders := newBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr)
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {

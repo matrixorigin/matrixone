@@ -155,7 +155,7 @@ type Transaction struct {
 	blockId_raw_batch map[types.Blockid]*batch.Batch
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
 	blockId_dn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
-
+	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 
 	rollbackCount int
@@ -164,8 +164,9 @@ type Transaction struct {
 }
 
 type Pos struct {
-	idx    int
-	offset int64
+	idx     int
+	offset  int64
+	blkInfo catalog.BlockInfo
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -433,9 +434,12 @@ type withFilterMixin struct {
 
 	filterState struct {
 		evaluated bool
-		expr      *plan.Expr
-		filter    blockio.ReadFilter
+		//point select for primary key
+		expr   *plan.Expr
+		filter blockio.ReadFilter
 	}
+
+	sels []int32
 }
 
 type blockReader struct {
@@ -447,9 +451,11 @@ type blockReader struct {
 	currentStep int
 
 	// block list to scan
-	blks []*catalog.BlockInfo
+	blks    []*catalog.BlockInfo
+	blkDels map[types.Blockid][]int64
 }
 
+// TODO::blockMergeReader should inherit from blockReader.
 type blockMergeReader struct {
 	withFilterMixin
 
