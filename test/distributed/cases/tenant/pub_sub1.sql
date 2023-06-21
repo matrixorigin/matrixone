@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create database db1;
 create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
 create publication pubname2 database db1 account test_tenant_1 comment 'publish db1 database';
@@ -13,3 +14,4 @@ drop publication pubname1;
 drop publication pubname2;
 drop database db1;
 
+set global enable_privilege_cache = on;

@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop account if exists acc1;
 create account acc1 admin_name = 'r1' identified by '111' open comment 'acc1';
 
@@ -35,3 +36,4 @@ select * from a;
 
 drop table if exists a;
 drop account if exists acc1;
+set global enable_privilege_cache = on;
