@@ -309,12 +309,12 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	skipDeletes bool) (view *containers.BlockView, err error) {
 
 	view = containers.NewBlockView()
-	for _, colIdx := range colIdxs {
-		vec, err := blk.LoadPersistedColumnData(ctx, readSchema, colIdx)
-		if err != nil {
-			return nil, err
-		}
-		view.SetData(colIdx, vec)
+	vecs, err := LoadPersistedColumnDatas(ctx, readSchema, blk.rt, blk.meta.AsCommonID(), colIdxs, blk.meta.GetMetaLoc())
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range vecs {
+		view.SetData(colIdxs[i], vec)
 	}
 
 	if skipDeletes {

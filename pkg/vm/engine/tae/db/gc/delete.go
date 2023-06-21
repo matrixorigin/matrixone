@@ -16,9 +16,11 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type GCWorker struct {
@@ -65,6 +67,7 @@ func (g *GCWorker) ExecDelete(ctx context.Context, names []string) error {
 	}
 	g.Unlock()
 
+	logutil.Infof("[DB GC] files to delete: %v", g.objects)
 	err := g.fs.DelFiles(ctx, g.objects)
 	g.Lock()
 	defer g.Unlock()
