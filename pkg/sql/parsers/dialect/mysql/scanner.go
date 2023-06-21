@@ -177,17 +177,11 @@ func (s *Scanner) Scan() (int, string) {
 			return s.Scan()
 		case '*':
 			s.inc()
-			switch {
-			case s.cur() == '!' && s.dialectType == dialect.MYSQL:
-				// TODO: ExtractMysqlComment
-				return s.scanMySQLSpecificComment()
-			default:
-				id, str := s.scanCommentTypeBlock()
-				if id == LEX_ERROR {
-					return id, str
-				}
-				return s.Scan()
+			id, str := s.scanCommentTypeBlock()
+			if id == LEX_ERROR {
+				return id, str
 			}
+			return s.Scan()
 		default:
 			return int(ch), ""
 		}
@@ -427,7 +421,7 @@ func (s *Scanner) scanCommentTypeBlock() (int, string) {
 }
 
 // scanMySQLSpecificComment scans a MySQL comment pragma, which always starts with '//*`
-func (s *Scanner) scanMySQLSpecificComment() (int, string) {
+/*func (s *Scanner) scanMySQLSpecificComment() (int, string) {
 	start := s.Pos - 3
 	for {
 		if s.cur() == '*' {
@@ -449,7 +443,7 @@ func (s *Scanner) scanMySQLSpecificComment() (int, string) {
 	s.MysqlSpecialComment = NewScanner(s.dialectType, sql)
 
 	return s.Scan()
-}
+}*/
 
 // ExtractMysqlComment extracts the version and SQL from a comment-only query
 // such as /*!50708 sql here */

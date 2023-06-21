@@ -325,7 +325,7 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 
-	qualified := make([]logtail.TableLogtail, 0, len(ss.tables))
+	qualified := make([]logtail.TableLogtail, 0, 4)
 	for _, t := range tails {
 		if state, ok := ss.tables[t.id]; ok && state == TableSubscribed {
 			qualified = append(qualified, t.tail)
