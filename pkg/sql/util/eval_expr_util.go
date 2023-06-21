@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go/constant"
 	"math"
@@ -30,17 +31,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
 func getVal(val any) string {
 	switch v := val.(type) {
-	case float32:
-		return fmt.Sprintf("%e", val)
-	case float64:
-		return fmt.Sprintf("%e", val)
+	/*
+		case float32:
+			return fmt.Sprintf("%e", val)
+		case float64:
+			return fmt.Sprintf("%e", val)
+	*/
 	case []byte:
 		return string(v)
 	case string:
@@ -601,7 +603,8 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 		destLen := int(typ.Width)
 		if typ.Oid != types.T_text && typ.Oid != types.T_binary && destLen != 0 {
 			if utf8.RuneCountInString(s) > destLen {
-				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
+				return nil, errors.New("test")
+				//return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
 		v := []byte(s)
@@ -682,7 +685,8 @@ func checkOverFlow[T1, T2 constraints.Integer | constraints.Float](ctx context.C
 			return moerr.NewOutOfRange(ctx, "float", "value '%v'", val)
 		}
 	} else {
-		return function.OverflowForNumericToNumeric[T1, T2](ctx, []T1{val}, n)
+		//	return function.OverflowForNumericToNumeric[T1, T2](ctx, []T1{val}, n)
+		return nil
 	}
 	return nil
 }

@@ -359,7 +359,7 @@ func (n *Bitmap) Count() int {
 		cnt += bits.OnesCount64(n.data[i])
 	}
 	if offset := n.len % 64; offset > 0 {
-		start := n.len / 64
+		start := (n.len / 64) * 64
 		for i, j := start, start+offset; i < j; i++ {
 			if n.Contains(uint64(i)) {
 				cnt++
