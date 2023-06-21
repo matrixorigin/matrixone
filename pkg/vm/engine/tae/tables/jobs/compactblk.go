@@ -106,30 +106,40 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 	preparer.Columns = containers.NewBatch()
 
 	schema := task.schema
-	var view *containers.ColumnView
-	seqnums := make([]uint16, 0, len(schema.ColDefs))
+	colLen := len(schema.ColDefs)
+	seqnums := make([]uint16, 0, colLen)
+	idxs := make([]int, 0, colLen)
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
 		}
-		view, err = task.compacted.GetColumnDataById(ctx, def.Idx)
+		idxs = append(idxs, def.Idx)
+		seqnums = append(seqnums, def.SeqNum)
+	}
+	if len(idxs) > 0 {
+		var views *containers.BlockView
+		views, err = task.compacted.GetColumnDataByIds(ctx, idxs)
 		if err != nil {
 			return
 		}
-		if view == nil {
-			preparer.Close()
-			return nil, true, nil
+		task.deletes = views.DeleteMask
+		views.ApplyDeletes()
+		for i := 0; i < colLen; i++ {
+			if schema.ColDefs[i].IsPhyAddr() {
+				continue
+			}
+			if views.Columns[i] == nil {
+				preparer.Close()
+				return nil, true, nil
+			}
+			vec := views.Columns[i].Orphan()
+			if vec.Length() == 0 {
+				empty = true
+				vec.Close()
+				return
+			}
+			preparer.Columns.AddVector(schema.ColDefs[i].Name, vec)
 		}
-		task.deletes = view.DeleteMask
-		view.ApplyDeletes()
-		vec := view.Orphan()
-		if vec.Length() == 0 {
-			empty = true
-			vec.Close()
-			return
-		}
-		preparer.Columns.AddVector(def.Name, vec)
-		seqnums = append(seqnums, def.SeqNum)
 	}
 	preparer.SchemaVersion = schema.Version
 	preparer.Seqnums = seqnums
@@ -154,11 +164,21 @@ func (task *compactBlockTask) Name() string {
 func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	logutil.Info("[Start]", common.OperationField(task.Name()),
 		common.OperandField(task.meta.Repr()))
+	phaseNumber := 0
+	defer func() {
+		if err != nil {
+			logutil.Error("[DoneWithErr]", common.OperationField(task.Name()),
+				common.AnyField("error", err),
+				common.AnyField("phase", phaseNumber),
+			)
+		}
+	}()
 	now := time.Now()
 	seg := task.compacted.GetSegment()
 	defer seg.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
+	phaseNumber = 1
 	preparer, empty, err := task.PrepareData(ctx)
 	if err != nil {
 		return
@@ -167,20 +187,12 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 	defer preparer.Close()
+	phaseNumber = 2
 	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
 	oldBlkData := oldBMeta.GetBlockData()
-	var deletes *containers.Batch
-	if !oldBMeta.IsAppendable() {
-		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
-		if err != nil {
-			return
-		}
-		if deletes != nil {
-			defer deletes.Close()
-		}
-	}
+	phaseNumber = 3
 
 	if !empty {
 		createOnSeg := seg
@@ -204,15 +216,19 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 
 		if _, err = task.createAndFlushNewBlock(
-			createOnSeg, preparer, deletes,
+			createOnSeg, preparer,
 		); err != nil {
 			return
 		}
 	}
 
 	table := task.meta.GetSegment().GetTable()
+	// write old block
+	var deletes *containers.Batch
 	// write ablock
+	phaseNumber = 4
 	if oldBMeta.IsAppendable() {
+		// for ablk, flush data and deletes
 		var data *containers.Batch
 		dataVer, errr := oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
 		if errr != nil {
@@ -262,6 +278,31 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				return err
 			}
 		}
+	} else {
+		// for nablk, flush deletes
+		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
+		if err != nil {
+			return
+		}
+		if deletes != nil {
+			defer deletes.Close()
+			deleteTask := NewFlushDeletesTask(tasks.WaitableCtx, oldBlkData.GetFs(), oldBMeta, deletes)
+			if err = task.rt.Scheduler.Schedule(deleteTask); err != nil {
+				return
+			}
+			if err = deleteTask.WaitDone(); err != nil {
+				return
+			}
+			deltaLoc := blockio.EncodeLocation(
+				deleteTask.name,
+				deleteTask.blocks[0].GetExtent(),
+				uint32(deletes.Length()),
+				deleteTask.blocks[0].GetID())
+
+			if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
+				return err
+			}
+		}
 	}
 	// sortkey does not change, nerver mind the schema version
 	if !task.schema.HasSortKey() && task.created != nil {
@@ -271,6 +312,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			task.mapping[i] = int32(i)
 		}
 	}
+	phaseNumber = 5
 	txnEntry := txnentries.NewCompactBlockEntry(
 		task.txn,
 		task.compacted,
@@ -289,16 +331,20 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 	createdStr := "nil"
+	rows := 0
 	if task.created != nil {
 		createdStr = task.created.Fingerprint().BlockString()
+		rows = task.created.Rows()
 	}
 	logutil.Info("[Done]",
 		common.AnyField("txn-start-ts", task.txn.GetStartTS().ToString()),
 		common.OperationField(task.Name()),
 		common.AnyField("compacted", task.meta.Repr()),
 		common.AnyField("created", createdStr),
+		common.AnyField("compactedRows", task.compacted.Rows()),
+		common.AnyField("TotalChanges", task.compacted.GetTotalChanges()),
+		common.AnyField("createdRows", rows),
 		common.DurationField(time.Since(now)))
-
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Segment.CompactBlock.Add(1)
 	})
@@ -308,7 +354,6 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 func (task *compactBlockTask) createAndFlushNewBlock(
 	seg handle.Segment,
 	preparer *model.PreparedCompactedBlockData,
-	deletes *containers.Batch,
 ) (newBlk handle.Block, err error) {
 	newBlk, err = seg.CreateNonAppendableBlock(nil)
 	if err != nil {
@@ -325,7 +370,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		newBlkData.GetFs(),
 		newMeta,
 		preparer.Columns,
-		deletes)
+		nil)
 	if err = task.rt.Scheduler.Schedule(ioTask); err != nil {
 		return
 	}
@@ -342,17 +387,6 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	logutil.Debugf("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
-	}
-	if deletes != nil {
-		deltaLoc := blockio.EncodeLocation(
-			ioTask.name,
-			ioTask.blocks[1].GetExtent(),
-			uint32(deletes.Length()),
-			ioTask.blocks[1].GetID())
-
-		if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
-			return
-		}
 	}
 
 	err = newBlkData.Init()
