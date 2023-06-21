@@ -26,7 +26,12 @@ func TestSingle(t *testing.T) {
 	}{
 		{"abc", "bc", 2},
 		{"abc", "b", 2},
+		{"abc", "A", 1},
 		{"abc", "abc", 1},
+		{"foobarbar", "bar", 4},
+		{"foobarbar", "Bar", 4},
+		{"Abc", "A", 1},
+		{"abc", "A", 1},
 		{"abc", "a", 1},
 		{"abc", "dca", 0},
 		{"abc", "", 1},
