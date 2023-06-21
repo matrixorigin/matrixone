@@ -37,10 +37,10 @@ import (
 
 func getVal(val any) string {
 	switch v := val.(type) {
-	case float32:
-		return fmt.Sprintf("%e", val)
-	case float64:
-		return fmt.Sprintf("%e", val)
+	// case float32:
+	// 	return fmt.Sprintf("%e", val)
+	// case float64:
+	// 	return fmt.Sprintf("%e", val)
 	case []byte:
 		return string(v)
 	case string:

@@ -57,10 +57,10 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	case *tree.PrepareStmt:
 		stmtName = string(pstmt.Name)
 		preparePlan, err = getPreparePlan(ctx, pstmt.Stmt)
-		preparePlan.IsPrepare = true
 		if err != nil {
 			return nil, err
 		}
+		preparePlan.IsPrepare = true
 
 	case *tree.PrepareString:
 		var v interface{}
@@ -77,10 +77,10 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 		stmtName = string(pstmt.Name)
 		preparePlan, err = getPreparePlan(ctx, stmts[0])
-		preparePlan.IsPrepare = true
 		if err != nil {
 			return nil, err
 		}
+		preparePlan.IsPrepare = true
 	}
 
 	// dcl tcl is not support
