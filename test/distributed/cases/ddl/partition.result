@@ -98,7 +98,7 @@ col2
 11896
 -18596
 create table pt_table_10(col1 tinyint,col2 smallint,col3 int,primary key(col1))partition by hash(col2);
-invalid input: partition key is not part of primary key
+A PRIMARY KEY must include all columns in the table's partitioning function
 create table pt_table_11(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by hash(col9) partitions 6;
 Field 'col9' is of a not allowed type for this type of partitioning
 create table pt_table_12(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255))partition by hash(col20);
@@ -334,7 +334,7 @@ invalid input: operator / is not allowed in the partition expression
 create table pt_table_51(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by list(year(col13))(PARTITION r0 VALUES IN (1999, 2001, 2003),PARTITION r1 VALUES IN (1999, 2001, 2003),PARTITION r2 VALUES IN (1999, 2001, 2003));
 Multiple definition of same constant in list partitioning
 create table pt_table_52(col1 tinyint,col2 smallint,col3 int,col4 bigint,col11 varchar(255),col12 Date,col13 DateTime,primary key(col4,col3,col11))partition by list(col2) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
-invalid input: partition key is not part of primary key
+A PRIMARY KEY must include all columns in the table's partitioning function
 create table pt_table_53(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4,col3,col11))partition by list(col3) (PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),PARTITION r1 VALUES IN (2, 6, 10, 14*2, 18, 22),PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
 Multiple definition of same constant in list partitioning
 create table pt_table_54(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4,col3,col11))partition by list(col3) (PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),PARTITION r1 VALUES IN (2, 6, 11, 14*2, 18, 22),PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
