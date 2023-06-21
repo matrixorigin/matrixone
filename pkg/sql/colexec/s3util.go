@@ -222,7 +222,7 @@ func (w *S3Writer) ResetMetaLocBat(proc *process.Process) {
 	if w.metaLocBat != nil {
 		w.metaLocBat.Clean(proc.GetMPool())
 	}
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
 	metaLocBat := batch.NewWithSize(len(attrs))
 	metaLocBat.Attrs = attrs
 	metaLocBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
@@ -594,11 +594,11 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 }
 
 func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
-	metaLocs, err := w.WriteEndBlocks(proc)
+	blkInfos, err := w.WriteEndBlocks(proc)
 	if err != nil {
 		return err
 	}
-	for _, metaLoc := range metaLocs {
+	for _, blkInfo := range blkInfos {
 		if err := vector.AppendFixed(
 			w.metaLocBat.Vecs[0],
 			w.partitionIndex,
@@ -608,7 +608,8 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 		}
 		if err := vector.AppendBytes(
 			w.metaLocBat.Vecs[1],
-			[]byte(metaLoc),
+			//[]byte(metaLoc),
+			catalog.EncodeBlockInfo(blkInfo),
 			false,
 			proc.GetMPool()); err != nil {
 			return err
@@ -620,20 +621,39 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 
 // WriteEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]string, error) {
+func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
 	if err != nil {
 		return nil, err
 	}
-	metaLocs := make([]string, 0, len(blocks))
+	blkInfos := make([]catalog.BlockInfo, 0, len(blocks))
+	//TODO::block id ,segment id and location should be get from BlockObject.
 	for j := range blocks {
-		metaLoc := blockio.EncodeLocation(
-			w.writer.GetName(),
-			blocks[j].GetExtent(),
-			uint32(w.lengths[j]),
-			blocks[j].GetID(),
-		).String()
-		metaLocs = append(metaLocs, metaLoc)
+		location, err := blockio.EncodeLocationFromString(
+			blockio.EncodeLocation(
+				w.writer.GetName(),
+				blocks[j].GetExtent(),
+				uint32(w.lengths[j]),
+				blocks[j].GetID(),
+			).String())
+		if err != nil {
+			return nil, err
+		}
+		sid := location.Name().SegmentId()
+		blkInfo := catalog.BlockInfo{
+			BlockID: *objectio.NewBlockid(
+				&sid,
+				location.Name().Num(),
+				location.ID()),
+			SegmentID: sid,
+			//non-appendable block
+			EntryState: false,
+		}
+		blkInfo.SetMetaLocation(location)
+		if w.sortIndex != -1 {
+			blkInfo.Sorted = true
+		}
+		blkInfos = append(blkInfos, blkInfo)
 	}
-	return metaLocs, err
+	return blkInfos, err
 }
