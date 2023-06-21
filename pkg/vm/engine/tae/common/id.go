@@ -61,7 +61,7 @@ func (id *ID) AsBlockID() *ID {
 }
 
 func (id *ID) String() string {
-	return fmt.Sprintf("<%d-%d-%s>", id.DbID, id.TableID, id.BlockID.ShortString())
+	return fmt.Sprintf("<%d-%d-%s>", id.DbID, id.TableID, id.BlockID.String())
 }
 
 func (id *ID) DBString() string {
