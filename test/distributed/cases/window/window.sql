@@ -190,3 +190,11 @@ insert into dense_rank01 values (4, 'f');
 insert into dense_rank01 values (5, 'm');
 select sex, id, rank() over (partition by sex order by id desc) from dense_rank01;
 select sex, id, dense_rank() over (partition by sex order by id desc) from dense_rank01;
+
+drop table if exists sales;
+CREATE TABLE sales (customer_id VARCHAR(1), order_date DATE, product_id INTEGER);
+INSERT INTO sales(customer_id, order_date, product_id) VALUES ('A', '2021-01-01', '1'), ('A', '2021-01-01', '2'), ('A', '2021-01-07', '2'), ('A', '2021-01-10', '3'), ('A', '2021-01-11', '3'), ('A', '2021-01-11', '3'),('B', '2021-01-01', '2'),('B', '2021-01-02', '2'),('B', '2021-01-04', '1'),('B', '2021-01-11', '1'),('B', '2021-01-16', '3'),('B', '2021-02-01', '3'),('C', '2021-01-01', '3'),('C', '2021-01-01', '3'),('C', '2021-01-07', '3');
+drop table if exists menu;
+CREATE TABLE menu (product_id INTEGER,product_name VARCHAR(5),price INTEGER);
+INSERT INTO menu(product_id, product_name, price) VALUES ('1', 'sushi', '10'),('2', 'curry', '15'),('3', 'ramen', '12');
+WITH ordered_sales AS (SELECT sales.customer_id, sales.order_date, menu.product_name,DENSE_RANK() OVER (PARTITION BY sales.customer_id ORDER BY sales.order_date) AS `rank` FROM sales INNER JOIN menu ON sales.product_id = menu.product_id) SELECT customer_id, product_name FROM ordered_sales WHERE `rank` = 1 GROUP BY customer_id, product_name;

@@ -157,6 +157,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 		}
 
 		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(proc.Mp())
 		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
 			return err
 		}
@@ -225,7 +226,6 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 	}
 	if isWinOrder {
 		vec.SetNulls(nil)
-		// w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	}
 	ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 	if vec != nil {
@@ -395,18 +395,6 @@ func makeFlagsOne(n int) []uint8 {
 
 func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
 	makeArgFs(ap)
-	for i := 0; i < bat.VectorCount(); i++ {
-		vec := bat.GetVector(int32(i))
-		if vec.NeedDup() {
-			oldVec := bat.Vecs[i]
-			nvec, err := oldVec.Dup(proc.Mp())
-			if err != nil {
-				return false, err
-			}
-			bat.ReplaceVector(oldVec, nvec)
-			oldVec.Free(proc.Mp())
-		}
-	}
 
 	for i := range ctr.orderVecs {
 		vec, err := ctr.orderVecs[i].executor.Eval(proc, []*batch.Batch{bat})
@@ -419,9 +407,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	ovec := ctr.orderVecs[0].vec
 	var strCol []string
 
-	sels := make([]int64, len(bat.Zs))
+	if ctr.sels == nil {
+		ctr.sels = make([]int64, len(bat.Zs))
+	}
 	for i := 0; i < len(bat.Zs); i++ {
-		sels[i] = int64(i)
+		ctr.sels[i] = int64(i)
 	}
 
 	// skip sort for const vector
@@ -433,12 +423,12 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 			} else {
 				strCol = nil
 			}
-			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, sels, ovec, strCol)
+			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec, strCol)
 		}
 	}
 
 	ps := make([]int64, 0, 16)
-	ds := make([]bool, len(sels))
+	ds := make([]bool, len(ctr.sels))
 
 	n := len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.PartitionBy)
 
@@ -446,11 +436,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	for ; i < j; i++ {
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
-		ps = partition.Partition(sels, ds, ps, ovec)
+		ps = partition.Partition(ctr.sels, ds, ps, ovec)
 		vec := ctr.orderVecs[i].vec
 		// skip sort for const vector
 		if !vec.IsConst() {
-			nullCnt := ovec.GetNulls().Count()
+			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
 				if vec.GetType().IsVarlen() {
 					strCol = vector.MustStrCol(vec)
@@ -459,9 +449,9 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 				}
 				for i, j := 0, len(ps); i < j; i++ {
 					if i == j-1 {
-						sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:], vec, strCol)
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec, strCol)
 					} else {
-						sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:ps[i+1]], vec, strCol)
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec, strCol)
 					}
 				}
 			}
@@ -474,7 +464,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	}
 
 	if n == i {
-		ps = partition.Partition(sels, ds, ps, ovec)
+		ps = partition.Partition(ctr.sels, ds, ps, ovec)
 		ctr.ps = make([]int64, len(ps))
 		copy(ctr.ps, ps)
 	} else if n == 0 {
@@ -482,18 +472,18 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	}
 
 	if len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.OrderBy) > 0 {
-		ctr.os = partition.Partition(sels, ds, ps, ovec)
+		ctr.os = partition.Partition(ctr.sels, ds, ps, ovec)
 	} else {
 		ctr.os = nil
 	}
 
-	if err := bat.Shuffle(sels, proc.Mp()); err != nil {
+	if err := bat.Shuffle(ctr.sels, proc.Mp()); err != nil {
 		panic(err)
 	}
 
 	// shuffle agg vector
-	if ctr.aggVecs[idx].vec != nil && ctr.aggVecs[idx].executor.IfResultMemoryReuse() {
-		if err := ctr.aggVecs[idx].vec.Shuffle(sels, proc.Mp()); err != nil {
+	if ctr.aggVecs[idx].vec != nil && !ctr.aggVecs[idx].executor.IsColumnExpr() {
+		if err := ctr.aggVecs[idx].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
 			panic(err)
 		}
 	}
