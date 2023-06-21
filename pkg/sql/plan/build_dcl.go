@@ -60,6 +60,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		if err != nil {
 			return nil, err
 		}
+		preparePlan.IsPrepare = true
 
 	case *tree.PrepareString:
 		var v interface{}
@@ -79,6 +80,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		if err != nil {
 			return nil, err
 		}
+		preparePlan.IsPrepare = true
 	}
 
 	// dcl tcl is not support

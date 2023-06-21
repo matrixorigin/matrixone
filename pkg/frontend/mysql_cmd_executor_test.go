@@ -936,7 +936,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		db.EXPECT().Relation(ctx, "t").Return(table, nil).AnyTimes()
+		db.EXPECT().Relation(ctx, "t", nil).Return(table, nil).AnyTimes()
 		defs := []engine.TableDef{
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: types.T_char.ToType()}},
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: types.T_int32.ToType()}},
