@@ -669,13 +669,17 @@ func (blk *baseBlock) adjustScore(
 	deleteCnt := blk.mvcc.GetDeleteCnt()
 	ratio = float32(deleteCnt) / float32(blk.meta.GetSchema().BlockMaxRows)
 	if ratio <= 1 && ratio > 0.5 {
-		ttl /= 10
+		ttl /= 8
 	} else if ratio <= 0.5 && ratio > 0.3 {
-		ttl /= 5
+		ttl /= 4
 	} else if ratio <= 0.3 && ratio > 0.2 {
-		ttl /= 3
-	} else if ratio <= 0.2 && ratio > 0.1 {
 		ttl /= 2
+	} else if ratio <= 0.2 && ratio > 0.1 {
+		ttl /= 1
+	} else {
+		factor := 1.25 - ratio
+		factor = factor * factor * factor * factor
+		ttl = time.Duration(float32(ttl) * factor)
 	}
 
 	if time.Now().After(blk.ttl.Add(ttl)) {
@@ -716,7 +720,7 @@ func (blk *baseBlock) GetRowsOnReplay() uint64 {
 }
 
 func (blk *baseBlock) GetTotalChanges() int {
-	return int(blk.mvcc.GetChangeNodeCnt())
+	return int(blk.mvcc.GetDeleteCnt())
 }
 
 func (blk *baseBlock) IsAppendable() bool { return false }
