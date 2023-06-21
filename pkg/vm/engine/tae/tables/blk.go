@@ -163,7 +163,7 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 		dropped = true
 		return
 	}
-	if blk.mvcc.GetChangeNodeCnt() == 0 {
+	if blk.mvcc.GetChangeIntentionCnt() == 0 {
 		// No deletes found
 		score = 0
 	} else {
