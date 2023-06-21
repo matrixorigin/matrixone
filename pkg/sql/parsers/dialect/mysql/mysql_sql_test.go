@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select day_key,day_date,day,month,quarter,year,week,day_of_week from bi_date where 1=2;",
-		output: "select day_key, day_date, day, month, quarter, year, week, day_of_week from bi_date where 1 = 2",
+		input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
+		output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
 	}
 )
 
@@ -2254,6 +2254,22 @@ var (
 		{
 			input:  "select BINARY 124",
 			output: "select binary(124)",
+		},
+		{
+			input:  "set transaction isolation level read committed;",
+			output: "set transaction isolation level read committed",
+		},
+		{
+			input:  "set global transaction isolation level read committed , read write , isolation level read committed , read only;",
+			output: "set global transaction isolation level read committed , read write , isolation level read committed , read only",
+		},
+		{
+			input:  "set session transaction isolation level read committed , read write , isolation level read committed , read only;",
+			output: "set transaction isolation level read committed , read write , isolation level read committed , read only",
+		},
+		{
+			input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
+			output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
 		},
 	}
 )

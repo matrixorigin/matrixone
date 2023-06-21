@@ -141,6 +141,7 @@ sleep(16)
 0
 use system;
 select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and length(trim(statement)) > 0 and status != 'Running' order by request_at desc limit 70;
+
 statement    result_count
 use system    0
 select * from unnest('{"a":1}') as f    1
