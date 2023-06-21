@@ -816,14 +816,17 @@ func (tbl *txnTable) rangesOnePart(
 			if _, ok := dirtyBlks[blk.BlockID]; !ok {
 				blk.CanRemote = true
 			}
+			blk.PartitionNum = -1
 			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 			continue
 		}
 		// store the block in ranges
 		blk.CanRemote = true
+		blk.PartitionNum = -1
 		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
-	//TODO::1. collect uncommitted blocks with deletes through CN writing S3 from txn's workspace into ranges.
+	//TODO::1. collect uncommitted blocks with deletes through CN writing S3
+	//          from txn's workspace into ranges.
 	//      2. collect uncommitted blocks without deletes into ranges.
 	return
 }
@@ -1324,7 +1327,7 @@ func (tbl *txnTable) NewReader(
 		mrds := make([]mergeReader, num)
 		ranges = ranges[1:]
 
-		var dirtyBlks []catalog.BlockInfo
+		var dirtyBlks []*catalog.BlockInfo
 		var cleanBlks []*catalog.BlockInfo
 		for _, blk := range ranges {
 			blkInfo := catalog.DecodeBlockInfo(blk)
@@ -1332,7 +1335,7 @@ func (tbl *txnTable) NewReader(
 				cleanBlks = append(cleanBlks, blkInfo)
 				continue
 			}
-			dirtyBlks = append(dirtyBlks, *blkInfo)
+			dirtyBlks = append(dirtyBlks, blkInfo)
 		}
 
 		rds0, err := tbl.newMergeReader(ctx, num, expr, dirtyBlks)
@@ -1369,7 +1372,7 @@ func (tbl *txnTable) newMergeReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
-	dirtyBlks []catalog.BlockInfo) ([]engine.Reader, error) {
+	dirtyBlks []*catalog.BlockInfo) ([]engine.Reader, error) {
 
 	var encodedPrimaryKey []byte
 	pk := tbl.tableDef.Pkey
@@ -1461,7 +1464,7 @@ func (tbl *txnTable) newReader(
 	readerNumber int,
 	encodedPrimaryKey []byte,
 	expr *plan.Expr,
-	dirtyBlks []catalog.BlockInfo,
+	dirtyBlks []*catalog.BlockInfo,
 	entries []Entry,
 ) ([]engine.Reader, error) {
 	txn := tbl.db.txn
@@ -1599,7 +1602,7 @@ func (tbl *txnTable) newReader(
 			readers = append(
 				readers,
 				newBlockMergeReader(
-					ctx, tbl, ts, []catalog.BlockInfo{dirtyBlks[i]}, expr, fs,
+					ctx, tbl, ts, []*catalog.BlockInfo{dirtyBlks[i]}, expr, fs,
 				),
 			)
 		}
@@ -1609,7 +1612,7 @@ func (tbl *txnTable) newReader(
 	if len(dirtyBlks) < readerNumber-1 {
 		for i := range dirtyBlks {
 			readers[i+1] = newBlockMergeReader(
-				ctx, tbl, ts, []catalog.BlockInfo{dirtyBlks[i]}, expr, fs,
+				ctx, tbl, ts, []*catalog.BlockInfo{dirtyBlks[i]}, expr, fs,
 			)
 		}
 		for j := len(dirtyBlks) + 1; j < readerNumber; j++ {

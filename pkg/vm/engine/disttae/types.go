@@ -460,7 +460,7 @@ type blockMergeReader struct {
 	withFilterMixin
 
 	table     *txnTable
-	dirtyBlks []catalog.BlockInfo
+	dirtyBlks []*catalog.BlockInfo
 	buffer    []int64
 }
 

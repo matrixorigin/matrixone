@@ -64,6 +64,7 @@ func (p *PartitionReader) Read(
 		return nil, nil
 	}
 	//read uncommitted block through cn writing S3.
+	//TODO::remove it
 	{
 		bat, err := p.blockReader.Read(ctx, colNames, expr, mp, vp)
 		if err != nil {

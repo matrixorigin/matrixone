@@ -2385,7 +2385,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			ranges = append(ranges, subranges[1:]...)
+			//add partition number into catalog.BlockInfo.
+			for _, r := range subranges[1:] {
+				blkInfo := catalog.DecodeBlockInfo(r)
+				blkInfo.PartitionNum = i
+				ranges = append(ranges, r)
+			}
+			//ranges = append(ranges, subranges[1:]...)
 		}
 	}
 
@@ -2394,8 +2400,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	expectedLen := len(ranges)
 	logutil.Debugf("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
-	// If ranges == 0, dont know what type of table is this
-	//FIXME:: if len(ranges) == 0 indicates that it's a temporary table?
+	//if len(ranges) == 0 indicates that it's a temporary table.
 	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
@@ -2502,7 +2507,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		nodes[0].Data = append(nodes[0].Data, ranges...)
 		return nodes, nil
 	}
-	// put blocks which can't be distributed remotely in current CN.
+	// put dirty blocks which can't be distributed remotely in current CN.
 	newRanges := make([][]byte, 0, len(ranges))
 	for _, blk := range ranges {
 		blkInfo := catalog.DecodeBlockInfo(blk)

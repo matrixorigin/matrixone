@@ -333,7 +333,7 @@ func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
 	ts timestamp.Timestamp,
-	dirtyBlks []catalog.BlockInfo,
+	dirtyBlks []*catalog.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
 ) *blockMergeReader {
@@ -377,7 +377,7 @@ func (r *blockMergeReader) Read(
 	}()
 
 	// get the current block to be read
-	info := &r.dirtyBlks[0]
+	info := r.dirtyBlks[0]
 
 	// try to update the columns
 	r.tryUpdateColumns(cols)
