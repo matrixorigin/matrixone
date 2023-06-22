@@ -3812,6 +3812,7 @@ func (h *jsonPlanHandler) Free() {
 		releaseMarshalPlanBufferPool(h.buffer)
 		h.buffer = nil
 		h.jsonBytes = nil
+		h.statsBytes = nil
 	}
 }
 
