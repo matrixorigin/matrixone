@@ -58,6 +58,12 @@ func WithFixedSizeRatio(ratio float64) VectorPoolOption {
 	}
 }
 
+func WithMPool(mp *mpool.MPool) VectorPoolOption {
+	return func(p *VectorPool) {
+		p.mp = mp
+	}
+}
+
 type vectorPoolElement struct {
 	pool  *VectorPool
 	mp    *mpool.MPool
@@ -96,6 +102,7 @@ type VectorPool struct {
 	varlenPool   []*vectorPoolElement
 	hit          stats.Counter
 	total        stats.Counter
+	mp           *mpool.MPool
 }
 
 func NewVectorPool(name string, cnt int, opts ...VectorPoolOption) *VectorPool {
@@ -105,6 +112,9 @@ func NewVectorPool(name string, cnt int, opts ...VectorPoolOption) *VectorPool {
 	}
 	for _, opt := range opts {
 		opt(p)
+	}
+	if p.mp == nil {
+		p.mp = _vectorPoolAlloactor
 	}
 	if p.maxAlloc <= 0 {
 		p.maxAlloc = defaultAllocLimit
@@ -120,11 +130,11 @@ func NewVectorPool(name string, cnt int, opts ...VectorPoolOption) *VectorPool {
 
 	for i := 0; i < cnt1; i++ {
 		t := types.T_int64.ToType()
-		p.fixSizedPool = append(p.fixSizedPool, newVectorElement(p, &t))
+		p.fixSizedPool = append(p.fixSizedPool, newVectorElement(p, &t, p.mp))
 	}
 	for i := 0; i < cnt2; i++ {
 		t := types.T_varchar.ToType()
-		p.varlenPool = append(p.varlenPool, newVectorElement(p, &t))
+		p.varlenPool = append(p.varlenPool, newVectorElement(p, &t, p.mp))
 	}
 	return p
 }
@@ -246,11 +256,11 @@ func (p *VectorPool) Used(isUnsafe bool) (int, int) {
 	return cnt, size
 }
 
-func newVectorElement(pool *VectorPool, t *types.Type) *vectorPoolElement {
+func newVectorElement(pool *VectorPool, t *types.Type, mp *mpool.MPool) *vectorPoolElement {
 	vec := vector.NewVec(*t)
 	element := &vectorPoolElement{
 		pool: pool,
-		mp:   _vectorPoolAlloactor,
+		mp:   mp,
 		vec:  vec,
 	}
 	return element

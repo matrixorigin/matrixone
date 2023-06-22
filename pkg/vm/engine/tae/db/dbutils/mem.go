@@ -16,6 +16,7 @@ package dbutils
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/shirou/gopsutil/v3/mem"
 )
@@ -47,6 +48,7 @@ func MakeDefaultMemtablePool(name string) *containers.VectorPool {
 		name,
 		memtableCapacity,
 		containers.WithAllocationLimit(limit),
+		containers.WithMPool(common.MutMemAllocator),
 	)
 }
 
