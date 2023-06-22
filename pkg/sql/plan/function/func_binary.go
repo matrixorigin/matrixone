@@ -1386,7 +1386,7 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 const (
-	max_unix_timestamp_int = 32536771199
+	maxUnixTimestampInt = 32536771199
 )
 
 func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -1397,7 +1397,7 @@ func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > max_unix_timestamp_int) {
+		if null || (v < 0 || v > maxUnixTimestampInt) {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -1418,7 +1418,7 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || v > max_unix_timestamp_int {
+		if null || v > maxUnixTimestampInt {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -1446,7 +1446,7 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWra
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > max_unix_timestamp_int) {
+		if null || (v < 0 || v > maxUnixTimestampInt) {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -1473,7 +1473,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > max_unix_timestamp_int) || null1 {
+		if null || (v < 0 || v > maxUnixTimestampInt) || null1 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -1504,7 +1504,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null1 || null || v > max_unix_timestamp_int {
+		if null1 || null || v > maxUnixTimestampInt {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -1535,7 +1535,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > max_unix_timestamp_int) || null1 {
+		if null || (v < 0 || v > maxUnixTimestampInt) || null1 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -1766,134 +1766,55 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// STARTSWITH
-
-func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[uint8](result)
-
-	//TODO: ignoring 4 switch cases: Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/startswith.go#L36
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			res := hasPrefix(v1, v2)
-			if err = rs.Append(res, false); err != nil {
-				return err
-			}
+func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	hasPrefix := func(b1, b2 []byte) uint8 {
+		if len(b1) >= len(b2) && bytes.Equal(b1[:len(b2)], b2) {
+			return 1
 		}
+		return 0
 	}
-	return nil
-}
-func hasPrefix(b1, b2 []byte) uint8 {
-	if len(b1) >= len(b2) && bytes.Equal(b1[:len(b2)], b2) {
-		return 1
-	}
-	return 0
+
+	return opBinaryBytesBytesToFixed[uint8](ivecs, result, proc, length, hasPrefix)
 }
 
-// ENDSWITH
-
-func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[uint8](result)
-
-	//TODO: ignoring 4 switch cases: Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/endswith.go#L43
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			res := isEqualSuffix(string(v1), string(v2))
-			if err = rs.Append(res, false); err != nil {
-				return err
-			}
+func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	isEqualSuffix := func(b1, b2 []byte) uint8 {
+		if len(b1) >= len(b2) && bytes.Equal(b1[len(b1)-len(b2):], b2) {
+			return 1
 		}
+		return 0
 	}
-	return nil
-}
 
-func isEqualSuffix(b1, b2 string) uint8 {
-	if len(b1) >= len(b2) && bytes.Equal([]byte(b1)[len(b1)-len(b2):], []byte(b2)) {
-		return 1
-	}
-	return 0
+	return opBinaryBytesBytesToFixed[uint8](ivecs, result, proc, length, isEqualSuffix)
 }
-
-// EXTRACT
 
 func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	extractFromDate := func(unit string, d types.Date) (uint32, error) {
+		var r uint32
+		switch unit {
+		case "day":
+			r = uint32(d.Day())
+		case "week":
+			r = uint32(d.WeekOfYear2())
+		case "month":
+			r = uint32(d.Month())
+		case "quarter":
+			r = d.Quarter()
+		case "year_month":
+			r = d.YearMonth()
+		case "year":
+			r = uint32(d.Year())
+		default:
+			return 0, moerr.NewInternalErrorNoCtx("invalid unit")
+		}
+		return r, nil
+	}
+
 	if !ivecs[0].IsConst() {
 		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
 	}
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
-	rs := vector.MustFunctionResult[uint32](result)
 
-	v1, null1 := p1.GetStrValue(0)
-	if null1 {
-		for i := uint64(0); i < uint64(length); i++ {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	unit := functionUtil.QuickBytesToStr(v1)
-	for i := uint64(0); i < uint64(length); i++ {
-		v2, null2 := p2.GetValue(i)
-		if null2 {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			res, _ := extractFromDate(unit, v2)
-			if err = rs.Append(res, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-var validDateUnit = map[string]struct{}{
-	"year":       {},
-	"month":      {},
-	"day":        {},
-	"year_month": {},
-	"quarter":    {},
-}
-
-func extractFromDate(unit string, d types.Date) (uint32, error) {
-	if _, ok := validDateUnit[unit]; !ok {
-		return 0, moerr.NewInternalErrorNoCtx("invalid unit")
-	}
-	var result uint32
-	switch unit {
-	case "day":
-		result = uint32(d.Day())
-	case "week":
-		result = uint32(d.WeekOfYear2())
-	case "month":
-		result = uint32(d.Month())
-	case "quarter":
-		result = d.Quarter()
-	case "year_month":
-		result = d.YearMonth()
-	case "year":
-		result = uint32(d.Year())
-	}
-	return result, nil
+	return opBinaryStrFixedToFixedWithErrorCheck[types.Date, uint32](ivecs, result, proc, length, extractFromDate)
 }
 
 func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -2152,68 +2073,22 @@ func extractFromVarchar(unit string, t string, scale int32) (string, error) {
 	return result, nil
 }
 
-// FINDINSET
-
-func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[uint64](result)
-
-	//TODO: ignoring 4 switch cases: Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/findinset.go#L45
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			res := findInStrList(string(v1), string(v2))
-			if err = rs.Append(res, false); err != nil {
-				return err
+func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	findInStrList := func(str, strlist string) uint64 {
+		for j, s := range strings.Split(strlist, ",") {
+			if s == str {
+				return uint64(j + 1)
 			}
 		}
+		return 0
 	}
-	return nil
+
+	return opBinaryStrStrToFixed[uint64](ivecs, result, proc, length, findInStrList)
 }
 
-func findInStrList(str, strlist string) uint64 {
-	for j, s := range strings.Split(strlist, ",") {
-		if s == str {
-			return uint64(j + 1)
-		}
-	}
-	return 0
+func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	return opBinaryStrStrToFixed[int64](ivecs, result, proc, length, instr.Single)
 }
-
-// INSTR
-
-func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[int64](result)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			str1 := functionUtil.QuickBytesToStr(v1)
-			str2 := functionUtil.QuickBytesToStr(v2)
-
-			res := instr.Single(str1, str2)
-			if err = rs.Append(res, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// LEFT
 
 func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -2249,8 +2124,6 @@ func evalLeft(str string, length int64) string {
 	return string(runeStr[:leftLength])
 }
 
-//POW
-
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
@@ -2274,26 +2147,8 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	return nil
 }
 
-func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
-	rs := vector.MustFunctionResult[types.Time](result)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			res, _ := timeDiff(v1, v2)
-			if err = rs.Append(res, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	return opBinaryFixedFixedToFixedWithErrorCheck[T, T, types.Time](ivecs, result, proc, length, timeDiff[T])
 }
 
 func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
@@ -2308,15 +2163,13 @@ func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
 	}
 
 	// same sign don't need to check overflow
-	time := types.Time(tmpTime)
-	hour, _, _, _, isNeg := time.ClockFormat()
+	tt := types.Time(tmpTime)
+	hour, _, _, _, isNeg := tt.ClockFormat()
 	if !types.ValidTime(uint64(hour), 0, 0) {
 		return types.TimeFromClock(isNeg, types.MaxHourInTime, 59, 59, 0), nil
 	}
-	return time, nil
+	return tt, nil
 }
-
-// TIMESTAMPDIFF
 
 func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -2324,7 +2177,6 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	p3 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
 	rs := vector.MustFunctionResult[int64](result)
 
-	//TODO: ignoring maxLen: Original code:https://github.com/m-schen/matrixone/blob/d2921c8ea5ecd9f38ad224159d3c62543894e807/pkg/sql/plan/function/builtin/multi/timestampdiff.go#L35
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
@@ -2354,14 +2206,11 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 		v2, null2 := p2.GetStrValue(i)
 		v3, null3 := p3.GetStrValue(i)
 
-		// TODO: Ignoring maxLen. https://github.com/m-schen/matrixone/blob/5f91a015a3d7aae5721ba94b097db13c3dcbf294/pkg/sql/plan/function/builtin/multi/replace.go#L35
 		if null1 || null2 || null3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			//FIXME: Ignoring the complex logic. https://github.com/m-schen/matrixone/blob/5f91a015a3d7aae5721ba94b097db13c3dcbf294/pkg/vectorize/regular/regular_replace.go#L182
-			// FIXME: This is wrong. I haven't handled Arrays. Hence it will fail.
 			v1Str := functionUtil.QuickBytesToStr(v1)
 			v2Str := functionUtil.QuickBytesToStr(v2)
 			var res string
@@ -2379,10 +2228,7 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
-//TRIM
-
 func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
@@ -2480,6 +2326,7 @@ func computeJson(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error
 	bj := types.DecodeJson(json)
 	return bj.Query(paths), nil
 }
+
 func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
 	bj, err := types.ParseSliceToByteJson(json)
 	if err != nil {

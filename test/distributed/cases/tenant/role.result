@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop role if exists r1,r2,r3;
 create role r1,r2,r3;
 create role if not exists r1,r2,r3;
@@ -15,3 +16,4 @@ internal error: can not use the name public. it is the name of the predefined ro
 create role if not exists r1,r2,r3,r4;
 drop role r4;
 drop role if exists r1,r2,r3,r4;
+set global enable_privilege_cache = on;

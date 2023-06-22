@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop database if exists priv_db1;
 create database priv_db1;
 use priv_db1;
@@ -34,3 +35,4 @@ a
 1
 2
 drop database if exists priv_db1;
+set global enable_privilege_cache = on;

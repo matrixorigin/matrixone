@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 -- the administrator can only read the content of catalog.
 drop database mo_catalog;
 drop database system;
@@ -123,3 +124,4 @@ drop table if exists INFORMATION_SCHEMA.TRIGGERS;
 drop table if exists INFORMATION_SCHEMA.TABLES;
 create table INFORMATION_SCHEMA.A(a int);
 -- add update,insert,delete
+set global enable_privilege_cache = on;
