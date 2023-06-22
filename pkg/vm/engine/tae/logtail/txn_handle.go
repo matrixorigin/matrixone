@@ -78,7 +78,8 @@ func NewTxnLogtailRespBuilder(rt *dbutils.Runtime) *TxnLogtailRespBuilder {
 func (b *TxnLogtailRespBuilder) Close() {
 	for i, bat := range b.batchToClose {
 		if b.insertBatch.Contains(uint32(i)) {
-			b.closeInsertBatch(bat)
+			// b.closeInsertBatch(bat)
+			bat.Close()
 		} else {
 			bat.Close()
 		}
