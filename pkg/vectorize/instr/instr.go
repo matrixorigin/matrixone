@@ -62,8 +62,9 @@ func Single(str string, substr string) int64 {
 		if !isASCII(substr) {
 			return 0
 		}
-		return int64(strings.Index(str, substr) + 1)
+		return int64(strings.Index(strings.ToLower(str), strings.ToLower(substr)) + 1)
 	}
-	r1, r2 := []rune(str), []rune(substr)
+
+	r1, r2 := []rune(strings.ToLower(str)), []rune(strings.ToLower(substr))
 	return kmp(r1, r2)
 }
