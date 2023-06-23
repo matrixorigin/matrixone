@@ -64,6 +64,11 @@ func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName, sch
 	}, nil
 }
 
+// just for test
+func (w *BlockWriter) GetObjWriterFS() string {
+	return w.writer.GetObjFS()
+}
+
 func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.isSetPK = true
 	w.pk = idx
@@ -156,7 +161,8 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 	logutil.Debug("[WriteEnd]",
 		common.OperationField(w.String(blocks)),
 		common.OperandField(w.writer.GetSeqnums()),
-		common.OperandField(w.writer.GetMaxSeqnum()))
+		common.OperandField(w.writer.GetMaxSeqnum()),
+		common.OperandField(w.writer.GetObjFS()))
 	return blocks, blocks[0].BlockHeader().MetaLocation(), err
 }
 

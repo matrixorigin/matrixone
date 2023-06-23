@@ -2535,6 +2535,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 	if n.Stats.Shuffle && n.Stats.ShuffleType == plan.ShuffleType_Range {
 		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
+			logutil.Infof("shuffleBlocksByRange failed, err: %v", err)
 			return nil, err
 		}
 	} else {
@@ -2578,6 +2579,9 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		location := unmarshalledBlockInfo.MetaLocation()
+		logutil.Infof("c.proc.FileSevice's name : %s, BlockInfo's meta location : %s",
+			c.proc.FileService.Name(),
+			location.String())
 		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
 			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, c.proc.FileService); err != nil {
 				return err

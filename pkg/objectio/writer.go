@@ -106,6 +106,11 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
+// just for test;
+func (w *objectWriterV1) GetObjFS() string {
+	return w.object.fs.Name()
+}
+
 func (w *objectWriterV1) GetSeqnums() []uint16 {
 	return w.seqnums.Seqs
 }

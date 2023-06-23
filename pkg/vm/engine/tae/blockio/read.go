@@ -50,7 +50,11 @@ func BlockRead(
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debugf("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
+		logutil.Debugf("read block %s, seqnums %v, typs %v from fs %s",
+			info.BlockID.String(),
+			seqnums,
+			colTypes,
+			fs.Name())
 	}
 	columnBatch, err := BlockReadInner(
 		ctx, info, deletes, seqnums, colTypes,
