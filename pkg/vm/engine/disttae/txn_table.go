@@ -722,6 +722,7 @@ func (tbl *txnTable) rangesOnePart(
 				continue
 			}
 			//load uncommitted blocks from txn's workspace.
+			//TODO::take filtering bloks into account.
 			metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
 			for _, metaLoc := range metaLocs {
 				location, err := blockio.EncodeLocationFromString(metaLoc)
