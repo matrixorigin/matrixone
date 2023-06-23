@@ -177,7 +177,8 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 		b.batches[dataInsBatch] = mybat
 	} else {
 		b.batches[dataInsBatch].Extend(mybat)
-		b.closeInsertBatch(mybat)
+		// b.closeInsertBatch(mybat)
+		mybat.Close()
 	}
 }
 
