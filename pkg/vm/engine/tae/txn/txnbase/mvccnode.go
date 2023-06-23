@@ -391,9 +391,8 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%s,%s,%s]",
+	return fmt.Sprintf("[%s,%s]",
 		un.Start.ToString(),
-		un.Prepare.ToString(),
 		un.End.ToString())
 }
 
