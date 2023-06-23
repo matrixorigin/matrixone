@@ -308,10 +308,10 @@ create database test_db    DDL    external_sql
 drop database if exists test_db    DDL    external_sql
 rollback    TCL    external_sql
 start transaction    TCL    external_sql
-commit    TCL    external_sql
 begin    TCL    external_sql
 create database statement_query_type    DDL    external_sql
 SET character_set_results = utf8    Other    external_sql
+deallocate prepare s1    Other    external_sql
 /* cloud_user */ use statement_query_type;
 /* cloud_user */ begin;
 /* cloud_user */ commit;
