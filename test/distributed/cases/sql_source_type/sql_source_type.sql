@@ -15,7 +15,7 @@ select * from __mo_t1;
 
 -- result check
 select sleep(16);
-select statement, sql_source_type from system.statement_info where account="bvt_sql_source_type" and status != 'Running' and statement not like '%mo_ctl%' order by request_at desc limit 3;
+select statement, sql_source_type from system.statement_info where account="bvt_sql_source_type" and status != 'Running' and statement not like '%mo_ctl%' order by request_at desc limit 4;
 
 -- cleanup
 drop account if exists bvt_sql_source_type;
