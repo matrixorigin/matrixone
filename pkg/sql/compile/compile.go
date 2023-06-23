@@ -151,6 +151,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	// Compile may exec some function that need engine.Engine.
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	// generate logic pipeline for query.
+	logutil.Infof("Compile.Compile: proc's FileService :", c.proc.FileService.Name())
 	c.scope, err = c.compileScope(ctx, pn)
 	if err != nil {
 		return err
@@ -550,10 +551,12 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 
 	steps := make([]*Scope, 0, len(qry.Steps))
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
+		logutil.Infof("Compile.CompileQuery: before compilePlanScope, c.proc.FileService: %s", c.proc.FileService)
 		scopes, err := c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
 		if err != nil {
 			return nil, err
 		}
+		logutil.Infof("Compile.CompileQuery: after compilePlanScope, c.proc.FileService: %s", c.proc.FileService)
 		scope, err := c.compileApQuery(qry, scopes)
 		if err != nil {
 			return nil, err
@@ -2328,6 +2331,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var ranges [][]byte
 	var nodes engine.Nodes
 	isPartitionTable := false
+
+	logutil.Infof("Compile.generateNodes: c.proc.FileService:%s",
+		c.proc.FileService.Name())
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {

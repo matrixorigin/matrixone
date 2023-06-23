@@ -330,6 +330,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.ses.isInternal,
 		cwft.ses.getCNLabels(),
 	)
+	logInfof("TxnComputationWrapper.compile : FileService : %s", cwft.proc.FileService.Name())
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
