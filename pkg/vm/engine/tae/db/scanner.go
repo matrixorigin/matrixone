@@ -59,7 +59,6 @@ func (scanner *dbScanner) OnExec() {
 	scanner.dbmask.Clear()
 	scanner.tablemask.Clear()
 	scanner.segmask.Clear()
-	logutil.Info(scanner.db.Runtime.VectorPool.Transient.String())
 	for _, op := range scanner.ops {
 		err := op.PreExecute()
 		if err != nil {
