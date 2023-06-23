@@ -53,22 +53,12 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	// Get the lastest schema, it will not be modified, so just keep the pointer
 	schema := block.meta.GetSchema()
 	impl.writeSchema = schema
-	// impl.data = containers.BuildBatchWithPool(
-	// 	schema.AllNames(), schema.AllTypes(), 0, block.rt.VectorPool.Memtable,
-	// )
+	impl.data = containers.BuildBatchWithPool(
+		schema.AllNames(), schema.AllTypes(), 0, block.rt.VectorPool.Memtable,
+	)
 	impl.initPKIndex(schema)
 	impl.OnZeroCB = impl.close
 	return impl
-}
-
-func (node *memoryNode) mustData() *containers.Batch {
-	if node.data == nil {
-		schema := node.writeSchema
-		node.data = containers.BuildBatchWithPool(
-			schema.AllNames(), schema.AllTypes(), 0, node.block.rt.VectorPool.Memtable,
-		)
-	}
-	return node.data
 }
 
 func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
@@ -82,10 +72,8 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 func (node *memoryNode) close() {
 	mvcc := node.block.mvcc
 	logutil.Debugf("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
-	if node.data != nil {
-		node.data.Close()
-		node.data = nil
-	}
+	node.data.Close()
+	node.data = nil
 	if node.pkIndex != nil {
 		node.pkIndex.Close()
 		node.pkIndex = nil
@@ -124,15 +112,11 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 		// TODO(aptend): use default value
 		return nil, true
 	}
-	data := node.mustData()
-	vec := data.Vecs[idx]
+	vec := node.data.Vecs[idx]
 	return vec.Get(row), vec.IsNull(row)
 }
 
 func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
-	if node.data == nil {
-		return nil
-	}
 	return node.data.Vecs[colIdx].Foreach(op, sels)
 }
 
@@ -141,9 +125,6 @@ func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {
 }
 
 func (node *memoryNode) Rows() uint32 {
-	if node.data == nil {
-		return 0
-	}
 	return uint32(node.data.Length())
 }
 
@@ -157,10 +138,6 @@ func (node *memoryNode) GetColumnDataWindow(
 	if !ok {
 		return containers.FillConstVector(int(to-from), readSchema.ColDefs[col].Type, nil), nil
 	}
-	if node.data == nil {
-		vec = containers.MakeVector(node.writeSchema.AllTypes()[idx])
-		return
-	}
 	data := node.data.Vecs[idx]
 	vec = data.CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
 	// vec = data.CloneWindow(int(from), int(to-from), common.MutMemAllocator)
@@ -169,22 +146,6 @@ func (node *memoryNode) GetColumnDataWindow(
 
 func (node *memoryNode) GetDataWindowOnWriteSchema(
 	from, to uint32) (bat *containers.BatchWithVersion, err error) {
-	if node.data == nil {
-		schema := node.writeSchema
-		opts := containers.Options{
-			Allocator: common.DefaultAllocator,
-		}
-		inner := containers.BuildBatch(
-			schema.AllNames(), schema.AllTypes(), opts,
-		)
-		return &containers.BatchWithVersion{
-			Version:    node.writeSchema.Version,
-			NextSeqnum: uint16(node.writeSchema.Extra.NextColSeqnum),
-			Seqnums:    node.writeSchema.AllSeqnums(),
-			Batch:      inner,
-		}, nil
-	}
-
 	inner := node.data.CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
 	// inner := node.data.CloneWindow(int(from), int(to-from), common.MutMemAllocator)
 	bat = &containers.BatchWithVersion{
@@ -199,17 +160,6 @@ func (node *memoryNode) GetDataWindowOnWriteSchema(
 func (node *memoryNode) GetDataWindow(
 	readSchema *catalog.Schema,
 	from, to uint32) (bat *containers.Batch, err error) {
-	if node.data == nil {
-		schema := node.writeSchema
-		opts := containers.Options{
-			Allocator: common.DefaultAllocator,
-		}
-		bat = containers.BuildBatch(
-			schema.AllNames(), schema.AllTypes(), opts,
-		)
-		return
-	}
-
 	// manually clone data
 	bat = containers.NewBatchWithCapacity(len(readSchema.ColDefs))
 	if node.data.Deletes != nil {
@@ -229,14 +179,7 @@ func (node *memoryNode) GetDataWindow(
 }
 
 func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
-	var length uint32
-	if node.data == nil {
-		length = 0
-	} else {
-		length = uint32(node.data.Length())
-	}
-
-	left := node.writeSchema.BlockMaxRows - length
+	left := node.writeSchema.BlockMaxRows - uint32(node.data.Length())
 	if left == 0 {
 		err = moerr.NewInternalErrorNoCtx("not appendable")
 		return
@@ -255,11 +198,11 @@ func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 		&node.block.meta.ID,
 		startRow,
 		length,
-		common.MutMemAllocator,
+		common.DefaultAllocator,
 	); err != nil {
 		return
 	}
-	err = node.mustData().Vecs[node.writeSchema.PhyAddrKey.Idx].ExtendVec(col)
+	err = node.data.Vecs[node.writeSchema.PhyAddrKey.Idx].ExtendVec(col)
 	col.Free(common.DefaultAllocator)
 	return
 }
@@ -268,7 +211,7 @@ func (node *memoryNode) ApplyAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn) (from int, err error) {
 	schema := node.writeSchema
-	from = int(node.mustData().Length())
+	from = int(node.data.Length())
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := node.data.Vecs[def.Idx]

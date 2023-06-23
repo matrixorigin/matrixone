@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -34,15 +33,6 @@ var (
 	cnProxy goetty.Proxy
 )
 
-func hackGoMemoryPolicy() {
-	// hack go memory policy
-	// for other hacks like GC Policy, goes here before the loop.
-	tick := time.Tick(time.Minute * 1)
-	for range tick {
-		debug.FreeOSMemory()
-	}
-}
-
 func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet *perfcounter.CounterSet) error {
 	if *launchFile == "" {
 		panic("launch file not set")
@@ -52,8 +42,6 @@ func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet 
 	if err := parseConfigFromFile(*launchFile, cfg); err != nil {
 		return err
 	}
-
-	go hackGoMemoryPolicy()
 
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet); err != nil {
 		return err
@@ -69,7 +57,6 @@ func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet 
 			return err
 		}
 	}
-
 	return nil
 }
 
