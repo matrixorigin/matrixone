@@ -1932,21 +1932,20 @@ func appendPreInsertUkPlan(
 	}
 	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
 
-	// xxx todo confirm : i think we do not need lock unique table
-	// pkPos, pkTyp := getPkPos(uniqueTableDef, false)
-	// lockTarget := &plan.LockTarget{
-	// 	TableId:            uniqueTableDef.TblId,
-	// 	PrimaryColIdxInBat: int32(pkPos),
-	// 	PrimaryColTyp:      pkTyp,
-	// 	RefreshTsIdxInBat:  -1, //unsupport now
-	// 	FilterColIdxInBat:  -1,
-	// }
-	// lockNode := &Node{
-	// 	NodeType:    plan.Node_LOCK_OP,
-	// 	Children:    []int32{lastNodeId},
-	// 	LockTargets: []*plan.LockTarget{lockTarget},
-	// }
-	// lastNodeId = builder.appendNode(lockNode, bindCtx)
+	pkPos, pkTyp := getPkPos(uniqueTableDef, false)
+	lockTarget := &plan.LockTarget{
+		TableId:            uniqueTableDef.TblId,
+		PrimaryColIdxInBat: int32(pkPos),
+		PrimaryColTyp:      pkTyp,
+		RefreshTsIdxInBat:  -1, //unsupport now
+		FilterColIdxInBat:  -1,
+	}
+	lockNode := &Node{
+		NodeType:    plan.Node_LOCK_OP,
+		Children:    []int32{lastNodeId},
+		LockTargets: []*plan.LockTarget{lockTarget},
+	}
+	lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
