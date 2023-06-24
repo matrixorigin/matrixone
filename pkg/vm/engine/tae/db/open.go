@@ -184,6 +184,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			"clean-transfer-table",
 			opts.CheckpointCfg.FlushInterval,
 			func(_ context.Context) (err error) {
+				logutil.Info(db.Runtime.VectorPool.Transient.String())
+				logutil.Info(db.Runtime.VectorPool.Memtable.String())
 				transferTable.RunTTL(time.Now())
 				return
 			}),
