@@ -711,11 +711,11 @@ func TestVectorPool(t *testing.T) {
 
 	if pool.ratio >= 0.6 && pool.ratio < 0.7 {
 		t.Log(pool.String())
-		usedCnt, _ := pool.FixedSizeUsed()
+		usedCnt, _ := pool.FixedSizeUsed(false)
 		assert.GreaterOrEqual(t, 6, usedCnt)
-		usedCnt, _ = pool.VarlenUsed()
+		usedCnt, _ = pool.VarlenUsed(false)
 		assert.GreaterOrEqual(t, 4, usedCnt)
-		usedCnt, _ = pool.Used()
+		usedCnt, _ = pool.Used(false)
 		assert.GreaterOrEqual(t, 10, usedCnt)
 	}
 

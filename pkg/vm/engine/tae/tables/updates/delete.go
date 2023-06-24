@@ -147,6 +147,7 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 	for i := start; i < end+1; i++ {
 		node.chain.Load().InsertInDeleteView(i, node)
 	}
+	node.chain.Load().mvcc.IncChangeIntentionCnt()
 }
 func (node *DeleteNode) DeletedRows() (rows []uint32) {
 	if node.mask == nil {
@@ -176,7 +177,6 @@ func (node *DeleteNode) ApplyCommit() (err error) {
 		return
 	}
 	node.chain.Load().AddDeleteCnt(uint32(node.mask.GetCardinality()))
-	node.chain.Load().mvcc.IncChangeNodeCnt()
 	return node.OnApply()
 }
 
@@ -184,6 +184,7 @@ func (node *DeleteNode) ApplyRollback() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
 	_, err = node.TxnMVCCNode.ApplyRollback()
+	node.chain.Load().mvcc.DecChangeIntentionCnt()
 	return
 }
 
