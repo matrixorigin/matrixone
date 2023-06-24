@@ -109,6 +109,7 @@ func (f *FileServices) Read(ctx context.Context, vector *IOVector) error {
 	if path.Service == "" {
 		path.Service = f.defaultName
 	}
+
 	fs, err := Get[FileService](f, path.Service)
 	if err != nil {
 		return err

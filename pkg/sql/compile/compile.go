@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"math"
 	"net"
 	"runtime"
@@ -151,7 +152,6 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	// Compile may exec some function that need engine.Engine.
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	// generate logic pipeline for query.
-	logutil.Infof("Compile.Compile: proc's FileService :", c.proc.FileService.Name())
 	c.scope, err = c.compileScope(ctx, pn)
 	if err != nil {
 		return err
@@ -551,12 +551,10 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 
 	steps := make([]*Scope, 0, len(qry.Steps))
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
-		logutil.Infof("Compile.CompileQuery: before compilePlanScope, c.proc.FileService: %s", c.proc.FileService)
 		scopes, err := c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
 		if err != nil {
 			return nil, err
 		}
-		logutil.Infof("Compile.CompileQuery: after compilePlanScope, c.proc.FileService: %s", c.proc.FileService)
 		scope, err := c.compileApQuery(qry, scopes)
 		if err != nil {
 			return nil, err
@@ -2331,10 +2329,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	var ranges [][]byte
 	var nodes engine.Nodes
 	isPartitionTable := false
-
-	logutil.Infof("Compile.generateNodes: c.proc.FileService:%s",
-		c.proc.FileService.Name())
-
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -2541,7 +2535,6 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 	if n.Stats.Shuffle && n.Stats.ShuffleType == plan.ShuffleType_Range {
 		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
-			logutil.Infof("shuffleBlocksByRange failed, err: %v", err)
 			return nil, err
 		}
 	} else {
@@ -2581,15 +2574,15 @@ func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
 
 func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
 	var objMeta objectio.ObjectMeta
-	var err error
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		location := unmarshalledBlockInfo.MetaLocation()
-		logutil.Infof("c.proc.FileSevice's name : %s, BlockInfo's meta location : %s",
-			c.proc.FileService.Name(),
-			location.String())
+		fs, err := fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
+		if err != nil {
+			return err
+		}
 		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, c.proc.FileService); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, fs); err != nil {
 				return err
 			}
 		}
