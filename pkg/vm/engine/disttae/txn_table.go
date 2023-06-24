@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -181,13 +183,17 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	zms := make([]objectio.ZoneMap, dataLength)
 
 	var meta objectio.ObjectMeta
+	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, nil, err
+	}
 	onBlkFn := func(blk logtailreplay.BlockEntry) error {
 		var err error
 		location := blk.MetaLocation()
 		if objectio.IsSameObjectLocVsMeta(location, meta) {
 			return nil
 		}
-		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 			return err
 		}
 		if inited {
@@ -309,6 +315,10 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	}
 	iter.Close()
 
+	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return -1, err
+	}
 	// Calculate the block size
 	biter := part.NewBlocksIter(ts)
 	for biter.Next() {
@@ -318,7 +328,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			continue
 		}
 
-		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 			biter.Close()
 			return 0, err
 		}
@@ -357,14 +367,17 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	if !found {
 		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
 	}
-
+	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 	var meta objectio.ObjectMeta
 	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.blockInfos))
 	eachBlkFn := func(blk logtailreplay.BlockEntry) error {
 		var err error
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
-			if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+			if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 				return err
 			}
 		}
@@ -637,14 +650,17 @@ func (tbl *txnTable) ApplyRuntimeFilters(ctx context.Context, blocks [][]byte, e
 	}()
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
-
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 	curr := 1 // Skip the first block which is always the memtable
 	for i := 1; i < len(blocks); i++ {
 		blk := catalog.DecodeBlockInfo(blocks[i])
 		location := blk.MetaLocation()
 
 		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, proc.FileService); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, fs); err != nil {
 				return nil, err
 			}
 
@@ -779,6 +795,10 @@ func (tbl *txnTable) rangesOnePart(
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
 	hasDeletes := len(dirtyBlks) > 0
 	for _, blk := range blocks {
 		// if expr is monotonic, we need evaluating expr for each block
@@ -795,7 +815,7 @@ func (tbl *txnTable) rangesOnePart(
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
 			if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
+				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 					return
 				}
 
@@ -1443,7 +1463,11 @@ func (tbl *txnTable) newBlockReader(
 	}
 
 	infos, steps := groupBlocksToObjects(blkInfos, num)
-	blockReaders := newBlockReaders(ctx, tbl.db.txn.engine.fs, tableDef,
+	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.engine.fs, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	blockReaders := newBlockReaders(ctx, fs, tableDef,
 		tbl.primarySeqnum, ts, num, expr, proc)
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {

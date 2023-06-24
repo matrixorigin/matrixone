@@ -488,7 +488,11 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	}
 
 	infos, steps := groupBlocksToObjects(blkInfos, num)
-	blockReaders := newBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr, proc.(*process.Process))
+	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	blockReaders := newBlockReaders(ctx, fs, tblDef, -1, ts, num, expr, proc.(*process.Process))
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]

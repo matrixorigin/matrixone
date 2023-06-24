@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -2638,12 +2639,16 @@ func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
 
 func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
 	var objMeta objectio.ObjectMeta
-	var err error
+
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		location := unmarshalledBlockInfo.MetaLocation()
+		fs, err := fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
+		if err != nil {
+			return err
+		}
 		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, c.proc.FileService); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, fs); err != nil {
 				return err
 			}
 		}

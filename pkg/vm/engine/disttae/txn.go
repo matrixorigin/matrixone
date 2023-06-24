@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -41,12 +43,16 @@ func (txn *Transaction) getBlockInfos(
 	}
 	var objectName objectio.ObjectNameShort
 	iter := state.NewBlocksIter(ts)
+	fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 	for iter.Next() {
 		entry := iter.Entry()
 		location := entry.MetaLocation()
 		if !objectio.IsSameObjectLocVsShort(location, &objectName) {
 			// Prefetch object meta
-			if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
+			if err = blockio.PrefetchMeta(fs, location); err != nil {
 				iter.Close()
 				return
 			}
