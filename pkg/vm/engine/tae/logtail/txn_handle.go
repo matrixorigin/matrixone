@@ -77,12 +77,7 @@ func NewTxnLogtailRespBuilder(rt *dbutils.Runtime) *TxnLogtailRespBuilder {
 
 func (b *TxnLogtailRespBuilder) Close() {
 	for i, bat := range b.batchToClose {
-		if b.insertBatch.Contains(uint32(i)) {
-			// b.closeInsertBatch(bat)
-			bat.Close()
-		} else {
-			bat.Close()
-		}
+		bat.Close()
 	}
 }
 
@@ -177,16 +172,8 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 		b.batches[dataInsBatch] = mybat
 	} else {
 		b.batches[dataInsBatch].Extend(mybat)
-		// b.closeInsertBatch(mybat)
 		mybat.Close()
 	}
-}
-
-// closeInsertBatch closes rowid and committs
-// Other vectors are closed in localsegment
-func (b *TxnLogtailRespBuilder) closeInsertBatch(bat *containers.Batch) {
-	bat.Vecs[0].Close()
-	bat.Vecs[1].Close()
 }
 
 func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.DeleteNode) {
