@@ -548,7 +548,7 @@ jobs:
 
 
   clean_up_env:
-    if: ${{ always() && !cancelled() && github.event.pull_request.merged == true && needs.docker_image_build.result == 'success' }} #
+    if: ${{ always() && github.event.pull_request.merged == true && needs.docker_image_build.result == 'success' }} #
     name: CLEAN UP ENV
     runs-on: arm64-runner
     needs: [docker_image_build,setup_mo_test_env,test]
