@@ -494,7 +494,7 @@ select (col1,col2,to_date(col3,'%Y-%m-%d %H:%i:%s')) <= (col1,col2,'2023-01-02 0
 true
 true
 null
-select (date_add(col1,interval 45 day),col2) > ('1999-01-01','1999-01-04 00:00:09') from row04;;
+select (date_add(col1,interval 45 day),col2) > ('1999-01-01','1999-01-04 00:00:09') from row04;
 (date_add(col1, interval(45, day)), col2) > (1999-01-01, 1999-01-04 00:00:09)
 true
 true

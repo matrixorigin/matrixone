@@ -223,7 +223,7 @@ select * from dis_table_01;
 -- @session}
 
 begin ;
-delete from dis_table_02 where a>1;;
+delete from dis_table_02 where a>1;
 select b, c from dis_table_02;
 -- @session:id=1{
 select b, c from dis_table_02;
