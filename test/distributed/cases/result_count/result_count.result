@@ -140,10 +140,15 @@ select sleep(16);
 sleep(16)
 0
 use system;
-select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and length(statement) > 0 and status != 'Running' and aggr_count < 1 order by request_at desc limit 53;
+select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and length(trim(statement)) > 0 and status != 'Running' order by request_at desc limit 70;
+
 statement    result_count
 use system    0
+select * from unnest('{"a":1}') as f    1
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    1
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    3
+select 1 union select 2    2
+select 1    1
 drop database db2    0
 delete from t2 where a=1    0
 delete from t2 where a=5    0
@@ -157,6 +162,13 @@ use db2    0
 create database db2    0
 drop database db2    0
 commit    0
+delete from t2 where a=1    0
+delete from t2 where a=5    0
+select * from t2 limit 3    3
+select * from t2    5
+update t2 set b='yy' where a=1    0
+update t2 set b='xx' where a=5    0
+insert into t2 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e')    0
 begin    0
 create table t2(a int, b varchar)    0
 use db2    0
@@ -186,6 +198,13 @@ prepare s1 from "select * from t1 where a>?"    0
 set @a=1    0
 create view v2 as select * from t1 limit 1    0
 create view v1 as select * from t1    0
+delete from t1 where a=1    0
+delete from t1 where a=5    0
+select * from t1 limit 3    3
+select * from t1    5
+update t1 set b='yy' where a=1    0
+update t1 set b='xx' where a=5    0
+insert into t1 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e')    0
 create table t1(a int, b varchar)    0
 use db1    0
 create database db1    0
@@ -194,7 +213,6 @@ start transaction    0
 commit    0
 rollback    0
 begin    0
-SET character_set_results = utf8    0
 select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != 'Running' order by request_at desc limit 2;
 statement    result_count
 drop account test_tenant_1    0
