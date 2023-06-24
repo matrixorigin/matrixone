@@ -1,7 +1,7 @@
 service-type = "CN"
 
 [log]
-level = "debug"
+level = "info"
 format = "console"
 max-size = 512
 

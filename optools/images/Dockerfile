@@ -1,7 +1,7 @@
 FROM golang:1.20-buster as builder
 
 # goproxy
-ARG GOPROXY="https://goproxy.cn,direct"
+ARG GOPROXY="https://proxy.golang.org,direct"
 RUN go env -w GOPROXY=${GOPROXY}
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
