@@ -41,6 +41,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func init() {
+	testutil.SetupAutoIncrService()
+}
+
 func Test_PathExists(t *testing.T) {
 	cases := [...]struct {
 		path   string
