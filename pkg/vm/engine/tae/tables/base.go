@@ -50,11 +50,11 @@ type BlockT[T common.IRef] interface {
 type baseBlock struct {
 	common.RefHelper
 	*sync.RWMutex
-	rt       *dbutils.Runtime
-	meta     *catalog.BlockEntry
-	mvcc     *updates.MVCCHandle
-	changeTs int64
-	impl     data.Block
+	rt   *dbutils.Runtime
+	meta *catalog.BlockEntry
+	mvcc *updates.MVCCHandle
+	ttl  time.Time
+	impl data.Block
 
 	node atomic.Pointer[Node]
 }
@@ -68,6 +68,7 @@ func newBaseBlock(
 		impl: impl,
 		rt:   rt,
 		meta: meta,
+		ttl:  time.Now(),
 	}
 	blk.mvcc = updates.NewMVCCHandle(meta)
 	blk.RWMutex = blk.mvcc.RWMutex
@@ -652,10 +653,6 @@ func (blk *baseBlock) adjustScore(
 	if score == 0 || score > 1 {
 		return score
 	}
-	if atomic.LoadInt64(&blk.changeTs) == 0 {
-		atomic.StoreInt64(&blk.changeTs, time.Now().UnixNano())
-		return 1
-	}
 	var ratio float32
 	if blk.meta.IsAppendable() {
 		currRows := uint32(blk.Rows())
@@ -685,8 +682,7 @@ func (blk *baseBlock) adjustScore(
 		ttl = time.Duration(float32(ttl) * factor)
 	}
 
-	changeTs := time.Unix(0, atomic.LoadInt64(&blk.changeTs))
-	if time.Now().After(changeTs.Add(ttl)) {
+	if time.Now().After(blk.ttl.Add(ttl)) {
 		return 100
 	}
 	return 1
