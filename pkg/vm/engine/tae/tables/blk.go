@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"math/rand"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -162,7 +163,7 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 		dropped = true
 		return
 	}
-	if blk.mvcc.GetChangeNodeCnt() == 0 {
+	if blk.mvcc.GetChangeIntentionCnt() == 0 {
 		// No deletes found
 		score = 0
 	} else {
@@ -181,6 +182,7 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 }
 
 func (blk *block) EstimateScore(ttl time.Duration, force bool) int {
+	ttl = time.Duration(float64(ttl) * float64(rand.Intn(5)+10) / float64(10))
 	return blk.adjustScore(blk.estimateRawScore, ttl, force)
 }
 

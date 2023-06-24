@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop account if exists tenant_test;
 create account tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 
@@ -20,3 +21,4 @@ select a from a;
 drop table if exists a;
 
 drop account if exists tenant_test;
+set global enable_privilege_cache = on;

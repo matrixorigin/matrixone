@@ -222,7 +222,6 @@ select * from `%!%p2%!%p_table_17`;
 select * from `%!%p3%!%p_table_17`;
 
 -- key partition: decimal,float,double
--- @bvt:issue#10064
 create table p_table_18(col1 bigint,col2 varchar(25),col3 decimal(6,4))partition by key(col3)partitions 2;
 insert into p_table_18 values(932,'rel',0.98),(76,'opp',8.94),(823,'var',0.98);
 select * from p_table_18;
@@ -240,7 +239,6 @@ insert into p_table_18 values(932,'rel',0.98),(76,'opp',8.94),(823,'var',0.98);
 select * from p_table_18;
 select * from `%!%p0%!%p_table_18`;
 select * from `%!%p1%!%p_table_18`;
--- @bvt:issue
 
 -- key partition: date,datetime,timestamp
 create table p_table_19(col1 int,col2 date,col3 varchar(25))partition by key(col2)partitions 6;
@@ -281,26 +279,14 @@ select * from `%!%p0%!%p_table_002`;
 select * from `%!%p1%!%p_table_002`;
 select * from `%!%p2%!%p_table_002`;
 select * from `%!%p3%!%p_table_002`;
-create table p_table_003(col1 int,col2 blob)partition by key(col2)partitions 4;
-insert into p_table_003 values (12,'var1'),(56,'sstt'),(78,'var2'),(90,'lop');
-select * from `%!%p0%!%p_table_003`;
-select * from `%!%p1%!%p_table_003`;
-select * from `%!%p2%!%p_table_003`;
-select * from `%!%p3%!%p_table_003`;
-create table p_table_004(col1 int,col2 text)partition by key(col2)partitions 4;
-insert into p_table_004 values (12,'var1'),(56,'sstt'),(78,'var2'),(90,'lop');
-select * from `%!%p0%!%p_table_004`;
-select * from `%!%p1%!%p_table_004`;
-select * from `%!%p2%!%p_table_004`;
-select * from `%!%p3%!%p_table_004`;
 
--- key partition abnormal type : json
+-- key partition abnormal type : json,blob,text
+create table p_table_003(col1 int,col2 blob)partition by key(col2)partitions 4;
 create table p_table_non(col1 int,col2 json)partition by key(col2)partitions 4;
+create table p_table_004(col1 int,col2 text)partition by key(col2)partitions 4;
 
 -- key partition:
--- @bvt:issue#10081
 create temporary table p_table_non(col1 int,col2 varchar(25))partition by key(col2)partitions 4;
--- @bvt:issue
 create view p_view as select * from p_table_19;
 select * from p_view;
 drop view p_view;
@@ -423,13 +409,11 @@ select * from `%!%p1%!%p_hash_table_07`;
 select * from p_hash_table_07;
 
 -- hash partition: key(expr)
--- @bvt:issue#10077
 create table p_hash_table_08(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(ceil(col3)) partitions 2;
 insert into p_hash_table_08 values (10,'nb',35.5),(10,'bv',35.45),(12,'nb',30.09),(12,'nb',30.23);
 select * from `%!%p0%!%p_hash_table_08`;
 select * from `%!%p1%!%p_hash_table_08`;
 select * from p_hash_table_08;
--- @bvt:issue
 drop table if exists p_hash_table_08;
 create table p_hash_table_08(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(col1*100)partitions 2;
 insert into p_hash_table_08 values (10,'nb',35.5),(10,'bv',35.45),(12,'nb',30.09),(12,'nb',30.23);
@@ -440,9 +424,7 @@ select * from p_hash_table_08;
 -- abnormal test
 drop table if exists p_hash_table_03;
 create table p_hash_table_03(col1 bigint auto_increment,col2 varchar(30),col3 date default '1970-01-01',col4 int,primary key(col1,col2),unique key k1(col4))partition by hash(col1) partitions 4;
--- @bvt:issue#10080
 create table p_hash_table_03(col1 bigint ,col2 date default '1970-01-01',col3 varchar(30))partition by hash(year(col3)) partitions 8;
--- @bvt:issue
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(col3) partitions 2;
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 blob)partition by hash(col3) partitions 2;
 create table p_hash_table_06(col1 tinyint,col2 varchar(30))partition by hash(col2) partitions 2;

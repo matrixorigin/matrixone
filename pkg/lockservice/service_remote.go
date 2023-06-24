@@ -56,6 +56,8 @@ func (s *service) initRemote() {
 func (s *service) initRemoteHandler() {
 	s.remote.server.RegisterMethodHandler(pb.Method_Lock,
 		s.handleRemoteLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_ForwardLock,
+		s.handleForwardLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_Unlock,
 		s.handleRemoteUnlock)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetTxnLock,
@@ -98,6 +100,45 @@ func (s *service) handleRemoteLock(
 		req.Lock.Rows,
 		LockOptions{LockOptions: req.Lock.Options, async: true},
 		func(result pb.Result, err error) {
+			resp.Lock.Result = result
+			writeResponse(ctx, resp, err, cs)
+		})
+}
+
+func (s *service) handleForwardLock(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	l, err := s.getLockTable(req.GetBind.Table)
+	if err != nil ||
+		l == nil {
+		// means that the lockservice sending the lock request holds a stale
+		// lock table binding.
+		writeResponse(ctx, resp, err, cs)
+		return
+	}
+
+	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, "")
+	txn.Lock()
+	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+		txn.Unlock()
+		writeResponse(ctx, resp, ErrTxnNotFound, cs)
+		return
+	}
+	if txn.deadlockFound {
+		txn.Unlock()
+		writeResponse(ctx, resp, ErrDeadLockDetected, cs)
+		return
+	}
+
+	l.lock(
+		ctx,
+		txn,
+		req.Lock.Rows,
+		LockOptions{LockOptions: req.Lock.Options, async: true},
+		func(result pb.Result, err error) {
+			txn.Unlock()
 			resp.Lock.Result = result
 			writeResponse(ctx, resp, err, cs)
 		})

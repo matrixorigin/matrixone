@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop role if exists rolex;
 create role rolex;
 drop user if exists userx;
@@ -50,3 +51,4 @@ grant alter account on account * to rolex;
 internal error: the privilege alter account can not be granted
 drop role rolex;
 drop user userx;
+set global enable_privilege_cache = on;

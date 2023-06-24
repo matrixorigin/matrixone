@@ -609,7 +609,7 @@ func (r *runner) tryScheduleCheckpoint() {
 			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
 			tree.GetTree().Compact()
 			if !tree.IsEmpty() && entry.CheckPrintTime() {
-				logutil.Infof("checkpoint %s waiting for dirty tree %s", entry.String(), tree.String())
+				logutil.Infof("waiting for dirty tree %s", tree.String())
 				entry.SetPrintTime()
 			}
 			return tree.IsEmpty()
@@ -666,6 +666,9 @@ func (r *runner) fillDefaults() {
 }
 
 func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, force bool) (err error) {
+	if !r.rt.Throttle.CanCompact() {
+		return
+	}
 	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)

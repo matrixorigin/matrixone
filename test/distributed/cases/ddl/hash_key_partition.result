@@ -97,9 +97,9 @@ invalid input: Field in list of fields for partition function not found in table
 create table p_table_07(col1 int,col2 char(25),col3 decimal(4,2))partition by key()partitions 8;
 invalid input: Field in list of fields for partition function not found in table
 create table p_table_07(col1 int,col2 char(25),col3 decimal(4,2),unique key k2(col1))partition by key(col2)partitions 8;
-invalid input: partition key is not part of unique key
+A PRIMARY KEY must include all columns in the table's partitioning function
 create table p_table_07(col1 int unsigned,col2 date, col3 varchar(25),primary key(col1,col2) ,unique key k1(col3))partition by key(col1)partitions 4;
-invalid input: partition key is not part of unique key
+A PRIMARY KEY must include all columns in the table's partitioning function
 create table p_table_08(col1 tinyint,col2 varchar(25),col3 decimal(6,2))partition by key(col1)partitions 4;
 insert into p_table_08 values (34,'mod',78.9),(34,'proto',0.34),(-80,'mod',6.5),(-80,'mode',9.0),(59,'make',62.9),(59,'io',88.92);
 select * from `%!%p0%!%p_table_08`;
@@ -629,39 +629,49 @@ col1    col2    col3    col4
 6    1999-09-29    res1    0.1200
 10    1999-09-29    oop1    0.8700
 create table p_table_18(col1 bigint,col2 varchar(25),col3 decimal(6,4))partition by key(col3)partitions 2;
-
 insert into p_table_18 values(932,'rel',0.98),(76,'opp',8.94),(823,'var',0.98);
-
 select * from p_table_18;
-
+col1    col2    col3
+932    rel    0.9800
+823    var    0.9800
+76    opp    8.9400
 select * from `%!%p0%!%p_table_18`;
-
+col1    col2    col3
+932    rel    0.9800
+823    var    0.9800
 select * from `%!%p1%!%p_table_18`;
-
+col1    col2    col3
+76    opp    8.9400
 drop table p_table_18;
-
 create table p_table_18(col1 bigint,col2 varchar(25),col3 float)partition by key(col3)partitions 2;
-
 insert into p_table_18 values(932,'rel',0.98),(76,'opp',8.94),(823,'var',0.98);
-
 select * from p_table_18;
-
+col1    col2    col3
+932    rel    0.98
+823    var    0.98
+76    opp    8.94
 select * from `%!%p0%!%p_table_18`;
-
+col1    col2    col3
+932    rel    0.98
+823    var    0.98
 select * from `%!%p1%!%p_table_18`;
-
+col1    col2    col3
+76    opp    8.94
 drop table p_table_18;
-
 create table p_table_18(col1 bigint,col2 varchar(25),col3 double)partition by key(col3)partitions 2;
-
 insert into p_table_18 values(932,'rel',0.98),(76,'opp',8.94),(823,'var',0.98);
-
 select * from p_table_18;
-
+col1    col2    col3
+932    rel    0.98
+76    opp    8.94
+823    var    0.98
 select * from `%!%p0%!%p_table_18`;
-
+col1    col2    col3
 select * from `%!%p1%!%p_table_18`;
-
+col1    col2    col3
+932    rel    0.98
+76    opp    8.94
+823    var    0.98
 create table p_table_19(col1 int,col2 date,col3 varchar(25))partition by key(col2)partitions 6;
 load data infile '$resources/load_data/key_partition_data.csv' into table p_table_19;
 select * from p_table_19 where col1>1500;
@@ -774,37 +784,13 @@ col1    col2
 select * from `%!%p3%!%p_table_002`;
 col1    col2
 create table p_table_003(col1 int,col2 blob)partition by key(col2)partitions 4;
-insert into p_table_003 values (12,'var1'),(56,'sstt'),(78,'var2'),(90,'lop');
-select * from `%!%p0%!%p_table_003`;
-col1    col2
-12    var1
-select * from `%!%p1%!%p_table_003`;
-col1    col2
-78    var2
-90    lop
-select * from `%!%p2%!%p_table_003`;
-col1    col2
-56    sstt
-select * from `%!%p3%!%p_table_003`;
-col1    col2
-create table p_table_004(col1 int,col2 text)partition by key(col2)partitions 4;
-insert into p_table_004 values (12,'var1'),(56,'sstt'),(78,'var2'),(90,'lop');
-select * from `%!%p0%!%p_table_004`;
-col1    col2
-12    var1
-select * from `%!%p1%!%p_table_004`;
-col1    col2
-78    var2
-90    lop
-select * from `%!%p2%!%p_table_004`;
-col1    col2
-56    sstt
-select * from `%!%p3%!%p_table_004`;
-col1    col2
+A BLOB field is not allowed in partition function
 create table p_table_non(col1 int,col2 json)partition by key(col2)partitions 4;
-SQL syntax error: column col2 type JSON is not allowed in partition clause
+A BLOB field is not allowed in partition function
+create table p_table_004(col1 int,col2 text)partition by key(col2)partitions 4;
+A BLOB field is not allowed in partition function
 create temporary table p_table_non(col1 int,col2 varchar(25))partition by key(col2)partitions 4;
-
+Cannot create temporary table with partitions
 create view p_view as select * from p_table_19;
 select * from p_view;
 col1    col2    col3
@@ -1101,15 +1087,15 @@ col1    col2
 12    nb
 12    bv
 create table p_hash_table_08(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(ceil(col3)) partitions 2;
-
+Field 'ceil(col3)' is of a not allowed type for this type of partitioning
 insert into p_hash_table_08 values (10,'nb',35.5),(10,'bv',35.45),(12,'nb',30.09),(12,'nb',30.23);
-
+no such table hash_key_partition.p_hash_table_08
 select * from `%!%p0%!%p_hash_table_08`;
-
+SQL parser error: table "%!%p0%!%p_hash_table_08" does not exist
 select * from `%!%p1%!%p_hash_table_08`;
-
+SQL parser error: table "%!%p1%!%p_hash_table_08" does not exist
 select * from p_hash_table_08;
-
+SQL parser error: table "p_hash_table_08" does not exist
 drop table if exists p_hash_table_08;
 create table p_hash_table_08(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(col1*100)partitions 2;
 insert into p_hash_table_08 values (10,'nb',35.5),(10,'bv',35.45),(12,'nb',30.09),(12,'nb',30.23);
@@ -1129,9 +1115,9 @@ col1    col2    col3
 10    bv    35.450
 drop table if exists p_hash_table_03;
 create table p_hash_table_03(col1 bigint auto_increment,col2 varchar(30),col3 date default '1970-01-01',col4 int,primary key(col1,col2),unique key k1(col4))partition by hash(col1) partitions 4;
-invalid input: partition key is not part of unique key
+A PRIMARY KEY must include all columns in the table's partitioning function
 create table p_hash_table_03(col1 bigint ,col2 date default '1970-01-01',col3 varchar(30))partition by hash(year(col3)) partitions 8;
-
+Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(col3) partitions 2;
 Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 blob)partition by hash(col3) partitions 2;

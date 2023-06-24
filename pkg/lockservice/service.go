@@ -79,6 +79,10 @@ func (s *service) Lock(
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
 	defer span.End()
 
+	if options.ForwardTo != "" {
+		return s.forwardLock(ctx, tableID, rows, txnID, options)
+	}
+
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 	l, err := s.getLockTable(tableID)
 	if err != nil {
