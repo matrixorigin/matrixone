@@ -344,11 +344,16 @@ func runLockOpTest(
 			require.NoError(t, err)
 
 			c := client.NewTxnClient(s, opts...)
+			if tc, ok := c.(client.TxnClientWithFeature); ok {
+				tc.Resume()
+			}
 			defer func() {
 				assert.NoError(t, c.Close())
 			}()
 			txnOp, err := c.New(ctx, timestamp.Timestamp{})
 			require.NoError(t, err)
+
+			txnOp.TxnRef().LockService = services[0].GetConfig().ServiceID
 
 			proc := process.New(
 				ctx,

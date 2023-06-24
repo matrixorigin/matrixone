@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 --env prepare statement
 drop user if exists yellowcar,test_user,user123456,123user,`1234@fff`,`1234`,`user1234.aaaa`,`123user中文`,user_role,user123456,c_user_01,c_user_02,c_user_03,customername,customer,custom,finley,jason,`neil@192.168.1.10`;
 drop user if exists test_user,test_user0,test_user1,test_user2,user1,user2,user3,user4,user5,user6,user7,user8,user9,user10,tester1,tester2,tester001,tester002,tester003,`daisy@192.168.1.10`,daisy;
@@ -90,3 +91,4 @@ drop user if exists user1,tester1,tester2,jason,finley,custom,customer,customnam
 drop account if exists test5555;
 drop role if exists low_level,mid_level,high_level,u_role;
 drop table if exists testdb.aaa;
+set global enable_privilege_cache = on;

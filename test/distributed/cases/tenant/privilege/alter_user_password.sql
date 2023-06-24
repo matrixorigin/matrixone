@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 -- @session:id=1&user=acc_idx:root&password=123456
 alter user 'root' identified by '111';
@@ -50,3 +51,4 @@ drop user if exists hjk;
 drop user if exists opp;
 drop role if exists role1;
 alter user root identified by '111';
+set global enable_privilege_cache = on;

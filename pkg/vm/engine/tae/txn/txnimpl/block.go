@@ -240,6 +240,10 @@ func (blk *txnBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (
 	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, attrIds)
 }
 
+func (blk *txnBlock) GetDeltaPersistedTS() types.TS {
+	return blk.entry.GetDeltaPersistedTSByTxn(blk.Txn)
+}
+
 func (blk *txnBlock) GetColumnDataById(ctx context.Context, colIdx int) (*containers.ColumnView, error) {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx)
