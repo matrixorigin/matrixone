@@ -727,18 +727,11 @@ func (blk *baseBlock) IsAppendable() bool { return false }
 
 func (blk *baseBlock) MutationInfo() string {
 	rows := blk.Rows()
-	totalChanges := blk.mvcc.GetChangeNodeCnt()
+	deleteCnt := blk.mvcc.GetDeleteCnt()
 	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d",
 		blk.meta.AsCommonID().BlockString(),
-		totalChanges,
+		deleteCnt,
 		rows)
-	if totalChanges == 0 {
-		return s
-	}
-	deleteCnt := blk.mvcc.GetDeleteCnt()
-	if deleteCnt != 0 {
-		s = fmt.Sprintf("%s, Del:%d/%d", s, deleteCnt, rows)
-	}
 	return s
 }
 

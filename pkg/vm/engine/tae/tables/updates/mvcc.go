@@ -101,14 +101,21 @@ func (n *MVCCHandle) GetDeletesListener() func(uint64, common.RowGen, types.TS) 
 	return n.deletesListener
 }
 
-func (n *MVCCHandle) IncChangeNodeCnt() {
+func (n *MVCCHandle) IncChangeIntentionCnt() {
 	n.changes.Add(1)
 }
 
-func (n *MVCCHandle) GetChangeNodeCnt() uint32 {
+func (n *MVCCHandle) DecChangeIntentionCnt() {
+	n.changes.Add(^uint32(0))
+}
+
+// GetChangeIntentionCnt returns the number of operation of delete, which is updated before commiting.
+// Note: Now it is ** only ** used in checkpointe runner to check whether this block has any chance to be flushed
+func (n *MVCCHandle) GetChangeIntentionCnt() uint32 {
 	return n.changes.Load()
 }
 
+// GetDeleteCnt returns committed deleted rows
 func (n *MVCCHandle) GetDeleteCnt() uint32 {
 	return n.deletes.Load().GetDeleteCnt()
 }
