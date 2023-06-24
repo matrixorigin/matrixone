@@ -65,7 +65,7 @@ func MakeDefaultTransientPool(name string) *containers.VectorPool {
 		limit = mpool.MB
 		trasientCapacity = 512
 	} else if memStats.Total > mpool.GB*10 {
-		limit = mpool.MB * 512
+		limit = mpool.KB * 512
 		trasientCapacity = 512
 	} else if memStats.Total > mpool.GB*5 {
 		limit = mpool.KB * 256
