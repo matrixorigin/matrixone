@@ -186,6 +186,9 @@ func (client *txnClient) New(
 	txnMeta.SnapshotTS = ts
 	txnMeta.Mode = client.getTxnMode()
 	txnMeta.Isolation = client.getTxnIsolation()
+	if client.lockService != nil {
+		txnMeta.LockService = client.lockService.GetConfig().ServiceID
+	}
 
 	err = client.pushTransaction(txnMeta)
 	if err != nil {
