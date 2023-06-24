@@ -15,7 +15,11 @@
 package dbutils
 
 import (
+	"fmt"
+	"runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -80,4 +84,25 @@ func MakeDefaultTransientPool(name string) *containers.VectorPool {
 		trasientCapacity,
 		containers.WithAllocationLimit(limit),
 	)
+}
+func FormatMemStats(memstats runtime.MemStats) string {
+	return fmt.Sprintf(
+		"Alloc:%dMB TotalAlloc:%dMB Sys:%dMB HeapAlloc:%dMB HeapSys:%dMB HeapIdle:%dMB HeapReleased:%dMB HeapInuse:%dMB",
+		memstats.Alloc/mpool.MB,
+		memstats.TotalAlloc/mpool.MB,
+		memstats.Sys/mpool.MB,
+		memstats.HeapAlloc/mpool.MB,
+		memstats.HeapSys/mpool.MB,
+		memstats.HeapIdle/mpool.MB,
+		memstats.HeapReleased/mpool.MB,
+		memstats.HeapInuse/mpool.MB,
+	)
+}
+
+func PrintMemStats() {
+	var memstats runtime.MemStats
+	runtime.ReadMemStats(&memstats)
+	logutil.Infof("heapInfo:%s", FormatMemStats(memstats))
+	stats, _ := mem.VirtualMemory()
+	logutil.Infof("osMemInfo:%s", stats)
 }
