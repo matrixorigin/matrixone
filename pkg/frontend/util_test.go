@@ -472,24 +472,9 @@ func TestGetSimpleExprValue(t *testing.T) {
 		dec3, _, _ := types.Parse64("-1.2345670")
 
 		kases := []args{
-			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       18,
-				Scale:       1,
-				NotNullable: true,
-			})},
-			{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       18,
-				Scale:       1,
-				NotNullable: true,
-			})},
-			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       18,
-				Scale:       7,
-				NotNullable: true,
-			})},
+			{"set @@x=1.0", false, fmt.Sprintf("%v", dec1.Format(1))},
+			{"set @@x=-1.0", false, fmt.Sprintf("%v", dec2.Format(1))},
+			{"set @@x=-1.2345670", false, fmt.Sprintf("%v", dec3.Format(7))},
 		}
 		ctrl := gomock.NewController(t)
 		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
