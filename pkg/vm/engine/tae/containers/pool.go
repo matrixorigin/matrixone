@@ -100,6 +100,8 @@ type VectorPool struct {
 	ratio        float64
 	fixSizedPool []*vectorPoolElement
 	varlenPool   []*vectorPoolElement
+	fixHit       stats.Counter
+	varHit       stats.Counter
 	hit          stats.Counter
 	total        stats.Counter
 	mp           *mpool.MPool
@@ -144,7 +146,7 @@ func (p *VectorPool) String() string {
 	varlenUsedCnt, _ := p.VarlenUsed(false)
 	usedCnt := fixedUsedCnt + varlenUsedCnt
 	str := fmt.Sprintf(
-		"VectorPool[%s][%d/%d]: FixSizedVec[%d/%d] VarlenVec[%d/%d], Hit/Total: %d/%d",
+		"VectorPool[%s][%d/%d]: FixSizedVec[%d/%d] VarlenVec[%d/%d], Hit/Total: [(%d,%d)%d/%d]",
 		p.name,                                /* name */
 		usedCnt,                               /* total used vector cnt */
 		len(p.fixSizedPool)+len(p.varlenPool), /* total vector cnt */
@@ -152,6 +154,8 @@ func (p *VectorPool) String() string {
 		len(p.fixSizedPool),                   /* total fixed sized vector cnt */
 		varlenUsedCnt,                         /* used varlen vector cnt */
 		len(p.varlenPool),                     /* total varlen vector cnt */
+		p.fixHit.Load(),                       /* fixed sized vector hit cnt */
+		p.varHit.Load(),                       /* varlen vector hit cnt */
 		p.hit.Load(),                          /* hit cnt */
 		p.total.Load(),                        /* total cnt */
 	)
@@ -167,6 +171,7 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 				element := p.fixSizedPool[idx]
 				if element.tryReuse(t) {
 					p.hit.Add(1)
+					p.fixHit.Add(1)
 					return &vectorWrapper{
 						wrapped: element.vec,
 						mpool:   element.mp,
@@ -182,6 +187,7 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 				element := p.varlenPool[idx]
 				if element.tryReuse(t) {
 					p.hit.Add(1)
+					p.varHit.Add(1)
 					return &vectorWrapper{
 						wrapped: element.vec,
 						mpool:   element.mp,
