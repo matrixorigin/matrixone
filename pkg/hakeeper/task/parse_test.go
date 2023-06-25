@@ -60,9 +60,8 @@ func TestParseCNStores(t *testing.T) {
 	for _, c := range cases {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
-		working, expired := parseCNStores(cfg, c.infos, c.currentTick)
+		working := getWorkingCNs(cfg, c.infos, c.currentTick)
 		assert.Equal(t, c.expectedWorking, working)
-		assert.Equal(t, c.expectedExpired, expired)
 	}
 }
 
