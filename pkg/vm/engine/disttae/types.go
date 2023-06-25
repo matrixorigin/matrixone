@@ -466,6 +466,7 @@ type blockReader struct {
 	// block list to scan
 	blks    []*catalog.BlockInfo
 	blkDels map[types.Blockid][]int64
+	proc    *process.Process
 }
 
 // TODO::blockMergeReader should inherit from blockReader.

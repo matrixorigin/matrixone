@@ -1684,7 +1684,7 @@ func (tbl *txnTable) newReader(
 				ctx,
 				tbl,
 				ts,
-				[]catalog.BlockInfo{dirtyBlks[i]},
+				[]*catalog.BlockInfo{dirtyBlks[i]},
 				expr,
 				fs,
 				tbl.proc,
