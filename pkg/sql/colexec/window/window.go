@@ -157,6 +157,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 		}
 
 		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(proc.Mp())
 		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
 			return err
 		}
@@ -179,15 +180,38 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 		}
 	} else {
+		nullVec := vector.NewConstNull(*ctr.aggVecs[idx].vec.GetType(), 1, proc.Mp())
+		defer nullVec.Free(proc.Mp())
+
 		// plan.Function_AGG, plan.Function_WIN_VALUE
 		for j := 0; j < n; j++ {
 
-			start, end, err := ctr.buildInterval(j, idx, ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Frame, proc)
+			start, end := 0, ctr.bat.Vecs[0].Length()
+
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+
+			left, right, err := ctr.buildInterval(j, start, end, ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Frame, proc)
 			if err != nil {
 				return err
 			}
 
-			for k := start; k < end; k++ {
+			if right < start || left > end || left >= right {
+				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(0), 1, []*vector.Vector{nullVec}); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if left < start {
+				left = start
+			}
+			if right > end {
+				right = end
+			}
+
+			for k := left; k < right; k++ {
 				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(k), 1, []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
 					return err
 				}
@@ -202,7 +226,6 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 	}
 	if isWinOrder {
 		vec.SetNulls(nil)
-		// w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	}
 	ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 	if vec != nil {
@@ -211,24 +234,10 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 	return nil
 }
 
-func (ctr *container) buildInterval(rowIdx, vecIdx int, frame *plan.FrameClause, proc *process.Process) (int, int, error) {
-	n := ctr.bat.Vecs[0].Length()
-	var err error
-
-	start, end := 0, n
-
-	if ctr.ps != nil {
-		start, end = buildPartitionInterval(ctr.ps, rowIdx, n)
-	}
-
+func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameClause, proc *process.Process) (int, int, error) {
 	// FrameClause_ROWS
 	if frame.Type == plan.FrameClause_ROWS {
 		start, end = ctr.buildRowsInterval(rowIdx, start, end, frame)
-		return start, end, nil
-	}
-
-	// FrameClause_Range
-	if frame.Start.UnBounded && frame.End.UnBounded {
 		return start, end, nil
 	}
 
@@ -236,75 +245,81 @@ func (ctr *container) buildInterval(rowIdx, vecIdx int, frame *plan.FrameClause,
 		return start, end, nil
 	}
 
-	if frame.Start.Type == plan.FrameBound_CURRENT_ROW {
-		// [cur, cur]
-		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, nil)
-		if err != nil {
-			return start, end, err
-		}
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, nil)
-		return start, end, err
-	}
-
-	// start = FrameBound_PRECEDING
-	switch frame.End.Type {
-	case plan.FrameBound_FOLLOWING:
-
-		if frame.Start.UnBounded && !frame.End.UnBounded {
-			// [start, cur + fo]
-			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.End.Val)
-		} else if !frame.Start.UnBounded && frame.End.UnBounded {
-			// [cur - pre, end)
-			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.Start.Val)
-		} else if !frame.Start.UnBounded && !frame.End.UnBounded {
-			// [cur - pre, cur + fo]
-			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.Start.Val)
-			if err != nil {
-				return start, end, err
-			}
-			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.End.Val)
-		}
-
-	case plan.FrameBound_CURRENT_ROW:
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, nil)
-		if err != nil {
-			return start, end, err
-		}
-		if !frame.Start.UnBounded {
-			// [cur - pre, cur]
-			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.Start.Val)
-		}
-
-	}
-	return start, end, err
+	// FrameClause_Range
+	return ctr.buildRangeInterval(rowIdx, start, end, frame)
 }
 
 func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int) {
-	if frame.Start.Type == plan.FrameBound_CURRENT_ROW {
+	switch frame.Start.Type {
+	case plan.FrameBound_CURRENT_ROW:
 		start = rowIdx
-	}
-
-	// FrameBound_PRECEDING
-	if frame.Start.Val != nil {
-		pre := frame.Start.Val.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U64Val).U64Val
-		left := rowIdx - int(pre)
-		if left > start {
-			start = left
+	case plan.FrameBound_PRECEDING:
+		if !frame.Start.UnBounded {
+			pre := frame.Start.Val.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U64Val).U64Val
+			start = rowIdx - int(pre)
 		}
+	case plan.FrameBound_FOLLOWING:
+		fol := frame.Start.Val.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U64Val).U64Val
+		start = rowIdx + int(fol)
 	}
 
-	if frame.End.Type == plan.FrameBound_CURRENT_ROW {
-		return start, rowIdx + 1
-	}
-
-	if frame.End.Val != nil {
-		fol := frame.End.Val.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U64Val).U64Val
-		right := rowIdx + int(fol) + 1
-		if right < end {
-			end = right
+	switch frame.End.Type {
+	case plan.FrameBound_CURRENT_ROW:
+		end = rowIdx + 1
+	case plan.FrameBound_PRECEDING:
+		pre := frame.End.Val.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U64Val).U64Val
+		end = rowIdx - int(pre) + 1
+	case plan.FrameBound_FOLLOWING:
+		if !frame.End.UnBounded {
+			fol := frame.End.Val.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U64Val).U64Val
+			end = rowIdx + int(fol) + 1
 		}
 	}
 	return start, end
+}
+
+func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
+	var err error
+	switch frame.Start.Type {
+	case plan.FrameBound_CURRENT_ROW:
+		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, nil, false)
+		if err != nil {
+			return start, end, err
+		}
+	case plan.FrameBound_PRECEDING:
+		if !frame.Start.UnBounded {
+			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.Start.Val, false)
+			if err != nil {
+				return start, end, err
+			}
+		}
+	case plan.FrameBound_FOLLOWING:
+		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.Start.Val, true)
+		if err != nil {
+			return start, end, err
+		}
+	}
+
+	switch frame.End.Type {
+	case plan.FrameBound_CURRENT_ROW:
+		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, nil, false)
+		if err != nil {
+			return start, end, err
+		}
+	case plan.FrameBound_PRECEDING:
+		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.End.Val, true)
+		if err != nil {
+			return start, end, err
+		}
+	case plan.FrameBound_FOLLOWING:
+		if !frame.End.UnBounded {
+			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.End.Val, false)
+			if err != nil {
+				return start, end, err
+			}
+		}
+	}
+	return start, end, nil
 }
 
 func buildPartitionInterval(ps []int64, j int, l int) (int, int) {
@@ -380,18 +395,6 @@ func makeFlagsOne(n int) []uint8 {
 
 func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
 	makeArgFs(ap)
-	for i := 0; i < bat.VectorCount(); i++ {
-		vec := bat.GetVector(int32(i))
-		if vec.NeedDup() {
-			oldVec := bat.Vecs[i]
-			nvec, err := oldVec.Dup(proc.Mp())
-			if err != nil {
-				return false, err
-			}
-			bat.ReplaceVector(oldVec, nvec)
-			oldVec.Free(proc.Mp())
-		}
-	}
 
 	for i := range ctr.orderVecs {
 		vec, err := ctr.orderVecs[i].executor.Eval(proc, []*batch.Batch{bat})
@@ -404,9 +407,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	ovec := ctr.orderVecs[0].vec
 	var strCol []string
 
-	sels := make([]int64, len(bat.Zs))
+	if ctr.sels == nil {
+		ctr.sels = make([]int64, len(bat.Zs))
+	}
 	for i := 0; i < len(bat.Zs); i++ {
-		sels[i] = int64(i)
+		ctr.sels[i] = int64(i)
 	}
 
 	// skip sort for const vector
@@ -418,12 +423,12 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 			} else {
 				strCol = nil
 			}
-			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, sels, ovec, strCol)
+			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec, strCol)
 		}
 	}
 
 	ps := make([]int64, 0, 16)
-	ds := make([]bool, len(sels))
+	ds := make([]bool, len(ctr.sels))
 
 	n := len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.PartitionBy)
 
@@ -431,11 +436,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	for ; i < j; i++ {
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
-		ps = partition.Partition(sels, ds, ps, ovec)
+		ps = partition.Partition(ctr.sels, ds, ps, ovec)
 		vec := ctr.orderVecs[i].vec
 		// skip sort for const vector
 		if !vec.IsConst() {
-			nullCnt := ovec.GetNulls().Count()
+			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
 				if vec.GetType().IsVarlen() {
 					strCol = vector.MustStrCol(vec)
@@ -444,9 +449,9 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 				}
 				for i, j := 0, len(ps); i < j; i++ {
 					if i == j-1 {
-						sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:], vec, strCol)
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec, strCol)
 					} else {
-						sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:ps[i+1]], vec, strCol)
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec, strCol)
 					}
 				}
 			}
@@ -459,7 +464,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	}
 
 	if n == i {
-		ps = partition.Partition(sels, ds, ps, ovec)
+		ps = partition.Partition(ctr.sels, ds, ps, ovec)
 		ctr.ps = make([]int64, len(ps))
 		copy(ctr.ps, ps)
 	} else if n == 0 {
@@ -467,18 +472,18 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	}
 
 	if len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.OrderBy) > 0 {
-		ctr.os = partition.Partition(sels, ds, ps, ovec)
+		ctr.os = partition.Partition(ctr.sels, ds, ps, ovec)
 	} else {
 		ctr.os = nil
 	}
 
-	if err := bat.Shuffle(sels, proc.Mp()); err != nil {
+	if err := bat.Shuffle(ctr.sels, proc.Mp()); err != nil {
 		panic(err)
 	}
 
 	// shuffle agg vector
-	if ctr.aggVecs[idx].vec != nil && ctr.aggVecs[idx].executor.IfResultMemoryReuse() {
-		if err := ctr.aggVecs[idx].vec.Shuffle(sels, proc.Mp()); err != nil {
+	if ctr.aggVecs[idx].vec != nil && !ctr.aggVecs[idx].executor.IsColumnExpr() {
+		if err := ctr.aggVecs[idx].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
 			panic(err)
 		}
 	}
@@ -486,7 +491,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	return false, nil
 }
 
-func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (int, error) {
+func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool) (int, error) {
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		return rowIdx, nil
 	}
@@ -498,7 +503,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int8], genericGreater[int8])
 		} else {
 			c := int8(expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_I8Val).I8Val)
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int8], genericGreater[int8])
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int8], genericGreater[int8])
+			} else {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int8], genericGreater[int8])
+			}
 		}
 	case types.T_int16:
 		col := vector.MustFixedCol[int16](vec)
@@ -506,7 +515,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int16], genericGreater[int16])
 		} else {
 			c := int16(expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_I16Val).I16Val)
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int16], genericGreater[int16])
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int16], genericGreater[int16])
+			} else {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int16], genericGreater[int16])
+			}
 		}
 	case types.T_int32:
 		col := vector.MustFixedCol[int32](vec)
@@ -514,7 +527,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int32], genericGreater[int32])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_I32Val).I32Val
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int32], genericGreater[int32])
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int32], genericGreater[int32])
+			} else {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int32], genericGreater[int32])
+			}
 		}
 	case types.T_int64:
 		col := vector.MustFixedCol[int64](vec)
@@ -522,7 +539,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int64], genericGreater[int64])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int64], genericGreater[int64])
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int64], genericGreater[int64])
+			} else {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int64], genericGreater[int64])
+			}
 		}
 	case types.T_uint8:
 		col := vector.MustFixedCol[uint8](vec)
@@ -530,10 +551,14 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint8], genericGreater[uint8])
 		} else {
 			c := uint8(expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U8Val).U8Val)
-			if col[rowIdx] <= c {
-				return start, nil
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint8], genericGreater[uint8])
+			} else {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint8], genericGreater[uint8])
 			}
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint8], genericGreater[uint8])
 		}
 	case types.T_uint16:
 		col := vector.MustFixedCol[uint16](vec)
@@ -541,10 +566,14 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint16], genericGreater[uint16])
 		} else {
 			c := uint16(expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U16Val).U16Val)
-			if col[rowIdx] <= c {
-				return start, nil
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint16], genericGreater[uint16])
+			} else {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint16], genericGreater[uint16])
 			}
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint16], genericGreater[uint16])
 		}
 	case types.T_uint32:
 		col := vector.MustFixedCol[uint32](vec)
@@ -552,10 +581,14 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint32], genericGreater[uint32])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U32Val).U32Val
-			if col[rowIdx] <= c {
-				return start, nil
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint32], genericGreater[uint32])
+			} else {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint32], genericGreater[uint32])
 			}
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint32], genericGreater[uint32])
 		}
 	case types.T_uint64:
 		col := vector.MustFixedCol[uint64](vec)
@@ -563,10 +596,14 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint64], genericGreater[uint64])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U64Val).U64Val
-			if col[rowIdx] <= c {
-				return start, nil
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], genericGreater[uint64])
+			} else {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], genericGreater[uint64])
 			}
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], genericGreater[uint64])
 		}
 	case types.T_float32:
 		col := vector.MustFixedCol[float32](vec)
@@ -574,7 +611,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[float32], genericGreater[float32])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Fval).Fval
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float32], genericGreater[float32])
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[float32], genericGreater[float32])
+			} else {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float32], genericGreater[float32])
+			}
 		}
 	case types.T_float64:
 		col := vector.MustFixedCol[float64](vec)
@@ -582,7 +623,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[float64], genericGreater[float64])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Dval).Dval
-			left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float64], genericGreater[float64])
+			if plus {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[float64], genericGreater[float64])
+			} else {
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float64], genericGreater[float64])
+			}
 		}
 	case types.T_decimal64:
 		col := vector.MustFixedCol[types.Decimal64](vec)
@@ -590,11 +635,19 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], decimal64Equal, decimal64Greater)
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Decimal64Val).Decimal64Val.A
-			fol, err := col[rowIdx].Sub64(types.Decimal64(c))
-			if err != nil {
-				return left, err
+			if plus {
+				fol, err := col[rowIdx].Add64(types.Decimal64(c))
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, decimal64Equal, decimal64Greater)
+			} else {
+				fol, err := col[rowIdx].Sub64(types.Decimal64(c))
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, decimal64Equal, decimal64Greater)
 			}
-			left = genericSearchLeft(start, end-1, col, fol, decimal64Equal, decimal64Greater)
 		}
 	case types.T_decimal128:
 		col := vector.MustFixedCol[types.Decimal128](vec)
@@ -602,11 +655,19 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], decimal128Equal, decimal128Greater)
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Decimal128Val).Decimal128Val
-			fol, err := col[rowIdx].Sub128(types.Decimal128{B0_63: uint64(c.A), B64_127: uint64(c.B)})
-			if err != nil {
-				return left, err
+			if plus {
+				fol, err := col[rowIdx].Add128(types.Decimal128{B0_63: uint64(c.A), B64_127: uint64(c.B)})
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, decimal128Equal, decimal128Greater)
+			} else {
+				fol, err := col[rowIdx].Sub128(types.Decimal128{B0_63: uint64(c.A), B64_127: uint64(c.B)})
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, decimal128Equal, decimal128Greater)
 			}
-			left = genericSearchLeft(start, end-1, col, fol, decimal128Equal, decimal128Greater)
 		}
 	case types.T_date:
 		col := vector.MustFixedCol[types.Date](vec)
@@ -615,11 +676,19 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 		} else {
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			fol, err := doDateSub(col[rowIdx], diff, unit)
-			if err != nil {
-				return left, err
+			if plus {
+				fol, err := doDateAdd(col[rowIdx], diff, unit)
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], genericGreater[types.Date])
+			} else {
+				fol, err := doDateSub(col[rowIdx], diff, unit)
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], genericGreater[types.Date])
 			}
-			left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], genericGreater[types.Date])
 		}
 	case types.T_datetime:
 		col := vector.MustFixedCol[types.Datetime](vec)
@@ -628,11 +697,19 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 		} else {
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			fol, err := doDatetimeSub(col[rowIdx], diff, unit)
-			if err != nil {
-				return left, err
+			if plus {
+				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], genericGreater[types.Datetime])
+			} else {
+				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], genericGreater[types.Datetime])
 			}
-			left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], genericGreater[types.Datetime])
 		}
 	case types.T_time:
 		col := vector.MustFixedCol[types.Time](vec)
@@ -641,11 +718,19 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 		} else {
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			fol, err := doTimeSub(col[rowIdx], diff, unit)
-			if err != nil {
-				return left, err
+			if plus {
+				fol, err := doTimeAdd(col[rowIdx], diff, unit)
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], genericGreater[types.Time])
+			} else {
+				fol, err := doTimeSub(col[rowIdx], diff, unit)
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], genericGreater[types.Time])
 			}
-			left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], genericGreater[types.Time])
 		}
 	case types.T_timestamp:
 		col := vector.MustFixedCol[types.Timestamp](vec)
@@ -654,11 +739,19 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (in
 		} else {
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
-			if err != nil {
-				return left, err
+			if plus {
+				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
+			} else {
+				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
+				if err != nil {
+					return left, err
+				}
+				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 			}
-			left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 		}
 	}
 	return left, nil
@@ -716,7 +809,7 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 	}
 }
 
-func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (int, error) {
+func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool) (int, error) {
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		return rowIdx + 1, nil
 	}
@@ -728,7 +821,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[int8], genericGreater[int8])
 		} else {
 			c := int8(expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_I8Val).I8Val)
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int8], genericGreater[int8])
+			if sub {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int8], genericGreater[int8])
+			} else {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int8], genericGreater[int8])
+			}
 		}
 	case types.T_int16:
 		col := vector.MustFixedCol[int16](vec)
@@ -736,7 +833,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[int16], genericGreater[int16])
 		} else {
 			c := int16(expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_I16Val).I16Val)
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int16], genericGreater[int16])
+			if sub {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int16], genericGreater[int16])
+			} else {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int16], genericGreater[int16])
+			}
 		}
 	case types.T_int32:
 		col := vector.MustFixedCol[int32](vec)
@@ -744,7 +845,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[int32], genericGreater[int32])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_I32Val).I32Val
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int32], genericGreater[int32])
+			if sub {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int32], genericGreater[int32])
+			} else {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int32], genericGreater[int32])
+			}
 		}
 	case types.T_int64:
 		col := vector.MustFixedCol[int64](vec)
@@ -752,7 +857,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[int64], genericGreater[int64])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int64], genericGreater[int64])
+			if sub {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int64], genericGreater[int64])
+			} else {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int64], genericGreater[int64])
+			}
 		}
 	case types.T_uint8:
 		col := vector.MustFixedCol[uint8](vec)
@@ -760,10 +869,14 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[uint8], genericGreater[uint8])
 		} else {
 			c := uint8(expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U8Val).U8Val)
-			if col[rowIdx] <= c {
-				return start, nil
+			if sub {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint8], genericGreater[uint8])
+			} else {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint8], genericGreater[uint8])
 			}
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint8], genericGreater[uint8])
 		}
 	case types.T_uint16:
 		col := vector.MustFixedCol[uint16](vec)
@@ -771,10 +884,14 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[uint16], genericGreater[uint16])
 		} else {
 			c := uint16(expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U16Val).U16Val)
-			if col[rowIdx] <= c {
-				return start, nil
+			if sub {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint16], genericGreater[uint16])
+			} else {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint16], genericGreater[uint16])
 			}
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint16], genericGreater[uint16])
 		}
 	case types.T_uint32:
 		col := vector.MustFixedCol[uint32](vec)
@@ -782,10 +899,14 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[uint32], genericGreater[uint32])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U32Val).U32Val
-			if col[rowIdx] <= c {
-				return start, nil
+			if sub {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint32], genericGreater[uint32])
+			} else {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint32], genericGreater[uint32])
 			}
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint32], genericGreater[uint32])
 		}
 	case types.T_uint64:
 		col := vector.MustFixedCol[uint64](vec)
@@ -793,10 +914,14 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[uint64], genericGreater[uint64])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_U64Val).U64Val
-			if col[rowIdx] <= c {
-				return start, nil
+			if sub {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], genericGreater[uint64])
+			} else {
+				if col[rowIdx] <= c {
+					return start, nil
+				}
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], genericGreater[uint64])
 			}
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], genericGreater[uint64])
 		}
 	case types.T_float32:
 		col := vector.MustFixedCol[float32](vec)
@@ -804,7 +929,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[float32], genericGreater[float32])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Fval).Fval
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float32], genericGreater[float32])
+			if sub {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[float32], genericGreater[float32])
+			} else {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float32], genericGreater[float32])
+			}
 		}
 	case types.T_float64:
 		col := vector.MustFixedCol[float64](vec)
@@ -812,7 +941,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], genericEqual[float64], genericGreater[float64])
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Dval).Dval
-			right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float64], genericGreater[float64])
+			if sub {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[float64], genericGreater[float64])
+			} else {
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float64], genericGreater[float64])
+			}
 		}
 	case types.T_decimal64:
 		col := vector.MustFixedCol[types.Decimal64](vec)
@@ -820,11 +953,19 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], decimal64Equal, decimal64Greater)
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Decimal64Val).Decimal64Val.A
-			fol, err := col[rowIdx].Add64(types.Decimal64(c))
-			if err != nil {
-				return right, err
+			if sub {
+				fol, err := col[rowIdx].Sub64(types.Decimal64(c))
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, decimal64Equal, decimal64Greater)
+			} else {
+				fol, err := col[rowIdx].Add64(types.Decimal64(c))
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, decimal64Equal, decimal64Greater)
 			}
-			right = genericSearchRight(start, end-1, col, fol, decimal64Equal, decimal64Greater)
 		}
 	case types.T_decimal128:
 		col := vector.MustFixedCol[types.Decimal128](vec)
@@ -832,11 +973,19 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 			right = genericSearchRight(start, end-1, col, col[rowIdx], decimal128Equal, decimal128Greater)
 		} else {
 			c := expr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Decimal128Val).Decimal128Val
-			fol, err := col[rowIdx].Add128(types.Decimal128{B0_63: uint64(c.A), B64_127: uint64(c.B)})
-			if err != nil {
-				return right, err
+			if sub {
+				fol, err := col[rowIdx].Sub128(types.Decimal128{B0_63: uint64(c.A), B64_127: uint64(c.B)})
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, decimal128Equal, decimal128Greater)
+			} else {
+				fol, err := col[rowIdx].Add128(types.Decimal128{B0_63: uint64(c.A), B64_127: uint64(c.B)})
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, decimal128Equal, decimal128Greater)
 			}
-			right = genericSearchRight(start, end-1, col, fol, decimal128Equal, decimal128Greater)
 		}
 	case types.T_date:
 		col := vector.MustFixedCol[types.Date](vec)
@@ -845,11 +994,19 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 		} else {
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			fol, err := doDateAdd(col[rowIdx], diff, unit)
-			if err != nil {
-				return right, err
+			if sub {
+				fol, err := doDateSub(col[rowIdx], diff, unit)
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], genericGreater[types.Date])
+			} else {
+				fol, err := doDateAdd(col[rowIdx], diff, unit)
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], genericGreater[types.Date])
 			}
-			right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], genericGreater[types.Date])
 		}
 	case types.T_datetime:
 		col := vector.MustFixedCol[types.Datetime](vec)
@@ -858,11 +1015,19 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 		} else {
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
-			if err != nil {
-				return right, err
+			if sub {
+				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], genericGreater[types.Datetime])
+			} else {
+				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], genericGreater[types.Datetime])
 			}
-			right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], genericGreater[types.Datetime])
 		}
 	case types.T_time:
 		col := vector.MustFixedCol[types.Time](vec)
@@ -871,11 +1036,19 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 		} else {
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			fol, err := doTimeAdd(col[rowIdx], diff, unit)
-			if err != nil {
-				return right, err
+			if sub {
+				fol, err := doTimeSub(col[rowIdx], diff, unit)
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], genericGreater[types.Time])
+			} else {
+				fol, err := doTimeAdd(col[rowIdx], diff, unit)
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], genericGreater[types.Time])
 			}
-			right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], genericGreater[types.Time])
 		}
 	case types.T_timestamp:
 		col := vector.MustFixedCol[types.Timestamp](vec)
@@ -884,11 +1057,19 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr) (i
 		} else {
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
-			fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
-			if err != nil {
-				return right, err
+			if sub {
+				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
+			} else {
+				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
+				if err != nil {
+					return right, err
+				}
+				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 			}
-			right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 		}
 	}
 	return right + 1, nil
