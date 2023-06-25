@@ -1499,7 +1499,9 @@ func (tbl *txnTable) newBlockReader(
 	}
 
 	infos, steps := groupBlocksToObjects(blkInfos, num)
-	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.engine.fs, defines.SharedFileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](
+		tbl.db.txn.engine.fs,
+		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}

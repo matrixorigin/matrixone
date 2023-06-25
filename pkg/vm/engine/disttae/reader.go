@@ -260,10 +260,10 @@ func newBlockReader(
 			ctx:      ctx,
 			fs:       fs,
 			ts:       ts,
+			proc:     proc,
 			tableDef: tableDef,
 		},
 		blks:    blks,
-		proc:    proc,
 		blkDels: make(map[types.Blockid][]int64),
 	}
 	r.filterState.expr = filterExpr
@@ -347,11 +347,11 @@ func newBlockMergeReader(
 			ctx:      ctx,
 			tableDef: txnTable.tableDef,
 			ts:       ts,
+			proc:     proc,
 			fs:       fs,
 		},
 		dirtyBlks: dirtyBlks,
 		table:     txnTable,
-		proc:      proc,
 	}
 	r.filterState.expr = filterExpr
 	return r

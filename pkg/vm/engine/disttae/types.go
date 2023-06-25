@@ -425,6 +425,7 @@ type withFilterMixin struct {
 	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
+	proc     *process.Process
 	tableDef *plan.TableDef
 
 	// columns used for reading
@@ -462,7 +463,7 @@ type blockReader struct {
 	// block list to scan
 	blks    []*catalog.BlockInfo
 	blkDels map[types.Blockid][]int64
-	proc    *process.Process
+	//proc    *process.Process
 }
 
 // TODO::blockMergeReader should inherit from blockReader.
@@ -472,7 +473,7 @@ type blockMergeReader struct {
 	table     *txnTable
 	dirtyBlks []*catalog.BlockInfo
 	buffer    []int64
-	proc      *process.Process
+	//proc      *process.Process
 }
 
 type mergeReader struct {
