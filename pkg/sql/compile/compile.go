@@ -169,13 +169,6 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			err = moerr.ConvertPanicError(ctx, e)
 		}
 	}()
-	txnOp := c.proc.TxnOperator
-	if txnOp != nil {
-		err := txnOp.GetWorkspace().IncrStatemenetID(c.proc.Ctx)
-		if err != nil {
-			return nil
-		}
-	}
 
 	// with values
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
@@ -335,7 +328,7 @@ func (c *Compile) Run(_ uint64) error {
 				return err
 			}
 			//  increase the statement id
-			if err = c.proc.TxnOperator.GetWorkspace().IncrStatemenetID(c.ctx); err != nil {
+			if err = c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx); err != nil {
 				return err
 			}
 
