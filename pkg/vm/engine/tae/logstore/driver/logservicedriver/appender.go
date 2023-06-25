@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+
+	"go.uber.org/zap"
 )
 
 type driverAppender struct {
@@ -45,6 +47,8 @@ func (a *driverAppender) appendEntry(e *entry.Entry) {
 }
 
 func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
+	retryTimout = 10 * time.Millisecond
+	appendTimeout = time.Millisecond
 	size := a.entry.prepareRecord()
 	// if size > int(common.K)*20 { //todo
 	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))
@@ -64,15 +68,17 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 		trace.WithProfileCpuSecs(time.Second*10))
 	defer timeoutSpan.End()
 
+	logutil.Debug("append", zap.Duration("retry", retryTimout), zap.Duration("append", appendTimeout))
 	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
 	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {
-		logutil.Errorf("append failed: %v", err)
+		logutil.Error("append failed", zap.Error(err), trace.ContextField(ctx))
 	}
 	cancel()
 	if err != nil {
+
 		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
-			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+			ctx, cancel := context.WithTimeout(ctx, appendTimeout)
 			ctx, timeoutSpan = trace.Start(ctx, "appender retry",
 				trace.WithProfileGoroutine(),
 				trace.WithProfileHeap(),
@@ -81,7 +87,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 			lsn, err = a.client.c.Append(ctx, record)
 			cancel()
 			if err != nil {
-				logutil.Errorf("append failed: %v", err)
+				logutil.Error("append failed", zap.Error(err), trace.ContextField(ctx))
 			}
 			return err == nil
 		})
@@ -89,7 +95,8 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	logutil.Debugf("Log Service Driver: append end %p", a.client.record.Data)
 	if err != nil {
 		logutil.Infof("size is %d", size)
-		logutil.Panic(err.Error())
+		logutil.Panic("error", zap.Error(err), trace.ContextField(ctx),
+			zap.Duration("retry", retryTimout), zap.Duration("append", appendTimeout))
 	}
 	a.logserviceLsn = lsn
 	a.wg.Done()
