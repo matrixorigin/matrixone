@@ -948,7 +948,23 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
 
 		if toWriteS3 {
-			if haveSinkScanInPlan(ns, n.Children[0]) {
+			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
+				insertArg, err := constructInsert(n, c.e, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				insertArg.ToWriteS3 = true
+				rs := c.newInsertMergeScope(insertArg, ss)
+				rs.Magic = MergeInsert
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op: vm.MergeBlock,
+					Arg: &mergeblock.Argument{
+						Tbl:              insertArg.InsertCtx.Rel,
+						PartitionSources: insertArg.InsertCtx.PartitionSources,
+					},
+				})
+				ss = []*Scope{rs}
+			} else {
 				dataScope := c.newMergeScope(ss)
 				dataScope.IsEnd = true
 				if c.anal.qry.LoadTag {
@@ -991,22 +1007,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				insertArg.ToWriteS3 = true
 				rs := c.newMergeScope(scopes)
 				rs.PreScopes = append(rs.PreScopes, dataScope)
-				rs.Magic = MergeInsert
-				rs.Instructions = append(rs.Instructions, vm.Instruction{
-					Op: vm.MergeBlock,
-					Arg: &mergeblock.Argument{
-						Tbl:              insertArg.InsertCtx.Rel,
-						PartitionSources: insertArg.InsertCtx.PartitionSources,
-					},
-				})
-				ss = []*Scope{rs}
-			} else {
-				insertArg, err := constructInsert(n, c.e, c.proc)
-				if err != nil {
-					return nil, err
-				}
-				insertArg.ToWriteS3 = true
-				rs := c.newInsertMergeScope(insertArg, ss)
 				rs.Magic = MergeInsert
 				rs.Instructions = append(rs.Instructions, vm.Instruction{
 					Op: vm.MergeBlock,
