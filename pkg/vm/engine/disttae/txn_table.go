@@ -577,7 +577,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		exprs,
 		tbl.blockInfos,
 		&ranges,
-		tbl.db.txn.proc,
+		tbl.proc,
 	)
 	return
 }
