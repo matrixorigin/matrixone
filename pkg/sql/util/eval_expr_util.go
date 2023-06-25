@@ -724,8 +724,13 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		canInsert = false
 
 	case tree.P_float64:
-		canInsert = false
-
+		val, err := strconv.ParseFloat(numVal.OrigString(), 64)
+		if err != nil {
+			canInsert = false
+			return canInsert, nil
+		}
+		canInsert = true
+		err = vector.AppendFixed(vec, T(val), false, proc.Mp())
 	case tree.P_hexnum:
 		var val uint64
 		val, err = hexToInt(numVal.OrigString())
