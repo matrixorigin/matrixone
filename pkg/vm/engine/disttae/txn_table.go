@@ -705,11 +705,13 @@ func (tbl *txnTable) rangesOnePart(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	blocks []catalog.BlockInfo, // whole block list
+	committedblocks []catalog.BlockInfo, // whole block list
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
+	blks := make([]catalog.BlockInfo, 0, len(committedblocks))
+	blks = append(blks, committedblocks...)
 
 	//collect dirty blocks from PartitionState.dirtyBlocks.
 	{
@@ -737,7 +739,6 @@ func (tbl *txnTable) rangesOnePart(
 				continue
 			}
 			//load uncommitted blocks from txn's workspace.
-			//TODO::take filtering bloks into account.
 			metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
 			for _, metaLoc := range metaLocs {
 				location, err := blockio.EncodeLocationFromString(metaLoc)
@@ -753,15 +754,16 @@ func (tbl *txnTable) rangesOnePart(
 				if !ok {
 					panic(fmt.Sprintf("blkid %s not found", blkid.String()))
 				}
-				//blkInfos = append(blkInfos, &pos.blkInfo)
-				blkInfo := pos.blkInfo
-				blkInfo.PartitionNum = -1
+				blks = append(blks, pos.blkInfo)
+				//blkInfo := pos.blkInfo
+				//blkInfo.PartitionNum = -1
 
 				offsets := txn.deletedBlocks.getDeletedOffsetsByBlock(blkid)
 				if len(offsets) == 0 {
-					blkInfo.CanRemote = true
+					//blkInfo.CanRemote = true
+					dirtyBlks[*blkid] = struct{}{}
 				}
-				*ranges = append(*ranges, catalog.EncodeBlockInfo(blkInfo))
+				//*ranges = append(*ranges, catalog.EncodeBlockInfo(blkInfo))
 			}
 			continue
 		}
@@ -816,7 +818,7 @@ func (tbl *txnTable) rangesOnePart(
 		return err
 	}
 	hasDeletes := len(dirtyBlks) > 0
-	for _, blk := range blocks {
+	for _, blk := range blks {
 		// if expr is monotonic, we need evaluating expr for each block
 		if auxIdCnt > 0 {
 			location := blk.MetaLocation()
