@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
+func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	aliasMap := make(map[string][2]string)
 	for _, tbl := range stmt.TableRefs {
 		getAliasToName(ctx, tbl, "", aliasMap)
@@ -28,7 +28,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 
 	queryBindCtx := NewBindContext(builder, nil)
 	lastNodeId, err := deleteToSelect(builder, queryBindCtx, stmt, true, tblInfo)

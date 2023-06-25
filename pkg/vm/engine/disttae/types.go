@@ -65,6 +65,10 @@ const (
 	INIT_ROWID_OFFSET             = math.MaxUint32
 )
 
+const (
+	WorkspaceThreshold uint64 = 1 * mpool.MB
+)
+
 var (
 	_ client.Workspace = (*Transaction)(nil)
 )
@@ -217,6 +221,12 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 }
 
 func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
+	if err := txn.mergeTxnWorkspace(); err != nil {
+		return err
+	}
+	if err := txn.dumpBatch(false, 0); err != nil {
+		return err
+	}
 	txn.Lock()
 	defer txn.Unlock()
 	if txn.statementID > 0 {
@@ -386,6 +396,9 @@ type txnTable struct {
 	rowids []types.Rowid
 	//the old table id before truncate
 	oldTableId uint64
+
+	// process for statement
+	proc *process.Process
 }
 
 type column struct {
@@ -462,6 +475,7 @@ type blockMergeReader struct {
 	table     *txnTable
 	dirtyBlks []*catalog.BlockInfo
 	buffer    []int64
+	proc      *process.Process
 }
 
 type mergeReader struct {

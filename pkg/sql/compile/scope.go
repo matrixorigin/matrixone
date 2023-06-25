@@ -230,7 +230,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
-			s.NodeInfo.Data, s.DataSource.TableDef)
+			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return err
 		}
@@ -289,14 +289,14 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if err != nil {
 			return err
 		}
-		rel, err = db.Relation(ctx, s.DataSource.RelationName)
+		rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
 		if err != nil {
 			var e error // avoid contamination of error messages
 			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
 			if e != nil {
 				return e
 			}
-			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName))
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
 			if e != nil {
 				return err
 			}
@@ -347,7 +347,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			}
 			// create readers for reading dirty blocks from partition table.
 			for num, relName := range s.DataSource.PartitionRelationNames {
-				subrel, err := db.Relation(c.ctx, relName)
+				subrel, err := db.Relation(c.ctx, relName, c.proc)
 				if err != nil {
 					return err
 				}

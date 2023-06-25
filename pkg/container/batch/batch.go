@@ -334,6 +334,10 @@ func (bat *Batch) SubCnt(cnt int) {
 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
 }
 
+func (bat *Batch) SetCnt(cnt int64) {
+	atomic.StoreInt64(&bat.Cnt, cnt)
+}
+
 func (bat *Batch) GetCnt() int64 {
 	return atomic.LoadInt64(&bat.Cnt)
 }

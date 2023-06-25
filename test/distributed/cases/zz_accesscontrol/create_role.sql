@@ -2,7 +2,7 @@ set global enable_privilege_cache = off;
 --env prepare statement
 drop role if exists newrole, role_1234,12role,`role@hhhh123`,`role.123`,_newrole,role222;
 drop role if exists role1,role2,role3,role4,role5,role6,role_7,user_role,u_role;
-drop role if exists role_1,role_2,role_3,role_4,role_5,role_6,role_7,'中文','12345','default';;
+drop role if exists role_1,role_2,role_3,role_4,role_5,role_6,role_7,'中文','12345','default';
 drop role if exists `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff`;
 drop user if exists role_user,user_role;
 drop role if exists role_role1,role_role2,role_role3,role_role4,role_role5,role_role6,role_role7,role_role8,u_role;
@@ -107,7 +107,7 @@ execute stmt5;
 
 drop role if exists newrole, role_1234,12role,`role@hhhh123`,`role.123`,_newrole,role222;
 drop role if exists role1,role2,role3,role4,role5,role6,role_7,user_role,u_role;
-drop role if exists role_1,role_2,role_3,role_4,role_5,role_6,role_7,'中文','12345','default';;
+drop role if exists role_1,role_2,role_3,role_4,role_5,role_6,role_7,'中文','12345','default';
 drop role if exists `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff`;
 drop user if exists role_user,user_role;
 drop role if exists role_role1,role_role2,role_role3,role_role4,role_role5,role_role6,role_role7,role_role8,u_role;

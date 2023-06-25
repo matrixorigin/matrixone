@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -137,7 +138,23 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			typ:      typ,
 		}, nil
 
+	case *plan.Expr_P:
+		return &ParamExpressionExecutor{
+			pos: int(t.P.Pos),
+			typ: types.T_text.ToType(),
+		}, nil
+
+	case *plan.Expr_V:
+		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		return &VarExpressionExecutor{
+			name:   t.V.Name,
+			system: t.V.System,
+			global: t.V.Global,
+			typ:    typ,
+		}, nil
+
 	case *plan.Expr_F:
+
 		overload, err := function.GetFunctionById(proc.Ctx, t.F.GetFunc().GetObj())
 		if err != nil {
 			return nil, err
@@ -277,6 +294,52 @@ type ColumnExpressionExecutor struct {
 	colIndex int
 	// result type.
 	typ types.Type
+}
+
+type ParamExpressionExecutor struct {
+	pos int
+	typ types.Type
+}
+
+func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	return proc.GetPrepareParamsAt(int(expr.pos))
+}
+
+func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	return expr.Eval(proc, batches)
+}
+
+func (expr *ParamExpressionExecutor) Free() {
+}
+
+func (expr *ParamExpressionExecutor) IfResultMemoryReuse() bool {
+	return false
+}
+
+type VarExpressionExecutor struct {
+	name   string
+	system bool
+	global bool
+	typ    types.Type
+}
+
+func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	val, err := proc.GetResolveVariableFunc()(expr.name, expr.system, expr.global)
+	if err != nil {
+		return nil, err
+	}
+	return util.GenVectorByVarValue(proc, expr.typ, val)
+}
+
+func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	return expr.Eval(proc, batches)
+}
+
+func (expr *VarExpressionExecutor) Free() {
+}
+
+func (expr *VarExpressionExecutor) IfResultMemoryReuse() bool {
+	return false
 }
 
 func (expr *FunctionExpressionExecutor) Init(
@@ -888,17 +951,23 @@ func GetExprZoneMap(
 				return zms[expr.AuxId]
 			}
 
-			for _, arg := range args {
-				zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
-				if !zms[arg.AuxId].IsInited() {
-					zms[expr.AuxId].Reset()
-					return zms[expr.AuxId]
+			f := func() bool {
+				for _, arg := range args {
+					zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+					if !zms[arg.AuxId].IsInited() {
+						zms[expr.AuxId].Reset()
+						return true
+					}
 				}
+				return false
 			}
 
 			var res, ok bool
 			switch t.F.Func.ObjName {
 			case ">":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGT(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -906,6 +975,9 @@ func GetExprZoneMap(
 				}
 
 			case "<":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyLT(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -913,6 +985,9 @@ func GetExprZoneMap(
 				}
 
 			case ">=":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGE(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -920,6 +995,9 @@ func GetExprZoneMap(
 				}
 
 			case "<=":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyLE(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -927,6 +1005,9 @@ func GetExprZoneMap(
 				}
 
 			case "=":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -934,6 +1015,9 @@ func GetExprZoneMap(
 				}
 
 			case "and":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].And(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -941,6 +1025,9 @@ func GetExprZoneMap(
 				}
 
 			case "or":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].Or(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -948,24 +1035,31 @@ func GetExprZoneMap(
 				}
 
 			case "+":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				zms[expr.AuxId] = index.ZMPlus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			case "-":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				zms[expr.AuxId] = index.ZMMinus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			case "*":
+				if f() {
+					return zms[expr.AuxId]
+				}
 				zms[expr.AuxId] = index.ZMMulti(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			default:
 				ivecs := make([]*vector.Vector, len(args))
 				for i, arg := range args {
-					if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
+					if ivecs[i], err = EvalExpressionOnce(proc, arg, []*batch.Batch{batch.EmptyForConstFoldBatch}); err != nil {
 						zms[expr.AuxId].Reset()
 						return zms[expr.AuxId]
 					}
-					ivecs[i] = vecs[arg.AuxId]
 				}
-
 				fn := overload.GetExecuteMethod()
 				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 

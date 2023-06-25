@@ -355,8 +355,16 @@ func (n *Bitmap) Count() int {
 	if n.emptyFlag.Load() == kEmptyFlagEmpty { //must be empty
 		return 0
 	}
-	for i := 0; i < len(n.data); i++ {
+	for i := int64(0); i < n.len/64; i++ {
 		cnt += bits.OnesCount64(n.data[i])
+	}
+	if offset := n.len % 64; offset > 0 {
+		start := (n.len / 64) * 64
+		for i, j := start, start+offset; i < j; i++ {
+			if n.Contains(uint64(i)) {
+				cnt++
+			}
+		}
 	}
 	if cnt > 0 {
 		n.emptyFlag.Store(kEmptyFlagNotEmpty)

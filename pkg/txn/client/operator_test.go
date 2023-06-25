@@ -365,7 +365,9 @@ func TestSnapshotTxnOperator(t *testing.T) {
 
 		tc2, err := newTxnOperatorWithSnapshot(tc.sender, v)
 		assert.NoError(t, err)
+		assert.True(t, tc2.mu.txn.Mirror)
 
+		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true
