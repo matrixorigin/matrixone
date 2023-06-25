@@ -37,11 +37,11 @@ select @u64_var1,@u64_var2;
 set @f32_var1 = 1.1754943508222875e-38,@f32_var2 = 99999999999999999999999999999999999999;
 select @f32_var1,@f32_var2;
 @f32_var1    @f32_var2
-0E-37    99999999999999999999999999999999999999
+1.175494e-38    99999999999999999999999999999999999999
 set @f64_var1 = 2.2250738585072014e-308,@f64_var2 = 99999999999999999999999999999999999999;
 select @f64_var1,@f64_var2;
 @f64_var1    @f64_var2
-0E-37    99999999999999999999999999999999999999
+2.225074e-308    99999999999999999999999999999999999999
 set @ch_var='abc',@varch_var=cast('def' as varchar),@bin_var=cast('1001' as binary),@varbin_var=cast('1001' as varbinary(6)),@text_var=cast('ghi' as text),@blob_var=cast('1010' as blob);
 select @ch_var,@varch_var,@bin_var,@varbin_var,@text_var,@blob_var;
 @ch_var    @varch_var    @bin_var    @varbin_var    @text_var    @blob_var

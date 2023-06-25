@@ -394,7 +394,7 @@ func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error)
 
 	var pl *plan.Plan
 	for _, ast := range stmts {
-		pl, err = BuildPlan(ctx, ast)
+		pl, err = BuildPlan(ctx, ast, false)
 		if err != nil {
 			return nil, err
 		}

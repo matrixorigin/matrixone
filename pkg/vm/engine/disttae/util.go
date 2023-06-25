@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -92,7 +93,7 @@ func getPosInCompositPK(name string, pks []string) int {
 	return -1
 }
 
-func getValidCompositePKCnt(vals []*plan.Expr_C) int {
+func getValidCompositePKCnt(vals []*plan.Const) int {
 	if len(vals) == 0 {
 		return 0
 	}
@@ -107,65 +108,67 @@ func getValidCompositePKCnt(vals []*plan.Expr_C) int {
 	return cnt
 }
 
-func getCompositPKVals(expr *plan.Expr, pks []string, vals []*plan.Expr_C) bool {
+func getCompositPKVals(expr *plan.Expr, pks []string, vals []*plan.Const, proc *process.Process) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		fname := exprImpl.F.Func.ObjName
 		switch fname {
 		case "and":
-			getCompositPKVals(exprImpl.F.Args[0], pks, vals)
-			return getCompositPKVals(exprImpl.F.Args[1], pks, vals)
+			getCompositPKVals(exprImpl.F.Args[0], pks, vals, proc)
+			return getCompositPKVals(exprImpl.F.Args[1], pks, vals, proc)
 		case "=":
-			switch leftExpr := exprImpl.F.Args[0].Expr.(type) {
-			case *plan.Expr_C:
-				if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
-					if pos := getPosInCompositPK(rightExpr.Col.Name, pks); pos != -1 {
-						vals[pos] = leftExpr
-						return true
-					}
-				}
-			case *plan.Expr_Col:
+			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
 				if pos := getPosInCompositPK(leftExpr.Col.Name, pks); pos != -1 {
-					if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_C); ok {
-						vals[pos] = rightExpr
-						return true
+					_, ret := getConstValueByExpr(exprImpl.F.Args[1], proc)
+					if ret == nil {
+						return false
 					}
+					vals[pos] = ret
+					return true
 				}
+				return false
 			}
+			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
+				if pos := getPosInCompositPK(rightExpr.Col.Name, pks); pos != -1 {
+					_, ret := getConstValueByExpr(exprImpl.F.Args[0], proc)
+					if ret == nil {
+						return false
+					}
+					vals[pos] = ret
+				}
+				return false
+			}
+			return false
 		}
 	}
 	return false
 }
 
-func getPkExpr(expr *plan.Expr, pkName string) (bool, *plan.Expr) {
+func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) (bool, *plan.Const) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funName := exprImpl.F.Func.ObjName
 		switch funName {
 		case "and":
-			canCompute, pkBytes := getPkExpr(exprImpl.F.Args[0], pkName)
+			canCompute, pkBytes := getPkExpr(exprImpl.F.Args[0], pkName, proc)
 			if canCompute {
 				return canCompute, pkBytes
 			}
-			return getPkExpr(exprImpl.F.Args[1], pkName)
+			return getPkExpr(exprImpl.F.Args[1], pkName, proc)
 
 		case "=":
-			switch leftExpr := exprImpl.F.Args[0].Expr.(type) {
-			case *plan.Expr_C:
-				if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
-					if compPkCol(rightExpr.Col.Name, pkName) {
-						return true, exprImpl.F.Args[0]
-					}
+			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
+				if !compPkCol(leftExpr.Col.Name, pkName) {
+					return false, nil
 				}
-
-			case *plan.Expr_Col:
-				if compPkCol(leftExpr.Col.Name, pkName) {
-					if _, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_C); ok {
-						return true, exprImpl.F.Args[1]
-					}
-				}
+				return getConstValueByExpr(exprImpl.F.Args[1], proc)
 			}
-
+			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
+				if !compPkCol(rightExpr.Col.Name, pkName) {
+					return false, nil
+				}
+				return getConstValueByExpr(exprImpl.F.Args[0], proc)
+			}
 			return false, nil
 
 		default:
@@ -176,14 +179,14 @@ func getPkExpr(expr *plan.Expr, pkName string) (bool, *plan.Expr) {
 	return false, nil
 }
 
-func getNonCompositePKSearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, func(*vector.Vector) int) {
-	canCompute, valExpr := getPkExpr(expr, pkName)
+func getNonCompositePKSearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T,
+	proc *process.Process) (bool, func(*vector.Vector) int) {
+	canCompute, valExpr := getPkExpr(expr, pkName, proc)
 	if !canCompute {
 		return canCompute, nil
 	}
 
-	c := valExpr.Expr.(*plan.Expr_C)
-	switch val := c.C.Value.(type) {
+	switch val := valExpr.Value.(type) {
 	case *plan.Const_I8Val:
 		return true, vector.OrderedBinarySearchOffsetByValFactory(int8(val.I8Val))
 	case *plan.Const_I16Val:
@@ -225,12 +228,12 @@ func getNonCompositePKSearchFuncByExpr(expr *plan.Expr, pkName string, oid types
 	return false, nil
 }
 
-func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, any) {
-	canCompute, valExpr := getPkExpr(expr, pkName)
+func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T, proc *process.Process) (bool, any) {
+	canCompute, valExpr := getPkExpr(expr, pkName, proc)
 	if !canCompute {
 		return canCompute, nil
 	}
-	switch val := valExpr.Expr.(*plan.Expr_C).C.Value.(type) {
+	switch val := valExpr.Value.(type) {
 	case *plan.Const_I8Val:
 		return transferIval(val.I8Val, oid)
 	case *plan.Const_I16Val:
@@ -278,11 +281,16 @@ func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, any) {
 // support eg: pk="a",  pk="a" and noPk > 200
 // unsupport eg: pk>"a", pk=otherFun("a"),  pk="a" or noPk > 200,
 func computeRangeByNonIntPk(ctx context.Context, expr *plan.Expr, pkName string, proc *process.Process) (bool, uint64) {
-	canCompute, valExpr := getPkExpr(expr, pkName)
+	canCompute, valExpr := getPkExpr(expr, pkName, proc)
 	if !canCompute {
 		return canCompute, 0
 	}
-	ok, pkHashValue := getConstantExprHashValue(ctx, valExpr, proc)
+	ok, pkHashValue := getConstantExprHashValue(ctx, &plan.Expr{
+		Typ: expr.Typ,
+		Expr: &plan.Expr_C{
+			C: valExpr,
+		},
+	}, proc)
 	if !ok {
 		return false, 0
 	}
@@ -910,9 +918,9 @@ func EvalSelectedOnVarlenColumnFactory(
 // it evaluates the filter expression only on the selected rows and returns the selected rows
 // which are evaluated to true
 func getCompositeFilterFuncByExpr(
-	expr *plan.Expr_C, isSorted bool,
+	expr *plan.Const, isSorted bool,
 ) func(*vector.Vector, []int32, *[]int32) {
-	switch val := expr.C.Value.(type) {
+	switch val := expr.Value.(type) {
 	case *plan.Const_Bval:
 		return EvalSelectedOnFixedSizeColumnFactory(val.Bval)
 	case *plan.Const_I8Val:
@@ -1013,8 +1021,8 @@ func getCompositeFilterFuncByExpr(
 	}
 }
 
-func serialTupleByConstExpr(expr *plan.Expr_C, packer *types.Packer) {
-	switch val := expr.C.Value.(type) {
+func serialTupleByConstExpr(expr *plan.Const, packer *types.Packer) {
+	switch val := expr.Value.(type) {
 	case *plan.Const_Bval:
 		packer.EncodeBool(val.Bval)
 	case *plan.Const_I8Val:
@@ -1056,4 +1064,21 @@ func serialTupleByConstExpr(expr *plan.Expr_C, packer *types.Packer) {
 	default:
 		panic(fmt.Sprintf("unexpected const expr %v", expr))
 	}
+}
+
+func getConstValueByExpr(expr *plan.Expr,
+	proc *process.Process) (bool, *plan.Const) {
+	exec, err := colexec.NewExpressionExecutor(proc, expr)
+	if err != nil {
+		return false, nil
+	}
+	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	if err != nil {
+		return false, nil
+	}
+	defer exec.Free()
+	if ret := rule.GetConstantValue(vec, true); ret != nil {
+		return true, ret
+	}
+	return false, nil
 }

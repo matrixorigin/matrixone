@@ -22,9 +22,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -33,7 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
+func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool) *QueryBuilder {
 	var mysqlCompatible bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
@@ -49,12 +52,13 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 		qry: &Query{
 			StmtType: queryType,
 		},
-		compCtx:         ctx,
-		ctxByNode:       []*BindContext{},
-		nameByColRef:    make(map[[2]int32]string),
-		nextTag:         0,
-		mysqlCompatible: mysqlCompatible,
-		tag2Table:       make(map[int32]*TableDef),
+		compCtx:            ctx,
+		ctxByNode:          []*BindContext{},
+		nameByColRef:       make(map[[2]int32]string),
+		nextTag:            0,
+		mysqlCompatible:    mysqlCompatible,
+		tag2Table:          make(map[int32]*TableDef),
+		isPrepareStatement: isPrepareStatement,
 	}
 }
 
@@ -879,6 +883,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		remapping = childRemapping
 
 	case plan.Node_VALUE_SCAN:
+		node.NotCacheable = true
 		// VALUE_SCAN always have one column now
 		if node.TableDef == nil { // like select 1,2
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
@@ -1481,9 +1486,24 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var lockNode *plan.Node
 
 	if clause == nil {
+		proc := builder.compCtx.GetProcess()
 		rowCount := len(valuesClause.Rows)
 		if len(valuesClause.Rows) == 0 {
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
+		}
+		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
+		strTyp := &plan.Type{
+			Id:          int32(types.T_text),
+			NotNullable: false,
+		}
+		strColTyp := makeTypeByPlan2Type(strTyp)
+		strColTargetTyp := &plan.Expr{
+			Typ: strTyp,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{
+					Typ: strTyp,
+				},
+			},
 		}
 		colCount := len(valuesClause.Rows[0])
 		for j := 1; j < rowCount; j++ {
@@ -1503,40 +1523,27 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 		ctx.binder = NewWhereBinder(builder, ctx)
 		for i := 0; i < colCount; i++ {
-			rows := make([]*plan.Expr, rowCount)
-			var colTyp *plan.Type
-			var tmpArgsType []types.Type
+			vec := proc.GetVector(types.T_text.ToType())
+			bat.Vecs[i] = vec
+			rowSetData.Cols[i] = &plan.ColData{}
 			for j := 0; j < rowCount; j++ {
+				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
+					bat.Clean(proc.Mp())
+					return 0, err
+				}
 				planExpr, err := ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true)
 				if err != nil {
 					return 0, err
 				}
-				if planExpr.Typ.Id != int32(types.T_any) {
-					tmpArgsType = append(tmpArgsType, makeTypeByPlan2Expr(planExpr))
-				}
-				rows[j] = planExpr
-			}
-
-			if len(tmpArgsType) > 0 {
-				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
+				planExpr, err = forceCastExpr2(builder.GetContext(), planExpr, strColTyp, strColTargetTyp)
 				if err != nil {
 					return 0, err
 				}
-				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
-				if len(argsCastType) > 0 {
-					colTyp = makePlan2Type(&argsCastType[0])
-					for j := 0; j < rowCount; j++ {
-						if rows[j].Typ.Id != int32(types.T_any) && rows[j].Typ.Id != colTyp.Id {
-							rows[j], err = appendCastBeforeExpr(builder.GetContext(), rows[j], colTyp)
-							if err != nil {
-								return 0, err
-							}
-						}
-					}
-				}
-			}
-			if colTyp == nil {
-				colTyp = rows[0].Typ
+				rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
+					RowPos: int32(j),
+					Expr:   planExpr,
+					Pos:    -1,
+				})
 			}
 
 			colName := fmt.Sprintf("column_%d", i) // like MySQL
@@ -1553,18 +1560,24 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			tableDef.Cols[i] = &plan.ColDef{
 				ColId: 0,
 				Name:  colName,
-				Typ:   colTyp,
-			}
-			rowSetData.Cols[i] = &plan.ColData{
-				Data: rows,
+				Typ:   strTyp,
 			}
 		}
+		bat.SetZs(rowCount, proc.Mp())
+		nodeUUID, _ := uuid.NewUUID()
 		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_VALUE_SCAN,
-			RowsetData:  rowSetData,
-			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewTag()},
+			NodeType:     plan.Node_VALUE_SCAN,
+			RowsetData:   rowSetData,
+			TableDef:     tableDef,
+			BindingTags:  []int32{builder.genNewTag()},
+			Uuid:         nodeUUID[:],
+			NotCacheable: true,
 		}, ctx)
+		if builder.isPrepareStatement {
+			proc.SetPrepareBatch(bat)
+		} else {
+			proc.SetValueScanBatch(nodeUUID, bat)
+		}
 
 		err = builder.addBinding(nodeID, tree.AliasClause{
 			Alias: "_ValueScan",

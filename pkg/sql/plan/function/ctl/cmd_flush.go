@@ -43,7 +43,7 @@ func handleFlush() handleFunc {
 			if err != nil {
 				return nil, err
 			}
-			rel, err := database.Relation(proc.Ctx, parameters[1])
+			rel, err := database.Relation(proc.Ctx, parameters[1], nil)
 			if err != nil {
 				return nil, err
 			}
