@@ -132,7 +132,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	if node.RowsetData != nil {
 		for i := range node.RowsetData.Cols {
 			for j := range node.RowsetData.Cols[i].Data {
-				node.RowsetData.Cols[i].Data[j], err = applyAndResetType(node.RowsetData.Cols[i].Data[j])
+				node.RowsetData.Cols[i].Data[j].Expr, err = applyAndResetType(node.RowsetData.Cols[i].Data[j].Expr)
 				if err != nil {
 					return err
 				}

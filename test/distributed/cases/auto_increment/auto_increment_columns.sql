@@ -413,11 +413,13 @@ insert into t1 values(null), (3), (null), (6), (null), (65535);
 select * from t1;
 insert into t1 values();
 
+-- @bvt:issue#10204
 drop table t1;
 create table t1(a int unsigned auto_increment);
 insert into t1 values(null), (3), (null), (6), (null), (4294967295);
 select * from t1;
 insert into t1 values();
+-- @bvt:issue
 
 drop table t1;
 create table t1(a bigint unsigned auto_increment);

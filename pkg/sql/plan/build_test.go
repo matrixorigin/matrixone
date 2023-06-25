@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -1052,7 +1052,7 @@ func TestVisitRule(t *testing.T) {
 		makePlan2Int64ConstExprWithType(10),
 	}
 	resetParamRule := NewResetParamRefRule(ctx, params)
-	resetVarRule := NewResetVarRefRule(&mock.ctxt, &process.Process{})
+	resetVarRule := NewResetVarRefRule(&mock.ctxt, testutil.NewProc())
 	constantFoldRule := NewConstantFoldRule(&mock.ctxt)
 	vp = NewVisitPlan(plan, []VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
 	err = vp.Visit(ctx)
@@ -1113,7 +1113,7 @@ func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return BuildPlan(ctx, stmts[0])
+	return BuildPlan(ctx, stmts[0], false)
 }
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {

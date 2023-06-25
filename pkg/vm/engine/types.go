@@ -568,7 +568,7 @@ type Reader interface {
 
 type Database interface {
 	Relations(context.Context) ([]string, error)
-	Relation(context.Context, string) (Relation, error)
+	Relation(context.Context, string, any) (Relation, error)
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
@@ -606,7 +606,7 @@ type Engine interface {
 	Hints() Hints
 
 	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
+		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)

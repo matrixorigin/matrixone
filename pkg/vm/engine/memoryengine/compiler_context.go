@@ -226,6 +226,7 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs 
 	table, err := db.Relation(
 		c.ctx,
 		tableName,
+		nil,
 	)
 	if err != nil {
 		return nil, err
