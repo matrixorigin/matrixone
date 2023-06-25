@@ -329,7 +329,7 @@ func (vec *vectorWrapper) CloneWindowWithPool(offset, length int, pool *VectorPo
 
 func (vec *vectorWrapper) cloneWindowTo(offset, length int, cloned *vectorWrapper) {
 	if vec.wrapped.IsConstNull() {
-		cloned.wrapped = vector.NewConstNull(*vec.GetType(), length, vec.GetAllocator())
+		cloned.wrapped = vector.NewConstNull(*vec.GetType(), length, cloned.GetAllocator())
 		return
 	}
 
