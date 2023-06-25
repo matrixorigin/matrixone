@@ -30,30 +30,23 @@ func TestParseCNStores(t *testing.T) {
 		infos           pb.CNState
 		currentTick     uint64
 		expectedWorking []string
-		expectedExpired []string
 	}{
 		{
-			infos:       pb.CNState{},
-			currentTick: 0,
-
-			expectedWorking: []string{},
-			expectedExpired: []string{},
+			infos:           pb.CNState{},
+			currentTick:     0,
+			expectedWorking: []string(nil),
 		},
 		{
-			infos:       pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {Tick: 0}}},
-			currentTick: 0,
-
+			infos:           pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {Tick: 0}}},
+			currentTick:     0,
 			expectedWorking: []string{"a"},
-			expectedExpired: []string{},
 		},
 		{
 			infos: pb.CNState{Stores: map[string]pb.CNStoreInfo{
 				"a": {Tick: 0},
 				"b": {Tick: expiredTick}}},
-			currentTick: expiredTick + 1,
-
+			currentTick:     expiredTick + 1,
 			expectedWorking: []string{"b"},
-			expectedExpired: []string{"a"},
 		},
 	}
 
