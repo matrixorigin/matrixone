@@ -101,10 +101,6 @@ func GetPrepareStmtID(ctx context.Context, name string) (int, error) {
 	return strconv.Atoi(name[idx:])
 }
 
-func getPrepareStmtSessionVarName(index int) string {
-	return fmt.Sprintf("%s_%d", prefixPrepareStmtSessionVar, index)
-}
-
 type MysqlCmdExecutor struct {
 	CmdExecutorImpl
 
@@ -335,7 +331,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
-		r, err := db.Relation(ses.requestCtx, tableName)
+		r, err := db.Relation(ses.requestCtx, tableName, nil)
 		if err != nil {
 			return err
 		}
@@ -1096,12 +1092,14 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt) (*Pr
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
-		PreparePlan: preparePlan,
-		PrepareStmt: st.Stmt,
+		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan:         preparePlan,
+		PrepareStmt:         st.Stmt,
+		getFromSendLongData: make(map[int]struct{}),
 	}
-
+	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+
 	return prepareStmt, err
 }
 
@@ -1124,13 +1122,12 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 	if err != nil {
 		return nil, err
 	}
-
 	prepareStmt := &PrepareStmt{
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
 		PrepareStmt: stmts[0],
 	}
-
+	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 	return prepareStmt, err
 }
@@ -1557,7 +1554,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt)
+			ret, err = plan2.BuildPlan(ctx, stmt, false)
 			if err != nil {
 				return nil, err
 			}
@@ -1579,7 +1576,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt)
+		optimized, err := opt.Optimize(stmt, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1589,7 +1586,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 			},
 		}
 	default:
-		ret, err = plan2.BuildPlan(ctx, stmt)
+		ret, err = plan2.BuildPlan(ctx, stmt, false)
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
@@ -3276,6 +3273,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())
+	proc.CopyVectorPool(ses.proc)
+	proc.CopyValueScanBatch(ses.proc)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3292,6 +3291,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		LastInsertID:  ses.GetLastInsertID(),
 		SqlHelper:     ses.GetSqlHelper(),
 	}
+	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
@@ -3313,7 +3313,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		proc.SessionInfo.UserId = rootID
 	}
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
-	ses.txnCompileCtx.SetProcess(proc)
+	ses.txnCompileCtx.SetProcess(ses.proc)
+	ses.proc.SessionInfo = proc.SessionInfo
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		input,
 		ses.GetUserName(),
@@ -3444,6 +3445,8 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())
+	proc.CopyVectorPool(ses.proc)
+	proc.CopyValueScanBatch(ses.proc)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3457,6 +3460,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 	}
+	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
@@ -3472,7 +3476,9 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
-
+	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
+	ses.txnCompileCtx.SetProcess(ses.proc)
+	ses.proc.SessionInfo = proc.SessionInfo
 	stmtExecs, err = GetStmtExecList(ses.GetDatabaseName(),
 		input.getSql(),
 		ses.GetUserName(),
@@ -3600,7 +3606,8 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 	case COM_STMT_EXECUTE:
 		ses.SetCmd(COM_STMT_EXECUTE)
 		data := req.GetData().([]byte)
-		sql, err = mce.parseStmtExecute(requestCtx, data)
+		var prepareStmt *PrepareStmt
+		sql, prepareStmt, err = mce.parseStmtExecute(requestCtx, data)
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
@@ -3608,7 +3615,23 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, err)
 		}
+		if prepareStmt.params != nil {
+			prepareStmt.params.GetNulls().Reset()
+			for k := range prepareStmt.getFromSendLongData {
+				delete(prepareStmt.getFromSendLongData, k)
+			}
+		}
 		return resp, nil
+
+	case COM_STMT_SEND_LONG_DATA:
+		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
+		data := req.GetData().([]byte)
+		err = mce.parseStmtSendLongData(requestCtx, data)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, err)
+			return resp, nil
+		}
+		return nil, nil
 
 	case COM_STMT_CLOSE:
 		data := req.GetData().([]byte)
@@ -3645,11 +3668,11 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 	return resp, nil
 }
 
-func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data []byte) (string, error) {
-	// see https://dev.mysql.com/doc/internals/en/com-stmt-execute.html
+func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data []byte) (string, *PrepareStmt, error) {
+	// see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_execute.html
 	pos := 0
 	if len(data) < 4 {
-		return "", moerr.NewInvalidInput(requestCtx, "sql command contains malformed packet")
+		return "", nil, moerr.NewInvalidInput(requestCtx, "sql command contains malformed packet")
 	}
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
@@ -3658,26 +3681,42 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data [
 	ses := mce.GetSession()
 	preStmt, err := ses.GetPrepareStmt(stmtName)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	names, vars, err := ses.GetMysqlProtocol().ParseExecuteData(requestCtx, preStmt, data, pos)
-	if err != nil {
-		return "", err
-	}
+
 	sql := fmt.Sprintf("execute %s", stmtName)
-	varStrings := make([]string, len(names))
-	if len(names) > 0 {
-		sql = sql + fmt.Sprintf(" using @%s", strings.Join(names, ",@"))
-		for i := 0; i < len(names); i++ {
-			varStrings[i] = fmt.Sprintf("%v", vars[i])
-			err := ses.SetUserDefinedVar(names[i], vars[i])
-			if err != nil {
-				return "", err
-			}
-		}
+	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+	err = ses.GetMysqlProtocol().ParseExecuteData(requestCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	if err != nil {
+		return "", nil, err
 	}
-	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
-	return sql, nil
+	return sql, preStmt, nil
+}
+
+func (mce *MysqlCmdExecutor) parseStmtSendLongData(requestCtx context.Context, data []byte) error {
+	// see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_send_long_data.html
+	pos := 0
+	if len(data) < 4 {
+		return moerr.NewInvalidInput(requestCtx, "sql command contains malformed packet")
+	}
+	stmtID := binary.LittleEndian.Uint32(data[0:4])
+	pos += 4
+
+	stmtName := fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+	ses := mce.GetSession()
+	preStmt, err := ses.GetPrepareStmt(stmtName)
+	if err != nil {
+		return err
+	}
+
+	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
+	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+
+	err = ses.GetMysqlProtocol().ParseSendLongData(requestCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {

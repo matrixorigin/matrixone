@@ -77,7 +77,7 @@ func (d *Database) Truncate(ctx context.Context, relName string) (uint64, error)
 	if err != nil {
 		return 0, err
 	}
-	rel, err := d.Relation(ctx, relName)
+	rel, err := d.Relation(ctx, relName, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -125,7 +125,7 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 	return nil
 }
 
-func (d *Database) Relation(ctx context.Context, relName string) (engine.Relation, error) {
+func (d *Database) Relation(ctx context.Context, relName string, _ any) (engine.Relation, error) {
 
 	if relName == "" {
 		return nil, moerr.NewInvalidInput(ctx, "no table name")

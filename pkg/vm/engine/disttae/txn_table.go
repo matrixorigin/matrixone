@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -180,13 +183,17 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	zms := make([]objectio.ZoneMap, dataLength)
 
 	var meta objectio.ObjectMeta
+	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, nil, err
+	}
 	onBlkFn := func(blk logtailreplay.BlockEntry) error {
 		var err error
 		location := blk.MetaLocation()
 		if objectio.IsSameObjectLocVsMeta(location, meta) {
 			return nil
 		}
-		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 			return err
 		}
 		if inited {
@@ -308,6 +315,10 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	}
 	iter.Close()
 
+	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return -1, err
+	}
 	// Calculate the block size
 	biter := part.NewBlocksIter(ts)
 	for biter.Next() {
@@ -317,7 +328,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			continue
 		}
 
-		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 			biter.Close()
 			return 0, err
 		}
@@ -356,14 +367,17 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	if !found {
 		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
 	}
-
+	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 	var meta objectio.ObjectMeta
 	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.blockInfos))
 	eachBlkFn := func(blk logtailreplay.BlockEntry) error {
 		var err error
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
-			if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+			if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 				return err
 			}
 		}
@@ -536,8 +550,6 @@ func (tbl *txnTable) resetSnapshot() {
 
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
-	tbl.db.txn.mergeTxnWorkspace()
-	tbl.db.txn.DumpBatch(false, 0)
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
 
@@ -577,7 +589,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		tbl.blockInfos,
 		&ranges,
 		&dirtyBlks,
-		tbl.db.txn.proc,
+		tbl.proc,
 	)
 	// TODO: workaround for ISSUE #9897
 	// Remove me later
@@ -638,14 +650,17 @@ func (tbl *txnTable) ApplyRuntimeFilters(ctx context.Context, blocks [][]byte, e
 	}()
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
-
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 	curr := 1 // Skip the first block which is always the memtable
 	for i := 1; i < len(blocks); i++ {
 		blk := catalog.DecodeBlockInfo(blocks[i])
 		location := blk.MetaLocation()
 
 		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, proc.FileService); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, fs); err != nil {
 				return nil, err
 			}
 
@@ -780,6 +795,10 @@ func (tbl *txnTable) rangesOnePart(
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
 	hasDeletes := len(dirtyBlks) > 0
 	for _, blk := range blocks {
 		// if expr is monotonic, we need evaluating expr for each block
@@ -796,7 +815,7 @@ func (tbl *txnTable) rangesOnePart(
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
 			if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
+				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 					return
 				}
 
@@ -1031,7 +1050,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 		blkInfo := catalog.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0))
 		fileName := blkInfo.MetaLocation().Name().String()
-		ibat, err := bat.Dup(tbl.db.txn.proc.Mp())
+		ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
 		if err != nil {
 			return err
 		}
@@ -1045,7 +1064,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			ibat,
 			tbl.db.txn.dnStores[0])
 	}
-	ibat, err := bat.Dup(tbl.db.txn.proc.Mp())
+	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
 	if err != nil {
 		return err
 	}
@@ -1062,16 +1081,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		false); err != nil {
 		return err
 	}
-	/*
-		var packer *types.Packer
-		put := tbl.db.txn.engine.packerPool.Get(&packer)
-		defer put.Put()
-		if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
-			return err
-		}
-	*/
-
-	return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
+	return tbl.db.txn.dumpBatch(false, tbl.writesOffset)
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -1098,8 +1108,10 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			return err
 		}
 		fileName := location.Name().String()
-		copBat := CopyBatch(tbl.db.txn.proc.Ctx, tbl.db.txn.proc, bat)
-		//copBat.Attrs = {catalog.BlockMeta_DeltaLoc}
+		copBat, err := util.CopyBatch(bat, tbl.db.txn.proc)
+		if err != nil {
+			return err
+		}
 		if err := tbl.db.txn.WriteFile(DELETE, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.dnStores[0]); err != nil {
 			return err
@@ -1288,18 +1300,11 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	return tbl.writeDnPartition(ctx, bat)
 }
 
-func CopyBatch(ctx context.Context, proc *process.Process, bat *batch.Batch) *batch.Batch {
-	ibat := batch.NewWithSize(len(bat.Attrs))
-	ibat.Attrs = append(ibat.Attrs, bat.Attrs...)
-	for i := 0; i < len(ibat.Attrs); i++ {
-		ibat.SetVector(int32(i), vector.NewVec(*bat.GetVector(int32(i)).GetType()))
-	}
-	ibat.Append(ctx, proc.GetMPool(), bat)
-	return ibat
-}
-
 func (tbl *txnTable) writeDnPartition(ctx context.Context, bat *batch.Batch) error {
-	ibat := CopyBatch(ctx, tbl.db.txn.proc, bat)
+	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
+	if err != nil {
+		return err
+	}
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
@@ -1349,7 +1354,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 		for _, r := range ranges[1:] {
 			blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
 		}
-		rds0, err = tbl.newBlockReader(ctx, num, expr, blkInfos)
+		rds0, err = tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -1365,7 +1370,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 	for _, r := range ranges {
 		blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
 	}
-	return tbl.newBlockReader(ctx, num, expr, blkInfos)
+	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc)
 }
 
 func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
@@ -1378,8 +1383,8 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		// right now for composite primary key, the filter expr will not be pushed down
 		// here we try to serialize the composite primary key
 		if pk.CompPkeyCol != nil {
-			pkVals := make([]*plan.Expr_C, len(pk.Names))
-			getCompositPKVals(expr, pk.Names, pkVals)
+			pkVals := make([]*plan.Const, len(pk.Names))
+			getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
 				var packer *types.Packer
@@ -1396,7 +1401,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			}
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
+			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc)
 			if ok {
 				var packer *types.Packer
 				put := tbl.db.txn.engine.packerPool.Get(&packer)
@@ -1439,7 +1444,7 @@ func (tbl *txnTable) newBlockReader(
 	ctx context.Context,
 	num int,
 	expr *plan.Expr,
-	blkInfos []*catalog.BlockInfo) ([]engine.Reader, error) {
+	blkInfos []*catalog.BlockInfo, proc *process.Process) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
@@ -1448,6 +1453,7 @@ func (tbl *txnTable) newBlockReader(
 		for i, blk := range blkInfos {
 			rds[i] = newBlockReader(
 				ctx, tableDef, ts, []*catalog.BlockInfo{blk}, expr, tbl.db.txn.engine.fs,
+				proc,
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {
@@ -1457,7 +1463,12 @@ func (tbl *txnTable) newBlockReader(
 	}
 
 	infos, steps := groupBlocksToObjects(blkInfos, num)
-	blockReaders := newBlockReaders(ctx, tbl.db.txn.engine.fs, tableDef, tbl.primarySeqnum, ts, num, expr)
+	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.engine.fs, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	blockReaders := newBlockReaders(ctx, fs, tableDef,
+		tbl.primarySeqnum, ts, num, expr, proc)
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]
@@ -1586,7 +1597,7 @@ func (tbl *txnTable) newReader(
 			ts,
 			nil,
 			expr,
-			fs),
+			fs, tbl.proc),
 		typsMap:  mp,
 		inserts:  inserts,
 		deletes:  deletes,
@@ -1608,7 +1619,7 @@ func (tbl *txnTable) newReader(
 			readers = append(
 				readers,
 				newBlockMergeReader(
-					ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs,
+					ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs, tbl.proc,
 				),
 			)
 		}
@@ -1618,7 +1629,7 @@ func (tbl *txnTable) newReader(
 	if len(blks) < readerNumber-1 {
 		for i := range blks {
 			readers[i+1] = newBlockMergeReader(
-				ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs,
+				ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs, tbl.proc,
 			)
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {
@@ -1634,11 +1645,11 @@ func (tbl *txnTable) newReader(
 	for i := 1; i < readerNumber; i++ {
 		if i == readerNumber-1 {
 			readers[i] = newBlockMergeReader(
-				ctx, tbl, ts, blks[(i-1)*step:], expr, fs,
+				ctx, tbl, ts, blks[(i-1)*step:], expr, fs, tbl.proc,
 			)
 		} else {
 			readers[i] = newBlockMergeReader(
-				ctx, tbl, ts, blks[(i-1)*step:i*step], expr, fs,
+				ctx, tbl, ts, blks[(i-1)*step:i*step], expr, fs, tbl.proc,
 			)
 		}
 	}

@@ -19,11 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
+func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepareStmt bool) (p *Plan, err error) {
 	if isReplace {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}
@@ -47,7 +46,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
@@ -177,37 +176,53 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 }
 
 func getPkValueExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues int) *Expr {
-	pkPos, pkTyp := getPkPos(tableDef, true)
-	if pkPos == -1 || pkTyp.AutoIncr {
-		return nil
-	}
-	colTyp := makeTypeByPlan2Type(pkTyp)
-	targetTyp := &plan.Expr{
-		Typ: pkTyp,
-		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: pkTyp,
+	/*
+		pkPos, pkTyp := getPkPos(tableDef, true)
+		if pkPos == -1 || pkTyp.AutoIncr {
+			return nil
+		}
+		colTyp := makeTypeByPlan2Type(pkTyp)
+		targetTyp := &plan.Expr{
+			Typ: pkTyp,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{
+					Typ: pkTyp,
+				},
 			},
-		},
-	}
-
-	for _, node := range builder.qry.Nodes {
-		if node.NodeType != plan.Node_VALUE_SCAN {
-			continue
-		}
-		if len(node.RowsetData.Cols[0].Data) != 1 {
-			continue
 		}
 
-		oldExpr := node.RowsetData.Cols[pkPosInValues].Data[0]
-		if !rule.IsConstant(oldExpr) {
-			return nil
+		for _, node := range builder.qry.Nodes {
+			if node.NodeType != plan.Node_VALUE_SCAN {
+				continue
+			}
+			if len(node.RowsetData.Cols[0].Data) != 1 {
+				continue
+			}
+
+			for _, node := range builder.qry.Nodes {
+				if node.NodeType != plan.Node_VALUE_SCAN {
+					continue
+				}
+				if len(node.RowsetData.Cols[0].Data) != 1 {
+					continue
+				}
+
+				oldExpr := node.RowsetData.Cols[pkPosInValues].Data[0]
+				if !rule.IsConstant(oldExpr.Expr) {
+					return nil
+				}
+				pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr.Expr), colTyp, targetTyp)
+				if err != nil {
+					return nil
+				}
+				return pkValueExpr
+			}
+			pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr), colTyp, targetTyp)
+			if err != nil {
+				return nil
+			}
+			return pkValueExpr
 		}
-		pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr), colTyp, targetTyp)
-		if err != nil {
-			return nil
-		}
-		return pkValueExpr
-	}
+	*/
 	return nil
 }

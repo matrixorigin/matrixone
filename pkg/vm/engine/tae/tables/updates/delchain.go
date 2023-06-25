@@ -208,7 +208,7 @@ func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
 	deleteNode.AttachTo(chain)
 	chain.AddDeleteCnt(uint32(deleteNode.mask.GetCardinality()))
 	chain.insertInMaskByNode(deleteNode)
-	chain.mvcc.IncChangeNodeCnt()
+	chain.mvcc.IncChangeIntentionCnt()
 }
 
 func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
