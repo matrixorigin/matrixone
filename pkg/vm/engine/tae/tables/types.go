@@ -39,7 +39,9 @@ type NodeT interface {
 		txn txnif.AsyncTxn,
 	) (from int, err error)
 
-	GetDataWindow(readSchema *catalog.Schema, from, to uint32) (bat *containers.Batch, err error)
+	GetDataWindow(
+		readSchema *catalog.Schema, colIdxes []int, from, to uint32,
+	) (bat *containers.Batch, err error)
 	GetColumnDataWindow(
 		readSchema *catalog.Schema,
 		from uint32,
