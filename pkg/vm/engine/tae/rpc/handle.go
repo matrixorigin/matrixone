@@ -773,8 +773,8 @@ func (h *Handle) HandleCreateRelation(
 		return
 	}
 
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] create relation: %+v txn: %s", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] create relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		// do not turn it on in prod. This print outputs multiple duplicate lines
