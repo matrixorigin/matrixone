@@ -47,8 +47,6 @@ func (a *driverAppender) appendEntry(e *entry.Entry) {
 }
 
 func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
-	retryTimout = 10 * time.Millisecond
-	appendTimeout = time.Millisecond
 	size := a.entry.prepareRecord()
 	// if size > int(common.K)*20 { //todo
 	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))
