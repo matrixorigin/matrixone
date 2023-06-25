@@ -727,6 +727,10 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		val, ok := constant.Float64Val(numVal.Value)
 		if canInsert = ok; canInsert {
 			var v T
+			if err = checkOverFlow[float64, T](proc.Ctx, vec.GetType(), val,
+				vec.GetNulls()); err != nil {
+				return false, err
+			}
 			if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
 				v = T(val)
 			} else {
