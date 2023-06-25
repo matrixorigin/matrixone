@@ -1552,33 +1552,6 @@ func (tbl *txnTable) newReader(
 				}
 				inserts = append(inserts, entry.bat)
 				continue
-				//if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
-				//	metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
-				//	for _, metaLoc := range metaLocs {
-				//		location, err := blockio.EncodeLocationFromString(metaLoc)
-				//		if err != nil {
-				//			return nil, err
-				//		}
-				//		sid := location.Name().SegmentId()
-				//		blkid := objectio.NewBlockid(
-				//			&sid,
-				//			location.Name().Num(),
-				//			location.ID())
-				//		pos, ok := txn.cnBlkId_Pos[*blkid]
-				//		if !ok {
-				//			panic(fmt.Sprintf("blkid %s not found", blkid.String()))
-				//		}
-				//		blkInfos = append(blkInfos, &pos.blkInfo)
-				//		offsets := txn.deletedBlocks.getDeletedOffsetsByBlock(blkid)
-				//		if len(offsets) != 0 {
-				//			blkDels[*blkid] = offsets
-				//		}
-				//	}
-
-				//} else {
-				//	inserts = append(inserts, entry.bat)
-				//}
-				//continue
 			}
 			//entry.typ == DELETE
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
@@ -1637,27 +1610,12 @@ func (tbl *txnTable) newReader(
 	}
 
 	partReader := &PartitionReader{
-		//blockReader: newBlockReader(
-		//	ctx,
-		//	tbl.tableDef,
-		//	ts,
-		//	nil,
-		//	expr,
-		//	fs),
 		typsMap:  mp,
 		inserts:  inserts,
 		deletes:  deletes,
 		iter:     iter,
 		seqnumMp: seqnumMp,
 	}
-	//partReader.blockReader.blkDels = blkDels
-	//infos, steps := groupBlocksToObjects(blkInfos, 1)
-	//distributeBlocksToBlockReaders(
-	//	[]*blockReader{partReader.blockReader},
-	//	1,
-	//	infos,
-	//	steps)
-
 	readers[0] = partReader
 
 	if readerNumber == 1 {
