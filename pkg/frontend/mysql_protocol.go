@@ -1815,7 +1815,11 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	pos = mp.io.WriteUint32(data, pos, column.Length())
 
 	//int<1>              type
-	pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
+	if column.ColumnType() == defines.MYSQL_TYPE_BOOL {
+		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_VARCHAR))
+	} else {
+		pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
+	}
 
 	//int<2>              flags
 	pos = mp.io.WriteUint16(data, pos, column.Flag())
@@ -1926,6 +1930,12 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 		}
 
 		switch mysqlColumn.ColumnType() {
+		case defines.MYSQL_TYPE_BOOL:
+			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
 		case defines.MYSQL_TYPE_TINY:
 			if value, err := mrs.GetInt64(ctx, rowIdx, i); err != nil {
 				return nil, err
@@ -1942,13 +1952,13 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			if value, err := mrs.GetInt64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
-				buffer = mp.appendUint32(buffer, uint32(value))
+				data = mp.appendUint32(data, uint32(value))
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
 			if value, err := mrs.GetUint64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
-				buffer = mp.appendUint64(buffer, value)
+				data = mp.appendUint64(data, value)
 			}
 		case defines.MYSQL_TYPE_FLOAT:
 			if value, err := mrs.GetValue(ctx, rowIdx, i); err != nil {
@@ -1956,11 +1966,11 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				switch v := value.(type) {
 				case float32:
-					buffer = mp.appendUint32(buffer, math.Float32bits(v))
+					data = mp.appendUint32(data, math.Float32bits(v))
 				case float64:
-					buffer = mp.appendUint32(buffer, math.Float32bits(float32(v)))
+					data = mp.appendUint32(data, math.Float32bits(float32(v)))
 				case string:
-					buffer = mp.appendStringLenEnc(buffer, v)
+					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -1970,11 +1980,11 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				switch v := value.(type) {
 				case float32:
-					buffer = mp.appendUint64(buffer, math.Float64bits(float64(v)))
+					data = mp.appendUint64(data, math.Float64bits(float64(v)))
 				case float64:
-					buffer = mp.appendUint64(buffer, math.Float64bits(v))
+					data = mp.appendUint64(data, math.Float64bits(v))
 				case string:
-					buffer = mp.appendStringLenEnc(buffer, v)
+					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
