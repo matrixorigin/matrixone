@@ -35,6 +35,7 @@ func NewCatalog() *CatalogCache {
 		tables: &tableCache{
 			data:       btree.NewBTreeG(tableItemLess),
 			rowidIndex: btree.NewBTreeG(tableItemRowidLess),
+			tableGuard: newTableGuard(),
 		},
 		databases: &databaseCache{
 			data:       btree.NewBTreeG(databaseItemLess),
@@ -299,7 +300,7 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 				DatabaseId: item.DatabaseId,
 				Ts:         timestamps[i].ToTimestamp(),
 			}
-			cc.tables.data.Set(newItem)
+			cc.tables.addTableItem(newItem)
 		}
 	}
 }
@@ -372,9 +373,9 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 				Version:    exist.Version,
 				Ts:         item.Ts,
 			}
-			cc.tables.data.Set(newItem)
+			cc.tables.addTableItem(newItem)
 		}
-		cc.tables.data.Set(item)
+		cc.tables.addTableItem(item)
 		cc.tables.rowidIndex.Set(item)
 	}
 }
@@ -576,5 +577,24 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 		Name:          name,
 		Cols:          cols,
 		Name2ColIndex: name2index,
+	}
+}
+
+// GetDeletedTableIndex returns the max index of deleted tables slice.
+func (cc *CatalogCache) GetDeletedTableIndex() int {
+	return cc.tables.tableGuard.getDeletedTableIndex()
+}
+
+// GetDeletedTables returns the deleted tables in [cachedIndex+1:] whose timestamp is less than ts.
+func (cc *CatalogCache) GetDeletedTables(cachedIndex int, ts timestamp.Timestamp) []*TableItem {
+	return cc.tables.tableGuard.getDeletedTables(cachedIndex, ts)
+}
+
+// addTableItem inserts a new table item. If it is a deleted one, also push the
+// item into tableCache.tableGuard.mu.deletedTables.
+func (c *tableCache) addTableItem(item *TableItem) {
+	c.data.Set(item)
+	if item != nil && item.deleted {
+		c.tableGuard.pushDeletedTable(item)
 	}
 }

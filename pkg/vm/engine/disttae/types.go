@@ -129,7 +129,10 @@ type Transaction struct {
 	rowId [6]uint32
 	segId types.Uuid
 	// use to cache table
-	tableMap *sync.Map
+	tableCache struct {
+		cachedIndex int
+		tableMap    *sync.Map
+	}
 	// use to cache database
 	databaseMap *sync.Map
 	// use to cache created table
@@ -217,7 +220,7 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
-func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
+func (txn *Transaction) IncrStatementID(ctx context.Context) error {
 	if err := txn.mergeTxnWorkspace(); err != nil {
 		return err
 	}
@@ -243,8 +246,11 @@ func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
 	}
 	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
-	if txn.meta.IsRCIsolation() &&
-		(txn.statementID > 1 || txn.rollbackCount > 0) {
+
+	// For RC isolation, update the snapshot TS of transaction for each statement including
+	// the first one. Means that, the timestamp of the first statement is not the transaction's
+	// begin timestamp, but its own timestamp.
+	if txn.meta.IsRCIsolation() {
 		if err := txn.op.UpdateSnapshot(
 			ctx,
 			timestamp.Timestamp{}); err != nil {
@@ -275,19 +281,11 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
 func (txn *Transaction) resetSnapshot() error {
-	txn.tableMap.Range(func(key, value interface{}) bool {
+	txn.tableCache.tableMap.Range(func(key, value interface{}) bool {
 		value.(*txnTable).resetSnapshot()
 		return true
 	})
 	return nil
-}
-
-// DeleteTable implements the client.Workspace interface.
-func (txn *Transaction) DeleteTable(ctx context.Context, dbID uint64, tableName string) {
-	k := genTableKey(ctx, tableName, dbID)
-	if _, ok := txn.tableMap.Load(k); ok {
-		txn.tableMap.Delete(k)
-	}
 }
 
 // Entry represents a delete/insert
