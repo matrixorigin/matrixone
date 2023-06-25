@@ -724,13 +724,21 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		canInsert = false
 
 	case tree.P_float64:
-		val, err := strconv.ParseFloat(numVal.OrigString(), 64)
-		if err != nil {
-			canInsert = false
-			return canInsert, nil
+		val, ok := constant.Float64Val(numVal.Value)
+		if canInsert = ok; canInsert {
+			var v T
+			if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
+				v = T(val)
+			} else {
+				v, err = floatNumToFixFloat[T](val, numVal.OrigString(), vec.GetType())
+				if err != nil {
+					return false, err
+				}
+			}
+			if err = vector.AppendFixed(vec, v, false, proc.Mp()); err != nil {
+				return false, err
+			}
 		}
-		canInsert = true
-		err = vector.AppendFixed(vec, T(val), false, proc.Mp())
 	case tree.P_hexnum:
 		var val uint64
 		val, err = hexToInt(numVal.OrigString())
@@ -876,4 +884,23 @@ func setInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, vec *v
 		canInsert = false
 	}
 	return
+}
+
+func floatNumToFixFloat[T constraints.Float | constraints.Integer](
+	from float64, originStr string, typ *types.Type) (T, error) {
+
+	pow := math.Pow10(int(typ.Scale))
+	max_value := math.Pow10(int(typ.Width - typ.Scale))
+	max_value -= 1.0 / pow
+
+	tmp := math.Round((from-math.Floor(from))*pow) / pow
+	v := math.Floor(from) + tmp
+	if v < -max_value || v > max_value {
+		if originStr == "" {
+			return 0, moerr.NewOutOfRange(context.TODO(), "float", "value '%v'", from)
+		} else {
+			return 0, moerr.NewOutOfRange(context.TODO(), "float", "value '%s'", originStr)
+		}
+	}
+	return T(v), nil
 }
