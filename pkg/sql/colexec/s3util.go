@@ -629,13 +629,13 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, e
 	blkInfos := make([]catalog.BlockInfo, 0, len(blocks))
 	//TODO::block id ,segment id and location should be get from BlockObject.
 	for j := range blocks {
-		location, err := blockio.EncodeLocationFromString(
-			blockio.EncodeLocation(
-				w.writer.GetName(),
-				blocks[j].GetExtent(),
-				uint32(w.lengths[j]),
-				blocks[j].GetID(),
-			).String())
+		location := blockio.EncodeLocation(
+			w.writer.GetName(),
+			blocks[j].GetExtent(),
+			uint32(w.lengths[j]),
+			blocks[j].GetID(),
+		)
+
 		if err != nil {
 			return nil, err
 		}
