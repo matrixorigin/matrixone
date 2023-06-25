@@ -117,8 +117,10 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			for pidx, writer := range ap.ctr.partitionS3Writers {
 				if err = writer.WriteS3Batch(proc, insertBatches[pidx]); err != nil {
 					ap.ctr.state = End
+					insertBatches[pidx].Clean(proc.Mp())
 					return false, err
 				}
+				insertBatches[pidx].Clean(proc.Mp())
 			}
 		} else {
 			// Normal non partition table

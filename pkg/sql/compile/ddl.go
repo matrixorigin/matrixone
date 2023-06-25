@@ -180,7 +180,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 		return err
 	}
 
-	if err := lockTable(c.ctx, c.proc, rel); err != nil {
+	if err := lockTable(c.proc, rel); err != nil {
 		return err
 	}
 
@@ -1031,7 +1031,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp {
 		// before dropping table, lock it. It only works on pessimistic mode.
-		if err := lockTable(c.ctx, c.proc, rel); err != nil {
+		if err := lockTable(c.proc, rel); err != nil {
 			return err
 		}
 	}
@@ -1205,7 +1205,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	if !isTemp && !isView {
 		// before dropping table, lock it. It only works on pessimistic mode.
-		if err := lockTable(c.ctx, c.proc, rel); err != nil {
+		if err := lockTable(c.proc, rel); err != nil {
 			return err
 		}
 	}
@@ -1742,7 +1742,6 @@ func getValue[T constraints.Integer](minus bool, num any) T {
 }
 
 func lockTable(
-	ctx context.Context,
 	proc *process.Process,
 	rel engine.Relation) error {
 	id := rel.GetTableID(proc.Ctx)
@@ -1758,14 +1757,6 @@ func lockTable(
 		proc,
 		id,
 		defs[0].Type)
-	if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
-		// If the transaction needs to retry, delete the table from Transaction.tableMap
-		// to make sure that we could drop the table with the new table ID. Because if
-		// there is no table which will be dropped/truncated, a new one will be fetched
-		// from catalog.
-		proc.TxnOperator.GetWorkspace().DeleteTable(
-			ctx, rel.GetDBID(ctx), rel.GetTableName())
-	}
 	return err
 }
 

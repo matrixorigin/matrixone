@@ -19,19 +19,14 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-// parseCNStores returns all working and expired stores' ids.
-func parseCNStores(cfg hakeeper.Config, infos pb.CNState, currentTick uint64) ([]string, []string) {
-	working := make([]string, 0)
-	expired := make([]string, 0)
+// getWorkingCNs returns all working and expired stores' ids.
+func getWorkingCNs(cfg hakeeper.Config, infos pb.CNState, currentTick uint64) (working []string) {
 	for uuid, storeInfo := range infos.Stores {
-		if cfg.CNStoreExpired(storeInfo.Tick, currentTick) {
-			expired = append(expired, uuid)
-		} else {
+		if !cfg.CNStoreExpired(storeInfo.Tick, currentTick) {
 			working = append(working, uuid)
 		}
 	}
-
-	return working, expired
+	return
 }
 
 func contains(slice []string, val string) bool {

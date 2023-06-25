@@ -58,6 +58,7 @@ type databaseCache struct {
 type tableCache struct {
 	data       *btree.BTreeG[*TableItem]
 	rowidIndex *btree.BTreeG[*TableItem]
+	tableGuard *tableGuard
 }
 
 type DatabaseItem struct {
