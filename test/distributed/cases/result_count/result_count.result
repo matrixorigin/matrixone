@@ -140,7 +140,7 @@ select sleep(16);
 sleep(16)
 0
 use system;
-select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and length(statement) > 0 and status != 'Running' and aggr_count < 1 order by request_at desc limit 53;
+select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and length(statement) > 0 and status != 'Running' and aggr_count < 1 order by request_at desc limit 50;
 statement    result_count
 use system    0
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    3
@@ -195,3 +195,8 @@ SET character_set_results = utf8    0
 use system    0
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    3
 drop database db2    0
+select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != 'Running' order by request_at desc limit 2;
+statement    result_count
+drop account test_tenant_1    0
+create account test_tenant_1 admin_name 'test_account' identified by '******'    0
+drop account if exists bvt_result_count;
