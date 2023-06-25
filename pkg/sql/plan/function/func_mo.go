@@ -16,9 +16,10 @@ package function
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -74,7 +75,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			if err != nil {
 				return err
 			}
-			rel, err = dbo.Relation(ctx, tblStr)
+			rel, err = dbo.Relation(ctx, tblStr, nil)
 			if err != nil {
 				return err
 			}
@@ -106,7 +107,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				var prows int64
 				// for partition table,  the table rows is equal to the sum of the partition tables.
 				for _, partitionTable := range partitionInfo.PartitionTableNames {
-					prel, err = dbo.Relation(ctx, partitionTable)
+					prel, err = dbo.Relation(ctx, partitionTable, nil)
 					if err != nil {
 						return err
 					}
@@ -167,7 +168,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			if err != nil {
 				return err
 			}
-			rel, err = dbo.Relation(ctx, tblStr)
+			rel, err = dbo.Relation(ctx, tblStr, nil)
 			if err != nil {
 				return err
 			}
@@ -199,7 +200,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				var psize int64
 				// for partition table, the table size is equal to the sum of the partition tables.
 				for _, partitionTable := range partitionInfo.PartitionTableNames {
-					prel, err = dbo.Relation(ctx, partitionTable)
+					prel, err = dbo.Relation(ctx, partitionTable, nil)
 					if err != nil {
 						return err
 					}
@@ -278,7 +279,7 @@ func moTableColMaxMinImpl(fn string, ivecs []*vector.Vector, result vector.Funct
 			if err != nil {
 				return err
 			}
-			rel, err := db.Relation(proc.Ctx, tblStr)
+			rel, err := db.Relation(proc.Ctx, tblStr, nil)
 			if err != nil {
 				return err
 			}

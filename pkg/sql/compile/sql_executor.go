@@ -186,7 +186,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
-		stmts[0])
+		stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}

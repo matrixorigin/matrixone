@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,6 +34,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
+
+const (
+	VectorLimit = 32
 )
 
 // Analyze analyzes information for operator
@@ -153,9 +158,12 @@ type Process struct {
 	Reg Register
 	Lim Limitation
 
-	vp           *vectorPool
-	mp           *mpool.MPool
-	prepareBatch *batch.Batch
+	vp              *vectorPool
+	mp              *mpool.MPool
+	prepareBatch    *batch.Batch
+	prepareExprList any
+
+	valueScanBatch map[[16]byte]*batch.Batch
 
 	// unix timestamp
 	UnixTime int64
@@ -185,6 +193,9 @@ type Process struct {
 	DispatchNotifyCh chan WrapCs
 
 	Aicm *defines.AutoIncrCacheManager
+
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	prepareParams       *vector.Vector
 }
 
 type vectorPool struct {
@@ -210,6 +221,47 @@ func (proc *Process) InitSeq() {
 	proc.SessionInfo.SeqLastValue[0] = ""
 	proc.SessionInfo.SeqAddValues = make(map[uint64]string)
 	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
+}
+
+func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
+	proc.valueScanBatch[key] = batch
+}
+
+func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
+	bat, ok := proc.valueScanBatch[key]
+	if ok {
+		delete(proc.valueScanBatch, key)
+	}
+	return bat
+}
+
+func (proc *Process) GetValueScanBatchs() []*batch.Batch {
+	var bats []*batch.Batch
+
+	for k, bat := range proc.valueScanBatch {
+		if bat != nil {
+			bats = append(bats, bat)
+		}
+		delete(proc.valueScanBatch, k)
+	}
+	return bats
+}
+
+func (proc *Process) GetPrepareParamsAt(i int) (*vector.Vector, error) {
+	if i < 0 || i >= proc.prepareParams.Length() {
+		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
+	}
+	val := proc.prepareParams.GetRawBytesAt(i)
+	vec := vector.NewConstBytes(*proc.prepareParams.GetType(), val, 1, proc.Mp())
+	return vec, nil
+}
+
+func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
+	proc.resolveVariableFunc = f
+}
+
+func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	return proc.resolveVariableFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

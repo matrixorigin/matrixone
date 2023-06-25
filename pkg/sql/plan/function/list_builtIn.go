@@ -2437,7 +2437,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId:      0,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					typ := types.T_timestamp.ToType()
+					typ.Scale = 6
+					return typ
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInCurrentTimestamp

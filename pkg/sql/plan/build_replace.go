@@ -18,12 +18,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildReplace(stmt *tree.Replace, ctx CompilerContext) (p *Plan, err error) {
+func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
 	insertStmt := &tree.Insert{
 		Table:          stmt.Table,
 		PartitionNames: stmt.PartitionNames,
 		Columns:        stmt.Columns,
 		Rows:           stmt.Rows,
 	}
-	return buildInsert(insertStmt, ctx, true)
+	return buildInsert(insertStmt, ctx, true, isPrepareStmt)
 }
