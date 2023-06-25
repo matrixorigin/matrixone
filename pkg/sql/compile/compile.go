@@ -861,16 +861,14 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 
-		insertArg, err := constructInsert(n, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
 		currentFirstFlag := c.anal.isFirst
 		toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
-		insertArg.ToWriteS3 = toWriteS3
 
 		if toWriteS3 {
+
+			// haveSinkScan := haveSinkScanInPlan(ns, n.Children[0])
+
 			dataScope := c.newMergeScope(ss)
 			dataScope.IsEnd = true
 			if c.anal.qry.LoadTag {
@@ -905,6 +903,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Arg:     insertArg,
 				})
 			}
+
+			insertArg, err := constructInsert(n, c.e, c.proc)
+			if err != nil {
+				return nil, err
+			}
+			insertArg.ToWriteS3 = true
 			rs := c.newMergeScope(scopes)
 			rs.PreScopes = append(rs.PreScopes, dataScope)
 			rs.Magic = MergeInsert
