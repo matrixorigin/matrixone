@@ -194,6 +194,27 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.GetTxnHandler().AttachTempStorageToTxnCtx()
 	}
+
+	txnHandler := cwft.ses.GetTxnHandler()
+	var txnCtx context.Context
+	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+	if err != nil {
+		return nil, err
+	}
+
+	// Increase the statement ID and update snapshot TS before build plan, because the
+	// snapshot TS is used when build plan.
+	// NB: In internal executor, we should also do the same action, which is increasing
+	// statement ID and updating snapshot TS.
+	// See `func (exec *txnExecutor) Exec(sql string)` for details.
+	txnOp := cwft.GetProcess().TxnOperator
+	if txnOp != nil {
+		err := txnOp.GetWorkspace().IncrStatementID(requestCtx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
@@ -288,12 +309,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		*/
 	}
 
-	txnHandler := cwft.ses.GetTxnHandler()
-	var txnCtx context.Context
-	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-	if err != nil {
-		return nil, err
-	}
 	addr := ""
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
 		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr
