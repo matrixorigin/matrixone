@@ -192,13 +192,11 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid) []int64 {
+func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
 	b.RLock()
 	defer b.RUnlock()
 	res := b.offsets[*blockID]
-	offsets := make([]int64, len(res))
-	copy(offsets, res)
-	return offsets
+	*offsets = append(*offsets, res...)
 }
 
 func (b *deletedBlocks) removeBlockDeletedInfos(ids []*types.Blockid) {
