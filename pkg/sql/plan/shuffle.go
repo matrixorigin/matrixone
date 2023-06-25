@@ -114,7 +114,7 @@ func maybeSorted(n *plan.Node, builder *QueryBuilder, scanID int32) bool {
 	return false
 }
 
-func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
+func determinShuffleTypeForGroupBy(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
 	// hash by default
 	n.Stats.ShuffleType = plan.ShuffleType_Hash
 
@@ -181,7 +181,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
 		n.Stats.ShuffleColIdx = int32(idx)
 		n.Stats.Shuffle = true
-		determinShuffleType(hashCol, n, builder)
+		determinShuffleTypeForGroupBy(hashCol, n, builder)
 	case types.T_varchar, types.T_char, types.T_text:
 		n.Stats.ShuffleColIdx = int32(idx)
 		n.Stats.Shuffle = true
@@ -209,10 +209,13 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		if s.NdvMap[firstColName] < ShuffleThreshHold {
 			return
 		}
-		n.Stats.ShuffleType = plan.ShuffleType_Range
-		n.Stats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
-		n.Stats.ShuffleColMin = int64(s.MinValMap[firstColName])
-		n.Stats.ShuffleColMax = int64(s.MaxValMap[firstColName])
+		switch types.T(n.TableDef.Cols[firstColID].Typ.Id) {
+		case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+			n.Stats.ShuffleType = plan.ShuffleType_Range
+			n.Stats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
+			n.Stats.ShuffleColMin = int64(s.MinValMap[firstColName])
+			n.Stats.ShuffleColMax = int64(s.MaxValMap[firstColName])
+		}
 	}
 }
 
