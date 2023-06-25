@@ -63,13 +63,6 @@ type dmlTableInfo struct {
 	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
-var constTextType *plan.Type
-
-func init() {
-	typ := types.T_text.ToType()
-	constTextType = makePlan2Type(&typ)
-}
-
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
 	switch t := expr.(type) {
 	case *tree.TableName:
@@ -933,20 +926,6 @@ func buildValueScan(
 						bat.Clean(proc.Mp())
 						return err
 					}
-				} else if nv, ok := r[i].(*tree.ParamExpr); ok {
-					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-						RowPos: int32(j),
-						Pos:    int32(nv.Offset),
-						Expr: &plan.Expr{
-							Typ: constTextType,
-							Expr: &plan.Expr_P{
-								P: &plan.ParamRef{
-									Pos: int32(nv.Offset),
-								},
-							},
-						},
-					})
-					continue
 				} else {
 					defExpr, err = binder.BindExpr(r[i], 0, true)
 					if err != nil {

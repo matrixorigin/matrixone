@@ -673,14 +673,7 @@ func setInsertValueJSON(proc *process.Process, numVal *tree.NumVal, vec *vector.
 
 func checkOverFlow[T1, T2 constraints.Integer | constraints.Float](ctx context.Context, typ *types.Type, val T1, n *nulls.Nulls) error {
 	if typ.Scale >= 0 && typ.Width > 0 {
-		var max_value float64
-		if typ.Oid == types.T_float32 || typ.Oid == types.T_float64 {
-			pow := math.Pow10(int(typ.Scale))
-			max_value = math.Pow10(int(typ.Width - typ.Scale))
-			max_value -= 1.0 / pow
-		} else {
-			max_value = math.Pow10(int(typ.Width-typ.Scale)) - 1
-		}
+		max_value := math.Pow10(int(typ.Width-typ.Scale)) - 1
 		if float64(val) < -max_value || float64(val) > max_value {
 			return moerr.NewOutOfRange(ctx, "float", "value '%v'", val)
 		}
@@ -731,25 +724,8 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		canInsert = false
 
 	case tree.P_float64:
-		val, ok := constant.Float64Val(numVal.Value)
-		if canInsert = ok; canInsert {
-			var v T
-			if err = checkOverFlow[float64, T](proc.Ctx, vec.GetType(), val,
-				vec.GetNulls()); err != nil {
-				return false, err
-			}
-			if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-				v = T(val)
-			} else {
-				v, err = floatNumToFixFloat[T](val, numVal.OrigString(), vec.GetType())
-				if err != nil {
-					return false, err
-				}
-			}
-			if err = vector.AppendFixed(vec, v, false, proc.Mp()); err != nil {
-				return false, err
-			}
-		}
+		canInsert = false
+
 	case tree.P_hexnum:
 		var val uint64
 		val, err = hexToInt(numVal.OrigString())
@@ -895,23 +871,4 @@ func setInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, vec *v
 		canInsert = false
 	}
 	return
-}
-
-func floatNumToFixFloat[T constraints.Float | constraints.Integer](
-	from float64, originStr string, typ *types.Type) (T, error) {
-
-	pow := math.Pow10(int(typ.Scale))
-	max_value := math.Pow10(int(typ.Width - typ.Scale))
-	max_value -= 1.0 / pow
-
-	tmp := math.Round((from-math.Floor(from))*pow) / pow
-	v := math.Floor(from) + tmp
-	if v < -max_value || v > max_value {
-		if originStr == "" {
-			return 0, moerr.NewOutOfRange(context.TODO(), "float", "value '%v'", from)
-		} else {
-			return 0, moerr.NewOutOfRange(context.TODO(), "float", "value '%s'", originStr)
-		}
-	}
-	return T(v), nil
 }
