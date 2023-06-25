@@ -337,9 +337,7 @@ func (vec *vectorWrapper) cloneWindowTo(offset, length int, cloned *vectorWrappe
 		panic(moerr.NewInternalErrorNoCtx("cloneWindow to const vectorWrapper"))
 	}
 
-	var err error
-	cloned.wrapped, err = vec.wrapped.CloneWindow(offset, offset+length, cloned.GetAllocator())
-	if err != nil {
+	if err := vec.wrapped.CloneWindowTo(cloned.wrapped, offset, offset+length, cloned.GetAllocator()); err != nil {
 		panic(err)
 	}
 }

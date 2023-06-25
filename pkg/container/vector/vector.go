@@ -2729,6 +2729,16 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	if start == end {
 		return w, nil
 	}
+	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
+	if start == end {
+		return nil
+	}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()
 	if mp == nil {
@@ -2745,7 +2755,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	} else {
 		err := w.PreExtend(end-start, mp)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		w.length = end - start
 		if v.GetType().IsVarlen() {
@@ -2757,7 +2767,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 					bs := vCol[i].GetByteSlice(v.area)
 					va, w.area, err = types.BuildVarlena(bs, w.area, mp)
 					if err != nil {
-						return nil, err
+						return err
 					}
 					wCol[i-start] = va
 				}
@@ -2768,7 +2778,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		}
 	}
 
-	return w, nil
+	return nil
 }
 
 // GetMinMaxValue returns the min and max value of the vector.
