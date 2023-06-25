@@ -1674,7 +1674,11 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			if w.IsConst() {
 				return appendOneBytes(v, ws[0].GetByteSlice(w.area), false, mp)
 			}
-			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(&w.nsp, uint64(sel)), mp)
+			if nulls.Contains(&w.nsp, uint64(sel)) {
+				return appendOneBytes(v, []byte{}, true, mp)
+			} else {
+				return appendOneBytes(v, ws[sel].GetByteSlice(w.area), false, mp)
+			}
 		}
 	case types.T_Blockid:
 		return func(v, w *Vector, sel int64) error {
