@@ -87,8 +87,8 @@ func (e *EntireEngine) Hints() Hints {
 }
 
 func (e *EntireEngine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error) {
-	return e.Engine.NewBlockReader(ctx, num, ts, expr, ranges, tblDef)
+	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]Reader, error) {
+	return e.Engine.NewBlockReader(ctx, num, ts, expr, ranges, tblDef, proc)
 }
 
 func (e *EntireEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {

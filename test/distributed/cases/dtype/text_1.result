@@ -97,11 +97,11 @@ cast(col1 as tinyint)
 127
 insert into t8(col1) values ('-129');
 select cast(col1 as tinyint) from t8;
-Data truncation: data out of range: data type int, value '-129'
+Data truncation: data out of range: data type int8, value '-129'
 delete from t8 where col1='-129';
 insert into t8(col1) values ('128');
 select cast(col1 as tinyint) from t8;
-Data truncation: data out of range: data type int, value '128'
+Data truncation: data out of range: data type int8, value '128'
 delete from t8 where col1 is not NULL;
 insert into t8(col2) values ('-32768');
 insert into t8(col2) values ('32767');
@@ -115,11 +115,11 @@ cast(col2 as smallint)
 32767
 insert into t8(col2) values ('-32769');
 select cast(col2 as smallint) from t8;
-Data truncation: data out of range: data type int, value '-32769'
+Data truncation: data out of range: data type int16, value '-32769'
 delete from t8 where col2 is not NULL;
 insert into t8(col2) values ('32768');
 select cast(col2 as smallint) from t8;
-Data truncation: data out of range: data type int, value '32768'
+Data truncation: data out of range: data type int16, value '32768'
 delete from t8 where col2 is not NULL;
 insert into t8(col3) values ('-2147483648');
 insert into t8(col3) values ('2147483647');
@@ -133,11 +133,11 @@ cast(col3 as int)
 2147483647
 insert into t8(col3) values ('-2147483649');
 select cast(col3 as int) from t8;
-Data truncation: data out of range: data type int, value '-2147483649'
+Data truncation: data out of range: data type int32, value '-2147483649'
 delete from t8 where col3 is not NULL;
 insert into t8(col3) values ('2147483648');
 select cast(col3 as int) from t8;
-Data truncation: data out of range: data type int, value '2147483648'
+Data truncation: data out of range: data type int32, value '2147483648'
 delete from t8 where col3 is not NULL;
 insert into t8(col4) values ('-9223372036854775808');
 insert into t8(col4) values ('9223372036854775807');
@@ -151,11 +151,11 @@ cast(col4 as bigint)
 9223372036854775807
 insert into t8(col4) values ('-9223372036854775809');
 select cast(col4 as bigint) from t8;
-Data truncation: data out of range: data type int, value '-9223372036854775809'
+Data truncation: data out of range: data type int64, value '-9223372036854775809'
 delete from t8 where col4 is not NULL;
 insert into t8(col4) values ('9223372036854775808');
 select cast(col4 as bigint) from t8;
-Data truncation: data out of range: data type int, value '9223372036854775808'
+Data truncation: data out of range: data type int64, value '9223372036854775808'
 delete from t8 where col4 is not NULL;
 insert into t8(col5) values ('0');
 insert into t8(col5) values ('255');
