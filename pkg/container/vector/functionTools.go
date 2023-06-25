@@ -497,7 +497,8 @@ func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameterWrapper[ty
 
 func (fr *FunctionResult[T]) Free() {
 	if fr.vec != nil {
-		fr.vec.Free(fr.mp)
+		fr.putVectorMethod(fr.vec)
+		fr.vec = nil
 	}
 }
 
