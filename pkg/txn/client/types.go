@@ -183,12 +183,10 @@ type TimestampWaiter interface {
 }
 
 type Workspace interface {
-	// IncrStatemenetID incr the execute statemenet id. It mantains the statement id, first statemenet is 1,
+	// IncrStatementID incr the execute statement id. It maintains the statement id, first statement is 1,
 	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
 	// workspace will update snapshot data for later read request.
-	IncrStatemenetID(ctx context.Context) error
+	IncrStatementID(ctx context.Context) error
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
-	// DeleteTable deletes the table identified by tableName from table map in the transaction.
-	DeleteTable(ctx context.Context, dbID uint64, tableName string)
 }
