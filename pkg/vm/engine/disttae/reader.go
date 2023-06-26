@@ -263,8 +263,7 @@ func newBlockReader(
 			proc:     proc,
 			tableDef: tableDef,
 		},
-		blks:    blks,
-		blkDels: make(map[types.Blockid][]int64),
+		blks: blks,
 	}
 	r.filterState.expr = filterExpr
 	return r
@@ -312,7 +311,7 @@ func (r *blockReader) Read(
 
 	// read the block
 	bat, err := blockio.BlockRead(
-		r.ctx, blockInfo, r.blkDels[(*blockInfo).BlockID], r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
+		r.ctx, blockInfo, nil, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err
@@ -357,11 +356,16 @@ func newBlockMergeReader(
 	return r
 }
 
+// TODO::blockMergeReader should inherit from blockReader.
 func (r *blockMergeReader) Close() error {
 	r.withFilterMixin.reset()
 	r.table = nil
 	r.dirtyBlks = nil
 	return nil
+}
+
+func (r *blockMergeReader) loadDeletesFor(bid *types.Blockid, deletes *[]int64) {
+
 }
 
 func (r *blockMergeReader) Read(

@@ -61,6 +61,7 @@ func (p *PartitionReader) Read(
 	if p == nil {
 		return nil, nil
 	}
+	//read batch resides in memory from txn.writes.
 	if len(p.inserts) > 0 {
 		bat := p.inserts[0].GetSubBatch(colNames)
 		rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
@@ -99,7 +100,7 @@ func (p *PartitionReader) Read(
 		return b, nil
 	}
 
-	//read partitionState.rows.
+	//read batch from partitionState.rows.
 	{
 		const maxRows = 8192
 		b := batch.NewWithSize(len(colNames))

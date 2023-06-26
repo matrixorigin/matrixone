@@ -461,9 +461,7 @@ type blockReader struct {
 	currentStep int
 
 	// block list to scan
-	blks    []*catalog.BlockInfo
-	blkDels map[types.Blockid][]int64
-	//proc    *process.Process
+	blks []*catalog.BlockInfo
 }
 
 // TODO::blockMergeReader should inherit from blockReader.
@@ -475,6 +473,12 @@ type blockMergeReader struct {
 	buffer    []int64
 	//proc      *process.Process
 }
+
+//type blockMergeReader struct {
+//	*blockReader
+//  buffer  []int64
+//	table   *txnTable
+//}
 
 type mergeReader struct {
 	rds []engine.Reader
