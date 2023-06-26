@@ -260,10 +260,10 @@ func newBlockReader(
 			ctx:      ctx,
 			fs:       fs,
 			ts:       ts,
+			proc:     proc,
 			tableDef: tableDef,
 		},
 		blks:    blks,
-		proc:    proc,
 		blkDels: make(map[types.Blockid][]int64),
 	}
 	r.filterState.expr = filterExpr
@@ -347,11 +347,11 @@ func newBlockMergeReader(
 			ctx:      ctx,
 			tableDef: txnTable.tableDef,
 			ts:       ts,
+			proc:     proc,
 			fs:       fs,
 		},
 		dirtyBlks: dirtyBlks,
 		table:     txnTable,
-		proc:      proc,
 	}
 	r.filterState.expr = filterExpr
 	return r
@@ -390,12 +390,11 @@ func (r *blockMergeReader) Read(
 
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
 	if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[info.BlockID]; ok {
-		deletes, err := r.table.LoadDeletesForBlock(info.BlockID)
+		err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
 		if err != nil {
 			return nil, err
 		}
-		//TODO:: need to optimize .
-		r.buffer = append(r.buffer, deletes...)
+		//r.buffer = append(r.buffer, deletes...)
 	}
 
 	// load deletes from partition state for the specified block
@@ -432,7 +431,8 @@ func (r *blockMergeReader) Read(
 	}
 	//load deletes from txn.deletedBlocks.
 	txn := r.table.db.txn
-	r.buffer = append(r.buffer, txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID)...)
+	//r.buffer = append(r.buffer, txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID)...)
+	txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)
 
 	filter := r.getReadFilter(r.proc)
 
