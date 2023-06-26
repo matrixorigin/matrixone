@@ -113,7 +113,7 @@ func TestMergeDelete(t *testing.T) {
 
 	metaLocBat3 := &batch.Batch{
 		Attrs: []string{
-			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_DeltaLoc,
 		},
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"d:magic:15"}, nil),
@@ -132,7 +132,7 @@ func TestMergeDelete(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"mock_block_id1", "mock_block_id2", "mock_block_id3"}, nil),
 			testutil.MakeTextVector([]string{string(bytes1), string(bytes2), string(bytes3)}, nil),
-			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch, deletion.CNBlockOffset, deletion.FlushMetaLoc}, nil),
+			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch, deletion.CNBlockOffset, deletion.FlushDeltaLoc}, nil),
 			testutil.MakeInt32Vector([]int32{0, 0, 0}, nil),
 			vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool()),
 		},
@@ -175,7 +175,7 @@ func TestMergeDelete(t *testing.T) {
 	// check attr names
 	require.True(t, reflect.DeepEqual(
 		[]string{
-			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_DeltaLoc,
 		},
 		result1.Attrs,
 	))

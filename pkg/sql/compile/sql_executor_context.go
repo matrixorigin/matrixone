@@ -227,7 +227,7 @@ func (c *compilerContext) getRelation(
 		return nil, err
 	}
 
-	table, err := db.Relation(c.ctx, tableName)
+	table, err := db.Relation(c.ctx, tableName, nil)
 	if err != nil {
 		return nil, err
 	}

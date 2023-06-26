@@ -187,6 +187,24 @@ const (
 	// ErrLockTableNotFound lock table not found on remote lock service instance
 	ErrLockTableNotFound uint16 = 20703
 
+	// Group 8: partition
+	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
+	ErrWrongExprInPartitionFunc            uint16 = 20802
+	ErrMultipleDefConstInListPart          uint16 = 20803
+	ErrPartitionConstDomain                uint16 = 20804
+	ErrFieldNotFoundPart                   uint16 = 20805
+	ErrPartitionsMustBeDefined             uint16 = 20806
+	ErrWrongTypeColumnValue                uint16 = 20807
+	ErrValuesIsNotIntType                  uint16 = 20808
+	ErrPartitionColumnList                 uint16 = 20809
+	ErrSameNamePartition                   uint16 = 20810
+	ErrTooManyPartitions                   uint16 = 20811
+	ErrPartitionFuncNotAllowed             uint16 = 20812
+	ErrFieldTypeNotAllowedAsPartitionField uint16 = 20813
+	ErrPartitionNoTemporary                uint16 = 20814
+	ErrBlobFieldInPartFunc                 uint16 = 20815
+	ErrUniqueKeyNeedAllFieldsInPf          uint16 = 20816
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -327,6 +345,24 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
 	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind chaged"},
 	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
+
+	// Group 8: partition
+	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
+	ErrWrongExprInPartitionFunc:            {ER_WRONG_EXPR_IN_PARTITION_FUNC_ERROR, []string{MySQLDefaultSqlState}, "Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed"},
+	ErrMultipleDefConstInListPart:          {ER_MULTIPLE_DEF_CONST_IN_LIST_PART_ERROR, []string{MySQLDefaultSqlState}, "Multiple definition of same constant in list partitioning"},
+	ErrPartitionConstDomain:                {ER_PARTITION_CONST_DOMAIN_ERROR, []string{MySQLDefaultSqlState}, "Partition constant is out of partition function domain"},
+	ErrFieldNotFoundPart:                   {ER_FIELD_NOT_FOUND_PART_ERROR, []string{MySQLDefaultSqlState}, "Field in list of fields for partition function not found in table"},
+	ErrPartitionsMustBeDefined:             {ER_PARTITIONS_MUST_BE_DEFINED_ERROR, []string{MySQLDefaultSqlState}, "For %-.64s partitions each partition must be defined"},
+	ErrWrongTypeColumnValue:                {ER_WRONG_TYPE_COLUMN_VALUE_ERROR, []string{MySQLDefaultSqlState}, "Partition column values of incorrect type"},
+	ErrValuesIsNotIntType:                  {ER_VALUES_IS_NOT_INT_TYPE_ERROR, []string{MySQLDefaultSqlState}, "VALUES value for partition '%-.64s' must have type INT"},
+	ErrPartitionColumnList:                 {ER_PARTITION_COLUMN_LIST_ERROR, []string{MySQLDefaultSqlState}, "Inconsistency in usage of column lists for partitioning"},
+	ErrSameNamePartition:                   {ER_SAME_NAME_PARTITION, []string{MySQLDefaultSqlState}, "Duplicate partition name %-.192s"},
+	ErrTooManyPartitions:                   {ER_TOO_MANY_PARTITIONS_ERROR, []string{MySQLDefaultSqlState}, "Too many partitions (including subpartitions) were defined"},
+	ErrPartitionFuncNotAllowed:             {ER_PARTITION_FUNC_NOT_ALLOWED_ERROR, []string{MySQLDefaultSqlState}, "The %-.192s function returns the wrong type"},
+	ErrFieldTypeNotAllowedAsPartitionField: {ER_FIELD_TYPE_NOT_ALLOWED_AS_PARTITION_FIELD, []string{MySQLDefaultSqlState}, "Field '%-.192s' is of a not allowed type for this type of partitioning"},
+	ErrPartitionNoTemporary:                {ER_PARTITION_NO_TEMPORARY, []string{MySQLDefaultSqlState}, "Cannot create temporary table with partitions"},
+	ErrBlobFieldInPartFunc:                 {ER_BLOB_FIELD_IN_PART_FUNC_ERROR, []string{MySQLDefaultSqlState}, "A BLOB field is not allowed in partition function"},
+	ErrUniqueKeyNeedAllFieldsInPf:          {ER_UNIQUE_KEY_NEED_ALL_FIELDS_IN_PF, []string{MySQLDefaultSqlState}, "A %-.192s must include all columns in the table's partitioning function"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -943,6 +979,69 @@ func NewLockTableBindChanged(ctx context.Context) *Error {
 
 func NewLockTableNotFound(ctx context.Context) *Error {
 	return newError(ctx, ErrLockTableNotFound)
+}
+
+func NewPartitionFunctionIsNotAllowed(ctx context.Context) *Error {
+	return newError(ctx, ErrPartitionFunctionIsNotAllowed)
+}
+
+func NewWrongExprInPartitionFunc(ctx context.Context) *Error {
+	return newError(ctx, ErrWrongExprInPartitionFunc)
+}
+
+func NewMultipleDefConstInListPart(ctx context.Context) *Error {
+	return newError(ctx, ErrMultipleDefConstInListPart)
+}
+
+func NewPartitionConstDomain(ctx context.Context) *Error {
+	return newError(ctx, ErrPartitionConstDomain)
+}
+
+func NewFieldNotFoundPart(ctx context.Context) *Error {
+	return newError(ctx, ErrFieldNotFoundPart)
+}
+func NewPartitionsMustBeDefined(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrPartitionsMustBeDefined, k)
+}
+
+func NewWrongTypeColumnValue(ctx context.Context) *Error {
+	return newError(ctx, ErrWrongTypeColumnValue)
+}
+
+func NewValuesIsNotIntType(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrValuesIsNotIntType, k)
+}
+
+func NewPartitionColumnList(ctx context.Context) *Error {
+	return newError(ctx, ErrPartitionColumnList)
+}
+
+func NewSameNamePartition(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrSameNamePartition)
+}
+
+func NewErrTooManyPartitions(ctx context.Context) *Error {
+	return newError(ctx, ErrTooManyPartitions)
+}
+
+func NewPartitionFuncNotAllowed(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrPartitionFuncNotAllowed, k)
+}
+
+func NewFieldTypeNotAllowedAsPartitionField(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrFieldTypeNotAllowedAsPartitionField, k)
+}
+
+func NewPartitionNoTemporary(ctx context.Context) *Error {
+	return newError(ctx, ErrPartitionNoTemporary)
+}
+
+func NewBlobFieldInPartFunc(ctx context.Context) *Error {
+	return newError(ctx, ErrBlobFieldInPartFunc)
+}
+
+func NewUniqueKeyNeedAllFieldsInPf(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrUniqueKeyNeedAllFieldsInPf, k)
 }
 
 var contextFunc atomic.Value

@@ -7381,5 +7381,117 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 	}
 	cancel()
 	wg.Wait()
+}
 
+func TestRW(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(5, 2)
+	schema.BlockMaxRows = uint32(rows)
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	tae.createRelAndAppend(bat, true)
+
+	txn1, rel1 := tae.getRelation()
+	v := bat.Vecs[2].Get(2)
+	filter := handle.NewEQFilter(v)
+	id, row, err := rel1.GetByFilter(ctx, filter)
+	assert.NoError(t, err)
+	err = rel1.RangeDelete(id, row, row, handle.DT_Normal)
+	assert.NoError(t, err)
+
+	meta := rel1.GetMeta().(*catalog.TableEntry)
+
+	cnt := 3
+	for i := 0; i < cnt; i++ {
+		txn2, rel2 := tae.getRelation()
+		v = bat.Vecs[2].Get(i + 3)
+		filter = handle.NewEQFilter(v)
+		id, row, err = rel2.GetByFilter(ctx, filter)
+		assert.NoError(t, err)
+		err = rel2.RangeDelete(id, row, row, handle.DT_Normal)
+		assert.NoError(t, err)
+		err = txn2.Commit(ctx)
+		assert.NoError(t, err)
+
+		err = tae.FlushTable(
+			ctx, 0, meta.GetDB().ID, meta.ID,
+			types.BuildTS(time.Now().UTC().UnixNano(), 0),
+		)
+		assert.NoError(t, err)
+	}
+
+	err = txn1.Commit(ctx)
+	assert.NoError(t, err)
+
+	{
+		txn, rel := tae.getRelation()
+		rcnt := getColumnRowsByScan(t, rel, 2, true)
+		assert.Equal(t, rows-cnt-1, rcnt)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+}
+
+func TestReplayDeletes(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 250
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	bats := bat.Split(5)
+	tae.createRelAndAppend(bats[0], true)
+	//nablk
+	tae.compactBlocks(false)
+	//deletes
+	txn, rel := tae.getRelation()
+	blkIt := rel.MakeBlockIt()
+	blk := blkIt.GetBlock()
+	blk.RangeDelete(1, 50, handle.DT_Normal)
+	assert.NoError(t, txn.Commit(context.Background()))
+	//the next blk to compact
+	tae.DoAppend(bats[1])
+	//keep the segment appendable
+	tae.DoAppend(bats[2])
+	//compact nablk and its next blk
+	txn2, rel := tae.getRelation()
+	blkIt = rel.MakeBlockIt()
+	blkEntry := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry)
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	task, err := jobs.NewCompactBlockTask(nil, txn, blkEntry, tae.Runtime)
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	assert.NoError(t, txn2.Commit(context.Background()))
+	//replay and check nextObjectIdx
+	t.Log(tae.Catalog.SimplePPString(3))
+	db, err := tae.Catalog.GetDatabaseByID(blkEntry.AsCommonID().DbID)
+	assert.NoError(t, err)
+	tbl, err := db.GetTableEntryByID(blkEntry.AsCommonID().TableID)
+	assert.NoError(t, err)
+	seg, err := tbl.GetSegmentByID(blkEntry.AsCommonID().SegmentID())
+	segString1 := seg.Repr()
+	assert.NoError(t, err)
+	tae.restart(context.Background())
+	t.Log(tae.Catalog.SimplePPString(3))
+	db, err = tae.Catalog.GetDatabaseByID(blkEntry.AsCommonID().DbID)
+	assert.NoError(t, err)
+	tbl, err = db.GetTableEntryByID(blkEntry.AsCommonID().TableID)
+	assert.NoError(t, err)
+	seg, err = tbl.GetSegmentByID(blkEntry.AsCommonID().SegmentID())
+	assert.NoError(t, err)
+	segString2 := seg.Repr()
+	assert.Equal(t, segString1, segString2)
 }

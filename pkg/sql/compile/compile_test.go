@@ -81,15 +81,13 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 type Ws struct {
 }
 
-func (w *Ws) IncrStatemenetID(ctx context.Context) error {
+func (w *Ws) IncrStatementID(ctx context.Context) error {
 	return nil
 }
 
 func (w *Ws) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
-
-func (w *Ws) DeleteTable(ctx context.Context, dbID uint64, tableName string) {}
 
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
@@ -138,7 +136,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 	e, _, compilerCtx := testengine.New(context.Background())
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
-	pn, err := plan2.BuildPlan(compilerCtx, stmts[0])
+	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
 	if err != nil {
 		panic(err)
 	}

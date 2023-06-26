@@ -15,6 +15,8 @@
 package colexec
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -23,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestFixedExpressionExecutor(t *testing.T) {
@@ -160,7 +161,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 
 		currStart := proc.Mp().CurrNB()
 		fExprExecutor := &FunctionExpressionExecutor{}
-		err := fExprExecutor.Init(proc.Mp(), 2, types.T_int64.ToType(),
+		err := fExprExecutor.Init(proc, 2, types.T_int64.ToType(),
 			func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 				v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
 				v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
@@ -217,6 +218,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, curr3, proc.Mp().CurrNB())
 		fExprExecutor.Free()
+		proc.FreeVectors()
 		require.Equal(t, currStart, proc.Mp().CurrNB())
 	}
 
@@ -248,6 +250,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		_, ok := executor.(*FixedVectorExpressionExecutor)
 		require.Equal(t, true, ok)
 		executor.Free()
+		proc.FreeVectors()
 		require.Equal(t, currNb, proc.Mp().CurrNB())
 	}
 }

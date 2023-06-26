@@ -38,9 +38,10 @@ import (
 )
 
 type S3Writer struct {
-	sortIndex int
-	pk        int
-	idx       int16
+	sortIndex      int
+	pk             int
+	partitionIndex int16 // This value is aligned with the partition number
+	isClusterBy    bool
 
 	schemaVersion uint32
 	seqnums       []uint16
@@ -126,9 +127,9 @@ func (w *S3Writer) SetSortIdx(sortIdx int) {
 
 func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, error) {
 	writer := &S3Writer{
-		sortIndex: -1,
-		pk:        -1,
-		idx:       0,
+		sortIndex:      -1,
+		pk:             -1,
+		partitionIndex: 0,
 	}
 	writer.ResetMetaLocBat(proc)
 
@@ -151,6 +152,7 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 		}
 	}
 	if tableDef.ClusterBy != nil {
+		writer.isClusterBy = true
 		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 			// the serialized clusterby col is located in the last of the bat.vecs
 			writer.sortIndex = len(tableDef.Cols) - 1
@@ -172,9 +174,9 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 	writers := make([]*S3Writer, partitionNum)
 	for i := range writers {
 		writers[i] = &S3Writer{
-			sortIndex: -1,
-			pk:        -1,
-			idx:       int16(i), // This value is aligned with the partition number
+			sortIndex:      -1,
+			pk:             -1,
+			partitionIndex: int16(i), // This value is aligned with the partition number
 		}
 		writers[i].ResetMetaLocBat(proc)
 
@@ -220,7 +222,7 @@ func (w *S3Writer) ResetMetaLocBat(proc *process.Process) {
 	if w.metaLocBat != nil {
 		w.metaLocBat.Clean(proc.GetMPool())
 	}
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
 	metaLocBat := batch.NewWithSize(len(attrs))
 	metaLocBat.Attrs = attrs
 	metaLocBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
@@ -276,7 +278,7 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	}
 	for _, bat := range w.Bats {
 		if err := vector.AppendFixed(
-			w.metaLocBat.Vecs[0], -w.idx-1,
+			w.metaLocBat.Vecs[0], -w.partitionIndex-1,
 			false, proc.GetMPool()); err != nil {
 			return err
 		}
@@ -383,7 +385,7 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		// sort bats firstly
 		// for main/orgin table and unique index table.
 		if w.sortIndex != -1 {
-			err := sortByKey(proc, w.Bats[i], w.sortIndex, proc.GetMPool())
+			err := sortByKey(proc, w.Bats[i], w.sortIndex, w.isClusterBy, proc.GetMPool())
 			if err != nil {
 				return err
 			}
@@ -547,13 +549,16 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
-func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, m *mpool.MPool) error {
-	// Not-Null Check
+func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_null bool, m *mpool.MPool) error {
+	hasNull := false
+	// Not-Null Check, notice that cluster by support null value
 	if nulls.Any(bat.Vecs[sortIndex].GetNulls()) {
-		//logutil.Info(common.PrintMoBatch(bat, bat.Length()))
-		return moerr.NewConstraintViolation(proc.Ctx,
-			"sort key can not be null, sortIndex = %d, sortCol = %s",
-			sortIndex, bat.Attrs[sortIndex])
+		hasNull = true
+		if !allow_null {
+			return moerr.NewConstraintViolation(proc.Ctx,
+				"sort key can not be null, sortIndex = %d, sortCol = %s",
+				sortIndex, bat.Attrs[sortIndex])
+		}
 	}
 	var strCol []string
 	sels := make([]int64, len(bat.Zs))
@@ -566,7 +571,12 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, m *mpool.
 	} else {
 		strCol = nil
 	}
-	sort.Sort(false, false, false, sels, ovec, strCol)
+	if allow_null {
+		// null last
+		sort.Sort(false, true, hasNull, sels, ovec, strCol)
+	} else {
+		sort.Sort(false, false, hasNull, sels, ovec, strCol)
+	}
 	return bat.Shuffle(sels, m)
 }
 
@@ -584,21 +594,22 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 }
 
 func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
-	metaLocs, err := w.WriteEndBlocks(proc)
+	blkInfos, err := w.WriteEndBlocks(proc)
 	if err != nil {
 		return err
 	}
-	for _, metaLoc := range metaLocs {
+	for _, blkInfo := range blkInfos {
 		if err := vector.AppendFixed(
 			w.metaLocBat.Vecs[0],
-			w.idx,
+			w.partitionIndex,
 			false,
 			proc.GetMPool()); err != nil {
 			return err
 		}
 		if err := vector.AppendBytes(
 			w.metaLocBat.Vecs[1],
-			[]byte(metaLoc),
+			//[]byte(metaLoc),
+			catalog.EncodeBlockInfo(blkInfo),
 			false,
 			proc.GetMPool()); err != nil {
 			return err
@@ -610,20 +621,39 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 
 // WriteEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]string, error) {
+func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
 	if err != nil {
 		return nil, err
 	}
-	metaLocs := make([]string, 0, len(blocks))
+	blkInfos := make([]catalog.BlockInfo, 0, len(blocks))
+	//TODO::block id ,segment id and location should be get from BlockObject.
 	for j := range blocks {
-		metaLoc := blockio.EncodeLocation(
+		location := blockio.EncodeLocation(
 			w.writer.GetName(),
 			blocks[j].GetExtent(),
 			uint32(w.lengths[j]),
 			blocks[j].GetID(),
-		).String()
-		metaLocs = append(metaLocs, metaLoc)
+		)
+
+		if err != nil {
+			return nil, err
+		}
+		sid := location.Name().SegmentId()
+		blkInfo := catalog.BlockInfo{
+			BlockID: *objectio.NewBlockid(
+				&sid,
+				location.Name().Num(),
+				location.ID()),
+			SegmentID: sid,
+			//non-appendable block
+			EntryState: false,
+		}
+		blkInfo.SetMetaLocation(location)
+		if w.sortIndex != -1 {
+			blkInfo.Sorted = true
+		}
+		blkInfos = append(blkInfos, blkInfo)
 	}
-	return metaLocs, err
+	return blkInfos, err
 }

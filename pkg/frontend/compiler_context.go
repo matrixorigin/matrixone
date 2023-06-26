@@ -198,7 +198,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	// logDebugf(ses.GetDebugString(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
-	table, err := db.Relation(txnCtx, tableName)
+	table, err := db.Relation(txnCtx, tableName, nil)
 	if err != nil {
 		tmpTable, e := tcc.getTmpRelation(txnCtx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
@@ -222,7 +222,7 @@ func (tcc *TxnCompilerContext) getTmpRelation(_ context.Context, tableName strin
 		logErrorf(tcc.GetSession().GetDebugString(), "get temp database error %v", err)
 		return nil, err
 	}
-	table, err := db.Relation(txnCtx, tableName)
+	table, err := db.Relation(txnCtx, tableName, nil)
 	return table, err
 }
 

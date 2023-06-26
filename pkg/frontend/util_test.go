@@ -18,15 +18,15 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/stretchr/testify/assert"
 	"math"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -40,6 +40,10 @@ import (
 	cvey "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	testutil.SetupAutoIncrService()
+}
 
 func Test_PathExists(t *testing.T) {
 	cases := [...]struct {
@@ -468,24 +472,9 @@ func TestGetSimpleExprValue(t *testing.T) {
 		dec3, _, _ := types.Parse64("-1.2345670")
 
 		kases := []args{
-			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       18,
-				Scale:       1,
-				NotNullable: true,
-			})},
-			{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       18,
-				Scale:       1,
-				NotNullable: true,
-			})},
-			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       18,
-				Scale:       7,
-				NotNullable: true,
-			})},
+			{"set @@x=1.0", false, fmt.Sprintf("%v", dec1.Format(1))},
+			{"set @@x=-1.0", false, fmt.Sprintf("%v", dec2.Format(1))},
+			{"set @@x=-1.2345670", false, fmt.Sprintf("%v", dec3.Format(7))},
 		}
 		ctrl := gomock.NewController(t)
 		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
@@ -518,17 +507,17 @@ func TestGetExprValue(t *testing.T) {
 			want    interface{}
 		}
 
-		dec1280, _, err := types.Parse128("-9223372036854775808")
-		assert.NoError(t, err)
+		// dec1280, _, err := types.Parse128("-9223372036854775808")
+		// assert.NoError(t, err)
 
-		dec1281, _, err := types.Parse128("99999999999999999999999999999999999999")
-		assert.NoError(t, err)
+		// dec1281, _, err := types.Parse128("99999999999999999999999999999999999999")
+		// assert.NoError(t, err)
 
-		dec1282, _, err := types.Parse128("-99999999999999999999999999999999999999")
-		assert.NoError(t, err)
+		// dec1282, _, err := types.Parse128("-99999999999999999999999999999999999999")
+		// assert.NoError(t, err)
 
-		dec1283, _, err := types.Parse128("9223372036854775807")
-		assert.NoError(t, err)
+		// dec1283, _, err := types.Parse128("9223372036854775807")
+		// assert.NoError(t, err)
 
 		kases := []args{
 			{"set @@x=1", false, 1},
@@ -573,15 +562,15 @@ func TestGetExprValue(t *testing.T) {
 			{"set @@x=(select 127)", false, 127},
 			{"set @@x=(select -128)", false, -128},
 			{"set @@x=(select -2147483648)", false, -2147483648},
-			{"set @@x=(select -9223372036854775808)", false, dec1280},
+			{"set @@x=(select -9223372036854775808)", false, "-9223372036854775808"},
 			{"set @@x=(select 18446744073709551615)", false, uint64(math.MaxUint64)},
 			{"set @@x=(select 1.1754943508222875e-38)", false, float32(1.1754943508222875e-38)},
 			{"set @@x=(select 3.4028234663852886e+38)", false, float32(3.4028234663852886e+38)},
 			{"set @@x=(select  2.2250738585072014e-308)", false, float64(2.2250738585072014e-308)},
 			{"set @@x=(select  1.7976931348623157e+308)", false, float64(1.7976931348623157e+308)},
-			{"set @@x=(select cast(9223372036854775807 as decimal))", false, dec1283},
-			{"set @@x=(select cast(99999999999999999999999999999999999999 as decimal))", false, dec1281},
-			{"set @@x=(select cast(-99999999999999999999999999999999999999 as decimal))", false, dec1282},
+			{"set @@x=(select cast(9223372036854775807 as decimal))", false, "9223372036854775807"},
+			{"set @@x=(select cast(99999999999999999999999999999999999999 as decimal))", false, "99999999999999999999999999999999999999"},
+			{"set @@x=(select cast(-99999999999999999999999999999999999999 as decimal))", false, "-99999999999999999999999999999999999999"},
 			{"set @@x=(select cast('{\"a\":1,\"b\":2}' as json))", false, "{\"a\": 1, \"b\": 2}"},
 			{"set @@x=(select cast('00000000-0000-0000-0000-000000000000' as uuid))", false, "00000000-0000-0000-0000-000000000000"},
 			{"set @@x=(select cast('00:00:00' as time))", false, "00:00:00"},
@@ -603,7 +592,7 @@ func TestGetExprValue(t *testing.T) {
 
 		table := mock_frontend.NewMockRelation(ctrl)
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(0xABC)).AnyTimes()
-		db.EXPECT().Relation(gomock.Any(), "t").Return(table, moerr.NewInternalErrorNoCtx("no such table")).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), "t", nil).Return(table, moerr.NewInternalErrorNoCtx("no such table")).AnyTimes()
 		defs := []engine.TableDef{
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: types.T_char.ToType()}},
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: types.T_int32.ToType()}},
@@ -628,7 +617,7 @@ func TestGetExprValue(t *testing.T) {
 		eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 
 		ws := mock_frontend.NewMockWorkspace(ctrl)
-		ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
+		ws.EXPECT().IncrStatementID(gomock.Any()).Return(nil).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -691,29 +680,14 @@ func TestGetExprValue(t *testing.T) {
 			want    interface{}
 		}
 
-		dec1, _, _ := types.Parse64("1.0")
-		dec2, _, _ := types.Parse64("-1.0")
-		dec3, _, _ := types.Parse64("-1.2345670")
+		// dec1, _, _ := types.Parse64("1.0")
+		// dec2, _, _ := types.Parse64("-1.0")
+		// dec3, _, _ := types.Parse64("-1.2345670")
 
 		kases := []args{
-			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       18,
-				Scale:       1,
-				NotNullable: true,
-			})},
-			{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       18,
-				Scale:       1,
-				NotNullable: true,
-			})},
-			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       18,
-				Scale:       7,
-				NotNullable: true,
-			})},
+			{"set @@x=1.0", false, "1.0"},
+			{"set @@x=-1.0", false, "-1.0"},
+			{"set @@x=-1.2345670", false, "-1.2345670"},
 		}
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -726,7 +700,7 @@ func TestGetExprValue(t *testing.T) {
 		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		db.EXPECT().Relation(ctx, "t").Return(table, nil).AnyTimes()
+		db.EXPECT().Relation(ctx, "t", nil).Return(table, nil).AnyTimes()
 		defs := []engine.TableDef{
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: types.T_char.ToType()}},
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: types.T_int32.ToType()}},
@@ -740,7 +714,7 @@ func TestGetExprValue(t *testing.T) {
 		eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 
 		ws := mock_frontend.NewMockWorkspace(ctrl)
-		ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
+		ws.EXPECT().IncrStatementID(gomock.Any()).Return(nil).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()

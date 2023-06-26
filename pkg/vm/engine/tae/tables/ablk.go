@@ -320,7 +320,7 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool) {
 		return
 	}
 
-	if blk.mvcc.GetChangeNodeCnt() == 0 && rows == 0 {
+	if blk.mvcc.GetChangeIntentionCnt() == 0 && rows == 0 {
 		score = 0
 	} else {
 		score = 1

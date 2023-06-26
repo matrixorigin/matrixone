@@ -53,8 +53,14 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	// Get the lastest schema, it will not be modified, so just keep the pointer
 	schema := block.meta.GetSchema()
 	impl.writeSchema = schema
-	impl.data = containers.BuildBatchWithPool(
-		schema.AllNames(), schema.AllTypes(), 0, block.rt.VectorPool.Memtable,
+	// impl.data = containers.BuildBatchWithPool(
+	// 	schema.AllNames(), schema.AllTypes(), 0, block.rt.VectorPool.Memtable,
+	// )
+	opts := containers.Options{
+		Allocator: common.MutMemAllocator,
+	}
+	impl.data = containers.BuildBatch(
+		schema.AllNames(), schema.AllTypes(), opts,
 	)
 	impl.initPKIndex(schema)
 	impl.OnZeroCB = impl.close
@@ -169,7 +175,7 @@ func (node *memoryNode) GetDataWindow(
 		idx, ok := node.writeSchema.SeqnumMap[col.SeqNum]
 		var vec containers.Vector
 		if !ok {
-			vec = containers.FillConstVector(int(from-to), col.Type, nil)
+			vec = containers.FillConstVector(int(to-from), col.Type, nil)
 		} else {
 			vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
 		}

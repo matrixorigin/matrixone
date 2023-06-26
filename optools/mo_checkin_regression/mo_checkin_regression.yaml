@@ -48,8 +48,8 @@ spec:
         memory: 15Gi
       limits:
         cpu: 8
-        memory: 15Gi
-  imageRepository: matrixorigin/matrixone
+        memory: 16Gi
+  imageRepository: matrixorigin/matrixone-dev
   logService:
     overlay:
       tolerations:

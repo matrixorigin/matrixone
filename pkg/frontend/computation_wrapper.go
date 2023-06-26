@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -192,6 +194,27 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.GetTxnHandler().AttachTempStorageToTxnCtx()
 	}
+
+	txnHandler := cwft.ses.GetTxnHandler()
+	var txnCtx context.Context
+	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+	if err != nil {
+		return nil, err
+	}
+
+	// Increase the statement ID and update snapshot TS before build plan, because the
+	// snapshot TS is used when build plan.
+	// NB: In internal executor, we should also do the same action, which is increasing
+	// statement ID and updating snapshot TS.
+	// See `func (exec *txnExecutor) Exec(sql string)` for details.
+	txnOp := cwft.GetProcess().TxnOperator
+	if txnOp != nil {
+		err := txnOp.GetWorkspace().IncrStatementID(requestCtx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
@@ -215,6 +238,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		if err != nil {
 			return nil, err
 		}
+		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 
 		// TODO check if schema change, obj.Obj is zero all the time in 0.6
 		// for _, obj := range preparePlan.GetSchemas() {
@@ -224,49 +248,46 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 	}
 		// }
 
-		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
-		if len(executePlan.Args) != len(preparePlan.ParamTypes) {
-			return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+		// The default count is 1. Setting it to 2 ensures that memory will not be reclaimed.
+		//  Convenient to reuse memory next time
+		if prepareStmt.InsertBat != nil {
+			prepareStmt.InsertBat.SetCnt(2)
+			cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
+			cwft.proc.SetPrepareExprList(prepareStmt.exprList)
 		}
-		if prepareStmt.IsInsertValues {
-			for _, node := range preparePlan.Plan.GetQuery().Nodes {
-				if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
-					tableDef := node.TableDef
-					colCount := len(tableDef.Cols)
-					colsData := node.RowsetData.Cols
-					rowCount := len(colsData[0].Data)
-
-					bat := prepareStmt.InsertBat
-					bat.CleanOnlyData()
-					for i := 0; i < colCount; i++ {
-						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
-							colsData[i].Data, bat.Vecs[i], executePlan.Args, prepareStmt.ufs[i]); err != nil {
-							return nil, err
-						}
-					}
-					bat.AddCnt(1)
-					for i := 0; i < rowCount; i++ {
-						bat.Zs = append(bat.Zs, 1)
-					}
-					cwft.proc.SetPrepareBatch(bat)
-					break
+		numParams := len(preparePlan.ParamTypes)
+		if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { //use binary protocol
+			if prepareStmt.params.Length() != numParams {
+				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+			}
+			cwft.proc.SetPrepareParams(prepareStmt.params)
+		} else if len(executePlan.Args) > 0 {
+			if len(executePlan.Args) != numParams {
+				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+			}
+			params := cwft.proc.GetVector(types.T_text.ToType())
+			for _, arg := range executePlan.Args {
+				exprImpl := arg.Expr.(*plan.Expr_V)
+				param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+				if err != nil {
+					return nil, err
+				}
+				if param == nil {
+					return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+				}
+				err = util.AppendAnyToStringVector(cwft.proc, param, params)
+				if err != nil {
+					return nil, err
 				}
 			}
-			cwft.plan = preparePlan.Plan
+			cwft.proc.SetPrepareParams(params)
 		} else {
-			newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
-
-			// replace ? and @var with their values
-			resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
-			resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
-			constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
-			vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
-			err = vp.Visit(requestCtx)
-			if err != nil {
-				return nil, err
+			if numParams > 0 {
+				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 			}
-			cwft.plan = newPlan
 		}
+
+		cwft.plan = preparePlan.Plan
 
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
@@ -286,25 +307,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		   	return nil, err
 		   }
 		*/
-	} else {
-		var vp *plan2.VisitPlan
-		if cacheHit {
-			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess()), plan2.NewRecomputeRealTimeRelatedFuncRule(cwft.ses.GetTxnCompileCtx().GetProcess())})
-		} else {
-			vp = plan2.NewVisitPlan(cwft.plan, []plan2.VisitPlanRule{plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())})
-		}
-		err = vp.Visit(requestCtx)
-		if err != nil {
-			return nil, err
-		}
 	}
 
-	txnHandler := cwft.ses.GetTxnHandler()
-	var txnCtx context.Context
-	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-	if err != nil {
-		return nil, err
-	}
 	addr := ""
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
 		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr

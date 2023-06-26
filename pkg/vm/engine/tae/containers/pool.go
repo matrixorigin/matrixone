@@ -16,10 +16,13 @@ package containers
 
 import (
 	"fmt"
+	"sync/atomic"
 	_ "unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
 const (
@@ -55,18 +58,53 @@ func WithFixedSizeRatio(ratio float64) VectorPoolOption {
 	}
 }
 
+func WithMPool(mp *mpool.MPool) VectorPoolOption {
+	return func(p *VectorPool) {
+		p.mp = mp
+	}
+}
+
+type vectorPoolElement struct {
+	pool  *VectorPool
+	mp    *mpool.MPool
+	vec   *vector.Vector
+	inUse atomic.Bool
+}
+
+func (e *vectorPoolElement) tryReuse(t *types.Type) bool {
+	if e.inUse.CompareAndSwap(false, true) {
+		e.vec.ResetWithNewType(t)
+		return true
+	}
+	return false
+}
+
+func (e *vectorPoolElement) put() {
+	if e.vec.Allocated() > e.pool.maxAlloc {
+		newVec := vector.NewVec(*e.vec.GetType())
+		e.vec.Free(e.mp)
+		e.vec = newVec
+	}
+	if !e.inUse.CompareAndSwap(true, false) {
+		panic("vectorPoolElement.put: vector is not in use")
+	}
+}
+
+func (e *vectorPoolElement) isIdle() bool {
+	return !e.inUse.Load()
+}
+
 type VectorPool struct {
 	name         string
 	maxAlloc     int
 	ratio        float64
-	fixSizedPool []*vectorWrapper
-	varlenPool   []*vectorWrapper
-}
-
-func _putVectorPoolFactory(p *VectorPool) func(vec *vectorWrapper) {
-	return func(vec *vectorWrapper) {
-		vec.toIdle(p.maxAlloc)
-	}
+	fixSizedPool []*vectorPoolElement
+	varlenPool   []*vectorPoolElement
+	fixHit       stats.Counter
+	varHit       stats.Counter
+	hit          stats.Counter
+	total        stats.Counter
+	mp           *mpool.MPool
 }
 
 func NewVectorPool(name string, cnt int, opts ...VectorPoolOption) *VectorPool {
@@ -77,6 +115,9 @@ func NewVectorPool(name string, cnt int, opts ...VectorPoolOption) *VectorPool {
 	for _, opt := range opts {
 		opt(p)
 	}
+	if p.mp == nil {
+		p.mp = _vectorPoolAlloactor
+	}
 	if p.maxAlloc <= 0 {
 		p.maxAlloc = defaultAllocLimit
 	}
@@ -86,51 +127,56 @@ func NewVectorPool(name string, cnt int, opts ...VectorPoolOption) *VectorPool {
 
 	cnt1 := int(float64(cnt) * p.ratio)
 	cnt2 := cnt - cnt1
-	p.fixSizedPool = make([]*vectorWrapper, 0, cnt1)
-	p.varlenPool = make([]*vectorWrapper, 0, cnt2)
+	p.fixSizedPool = make([]*vectorPoolElement, 0, cnt1)
+	p.varlenPool = make([]*vectorPoolElement, 0, cnt2)
 
 	for i := 0; i < cnt1; i++ {
 		t := types.T_int64.ToType()
-		p.fixSizedPool = append(p.fixSizedPool, newVectorElement(p, &t))
+		p.fixSizedPool = append(p.fixSizedPool, newVectorElement(p, &t, p.mp))
 	}
 	for i := 0; i < cnt2; i++ {
 		t := types.T_varchar.ToType()
-		p.varlenPool = append(p.varlenPool, newVectorElement(p, &t))
+		p.varlenPool = append(p.varlenPool, newVectorElement(p, &t, p.mp))
 	}
 	return p
 }
 
 func (p *VectorPool) String() string {
-	fixedUsedCnt, fixedUsedSize := p.FixedSizeUsed()
-	varlenUsedCnt, varlenUsedSize := p.VarlenUsed()
-	usedCnt, usedSize := fixedUsedCnt+varlenUsedCnt, fixedUsedSize+varlenUsedSize
+	fixedUsedCnt, _ := p.FixedSizeUsed(false)
+	varlenUsedCnt, _ := p.VarlenUsed(false)
+	usedCnt := fixedUsedCnt + varlenUsedCnt
 	str := fmt.Sprintf(
-		"VectorPool[%s][%d/%d:%d/%d]: FixSizedVec[%d/%d:%d/%d] VarlenVec[%d/%d:%d/%d]",
+		"VectorPool[%s][%d/%d]: FixSizedVec[%d/%d] VarlenVec[%d/%d], Hit/Total: [(%d,%d)%d/%d]",
 		p.name,                                /* name */
 		usedCnt,                               /* total used vector cnt */
 		len(p.fixSizedPool)+len(p.varlenPool), /* total vector cnt */
-		usedSize,                              /* total used vector size */
-		p.Allocated(),                         /* total vector size */
 		fixedUsedCnt,                          /* used fixed sized vector cnt */
 		len(p.fixSizedPool),                   /* total fixed sized vector cnt */
-		fixedUsedSize,                         /* used fixed sized vector size */
-		p.FixedSizeAllocated(),                /* total fixed sized vector size */
 		varlenUsedCnt,                         /* used varlen vector cnt */
 		len(p.varlenPool),                     /* total varlen vector cnt */
-		varlenUsedSize,                        /* used varlen vector size */
-		p.VarlenaSizeAllocated(),              /* total varlen vector size */
+		p.fixHit.Load(),                       /* fixed sized vector hit cnt */
+		p.varHit.Load(),                       /* varlen vector hit cnt */
+		p.hit.Load(),                          /* hit cnt */
+		p.total.Load(),                        /* total cnt */
 	)
 	return str
 }
 
 func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
+	p.total.Add(1)
 	if t.IsFixedLen() {
 		if len(p.fixSizedPool) > 0 {
 			for i := 0; i < 4; i++ {
 				idx := fastrand() % uint32(len(p.fixSizedPool))
-				vec := p.fixSizedPool[idx]
-				if vec.tryReuse(t) {
-					return vec
+				element := p.fixSizedPool[idx]
+				if element.tryReuse(t) {
+					p.hit.Add(1)
+					p.fixHit.Add(1)
+					return &vectorWrapper{
+						wrapped: element.vec,
+						mpool:   element.mp,
+						element: element,
+					}
 				}
 			}
 		}
@@ -138,9 +184,15 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 		if len(p.varlenPool) > 0 {
 			for i := 0; i < 4; i++ {
 				idx := fastrand() % uint32(len(p.varlenPool))
-				vec := p.varlenPool[idx]
-				if vec.tryReuse(t) {
-					return vec
+				element := p.varlenPool[idx]
+				if element.tryReuse(t) {
+					p.hit.Add(1)
+					p.varHit.Add(1)
+					return &vectorWrapper{
+						wrapped: element.vec,
+						mpool:   element.mp,
+						element: element,
+					}
 				}
 			}
 		}
@@ -158,61 +210,66 @@ func (p *VectorPool) Allocated() int {
 
 func (p *VectorPool) FixedSizeAllocated() int {
 	size := 0
-	for _, vec := range p.fixSizedPool {
-		size += vec.Allocated()
+	for _, element := range p.fixSizedPool {
+		size += element.vec.Allocated()
 	}
 	return size
 }
 
 func (p *VectorPool) VarlenaSizeAllocated() int {
 	size := 0
-	for _, vec := range p.varlenPool {
-		size += vec.Allocated()
+	for _, element := range p.varlenPool {
+		size += element.vec.Allocated()
 	}
 	return size
 }
 
-func (p *VectorPool) FixedSizeUsed() (int, int) {
+func (p *VectorPool) FixedSizeUsed(isUnsafe bool) (int, int) {
 	size := 0
 	cnt := 0
-	for _, vec := range p.fixSizedPool {
-		if vec.isIdle() {
+	for _, element := range p.fixSizedPool {
+		if element.isIdle() {
 			continue
 		}
-		size += vec.Allocated()
+		if isUnsafe {
+			size += element.vec.Allocated()
+		}
 		cnt++
 	}
 	return cnt, size
 }
 
-func (p *VectorPool) VarlenUsed() (int, int) {
+func (p *VectorPool) VarlenUsed(isUnsafe bool) (int, int) {
 	size := 0
 	cnt := 0
-	for _, vec := range p.varlenPool {
-		if vec.isIdle() {
+	for _, element := range p.varlenPool {
+		if element.isIdle() {
 			continue
 		}
-		size += vec.Allocated()
+		if isUnsafe {
+			size += element.vec.Allocated()
+		}
 		cnt++
 	}
 	return cnt, size
 }
 
-func (p *VectorPool) Used() (int, int) {
-	cnt, size := p.FixedSizeUsed()
-	cnt2, size2 := p.VarlenUsed()
+func (p *VectorPool) Used(isUnsafe bool) (int, int) {
+	cnt, size := p.FixedSizeUsed(isUnsafe)
+	cnt2, size2 := p.VarlenUsed(isUnsafe)
 	cnt += cnt2
 	size += size2
 	return cnt, size
 }
 
-func newVectorElement(pool *VectorPool, t *types.Type) *vectorWrapper {
-	opts := Options{
-		Allocator: _vectorPoolAlloactor,
+func newVectorElement(pool *VectorPool, t *types.Type, mp *mpool.MPool) *vectorPoolElement {
+	vec := vector.NewVec(*t)
+	element := &vectorPoolElement{
+		pool: pool,
+		mp:   mp,
+		vec:  vec,
 	}
-	vec := NewVector(*t, opts)
-	vec.put = _putVectorPoolFactory(pool)
-	return vec
+	return element
 }
 
 //go:linkname fastrand runtime.fastrand

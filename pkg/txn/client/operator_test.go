@@ -342,26 +342,6 @@ func TestWriteOnCommittedTxn(t *testing.T) {
 	})
 }
 
-func TestWriteOnInvalidEpoch(t *testing.T) {
-	runTimestampWaiterTests(
-		t,
-		func(tw *timestampWaiter) {
-			tw.NotifyLatestCommitTS(newTestTimestamp(1))
-			runOperatorTestsWithOptions(
-				t,
-				func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-					tw.UpdateEpoch(1)
-					_, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-					assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
-				},
-				newTestTimestamp(0),
-				[]TxnOption{},
-				WithEnableSacrificingFreshness(),
-				WithTimestampWaiter(tw))
-		},
-	)
-}
-
 func TestWriteOnCommittingTxn(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
@@ -385,7 +365,9 @@ func TestSnapshotTxnOperator(t *testing.T) {
 
 		tc2, err := newTxnOperatorWithSnapshot(tc.sender, v)
 		assert.NoError(t, err)
+		assert.True(t, tc2.mu.txn.Mirror)
 
+		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true

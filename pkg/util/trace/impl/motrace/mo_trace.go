@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"go.uber.org/zap"
@@ -172,19 +173,23 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	}
 }
 
-// End record span which meets any of the following condition
-// 1. span's duration >= LongTimeThreshold
-// 2. span's ctx, which specified at the MOTracer.Start, encounters the deadline
+// End record span which meets the following condition
+// If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the deadline.
+// If not set, check condition: duration > span.GetLongTimeThreshold()
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	s.EndTime = time.Now()
 	deadline, hasDeadline := s.ctx.Deadline()
 	s.Duration = s.EndTime.Sub(s.StartTime)
 	// check need record
-	if s.Duration >= s.GetLongTimeThreshold() {
-		s.needRecord = true
-	} else if hasDeadline && s.EndTime.After(deadline) {
-		s.needRecord = true
-		s.ExtraFields = append(s.ExtraFields, zap.Error(s.ctx.Err()))
+	if hasDeadline {
+		if s.EndTime.After(deadline) {
+			s.needRecord = true
+			s.ExtraFields = append(s.ExtraFields, zap.Error(s.ctx.Err()))
+		}
+	} else {
+		if s.Duration >= s.GetLongTimeThreshold() {
+			s.needRecord = true
+		}
 	}
 	if !s.needRecord {
 		go freeMOSpan(s)
@@ -194,8 +199,59 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	for _, opt := range options {
 		opt.ApplySpanEnd(&s.SpanConfig)
 	}
+	// do profile
+	s.doProfile()
+	// do Collect
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)
+	}
+}
+
+// doProfile is sync op.
+func (s *MOSpan) doProfile() {
+	factory := s.tracer.provider.writerFactory
+	ctx := DefaultContext()
+	// do profile goroutine txt
+	if s.ProfileGoroutine() {
+		filepath := profile.GetProfileName(profile.GOROUTINE, s.SpanID.String(), s.EndTime)
+		w := factory.GetWriter(ctx, filepath)
+		err := profile.ProfileGoroutine(w, 2)
+		if err == nil {
+			err = w.Close()
+		}
+		if err != nil {
+			s.AddExtraFields(zap.String(profile.GOROUTINE, err.Error()))
+		} else {
+			s.AddExtraFields(zap.String(profile.GOROUTINE, filepath))
+		}
+	}
+	// do profile heap pprof
+	if s.ProfileHeap() {
+		filepath := profile.GetProfileName(profile.HEAP, s.SpanID.String(), s.EndTime)
+		w := factory.GetWriter(ctx, filepath)
+		err := profile.ProfileHeap(w, 0)
+		if err == nil {
+			err = w.Close()
+		}
+		if err != nil {
+			s.AddExtraFields(zap.String(profile.HEAP, err.Error()))
+		} else {
+			s.AddExtraFields(zap.String(profile.HEAP, filepath))
+		}
+	}
+	// profile cpu should be the last one op, caused by it will sustain few seconds
+	if s.ProfileCpuSecs() > 0 {
+		filepath := profile.GetProfileName(profile.CPU, s.SpanID.String(), s.EndTime)
+		w := factory.GetWriter(ctx, filepath)
+		err := profile.ProfileCPU(w, s.ProfileCpuSecs())
+		if err == nil {
+			err = w.Close()
+		}
+		if err != nil {
+			s.AddExtraFields(zap.String(profile.CPU, err.Error()))
+		} else {
+			s.AddExtraFields(zap.String(profile.CPU, filepath))
+		}
 	}
 }
 
