@@ -7,15 +7,17 @@ spec:
   nodeSelector:
     role: mo-big-data-pr 
     kubernetes.io/arch: arm64
-  overlay:
-    tolerations:
-    - effect: NoSchedule
-      key: role/mo-big-data-pr
-      operator: Exists
   dn:
     overlay:
+      tolerations:
+      - effect: NoSchedule
+        key: role/mo-big-data-pr
+        operator: Exists    
       imagePullSecrets:
       - name: dockerhub
+      env:
+      - name: GOMEMLIMIT
+        value: "8000MiB"
     cacheVolume:
       size: 100Gi
       storageClassName: gp3
@@ -50,6 +52,10 @@ spec:
   imageRepository: matrixorigin/matrixone
   logService:
     overlay:
+      tolerations:
+      - effect: NoSchedule
+        key: role/mo-big-data-pr
+        operator: Exists    
       imagePullSecrets:
       - name: dockerhub
     replicas: 3
@@ -99,11 +105,15 @@ spec:
       listen-address = "0.0.0.0:19958"
     replicas: 2
     overlay:
+      tolerations:
+      - effect: NoSchedule
+        key: role/mo-big-data-pr
+        operator: Exists    
       imagePullSecrets:
       - name: dockerhub
       env:
       - name: GOMEMLIMIT
-        value: "10000MiB"
+        value: "8000MiB"
     resources:
       requests:
         cpu: 6
