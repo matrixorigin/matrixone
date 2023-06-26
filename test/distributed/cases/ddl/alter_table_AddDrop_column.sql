@@ -289,7 +289,6 @@ show create table transaction03;
 -- @session}
 drop table transaction03;
 
--- @bvt:issue#10118
 -- transcation: w-w conflict
 drop table if exists transaction05;
 create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
@@ -323,7 +322,7 @@ alter table update01 add column col1_2 binary after col1;
 alter table update01 add column col5 blob after col3;
 select * from update01;
 show create table update01;
-
+-- @bvt:issue#10093
 insert into update01 values(1,'1',3,'ew83u829d3qcefq','q3829ff2e3qe');
 insert into update01 values(2,'3',6,'3214()_)_)','00');
 select * from update01;
@@ -332,6 +331,7 @@ update update01 set col1 = 100 where col1 = 1;
 update update01 set col5 = '2798u3d3frew' where col2 = 6;
 delete from update01 where col1_2 is null;
 drop table update01;
+-- @bvt:issue
 
 -- alter table rename
 drop table if exists rename01;
@@ -558,5 +558,4 @@ drop table newRename;
 drop role role_r1;
 drop user role_u1;
 
--- @bvt:issue
 drop database test;

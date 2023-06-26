@@ -328,7 +328,7 @@ func (c *Compile) Run(_ uint64) error {
 				return err
 			}
 			//  increase the statement id
-			if err = c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx); err != nil {
+			if err = c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); err != nil {
 				return err
 			}
 

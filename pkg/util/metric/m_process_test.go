@@ -26,11 +26,11 @@ import (
 func TestProcessCollectorNormal(t *testing.T) {
 	Convey("collect proc cpu and mem succ", t, func() {
 		reg := prom.NewRegistry()
-		reg.MustRegister(newBatchStatsCollector(procCpuPercent{}, procMemUsage{}))
+		reg.MustRegister(newBatchStatsCollector(procCpuPercent{}, procMemUsage{}, procCpuTotal{}))
 
 		mf, err := reg.Gather()
 		So(err, ShouldBeNil)
-		So(len(mf), ShouldEqual, 2)
+		So(len(mf), ShouldEqual, 3)
 	})
 }
 
@@ -52,7 +52,7 @@ func TestProcessError(t *testing.T) {
 	defer stubs.Reset()
 	Convey("collect error", t, func() {
 		reg := prom.NewRegistry()
-		reg.MustRegister(newBatchStatsCollector(procCpuPercent{}, procMemUsage{}, procOpenFds{}, procFdsLimit{}))
+		reg.MustRegister(newBatchStatsCollector(procCpuPercent{}, procMemUsage{}, procOpenFds{}, procFdsLimit{}, procCpuTotal{}))
 
 		mf, err := reg.Gather()
 		So(err, ShouldBeNil)

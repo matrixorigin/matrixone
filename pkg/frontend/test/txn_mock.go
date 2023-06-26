@@ -1164,17 +1164,17 @@ func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 }
 
 // IncrStatementID mocks base method.
-func (m *MockWorkspace) IncrStatementID(ctx context.Context) error {
+func (m *MockWorkspace) IncrStatementID(ctx context.Context, commit bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IncrStatementID", ctx)
+	ret := m.ctrl.Call(m, "IncrStatementID", ctx, commit)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // IncrStatementID indicates an expected call of IncrStatementID.
-func (mr *MockWorkspaceMockRecorder) IncrStatementID(ctx interface{}) *gomock.Call {
+func (mr *MockWorkspaceMockRecorder) IncrStatementID(ctx, commit interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatementID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatementID), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatementID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatementID), ctx, commit)
 }
 
 // RollbackLastStatement mocks base method.
