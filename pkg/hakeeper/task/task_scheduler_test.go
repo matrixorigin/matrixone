@@ -41,26 +41,26 @@ func TestMain(m *testing.M) {
 func TestGetExpiredTasks(t *testing.T) {
 	cases := []struct {
 		tasks     []task.Task
-		expiredCN []string
+		workingCN []string
 
 		expected []task.Task
 	}{
 		{
 			tasks:     nil,
-			expiredCN: nil,
+			workingCN: nil,
 
 			expected: nil,
 		},
 		{
 			tasks:     []task.Task{{TaskRunner: "a"}, {TaskRunner: "b"}},
-			expiredCN: []string{"a"},
+			workingCN: []string{"b"},
 
 			expected: []task.Task{{TaskRunner: "a"}},
 		},
 	}
 
 	for _, c := range cases {
-		results := getExpiredTasks(c.tasks, c.expiredCN)
+		_, results := getCNOrderedAndExpiredTasks(c.tasks, c.workingCN)
 		assert.Equal(t, c.expected, results)
 	}
 }
@@ -99,7 +99,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		results := getCNOrdered(c.tasks, c.workingCN)
+		results, _ := getCNOrderedAndExpiredTasks(c.tasks, c.workingCN)
 		assert.Equal(t, c.expected, results)
 	}
 }

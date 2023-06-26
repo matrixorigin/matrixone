@@ -47,7 +47,6 @@ const (
 
 var _ engine.Relation = new(txnTable)
 
-// FIXME::Is this implementation correct, need to be fixed ?
 func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
 	if !ok {
@@ -95,7 +94,6 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 	}
 }
 
-// FIXME::Is this implementation correct, need to be fixed ?
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
@@ -166,7 +164,6 @@ func (tbl *txnTable) ForeachBlock(
 	return
 }
 
-// FIXME::??
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	var (
 		err  error
