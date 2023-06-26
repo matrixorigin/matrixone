@@ -124,7 +124,7 @@ func Shuffle(
 	retVec := ret.GetDownstreamVector()
 	srcVec := col.GetDownstreamVector()
 
-	if err = retVec.Union(srcVec, idx, col.GetAllocator()); err != nil {
+	if err = retVec.Union(srcVec, idx, ret.GetAllocator()); err != nil {
 		panic(err)
 	}
 
