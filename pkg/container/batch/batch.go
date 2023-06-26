@@ -302,12 +302,10 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	}
 
 	for i := range bat.Vecs {
-		unionFunc := vector.GetUnionAllFunction(*bat.Vecs[i].GetType(), mh)
-		if err := unionFunc(bat.Vecs[i], b.Vecs[i]); err != nil {
+		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
 			return bat, err
 		}
 	}
-
 	bat.Zs = append(bat.Zs, b.Zs...)
 	return bat, nil
 }
