@@ -5,7 +5,13 @@ metadata:
   namespace: nsformocheckin
 spec:
   nodeSelector:
-    role: mo-big-data-pr
+    role: mo-big-data-pr 
+    kubernetes.io/arch: arm64
+  overlay:
+    tolerations:
+    - effect: NoSchedule
+      key: role/mo-big-data-pr
+      operator: Exists
   dn:
     overlay:
       imagePullSecrets:
