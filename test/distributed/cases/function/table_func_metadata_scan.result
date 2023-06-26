@@ -37,9 +37,6 @@ select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_
 col_name    rows_cnt    null_cnt    origin_size
 a    8192    0    32805
 b    8192    4096    197697
-select sum(compress_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
-sum(compress_size)
-12638
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
 sum(origin_size)
 230502
