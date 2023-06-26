@@ -398,7 +398,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	txn.IncrStatementID(ctx)
+	txn.IncrStatementID(ctx, true)
 	defer e.delTransaction(txn)
 	if txn.readOnly.Load() {
 		return nil
