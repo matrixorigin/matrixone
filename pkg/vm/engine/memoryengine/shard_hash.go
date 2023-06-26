@@ -267,7 +267,7 @@ func getBytesFromPrimaryVectorForHash(
 		// is slice
 		size := vec.GetType().TypeSize()
 		l := vec.Length() * size
-		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), l)
+		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), l)
 		end := (i + 1) * size
 		if end > len(data) {
 			//TODO mimic to pass BVT
