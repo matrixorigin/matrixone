@@ -50,7 +50,7 @@ import (
 )
 
 const (
-	MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 100
+	MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 300
 	MAX_TXN_COMMIT_LATENCY  = time.Minute * 2
 )
 
@@ -708,8 +708,8 @@ func (h *Handle) HandleCreateDatabase(
 		return err
 	}
 
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] create database: %+v txn: %s", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] create database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
@@ -745,8 +745,8 @@ func (h *Handle) HandleDropDatabase(
 		return err
 	}
 
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] drop database: %+v txn: %s", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Info("[precommit] drop database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
@@ -811,8 +811,8 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] drop/truncate relation: %+v txn: %s", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] drop/truncate relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
