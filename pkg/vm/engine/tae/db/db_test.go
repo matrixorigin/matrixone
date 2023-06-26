@@ -5818,6 +5818,22 @@ func TestAlterRenameTbl(t *testing.T) {
 
 		t.Log(5, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
 	}
+
+	// test checkpoint replay with txn nil
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		tbl, _ := db.GetRelationByName("test")
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "test", "newtest"))) // make test nodelist has no active node
+		require.NoError(t, txn.Commit(context.Background()))
+
+		txn, _ = tae.StartTxn(nil)
+		db, _ = txn.GetDatabase("db")
+		tbl, _ = db.GetRelationByName("other")
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "other", "test"))) // rename other to test, success
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
 	tae.restart(ctx)
 
 	txn, _ = tae.StartTxn(nil)
@@ -5825,6 +5841,16 @@ func TestAlterRenameTbl(t *testing.T) {
 	dbentry := db.GetMeta().(*catalog.DBEntry)
 	t.Log(dbentry.PrettyNameIndex())
 	require.NoError(t, txn.Commit(context.Background()))
+
+	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS()))
+	tae.restart(ctx)
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	dbentry = db.GetMeta().(*catalog.DBEntry)
+	t.Log(dbentry.PrettyNameIndex())
+	require.NoError(t, txn.Commit(context.Background()))
+
 }
 
 func TestAlterTableBasic(t *testing.T) {

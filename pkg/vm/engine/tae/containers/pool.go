@@ -146,7 +146,7 @@ func (p *VectorPool) String() string {
 	varlenUsedCnt, _ := p.VarlenUsed(false)
 	usedCnt := fixedUsedCnt + varlenUsedCnt
 	str := fmt.Sprintf(
-		"VectorPool[%s][%d/%d]: FixSizedVec[%d/%d] VarlenVec[%d/%d], Hit/Total: [(%d,%d)%d/%d]",
+		"VectorPool[%s][%d/%d]: FixSizedVec[%d/%d] VarlenVec[%d/%d], Hit/Total:[(%d,%d)%d/%d]",
 		p.name,                                /* name */
 		usedCnt,                               /* total used vector cnt */
 		len(p.fixSizedPool)+len(p.varlenPool), /* total vector cnt */
