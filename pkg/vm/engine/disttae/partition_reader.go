@@ -33,7 +33,6 @@ import (
 
 // TODO::PartitionReader should inherit from withFilterMixin.
 type PartitionReader struct {
-	//*blockReader
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
@@ -168,7 +167,6 @@ func (p *PartitionReader) Read(
 		if rows == 0 {
 			return nil, nil
 		}
-		// XXX I'm not sure `normal` is a good description
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(
 				"partition reader[snapshot: partitionState.rows]",
