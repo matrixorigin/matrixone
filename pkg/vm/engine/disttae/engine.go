@@ -393,28 +393,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
-	logDebugf(op.Txn(), "Engine.Commit")
-	txn := e.getTransaction(op)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
-	}
-	txn.IncrStatementID(ctx)
-	defer e.delTransaction(txn)
-	if txn.readOnly.Load() {
-		return nil
-	}
-	if err := txn.mergeTxnWorkspace(); err != nil {
-		return err
-	}
-	if err := txn.dumpBatch(true, 0); err != nil {
-		return err
-	}
-	reqs, err := genWriteReqs(ctx, txn.writes)
-	if err != nil {
-		return err
-	}
-	_, err = op.Write(ctx, reqs)
-	return err
+	return nil
 }
 
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {

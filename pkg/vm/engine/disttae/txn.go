@@ -16,10 +16,11 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -517,5 +518,32 @@ func (txn *Transaction) getCachedTable(
 	if v, ok := txn.tableCache.tableMap.Load(k); ok {
 		return v.(*txnTable)
 	}
+	return nil
+}
+
+func (txn *Transaction) Commit(ctx context.Context) error {
+	logDebugf(txn.op.Txn(), "Transaction.Commit")
+	txn.IncrStatementID(ctx)
+	defer txn.engine.delTransaction(txn)
+	if txn.readOnly.Load() {
+		return nil
+	}
+	if err := txn.mergeTxnWorkspace(); err != nil {
+		return err
+	}
+	if err := txn.dumpBatch(true, 0); err != nil {
+		return err
+	}
+	reqs, err := genWriteReqs(ctx, txn.writes)
+	if err != nil {
+		return err
+	}
+	_, err = txn.op.Write(ctx, reqs)
+	return err
+}
+
+func (txn *Transaction) Rollback(ctx context.Context) error {
+	logDebugf(txn.op.Txn(), "Transaction.Rollback")
+	txn.engine.delTransaction(txn)
 	return nil
 }

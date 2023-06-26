@@ -249,11 +249,6 @@ func (exec *txnExecutor) commit() error {
 	if exec.opts.ExistsTxn() {
 		return nil
 	}
-	if err := exec.s.eng.Commit(
-		exec.ctx,
-		exec.opts.Txn()); err != nil {
-		return err
-	}
 	return exec.opts.Txn().Commit(exec.ctx)
 }
 
@@ -261,9 +256,6 @@ func (exec *txnExecutor) rollback() error {
 	if exec.opts.ExistsTxn() {
 		return nil
 	}
-	err := exec.s.eng.Rollback(
-		exec.ctx,
-		exec.opts.Txn())
-	return multierr.Append(err,
+	return multierr.Append(nil,
 		exec.opts.Txn().Rollback(exec.ctx))
 }
