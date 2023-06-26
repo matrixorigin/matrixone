@@ -48,7 +48,7 @@ spec:
         memory: 15Gi
       limits:
         cpu: 8
-        memory: 16Gi
+        memory: 15Gi
   imageRepository: matrixorigin/matrixone-dev
   logService:
     overlay:
