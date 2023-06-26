@@ -30,7 +30,7 @@ import (
 // - open fds & max fds (not available on MacOS)
 // - virtual_resident_mem_bytes
 
-var processCollector = newBatchStatsCollector(procCpuPercent{}, procMemUsage{}, procOpenFds{})
+var processCollector = newBatchStatsCollector(procCpuPercent{}, procMemUsage{}, procOpenFds{}, procCpuTotal{})
 
 var pid = int32(os.Getpid())
 
@@ -143,5 +143,30 @@ func (c procFdsLimit) Metric(ctx context.Context, s *statCaches) (prom.Metric, e
 			}
 		}
 		return nil, moerr.NewInternalError(ctx, "empty limit")
+	}
+}
+
+// procCpuTotal is the total cpu time of the process
+type procCpuTotal struct{}
+
+func (c procCpuTotal) Desc() *prom.Desc {
+	return prom.NewDesc(
+		"process_cpu_seconds_total",
+		"Process CPU time spent in seconds",
+		nil, sysTenantID,
+	)
+}
+
+func (c procCpuTotal) Metric(ctx context.Context, s *statCaches) (prom.Metric, error) {
+	val := s.getOrInsert(cacheKeyProcess, getProcess)
+	if val == nil {
+		return nil, moerr.NewInternalError(ctx, "empty process")
+	}
+	proc := val.(*process.Process)
+
+	if cput, err := proc.TimesWithContext(ctx); err != nil {
+		return nil, err
+	} else {
+		return prom.MustNewConstMetric(c.Desc(), prom.CounterValue, cput.Total()), nil
 	}
 }
