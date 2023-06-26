@@ -91,15 +91,19 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 
 	var address string
 	switch request.Method {
+	case pb.Method_ForwardLock:
+		sid := request.Lock.Options.ForwardTo
+		c.cluster.GetCNService(
+			clusterservice.NewServiceIDSelector(sid),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
 	case pb.Method_Lock,
-		pb.Method_ForwardLock,
 		pb.Method_Unlock,
 		pb.Method_GetTxnLock,
 		pb.Method_KeepRemoteLock:
 		sid := request.LockTable.ServiceID
-		if request.Lock.Options.ForwardTo != "" {
-			sid = request.Lock.Options.ForwardTo
-		}
 		c.cluster.GetCNService(
 			clusterservice.NewServiceIDSelector(sid),
 			func(s metadata.CNService) bool {

@@ -116,7 +116,8 @@ func (node *persistedNode) Foreach(
 }
 
 func (node *persistedNode) GetDataWindow(
-	readSchema *catalog.Schema, from, to uint32) (bat *containers.Batch, err error) {
+	readSchema *catalog.Schema, colIdxes []int, from, to uint32,
+) (bat *containers.Batch, err error) {
 	panic("to be implemented")
 }
 
