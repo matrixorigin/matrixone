@@ -20,11 +20,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -123,9 +122,11 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	if proc != nil {
 		p = proc.(*process.Process)
 	}
-	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
-		v.(*txnTable).proc = p
-		return v.(*txnTable), nil
+	rel := db.txn.getCachedTable(ctx, genTableKey(ctx, name, db.databaseId),
+		db.txn.meta.SnapshotTS)
+	if rel != nil {
+		rel.proc = p
+		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
@@ -180,7 +181,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		rowids:        item.Rowids,
 		proc:          p,
 	}
-	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
+	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
 
@@ -209,10 +210,10 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 			If we do not add DELETE entry in workspace, there is
 			a table t1 there after commit.
 		*/
-	} else if v, ok := db.txn.tableMap.Load(k); ok {
+	} else if v, ok := db.txn.tableCache.tableMap.Load(k); ok {
 		table := v.(*txnTable)
 		id = table.tableId
-		db.txn.tableMap.Delete(k)
+		db.txn.tableCache.tableMap.Delete(k)
 		rowid = table.rowid
 		rowids = table.rowids
 	} else {
@@ -272,7 +273,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	k := genTableKey(ctx, name, db.databaseId)
 	v, ok = db.txn.createMap.Load(k)
 	if !ok {
-		v, ok = db.txn.tableMap.Load(k)
+		v, ok = db.txn.tableCache.tableMap.Load(k)
 	}
 
 	if ok {
