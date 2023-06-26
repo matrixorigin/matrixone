@@ -30,7 +30,7 @@ func TestProcessCollectorNormal(t *testing.T) {
 
 		mf, err := reg.Gather()
 		So(err, ShouldBeNil)
-		So(len(mf), ShouldEqual, 2)
+		So(len(mf), ShouldEqual, 3)
 	})
 }
 
