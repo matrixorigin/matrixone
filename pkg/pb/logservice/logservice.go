@@ -165,7 +165,8 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 			recorded.Replicas = incoming.Replicas
 		} else if incoming.Epoch == recorded.Epoch && incoming.Epoch > 0 {
 			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) {
-				panic("inconsistent replicas")
+				panic(fmt.Sprintf("inconsistent replicas, recorded: %+v, incoming: %+v",
+					recorded, incoming))
 			}
 		}
 

@@ -173,19 +173,23 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	}
 }
 
-// End record span which meets any of the following condition
-// 1. span's duration >= LongTimeThreshold
-// 2. span's ctx, which specified at the MOTracer.Start, encounters the deadline
+// End record span which meets the following condition
+// If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the deadline.
+// If not set, check condition: duration > span.GetLongTimeThreshold()
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	s.EndTime = time.Now()
 	deadline, hasDeadline := s.ctx.Deadline()
 	s.Duration = s.EndTime.Sub(s.StartTime)
 	// check need record
-	if s.Duration >= s.GetLongTimeThreshold() {
-		s.needRecord = true
-	} else if hasDeadline && s.EndTime.After(deadline) {
-		s.needRecord = true
-		s.ExtraFields = append(s.ExtraFields, zap.Error(s.ctx.Err()))
+	if hasDeadline {
+		if s.EndTime.After(deadline) {
+			s.needRecord = true
+			s.ExtraFields = append(s.ExtraFields, zap.Error(s.ctx.Err()))
+		}
+	} else {
+		if s.Duration >= s.GetLongTimeThreshold() {
+			s.needRecord = true
+		}
 	}
 	if !s.needRecord {
 		go freeMOSpan(s)
@@ -206,10 +210,11 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 // doProfile is sync op.
 func (s *MOSpan) doProfile() {
 	factory := s.tracer.provider.writerFactory
+	ctx := DefaultContext()
 	// do profile goroutine txt
 	if s.ProfileGoroutine() {
 		filepath := profile.GetProfileName(profile.GOROUTINE, s.SpanID.String(), s.EndTime)
-		w := factory.GetWriter(s.ctx, filepath)
+		w := factory.GetWriter(ctx, filepath)
 		err := profile.ProfileGoroutine(w, 2)
 		if err == nil {
 			err = w.Close()
@@ -223,7 +228,7 @@ func (s *MOSpan) doProfile() {
 	// do profile heap pprof
 	if s.ProfileHeap() {
 		filepath := profile.GetProfileName(profile.HEAP, s.SpanID.String(), s.EndTime)
-		w := factory.GetWriter(s.ctx, filepath)
+		w := factory.GetWriter(ctx, filepath)
 		err := profile.ProfileHeap(w, 0)
 		if err == nil {
 			err = w.Close()
@@ -237,7 +242,7 @@ func (s *MOSpan) doProfile() {
 	// profile cpu should be the last one op, caused by it will sustain few seconds
 	if s.ProfileCpuSecs() > 0 {
 		filepath := profile.GetProfileName(profile.CPU, s.SpanID.String(), s.EndTime)
-		w := factory.GetWriter(s.ctx, filepath)
+		w := factory.GetWriter(ctx, filepath)
 		err := profile.ProfileCPU(w, s.ProfileCpuSecs())
 		if err == nil {
 			err = w.Close()
