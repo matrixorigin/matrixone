@@ -186,7 +186,7 @@ type Workspace interface {
 	// IncrStatementID incr the execute statement id. It maintains the statement id, first statement is 1,
 	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
 	// workspace will update snapshot data for later read request.
-	IncrStatementID(ctx context.Context) error
+	IncrStatementID(ctx context.Context, commit bool) error
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 }
