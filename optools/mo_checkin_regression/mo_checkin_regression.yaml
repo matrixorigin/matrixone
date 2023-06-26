@@ -43,10 +43,10 @@ spec:
     resources:
       requests:
         cpu: 3
-        memory: 12Gi
+        memory: 15Gi
       limits:
         cpu: 8
-        memory: 16Gi
+        memory: 15Gi
   imageRepository: matrixorigin/matrixone
   logService:
     overlay:
@@ -59,7 +59,7 @@ spec:
         memory: 2Gi
       limits:
         cpu: 8
-        memory: 16Gi
+        memory: 2Gi
     sharedStorage:
       s3:
         path: s3pathformocheckin
@@ -107,7 +107,7 @@ spec:
     resources:
       requests:
         cpu: 6
-        memory: 16Gi
+        memory: 15Gi
       limits:
         cpu: 8
         memory: 16Gi
