@@ -317,10 +317,12 @@ func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.
 		return vec
 	}
 	for i := 0; i < n; i++ {
-		var blockId [2]int64
-
-		blockId[1] = int64(i)
-		if err := vector.AppendFixed(vec, *(*types.Blockid)(unsafe.Pointer(&blockId[0])), false, m); err != nil {
+		var blockId types.Blockid
+		binary.NativeEndian.PutUint64(
+			unsafe.Slice(&blockId[types.BlockidSize/2], 8),
+			uint64(i),
+		)
+		if err := vector.AppendFixed(vec, blockId, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
