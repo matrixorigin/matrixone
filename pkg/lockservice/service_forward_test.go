@@ -46,7 +46,7 @@ func TestForwardLock(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			require.Nil(t, l1.activeTxnHolder.getActiveTxn(txn1, false, ""))
+			require.NotNil(t, l2.activeTxnHolder.getActiveTxn(txn1, false, ""))
 			require.NotNil(t, l2.activeTxnHolder.getActiveTxn(txn1, false, ""))
 		},
 	)
