@@ -293,7 +293,7 @@ func NewRowidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.Ro
 	}
 	for i := 0; i < n; i++ {
 		var rowId types.Rowid
-		binary.NativeEndian.PutUint64(
+		binary.LittleEndian.PutUint64(
 			unsafe.Slice(&rowId[types.RowidSize/2], 8),
 			uint64(i),
 		)
@@ -318,7 +318,7 @@ func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.
 	}
 	for i := 0; i < n; i++ {
 		var blockId types.Blockid
-		binary.NativeEndian.PutUint64(
+		binary.LittleEndian.PutUint64(
 			unsafe.Slice(&blockId[types.BlockidSize/2], 8),
 			uint64(i),
 		)

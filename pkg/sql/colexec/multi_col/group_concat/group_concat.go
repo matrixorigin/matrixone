@@ -249,7 +249,7 @@ func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, rowCount int64, ve
 		res_row += s
 		// prefix length + data
 		bs := make([]byte, 2)
-		binary.NativeEndian.PutUint16(bs, uint16(len(s)))
+		binary.LittleEndian.PutUint16(bs, uint16(len(s)))
 		insert_row += unsafe.String(&bs[0], 2) + s
 	}
 	if gc.arg.Dist {
