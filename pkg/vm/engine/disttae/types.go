@@ -192,11 +192,13 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets *[]int64) {
+func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid) []int64 {
 	b.RLock()
 	defer b.RUnlock()
 	res := b.offsets[*blockID]
-	*offsets = append(*offsets, res...)
+	offsets := make([]int64, len(res))
+	copy(offsets, res)
+	return offsets
 }
 
 func (b *deletedBlocks) removeBlockDeletedInfos(ids []*types.Blockid) {
@@ -425,7 +427,6 @@ type withFilterMixin struct {
 	ctx      context.Context
 	fs       fileservice.FileService
 	ts       timestamp.Timestamp
-	proc     *process.Process
 	tableDef *plan.TableDef
 
 	// columns used for reading
@@ -463,7 +464,7 @@ type blockReader struct {
 	// block list to scan
 	blks    []*catalog.BlockInfo
 	blkDels map[types.Blockid][]int64
-	//proc    *process.Process
+	proc    *process.Process
 }
 
 // TODO::blockMergeReader should inherit from blockReader.
@@ -473,7 +474,7 @@ type blockMergeReader struct {
 	table     *txnTable
 	dirtyBlks []*catalog.BlockInfo
 	buffer    []int64
-	//proc      *process.Process
+	proc      *process.Process
 }
 
 type mergeReader struct {

@@ -441,7 +441,7 @@ func (tbl *txnTable) GetDirtyBlksIn(
 	return dirtyBlks
 }
 
-func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
+func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid) (offsets []int64, err error) {
 
 	for blk, bats := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
 		if blk != bid {
@@ -452,7 +452,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			for _, metalLoc := range vs {
 				location, err := blockio.EncodeLocationFromString(metalLoc)
 				if err != nil {
-					return err
+					return nil, nil
 				}
 				rowIdBat, err := blockio.LoadColumns(
 					tbl.db.txn.proc.Ctx,
@@ -462,12 +462,12 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 					location,
 					tbl.db.txn.proc.GetMPool())
 				if err != nil {
-					return err
+					return nil, err
 				}
 				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 				for _, rowId := range rowIds {
 					_, offset := rowId.Decode()
-					*offsets = append(*offsets, int64(offset))
+					offsets = append(offsets, int64(offset))
 				}
 			}
 		}
@@ -705,13 +705,11 @@ func (tbl *txnTable) rangesOnePart(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	committedblocks []catalog.BlockInfo, // whole block list
+	blocks []catalog.BlockInfo, // whole block list
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
-	blks := make([]catalog.BlockInfo, 0, len(committedblocks))
-	blks = append(blks, committedblocks...)
 
 	//collect dirty blocks from PartitionState.dirtyBlocks.
 	{
@@ -739,6 +737,7 @@ func (tbl *txnTable) rangesOnePart(
 				continue
 			}
 			//load uncommitted blocks from txn's workspace.
+			//TODO::take filtering bloks into account.
 			metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
 			for _, metaLoc := range metaLocs {
 				location, err := blockio.EncodeLocationFromString(metaLoc)
@@ -754,16 +753,15 @@ func (tbl *txnTable) rangesOnePart(
 				if !ok {
 					panic(fmt.Sprintf("blkid %s not found", blkid.String()))
 				}
-				blks = append(blks, pos.blkInfo)
-				//blkInfo := pos.blkInfo
-				//blkInfo.PartitionNum = -1
-				var offsets []int64
-				txn.deletedBlocks.getDeletedOffsetsByBlock(blkid, &offsets)
-				if len(offsets) != 0 {
-					//blkInfo.CanRemote = true
-					dirtyBlks[*blkid] = struct{}{}
+				//blkInfos = append(blkInfos, &pos.blkInfo)
+				blkInfo := pos.blkInfo
+				blkInfo.PartitionNum = -1
+
+				offsets := txn.deletedBlocks.getDeletedOffsetsByBlock(blkid)
+				if len(offsets) == 0 {
+					blkInfo.CanRemote = true
 				}
-				//*ranges = append(*ranges, catalog.EncodeBlockInfo(blkInfo))
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(blkInfo))
 			}
 			continue
 		}
@@ -818,7 +816,7 @@ func (tbl *txnTable) rangesOnePart(
 		return err
 	}
 	hasDeletes := len(dirtyBlks) > 0
-	for _, blk := range blks {
+	for _, blk := range blocks {
 		// if expr is monotonic, we need evaluating expr for each block
 		if auxIdCnt > 0 {
 			location := blk.MetaLocation()
@@ -1499,9 +1497,7 @@ func (tbl *txnTable) newBlockReader(
 	}
 
 	infos, steps := groupBlocksToObjects(blkInfos, num)
-	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.db.txn.engine.fs,
-		defines.SharedFileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.engine.fs, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
