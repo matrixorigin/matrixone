@@ -82,7 +82,7 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 		return moerr.NewInternalError(ctx, "The databaseid of '%v' is not a valid number", databaseId)
 	}
 
-	relation, err := db.Relation(ctx, tblName)
+	relation, err := db.Relation(ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
@@ -143,7 +143,7 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 	if err != nil {
 		return moerr.NewInternalError(ctx, "The databaseid of '%v' is not a valid number", databaseId)
 	}
-	relation, err := db.Relation(ctx, tblName)
+	relation, err := db.Relation(ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
@@ -377,7 +377,7 @@ func GetNewRelation(eg engine.Engine, dbName, tbleName string, txn client.TxnOpe
 	if err != nil {
 		return nil, err
 	}
-	tableHandler, err := dbHandler.Relation(ctx, tbleName)
+	tableHandler, err := dbHandler.Relation(ctx, tbleName, nil)
 	if err != nil {
 		return nil, err
 	}

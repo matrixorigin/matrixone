@@ -16,9 +16,10 @@ package function
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -231,8 +232,8 @@ func TestRunFunctionDirectly(t *testing.T) {
 	{
 		proc := testutil.NewProcess()
 		inputs := []*vector.Vector{
-			vector.NewConstFixed[bool](types.T_bool.ToType(), true, 10, proc.Mp()),
-			vector.NewConstFixed[bool](types.T_bool.ToType(), true, 10, proc.Mp()),
+			vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp()),
+			vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp()),
 		}
 		startMp := proc.Mp().CurrNB()
 
@@ -248,6 +249,7 @@ func TestRunFunctionDirectly(t *testing.T) {
 		}
 
 		v.Free(proc.Mp())
+		proc.FreeVectors()
 		require.Equal(t, startMp, proc.Mp().CurrNB())
 	}
 

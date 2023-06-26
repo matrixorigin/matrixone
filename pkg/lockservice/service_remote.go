@@ -110,7 +110,7 @@ func (s *service) handleForwardLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	l, err := s.getLockTable(req.GetBind.Table)
+	l, err := s.getLockTable(req.LockTable.Table)
 	if err != nil ||
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale

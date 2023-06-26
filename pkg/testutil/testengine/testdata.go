@@ -59,7 +59,7 @@ func CreateR(db engine.Database) {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation(ctx, "r")
+	r, err := db.Relation(ctx, "r", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func CreateS(db engine.Database) {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation(ctx, "s")
+	r, err := db.Relation(ctx, "s", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func CreateT1(db engine.Database) {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation(ctx, "t1")
+	r, err := db.Relation(ctx, "t1", nil)
 	if err != nil {
 		log.Fatal(err)
 	}

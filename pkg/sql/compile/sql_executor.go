@@ -174,6 +174,16 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
+	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
+	// maybe we should fix it.
+	txnOp := exec.opts.Txn()
+	if txnOp != nil {
+		err := txnOp.GetWorkspace().IncrStatementID(exec.ctx, false)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
+
 	proc := process.New(
 		exec.ctx,
 		exec.s.mp,
@@ -186,7 +196,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
-		stmts[0])
+		stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}

@@ -169,7 +169,7 @@ func binInteger[T constraints.Unsigned | constraints.Signed](v T, proc *process.
 }
 
 func binFloat[T constraints.Float](v T, proc *process.Process) (string, error) {
-	if err := overflowForNumericToNumeric[T, int64](proc.Ctx, []T{v}); err != nil {
+	if err := overflowForNumericToNumeric[T, int64](proc.Ctx, []T{v}, nil); err != nil {
 		return "", err
 	}
 	return uintToBinary(uint64(int64(v))), nil
