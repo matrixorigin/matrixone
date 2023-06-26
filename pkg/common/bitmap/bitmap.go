@@ -336,6 +336,9 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 		copy(data, n.data)
 		n.data = data
 	}
+	if len(n.data) < newCap {
+		n.data = n.data[:newCap]
+	}
 	n.len = int64(size)
 }
 
