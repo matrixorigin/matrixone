@@ -271,6 +271,8 @@ func newBlockReader(
 
 func (r *blockReader) Close() error {
 	r.withFilterMixin.reset()
+	r.blks = nil
+	r.buffer = nil
 	return nil
 }
 
@@ -381,7 +383,7 @@ func (r *blockMergeReader) Close() error {
 	return nil
 }
 
-func (r *blockMergeReader) loadDeletes() error {
+func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
 	if len(r.blks) == 0 {
 		return nil
 	}
@@ -396,7 +398,7 @@ func (r *blockMergeReader) loadDeletes() error {
 	}
 	// load deletes from partition state for the specified block
 	{
-		state, err := r.table.getPartitionState(r.ctx)
+		state, err := r.table.getPartitionState(ctx)
 		if err != nil {
 			return err
 		}
@@ -442,7 +444,7 @@ func (r *blockMergeReader) Read(
 ) (*batch.Batch, error) {
 
 	//load deletes for the specified block
-	if err := r.loadDeletes(); err != nil {
+	if err := r.loadDeletes(ctx); err != nil {
 		return nil, err
 	}
 	return r.blockReader.Read(ctx, cols, expr, mp, vp)
