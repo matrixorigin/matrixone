@@ -1921,7 +1921,7 @@ func lockMoDatabase(c *Compile, dbName string) error {
 }
 
 func lockMoTable(c *Compile, dbName string, tblName string) error {
-	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
+	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
 	}
