@@ -759,7 +759,7 @@ func (tbl *txnTable) rangesOnePart(
 				//blkInfo.PartitionNum = -1
 				var offsets []int64
 				txn.deletedBlocks.getDeletedOffsetsByBlock(blkid, &offsets)
-				if len(offsets) == 0 {
+				if len(offsets) != 0 {
 					//blkInfo.CanRemote = true
 					dirtyBlks[*blkid] = struct{}{}
 				}
