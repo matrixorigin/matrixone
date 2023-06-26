@@ -443,6 +443,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		}
 		tbl.TableNode.schema.Store(schema)
 		if schema.Extra.OldName != "" {
+			logutil.Infof("replay rename %v from %v -> %v", tid, schema.Extra.OldName, schema.Name)
 			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
 			if err != nil {
 				logutil.Warn(schema.String())
