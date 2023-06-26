@@ -746,7 +746,7 @@ func (h *Handle) HandleDropDatabase(
 	}
 
 	common.DoIfInfoEnabled(func() {
-		logutil.Info("[precommit] drop database: %+v txn: %s", req, txn.String())
+		logutil.Infof("[precommit] drop database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
