@@ -874,6 +874,14 @@ func (h *Handle) HandleWrite(
 		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
+		// TODO: delete this debug log
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %d-%s txn: %s",
+				req.Type, req.TableID,
+				req.TableName, req.DatabaseId, req.DatabaseName,
+				txn.String(),
+			)
+		}
 	}()
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
