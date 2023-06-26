@@ -15,6 +15,7 @@
 package dbutils
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -111,4 +112,9 @@ func (r *Runtime) fillDefaults() {
 	if r.Throttle == nil {
 		r.Throttle = NewThrottle()
 	}
+}
+
+func (r *Runtime) PrintVectorPoolUsage() {
+	logutil.Info(r.VectorPool.Transient.String())
+	logutil.Info(r.VectorPool.Memtable.String())
 }
