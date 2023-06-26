@@ -104,7 +104,7 @@ func StatementInfoFilter(i Item) bool {
 	case "internal_sql", "external_sql", "non_cloud_user":
 		// Check StatementType
 		switch statementInfo.StatementType {
-		case "Insert", "Update", "Delete", "Execute", "Commit", "Rollback":
+		case "Insert", "Update", "Delete", "Execute", "Commit":
 			return true
 		case "Select":
 			// For 'select', also check if Duration is longer than 200 milliseconds
