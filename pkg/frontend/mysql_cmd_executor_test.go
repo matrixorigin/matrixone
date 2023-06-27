@@ -1058,7 +1058,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		}
 		stm := &motrace.StatementInfo{StatementID: uuid.New(), Statement: sql, RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
-		json, _, stats := h.Marshal(mock.CurrentContext().GetContext())
+		json := h.Marshal(mock.CurrentContext().GetContext())
+		_, stats := h.Stats(mock.CurrentContext().GetContext())
 		require.Equal(t, int64(0), stats.RowsRead)
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))

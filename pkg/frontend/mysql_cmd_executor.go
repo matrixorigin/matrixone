@@ -3820,25 +3820,30 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 }
 
 type jsonPlanHandler struct {
-	jsonBytes      []byte
-	statsJsonBytes []byte
-	stats          motrace.Statistic
-	buffer         *bytes.Buffer
+	jsonBytes  []byte
+	statsBytes []byte
+	stats      motrace.Statistic
+	buffer     *bytes.Buffer
 }
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan)
-	jsonBytes, statsJsonBytes, stats := h.Marshal(ctx)
+	jsonBytes := h.Marshal(ctx)
+	statsBytes, stats := h.Stats(ctx)
 	return &jsonPlanHandler{
-		jsonBytes:      jsonBytes,
-		statsJsonBytes: statsJsonBytes,
-		stats:          stats,
-		buffer:         h.handoverBuffer(),
+		jsonBytes:  jsonBytes,
+		statsBytes: statsBytes,
+		stats:      stats,
+		buffer:     h.handoverBuffer(),
 	}
 }
 
-func (h *jsonPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJsonBytes []byte, stats motrace.Statistic) {
-	return h.jsonBytes, h.statsJsonBytes, h.stats
+func (h *jsonPlanHandler) Stats(ctx context.Context) ([]byte, motrace.Statistic) {
+	return h.statsBytes, h.stats
+}
+
+func (h *jsonPlanHandler) Marshal(ctx context.Context) []byte {
+	return h.jsonBytes
 }
 
 func (h *jsonPlanHandler) Free() {
@@ -3846,7 +3851,7 @@ func (h *jsonPlanHandler) Free() {
 		releaseMarshalPlanBufferPool(h.buffer)
 		h.buffer = nil
 		h.jsonBytes = nil
-		h.statsJsonBytes = nil
+		h.statsBytes = nil
 	}
 }
 
@@ -3903,12 +3908,11 @@ func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
 	marshalPlanBufferPool.Put(b)
 }
 
-func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
+func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	var err error
 	if h.marshalPlan != nil {
-		var jsonBytesLen, statsJonsBytesLen = 0, 0
+		var jsonBytesLen = 0
 		h.buffer.Reset()
-		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
 		encoder := json.NewEncoder(h.buffer)
@@ -3924,31 +3928,61 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, sta
 		} else {
 			jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
 		}
-		// data transform Global to json
-		if len(h.marshalPlan.Steps) > 0 {
-			// if len(h.marshalPlan.Steps) > 1 {
-			// logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(h.marshalPlan.Steps))
-			// }
-			// XXX, `buffer` can be used repeatedly as a global variable in the future
-			global := h.marshalPlan.Steps[0].GraphData.Global
-			err = encoder.Encode(&global)
-			if err != nil {
-				statsJonsBytes = []byte(fmt.Sprintf(`{"code":200,"message":"%q"}`, err.Error()))
-			} else {
-				statsJonsBytesLen = h.buffer.Len()
-			}
-		}
 		// BG: bytes.Buffer maintain buf []byte.
 		// if buf[off:] not enough but len(buf) is enough place, then it will reset off = 0.
 		// So, in here, we need call Next(...) after all data has been written
 		if jsonBytesLen > 0 {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
-		if statsJonsBytesLen > 0 {
-			statsJonsBytes = h.buffer.Next(statsJonsBytesLen - jsonBytesLen)
-		}
 	} else {
 		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
 	return
+}
+
+func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte []byte, stats motrace.Statistic) {
+	if h.marshalPlan != nil && len(h.marshalPlan.Steps) > 0 {
+		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
+		global := h.marshalPlan.Steps[0].GraphData.Global
+		statsValues := getStatsFromGlobal(global, uint64(h.stmt.Duration))
+		statsByte = []byte(fmt.Sprintf("%v", statsValues))
+	} else {
+		statsByte = []byte(fmt.Sprintf("%v", []uint64{1, 0, 0, 0, 0}))
+	}
+	return
+}
+
+func getStatsFromGlobal(global explain.Global, duration uint64) []uint64 {
+	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
+
+	for _, stat := range global.Statistics.Time {
+		if stat.Name == "Time Consumed" {
+			timeConsumed = uint64(stat.Value)
+			break
+		}
+	}
+
+	for _, stat := range global.Statistics.Memory {
+		if stat.Name == "Memory Size" {
+			memorySize = uint64(stat.Value)
+			break
+		}
+	}
+
+	for _, stat := range global.Statistics.IO {
+		if stat.Name == "S3 IO Input Count" {
+			s3IOInputCount = uint64(stat.Value)
+		} else if stat.Name == "S3 IO Output Count" {
+			s3IOOutputCount = uint64(stat.Value)
+		}
+	}
+
+	statsValues := make([]uint64, 5)
+	statsValues[0] = 1 // this is the version number
+	statsValues[1] = timeConsumed
+	statsValues[2] = memorySize * duration
+	statsValues[3] = s3IOInputCount
+	statsValues[4] = s3IOOutputCount
+
+	return statsValues
 }

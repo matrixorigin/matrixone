@@ -710,3 +710,76 @@ A    sushi
 A    curry
 B    curry
 C    ramen
+drop table if exists test01;
+create table test01(i int, j int);
+insert into test01 values (1,null);
+insert into test01 values (1,null);
+insert into test01 values (1,1);
+insert into test01 values (1,null);
+insert into test01 values (1,2);
+insert into test01 values (2,1);
+insert into test01 values (2,2);
+insert into test01 values (2,null);
+insert into test01 values (2,null);
+select rank() over (order by t0.a) as b from (select i as a from test01) as t0;
+b
+1
+1
+1
+1
+1
+6
+6
+6
+6
+select rank() over(order by j) as col, j from test01;
+col    j
+1    null
+1    null
+1    null
+1    null
+1    null
+6    1
+6    1
+8    2
+8    2
+drop table if exists wf14;
+create table wf14 (id integer, sex char(1));
+insert into wf14 values (1, 'm');
+insert into wf14 values (2, 'f');
+insert into wf14 values (3, 'f');
+insert into wf14 values (4, 'f');
+insert into wf14 values (5, 'm');
+insert into wf14 values (10, null);
+insert into wf14 values (11, null);
+insert into wf14 values (10, null);
+select id, sex, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as a from wf14;
+id    sex    a
+10    null    20
+10    null    31
+11    null    31
+2    f    5
+3    f    9
+4    f    9
+1    m    6
+5    m    6
+select id, sex, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as a from wf14;
+id    sex    a
+10    null    20
+10    null    31
+11    null    31
+2    f    5
+3    f    9
+4    f    9
+1    m    6
+5    m    6
+select id, sex, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as a from wf14;
+id    sex    a
+10    null    20
+10    null    31
+11    null    31
+2    f    5
+3    f    9
+4    f    9
+1    m    6
+5    m    6
