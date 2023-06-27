@@ -272,7 +272,7 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 		return
 	}
 	if vec.IsConst() {
-		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), sz)
+		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), sz)
 		if m.hasNull {
 			for i := 0; i < n; i++ {
 				m.keys[i] = append(m.keys[i], 0)
@@ -285,7 +285,7 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 		}
 		return
 	}
-	data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
+	data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
 	if !vec.GetNulls().Any() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
