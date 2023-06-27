@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestRead(t *testing.T) {
@@ -449,6 +450,48 @@ func TestRollbackMultiTimes(t *testing.T) {
 		require.NoError(t, tc.Rollback(ctx))
 		require.Error(t, tc.Rollback(ctx))
 	})
+}
+
+func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
+	lockservice.RunLockServicesForTest(
+		zap.InfoLevel,
+		[]string{"s1"},
+		time.Second,
+		func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
+			l := ls[0]
+			tw := NewTimestampWaiter()
+			initTS := newTestTimestamp(1)
+			tw.NotifyLatestCommitTS(initTS)
+			runOperatorTestsWithOptions(
+				t,
+				func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+					require.Equal(t, initTS.Next(), tc.mu.txn.SnapshotTS)
+
+					_, err := l.Lock(ctx, 1, [][]byte{[]byte("k1")}, tc.mu.txn.ID, lock.LockOptions{})
+					require.NoError(t, err)
+
+					tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+
+					ctx2, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+					st := time.Now()
+					c := make(chan struct{})
+					go func() {
+						defer close(c)
+						time.Sleep(time.Second)
+						tw.NotifyLatestCommitTS(initTS.Next().Next())
+					}()
+					require.NoError(t, tc.Commit(ctx2))
+					<-c
+					require.True(t, time.Since(st) > time.Second)
+				},
+				newTestTimestamp(0),
+				[]TxnOption{WithTxnMode(txn.TxnMode_Pessimistic), WithTxnIsolation(txn.TxnIsolation_RC)},
+				WithTimestampWaiter(tw),
+				WithEnableSacrificingFreshness(),
+				WithLockService(l))
+		},
+		nil)
 }
 
 func runOperatorTests(
