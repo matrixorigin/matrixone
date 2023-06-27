@@ -404,7 +404,9 @@ func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				logutil.Infof("[log-tail-push-client] unsubscribe process exit.")
+				ticker.Stop()
 				return
+
 			case <-ticker.C:
 			}
 
