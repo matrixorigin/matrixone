@@ -372,6 +372,7 @@ message PartitionExpr {
 message PartitionColumns {
 	repeated Expr columns = 1;
 	repeated string partition_columns = 2;
+	repeated string partition_fmt_columns = 3;
 }
 
 message PartitionItem {

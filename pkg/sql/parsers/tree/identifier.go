@@ -62,13 +62,15 @@ type UnresolvedName struct {
 	//the name ends with a star. then the first element is empty in the Parts
 	Star bool
 
+	// user.db1.table1.empno;
 	// Parts are the name components (at most 4: column, table, db/schema, catalog.), in reverse order.
 	Parts NameParts
 }
 
 func (node *UnresolvedName) Format(ctx *FmtCtx) {
 	for i := node.NumParts - 1; i >= 0; i-- {
-		ctx.WriteString(node.Parts[i])
+		//ctx.WriteString(node.Parts[i])
+		ctx.WriteName(node.Parts[i])
 		if i > 0 {
 			ctx.WriteByte('.')
 		}

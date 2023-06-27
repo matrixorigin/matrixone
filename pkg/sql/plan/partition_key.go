@@ -145,16 +145,17 @@ func buildKeyPartitionExpr(partitionBinder *PartitionBinder, stmt *tree.CreateTa
 	keyList := partitionType.ColumnList
 	astExprs := make([]tree.Expr, len(keyList))
 	exprList := make([]*Expr, len(keyList))
-	var exprStr string
+
 	isFirst := true
+	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
 	for i, expr := range keyList {
 		astExprs[i] = expr
 		if isFirst {
 			isFirst = false
-			exprStr += "`" + tree.String(expr, dialect.MYSQL) + "`"
 		} else {
-			exprStr += ",`" + tree.String(expr, dialect.MYSQL) + "`"
+			fmtCtx.WritePlain(",")
 		}
+		expr.Format(fmtCtx)
 
 		planExpr, err := partitionBinder.BindExpr(expr, 0, true)
 		if err != nil {
@@ -162,6 +163,7 @@ func buildKeyPartitionExpr(partitionBinder *PartitionBinder, stmt *tree.CreateTa
 		}
 		exprList[i] = planExpr
 	}
+	exprStr := fmtCtx.ToString()
 
 	expr := &plan.Expr{
 		Expr: &plan.Expr_List{

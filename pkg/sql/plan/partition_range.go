@@ -43,20 +43,34 @@ func (rpb *rangePartitionBuilder) build(ctx context.Context, partitionBinder *Pa
 	}
 
 	// RANGE Partitioning
+	//if len(partitionType.ColumnList) == 0 {
+	//	partitionInfo.Type = plan.PartitionType_RANGE
+	//	planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	partitionInfo.PartitionExpr = &plan.PartitionExpr{
+	//		Expr:    planExpr,
+	//		ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
+	//	}
+	//} else {
+	//	// RANGE COLUMNS partitioning
+	//	partitionInfo.Type = plan.PartitionType_RANGE_COLUMNS
+	//	err := buildPartitionColumns(ctx, partitionBinder, partitionInfo, partitionType.ColumnList)
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 	if len(partitionType.ColumnList) == 0 {
 		partitionInfo.Type = plan.PartitionType_RANGE
-		planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+		err := buildRangePartitionExpr(ctx, partitionBinder, partitionType.Expr, partitionInfo)
 		if err != nil {
 			return err
-		}
-		partitionInfo.PartitionExpr = &plan.PartitionExpr{
-			Expr:    planExpr,
-			ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
 		}
 	} else {
 		// RANGE COLUMNS partitioning
 		partitionInfo.Type = plan.PartitionType_RANGE_COLUMNS
-		err := buildPartitionColumns(ctx, partitionBinder, partitionInfo, partitionType.ColumnList)
+		err := buildRangePartitionColumns(ctx, partitionBinder, partitionInfo, partitionType.ColumnList)
 		if err != nil {
 			return err
 		}
@@ -183,4 +197,58 @@ func (rpb *rangePartitionBuilder) buildEvalPartitionExpression(ctx context.Conte
 		partitionDef.PartitionExpression = partitionExpression
 	}
 	return nil
+}
+
+func buildRangePartitionExpr(ctx context.Context, partitionBinder *PartitionBinder, pExpr tree.Expr, partitionDef *plan.PartitionByDef) error {
+	//PARTITION BY LIST(expr)
+	planExpr, err := partitionBinder.BindExpr(pExpr, 0, true)
+	if err != nil {
+		return err
+	}
+	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
+	pExpr.Format(fmtCtx)
+	exprStr := fmtCtx.ToString()
+
+	partitionDef.PartitionExpr = &plan.PartitionExpr{
+		Expr:    planExpr,
+		ExprStr: exprStr,
+	}
+	return nil
+}
+
+func buildRangePartitionColumns(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, columnList []*tree.UnresolvedName) error {
+	var err error
+	columnsExpr := make([]*plan.Expr, len(columnList))
+	partitionColumns := make([]string, len(columnList))
+	partitionFmtColumns := make([]string, len(columnList))
+
+	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
+	// partition COLUMNS does not accept expressions, only names of columns.
+	for i, column := range columnList {
+		columnsExpr[i], err = partitionBinder.BindColRef(column, 0, true)
+		if err != nil {
+			return err
+		}
+		// The permitted data types are shown in the following list:
+		// All integer types
+		// DATE and DATETIME
+		// CHAR, VARCHAR, BINARY, and VARBINARY
+		// See https://dev.mysql.com/doc/refman/8.0/en/partitioning-columns.html
+		t := types.T(columnsExpr[i].Typ.Id)
+		if !t.IsInteger() && !t.IsMySQLString() && !t.IsDateRelate() {
+			return moerr.NewSyntaxError(ctx, "column %s type %s is not allowed in partition clause", tree.String(column, dialect.MYSQL), t.String())
+		}
+
+		partitionColumns[i] = tree.String(column, dialect.MYSQL)
+
+		column.Format(fmtCtx)
+		partitionFmtColumns[i] = fmtCtx.ToString()
+		fmtCtx.Reset()
+	}
+	partitionDef.PartitionColumns = &plan.PartitionColumns{
+		Columns:             columnsExpr,
+		PartitionColumns:    partitionColumns,
+		PartitionFmtColumns: partitionFmtColumns,
+	}
+	return err
 }

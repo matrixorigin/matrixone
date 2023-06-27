@@ -25,6 +25,7 @@ import (
 type FmtCtx struct {
 	*strings.Builder
 	dialectType dialect.DialectType
+	Flags       RestoreFlags
 	// quoteString string
 	quoteString       bool
 	singleQuoteString bool
@@ -35,12 +36,14 @@ func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
 		Builder:     new(strings.Builder),
 		dialectType: dialectType,
 	}
+
 	for _, opt := range opts {
 		opt.Apply(ctx)
 	}
 	return ctx
 }
 
+// ----------------------------------------------------------------------------------------
 type FmtCtxOption func(*FmtCtx)
 
 func (f FmtCtxOption) Apply(ctx *FmtCtx) {
@@ -58,9 +61,12 @@ func WithSingleQuoteString() FmtCtxOption {
 	})
 }
 
+//----------------------------------------------------------------------------------------
+
 // NodeFormatter for formatted output of the node.
 type NodeFormatter interface {
 	Format(ctx *FmtCtx)
+	//Restore(ctx *RestoreCtx)
 }
 
 func String(node NodeFormatter, dialectType dialect.DialectType) string {

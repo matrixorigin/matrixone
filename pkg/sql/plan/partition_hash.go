@@ -45,15 +45,16 @@ func (hpb *hashPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 	}
 
 	//step 3: build partition expr
-	planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
-	if err != nil {
-		return err
-	}
-
-	partitionDef.PartitionExpr = &plan.PartitionExpr{
-		Expr:    planExpr,
-		ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
-	}
+	buildHashPartitionExpr(partitionBinder, partitionType, partitionDef)
+	//planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//partitionDef.PartitionExpr = &plan.PartitionExpr{
+	//	Expr:    planExpr,
+	//	ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
+	//}
 
 	err = hpb.buildPartitionDefs(ctx, partitionBinder, partitionDef, partitionSyntaxDef.Partitions)
 	if err != nil {
@@ -111,5 +112,22 @@ func (hpb *hashPartitionBuilder) buildEvalPartitionExpression(ctx context.Contex
 		return err
 	}
 	partitionDef.PartitionExpression = partitionExpression
+	return nil
+}
+
+func buildHashPartitionExpr(partitionBinder *PartitionBinder, partitionType *tree.HashType, partitionDef *plan.PartitionByDef) error {
+	planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+	if err != nil {
+		return err
+	}
+
+	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
+	partitionType.Expr.Format(fmtCtx)
+	exprStr := fmtCtx.ToString()
+
+	partitionDef.PartitionExpr = &plan.PartitionExpr{
+		Expr:    planExpr,
+		ExprStr: exprStr,
+	}
 	return nil
 }
