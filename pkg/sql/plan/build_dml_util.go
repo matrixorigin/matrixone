@@ -864,7 +864,7 @@ func makeInsertPlan(
 	}
 
 	// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
-	if checkInsertPkDup && CNPrimaryCheck {
+	if checkInsertPkDup {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			pkColExpr := &plan.Expr{
