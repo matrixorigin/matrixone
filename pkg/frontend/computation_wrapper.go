@@ -209,7 +209,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
 	txnOp := cwft.GetProcess().TxnOperator
 	if txnOp != nil {
-		err := txnOp.GetWorkspace().IncrStatementID(requestCtx)
+		err := txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
 		if err != nil {
 			return nil, err
 		}
