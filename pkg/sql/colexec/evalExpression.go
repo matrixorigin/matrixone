@@ -79,7 +79,9 @@ type ExpressionExecutor interface {
 	// it will be called after query has done.
 	Free()
 
-	IfResultMemoryReuse() bool
+	IsColumnExpr() bool
+
+	ifResultMemoryReuse() bool
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -312,7 +314,11 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 func (expr *ParamExpressionExecutor) Free() {
 }
 
-func (expr *ParamExpressionExecutor) IfResultMemoryReuse() bool {
+func (expr *ParamExpressionExecutor) ifResultMemoryReuse() bool {
+	return false
+}
+
+func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
@@ -338,7 +344,11 @@ func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Proces
 func (expr *VarExpressionExecutor) Free() {
 }
 
-func (expr *VarExpressionExecutor) IfResultMemoryReuse() bool {
+func (expr *VarExpressionExecutor) ifResultMemoryReuse() bool {
+	return false
+}
+
+func (expr *VarExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
@@ -405,8 +415,12 @@ func (expr *FunctionExpressionExecutor) SetParameter(index int, executor Express
 	expr.parameterExecutor[index] = executor
 }
 
-func (expr *FunctionExpressionExecutor) IfResultMemoryReuse() bool {
+func (expr *FunctionExpressionExecutor) ifResultMemoryReuse() bool {
 	return true
+}
+
+func (expr *FunctionExpressionExecutor) IsColumnExpr() bool {
+	return false
 }
 
 func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
@@ -437,8 +451,12 @@ func (expr *ColumnExpressionExecutor) Free() {
 	// Nothing should do.
 }
 
-func (expr *ColumnExpressionExecutor) IfResultMemoryReuse() bool {
+func (expr *ColumnExpressionExecutor) ifResultMemoryReuse() bool {
 	return false
+}
+
+func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
+	return true
 }
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
@@ -464,8 +482,12 @@ func (expr *FixedVectorExpressionExecutor) Free() {
 	expr.resultVector = nil
 }
 
-func (expr *FixedVectorExpressionExecutor) IfResultMemoryReuse() bool {
+func (expr *FixedVectorExpressionExecutor) ifResultMemoryReuse() bool {
 	return true
+}
+
+func (expr *FixedVectorExpressionExecutor) IsColumnExpr() bool {
+	return false
 }
 
 func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Const) (*vector.Vector, error) {
@@ -648,7 +670,7 @@ func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 			if oldVec.GetType().Oid == types.T_any {
 				newVec = vector.NewConstNull(types.T_any.ToType(), oldVec.Length(), proc.Mp())
 			} else {
-				if executors[i].IfResultMemoryReuse() {
+				if executors[i].ifResultMemoryReuse() {
 					if e, ok := executors[i].(*FunctionExpressionExecutor); ok {
 						// if projection, we can get the result directly
 						newVec = e.resultVector.GetResultVector()
@@ -702,7 +724,7 @@ func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 // I will remove this function later.
 // do not use this function.
 func SafeGetResult(proc *process.Process, vec *vector.Vector, executor ExpressionExecutor) (*vector.Vector, error) {
-	if executor.IfResultMemoryReuse() {
+	if executor.ifResultMemoryReuse() {
 		if e, ok := executor.(*FunctionExpressionExecutor); ok {
 			nv := e.resultVector.GetResultVector()
 			e.resultVector.SetResultVector(nil)
@@ -1054,10 +1076,24 @@ func GetExprZoneMap(
 
 			default:
 				ivecs := make([]*vector.Vector, len(args))
-				for i, arg := range args {
-					if ivecs[i], err = EvalExpressionOnce(proc, arg, []*batch.Batch{batch.EmptyForConstFoldBatch}); err != nil {
-						zms[expr.AuxId].Reset()
+				if isAllConst(args) { // constant fold
+					for i, arg := range args {
+						if vecs[arg.AuxId], err = EvalExpressionOnce(proc, arg, []*batch.Batch{batch.EmptyForConstFoldBatch}); err != nil {
+							zms[expr.AuxId].Reset()
+							return zms[expr.AuxId]
+						}
+						ivecs[i] = vecs[arg.AuxId]
+					}
+				} else {
+					if f() {
 						return zms[expr.AuxId]
+					}
+					for i, arg := range args {
+						if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
+							zms[expr.AuxId].Reset()
+							return zms[expr.AuxId]
+						}
+						ivecs[i] = vecs[arg.AuxId]
 					}
 				}
 				fn := overload.GetExecuteMethod()
@@ -1260,5 +1296,25 @@ func makeAndExpr(left, right *plan.Expr) *plan.Expr_F {
 			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID, ObjName: function.AndFunctionName},
 			Args: []*plan.Expr{left, right},
 		},
+	}
+}
+
+func isAllConst(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if !isConst(expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func isConst(expr *plan.Expr) bool {
+	switch t := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return false
+	case *plan.Expr_F:
+		return isAllConst(t.F.Args)
+	default:
+		return true
 	}
 }

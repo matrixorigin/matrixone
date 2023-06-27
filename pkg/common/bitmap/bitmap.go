@@ -331,12 +331,16 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 		return
 	}
 	newCap := (size + 63) / 64
+	n.len = int64(size)
 	if newCap > cap(n.data) {
 		data := make([]uint64, newCap)
 		copy(data, n.data)
 		n.data = data
+		return
 	}
-	n.len = int64(size)
+	if len(n.data) < newCap {
+		n.data = n.data[:newCap]
+	}
 }
 
 func (n *Bitmap) Filter(sels []int64) *Bitmap {

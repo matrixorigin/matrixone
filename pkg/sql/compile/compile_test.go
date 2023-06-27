@@ -81,15 +81,13 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 type Ws struct {
 }
 
-func (w *Ws) IncrStatemenetID(ctx context.Context) error {
+func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
 	return nil
 }
 
 func (w *Ws) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
-
-func (w *Ws) DeleteTable(ctx context.Context, dbID uint64, tableName string) {}
 
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))

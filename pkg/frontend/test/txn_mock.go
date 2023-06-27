@@ -1163,30 +1163,18 @@ func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 	return m.recorder
 }
 
-// DeleteTable mocks base method.
-func (m *MockWorkspace) DeleteTable(ctx context.Context, dbID uint64, tableName string) {
+// IncrStatementID mocks base method.
+func (m *MockWorkspace) IncrStatementID(ctx context.Context, commit bool) error {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "DeleteTable", ctx, dbID, tableName)
-}
-
-// DeleteTable indicates an expected call of DeleteTable.
-func (mr *MockWorkspaceMockRecorder) DeleteTable(ctx, dbID, tableName interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteTable", reflect.TypeOf((*MockWorkspace)(nil).DeleteTable), ctx, dbID, tableName)
-}
-
-// IncrStatemenetID mocks base method.
-func (m *MockWorkspace) IncrStatemenetID(ctx context.Context) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IncrStatemenetID", ctx)
+	ret := m.ctrl.Call(m, "IncrStatementID", ctx, commit)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// IncrStatemenetID indicates an expected call of IncrStatemenetID.
-func (mr *MockWorkspaceMockRecorder) IncrStatemenetID(ctx interface{}) *gomock.Call {
+// IncrStatementID indicates an expected call of IncrStatementID.
+func (mr *MockWorkspaceMockRecorder) IncrStatementID(ctx, commit interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatemenetID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatemenetID), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatementID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatementID), ctx, commit)
 }
 
 // RollbackLastStatement mocks base method.

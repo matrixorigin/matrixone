@@ -37,8 +37,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// S3Writer is used to write table data to S3 and package a series of `BlockWriter` write operations
 type S3Writer struct {
-	sortIndex      int
+	sortIndex      int // When writing table data, if table has sort key, need to sort data and then write to S3
 	pk             int
 	partitionIndex int16 // This value is aligned with the partition number
 	isClusterBy    bool
@@ -51,17 +52,15 @@ type S3Writer struct {
 
 	metaLocBat *batch.Batch
 
-	// buffers[i] stands the i-th buffer batch used
-	// for merge sort (corresponding to table_i,table_i could be unique
-	// table or main table)
+	// An intermediate cache after the merge sort of all `Bats` data
 	buffer *batch.Batch
 
 	//for memory multiplexing.
 	tableBatchBuffers []*batch.Batch
 
-	// tableBatches[i] used to store the batches of table_i
-	// when the batches' size is over 64M, we will use merge
-	// sort, and then write a segment in s3
+	// Bats[i] used to store the batches of table
+	// Each batch in Bats will be sorted internally, and all batches correspond to only one table
+	// when the batches' size is over 64M, we will use merge sort, and then write a segment in s3
 	Bats []*batch.Batch
 
 	// tableBatchSizes are used to record the table_i's batches'
@@ -629,13 +628,13 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, e
 	blkInfos := make([]catalog.BlockInfo, 0, len(blocks))
 	//TODO::block id ,segment id and location should be get from BlockObject.
 	for j := range blocks {
-		location, err := blockio.EncodeLocationFromString(
-			blockio.EncodeLocation(
-				w.writer.GetName(),
-				blocks[j].GetExtent(),
-				uint32(w.lengths[j]),
-				blocks[j].GetID(),
-			).String())
+		location := blockio.EncodeLocation(
+			w.writer.GetName(),
+			blocks[j].GetExtent(),
+			uint32(w.lengths[j]),
+			blocks[j].GetID(),
+		)
+
 		if err != nil {
 			return nil, err
 		}
