@@ -1190,3 +1190,32 @@ func (mr *MockWorkspaceMockRecorder) RollbackLastStatement(ctx interface{}) *gom
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RollbackLastStatement", reflect.TypeOf((*MockWorkspace)(nil).RollbackLastStatement), ctx)
 }
+
+
+// Commit mocks base method.
+func (m *MockWorkspace) Commit(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RollbackLastStatement", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Commit indicates an expected call of Commit.
+func (mr *MockWorkspaceMockRecorder) Commit(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockWorkspace)(nil).Commit), ctx)
+}
+
+// Rollback mocks base method.
+func (m *MockWorkspace) Rollback(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RollbackLastStatement", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Rollback indicates an expected call of Rollback.
+func (mr *MockWorkspaceMockRecorder) Rollback(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockWorkspace)(nil).Rollback), ctx)
+}
