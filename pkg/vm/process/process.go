@@ -311,8 +311,8 @@ func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
 	defer vp.Unlock()
 	key := uint8(typ.Oid)
 	if vecs := vp.vecs[key]; len(vecs) > 0 {
-		vec := vecs[0]
-		vp.vecs[key] = vecs[1:]
+		vec := vecs[len(vecs)-1]
+		vp.vecs[key] = vecs[:len(vecs)-1]
 		return vec
 	}
 	return nil
