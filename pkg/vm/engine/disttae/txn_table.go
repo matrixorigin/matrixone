@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -39,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -1166,6 +1169,15 @@ func (tbl *txnTable) compaction() error {
 	}
 	var deletedIDs []*types.Blockid
 	defer func() {
+		// add log for issue 10193
+		if e := recover(); e != nil {
+			logutil.Error("panic when compaction",
+				zap.Any("error raised", e),
+				zap.Bool("is txn cleaned", tbl.db.txn.deletedBlocks == nil),
+				zap.Uint64("cleaner goroutine", tbl.db.txn.cleanRoutine.Load()),
+				zap.String("stack", string(debug.Stack())),
+			)
+		}
 		tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
 	}()
 	tbl.db.txn.deletedBlocks.iter(func(id *types.Blockid, deleteOffsets []int64) bool {
