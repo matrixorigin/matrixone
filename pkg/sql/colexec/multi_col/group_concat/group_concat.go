@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"strings"
 	"unsafe"
 
@@ -248,8 +249,12 @@ func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, rowCount int64, ve
 		s, _ := VectorToString(vecs[i], int(rowIndex))
 		res_row += s
 		// prefix length + data
+		l := len(s)
+		if l > math.MaxUint16 {
+			panic("too long")
+		}
 		bs := make([]byte, 2)
-		binary.LittleEndian.PutUint16(bs, uint16(len(s)))
+		binary.LittleEndian.PutUint16(bs, uint16(l))
 		insert_row += unsafe.String(&bs[0], 2) + s
 	}
 	if gc.arg.Dist {
