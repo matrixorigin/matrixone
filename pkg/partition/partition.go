@@ -32,6 +32,8 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 			isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 			if n != isNull {
 				diffs[i] = true
+			} else if n && isNull {
+				diffs[i] = false
 			} else {
 				diffs[i] = diffs[i] || (v != vs[sel])
 			}
@@ -64,6 +66,8 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 			isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 			if n != isNull {
 				diffs[i] = true
+			} else if n && isNull {
+				diffs[i] = false
 			} else {
 				diffs[i] = diffs[i] || !(bytes.Equal(v, vs[sel]))
 			}
