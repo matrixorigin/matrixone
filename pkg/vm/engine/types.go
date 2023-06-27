@@ -581,8 +581,6 @@ type Database interface {
 type Engine interface {
 	// transaction interface
 	New(ctx context.Context, op client.TxnOperator) error
-	Commit(ctx context.Context, op client.TxnOperator) error
-	Rollback(ctx context.Context, op client.TxnOperator) error
 
 	// Delete deletes a database
 	Delete(ctx context.Context, databaseName string, op client.TxnOperator) error

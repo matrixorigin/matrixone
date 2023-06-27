@@ -121,23 +121,31 @@ func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32
 			}
 		}
 	} else if vec.IsConst() {
-		ptr := (*T)(vector.GetPtrAt(vec, 0))
-		for i := 0; i < n; i++ {
-			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-			*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
+		ptr := vector.GetPtrAt[T](vec, 0)
+		// The old code was too stupid and would lead to out-of-bounds writing
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = *ptr
+			}
+			uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
+			}
+			uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
 		}
-		uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
 	} else if !vec.GetNulls().Any() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-				ptr := (*T)(vector.GetPtrAt(vec, int64(i+start)))
+				ptr := vector.GetPtrAt[T](vec, int64(i+start))
 				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
 			}
 			uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
 		} else {
 			for i := 0; i < n; i++ {
-				ptr := (*T)(vector.GetPtrAt(vec, int64(i+start)))
+				ptr := vector.GetPtrAt[T](vec, int64(i+start))
 				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = *ptr
 			}
 			uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
@@ -151,7 +159,7 @@ func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32
 					keyOffs[i]++
 				} else {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-					ptr := (*T)(vector.GetPtrAt(vec, int64(i+start)))
+					ptr := vector.GetPtrAt[T](vec, int64(i+start))
 					*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
 					keyOffs[i] += 1 + size
 				}
@@ -162,7 +170,7 @@ func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32
 					m.zValues[i] = 0
 					continue
 				}
-				ptr := (*T)(vector.GetPtrAt(vec, int64(i+start)))
+				ptr := vector.GetPtrAt[T](vec, int64(i+start))
 				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = *ptr
 				keyOffs[i] += size
 			}

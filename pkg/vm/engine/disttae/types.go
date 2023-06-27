@@ -461,19 +461,14 @@ type blockReader struct {
 	currentStep int
 
 	// block list to scan
-	blks    []*catalog.BlockInfo
-	blkDels map[types.Blockid][]int64
-	//proc    *process.Process
+	blks []*catalog.BlockInfo
+	//buffer for block's deletes
+	buffer []int64
 }
 
-// TODO::blockMergeReader should inherit from blockReader.
 type blockMergeReader struct {
-	withFilterMixin
-
-	table     *txnTable
-	dirtyBlks []*catalog.BlockInfo
-	buffer    []int64
-	//proc      *process.Process
+	*blockReader
+	table *txnTable
 }
 
 type mergeReader struct {
@@ -482,11 +477,6 @@ type mergeReader struct {
 
 type emptyReader struct {
 }
-
-//type ModifyBlockMeta struct {
-//	meta    catalog.BlockInfo
-//	deletes []int64
-//}
 
 type pkRange struct {
 	isRange bool
