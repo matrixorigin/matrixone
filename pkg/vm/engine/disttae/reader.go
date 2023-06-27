@@ -356,12 +356,12 @@ func newBlockMergeReader(
 			proc,
 		),
 	}
-	infos, steps := groupBlocksToObjects(dirtyBlks, 1)
-	distributeBlocksToBlockReaders(
-		[]*blockReader{r.blockReader},
-		1,
-		infos,
-		steps)
+	//infos, steps := groupBlocksToObjects(dirtyBlks, 1)
+	//distributeBlocksToBlockReaders(
+	//	[]*blockReader{r.blockReader},
+	//	1,
+	//	infos,
+	//	steps)
 
 	//r.withFilterMixin = withFilterMixin{
 	//	ctx:      ctx,
