@@ -37,37 +37,33 @@ import (
 )
 
 const (
-	// if we didn't receive response from dn log tail server within time maxTimeToWaitServerResponse.
-	// we assume that client has lost connect to server and will start a reconnect.
+	// reconnection related constants.
+	// maxTimeToWaitServerResponse : max time to wait for server response. if time exceed, do reconnection.
+	// retryReconnect : if reconnect dn failed. push client will retry after time retryReconnect.
 	maxTimeToWaitServerResponse = 60 * time.Second
+	retryReconnect              = 20 * time.Millisecond
 
-	// once we reconnect dn failed. we will retry after time retryReconnect.
-	retryReconnect = 20 * time.Millisecond
-
-	// max number of subscribe request we allowed per second.
+	// push client related constants.
+	// maxSubscribeRequestPerSecond : max number of subscribe request we allowed per second.
+	// defaultRequestDeadline : default deadline for every request (subscribe and unsubscribe).
 	maxSubscribeRequestPerSecond = 10000
+	defaultRequestDeadline       = 2 * time.Minute
 
-	// once we send a table subscribe request, we check table subscribe status each periodToCheckTableSubscribeSucceed.
-	// If check time exceeds maxTimeToCheckTableSubscribeSucceed, print debug log and return error.
+	// subscribe related constants.
+	// periodToCheckTableSubscribeSucceed : check table subscribe status period after push client send a subscribe request.
+	// maxTimeToCheckTableSubscribeSucceed : max time to wait for table subscribe succeed. if time exceed, return error.
 	periodToCheckTableSubscribeSucceed  = 1 * time.Millisecond
 	maxTimeToCheckTableSubscribeSucceed = 10 * time.Second
 	maxCheckRangeTableSubscribeSucceed  = int(maxTimeToCheckTableSubscribeSucceed / periodToCheckTableSubscribeSucceed)
 
-	// default deadline for context to send a rpc message.
-	defaultTimeOutToSubscribeTable = 2 * time.Minute
-
-	// each unsubscribeProcessTicker, we scan the table subscribe record.
-	// to unsubscribe the table which was unused for a long time (more than unsubscribeTimer).
+	// unsubscribe process related constants.
+	// unsubscribe process scan the table every 20 minutes, and unsubscribe table which was unused for 1 hour.
 	unsubscribeProcessTicker = 20 * time.Minute
 	unsubscribeTimer         = 1 * time.Hour
-)
 
-const (
-	// routine number to consume log tail.
-	parallelNums = 4
-
-	// each routine's log tail buffer size.
-	bufferLength = 256
+	// log tail consumer related constants.
+	consumerNumber       = 4
+	consumerBufferLength = 256
 )
 
 // pushClient is a structure responsible for all operations related to the log tail push model.
@@ -79,7 +75,7 @@ const (
 //	 3. subscribeTable	   : send a table subscribe request to service.
 //	 4. unsubscribeTable	   : send a table un subscribe request to service.
 //	 5. firstTimeConnectToLogTailServer : subscribe mo_databases, mo_tables, mo_columns
-//	 6. receiveTableLogTailContinuously   : start (1 + parallelNums) routine to receive log tail from service.
+//	 6. receiveTableLogTailContinuously   : start (1 + consumerNumber) routine to receive log tail from service.
 //	-----------------------------------------------------------------------------------------------------
 type pushClient struct {
 	// Responsible for sending subscription / unsubscription requests to the service
@@ -266,10 +262,10 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 	go func() {
 		for {
 			// new parallelNums routine to consume log tails.
-			consumeErr := make(chan error, parallelNums)
-			receiver := make([]routineController, parallelNums)
+			consumeErr := make(chan error, consumerNumber)
+			receiver := make([]routineController, consumerNumber)
 			for i := range receiver {
-				receiver[i] = createRoutineToConsumeLogTails(ctx, i, bufferLength, e, consumeErr)
+				receiver[i] = createRoutineToConsumeLogTails(ctx, i, consumerBufferLength, e, consumeErr)
 			}
 
 			ch := make(chan logTailSubscriberResponse, 1)
@@ -344,6 +340,10 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					e.setPushClientStatus(true)
 					logutil.Infof("[log-tail-push-client] connect to dn log tail service succeed.")
 					continue
+
+				case <-ctx.Done():
+					cancel()
+					goto cleanAndReconnect
 				}
 			}
 
@@ -356,6 +356,11 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				<-connectMsg
 			}
 			e.setPushClientStatus(false)
+
+			if ctx.Err() != nil {
+				logutil.Infof("[log-tail-push-client] context is done, exit log tail receive routine.")
+				return
+			}
 
 			logutil.Infof("[log-tail-push-client] clean finished, start to reconnect to dn log tail service")
 			for {
@@ -396,7 +401,14 @@ func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(unsubscribeProcessTicker)
 		for {
-			<-ticker.C
+			select {
+			case <-ctx.Done():
+				logutil.Infof("[log-tail-push-client] unsubscribe process exit.")
+				ticker.Stop()
+				return
+
+			case <-ticker.C:
+			}
 
 			t := time.Now()
 			client.subscribed.mutex.Lock()
@@ -505,7 +517,7 @@ func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.Times
 	if len(r.tList) == 0 {
 		r.tList = make(
 			[]atomic.Pointer[timestamp.Timestamp],
-			parallelNums+1,
+			consumerNumber+1,
 		)
 	}
 	for i := range r.tList {
@@ -651,7 +663,7 @@ func (s *logTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	// set a default deadline for ctx if it doesn't have.
 	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
+		newCtx, cancel := context.WithTimeout(ctx, defaultRequestDeadline)
 		_ = cancel
 		return s.logTailClient.Subscribe(newCtx, tblId)
 	}
@@ -663,7 +675,7 @@ func (s *logTailSubscriber) unSubscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	// set a default deadline for ctx if it doesn't have.
 	if _, ok := ctx.Deadline(); !ok {
-		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
+		newCtx, cancel := context.WithTimeout(ctx, defaultRequestDeadline)
 		_ = cancel
 		return s.logTailClient.Unsubscribe(newCtx, tblId)
 	}
@@ -721,11 +733,11 @@ func distributeSubscribeResponse(
 		}
 		e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
 	} else {
-		routineIndex := tbl.TbId % parallelNums
+		routineIndex := tbl.TbId % consumerNumber
 		recRoutines[routineIndex].sendSubscribeResponse(ctx, response)
 	}
 	// no matter how we consume the response, should update all timestamp.
-	e.pClient.receivedLogTailTime.updateTimestamp(parallelNums, *lt.Ts)
+	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts)
 	for _, rc := range recRoutines {
 		rc.updateTimeFromT(*lt.Ts)
 	}
@@ -770,11 +782,11 @@ func distributeUpdateResponse(
 		if ifShouldNotDistribute(table.DbId, table.TbId) {
 			continue
 		}
-		recIndex := table.TbId % parallelNums
+		recIndex := table.TbId % consumerNumber
 		recRoutines[recIndex].sendTableLogTail(list[index])
 	}
 	// should update all the timestamp.
-	e.pClient.receivedLogTailTime.updateTimestamp(parallelNums, *response.To)
+	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *response.To)
 	for _, rc := range recRoutines {
 		rc.updateTimeFromT(*response.To)
 	}
@@ -793,7 +805,7 @@ func distributeUnSubscribeResponse(
 			tbl.DbId, tbl.TbId)
 		return nil
 	}
-	routineIndex := tbl.TbId % parallelNums
+	routineIndex := tbl.TbId % consumerNumber
 	recRoutines[routineIndex].sendUnSubscribeResponse(response)
 
 	return nil

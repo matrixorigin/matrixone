@@ -263,8 +263,7 @@ func newBlockReader(
 			proc:     proc,
 			tableDef: tableDef,
 		},
-		blks:    blks,
-		blkDels: make(map[types.Blockid][]int64),
+		blks: blks,
 	}
 	r.filterState.expr = filterExpr
 	return r
@@ -272,6 +271,8 @@ func newBlockReader(
 
 func (r *blockReader) Close() error {
 	r.withFilterMixin.reset()
+	r.blks = nil
+	r.buffer = nil
 	return nil
 }
 
@@ -290,6 +291,7 @@ func (r *blockReader) Read(
 	// move to the next block at the end of this call
 	defer func() {
 		r.blks = r.blks[1:]
+		r.buffer = r.buffer[:0]
 		r.currentStep++
 	}()
 
@@ -312,7 +314,7 @@ func (r *blockReader) Read(
 
 	// read the block
 	bat, err := blockio.BlockRead(
-		r.ctx, blockInfo, r.blkDels[(*blockInfo).BlockID], r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
+		r.ctx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err
@@ -343,65 +345,44 @@ func newBlockMergeReader(
 	proc *process.Process,
 ) *blockMergeReader {
 	r := &blockMergeReader{
-		withFilterMixin: withFilterMixin{
-			ctx:      ctx,
-			tableDef: txnTable.tableDef,
-			ts:       ts,
-			proc:     proc,
-			fs:       fs,
-		},
-		dirtyBlks: dirtyBlks,
-		table:     txnTable,
+		table: txnTable,
+		blockReader: newBlockReader(
+			ctx,
+			txnTable.getTableDef(),
+			ts,
+			dirtyBlks,
+			filterExpr,
+			fs,
+			proc,
+		),
 	}
-	r.filterState.expr = filterExpr
 	return r
 }
 
 func (r *blockMergeReader) Close() error {
-	r.withFilterMixin.reset()
+	r.blockReader.Close()
 	r.table = nil
-	r.dirtyBlks = nil
 	return nil
 }
 
-func (r *blockMergeReader) Read(
-	ctx context.Context,
-	cols []string,
-	expr *plan.Expr,
-	mp *mpool.MPool,
-	vp engine.VectorPool,
-) (*batch.Batch, error) {
-	// if the block list is empty, return nil
-	if len(r.dirtyBlks) == 0 {
-		return nil, nil
+func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
+	if len(r.blks) == 0 {
+		return nil
 	}
-
-	// move to the next block at the end of this call
-	defer func() {
-		r.buffer = r.buffer[:0]
-		r.dirtyBlks = r.dirtyBlks[1:]
-	}()
-
-	// get the current block to be read
-	info := r.dirtyBlks[0]
-
-	// try to update the columns
-	r.tryUpdateColumns(cols)
-
+	info := r.blks[0]
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
 	if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[info.BlockID]; ok {
+		//TODO::prefetch the deletes
 		err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		//r.buffer = append(r.buffer, deletes...)
 	}
-
 	// load deletes from partition state for the specified block
 	{
 		state, err := r.table.getPartitionState(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ts := types.TimestampToTS(r.ts)
 		iter := state.NewRowsIter(ts, &info.BlockID, true)
@@ -431,24 +412,22 @@ func (r *blockMergeReader) Read(
 	}
 	//load deletes from txn.deletedBlocks.
 	txn := r.table.db.txn
-	//r.buffer = append(r.buffer, txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID)...)
 	txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)
+	return nil
+}
 
-	filter := r.getReadFilter(r.proc)
-
-	//TODO::prefetch.
-	bat, err := blockio.BlockRead(
-		r.ctx, info, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
-	)
-	if err != nil {
+func (r *blockMergeReader) Read(
+	ctx context.Context,
+	cols []string,
+	expr *plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (*batch.Batch, error) {
+	//load deletes for the specified block
+	if err := r.loadDeletes(ctx); err != nil {
 		return nil, err
 	}
-	bat.SetAttributes(cols)
-
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
-	}
-	return bat, nil
+	return r.blockReader.Read(ctx, cols, expr, mp, vp)
 }
 
 // -----------------------------------------------------------------

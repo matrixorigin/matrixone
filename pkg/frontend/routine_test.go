@@ -147,8 +147,6 @@ func Test_ConnectionCount(t *testing.T) {
 	//before anything using the configuration
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
