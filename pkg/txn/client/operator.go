@@ -358,11 +358,6 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
 	util.LogTxnCommit(tc.getTxnMeta(false))
-	if tc.workspace != nil {
-		if err := tc.workspace.Commit(ctx); err != nil {
-			return err
-		}
-	}
 
 	if tc.option.readyOnly {
 		tc.mu.Lock()
@@ -478,6 +473,11 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if commit {
+		if tc.workspace != nil {
+			if err := tc.workspace.Commit(ctx); err != nil {
+				return nil, err
+			}
+		}
 		tc.mu.Lock()
 		defer func() {
 			tc.closeLocked()
