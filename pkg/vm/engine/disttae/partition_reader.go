@@ -33,7 +33,6 @@ import (
 
 // TODO::PartitionReader should inherit from withFilterMixin.
 type PartitionReader struct {
-	//*blockReader
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
@@ -61,6 +60,7 @@ func (p *PartitionReader) Read(
 	if p == nil {
 		return nil, nil
 	}
+	//read batch resides in memory from txn.writes.
 	if len(p.inserts) > 0 {
 		bat := p.inserts[0].GetSubBatch(colNames)
 		rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
@@ -99,7 +99,7 @@ func (p *PartitionReader) Read(
 		return b, nil
 	}
 
-	//read partitionState.rows.
+	//read batch from partitionState.rows.
 	{
 		const maxRows = 8192
 		b := batch.NewWithSize(len(colNames))
@@ -167,7 +167,6 @@ func (p *PartitionReader) Read(
 		if rows == 0 {
 			return nil, nil
 		}
-		// XXX I'm not sure `normal` is a good description
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(
 				"partition reader[snapshot: partitionState.rows]",
