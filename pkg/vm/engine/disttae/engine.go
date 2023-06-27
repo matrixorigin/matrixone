@@ -397,13 +397,6 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
-	logDebugf(op.Txn(), "Engine.Rollback")
-	txn := e.getTransaction(op)
-	if txn == nil {
-		return nil // compatible with existing logic
-		//	return moerr.NewTxnClosed()
-	}
-	defer e.delTransaction(txn)
 	return nil
 }
 

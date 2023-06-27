@@ -14,13 +14,6 @@
 
 package sum
 
-/*
-#include "mo.h"
-#cgo CFLAGS: -I../../../cgo
-#cgo LDFLAGS: -L../../../cgo -lmo -lm
-*/
-import "C"
-
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"

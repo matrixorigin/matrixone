@@ -523,7 +523,7 @@ func (txn *Transaction) getCachedTable(
 
 func (txn *Transaction) Commit(ctx context.Context) error {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
-	txn.IncrStatementID(ctx)
+	txn.IncrStatementID(ctx, true)
 	defer txn.engine.delTransaction(txn)
 	if txn.readOnly.Load() {
 		return nil

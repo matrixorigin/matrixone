@@ -81,7 +81,7 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 type Ws struct {
 }
 
-func (w *Ws) IncrStatementID(ctx context.Context) error {
+func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
 	return nil
 }
 

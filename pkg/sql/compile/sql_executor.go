@@ -178,7 +178,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	// maybe we should fix it.
 	txnOp := exec.opts.Txn()
 	if txnOp != nil {
-		err := txnOp.GetWorkspace().IncrStatementID(exec.ctx)
+		err := txnOp.GetWorkspace().IncrStatementID(exec.ctx, false)
 		if err != nil {
 			return executor.Result{}, err
 		}
