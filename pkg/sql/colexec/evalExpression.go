@@ -1076,10 +1076,24 @@ func GetExprZoneMap(
 
 			default:
 				ivecs := make([]*vector.Vector, len(args))
-				for i, arg := range args {
-					if ivecs[i], err = EvalExpressionOnce(proc, arg, []*batch.Batch{batch.EmptyForConstFoldBatch}); err != nil {
-						zms[expr.AuxId].Reset()
+				if isAllConst(args) { // constant fold
+					for i, arg := range args {
+						if vecs[arg.AuxId], err = EvalExpressionOnce(proc, arg, []*batch.Batch{batch.EmptyForConstFoldBatch}); err != nil {
+							zms[expr.AuxId].Reset()
+							return zms[expr.AuxId]
+						}
+						ivecs[i] = vecs[arg.AuxId]
+					}
+				} else {
+					if f() {
 						return zms[expr.AuxId]
+					}
+					for i, arg := range args {
+						if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
+							zms[expr.AuxId].Reset()
+							return zms[expr.AuxId]
+						}
+						ivecs[i] = vecs[arg.AuxId]
 					}
 				}
 				fn := overload.GetExecuteMethod()
@@ -1282,5 +1296,25 @@ func makeAndExpr(left, right *plan.Expr) *plan.Expr_F {
 			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID, ObjName: function.AndFunctionName},
 			Args: []*plan.Expr{left, right},
 		},
+	}
+}
+
+func isAllConst(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if !isConst(expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func isConst(expr *plan.Expr) bool {
+	switch t := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return false
+	case *plan.Expr_F:
+		return isAllConst(t.F.Args)
+	default:
+		return true
 	}
 }
