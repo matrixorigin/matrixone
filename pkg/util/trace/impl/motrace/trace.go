@@ -153,6 +153,7 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 // PS: only in standalone or CN node can init schema
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
 	config := &GetTracerProvider().tracerProviderConfig
+	WithSQLExecutor(sqlExecutor).apply(config)
 	switch config.batchProcessMode {
 	case InternalExecutor, FileService:
 		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
@@ -210,6 +211,16 @@ func SetTracerProvider(p *MOTracerProvider) {
 }
 func GetTracerProvider() *MOTracerProvider {
 	return gTracerProvider.Load().(*MOTracerProvider)
+}
+
+func GetSQLExecutorFactory() func() ie.InternalExecutor {
+	p := GetTracerProvider()
+	if p != nil {
+		p.mux.Lock()
+		defer p.mux.Unlock()
+		return p.tracerProviderConfig.sqlExecutor
+	}
+	return nil
 }
 
 type PipeImpl batchpipe.PipeImpl[batchpipe.HasName, any]

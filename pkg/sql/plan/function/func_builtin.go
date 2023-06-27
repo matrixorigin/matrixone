@@ -20,12 +20,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
@@ -413,6 +417,55 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	}
 
 	return nil
+}
+
+// buildInMoPurgeLog act like `select mo_purge_log('log_type1,log_type2', '2023-06-27')`
+func buildInMoPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint8](result)
+
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		// fixme: should we need to support null date?
+		if null1 || null2 {
+			rs.Append(uint8(1), true)
+			continue
+		}
+
+		factory := motrace.GetSQLExecutorFactory()
+		if factory == nil {
+			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+		}
+		executor := factory()
+		purgeFunc := func(targetDB, targetTable, tsColumn string) error {
+			if strings.TrimSpace(tbl) == strings.TrimSpace(targetTable) {
+				sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
+					targetDB, targetTable, tsColumn, v2.String())
+				return executor.Exec(proc.Ctx, sql, ie.NewOptsBuilder().Finish())
+			}
+			return nil
+		}
+		tables := strings.Split(util.UnsafeBytesToString(v1), ",")
+		for _, tbl := range tables {
+			if err := motrace.PurgeTable(tbl, purgeFunc); err != nil {
+				return err
+			}
+			if err := mometric.PurgeTable(tbl, purgeFunc); err != nil {
+				return err
+			}
+		}
+
+		rs.Append(uint8(0), true)
+	}
+
+	return nil
+}
+
+func doPurgeLog(tables string, date types.Date) error {
+
 }
 
 func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
