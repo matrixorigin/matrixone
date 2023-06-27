@@ -392,14 +392,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	return nil
 }
 
-func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
-	return nil
-}
-
-func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
-	return nil
-}
-
 func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
@@ -486,34 +478,6 @@ func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
 
 func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 	return op.GetWorkspace().(*Transaction)
-}
-
-func (e *Engine) delTransaction(txn *Transaction) {
-	for i := range txn.writes {
-		if txn.writes[i].bat == nil {
-			continue
-		}
-		txn.proc.PutBatch(txn.writes[i].bat)
-	}
-	txn.tableCache.cachedIndex = -1
-	txn.tableCache.tableMap = nil
-	txn.createMap = nil
-	txn.databaseMap = nil
-	txn.deletedTableMap = nil
-	txn.blockId_dn_delete_metaLoc_batch = nil
-	txn.blockId_raw_batch = nil
-	txn.deletedBlocks = nil
-	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
-	segmentnames = append(segmentnames, txn.segId)
-	for blkId := range txn.cnBlkId_Pos {
-		// blkId:
-		// |------|----------|----------|
-		//   uuid    filelen   blkoffset
-		//    16        2          2
-		segmentnames = append(segmentnames, *blkId.Segment())
-	}
-	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
-	txn.cnBlkId_Pos = nil
 }
 
 func (e *Engine) getDNServices() []DNStore {
