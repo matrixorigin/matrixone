@@ -37,22 +37,6 @@ func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
 	return err
 }
 
-func (e *EntireEngine) Commit(ctx context.Context, op client.TxnOperator) error {
-	err := e.Engine.Commit(ctx, op)
-	if err == nil && e.TempEngine != nil {
-		return e.TempEngine.Commit(ctx, op)
-	}
-	return err
-}
-
-func (e *EntireEngine) Rollback(ctx context.Context, op client.TxnOperator) error {
-	err := e.Engine.Rollback(ctx, op)
-	if err == nil && e.TempEngine != nil {
-		return e.TempEngine.Rollback(ctx, op)
-	}
-	return err
-}
-
 func (e *EntireEngine) Delete(ctx context.Context, databaseName string, op client.TxnOperator) error {
 	return e.Engine.Delete(ctx, databaseName, op)
 }
