@@ -262,6 +262,7 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 	}
 
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	allocIDs, ok := c.mu.allocIDByKey[key]
 	if !ok {
 		allocIDs = &allocID{nextID: 0, lastID: 0}
@@ -271,7 +272,6 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 	if allocIDs.nextID != allocIDs.lastID {
 		v := allocIDs.nextID
 		allocIDs.nextID++
-		c.mu.Unlock()
 		return v, nil
 	}
 
@@ -289,7 +289,6 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 
 		allocIDs.nextID = firstID + 1
 		allocIDs.lastID = firstID + batch - 1
-		c.mu.Unlock()
 		return firstID, err
 	}
 }

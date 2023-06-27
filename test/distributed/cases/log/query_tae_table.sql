@@ -3,6 +3,7 @@
 create account if not exists `query_tae_table` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 
 -- @session:id=1&user=query_tae_table:admin:accountadmin&password=123456
+select sleep(10);
 drop database if exists `query_tae_table`;
 create database `query_tae_table`;
 /*issue_8168*/use query_tae_table;select syntax error stmt;
