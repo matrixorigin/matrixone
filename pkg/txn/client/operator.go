@@ -795,6 +795,17 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) {
+	// rc mode need to see the committed value, so wait logtail applied
+	if tc.mu.txn.IsRCIsolation() &&
+		tc.timestampWaiter != nil {
+		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
+		if err != nil {
+			util.GetLogger().Error("txn wait committed log applied failed in rc mode",
+				util.TxnField(tc.mu.txn),
+				zap.Error(err))
+		}
+	}
+
 	if err := tc.option.lockService.Unlock(
 		ctx,
 		tc.mu.txn.ID,
