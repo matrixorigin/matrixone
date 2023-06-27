@@ -570,6 +570,18 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	if len(tbl.blockInfos) == 0 {
 		return
 	}
+
+	// for dynamic parameter,  const fold cast expression here to improve performance
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	for i := range exprs {
+		exprs[i] = plan2.SubstitueParam(exprs[i], tbl.proc)
+		foldedExpr, _ := plan2.ConstantFold(bat, plan2.DeepCopyExpr(exprs[i]), tbl.proc)
+		if foldedExpr != nil {
+			exprs[i] = foldedExpr
+		}
+	}
+
 	err = tbl.rangesOnePart(
 		ctx,
 		part,
