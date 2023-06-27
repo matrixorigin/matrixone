@@ -131,6 +131,8 @@ github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1m
 github.com/envoyproxy/go-control-plane v0.9.9-0.20210217033140-668b12f5399d/go.mod h1:cXg6YxExXjJnVBQHBLXeUAgxn2UodCpnH306RInaBQk=
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
 github.com/etcd-io/bbolt v1.3.3/go.mod h1:ZF2nL25h33cCyBtcyWeZ2/I3HQOfTP+0PIEvHjkjCrw=
+github.com/fagongzi/goetty/v2 v2.0.3-0.20230520035916-bc1fed6f5e26 h1:EmSb+8S8zY6UKf+d9EdOkeGy1xz5dpeZmEBeTs2GB7I=
+github.com/fagongzi/goetty/v2 v2.0.3-0.20230520035916-bc1fed6f5e26/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
 github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d h1:1pILVCatHj3eVo9i52dZyY4BwjTmSIeN+/hoJh8rD0Y=
 github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d/go.mod h1:5cqSns2zMRcJeVGvAqeTrbXFqh5AqBFr5uVKP9T2kiE=
 github.com/fasthttp-contrib/websocket v0.0.0-20160511215533-1f3b11f56072/go.mod h1:duJ4Jxv5lDcvg4QuQr0oowTf7dz4/CR8NtyCooz9HL8=
@@ -303,8 +305,6 @@ github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0/go.mod h1:zJYVVT2
 github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004 h1:HwxzjxWB6oYwdA4gBXDgjjZiwpGKzBUfpGNzDbuJMwo=
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
-github.com/matrixorigin/goetty/v2 v2.0.0-20230520035916-bc1fed6f5e26 h1:uNTWW3Lhyy+zceS25MhQ+YYyzQ4F3Iw0f/HMR9UL5eA=
-github.com/matrixorigin/goetty/v2 v2.0.0-20230520035916-bc1fed6f5e26/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG+YcO/ntzjCleCu6hFTJiue7Oj2tftpJKTlU=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76 h1:MpmqMPooJ0Ea7W4ldIGbQV4D3z+sEiCu6C6aTibiwiQ=
