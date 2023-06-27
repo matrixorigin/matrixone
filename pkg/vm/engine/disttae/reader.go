@@ -356,30 +356,12 @@ func newBlockMergeReader(
 			proc,
 		),
 	}
-	//infos, steps := groupBlocksToObjects(dirtyBlks, 1)
-	//distributeBlocksToBlockReaders(
-	//	[]*blockReader{r.blockReader},
-	//	1,
-	//	infos,
-	//	steps)
-
-	//r.withFilterMixin = withFilterMixin{
-	//	ctx:      ctx,
-	//	tableDef: txnTable.tableDef,
-	//	ts:       ts,
-	//	proc:     proc,
-	//	fs:       fs,
-	//}
-	//r.blks = dirtyBlks
-	//r.filterState.expr = filterExpr
 	return r
 }
 
 func (r *blockMergeReader) Close() error {
 	r.blockReader.Close()
-	//r.withFilterMixin.reset()
 	r.table = nil
-	//r.dirtyBlks = nil
 	return nil
 }
 
@@ -430,7 +412,6 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
 	}
 	//load deletes from txn.deletedBlocks.
 	txn := r.table.db.txn
-	//r.buffer = append(r.buffer, txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID)...)
 	txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)
 	return nil
 }
@@ -442,91 +423,11 @@ func (r *blockMergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
-
 	//load deletes for the specified block
 	if err := r.loadDeletes(ctx); err != nil {
 		return nil, err
 	}
 	return r.blockReader.Read(ctx, cols, expr, mp, vp)
-
-	// if the block list is empty, return nil
-	//if len(r.dirtyBlks) == 0 {
-	//	return nil, nil
-	//}
-
-	//// move to the next block at the end of this call
-	//defer func() {
-	//	r.buffer = r.buffer[:0]
-	//	r.dirtyBlks = r.dirtyBlks[1:]
-	//}()
-
-	//// get the current block to be read
-	//info := r.dirtyBlks[0]
-
-	//// try to update the columns
-	//r.tryUpdateColumns(cols)
-
-	// load deletes from txn.blockId_dn_delete_metaLoc_batch
-	//if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[info.BlockID]; ok {
-	//	err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	//r.buffer = append(r.buffer, deletes...)
-	//}
-
-	//// load deletes from partition state for the specified block
-	//{
-	//	state, err := r.table.getPartitionState(ctx)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	ts := types.TimestampToTS(r.ts)
-	//	iter := state.NewRowsIter(ts, &info.BlockID, true)
-	//	for iter.Next() {
-	//		entry := iter.Entry()
-	//		_, offset := entry.RowID.Decode()
-	//		r.buffer = append(r.buffer, int64(offset))
-	//	}
-	//	iter.Close()
-	//}
-
-	////TODO:: if r.table.writes is a map , the time complexity could be O(1)
-	////load deletes from txn.writes for the specified block
-	//for _, entry := range r.table.writes {
-	//	if entry.isGeneratedByTruncate() {
-	//		continue
-	//	}
-	//	if entry.typ == DELETE && entry.fileName == "" {
-	//		vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-	//		for _, v := range vs {
-	//			id, offset := v.Decode()
-	//			if id == info.BlockID {
-	//				r.buffer = append(r.buffer, int64(offset))
-	//			}
-	//		}
-	//	}
-	//}
-	////load deletes from txn.deletedBlocks.
-	//txn := r.table.db.txn
-	////r.buffer = append(r.buffer, txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID)...)
-	//txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)
-
-	//filter := r.getReadFilter(r.proc)
-
-	////TODO::prefetch.
-	//bat, err := blockio.BlockRead(
-	//	r.ctx, info, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
-	//)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//bat.SetAttributes(cols)
-
-	//if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-	//	logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
-	//}
-	//return bat, nil
 }
 
 // -----------------------------------------------------------------

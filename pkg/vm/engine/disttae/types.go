@@ -468,12 +468,7 @@ type blockReader struct {
 
 type blockMergeReader struct {
 	*blockReader
-	//withFilterMixin
-
 	table *txnTable
-	//dirtyBlks []*catalog.BlockInfo
-	//buffer    []int64
-	//proc      *process.Process
 }
 
 type mergeReader struct {
