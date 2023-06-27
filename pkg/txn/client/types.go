@@ -189,4 +189,7 @@ type Workspace interface {
 	IncrStatementID(ctx context.Context, commit bool) error
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
+
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
 }
