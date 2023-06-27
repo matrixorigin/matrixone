@@ -27,6 +27,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	increaseRefCntForExprList(node.GroupBy, colRefCnt)
 	increaseRefCntForExprList(node.GroupingSet, colRefCnt)
 	increaseRefCntForExprList(node.AggList, colRefCnt)
+	increaseRefCntForExprList(node.WinSpecList, colRefCnt)
 	for i := range node.OrderBy {
 		increaseRefCnt(node.OrderBy[i].Expr, colRefCnt)
 	}
@@ -48,7 +49,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			projMap[ref] = expr
 		}
 
-	case plan.Node_AGG, plan.Node_PROJECT:
+	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
 			node.Children[i] = newChildID
@@ -73,6 +74,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	removeProjectionsForExprList(node.GroupBy, projMap)
 	removeProjectionsForExprList(node.GroupingSet, projMap)
 	removeProjectionsForExprList(node.AggList, projMap)
+	removeProjectionsForExprList(node.WinSpecList, projMap)
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = removeProjectionsForExpr(node.OrderBy[i].Expr, projMap)
 	}
@@ -171,8 +173,16 @@ func removeProjectionsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) 
 		for i, arg := range ne.F.Args {
 			ne.F.Args[i] = removeProjectionsForExpr(arg, projMap)
 		}
-	}
 
+	case *plan.Expr_W:
+		ne.W.WindowFunc = removeProjectionsForExpr(ne.W.WindowFunc, projMap)
+		for i, arg := range ne.W.PartitionBy {
+			ne.W.PartitionBy[i] = removeProjectionsForExpr(arg, projMap)
+		}
+		for i, order := range ne.W.OrderBy {
+			ne.W.OrderBy[i].Expr = removeProjectionsForExpr(order.Expr, projMap)
+		}
+	}
 	return expr
 }
 
