@@ -1700,5 +1700,4 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
-	return
 }
