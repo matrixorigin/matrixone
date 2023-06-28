@@ -151,15 +151,20 @@ func (d *dummyCollectorCounter) Collect(ctx context.Context, name batchpipe.HasN
 
 func (d *dummyCollectorCounter) Start() bool                                    { return true }
 func (d *dummyCollectorCounter) Stop(graceful bool) error                       { return nil }
-func (d *dummyCollectorCounter) Register(name batchpipe.HasName, impl PipeImpl) { return }
+func (d *dummyCollectorCounter) Register(name batchpipe.HasName, impl PipeImpl) {}
 
 func TestReportZap_Discardable(t *testing.T) {
+
+	exportMux.Lock()
+	defer exportMux.Unlock()
 
 	// Setup a Runtime
 	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	collector := newDummyCollectorCounter()
 	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithBatchProcessor(collector))
+	oldP := GetTracerProvider()
+	defer SetTracerProvider(oldP)
 	SetTracerProvider(p)
 
 	logutil.Info("normal log 1")

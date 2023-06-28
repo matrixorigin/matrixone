@@ -19,13 +19,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"go.uber.org/zap"
 )
@@ -46,6 +48,9 @@ var (
 	DBConnErrCount atomic.Uint32
 
 	prepareSQLMap sync.Map
+
+	moLogger   *log.MOLogger
+	loggerInit sync.Once
 )
 
 const MOLoggerUser = "mo_logger"
@@ -162,13 +167,15 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	return dbConn, nil
 }
 
-func WriteRowRecords(logger *log.MOLogger, records [][]string, tbl *table.Table, timeout time.Duration) (int, error) {
+func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration) (int, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}
 	var err error
 
 	var dbConn *sql.DB
+
+	var logger = getLogger()
 
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
 		logger.Error("sqlWriter WriteRowRecords failed above threshold")
@@ -188,7 +195,7 @@ func WriteRowRecords(logger *log.MOLogger, records [][]string, tbl *table.Table,
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	err = bulkInsert(ctx, logger, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
+	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
 	if err != nil {
 		DBConnErrCount.Add(1)
 		return 0, moerr.NewInternalError(ctx, err.Error())
@@ -253,11 +260,11 @@ func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen i
 	return prepareSQLS
 }
 
-func bulkInsert(ctx context.Context, logger *log.MOLogger, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
+func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
 	if len(records) == 0 {
 		return nil
 	}
-
+	var logger = getLogger()
 	var sqls *prepareSQLs
 	key := fmt.Sprintf("%s_%s", tbl.Database, tbl.Table)
 	if val, ok := prepareSQLMap.Load(key); ok {
@@ -415,4 +422,17 @@ func bulkInsert(ctx context.Context, logger *log.MOLogger, sqlDb *sql.DB, record
 		return moerr.ConvertGoError(ctx, err)
 	}
 	return nil
+}
+
+func getLogger() *log.MOLogger {
+	loggerInit.Do(func() {
+		rt := runtime.ProcessLevelRuntime()
+		if rt == nil {
+			moLogger = log.GetServiceLogger(logutil.Adjust(logutil.GetGlobalLogger()), metadata.ServiceType_CN, "uuid")
+		} else {
+			moLogger = rt.Logger()
+		}
+		moLogger = moLogger.With(logutil.Discardable())
+	})
+	return moLogger
 }

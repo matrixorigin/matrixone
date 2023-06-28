@@ -132,6 +132,8 @@ func (e *TraceLogEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Fiel
 }
 
 const MOInternalFiledKeyNoopReport = "MOInternalFiledKeyNoopReport"
+
+// MOInternalFiledKeyDiscardable mark
 const MOInternalFiledKeyDiscardable = "MODiscardable"
 
 func newTraceLogEncoder() *TraceLogEncoder {

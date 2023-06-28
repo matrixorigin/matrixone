@@ -72,7 +72,7 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	var err error
 	var cnt int
 
-	cnt, err = db_holder.WriteRowRecords(sw.logger, sw.buffer, sw.tbl, MAX_INSERT_TIME)
+	cnt, err = db_holder.WriteRowRecords(sw.buffer, sw.tbl, MAX_INSERT_TIME)
 
 	if err != nil {
 		sw.logger.Debug("sqlWriter WriteRowRecords failed", zap.Int("cnt", cnt), zap.Error(err), zap.Duration("time", time.Since(now)))
