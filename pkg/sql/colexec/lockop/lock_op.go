@@ -198,8 +198,9 @@ func performLock(
 			filterCols = vector.MustFixedCol[int32](bat.GetVector(target.filterColIndexInBatch))
 		}
 		refreshTS, err := doLock(
-			arg.block,
 			proc.Ctx,
+			arg.block,
+			arg.engine,
 			target.tableID,
 			proc,
 			priVec,
@@ -268,8 +269,9 @@ func LockTable(
 		WithLockTable(true).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	refreshTS, err := doLock(
-		false,
 		proc.Ctx,
+		false,
+		eng,
 		tableID,
 		proc,
 		nil,
@@ -304,8 +306,9 @@ func LockRows(
 		WithLockTable(false).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	refreshTS, err := doLock(
-		false,
 		proc.Ctx,
+		false,
+		eng,
 		tableID,
 		proc,
 		vec,
@@ -326,8 +329,9 @@ func LockRows(
 // is false, it means there is a conflict with other transactions and the data to
 // be manipulated has been modified, you need to get the latest data at timestamp.
 func doLock(
-	blocking bool,
 	ctx context.Context,
+	blocking bool,
+	eng engine.Engine,
 	tableID uint64,
 	proc *process.Process,
 	vec *vector.Vector,
@@ -408,7 +412,7 @@ func doLock(
 		}
 
 		// if [snapshotTS, lockedTS) has been modified, need retry at new snapshot ts
-		changed, err := fn(proc.Ctx, txnOp, tableID, nil, vec, snapshotTS.Prev(), lockedTS)
+		changed, err := fn(proc.Ctx, txnOp, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
 		if err != nil {
 			return timestamp.Timestamp{}, err
 		}
