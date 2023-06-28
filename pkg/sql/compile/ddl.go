@@ -1813,19 +1813,12 @@ func lockRows(
 	}
 
 	id := rel.GetTableID(proc.Ctx)
-	defs, err := rel.GetPrimaryKeys(proc.Ctx)
-	if err != nil {
-		return err
-	}
-	if len(defs) != 1 {
-		panic("invalid primary keys")
-	}
 
-	err = lockop.LockRows(
+	err := lockop.LockRows(
 		proc,
 		id,
 		vec,
-		defs[0].Type)
+		*vec.GetType())
 	return err
 }
 

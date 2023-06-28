@@ -16,10 +16,11 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -518,4 +519,59 @@ func (txn *Transaction) getCachedTable(
 		return v.(*txnTable)
 	}
 	return nil
+}
+
+func (txn *Transaction) Commit(ctx context.Context) error {
+	logDebugf(txn.op.Txn(), "Transaction.Commit")
+	txn.IncrStatementID(ctx, true)
+	defer txn.delTransaction()
+	if txn.readOnly.Load() {
+		return nil
+	}
+	if err := txn.mergeTxnWorkspace(); err != nil {
+		return err
+	}
+	if err := txn.dumpBatch(true, 0); err != nil {
+		return err
+	}
+	reqs, err := genWriteReqs(ctx, txn.writes)
+	if err != nil {
+		return err
+	}
+	_, err = txn.op.Write(ctx, reqs)
+	return err
+}
+
+func (txn *Transaction) Rollback(ctx context.Context) error {
+	logDebugf(txn.op.Txn(), "Transaction.Rollback")
+	txn.delTransaction()
+	return nil
+}
+
+func (txn *Transaction) delTransaction() {
+	for i := range txn.writes {
+		if txn.writes[i].bat == nil {
+			continue
+		}
+		txn.proc.PutBatch(txn.writes[i].bat)
+	}
+	txn.tableCache.cachedIndex = -1
+	txn.tableCache.tableMap = nil
+	txn.createMap = nil
+	txn.databaseMap = nil
+	txn.deletedTableMap = nil
+	txn.blockId_dn_delete_metaLoc_batch = nil
+	txn.blockId_raw_batch = nil
+	txn.deletedBlocks = nil
+	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
+	segmentnames = append(segmentnames, txn.segId)
+	for blkId := range txn.cnBlkId_Pos {
+		// blkId:
+		// |------|----------|----------|
+		//   uuid    filelen   blkoffset
+		//    16        2          2
+		segmentnames = append(segmentnames, *blkId.Segment())
+	}
+	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
+	txn.cnBlkId_Pos = nil
 }
