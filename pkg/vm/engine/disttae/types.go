@@ -381,8 +381,6 @@ type txnTable struct {
 	// offset of the writes in workspace
 	writesOffset int
 
-	// localState stores uncommitted data
-	localState *logtailreplay.PartitionState
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
 	// localTS timestamp.Timestamp
