@@ -1465,7 +1465,7 @@ func (tbl *txnTable) newMergeReader(
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
 				var packer *types.Packer
-				put := tbl.db.txn.engine.PackerPool.Get(&packer)
+				put := tbl.db.txn.engine.packerPool.Get(&packer)
 				for i := 0; i < cnt; i++ {
 					serialTupleByConstExpr(pkVals[i], packer)
 				}
@@ -1481,7 +1481,7 @@ func (tbl *txnTable) newMergeReader(
 			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc)
 			if ok {
 				var packer *types.Packer
-				put := tbl.db.txn.engine.PackerPool.Get(&packer)
+				put := tbl.db.txn.engine.packerPool.Get(&packer)
 				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
 				put.Put()
 			}
@@ -1804,4 +1804,15 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 
 	tbl.logtailUpdated = true
 	return nil
+}
+
+func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keysVector *vector.Vector) (bool, error) {
+	var packer *types.Packer
+	put := tbl.db.txn.engine.packerPool.Get(&packer)
+	defer put.Put()
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return false, err
+	}
+	return part.PrimaryKeysMayBeModified(from, to, keysVector, packer), nil
 }
