@@ -93,7 +93,7 @@ type Engine struct {
 	catalog    *cache.CatalogCache
 	dnID       string
 	partitions map[[2]uint64]*logtailreplay.Partition
-	PackerPool *fileservice.Pool[*types.Packer]
+	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
 	pClient pushClient
