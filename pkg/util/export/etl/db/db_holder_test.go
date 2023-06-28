@@ -98,7 +98,7 @@ func TestBulkInsert(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err = bulkInsert(ctx, db, records, tbl, 10, 1)
+	bulkInsert(ctx, db, records, tbl, 10, 1)
 
 	err = mock.ExpectationsWereMet()
 	if err != nil {
@@ -164,7 +164,7 @@ func TestBulkInsertWithBatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err = bulkInsert(ctx, db, records, tbl, 10, 1)
+	bulkInsert(ctx, db, records, tbl, 10, 1)
 
 	// we make sure that all expectations were met
 	if err := mock.ExpectationsWereMet(); err != nil {
