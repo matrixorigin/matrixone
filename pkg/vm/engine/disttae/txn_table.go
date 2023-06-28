@@ -1451,7 +1451,7 @@ func (tbl *txnTable) newMergeReader(
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
 				var packer *types.Packer
-				put := tbl.db.txn.engine.packerPool.Get(&packer)
+				put := tbl.db.txn.engine.PackerPool.Get(&packer)
 				for i := 0; i < cnt; i++ {
 					serialTupleByConstExpr(pkVals[i], packer)
 				}
@@ -1467,7 +1467,7 @@ func (tbl *txnTable) newMergeReader(
 			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc)
 			if ok {
 				var packer *types.Packer
-				put := tbl.db.txn.engine.packerPool.Get(&packer)
+				put := tbl.db.txn.engine.PackerPool.Get(&packer)
 				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
 				put.Put()
 			}

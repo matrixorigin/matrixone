@@ -33,7 +33,7 @@ func consumeEntry(
 ) error {
 
 	var packer *types.Packer
-	put := engine.packerPool.Get(&packer)
+	put := engine.PackerPool.Get(&packer)
 	defer put.Put()
 
 	state.HandleLogtailEntry(ctx, e, primarySeqnum, packer)

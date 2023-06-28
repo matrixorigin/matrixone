@@ -30,7 +30,7 @@ func newTxnTableForTest(
 	mp *mpool.MPool,
 ) *txnTable {
 	engine := &Engine{
-		packerPool: fileservice.NewPool(
+		PackerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
 				return types.NewPacker(mp)
