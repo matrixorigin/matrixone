@@ -105,10 +105,6 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
 }
 
-type DiscardableCollector interface {
-	DiscardableCollect(context.Context, batchpipe.HasName) error
-}
-
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
 	var discardable = false
 	if !GetTracerProvider().IsEnable() {
