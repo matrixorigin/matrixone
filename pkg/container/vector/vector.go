@@ -1395,7 +1395,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				if nulls.Contains(&w.nsp, uint64(i)) {
 					nulls.Add(&v.nsp, uint64(v.length))
 				} else {
-					va, v.area, err = types.BuildVarlena(ws[i].GetByteSlice(w.area), v.area, mp)
+					v.area, err = types.BuildVarlenaNoCopy(&va, ws[i].GetByteSlice(w.area), v.area, mp)
 					if err != nil {
 						return err
 					}
@@ -2014,7 +2014,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		var err error
 		var va types.Varlena
 		bs := w.col.([]types.Varlena)[sel].GetByteSlice(w.area)
-		va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+		v.area, err = types.BuildVarlenaNoCopy(&va, bs, v.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2050,7 +2050,7 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 			var err error
 			var va types.Varlena
 			bs := w.col.([]types.Varlena)[0].GetByteSlice(w.area)
-			va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+			v.area, err = types.BuildVarlenaNoCopy(&va, bs, v.area, mp)
 			if err != nil {
 				return err
 			}
@@ -2140,7 +2140,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			var err error
 			var va types.Varlena
 			bs := w.col.([]types.Varlena)[0].GetByteSlice(w.area)
-			va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+			v.area, err = types.BuildVarlenaNoCopy(&va, bs, v.area, mp)
 			if err != nil {
 				return err
 			}
