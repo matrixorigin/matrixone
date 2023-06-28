@@ -59,28 +59,6 @@ func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 	s[2] = vlen
 }
 
-func BuildVarlenaNoCopy(v *Varlena, bs []byte, area []byte, m *mpool.MPool) ([]byte, error) {
-	var err error
-	vlen := len(bs)
-	if vlen <= VarlenaInlineSize {
-		v[0] = byte(vlen)
-		copy(v[1:1+vlen], bs)
-		return area, nil
-	} else {
-		voff := len(area)
-		if voff+vlen < cap(area) || m == nil {
-			area = append(area, bs...)
-		} else {
-			area, err = m.Grow2(area, bs, voff+vlen)
-			if err != nil {
-				return nil, err
-			}
-		}
-		v.SetOffsetLen(uint32(voff), uint32(vlen))
-		return area, nil
-	}
-}
-
 func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, error) {
 	var err error
 	var v Varlena
