@@ -640,6 +640,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			PartitionTableIds:   t.InsertCtx.PartitionTableIDs,
 			PartitionTableNames: t.InsertCtx.PartitionTableNames,
 			PartitionIdx:        int32(t.InsertCtx.PartitionIndexInBatch),
+			TableDef:            t.InsertCtx.TableDef,
 		}
 	case *deletion.Argument:
 		in.Delete = &pipeline.Deletion{
@@ -1014,6 +1015,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				PartitionTableIDs:     t.PartitionTableIds,
 				PartitionTableNames:   t.PartitionTableNames,
 				PartitionIndexInBatch: int(t.PartitionIdx),
+				TableDef:              t.TableDef,
 			},
 		}
 	case vm.PreInsert:
