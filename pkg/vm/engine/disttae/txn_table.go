@@ -573,11 +573,25 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	if len(tbl.blockInfos) == 0 {
 		return
 	}
+
+	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
+	// temporary solution, will fix it in the future
+	newExprs := make([]*plan.Expr, len(exprs))
+	bat := batch.EmptyForConstFoldBatch
+	for i := range exprs {
+		newExprs[i] = plan2.DeepCopyExpr(exprs[i])
+		newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
+		foldedExpr, _ := plan2.ConstantFold(bat, newExprs[i], tbl.proc)
+		if foldedExpr != nil {
+			newExprs[i] = foldedExpr
+		}
+	}
+
 	err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.getTableDef(),
-		exprs,
+		newExprs,
 		tbl.blockInfos,
 		&ranges,
 		tbl.proc,
