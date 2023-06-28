@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -386,7 +387,10 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64) {
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
 	if low {
-		col.preAllocate(ctx, tableID, col.cfg.CountPerAllocate, nil)
+		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
+			tableID,
+			col.cfg.CountPerAllocate,
+			nil)
 	}
 }
 
