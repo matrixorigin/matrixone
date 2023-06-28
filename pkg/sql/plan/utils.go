@@ -1669,6 +1669,16 @@ func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
 		}
 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 		expr.Expr = ec
+	case *plan.Expr_V:
+		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
+		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+		vec, _ := util.GenVectorByVarValue(proc, typ, val)
+		c := rule.GetConstantValue(vec, false)
+		ec := &plan.Expr_C{
+			C: c,
+		}
+		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+		expr.Expr = ec
 	}
 	return expr
 }
