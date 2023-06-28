@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
@@ -739,7 +740,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 
 		if n.Stats.Shuffle {
-			ss = c.compileBucketGroup(n, ss, ns)
+			ss = c.compileShuffleGroup(n, ss, ns)
 			return c.compileSort(n, ss), nil
 		} else {
 			ss = c.compileMergeGroup(n, ss, ns)
@@ -935,61 +936,80 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 
-		insertArg, err := constructInsert(n, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
 		currentFirstFlag := c.anal.isFirst
 		toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
-		insertArg.ToWriteS3 = toWriteS3
 
 		if toWriteS3 {
-			dataScope := c.newMergeScope(ss)
-			dataScope.IsEnd = true
-			if c.anal.qry.LoadTag {
-				dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
-			}
-			mcpu := dataScope.NodeInfo.Mcpu
-			scopes := make([]*Scope, 0, mcpu)
-			regs := make([]*process.WaitRegister, 0, mcpu)
-			for i := 0; i < mcpu; i++ {
-				scopes = append(scopes, &Scope{
-					Magic:        Merge,
-					Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
-				})
-				scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
-				regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
-			}
-
-			dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
-				Op:  vm.Dispatch,
-				Arg: constructDispatchLocal(false, false, regs),
-			})
-			for i := range scopes {
+			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
 				insertArg, err := constructInsert(n, c.e, c.proc)
 				if err != nil {
 					return nil, err
 				}
 				insertArg.ToWriteS3 = true
-				scopes[i].appendInstruction(vm.Instruction{
-					Op:      vm.Insert,
-					Idx:     c.anal.curr,
-					IsFirst: currentFirstFlag,
-					Arg:     insertArg,
+				rs := c.newInsertMergeScope(insertArg, ss)
+				rs.Magic = MergeInsert
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op: vm.MergeBlock,
+					Arg: &mergeblock.Argument{
+						Tbl:              insertArg.InsertCtx.Rel,
+						PartitionSources: insertArg.InsertCtx.PartitionSources,
+					},
 				})
+				ss = []*Scope{rs}
+			} else {
+				dataScope := c.newMergeScope(ss)
+				dataScope.IsEnd = true
+				if c.anal.qry.LoadTag {
+					dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
+				}
+				mcpu := dataScope.NodeInfo.Mcpu
+				scopes := make([]*Scope, 0, mcpu)
+				regs := make([]*process.WaitRegister, 0, mcpu)
+				for i := 0; i < mcpu; i++ {
+					scopes = append(scopes, &Scope{
+						Magic:        Merge,
+						Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
+					})
+					scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
+					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
+				}
+
+				dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
+					Op:  vm.Dispatch,
+					Arg: constructDispatchLocal(false, false, regs),
+				})
+				for i := range scopes {
+					insertArg, err := constructInsert(n, c.e, c.proc)
+					if err != nil {
+						return nil, err
+					}
+					insertArg.ToWriteS3 = true
+					scopes[i].appendInstruction(vm.Instruction{
+						Op:      vm.Insert,
+						Idx:     c.anal.curr,
+						IsFirst: currentFirstFlag,
+						Arg:     insertArg,
+					})
+				}
+
+				insertArg, err := constructInsert(n, c.e, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				insertArg.ToWriteS3 = true
+				rs := c.newMergeScope(scopes)
+				rs.PreScopes = append(rs.PreScopes, dataScope)
+				rs.Magic = MergeInsert
+				rs.Instructions = append(rs.Instructions, vm.Instruction{
+					Op: vm.MergeBlock,
+					Arg: &mergeblock.Argument{
+						Tbl:              insertArg.InsertCtx.Rel,
+						PartitionSources: insertArg.InsertCtx.PartitionSources,
+					},
+				})
+				ss = []*Scope{rs}
 			}
-			rs := c.newMergeScope(scopes)
-			rs.PreScopes = append(rs.PreScopes, dataScope)
-			rs.Magic = MergeInsert
-			rs.Instructions = append(rs.Instructions, vm.Instruction{
-				Op: vm.MergeBlock,
-				Arg: &mergeblock.Argument{
-					Tbl:              insertArg.InsertCtx.Rel,
-					PartitionSources: insertArg.InsertCtx.PartitionSources,
-				},
-			})
-			ss = []*Scope{rs}
 		} else {
 			for i := range ss {
 				insertArg, err := constructInsert(n, c.e, c.proc)
@@ -1915,11 +1935,11 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
 	dop := plan2.GetShuffleDop()
-	parent, children := c.newScopeListForGroup(validScopeCount(ss), dop)
+	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
 
 	j := 0
 	for i := range ss {
@@ -2109,7 +2129,7 @@ func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
 	return ss
 }
 
-func (c *Compile) newScopeListForGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
+func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
 	var parent = make([]*Scope, 0, len(c.cnList))
 	var children = make([]*Scope, 0, len(c.cnList))
 
@@ -2117,6 +2137,11 @@ func (c *Compile) newScopeListForGroup(childrenCount int, blocks int) ([]*Scope,
 	for _, n := range c.cnList {
 		c.anal.isFirst = currentFirstFlag
 		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
+		for _, s := range scopes {
+			for _, rr := range s.Proc.Reg.MergeReceivers {
+				rr.Ch = make(chan *batch.Batch, 16)
+			}
+		}
 		children = append(children, scopes...)
 		parent = append(parent, c.newMergeRemoteScope(scopes, n))
 	}
@@ -2821,4 +2846,22 @@ func evalRowsetData(ctx context.Context, proc *process.Process,
 		}
 	}
 	return nil
+}
+
+func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
+	ss2 := make([]*Scope, 0, len(ss))
+	for _, s := range ss {
+		if s.IsEnd {
+			continue
+		}
+		ss2 = append(ss2, s)
+	}
+	insert := &vm.Instruction{
+		Op:  vm.Insert,
+		Arg: arg,
+	}
+	for i := range ss2 {
+		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
+	}
+	return c.newMergeScope(ss2)
 }
