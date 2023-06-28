@@ -12,31 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package mocks
 
 import (
-	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 )
 
-var (
-	ErrClose = moerr.NewInternalErrorNoCtx("closed")
-)
+var testVectorPool *containers.VectorPool
+var testRunTime *dbutils.Runtime
 
-type Closable interface {
-	IsClosed() bool
-	TryClose() bool
+func init() {
+	testVectorPool = containers.NewVectorPool("for-test", 20)
+	testRunTime = dbutils.NewRuntime(
+		dbutils.WithRuntimeMemtablePool(testVectorPool),
+		dbutils.WithRuntimeTransientPool(testVectorPool),
+	)
 }
 
-type ClosedState struct {
-	closed atomic.Int32
+func GetTestVectorPool() *containers.VectorPool {
+	return testVectorPool
 }
 
-func (c *ClosedState) IsClosed() bool {
-	return c.closed.Load() == int32(1)
-}
-
-func (c *ClosedState) TryClose() bool {
-	return c.closed.CompareAndSwap(0, 1)
+func GetTestRunTime() *dbutils.Runtime {
+	return testRunTime
 }

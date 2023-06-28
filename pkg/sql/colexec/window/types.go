@@ -38,6 +38,7 @@ type container struct {
 	desc      []bool
 	nullsLast []bool
 	orderVecs []evalVector
+	sels      []int64
 
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
@@ -61,6 +62,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
 		ctr.cleanAggVectors(mp)
+		ctr.cleanOrderVectors(mp)
 	}
 }
 

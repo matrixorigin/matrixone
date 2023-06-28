@@ -143,15 +143,15 @@ func (h *mockHandle) handleCmds(
 	return
 }
 
-func initDB(t *testing.T, opts *options.Options) *db.DB {
+func initDB(ctx context.Context, t *testing.T, opts *options.Options) *db.DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	db, _ := db.Open(dir, opts)
+	db, _ := db.Open(ctx, dir, opts)
 	return db
 }
 
-func mockTAEHandle(t *testing.T, opts *options.Options) *mockHandle {
+func mockTAEHandle(ctx context.Context, t *testing.T, opts *options.Options) *mockHandle {
 	blockio.Start()
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	mh := &mockHandle{
 		m: mpool.MustNewZero(),
 	}

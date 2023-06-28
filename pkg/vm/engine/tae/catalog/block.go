@@ -144,6 +144,38 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 	return e
 }
 
+func (entry *BlockEntry) BuildDeleteObjectName() objectio.ObjectName {
+	entry.segment.Lock()
+	id := entry.segment.nextObjectIdx
+	entry.segment.nextObjectIdx++
+	entry.segment.Unlock()
+	return objectio.BuildObjectName(entry.ID.Segment(), id)
+}
+
+func (entry *BlockEntry) GetDeltaPersistedTSByTxn(txn txnif.TxnReader) types.TS {
+	persisted := types.TS{}
+	entry.LoopChain(func(m *MVCCNode[*MetadataMVCCNode]) bool {
+		if m.BaseNode.DeltaLoc.IsEmpty() && m.IsVisible(txn) {
+			persisted = m.GetStart()
+			return false
+		}
+		return true
+	})
+	return persisted
+}
+
+func (entry *BlockEntry) GetDeltaPersistedTS() types.TS {
+	persisted := types.TS{}
+	entry.LoopChain(func(m *MVCCNode[*MetadataMVCCNode]) bool {
+		if m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
+			persisted = m.GetStart()
+			return false
+		}
+		return true
+	})
+	return persisted
+}
+
 func (entry *BlockEntry) Less(b *BlockEntry) int {
 	return entry.ID.Compare(b.ID)
 }

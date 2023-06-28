@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -25,8 +26,8 @@ import (
 )
 
 const (
-	ReplayReadSize = common.M * 64
-	MaxReadSize    = common.M * 64
+	ReplayReadSize = mpool.MB * 64
+	MaxReadSize    = mpool.MB * 64
 )
 
 func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {

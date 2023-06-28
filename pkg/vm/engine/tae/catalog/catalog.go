@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -64,8 +63,6 @@ type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex
 
-	scheduler tasks.TaskScheduler
-
 	entries   map[uint64]*common.GenericDLNode[*DBEntry]
 	nameNodes map[string]*nodeList[*DBEntry]
 	link      *common.GenericSortedDList[*DBEntry]
@@ -83,14 +80,13 @@ func genDBFullName(tenantID uint32, name string) string {
 	return fmt.Sprintf("%d-%s", tenantID, name)
 }
 
-func MockCatalog(scheduler tasks.TaskScheduler) *Catalog {
+func MockCatalog() *Catalog {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
 	return catalog
@@ -103,18 +99,16 @@ func NewEmptyCatalog() *Catalog {
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		scheduler:  nil,
 	}
 }
 
-func OpenCatalog(scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
+func OpenCatalog() (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
@@ -449,6 +443,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		}
 		tbl.TableNode.schema.Store(schema)
 		if schema.Extra.OldName != "" {
+			logutil.Infof("replay rename %v from %v -> %v", tid, schema.Extra.OldName, schema.Name)
 			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
 			if err != nil {
 				logutil.Warn(schema.String())
@@ -677,6 +672,11 @@ func (catalog *Catalog) onReplayUpdateBlock(
 			panic(err)
 		}
 	}
+	if !un.BaseNode.DeltaLoc.IsEmpty() {
+		name := un.BaseNode.DeltaLoc.Name()
+		objn := name.Num()
+		seg.replayNextObjectIdx(objn)
+	}
 	if err == nil {
 		blkun := blk.SearchNode(un)
 		if blkun != nil {
@@ -752,6 +752,11 @@ func (catalog *Catalog) onReplayCreateBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
+	if !deltaloc.IsEmpty() {
+		name := deltaloc.Name()
+		objn := name.Num()
+		seg.replayNextObjectIdx(objn)
+	}
 	blk, _ := seg.GetBlockEntryByID(blkid)
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
@@ -815,6 +820,11 @@ func (catalog *Catalog) onReplayDeleteBlock(
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
+	}
+	if !deltaloc.IsEmpty() {
+		name := deltaloc.Name()
+		objn := name.Num()
+		seg.replayNextObjectIdx(objn)
 	}
 	blk, err := seg.GetBlockEntryByID(blkid)
 	if err != nil {
@@ -905,7 +915,6 @@ func (catalog *Catalog) GetItemNodeByIDLocked(id uint64) *common.GenericDLNode[*
 	return catalog.entries[id]
 }
 
-func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }
 func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	catalog.RLock()
 	defer catalog.RUnlock()

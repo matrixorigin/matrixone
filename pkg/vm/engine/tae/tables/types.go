@@ -16,11 +16,14 @@ package tables
 
 import (
 	"context"
+
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -36,7 +39,9 @@ type NodeT interface {
 		txn txnif.AsyncTxn,
 	) (from int, err error)
 
-	GetDataWindow(readSchema *catalog.Schema, from, to uint32) (bat *containers.Batch, err error)
+	GetDataWindow(
+		readSchema *catalog.Schema, colIdxes []int, from, to uint32,
+	) (bat *containers.Batch, err error)
 	GetColumnDataWindow(
 		readSchema *catalog.Schema,
 		from uint32,
@@ -48,14 +53,21 @@ type NodeT interface {
 	GetRowsByKey(key any) (rows []uint32, err error)
 	BatchDedup(
 		ctx context.Context,
+		txn txnif.TxnReader,
+		isCommitting bool,
 		keys containers.Vector,
 		keysZM index.ZM,
-		skipFn func(row uint32) error,
+		rowmask *roaring.Bitmap,
 		bf objectio.BloomFilter,
-	) (sels *roaring.Bitmap, err error)
+	) (err error)
 	ContainsKey(ctx context.Context, key any) (ok bool, err error)
 
 	Rows() uint32
+
+	GetRowByFilter(ctx context.Context, txn txnif.TxnReader, filter *handle.Filter) (row uint32, err error)
+	CollectAppendInRange(
+		start, end types.TS, withAborted bool,
+	) (batWithVer *containers.BatchWithVersion, err error)
 }
 
 type Node struct {

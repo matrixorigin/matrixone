@@ -16,8 +16,10 @@ package function
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -223,4 +225,55 @@ func Test_GetFunctionByName(t *testing.T) {
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
+}
+
+func TestRunFunctionDirectly(t *testing.T) {
+	// fold case.
+	{
+		proc := testutil.NewProcess()
+		inputs := []*vector.Vector{
+			vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp()),
+			vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp()),
+		}
+		startMp := proc.Mp().CurrNB()
+
+		v, err := RunFunctionDirectly(proc, AndFunctionEncodedID, inputs, 10)
+		require.NoError(t, err)
+
+		require.Equal(t, 10, v.Length())
+		wrapper := vector.GenerateFunctionFixedTypeParameter[bool](v)
+		for i := 0; i < 10; i++ {
+			value, null := wrapper.GetValue(uint64(i))
+			require.Equal(t, false, null)
+			require.Equal(t, true, value)
+		}
+
+		v.Free(proc.Mp())
+		proc.FreeVectors()
+		require.Equal(t, startMp, proc.Mp().CurrNB())
+	}
+
+	// non-fold case.
+	{
+		proc := testutil.NewProcess()
+		inputs := []*vector.Vector{
+			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, true}),
+			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, true}),
+		}
+		startMp := proc.Mp().CurrNB()
+
+		v, err := RunFunctionDirectly(proc, AndFunctionEncodedID, inputs, 2)
+		require.NoError(t, err)
+
+		require.Equal(t, 2, v.Length())
+		wrapper := vector.GenerateFunctionFixedTypeParameter[bool](v)
+		for i := 0; i < 2; i++ {
+			value, null := wrapper.GetValue(uint64(i))
+			require.Equal(t, false, null)
+			require.Equal(t, true, value)
+		}
+
+		v.Free(proc.Mp())
+		require.Equal(t, startMp, proc.Mp().CurrNB())
+	}
 }

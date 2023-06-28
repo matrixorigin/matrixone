@@ -33,7 +33,7 @@ import (
 // 2. CNBlockOffset  : belong to txn's workspace
 
 // 3. RawRowIdBatch  : belong to txn's snapshot data.
-// 4. FlushMetaLoc   : belong to txn's snapshot data, which on S3 and pointed by delta location.
+// 4. FlushDeltaLoc   : belong to txn's snapshot data, which on S3 and pointed by delta location.
 const (
 	RawRowIdBatch = iota
 	// remember that, for one block,
@@ -42,7 +42,7 @@ const (
 	Compaction
 	CNBlockOffset
 	RawBatchOffset
-	FlushMetaLoc
+	FlushDeltaLoc
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -57,7 +57,7 @@ func Prepare(_ *process.Process, arg any) error {
 		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
 		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerSegment)}
 		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[string]*batch.Batch)
-		ap.ctr.partitionId_blockId_metaLoc = make(map[int]map[string]*batch.Batch)
+		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[string]*batch.Batch)
 	}
 	return nil
 }
@@ -99,16 +99,17 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				}
 			}
 
-			for pidx, blockId_metaLoc := range p.ctr.partitionId_blockId_metaLoc {
-				for blkid, bat := range blockId_metaLoc {
+			for pidx, blockId_deltaLoc := range p.ctr.partitionId_blockId_deltaLoc {
+				for blkid, bat := range blockId_deltaLoc {
 					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+					//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
 					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
 					bytes, err := bat.MarshalBinary()
 					if err != nil {
 						return true, err
 					}
 					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-					vector.AppendFixed(resBat.GetVector(2), int8(FlushMetaLoc), false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool())
 					vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
 				}
 			}

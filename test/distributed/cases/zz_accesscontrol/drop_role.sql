@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 -- env prepare statement
 drop role if exists drop_role1,drop_role2,drop_role3,drop_role4,drop_role5,drop_role6,drop_role7,drop_role8,drop_role9,drop_role10;
 drop role if exists drop_role_001,drop_role_002,drop_role_1,drop_role_2;
@@ -45,3 +46,4 @@ select role_name from mo_catalog.mo_user_grant mug ,mo_catalog.mo_role mr where 
 drop role if exists drop_role1,drop_role2,drop_role3,drop_role4,drop_role5,drop_role6,drop_role7,drop_role8,drop_role9,drop_role10;
 drop role if exists drop_role_001,drop_role_002,drop_role_1,drop_role_2;
 drop user if exists drop_user_1,drop_user_2;
+set global enable_privilege_cache = on;

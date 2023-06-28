@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop account if exists accx;
 create account accx admin_name 'xcca' identified by '111';
 drop role if exists rolex;
@@ -59,3 +60,4 @@ internal error: can not use the name moadmin. it is the name of the predefined r
 drop role rolex;
 drop user userx,root,dump;
 drop account if exists accx;
+set global enable_privilege_cache = on;

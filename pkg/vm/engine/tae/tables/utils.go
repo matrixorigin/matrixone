@@ -18,7 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
@@ -31,19 +31,72 @@ import (
 
 func LoadPersistedColumnData(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
+	rt *dbutils.Runtime,
 	id *common.ID,
 	def *catalog.ColDef,
 	location objectio.Location,
 ) (vec containers.Vector, err error) {
 	if def.IsPhyAddr() {
-		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows())
+		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 	}
-	bat, err := blockio.LoadColumns(ctx, []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
+	bat, err := blockio.LoadColumns(
+		ctx, []uint16{uint16(def.SeqNum)},
+		[]types.Type{def.Type},
+		rt.Fs.Service,
+		location,
+		nil)
 	if err != nil {
 		return
 	}
 	return containers.ToDNVector(bat.Vecs[0]), nil
+}
+
+func LoadPersistedColumnDatas(
+	ctx context.Context,
+	schema *catalog.Schema,
+	rt *dbutils.Runtime,
+	id *common.ID,
+	colIdxs []int,
+	location objectio.Location,
+) ([]containers.Vector, error) {
+	cols := make([]uint16, 0)
+	typs := make([]types.Type, 0)
+	vectors := make([]containers.Vector, len(colIdxs))
+	phyAddIdx := -1
+	for i, colIdx := range colIdxs {
+		def := schema.ColDefs[colIdx]
+		if def.IsPhyAddr() {
+			vec, err := model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
+			if err != nil {
+				return nil, err
+			}
+			phyAddIdx = i
+			vectors[phyAddIdx] = vec
+			continue
+		}
+		cols = append(cols, def.SeqNum)
+		typs = append(typs, def.Type)
+	}
+	if len(cols) == 0 {
+		return vectors, nil
+	}
+	bat, err := blockio.LoadColumns(
+		ctx, cols,
+		typs,
+		rt.Fs.Service,
+		location,
+		nil)
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range bat.Vecs {
+		idx := i
+		if idx >= phyAddIdx && phyAddIdx > -1 {
+			idx++
+		}
+		vectors[idx] = containers.ToDNVector(vec)
+	}
+	return vectors, nil
 }
 
 func ReadPersistedBlockRow(location objectio.Location) int {
@@ -89,15 +142,14 @@ func MakeImmuIndex(
 	ctx context.Context,
 	meta *catalog.BlockEntry,
 	bf objectio.BloomFilter,
-	cache model.LRUCache,
-	fs fileservice.FileService,
+	rt *dbutils.Runtime,
 ) (idx indexwrapper.ImmutIndex, err error) {
-	pkZM, err := meta.GetPKZoneMap(ctx, fs)
+	pkZM, err := meta.GetPKZoneMap(ctx, rt.Fs.Service)
 	if err != nil {
 		return
 	}
 	idx = indexwrapper.NewImmutIndex(
-		*pkZM, bf, meta.GetMetaLoc(), cache, fs,
+		*pkZM, bf, meta.GetMetaLoc(),
 	)
 	return
 }

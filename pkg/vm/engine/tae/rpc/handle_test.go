@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,38 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package rpc
 
 import (
-	"fmt"
-	"path"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
-type FileT int
+func TestHandleGCCache(t *testing.T) {
+	now := time.Now()
+	expired := now.Add(-MAX_TXN_COMMIT_LATENCY).Add(-time.Second)
 
-const (
-	FTLock FileT = iota
-)
-
-const (
-	TmpSuffix  = ".tmp"
-	LockSuffix = ".lock"
-)
-
-func MakeFilename(dirname string, ft FileT, name string, isTmp bool) string {
-	var s string
-	switch ft {
-	case FTLock:
-		s = path.Join(dirname, fmt.Sprintf("%s%s", name, LockSuffix))
-	default:
-		panic(fmt.Sprintf("unsupported %d", ft))
+	handle := Handle{}
+	handle.mu.txnCtxs = map[string]*txnContext{
+		"now": {
+			deadline: now,
+		},
+		"expired": {
+			deadline: expired,
+		},
 	}
-	if isTmp {
-		s += TmpSuffix
-	}
-	return s
-}
+	handle.GCCache(now)
 
-func MakeLockFileName(dirname, name string) string {
-	return MakeFilename(dirname, FTLock, name, false)
+	require.Equal(t, 1, len(handle.mu.txnCtxs))
+	require.Nil(t, handle.mu.txnCtxs["expired"])
+	require.NotNil(t, handle.mu.txnCtxs["now"])
 }

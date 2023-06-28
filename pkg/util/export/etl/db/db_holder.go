@@ -15,10 +15,10 @@
 package db_holder
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +43,8 @@ var (
 	dbMux sync.Mutex
 
 	DBConnErrCount atomic.Uint32
+
+	prepareSQLMap sync.Map
 )
 
 const MOLoggerUser = "mo_logger"
@@ -50,7 +52,36 @@ const MaxConnectionNumber = 1
 
 const DBConnRetryThreshold = 8
 
-const MAX_CHUNK_SIZE = 1024 * 1024 * 4
+const MaxInsertLen = 200
+const MiddleInsertLen = 10
+
+var maxRowBufPool sync.Pool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+
+var middleRowBufPool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+var oneRowBufPool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+
+type prepareSQLs struct {
+	maxRowNum int
+	maxRows   string
+
+	middleRowNum int
+	middleRows   string
+
+	oneRow  string
+	columns int
+}
 
 type DBUser struct {
 	UserName string
@@ -152,8 +183,8 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	done := make(chan error)
-	go bulkInsert(ctx, done, dbConn, records, tbl, MAX_CHUNK_SIZE)
+	done := make(chan error, 1)
+	go bulkInsert(ctx, done, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
 
 	select {
 	case err := <-done:
@@ -171,16 +202,79 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	return 0, err
 }
 
-func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int) {
+func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen int) *prepareSQLs {
+	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
+	oneRowBuf := oneRowBufPool.Get().(*bytes.Buffer)
+	for i := 0; i < columns; i++ {
+		if i == 0 {
+			oneRowBuf.WriteByte('?')
+		} else {
+			oneRowBuf.WriteString(",?")
+		}
+	}
+	oneRow := fmt.Sprintf("%s (%s)", prefix, oneRowBuf.String())
+
+	maxRowBuf := maxRowBufPool.Get().(*bytes.Buffer)
+	maxRowBuf.WriteString(prefix)
+	for i := 0; i < batchLen; i++ {
+		if i == 0 {
+			maxRowBuf.WriteByte('(')
+		} else {
+			maxRowBuf.WriteString(",(")
+		}
+		maxRowBuf.Write(oneRowBuf.Bytes())
+		maxRowBuf.WriteByte(')')
+	}
+
+	middleRowBuf := middleRowBufPool.Get().(*bytes.Buffer)
+	middleRowBuf.WriteString(prefix)
+	for i := 0; i < middleBatchLen; i++ {
+		if i == 0 {
+			middleRowBuf.WriteByte('(')
+		} else {
+			middleRowBuf.WriteString(",(")
+		}
+		middleRowBuf.Write(oneRowBuf.Bytes())
+		middleRowBuf.WriteByte(')')
+	}
+
+	prepareSQLS := &prepareSQLs{
+		maxRowNum: batchLen,
+		maxRows:   maxRowBuf.String(),
+
+		middleRowNum: middleBatchLen,
+		middleRows:   middleRowBuf.String(),
+
+		oneRow:  oneRow,
+		columns: columns,
+	}
+	oneRowBuf.Reset()
+	maxRowBuf.Reset()
+	middleRowBuf.Reset()
+	oneRowBufPool.Put(oneRowBuf)
+	maxRowBufPool.Put(maxRowBuf)
+	middleRowBufPool.Put(middleRowBuf)
+	return prepareSQLS
+}
+
+func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) {
 	if len(records) == 0 {
 		done <- nil
 		return
 	}
 
-	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
-
-	sb := strings.Builder{}
-	defer sb.Reset()
+	var sqls *prepareSQLs
+	key := fmt.Sprintf("%s_%s", tbl.Database, tbl.Table)
+	if val, ok := prepareSQLMap.Load(key); ok {
+		sqls = val.(*prepareSQLs)
+		if sqls.columns != len(records[0]) {
+			sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
+			prepareSQLMap.Store(key, sqls)
+		}
+	} else {
+		sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
+		prepareSQLMap.Store(key, sqls)
+	}
 
 	tx, err := sqlDb.Begin()
 	if err != nil {
@@ -188,47 +282,138 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 		return
 	}
 
-	for idx, row := range records {
-		if len(row) == 0 {
-			continue
-		}
+	var maxStmt *sql.Stmt
+	var middleStmt *sql.Stmt
+	var oneStmt *sql.Stmt
 
-		sb.WriteString("(")
-		for i, field := range row {
-			if i != 0 {
-				sb.WriteString(",")
+	for {
+		if len(records) == 0 {
+			break
+		} else if len(records) >= batchLen {
+			if maxStmt == nil {
+				maxStmt, err = tx.PrepareContext(ctx, sqls.maxRows)
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
 			}
-			escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
-			if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-				sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
-			} else {
-				sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
+			vals := make([]any, sqls.columns*batchLen)
+			idx := 0
+			for _, row := range records[:batchLen] {
+				for i, field := range row {
+					escapedStr := field
+					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+						vals[idx] = field[:tbl.Columns[i].Scale-1]
+					} else {
+						vals[idx] = field
+					}
+					idx++
+				}
 			}
-		}
-		sb.WriteString(")")
-
-		if sb.Len() >= maxLen || idx == len(records)-1 {
-			stmt := baseStr + sb.String() + ";"
-			_, err := tx.ExecContext(ctx, stmt)
+			_, err := maxStmt.ExecContext(ctx, vals...)
 			if err != nil {
+				logutil.Error("sqlWriter batchInsert failed", zap.Error(err))
 				tx.Rollback()
-				sb.Reset()
 				done <- err
 				return
 			}
-			select {
-			case <-ctx.Done():
-				// If context deadline is exceeded, rollback the transaction
-				tx.Rollback()
-				done <- ctx.Err()
-				return
-			default:
+
+			records = records[batchLen:]
+		} else if len(records) >= middleBatchLen {
+			if maxStmt != nil {
+				err = maxStmt.Close()
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
+				maxStmt = nil
 			}
-			sb.Reset()
+			if middleStmt == nil {
+				middleStmt, err = tx.PrepareContext(ctx, sqls.middleRows)
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
+			}
+			vals := make([]any, sqls.columns*middleBatchLen)
+			idx := 0
+			for _, row := range records[:middleBatchLen] {
+				for i, field := range row {
+					escapedStr := field
+					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+						vals[idx] = field[:tbl.Columns[i].Scale-1]
+					} else {
+						vals[idx] = field
+					}
+					idx++
+				}
+			}
+			_, err := middleStmt.ExecContext(ctx, vals...)
+			if err != nil {
+				logutil.Error("sqlWriter batchInsert failed", zap.Error(err))
+				tx.Rollback()
+				done <- err
+				return
+			}
+
+			records = records[middleBatchLen:]
 		} else {
-			sb.WriteString(",")
+			if maxStmt != nil {
+				err = maxStmt.Close()
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
+				maxStmt = nil
+			}
+			if middleStmt != nil {
+				err = middleStmt.Close()
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
+				middleStmt = nil
+			}
+			if oneStmt == nil {
+				oneStmt, err = tx.PrepareContext(ctx, sqls.oneRow)
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
+			}
+			vals := make([]any, sqls.columns)
+			for _, row := range records {
+				for i, field := range row {
+					escapedStr := field
+					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+						vals[i] = field[:tbl.Columns[i].Scale-1]
+					} else {
+						vals[i] = field
+					}
+				}
+				_, err := oneStmt.ExecContext(ctx, vals...)
+				if err != nil {
+					tx.Rollback()
+					done <- err
+					return
+				}
+			}
+			err = oneStmt.Close()
+			if err != nil {
+				tx.Rollback()
+				done <- err
+				return
+			}
+			break
 		}
 	}
+
 	if err := tx.Commit(); err != nil {
 		logutil.Error("sqlWriter commit failed", logutil.ErrorField(err))
 		done <- err

@@ -230,7 +230,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
-			s.NodeInfo.Data, s.DataSource.TableDef)
+			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return err
 		}
@@ -275,7 +275,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			return err
 		}
 		s.NodeInfo.Data = nil
-
+	//FIXME:: s.NodeInfo.Rel == nil, partition table?
 	default:
 		var err error
 		var db engine.Database
@@ -289,32 +289,69 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if err != nil {
 			return err
 		}
-		rel, err = db.Relation(ctx, s.DataSource.RelationName)
+		rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
 		if err != nil {
 			var e error // avoid contamination of error messages
 			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
 			if e != nil {
 				return e
 			}
-			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName))
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
 			if e != nil {
 				return err
 			}
 		}
-		if mainRds, err := rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
-			return err
-		} else {
+		if rel.GetEngineType() == engine.Memory ||
+			s.DataSource.PartitionRelationNames == nil {
+			mainRds, err := rel.NewReader(
+				ctx,
+				mcpu,
+				s.DataSource.Expr,
+				s.NodeInfo.Data)
+			if err != nil {
+				return err
+			}
 			rds = append(rds, mainRds...)
-		}
+		} else {
+			//handle partition table.
+			dirtyRanges := make(map[int][][]byte, 0)
+			cleanRanges := make([][]byte, 0, len(s.NodeInfo.Data))
+			ranges := s.NodeInfo.Data[1:]
+			for _, r := range ranges {
+				blkInfo := catalog.DecodeBlockInfo(r)
+				if !blkInfo.CanRemote {
+					if _, ok := dirtyRanges[blkInfo.PartitionNum]; !ok {
+						newRanges := make([][]byte, 0, 1)
+						newRanges = append(newRanges, []byte{})
+						dirtyRanges[blkInfo.PartitionNum] = newRanges
+					}
+					dirtyRanges[blkInfo.PartitionNum] =
+						append(dirtyRanges[blkInfo.PartitionNum], r)
+					continue
+				}
+				cleanRanges = append(cleanRanges, r)
+			}
 
-		// get readers of partitioned tables
-		if s.DataSource.PartitionRelationNames != nil {
-			for _, relName := range s.DataSource.PartitionRelationNames {
-				subrel, err := db.Relation(c.ctx, relName)
+			if len(cleanRanges) > 0 {
+				// create readers for reading clean blocks from main table.
+				mainRds, err := rel.NewReader(
+					ctx,
+					mcpu,
+					s.DataSource.Expr,
+					cleanRanges)
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, nil)
+				rds = append(rds, mainRds...)
+
+			}
+			// create readers for reading dirty blocks from partition table.
+			for num, relName := range s.DataSource.PartitionRelationNames {
+				subrel, err := db.Relation(c.ctx, relName, c.proc)
+				if err != nil {
+					return err
+				}
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, dirtyRanges[num])
 				if err != nil {
 					return err
 				}

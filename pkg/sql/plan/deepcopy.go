@@ -169,6 +169,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
 		FilterColIdxInBat:  target.FilterColIdxInBat,
 		LockTable:          target.LockTable,
+		Block:              target.Block,
 	}
 }
 
@@ -206,6 +207,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:           node.IsEnd,
 	}
+	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
 	copy(newNode.Children, node.Children)
 	copy(newNode.BindingTags, node.BindingTags)
@@ -518,10 +520,14 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	newCol := &plan.ColData{
-		Data: make([]*plan.Expr, len(col.Data)),
+		Data: make([]*plan.RowsetExpr, len(col.Data)),
 	}
 	for i, e := range col.Data {
-		newCol.Data[i] = DeepCopyExpr(e)
+		newCol.Data[i] = &plan.RowsetExpr{
+			Pos:    e.Pos,
+			RowPos: e.RowPos,
+			Expr:   DeepCopyExpr(e.Expr),
+		}
 	}
 
 	return newCol
@@ -545,19 +551,23 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 }
 
 func DeepCopyPlan(pl *Plan) *Plan {
-	switch pl := pl.Plan.(type) {
+	switch p := pl.Plan.(type) {
 	case *Plan_Query:
 		return &Plan{
 			Plan: &plan.Plan_Query{
-				Query: DeepCopyQuery(pl.Query),
+				Query: DeepCopyQuery(p.Query),
 			},
+			IsPrepare:   pl.IsPrepare,
+			TryRunTimes: pl.TryRunTimes,
 		}
 
 	case *plan.Plan_Ddl:
 		return &Plan{
 			Plan: &plan.Plan_Ddl{
-				Ddl: DeepCopyDataDefinition(pl.Ddl),
+				Ddl: DeepCopyDataDefinition(p.Ddl),
 			},
+			IsPrepare:   pl.IsPrepare,
+			TryRunTimes: pl.TryRunTimes,
 		}
 
 	default:
@@ -839,7 +849,9 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_V:
 		newExpr.Expr = &plan.Expr_V{
 			V: &plan.VarRef{
-				Name: item.V.GetName(),
+				Name:   item.V.GetName(),
+				Global: item.V.GetGlobal(),
+				System: item.V.GetSystem(),
 			},
 		}
 

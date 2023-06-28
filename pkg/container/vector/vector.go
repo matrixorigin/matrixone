@@ -71,16 +71,34 @@ func (v *Vector) SetSorted(b bool) {
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
 	v.class = FLAT
-	//v.data = v.data[:0]
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
+
+	v.length = 0
+	v.nsp.Reset()
+	v.sorted = false
+}
+
+func (v *Vector) ResetArea() {
+	v.area = v.area[:0]
+}
+
+// TODO: It is semantically same as Reset, need to merge them later.
+func (v *Vector) ResetWithNewType(t *types.Type) {
+	oldTyp := v.typ
+	v.typ = *t
+	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
 	v.nsp = nulls.Nulls{}
-
 	v.length = 0
-	//v.capacity = cap(v.data) / v.typ.TypeSize()
-	v.nsp.Reset()
+	v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.sorted = false
+	if oldTyp.Oid != t.Oid {
+		v.setupColFromData()
+	}
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -97,6 +115,12 @@ func (v *Vector) Length() int {
 
 func (v *Vector) Capacity() int {
 	return v.capacity
+}
+
+// Allocated returns the total allocated memory size of the vector.
+// it can be used to estimate the memory usage of the vector.
+func (v *Vector) Allocated() int {
+	return cap(v.data) + cap(v.area)
 }
 
 func (v *Vector) SetLength(n int) {
@@ -1650,7 +1674,11 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			if w.IsConst() {
 				return appendOneBytes(v, ws[0].GetByteSlice(w.area), false, mp)
 			}
-			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(&w.nsp, uint64(sel)), mp)
+			if nulls.Contains(&w.nsp, uint64(sel)) {
+				return appendOneBytes(v, []byte{}, true, mp)
+			} else {
+				return appendOneBytes(v, ws[sel].GetByteSlice(w.area), false, mp)
+			}
 		}
 	case types.T_Blockid:
 		return func(v, w *Vector, sel int64) error {
@@ -2705,6 +2733,16 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	if start == end {
 		return w, nil
 	}
+	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
+	if start == end {
+		return nil
+	}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()
 	if mp == nil {
@@ -2721,7 +2759,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	} else {
 		err := w.PreExtend(end-start, mp)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		w.length = end - start
 		if v.GetType().IsVarlen() {
@@ -2733,7 +2771,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 					bs := vCol[i].GetByteSlice(v.area)
 					va, w.area, err = types.BuildVarlena(bs, w.area, mp)
 					if err != nil {
-						return nil, err
+						return err
 					}
 					wCol[i-start] = va
 				}
@@ -2744,7 +2782,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		}
 	}
 
-	return w, nil
+	return nil
 }
 
 // GetMinMaxValue returns the min and max value of the vector.

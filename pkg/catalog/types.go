@@ -151,6 +151,7 @@ const (
 	BlockMeta_Delete_ID       = "block_delete_id"
 	BlockMeta_EntryState      = "entry_state"
 	BlockMeta_Sorted          = "sorted"
+	BlockMeta_BlockInfo       = "%!%mo__block_info"
 	BlockMeta_MetaLoc         = "%!%mo__meta_loc"
 	BlockMeta_DeltaLoc        = "delta_loc"
 	BlockMeta_CommitTs        = "committs"
@@ -333,6 +334,11 @@ type BlockInfo struct {
 	DeltaLoc   ObjectLocation
 	CommitTs   types.TS
 	SegmentID  types.Uuid
+
+	//TODO:: putting them here is a bad idea, remove
+	//this block can be distributed to remote nodes.
+	CanRemote    bool
+	PartitionNum int
 }
 
 func (b *BlockInfo) MetaLocation() objectio.Location {

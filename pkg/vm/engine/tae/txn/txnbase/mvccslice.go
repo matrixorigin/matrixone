@@ -35,6 +35,9 @@ func NewMVCCSlice[T txnif.MVCCNode[T]](newnodefn func() T,
 	}
 }
 func (be *MVCCSlice[T]) StringLocked() string {
+	if be == nil {
+		return "nil"
+	}
 	var w bytes.Buffer
 
 	length := len(be.MVCC)

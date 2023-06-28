@@ -89,29 +89,33 @@ enum TxnStatus {
 message TxnMeta {
     // ID transaction id, generated at the CN node at the time of transaction creation, 
     // globally unique.
-    bytes                     ID        = 1;
+    bytes                     ID          = 1;
     // Status transaction status
-    TxnStatus                 Status    = 2;
+    TxnStatus                 Status      = 2;
     // SnapshotTS transaction read timestamp, generated at the CN node at the time of 
     // transaction creation. All data.TS < txn.SnapshotTS is visible for the current 
     // transaction.
-    timestamp.Timestamp       SnapshotTS = 3 [(gogoproto.nullable) = false];
+    timestamp.Timestamp       SnapshotTS  = 3 [(gogoproto.nullable) = false];
     // PreparedTS timestamp to complete the first phase of a 2pc commit transaction.
-    timestamp.Timestamp       PreparedTS = 4 [(gogoproto.nullable) = false];
+    timestamp.Timestamp       PreparedTS  = 4 [(gogoproto.nullable) = false];
     // CommitTS transaction commit timestamp. For a 2pc transaction, commitTS = max(preparedTS).
-    timestamp.Timestamp       CommitTS   = 5 [(gogoproto.nullable) = false];
+    timestamp.Timestamp       CommitTS    = 5 [(gogoproto.nullable) = false];
     // DNShards all DNShards that have written data. The first DN is the coordinator of the 
     // transaction
-    repeated metadata.DNShard DNShards   = 6 [(gogoproto.nullable) = false];
+    repeated metadata.DNShard DNShards    = 6 [(gogoproto.nullable) = false];
     // LockTables For pessimistic transactions, LockTables record the bind metadata of the 
     // LockTable corresponding to the successful locking of the current transaction. This data 
     // is committed to the DN at Commit time, and the DN will check once if these bindings have 
     // changed, and if they have, the transaction will be rolled back.
-    repeated lock.LockTable   LockTables = 7 [(gogoproto.nullable) = false];
+    repeated lock.LockTable   LockTables  = 7 [(gogoproto.nullable) = false];
     // TxnMode txn mode
-    TxnMode                   Mode       = 8;
+    TxnMode                   Mode        = 8;
     // TxnIsolation isolation
-    TxnIsolation              Isolation  = 9;
+    TxnIsolation              Isolation   = 9;
+    // Mirror is mirror is true, means the current txn is not created on current node.
+    bool                      Mirror      = 10;
+    // LockService lock service's service address. Empty if is not pessimistic txn.
+    string                    LockService = 11;
 }
 
 // CNTxnSnapshot snapshot of the cn txn operation.

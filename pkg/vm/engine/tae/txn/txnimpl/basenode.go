@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 )
 
@@ -38,11 +37,11 @@ type InsertNode interface {
 	IsRowDeleted(row uint32) bool
 	IsPersisted() bool
 	PrintDeletes() string
-	GetColumnDataByIds([]int) (*model.BlockView, error)
-	GetColumnDataById(int) (*model.ColumnView, error)
+	GetColumnDataByIds([]int) (*containers.BlockView, error)
+	GetColumnDataById(context.Context, int) (*containers.ColumnView, error)
 	Prefetch(idxes []uint16) error
-	FillBlockView(view *model.BlockView, colIdxes []int) (err error)
-	FillColumnView(*model.ColumnView) error
+	FillBlockView(view *containers.BlockView, colIdxes []int) (err error)
+	FillColumnView(*containers.ColumnView) error
 	Window(start, end uint32) (*containers.Batch, error)
 	WindowColumn(start, end uint32, pos int) (containers.Vector, error)
 	GetSpace() uint32
@@ -135,15 +134,15 @@ func (n *baseNode) Rows() uint32 {
 	return n.meta.FastGetMetaLoc().Rows()
 }
 
-func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {
+func (n *baseNode) LoadPersistedColumnData(ctx context.Context, colIdx int) (vec containers.Vector, err error) {
 	location := n.meta.FastGetMetaLoc()
 	if location.IsEmpty() {
 		panic("cannot load persisted column data from empty location")
 	}
 	def := n.table.GetLocalSchema().ColDefs[colIdx]
 	return tables.LoadPersistedColumnData(
-		context.Background(),
-		n.table.store.dataFactory.Fs,
+		ctx,
+		n.table.store.rt,
 		nil,
 		def,
 		location)

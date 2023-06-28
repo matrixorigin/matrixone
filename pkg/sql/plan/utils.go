@@ -599,9 +599,14 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=":
-			switch exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C, *plan.Expr_P:
+			switch e := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C, *plan.Expr_P, *plan.Expr_V:
 				return CheckFilter(exprImpl.F.Args[0])
+			case *plan.Expr_F:
+				if e.F.Func.ObjName == "cast" {
+					return CheckFilter(exprImpl.F.Args[0])
+				}
+				return false, nil
 			default:
 				return false, nil
 			}
@@ -1021,11 +1026,20 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		isConst := true
 		for _, arg := range exprImpl.F.Args {
+			switch arg.Expr.(type) {
+			case *plan.Expr_C, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+				continue
+			}
+			isConst = false
 			isMonotonic := CheckExprIsMonotonic(ctx, arg)
 			if !isMonotonic {
 				return false
 			}
+		}
+		if isConst {
+			return true
 		}
 
 		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())

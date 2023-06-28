@@ -936,7 +936,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		db.EXPECT().Relation(ctx, "t").Return(table, nil).AnyTimes()
+		db.EXPECT().Relation(ctx, "t", nil).Return(table, nil).AnyTimes()
 		defs := []engine.TableDef{
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: types.T_char.ToType()}},
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: types.T_int32.ToType()}},
@@ -1058,7 +1058,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		}
 		stm := &motrace.StatementInfo{StatementID: uuid.New(), Statement: sql, RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
-		json, _, stats := h.Marshal(mock.CurrentContext().GetContext())
+		json := h.Marshal(mock.CurrentContext().GetContext())
+		_, stats := h.Stats(mock.CurrentContext().GetContext())
 		require.Equal(t, int64(0), stats.RowsRead)
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
@@ -1072,7 +1073,7 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan.BuildPlan(ctx, stmts[0])
+	return plan.BuildPlan(ctx, stmts[0], false)
 }
 
 func Test_getSqlType(t *testing.T) {

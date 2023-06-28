@@ -49,10 +49,11 @@ func TestCalculateStorageUsage(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// initialize cluster
 	opt := service.DefaultOptions()
-	c, err := service.NewCluster(t, opt.WithLogLevel(zap.ErrorLevel))
+	c, err := service.NewCluster(ctx, t, opt.WithLogLevel(zap.ErrorLevel))
 	require.NoError(t, err)
 	// close the cluster
 	defer func(c service.Cluster) {
@@ -84,7 +85,7 @@ func TestCalculateStorageUsage(t *testing.T) {
 	table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 	db := mock_frontend.NewMockDatabase(ctrl)
 	db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
-	db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
