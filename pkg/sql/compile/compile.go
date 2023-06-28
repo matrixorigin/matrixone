@@ -1043,7 +1043,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			lockOpArg, err := constructLockOp(n, ss[i].Proc)
+			lockOpArg, err := constructLockOp(n, ss[i].Proc, c.e)
 			if err != nil {
 				return nil, err
 			}

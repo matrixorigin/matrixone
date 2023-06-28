@@ -158,7 +158,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 		// decode and rewrite the scope.
 		// insert operator needs to fill the engine info.
-		s, err := decodeScope(receiver.scopeData, c.proc, true)
+		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
 		if err != nil {
 			return err
 		}
@@ -296,7 +296,7 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
-func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, error) {
+func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.Engine) (*Scope, error) {
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
@@ -313,7 +313,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, err
 	if err != nil {
 		return nil, err
 	}
-	if err := fillInstructionsForScope(s, ctx, p); err != nil {
+	if err := fillInstructionsForScope(s, ctx, p, eng); err != nil {
 		return nil, err
 	}
 
@@ -608,17 +608,17 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 }
 
 // fillInstructionsForScope fills scope's instructions.
-func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline) error {
+func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline, eng engine.Engine) error {
 	var err error
 
 	for i := range s.PreScopes {
-		if err = fillInstructionsForScope(s.PreScopes[i], ctx.children[i], p.Children[i]); err != nil {
+		if err = fillInstructionsForScope(s.PreScopes[i], ctx.children[i], p.Children[i], eng); err != nil {
 			return err
 		}
 	}
 	s.Instructions = make([]vm.Instruction, len(p.InstructionList))
 	for i := range s.Instructions {
-		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx); err != nil {
+		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx, eng); err != nil {
 			return err
 		}
 	}
@@ -983,7 +983,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 }
 
 // convert pipeline.Instruction to vm.Instruction
-func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
+func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng engine.Engine) (vm.Instruction, error) {
 	v := vm.Instruction{Op: vm.OpType(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch v.Op {
 	case vm.Deletion:
@@ -1029,7 +1029,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.LockOp:
 		t := opr.GetLockOp()
-		lockArg := lockop.NewArgument()
+		lockArg := lockop.NewArgument(eng)
 		lockArg.SetBlock(t.Block)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())

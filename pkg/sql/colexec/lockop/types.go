@@ -15,11 +15,16 @@
 package lockop
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,17 +47,19 @@ type FetchLockRowsFunc func(
 
 // LockOptions lock operation options
 type LockOptions struct {
-	maxBytesPerLock int
-	mode            lock.LockMode
-	lockTable       bool
-	parker          *types.Packer
-	fetchFunc       FetchLockRowsFunc
-	filter          RowsFilter
-	filterCols      []int32
+	maxBytesPerLock          int
+	mode                     lock.LockMode
+	lockTable                bool
+	parker                   *types.Packer
+	fetchFunc                FetchLockRowsFunc
+	filter                   RowsFilter
+	filterCols               []int32
+	hasNewVersionInRangeFunc hasNewVersionInRangeFunc
 }
 
 // Argument lock op argument.
 type Argument struct {
+	engine  engine.Engine
 	targets []lockTarget
 	block   bool
 
@@ -73,15 +80,24 @@ type lockTarget struct {
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.
 type RowsFilter func(row int, filterCols []int32) bool
 
+type hasNewVersionInRangeFunc func(
+	ctx context.Context,
+	txnOp client.TxnOperator,
+	tableID uint64,
+	eng engine.Engine,
+	vec *vector.Vector,
+	from, to timestamp.Timestamp) (bool, error)
+
 type state struct {
 	colexec.ReceiverOperator
 
-	parker         *types.Packer
-	retryError     error
-	step           int
-	fetchers       []FetchLockRowsFunc
-	cachedBatches  []*batch.Batch
-	batchFetchFunc func(process.Analyze) (*batch.Batch, bool, error)
+	parker               *types.Packer
+	retryError           error
+	step                 int
+	fetchers             []FetchLockRowsFunc
+	cachedBatches        []*batch.Batch
+	batchFetchFunc       func(process.Analyze) (*batch.Batch, bool, error)
+	hasNewVersionInRange hasNewVersionInRangeFunc
 }
 
 const (

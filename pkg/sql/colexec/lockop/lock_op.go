@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -183,7 +184,6 @@ func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
 	arg *Argument) error {
-	txnOp := proc.TxnOperator
 	txnFeature := proc.TxnClient.(client.TxnClientWithFeature)
 	needRetry := false
 	for idx, target := range arg.targets {
@@ -201,8 +201,7 @@ func performLock(
 			arg.block,
 			proc.Ctx,
 			target.tableID,
-			txnOp,
-			proc.LockService,
+			proc,
 			priVec,
 			target.primaryColumnType,
 			DefaultLockOptions(arg.rt.parker).
@@ -210,7 +209,8 @@ func performLock(
 				WithFetchLockRowsFunc(arg.rt.fetchers[idx]).
 				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowBytes)).
 				WithFilterRows(target.filter, filterCols).
-				WithLockTable(target.lockTable),
+				WithLockTable(target.lockTable).
+				WithHasNewVersionInRangeFunc(arg.rt.hasNewVersionInRange),
 		)
 		if getLogger().Enabled(zap.DebugLevel) {
 			getLogger().Debug("lock result",
@@ -254,6 +254,7 @@ func performLock(
 // LockTable lock table, all rows in the table will be locked, and wait current txn
 // closed.
 func LockTable(
+	eng engine.Engine,
 	proc *process.Process,
 	tableID uint64,
 	pkType types.Type) error {
@@ -270,8 +271,7 @@ func LockTable(
 		false,
 		proc.Ctx,
 		tableID,
-		proc.TxnOperator,
-		proc.LockService,
+		proc,
 		nil,
 		pkType,
 		opts)
@@ -287,6 +287,7 @@ func LockTable(
 
 // LockRow lock rows in table, rows will be locked, and wait current txn closed.
 func LockRows(
+	eng engine.Engine,
 	proc *process.Process,
 	tableID uint64,
 	vec *vector.Vector,
@@ -306,8 +307,7 @@ func LockRows(
 		false,
 		proc.Ctx,
 		tableID,
-		proc.TxnOperator,
-		proc.LockService,
+		proc,
 		vec,
 		pkType,
 		opts)
@@ -329,11 +329,14 @@ func doLock(
 	blocking bool,
 	ctx context.Context,
 	tableID uint64,
-	txnOp client.TxnOperator,
-	lockService lockservice.LockService,
+	proc *process.Process,
 	vec *vector.Vector,
 	pkType types.Type,
 	opts LockOptions) (timestamp.Timestamp, error) {
+	txnOp := proc.TxnOperator
+	txnClient := proc.TxnClient
+	lockService := proc.LockService
+
 	if !txnOp.Txn().IsPessimistic() {
 		return timestamp.Timestamp{}, nil
 	}
@@ -386,6 +389,35 @@ func doLock(
 	// add bind locks
 	if err := txnOp.AddLockTable(result.LockedOn); err != nil {
 		return timestamp.Timestamp{}, err
+	}
+
+	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
+	if !result.HasConflict {
+		snapshotTS := txnOp.Txn().SnapshotTS
+		lockedTS := result.Timestamp
+
+		// wait logtail applied at lockedTS - 1
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS.Prev())
+		if err != nil {
+			return timestamp.Timestamp{}, err
+		}
+
+		fn := opts.hasNewVersionInRangeFunc
+		if fn == nil {
+			fn = hasNewVersionInRange
+		}
+
+		// if [snapshotTS, lockedTS) has been modified, need retry at new snapshot ts
+		changed, err := fn(proc.Ctx, txnOp, tableID, nil, vec, snapshotTS.Prev(), lockedTS)
+		if err != nil {
+			return timestamp.Timestamp{}, err
+		}
+		if changed {
+			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+				return timestamp.Timestamp{}, err
+			}
+			return newSnapshotTS, nil
+		}
 	}
 
 	// no conflict or has conflict, but all prev txn all aborted
@@ -466,9 +498,17 @@ func (opts LockOptions) WithFilterRows(
 	return opts
 }
 
+// WithHasNewVersionInRangeFunc setup hasNewVersionInRange func
+func (opts LockOptions) WithHasNewVersionInRangeFunc(fn hasNewVersionInRangeFunc) LockOptions {
+	opts.hasNewVersionInRangeFunc = fn
+	return opts
+}
+
 // NewArgument create new lock op argument.
-func NewArgument() *Argument {
-	return &Argument{}
+func NewArgument(engine engine.Engine) *Argument {
+	return &Argument{
+		engine: engine,
+	}
 }
 
 // Block return if lock operator is a blocked node.
@@ -532,7 +572,7 @@ func (arg *Argument) LockTable(tableID uint64) *Argument {
 // partitions. For lock op does not care about the logic of data and partition mapping calculation, the
 // caller needs to tell the lock op.
 //
-// tableIDs: the set of ids of the sub-tables of the parition to which the data of the current operation is
+// tableIDs: the set of ids of the sub-tables of the partition to which the data of the current operation is
 // attributed after calculation.
 //
 // partitionTableIDMappingInBatch: the ID index of the sub-table corresponding to the data. Index of tableIDs
@@ -618,4 +658,23 @@ func getRowsFilter(
 		filterCols []int32) bool {
 		return partitionTables[filterCols[row]] == tableID
 	}
+}
+
+// [from, to).
+// 1. if has a mvcc record <= from, return false, means no changed
+// 2. otherwise return true, changed
+func hasNewVersionInRange(
+	ctx context.Context,
+	txnOp client.TxnOperator,
+	tableID uint64,
+	eng engine.Engine,
+	vec *vector.Vector,
+	from, to timestamp.Timestamp) (bool, error) {
+	_, _, rel, err := eng.GetRelationById(ctx, txnOp, tableID)
+	if err != nil {
+		return false, err
+	}
+	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
+	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
+	return rel.PrimaryKeysMayBeModified(ctx, fromTS, toTS, vec)
 }
