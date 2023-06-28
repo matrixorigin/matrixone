@@ -20,14 +20,23 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"database/sql/driver"
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-var logger = runtime.ProcessLevelRuntime().Logger()
+var logger *log.MOLogger
+
+func init() {
+	// Setup a Runtime
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+	logger = runtime.ProcessLevelRuntime().Logger()
+}
 
 func TestGetPrepareSQL(t *testing.T) {
 	tbl := &table.Table{
