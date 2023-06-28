@@ -21,6 +21,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -104,8 +105,12 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
 }
 
+type DiscardableCollector interface {
+	DiscardableCollect(context.Context, batchpipe.HasName) error
+}
+
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
-	var needReport = true
+	var discardable = false
 	if !GetTracerProvider().IsEnable() {
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
@@ -120,6 +125,9 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	// find SpanContext
 	endIdx := len(fields) - 1
 	for idx, v := range fields {
+		if v.Type == zapcore.BoolType && v.Key == logutil.MOInternalFiledKeyDiscardable {
+			discardable = true
+		}
 		if trace.IsSpanField(v) {
 			log.SpanContext = v.Interface.(*trace.SpanContext)
 			// find endIdx
@@ -135,19 +143,22 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 			break
 		}
 	}
-	if !needReport {
-		log.Free()
-		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
-	}
 	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
+	collector := GetGlobalBatchProcessor()
+	var collectFunc = collector.Collect
+	if discardable {
+		if c, support := collector.(DiscardableCollector); support {
+			collectFunc = c.DiscardableCollect
+		}
+	}
 	switch entry.Level {
 	case zap.PanicLevel, zap.DPanicLevel, zap.FatalLevel:
 		syncer := NewItemSyncer(log)
-		GetGlobalBatchProcessor().Collect(DefaultContext(), syncer)
+		collectFunc(DefaultContext(), syncer)
 		syncer.Wait()
 	default:
-		GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+		collectFunc(DefaultContext(), log)
 	}
 	return buffer, err
 }

@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -161,7 +162,7 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	return dbConn, nil
 }
 
-func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration) (int, error) {
+func WriteRowRecords(logger *log.MOLogger, records [][]string, tbl *table.Table, timeout time.Duration) (int, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}
@@ -170,7 +171,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	var dbConn *sql.DB
 
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
-		logutil.Error("sqlWriter WriteRowRecords failed above threshold")
+		logger.Error("sqlWriter WriteRowRecords failed above threshold")
 		if dbConn != nil {
 			dbConn.Close()
 		}
@@ -180,20 +181,20 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 		dbConn, err = InitOrRefreshDBConn(false, false)
 	}
 	if err != nil {
-		logutil.Debug("sqlWriter db init failed", zap.Error(err))
+		logger.Debug("sqlWriter db init failed", zap.Error(err))
 		return 0, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
+	err = bulkInsert(ctx, logger, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
 	if err != nil {
 		DBConnErrCount.Add(1)
 		return 0, moerr.NewInternalError(ctx, err.Error())
 	}
 
-	logutil.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
+	logger.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
 	return len(records), nil
 }
 
@@ -252,7 +253,7 @@ func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen i
 	return prepareSQLS
 }
 
-func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
+func bulkInsert(ctx context.Context, logger *log.MOLogger, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
 	if len(records) == 0 {
 		return nil
 	}
@@ -305,7 +306,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 			}
 			_, err := maxStmt.ExecContext(ctx, vals...)
 			if err != nil {
-				logutil.Debug("sqlWriter batchInsert failed", zap.Error(err))
+				logger.Error("sqlWriter batchInsert failed", zap.Error(err))
 				tx.Rollback()
 				return err
 			}
@@ -346,7 +347,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 			}
 			_, err := middleStmt.ExecContext(ctx, vals...)
 			if err != nil {
-				logutil.Debug("sqlWriter batchInsert failed", zap.Error(err))
+				logger.Error("sqlWriter batchInsert failed", zap.Error(err))
 				tx.Rollback()
 				return err
 			}
@@ -409,7 +410,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	}
 
 	if err = tx.Commit(); err != nil {
-		logutil.Debug("sqlWriter commit failed", logutil.ErrorField(err))
+		logger.Error("sqlWriter commit failed", logutil.ErrorField(err))
 		tx.Rollback()
 		return moerr.ConvertGoError(ctx, err)
 	}

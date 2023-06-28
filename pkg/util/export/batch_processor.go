@@ -332,6 +332,18 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 	}
 }
 
+func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.HasName) error {
+	select {
+	case <-c.stopCh:
+		ctx = errutil.ContextWithNoReport(ctx, true)
+		return moerr.NewInternalError(ctx, "MOCollector stopped")
+	case c.awakeCollect <- item:
+		return nil
+	case <-time.After(time.Millisecond):
+		return nil
+	}
+}
+
 // Start all goroutine worker, including collector, generator, and exporter
 func (c *MOCollector) Start() bool {
 	if atomic.LoadUint32(&c.started) != 0 {

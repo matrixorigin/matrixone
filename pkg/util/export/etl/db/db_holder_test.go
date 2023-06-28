@@ -16,14 +16,18 @@ package db_holder
 
 import (
 	"context"
-	"database/sql/driver"
 	"fmt"
 	"regexp"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+
+	"database/sql/driver"
+	"github.com/DATA-DOG/go-sqlmock"
 )
+
+var logger = runtime.ProcessLevelRuntime().Logger()
 
 func TestGetPrepareSQL(t *testing.T) {
 	tbl := &table.Table{
@@ -98,7 +102,7 @@ func TestBulkInsert(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	bulkInsert(ctx, db, records, tbl, 10, 1)
+	bulkInsert(ctx, logger, db, records, tbl, 10, 1)
 
 	err = mock.ExpectationsWereMet()
 	if err != nil {
@@ -164,7 +168,7 @@ func TestBulkInsertWithBatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	bulkInsert(ctx, db, records, tbl, 10, 1)
+	bulkInsert(ctx, logger, db, records, tbl, 10, 1)
 
 	// we make sure that all expectations were met
 	if err := mock.ExpectationsWereMet(); err != nil {
