@@ -3856,12 +3856,11 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		return nil
 	}
 
-	var t1 T1
 	var t2 T2
-	var li interface{} = &t1
 	var ri interface{} = &t2
-	switch li.(type) {
-	case *int8:
+	switch slice := (any(xs)).(type) {
+
+	case []int8:
 		switch ri.(type) {
 		case *uint8, *uint16, *uint32, *uint64:
 			for i, x := range xs {
@@ -3870,332 +3869,333 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 				}
 			}
 		}
-	case *int16:
-		nxs := unsafe.Slice((*int16)(unsafe.Pointer(&xs[0])), len(xs))
+
+	case []int16:
 		switch ri.(type) {
 		case *int8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt8 || x > math.MaxInt8) {
 					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *uint8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint8) {
 					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16, *uint32, *uint64:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x < 0 {
 					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
-	case *int32:
-		nxs := unsafe.Slice((*int32)(unsafe.Pointer(&xs[0])), len(xs))
+
+	case []int32:
 		switch ri.(type) {
 		case *int8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt8 || x > math.MaxInt8) {
 					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt16 || x > math.MaxInt16) {
 					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint8) {
 					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint16) {
 					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32, *uint64:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x < 0 {
 					return moerr.NewOutOfRange(ctx, "uint", "value '%v'", x)
 				}
 			}
 		}
-	case *int64:
-		nxs := unsafe.Slice((*int64)(unsafe.Pointer(&xs[0])), len(xs))
+
+	case []int64:
 		switch ri.(type) {
 		case *int8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt8 || x > math.MaxInt8) {
 					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt16 || x > math.MaxInt16) {
 					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < math.MinInt32 || x > math.MaxInt32) {
 					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint8) {
 					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint16) {
 					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && (x < 0 || x > math.MaxUint32) {
 					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x < 0 {
 					// XXX for adapt to bvt, but i don't know why we hide the wrong value here.
 					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
-	case *uint8:
-		nxs := unsafe.Slice((*uint8)(unsafe.Pointer(&xs[0])), len(xs))
+
+	case []uint8:
 		switch ri.(type) {
 		case *int8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
 					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		}
-	case *uint16:
-		nxs := unsafe.Slice((*uint16)(unsafe.Pointer(&xs[0])), len(xs))
+
+	case []uint16:
 		switch ri.(type) {
 		case *int8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
 					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt16 {
 					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint8 {
 					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		}
-	case *uint32:
-		nxs := unsafe.Slice((*uint32)(unsafe.Pointer(&xs[0])), len(xs))
+
+	case []uint32:
 		switch ri.(type) {
 		case *int8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
 					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt16 {
 					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt32 {
 					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint8 {
 					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint16 {
 					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		}
-	case *uint64:
-		nxs := unsafe.Slice((*uint64)(unsafe.Pointer(&xs[0])), len(xs))
+
+	case []uint64:
 		switch ri.(type) {
 		case *int8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt8 {
 					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt16 {
 					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt32 {
 					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxInt64 {
 					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint8 {
 					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint16 {
 					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxUint32 {
 					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		}
-	case *float32:
-		nxs := unsafe.Slice((*float32)(unsafe.Pointer(&xs[0])), len(xs))
+
+	case []float32:
 		switch ri.(type) {
 		case *int8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt8 {
 					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt16 {
 					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt32 {
 					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt64 {
 					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint8 {
 					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint16 {
 					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint32 {
 					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint64 {
 					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		}
-	case *float64:
-		nxs := unsafe.Slice((*float64)(unsafe.Pointer(&xs[0])), len(xs))
+
+	case []float64:
 		switch ri.(type) {
 		case *int8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt8 {
 					return moerr.NewOutOfRange(ctx, "int8", "value '%v'", x)
 				}
 			}
 		case *int16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt16 {
 					return moerr.NewOutOfRange(ctx, "int16", "value '%v'", x)
 				}
 			}
 		case *int32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt32 {
 					return moerr.NewOutOfRange(ctx, "int32", "value '%v'", x)
 				}
 			}
 		case *int64:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) &&
 					(math.Round(x) > math.MaxInt64 || math.Round(x) < math.MinInt64) {
 					return moerr.NewOutOfRange(ctx, "int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint8 {
 					return moerr.NewOutOfRange(ctx, "uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint16 {
 					return moerr.NewOutOfRange(ctx, "uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint32 {
 					return moerr.NewOutOfRange(ctx, "uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint64 {
 					return moerr.NewOutOfRange(ctx, "uint64", "value '%v'", x)
 				}
 			}
 		case *float32:
-			for i, x := range nxs {
+			for i, x := range slice {
 				if !nsp.Contains(uint64(i)) && x > math.MaxFloat32 {
 					return moerr.NewOutOfRange(ctx, "float32", "value '%v'", x)
 				}
 			}
 		}
+
 	}
 	return nil
 }

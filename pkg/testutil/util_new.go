@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"encoding/binary"
 	"math/rand"
 	"strconv"
 	"time"
@@ -291,10 +292,12 @@ func NewRowidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.Ro
 		return vec
 	}
 	for i := 0; i < n; i++ {
-		var rowId [2]int64
-
-		rowId[1] = int64(i)
-		if err := vector.AppendFixed(vec, *(*types.Rowid)(unsafe.Pointer(&rowId[0])), false, m); err != nil {
+		var rowId types.Rowid
+		binary.LittleEndian.PutUint64(
+			unsafe.Slice(&rowId[types.RowidSize/2], 8),
+			uint64(i),
+		)
+		if err := vector.AppendFixed(vec, rowId, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -314,10 +317,12 @@ func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.
 		return vec
 	}
 	for i := 0; i < n; i++ {
-		var blockId [2]int64
-
-		blockId[1] = int64(i)
-		if err := vector.AppendFixed(vec, *(*types.Blockid)(unsafe.Pointer(&blockId[0])), false, m); err != nil {
+		var blockId types.Blockid
+		binary.LittleEndian.PutUint64(
+			unsafe.Slice(&blockId[types.BlockidSize/2], 8),
+			uint64(i),
+		)
+		if err := vector.AppendFixed(vec, blockId, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

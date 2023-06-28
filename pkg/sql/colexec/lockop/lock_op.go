@@ -285,6 +285,42 @@ func LockTable(
 	return nil
 }
 
+// LockRow lock rows in table, rows will be locked, and wait current txn closed.
+func LockRows(
+	proc *process.Process,
+	tableID uint64,
+	vec *vector.Vector,
+	pkType types.Type,
+) error {
+	if !proc.TxnOperator.Txn().IsPessimistic() {
+		return nil
+	}
+
+	parker := types.NewPacker(proc.Mp())
+	defer parker.FreeMem()
+
+	opts := DefaultLockOptions(parker).
+		WithLockTable(false).
+		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
+	refreshTS, err := doLock(
+		false,
+		proc.Ctx,
+		tableID,
+		proc.TxnOperator,
+		proc.LockService,
+		vec,
+		pkType,
+		opts)
+	if err != nil {
+		return err
+	}
+	// If the returned timestamp is not empty, we should return a retry error,
+	if !refreshTS.IsEmpty() {
+		return moerr.NewTxnNeedRetry(proc.Ctx)
+	}
+	return nil
+}
+
 // doLock locks a set of data so that no other transaction can modify it.
 // The data is described by the primary key. When the returned timestamp.IsEmpty
 // is false, it means there is a conflict with other transactions and the data to

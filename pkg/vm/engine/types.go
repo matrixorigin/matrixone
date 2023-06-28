@@ -561,6 +561,8 @@ type Relation interface {
 	GetEngineType() EngineType
 
 	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
+
+	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 }
 
 type Reader interface {
@@ -583,8 +585,6 @@ type Database interface {
 type Engine interface {
 	// transaction interface
 	New(ctx context.Context, op client.TxnOperator) error
-	Commit(ctx context.Context, op client.TxnOperator) error
-	Rollback(ctx context.Context, op client.TxnOperator) error
 
 	// Delete deletes a database
 	Delete(ctx context.Context, databaseName string, op client.TxnOperator) error
