@@ -559,6 +559,8 @@ type Relation interface {
 	GetEngineType() EngineType
 
 	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
+
+	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 }
 
 type Reader interface {

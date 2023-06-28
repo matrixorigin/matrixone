@@ -83,7 +83,7 @@ func New(
 		catalog:    cache.NewCatalog(),
 		dnID:       dnID,
 		partitions: make(map[[2]uint64]*logtailreplay.Partition),
-		PackerPool: fileservice.NewPool(
+		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
 				return types.NewPacker(mp)
