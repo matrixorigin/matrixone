@@ -252,6 +252,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 		minMaxIdx = 1
 	}
 
+	var getValueFailed bool
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		db, null1 := dbNames.GetStrValue(i)
@@ -290,8 +291,11 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				return err
 			}
 
-			getValueFailed := true
-			if len(ranges) > 1 {
+			if len(ranges) == 0 {
+				getValueFailed = false
+			} else if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
+				getValueFailed = false
+			} else {
 				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
 				tValues, _, er := rel.MaxAndMinValues(proc.Ctx)
 				if er != nil {
