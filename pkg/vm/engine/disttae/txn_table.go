@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -39,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -1164,10 +1167,26 @@ func (tbl *txnTable) compaction() error {
 	if err != nil {
 		return err
 	}
+
 	var deletedIDs []*types.Blockid
 	defer func() {
 		tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
 	}()
+
+	// recover isn't allowed in this package by molint
+	// so we detect panic mannually.
+	hasPanic := true
+	defer func() {
+		// add log for issue 10193
+		if hasPanic {
+			logutil.Error("panic when compaction",
+				zap.Bool("is txn cleaned", tbl.db.txn.deletedBlocks == nil),
+				zap.Uint64("cleaner goroutine", tbl.db.txn.cleanRoutine.Load()),
+				zap.String("stack", string(debug.Stack())),
+			)
+		}
+	}()
+
 	tbl.db.txn.deletedBlocks.iter(func(id *types.Blockid, deleteOffsets []int64) bool {
 		pos := tbl.db.txn.cnBlkId_Pos[*id]
 		// just do compaction for current txnTable
@@ -1226,12 +1245,14 @@ func (tbl *txnTable) compaction() error {
 		return true
 	})
 	if err != nil {
+		hasPanic = false
 		return err
 	}
 
 	if batchNums > 0 {
 		blkInfos, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
 		if err != nil {
+			hasPanic = false
 			return err
 		}
 		new_bat := batch.NewWithSize(1)
@@ -1255,6 +1276,7 @@ func (tbl *txnTable) compaction() error {
 			new_bat,
 			tbl.db.txn.dnStores[0])
 		if err != nil {
+			hasPanic = false
 			return err
 		}
 	}
@@ -1283,6 +1305,7 @@ func (tbl *txnTable) compaction() error {
 		}
 	}
 	tbl.db.txn.Unlock()
+	hasPanic = false
 	return nil
 }
 
