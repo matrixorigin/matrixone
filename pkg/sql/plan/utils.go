@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"encoding/csv"
+	"fmt"
 	"math"
 	"path"
 	"strings"
@@ -1650,5 +1652,62 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 		for _, child := range f.F.Args {
 			ResetAuxIdForExpr(child)
 		}
+	}
+}
+
+func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
+	switch t := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range t.F.Args {
+			SubstitueParam(arg, proc)
+		}
+	case *plan.Expr_P:
+		vec, _ := proc.GetPrepareParamsAt(int(t.P.Pos))
+		c := rule.GetConstantValue(vec, false)
+		ec := &plan.Expr_C{
+			C: c,
+		}
+		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+		expr.Expr = ec
+	case *plan.Expr_V:
+		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
+		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+		vec, _ := util.GenVectorByVarValue(proc, typ, val)
+		c := rule.GetConstantValue(vec, false)
+		ec := &plan.Expr_C{
+			C: c,
+		}
+		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+		expr.Expr = ec
+	}
+	return expr
+}
+
+func FormatExpr(expr *plan.Expr) string {
+	var w bytes.Buffer
+	doFormatExpr(expr, &w, 0)
+	return w.String()
+}
+
+func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
+	out.WriteByte('\n')
+	prefix := strings.Repeat("\t", depth)
+	switch t := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		out.WriteString(fmt.Sprintf("%sExpr_Col(%s)", prefix, t.Col.Name))
+	case *plan.Expr_C:
+		out.WriteString(fmt.Sprintf("%sExpr_C(%s)", prefix, t.C.String()))
+	case *plan.Expr_F:
+		out.WriteString(fmt.Sprintf("%sExpr_F(\n%s\tFunc[\"%s\"](nargs=%d)", prefix, prefix, t.F.Func.ObjName, len(t.F.Args)))
+		for _, arg := range t.F.Args {
+			doFormatExpr(arg, out, depth+1)
+		}
+		out.WriteString(fmt.Sprintf("\n%s)", prefix))
+	case *plan.Expr_P:
+		out.WriteString(fmt.Sprintf("%sExpr_P(%d)", prefix, t.P.Pos))
+	case *plan.Expr_T:
+		out.WriteString(fmt.Sprintf("%sExpr_T(%s)", prefix, t.T.String()))
+	default:
+		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
 }
