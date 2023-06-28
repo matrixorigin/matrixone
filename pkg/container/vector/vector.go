@@ -336,13 +336,13 @@ func (v *Vector) GetArea() []byte {
 	return v.area
 }
 
-func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
+func GetPtrAt[T any](v *Vector, idx int64) *T {
 	if v.IsConst() {
 		idx = 0
 	} else {
 		idx *= int64(v.GetType().TypeSize())
 	}
-	return unsafe.Pointer(&v.data[idx])
+	return (*T)(unsafe.Pointer(&v.data[idx]))
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
