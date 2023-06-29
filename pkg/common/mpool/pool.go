@@ -147,7 +147,7 @@ func newPage(data []byte) page {
 }
 
 func (pg *page) init(sz int) {
-	pg.head = -1
+	atomic.StoreInt64(&pg.head, -1)
 	atomic.StoreInt64(&pg.slotSize, int64(sz))
 	for i := 0; i+sz < PageSize; i += sz {
 		atomic.StoreInt64((*int64)(unsafe.Pointer(&pg.data[i])),
