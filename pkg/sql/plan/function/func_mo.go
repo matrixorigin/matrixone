@@ -236,75 +236,86 @@ func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length)
 }
 
-func moTableColMaxMinImpl(fn string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
-	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
-	cols := vector.GenerateFunctionStrParameter(ivecs[2])
-
-	minmaxIdx := 0
-	if fn == "mo_table_col_max" {
-		minmaxIdx = 1
-	}
-
-	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.TxnOperator == nil {
+func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if !ok || proc.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
 	}
 	txn := proc.TxnOperator
 
+	dbNames := vector.GenerateFunctionStrParameter(parameters[0])
+	tableNames := vector.GenerateFunctionStrParameter(parameters[1])
+	columnNames := vector.GenerateFunctionStrParameter(parameters[2])
+
+	minMaxIdx := 0
+	if fnName == "mo_table_col_max" {
+		minMaxIdx = 1
+	}
+
+	var getValueFailed bool
+	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		db, dbnull := dbs.GetStrValue(i)
-		tbl, tblnull := tbls.GetStrValue(i)
-		col, colnull := cols.GetStrValue(i)
-		if dbnull || tblnull || colnull {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
+		db, null1 := dbNames.GetStrValue(i)
+		table, null2 := tableNames.GetStrValue(i)
+		column, null3 := columnNames.GetStrValue(i)
+		if null1 || null2 || null3 {
+			rs.AppendMustNull()
 		} else {
 			dbStr := functionUtil.QuickBytesToStr(db)
-			tblStr := functionUtil.QuickBytesToStr(tbl)
-			colStr := functionUtil.QuickBytesToStr(col)
+			tableStr := functionUtil.QuickBytesToStr(table)
+			columnStr := functionUtil.QuickBytesToStr(column)
 
-			// XXX why so obsessed with __mo_rowid?
-			if colStr == "__mo_rowid" {
-				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input column %s", fn, col)
+			// Magic code. too confused.
+			if tableStr == "mo_database" || tableStr == "mo_tables" || tableStr == "mo_columns" || tableStr == "sys_async_task" {
+				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input table %s", fnName, tableStr)
 			}
-			// XXX where did we get all these magic?   Esp, sys_async_task, which is not one of three
-			if tblStr == "mo_database" || tblStr == "mo_tables" || tblStr == "mo_columns" || tblStr == "sys_async_task" {
-				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input table %s", fn, tbl)
+			if columnStr == "__mo_rowid" {
+				return moerr.NewInvalidInput(proc.Ctx, "%s has bad input column %s", fnName, columnStr)
 			}
 
 			db, err := e.Database(proc.Ctx, dbStr, txn)
 			if err != nil {
 				return err
 			}
-			rel, err := db.Relation(proc.Ctx, tblStr, nil)
+			rel, err := db.Relation(proc.Ctx, tableStr, nil)
 			if err != nil {
 				return err
 			}
-
-			rel.Ranges(proc.Ctx, nil)
 			tableColumns, err := rel.TableColumns(proc.Ctx)
 			if err != nil {
 				return err
 			}
 
-			// Get table max and min value from zonemap
-			tableVal, _, err := rel.MaxAndMinValues(proc.Ctx)
+			ranges, err := rel.Ranges(proc.Ctx, nil)
 			if err != nil {
 				return err
 			}
 
-			// XXX This is a bug, if user drop col then add it back with same name.
-			for j := 0; j < len(tableColumns); j++ {
-				if tableColumns[j].Name == colStr {
-					strval := getValueInStr(tableVal[j][minmaxIdx])
-					if err := rs.AppendBytes(functionUtil.QuickStrToBytes(strval), false); err != nil {
-						return err
-					}
-					break
+			if len(ranges) == 0 {
+				getValueFailed = true
+			} else if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
+				getValueFailed = true
+			} else {
+				// BUG： if user delete the max or min value within the same txn, the result will be wrong.
+				tValues, _, er := rel.MaxAndMinValues(proc.Ctx)
+				if er != nil {
+					return er
 				}
+
+				// BUG: if user drop the col and add it back with the same name within the same txn, the result will be wrong.
+				for j := range tableColumns {
+					if tableColumns[j].Name == columnStr {
+						strval := getValueInStr(tValues[j][minMaxIdx])
+						if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(strval)); err != nil {
+							return err
+						}
+						getValueFailed = false
+						break
+					}
+				}
+			}
+			if getValueFailed {
+				rs.AppendMustNull()
 			}
 		}
 	}
