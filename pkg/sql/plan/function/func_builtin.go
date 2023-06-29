@@ -464,7 +464,7 @@ func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 			for _, tbl := range tables {
 				if strings.TrimSpace(tblName) == tbl.Table {
 					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
-						tbl.Database, tbl.Table, tbl.TimestampColumn, v2.String())
+						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
 					opts := executor.Options{}.WithDatabase(tbl.Database)
 					_, err := exec.Exec(proc.Ctx, sql, opts)
 					return err
