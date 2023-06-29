@@ -120,6 +120,7 @@ func (w *S3Writer) tryExtractSeqnums(attrs []*engine.Attribute) {
 		}
 		w.seqnums = append(w.seqnums, attr.Seqnum)
 	}
+	logutil.Infof("s3 table set from attrs %q seqnums: %+v", w.tablename, w.seqnums)
 }
 
 func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
@@ -154,6 +155,7 @@ func (w *S3Writer) SetTableName(name string) {
 
 func (w *S3Writer) SetSeqnums(seqnums []uint16) {
 	w.seqnums = seqnums
+	logutil.Infof("s3 table set directly %q seqnums: %+v", w.tablename, w.seqnums)
 }
 
 func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, error) {
@@ -165,13 +167,14 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 	writer.ResetMetaLocBat(proc)
 
 	writer.schemaVersion = tableDef.Version
-	writer.seqnums = make([]uint16, 0)
+	writer.seqnums = make([]uint16, 0, len(tableDef.Cols))
 	for _, colDef := range tableDef.Cols {
 		if colDef.Name != catalog.Row_ID {
 			writer.seqnums = append(writer.seqnums, uint16(colDef.Seqnum))
 		}
 	}
 	writer.tablename = tableDef.GetName()
+	logutil.Infof("s3 table set from AllocS3Writer %q seqnums: %+v", writer.tablename, writer.seqnums)
 
 	// Get Single Col pk index
 	for idx, colDef := range tableDef.Cols {
@@ -220,6 +223,7 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 				writers[i].seqnums = append(writers[i].seqnums, uint16(colDef.Seqnum))
 			}
 		}
+		logutil.Infof("s3 table set from AllocS3WriterP%d %q seqnums: %+v", i, writers[i].tablename, writers[i].seqnums)
 
 		// Get Single Col pk index
 		for idx, colDef := range tableDef.Cols {
