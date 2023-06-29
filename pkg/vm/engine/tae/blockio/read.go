@@ -179,6 +179,12 @@ func BlockReadInner(
 			selectRows = rows
 		}
 
+		if len(selectRows) == 0 {
+			RecordReadFilterSelectivity(1, 1)
+		} else {
+			RecordReadFilterSelectivity(0, 1)
+		}
+
 		// logutil.Debugf("sels/length: %d/%d=%f",
 		// 	len(selectRows),
 		// 	loaded.Vecs[0].Length(),
@@ -471,6 +477,10 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 		}
 	}
 	return nil
+}
+
+func RecordReadFilterSelectivity(hit, total int) {
+	pipeline.stats.RecordReadFilterSelectivity(hit, total)
 }
 
 func RecordBlockSelectivity(hit, total int) {
