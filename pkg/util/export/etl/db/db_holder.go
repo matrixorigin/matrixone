@@ -170,7 +170,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	var dbConn *sql.DB
 
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
-		logutil.Warn("sqlWriter WriteRowRecords failed above threshold")
+		logutil.Error("sqlWriter WriteRowRecords failed above threshold")
 		if dbConn != nil {
 			dbConn.Close()
 		}
@@ -190,8 +190,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
 	if err != nil {
 		DBConnErrCount.Add(1)
-		logutil.Error("sqlWriter bulkInsert failed", zap.Error(err))
-		return 0, err
+		return 0, moerr.NewInternalError(ctx, err.Error())
 	}
 
 	logutil.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
