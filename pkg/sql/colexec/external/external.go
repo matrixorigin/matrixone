@@ -1003,6 +1003,10 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
+				if err == strconv.ErrRange {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int8 type for column %d", field, colIdx)
+				}
 				f, err := strconv.ParseFloat(field, 64)
 				if err != nil || f < math.MinInt8 || f > math.MaxInt8 {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1019,6 +1023,10 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
+				if err == strconv.ErrRange {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int16 type for column %d", field, colIdx)
+				}
 				f, err := strconv.ParseFloat(field, 64)
 				if err != nil || f < math.MinInt16 || f > math.MaxInt16 {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1035,6 +1043,10 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
+				if err == strconv.ErrRange {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int32 type for column %d", field, colIdx)
+				}
 				f, err := strconv.ParseFloat(field, 64)
 				if err != nil || f < math.MinInt32 || f > math.MaxInt32 {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1051,6 +1063,10 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
+				if err == strconv.ErrRange {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int64 type for column %d", field, colIdx)
+				}
 				f, err := strconv.ParseFloat(field, 64)
 				if err != nil || f < math.MinInt64 || f > math.MaxInt64 {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1067,6 +1083,10 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
+				if err == strconv.ErrRange {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint8 type for column %d", field, colIdx)
+				}
 				f, err := strconv.ParseFloat(field, 64)
 				if err != nil || f < 0 || f > math.MaxUint8 {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1083,6 +1103,10 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
+				if err == strconv.ErrRange {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field, colIdx)
+				}
 				f, err := strconv.ParseFloat(field, 64)
 				if err != nil || f < 0 || f > math.MaxUint16 {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1099,6 +1123,10 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
+				if err == strconv.ErrRange {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint32 type for column %d", field, colIdx)
+				}
 				f, err := strconv.ParseFloat(field, 64)
 				if err != nil || f < 0 || f > math.MaxUint32 {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1115,6 +1143,10 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
+				if err == strconv.ErrRange {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint64 type for column %d", field, colIdx)
+				}
 				f, err := strconv.ParseFloat(field, 64)
 				if err != nil || f < 0 || f > math.MaxUint64 {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
