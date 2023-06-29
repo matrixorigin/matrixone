@@ -119,6 +119,32 @@ func hasSubquery(expr *plan.Expr) bool {
 	}
 }
 
+func hasTag(expr *plan.Expr, tag int32) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return exprImpl.Col.RelPos == tag
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if hasTag(arg, tag) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if hasTag(arg, tag) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return false
+	}
+}
+
 func decreaseDepthAndDispatch(preds []*plan.Expr) ([]*plan.Expr, []*plan.Expr) {
 	filterPreds := make([]*plan.Expr, 0, len(preds))
 	joinPreds := make([]*plan.Expr, 0, len(preds))
@@ -782,42 +808,22 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
-func increaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
+func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}]++
+		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}] += inc
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			increaseRefCnt(arg, colRefCnt)
+			increaseRefCnt(arg, inc, colRefCnt)
 		}
 	case *plan.Expr_W:
-		increaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
+		increaseRefCnt(exprImpl.W.WindowFunc, inc, colRefCnt)
 		for _, arg := range exprImpl.W.PartitionBy {
-			increaseRefCnt(arg, colRefCnt)
+			increaseRefCnt(arg, inc, colRefCnt)
 		}
 		for _, order := range exprImpl.W.OrderBy {
-			increaseRefCnt(order.Expr, colRefCnt)
-		}
-	}
-}
-
-func decreaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}]--
-
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			decreaseRefCnt(arg, colRefCnt)
-		}
-	case *plan.Expr_W:
-		decreaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
-		for _, arg := range exprImpl.W.PartitionBy {
-			decreaseRefCnt(arg, colRefCnt)
-		}
-		for _, order := range exprImpl.W.OrderBy {
-			decreaseRefCnt(order.Expr, colRefCnt)
+			increaseRefCnt(order.Expr, inc, colRefCnt)
 		}
 	}
 }

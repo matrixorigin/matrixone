@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -381,12 +382,15 @@ func (col *columnCache) allocateLocked(
 	}
 }
 
-func (col *columnCache) maybeAllocate(tableID uint64) {
+func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64) {
 	col.Lock()
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
 	if low {
-		col.preAllocate(context.Background(), tableID, col.cfg.CountPerAllocate, nil)
+		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
+			tableID,
+			col.cfg.CountPerAllocate,
+			nil)
 	}
 }
 
@@ -453,7 +457,7 @@ func insertAutoValues[T constraints.Integer](
 	// all values are filled after insert
 	defer func() {
 		vec.SetNulls(nil)
-		col.maybeAllocate(tableID)
+		col.maybeAllocate(ctx, tableID)
 	}()
 
 	vs := vector.MustFixedCol[T](vec)
