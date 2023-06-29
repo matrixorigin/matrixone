@@ -57,8 +57,10 @@ func (s *StatsArray) ToJson() []byte {
 	return ArrayUint64ToJson(s.arr)
 }
 
+// ArrayUint64ToJson return json arr format
 func ArrayUint64ToJson(arr []uint64) []byte {
-	buf := make([]byte, 0, 1024)
+	// len([1,184467440737095516161,18446744073709551616,18446744073709551616,18446744073709551616]") = 88
+	buf := make([]byte, 0, 128)
 	buf = append(buf, '[')
 	for idx, v := range arr {
 		if idx > 0 {
