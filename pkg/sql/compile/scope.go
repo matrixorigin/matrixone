@@ -213,10 +213,44 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if s.DataSource == nil {
 		return s.MergeRun(c)
 	}
+
 	mcpu := s.NodeInfo.Mcpu
+	var err error
+
+	if len(s.DataSource.RuntimeFilterReceivers) > 0 {
+		exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterReceivers))
+		filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
+
+		for _, receiver := range s.DataSource.RuntimeFilterReceivers {
+			select {
+			case <-s.Proc.Ctx.Done():
+				return nil
+
+			case filter := <-receiver.Chan:
+				if filter == nil {
+					exprs = nil
+					s.NodeInfo.Data = s.NodeInfo.Data[:0]
+					break
+				}
+				if filter.Typ == pbpipeline.RuntimeFilter_NO_FILTER {
+					continue
+				}
+
+				exprs = append(exprs, receiver.Spec.Expr)
+				filters = append(filters, filter)
+			}
+		}
+
+		if len(exprs) > 0 {
+			s.NodeInfo.Data, err = ApplyRuntimeFilters(c.ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	switch {
 	case remote:
-		var err error
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -232,47 +266,13 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		s.NodeInfo.Data = nil
 
 	case s.NodeInfo.Rel != nil:
-		var err error
-
-		if len(s.DataSource.RuntimeFilterReceivers) > 0 {
-			exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterReceivers))
-			filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
-
-			for _, receiver := range s.DataSource.RuntimeFilterReceivers {
-				select {
-				case <-s.Proc.Ctx.Done():
-					return nil
-
-				case filter := <-receiver.Chan:
-					if filter == nil {
-						exprs = nil
-						s.NodeInfo.Data = s.NodeInfo.Data[:0]
-						break
-					}
-					if filter.Typ == pbpipeline.RuntimeFilter_NO_FILTER {
-						continue
-					}
-
-					exprs = append(exprs, receiver.Spec.Expr)
-					filters = append(filters, filter)
-				}
-			}
-
-			if len(exprs) > 0 {
-				s.NodeInfo.Data, err = s.NodeInfo.Rel.ApplyRuntimeFilters(c.ctx, s.NodeInfo.Data, exprs, filters)
-				if err != nil {
-					return err
-				}
-			}
-		}
-
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
+
 	//FIXME:: s.NodeInfo.Rel == nil, partition table?
 	default:
-		var err error
 		var db engine.Database
 		var rel engine.Relation
 
@@ -470,8 +470,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 		}
 	}
 	s.PreScopes = append(s.PreScopes, chp...)
-	s.PreScopes = append(s.PreScopes, probe_scope)
 	s.PreScopes = append(s.PreScopes, build_scope)
+	s.PreScopes = append(s.PreScopes, probe_scope)
 
 	return s.MergeRun(c)
 }
@@ -730,6 +730,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 	var dataBuffer []byte
 	var ok bool
 	var m *pbpipeline.Message
+
 	for {
 		select {
 		case <-proc.Ctx.Done():
@@ -757,7 +758,12 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 		}
 
 		// normal receive
+		//if dataBuffer == nil {
+		//	dataBuffer = m.Data
+		//} else {
 		dataBuffer = append(dataBuffer, m.Data...)
+		//}
+
 		switch m.GetSid() {
 		case pbpipeline.WaitingNext:
 			continue

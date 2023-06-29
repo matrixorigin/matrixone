@@ -140,7 +140,7 @@ type scopeContext struct {
 	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
 
-	//runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
+	runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
 }
 
 // anaylze information
