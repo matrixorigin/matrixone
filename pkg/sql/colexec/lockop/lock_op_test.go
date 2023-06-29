@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,11 +33,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+var testFunc = func(
+	proc *process.Process,
+	tableID uint64,
+	eng engine.Engine,
+	vec *vector.Vector,
+	from, to timestamp.Timestamp) (bool, error) {
+	return false, nil
+}
 
 func TestCallLockOpWithNoConflict(t *testing.T) {
 	runLockNonBlockingOpTest(
@@ -45,6 +56,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, Prepare(proc, arg))
+			arg.rt.hasNewVersionInRange = testFunc
 			_, err := Call(0, proc, arg, false, false)
 			require.NoError(t, err)
 
@@ -66,6 +78,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, Prepare(proc, arg))
+			arg.rt.hasNewVersionInRange = testFunc
 
 			arg.rt.parker.Reset()
 			arg.rt.parker.EncodeInt32(0)
@@ -106,6 +119,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, Prepare(proc, arg))
+			arg.rt.hasNewVersionInRange = testFunc
 
 			arg.rt.parker.Reset()
 			arg.rt.parker.EncodeInt32(0)
@@ -126,6 +140,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				Prepare(proc, arg2)
+				arg2.rt.hasNewVersionInRange = testFunc
 				defer arg2.rt.parker.FreeMem()
 
 				_, err = Call(0, proc, arg2, false, false)
@@ -157,6 +172,7 @@ func TestLockWithBlocking(t *testing.T) {
 			arg *Argument,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
+			arg.rt.hasNewVersionInRange = testFunc
 			end, err := Call(idx, proc, arg, isFirst, isLast)
 			require.NoError(t, err)
 			if arg.rt.step == stepLock {
@@ -219,6 +235,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			arg *Argument,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
+			arg.rt.hasNewVersionInRange = testFunc
 			return Call(idx, proc, arg, isFirst, isLast)
 		},
 		func(arg *Argument) {
@@ -226,6 +243,44 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			require.Empty(t, arg.rt.cachedBatches)
 		},
 	)
+}
+
+func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
+	tw := client.NewTimestampWaiter()
+	stopper := stopper.NewStopper("")
+	stopper.RunTask(func(ctx context.Context) {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Millisecond * 100):
+				tw.NotifyLatestCommitTS(timestamp.Timestamp{PhysicalTime: time.Now().UTC().UnixNano()})
+			}
+		}
+	})
+	runLockNonBlockingOpTest(
+		t,
+		[]uint64{1},
+		[][]int32{{0, 1, 2}},
+		func(proc *process.Process, arg *Argument) {
+			require.NoError(t, Prepare(proc, arg))
+			arg.rt.hasNewVersionInRange = func(
+				proc *process.Process,
+				tableID uint64,
+				eng engine.Engine,
+				vec *vector.Vector,
+				from, to timestamp.Timestamp) (bool, error) {
+				return true, nil
+			}
+
+			_, err := Call(0, proc, arg, false, false)
+			require.NoError(t, err)
+			require.Error(t, arg.rt.retryError)
+			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
+		},
+		client.WithTimestampWaiter(tw),
+	)
+	stopper.Stop()
 }
 
 func runLockNonBlockingOpTest(
@@ -247,7 +302,7 @@ func runLockNonBlockingOpTest(
 			offset := int32(0)
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
-			arg := NewArgument()
+			arg := NewArgument(nil)
 			for idx, table := range tables {
 				arg.AddLockTarget(table, offset, pkType, offset+1)
 
@@ -283,7 +338,7 @@ func runLockBlockingOpTest(
 
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
-			arg := NewArgument().SetBlock(true).AddLockTarget(table, 0, pkType, 1)
+			arg := NewArgument(nil).SetBlock(true).AddLockTarget(table, 0, pkType, 1)
 
 			var batches []*batch.Batch
 			for _, vs := range values {

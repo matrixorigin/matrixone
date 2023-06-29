@@ -532,8 +532,8 @@ func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique
 	}, nil
 }
 
-func constructLockOp(n *plan.Node, proc *process.Process) (*lockop.Argument, error) {
-	arg := lockop.NewArgument()
+func constructLockOp(n *plan.Node, proc *process.Process, eng engine.Engine) (*lockop.Argument, error) {
+	arg := lockop.NewArgument(eng)
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
 		if target.IsPartitionTable {
