@@ -1167,7 +1167,7 @@ null
 99999999999999999999999999999999999.833
 99999999999999999999999999999999999.833
 select avg(d) over (partition by d) from decimal01;
-invalid input: Decimal128 Div overflow: 28888888888888888888888888888888888123(Scale:3)/1(Scale:0)
+invalid input: Decimal128 Add overflow: 99999999999999999999999999999999999833+99999999999999999999999999999999999833
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
 [unknown result because it is related to issue#10043]
 drop table decimal01;
