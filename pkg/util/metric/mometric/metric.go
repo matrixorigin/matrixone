@@ -371,10 +371,10 @@ var SingleMetricTable = &table.Table{
 	SupportConstAccess: true,
 }
 
-func ForeachTable(targetTable string, doFunc func(targetTable, db, tbl, tsColumn string) error) error {
+func ForeachTable(doFunc func(tbl *table.Table) error) error {
 	var err error
 	tbl := SingleMetricTable
-	if err = doFunc(targetTable, tbl.Database, tbl.Table, tbl.TimestampColumn.Name); err != nil {
+	if err = doFunc(tbl); err != nil {
 		return err
 	}
 	return nil

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
@@ -420,8 +421,8 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// buildInMoPurgeLog act like `select mo_purge_log('log_type1,log_type2', '2023-06-27')`
-func buildInMoPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+// buildInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
+func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint8](result)
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -445,22 +446,25 @@ func buildInMoPurgeLog(parameters []*vector.Vector, result vector.FunctionResult
 			moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 		}
 		exec := v.(executor.SQLExecutor)
-		purgeFunc := func(targetTable, db, tbl, tsColumn string) error {
-			if strings.TrimSpace(targetTable) == strings.TrimSpace(tbl) {
-				sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
-					db, tbl, tsColumn, v2.String())
-				opts := executor.Options{}.WithDatabase(db)
-				_, err := exec.Exec(proc.Ctx, sql, opts)
+		tableNames := strings.Split(util.UnsafeBytesToString(v1), ",")
+		for _, tblName := range tableNames {
+			purgeFunc := func(tbl *table.Table) error {
+				if tbl.TimestampColumn == nil {
+					return nil
+				}
+				if strings.TrimSpace(tblName) == strings.TrimSpace(tbl.Table) {
+					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
+						tbl.Database, tbl.Table, tbl.TimestampColumn, v2.String())
+					opts := executor.Options{}.WithDatabase(tbl.Database)
+					_, err := exec.Exec(proc.Ctx, sql, opts)
+					return err
+				}
+				return nil
+			}
+			if err := motrace.ForeachTable(purgeFunc); err != nil {
 				return err
 			}
-			return nil
-		}
-		tables := strings.Split(util.UnsafeBytesToString(v1), ",")
-		for _, tbl := range tables {
-			if err := motrace.ForeachTable(tbl, purgeFunc); err != nil {
-				return err
-			}
-			if err := mometric.ForeachTable(tbl, purgeFunc); err != nil {
+			if err := mometric.ForeachTable(purgeFunc); err != nil {
 				return err
 			}
 		}

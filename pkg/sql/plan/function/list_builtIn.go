@@ -2900,9 +2900,10 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			},
 		},
 	},
-	// function `mo_purge_log`
+
+	// function `purge_log`
 	{
-		functionId: MO_PURGE_LOG,
+		functionId: PURGE_LOG,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -2916,7 +2917,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return types.T_uint8.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return buildInMoPurgeLog
+					return buildInPurgeLog
 				},
 			},
 		},

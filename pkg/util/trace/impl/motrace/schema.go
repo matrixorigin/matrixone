@@ -284,10 +284,10 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	return nil
 }
 
-func ForeachTable(targetTable string, doFunc func(targetTable, db, tbl, tsColumn string) error) error {
+func ForeachTable(doFunc func(tbl *table.Table) error) error {
 	var err error
 	for _, tbl := range tables {
-		if err = doFunc(targetTable, tbl.Database, tbl.Table, tbl.TimestampColumn.Name); err != nil {
+		if err = doFunc(tbl); err != nil {
 			return err
 		}
 	}
