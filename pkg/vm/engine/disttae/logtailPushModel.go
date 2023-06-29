@@ -808,12 +808,16 @@ type routineController struct {
 	routineId  int
 	closeChan  chan bool
 	signalChan chan routineControlCmd
+
+	// Debug for issue #10138.
+	issue10138limitLine int
 }
 
 func (rc *routineController) sendSubscribeResponse(ctx context.Context, r *logtail.SubscribeResponse) {
 	// debug for issue #10138.
-	if l := len(rc.signalChan); l > 128 {
-		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, may consume is too slow", rc.routineId, l)
+	if l := len(rc.signalChan); l > rc.issue10138limitLine {
+		rc.issue10138limitLine = l
+		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, maybe consume is too slow", rc.routineId, l)
 	}
 
 	rc.signalChan <- cmdToConsumeSub{log: r}
@@ -821,8 +825,9 @@ func (rc *routineController) sendSubscribeResponse(ctx context.Context, r *logta
 
 func (rc *routineController) sendTableLogTail(r logtail.TableLogtail) {
 	// debug for issue #10138.
-	if l := len(rc.signalChan); l > 128 {
-		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, may consume is too slow", rc.routineId, l)
+	if l := len(rc.signalChan); l > rc.issue10138limitLine {
+		rc.issue10138limitLine = l
+		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, maybe consume is too slow", rc.routineId, l)
 	}
 
 	rc.signalChan <- cmdToConsumeLog{log: r}
@@ -830,8 +835,9 @@ func (rc *routineController) sendTableLogTail(r logtail.TableLogtail) {
 
 func (rc *routineController) updateTimeFromT(t timestamp.Timestamp) {
 	// debug for issue #10138.
-	if l := len(rc.signalChan); l > 128 {
-		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, may consume is too slow", rc.routineId, l)
+	if l := len(rc.signalChan); l > rc.issue10138limitLine {
+		rc.issue10138limitLine = l
+		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, maybe consume is too slow", rc.routineId, l)
 	}
 
 	rc.signalChan <- cmdToUpdateTime{time: t}
@@ -839,8 +845,9 @@ func (rc *routineController) updateTimeFromT(t timestamp.Timestamp) {
 
 func (rc *routineController) sendUnSubscribeResponse(r *logtail.UnSubscribeResponse) {
 	// debug for issue #10138.
-	if l := len(rc.signalChan); l > 128 {
-		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, may consume is too slow", rc.routineId, l)
+	if l := len(rc.signalChan); l > rc.issue10138limitLine {
+		rc.issue10138limitLine = l
+		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, maybe consume is too slow", rc.routineId, l)
 	}
 
 	rc.signalChan <- cmdToConsumeUnSub{log: r}
@@ -880,6 +887,9 @@ func createRoutineToConsumeLogTails(
 		routineId:  routineId,
 		closeChan:  make(chan bool),
 		signalChan: make(chan routineControlCmd, signalBufferLength),
+
+		// Debug for issue #10138.
+		issue10138limitLine: 200,
 	}
 
 	go singleRoutineToConsumeLogTail(ctx, e, &controller, errOut)
