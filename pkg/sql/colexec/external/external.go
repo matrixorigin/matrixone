@@ -1160,7 +1160,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 				d, err := types.ParseDecimal128(field, vec.GetType().Width, vec.GetType().Scale)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
-					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float32 type for column %d", field, colIdx)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not float64 type for column %d", field, colIdx)
 				}
 				if err := vector.SetFixedAt(vec, rowIdx, types.Decimal128ToFloat64(d, vec.GetType().Scale)); err != nil {
 					return err
