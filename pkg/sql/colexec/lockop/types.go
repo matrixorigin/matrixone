@@ -15,15 +15,12 @@
 package lockop
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -81,8 +78,7 @@ type lockTarget struct {
 type RowsFilter func(row int, filterCols []int32) bool
 
 type hasNewVersionInRangeFunc func(
-	ctx context.Context,
-	txnOp client.TxnOperator,
+	proc *process.Process,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,

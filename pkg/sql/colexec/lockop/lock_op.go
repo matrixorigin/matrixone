@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -396,7 +397,8 @@ func doLock(
 	}
 
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
-	if !result.HasConflict {
+	if !result.HasConflict &&
+		txnOp.Txn().IsRCIsolation() {
 		snapshotTS := txnOp.Txn().SnapshotTS
 		lockedTS := result.Timestamp
 
@@ -412,7 +414,7 @@ func doLock(
 		}
 
 		// if [snapshotTS, lockedTS) has been modified, need retry at new snapshot ts
-		changed, err := fn(proc.Ctx, txnOp, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
+		changed, err := fn(proc, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
 		if err != nil {
 			return timestamp.Timestamp{}, err
 		}
@@ -668,17 +670,46 @@ func getRowsFilter(
 // 1. if has a mvcc record <= from, return false, means no changed
 // 2. otherwise return true, changed
 func hasNewVersionInRange(
-	ctx context.Context,
-	txnOp client.TxnOperator,
+	proc *process.Process,
 	tableID uint64,
 	eng engine.Engine,
 	vec *vector.Vector,
 	from, to timestamp.Timestamp) (bool, error) {
-	_, _, rel, err := eng.GetRelationById(ctx, txnOp, tableID)
+	txnClient := proc.TxnClient
+	txnOp, err := txnClient.New(proc.Ctx, to.Prev())
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = txnOp.Rollback(proc.Ctx)
+	}()
+	if err := eng.New(proc.Ctx, txnOp); err != nil {
+		return false, err
+	}
+
+	dbName, tableName, _, err := eng.GetRelationById(proc.Ctx, txnOp, tableID)
+	if err != nil {
+		if strings.Contains(err.Error(), "can not find table by id") {
+			return false, nil
+		}
+		return false, err
+	}
+	db, err := eng.Database(proc.Ctx, dbName, txnOp)
+	if err != nil {
+		return false, err
+	}
+	rel, err := db.Relation(proc.Ctx, tableName, proc)
+	if err != nil {
+		return false, err
+	}
+	if err := txnOp.GetWorkspace().IncrStatementID(proc.Ctx, false); err != nil {
+		return false, nil
+	}
+	_, err = rel.Ranges(proc.Ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
-	return rel.PrimaryKeysMayBeModified(ctx, fromTS, toTS, vec)
+	return rel.PrimaryKeysMayBeModified(proc.Ctx, fromTS, toTS, vec)
 }
