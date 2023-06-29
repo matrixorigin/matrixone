@@ -638,20 +638,15 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 }
 
 func (s *logTailSubscriber) setReady() {
-	if s.requestLock != nil {
-		return
-	}
-	if !s.ready {
+	if !s.ready && s.requestLock != nil {
 		s.requestLock <- true
 		s.ready = true
 	}
 }
 
 func (s *logTailSubscriber) setNotReady() {
-	if s.ready {
-		if s.requestLock != nil {
-			<-s.requestLock
-		}
+	if s.ready && s.requestLock != nil {
+		<-s.requestLock
 		s.ready = false
 	}
 }
