@@ -410,9 +410,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					//   from the checkpoint, then apply the block meta into PartitionState.blocks.
 					// So , if the above scenario happens, we need to set the non-appendable block into
 					// PartitionState.dirtyBlocks.
-					if entry.Deleted &&
-						(!entryStateVector[i] && len(blockEntry.DeltaLoc) == 0) {
+					if !entryStateVector[i] && len(blockEntry.DeltaLoc) == 0 {
+						//if entry.Deleted {
 						p.dirtyBlocks.Set(blockEntry)
+						//}
 						//for better performance, we can break here.
 						break
 					}
