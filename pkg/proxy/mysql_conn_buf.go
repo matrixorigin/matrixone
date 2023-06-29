@@ -147,6 +147,14 @@ func (b *msgBuf) preRecv() (int, txnTag, error) {
 	if bodyLen == 0 {
 		return mysqlHeadLen, txnOther, nil
 	}
+
+	// body is not equal to 0, read out the cmd type info
+	if b.readAvail() < preRecvLen {
+		if err := b.receiveAtLeast(cmdLen); err != nil {
+			return 0, 0, err
+		}
+	}
+
 	cmd := b.buf[b.begin+mysqlHeadLen]
 
 	// Max length is 3 bytes.
