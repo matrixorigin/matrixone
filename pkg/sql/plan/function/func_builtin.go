@@ -440,20 +440,20 @@ func buildInMoPurgeLog(parameters []*vector.Vector, result vector.FunctionResult
 			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 		}
 		executor := factory()
-		purgeFunc := func(targetDB, targetTable, tsColumn string) error {
-			if strings.TrimSpace(tbl) == strings.TrimSpace(targetTable) {
+		purgeFunc := func(targetTable, db, tbl, tsColumn string) error {
+			if strings.TrimSpace(targetTable) == strings.TrimSpace(tbl) {
 				sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
-					targetDB, targetTable, tsColumn, v2.String())
+					db, tbl, tsColumn, v2.String())
 				return executor.Exec(proc.Ctx, sql, ie.NewOptsBuilder().Finish())
 			}
 			return nil
 		}
 		tables := strings.Split(util.UnsafeBytesToString(v1), ",")
 		for _, tbl := range tables {
-			if err := motrace.PurgeTable(tbl, purgeFunc); err != nil {
+			if err := motrace.ForeachTable(tbl, purgeFunc); err != nil {
 				return err
 			}
-			if err := mometric.PurgeTable(tbl, purgeFunc); err != nil {
+			if err := mometric.ForeachTable(tbl, purgeFunc); err != nil {
 				return err
 			}
 		}
@@ -462,10 +462,6 @@ func buildInMoPurgeLog(parameters []*vector.Vector, result vector.FunctionResult
 	}
 
 	return nil
-}
-
-func doPurgeLog(tables string, date types.Date) error {
-
 }
 
 func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {

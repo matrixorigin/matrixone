@@ -363,10 +363,21 @@ var SingleMetricTable = &table.Table{
 	Comment:          `metric data`,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
+	// TimestampColumn
+	TimestampColumn: &metricCollectTimeColumn,
 	// SupportUserAccess
 	SupportUserAccess: true,
 	// SupportConstAccess
 	SupportConstAccess: true,
+}
+
+func ForeachTable(targetTable string, doFunc func(targetTable, db, tbl, tsColumn string) error) error {
+	var err error
+	tbl := SingleMetricTable
+	if err = doFunc(targetTable, tbl.Database, tbl.Table, tbl.TimestampColumn.Name); err != nil {
+		return err
+	}
+	return nil
 }
 
 func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {

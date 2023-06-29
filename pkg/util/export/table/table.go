@@ -263,6 +263,8 @@ type Table struct {
 	PathBuilder PathBuilder
 	// AccountColumn help to split data in account's filepath
 	AccountColumn *Column
+	// TimestampColumn help to purge data
+	TimestampColumn *Column
 	// TableOptions default is nil, see GetTableOptions
 	TableOptions TableOptions
 	// SupportUserAccess default false. if true, user account can access.
