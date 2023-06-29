@@ -40,6 +40,15 @@ import (
 	"go.uber.org/zap"
 )
 
+var testFunc = func(
+	proc *process.Process,
+	tableID uint64,
+	eng engine.Engine,
+	vec *vector.Vector,
+	from, to timestamp.Timestamp) (bool, error) {
+	return false, nil
+}
+
 func TestCallLockOpWithNoConflict(t *testing.T) {
 	runLockNonBlockingOpTest(
 		t,
@@ -47,6 +56,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, Prepare(proc, arg))
+			arg.rt.hasNewVersionInRange = testFunc
 			_, err := Call(0, proc, arg, false, false)
 			require.NoError(t, err)
 
@@ -68,6 +78,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, Prepare(proc, arg))
+			arg.rt.hasNewVersionInRange = testFunc
 
 			arg.rt.parker.Reset()
 			arg.rt.parker.EncodeInt32(0)
@@ -108,6 +119,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, Prepare(proc, arg))
+			arg.rt.hasNewVersionInRange = testFunc
 
 			arg.rt.parker.Reset()
 			arg.rt.parker.EncodeInt32(0)
@@ -128,6 +140,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				Prepare(proc, arg2)
+				arg2.rt.hasNewVersionInRange = testFunc
 				defer arg2.rt.parker.FreeMem()
 
 				_, err = Call(0, proc, arg2, false, false)
@@ -159,6 +172,7 @@ func TestLockWithBlocking(t *testing.T) {
 			arg *Argument,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
+			arg.rt.hasNewVersionInRange = testFunc
 			end, err := Call(idx, proc, arg, isFirst, isLast)
 			require.NoError(t, err)
 			if arg.rt.step == stepLock {
@@ -221,6 +235,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			arg *Argument,
 			idx int,
 			isFirst, isLast bool) (bool, error) {
+			arg.rt.hasNewVersionInRange = testFunc
 			return Call(idx, proc, arg, isFirst, isLast)
 		},
 		func(arg *Argument) {
