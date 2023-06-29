@@ -43,13 +43,37 @@ func (s *selectivityStats) ExportW() (hit, total int64) {
 	return
 }
 
+func (s *selectivityStats) ExportAll() (whit, wtotal int64, hit, total int64) {
+	whit = s.hit.SwapW(0)
+	wtotal = s.total.SwapW(0)
+	hit = s.hit.Swap(0)
+	total = s.total.Swap(0)
+	return
+}
+
 type Stats struct {
-	blockSelectivity  selectivityStats
-	columnSelectivity selectivityStats
+	blockSelectivity      selectivityStats
+	columnSelectivity     selectivityStats
+	readFilterSelectivity selectivityStats
 }
 
 func NewStats() *Stats {
 	return &Stats{}
+}
+
+func (s *Stats) RecordReadFilterSelectivity(hit, total int) {
+	s.readFilterSelectivity.Record(hit, total)
+}
+
+func (s *Stats) ExportReadFilterSelectivity() (
+	whit, wtotal int64, hit, total int64,
+) {
+	whit, wtotal = s.readFilterSelectivity.ExportW()
+	if wtotal == 0 {
+		whit = 0
+	}
+	hit, total = s.readFilterSelectivity.Export()
+	return
 }
 
 func (s *Stats) RecordBlockSelectivity(hit, total int) {
@@ -57,13 +81,12 @@ func (s *Stats) RecordBlockSelectivity(hit, total int) {
 }
 
 func (s *Stats) ExportBlockSelectivity() (
-	whit, wtotal int64, hit, total int64,
+	whit, wtotal int64,
 ) {
-	whit, wtotal = s.blockSelectivity.ExportW()
+	whit, wtotal, _, _ = s.blockSelectivity.ExportAll()
 	if wtotal == 0 {
 		whit = 0
 	}
-	hit, total = s.blockSelectivity.Export()
 	return
 }
 
@@ -72,28 +95,30 @@ func (s *Stats) RecordColumnSelectivity(hit, total int) {
 }
 
 func (s *Stats) ExportColumnSelctivity() (
-	whit, wtotal int64, hit, total int64,
+	hit, total int64,
 ) {
-	whit, wtotal = s.columnSelectivity.ExportW()
-	if wtotal == 0 {
-		whit = 0
+	hit, total, _, _ = s.columnSelectivity.ExportAll()
+	if total == 0 {
+		hit = 0
 	}
-	hit, total = s.columnSelectivity.Export()
 	return
 }
 
 func (s *Stats) ExportString() string {
 	var w bytes.Buffer
-	whit, wtotal, hit, total := s.ExportBlockSelectivity()
+	whit, wtotal := s.ExportBlockSelectivity()
 	wrate, rate := 0.0, 0.0
 	if wtotal != 0 {
 		wrate = float64(whit) / float64(wtotal)
 	}
-	if total != 0 {
-		rate = float64(hit) / float64(total)
+	fmt.Fprintf(&w, "SelectivityStats: BLK[%d/%d=%0.2f] ", whit, wtotal, wrate)
+	whit, wtotal = s.ExportColumnSelctivity()
+	wrate, rate = 0.0, 0.0
+	if wtotal != 0 {
+		wrate = float64(whit) / float64(wtotal)
 	}
-	fmt.Fprintf(&w, "SelectivityStats: BLK[%d/%d=%0.2f,%d/%d=%0.2f] ", whit, wtotal, wrate, hit, total, rate)
-	whit, wtotal, hit, total = s.ExportColumnSelctivity()
+	fmt.Fprintf(&w, "COL[%d/%d=%0.2f] ", whit, wtotal, wrate)
+	whit, wtotal, hit, total := s.ExportReadFilterSelectivity()
 	wrate, rate = 0.0, 0.0
 	if wtotal != 0 {
 		wrate = float64(whit) / float64(wtotal)
@@ -101,6 +126,6 @@ func (s *Stats) ExportString() string {
 	if total != 0 {
 		rate = float64(hit) / float64(total)
 	}
-	fmt.Fprintf(&w, "COL[%d/%d=%0.2f,%d/%d=%0.2f]", whit, wtotal, wrate, hit, total, rate)
+	fmt.Fprintf(&w, "RDF[%d/%d=%0.2f,%d/%d=%0.2f]", whit, wtotal, wrate, hit, total, rate)
 	return w.String()
 }
