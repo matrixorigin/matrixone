@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -3945,9 +3946,9 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte []byte, stats
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		global := h.marshalPlan.Steps[0].GraphData.Global
 		statsValues := getStatsFromGlobal(global, uint64(h.stmt.Duration))
-		statsByte = []byte(fmt.Sprintf("%v", statsValues))
+		statsByte = statistic.ArrayUint64ToJson(statsValues)
 	} else {
-		statsByte = []byte(fmt.Sprintf("%v", []uint64{1, 0, 0, 0, 0}))
+		statsByte = []byte("[1,0,0,0,0]")
 	}
 	return
 }
@@ -3977,8 +3978,8 @@ func getStatsFromGlobal(global explain.Global, duration uint64) []uint64 {
 		}
 	}
 
-	statsValues := make([]uint64, 5)
-	statsValues[0] = 1 // this is the version number
+	statsValues := make([]uint64, statistic.StatsArrayLength)
+	statsValues[0] = statistic.StatsArrayVersion // this is the version number
 	statsValues[1] = timeConsumed
 	statsValues[2] = memorySize * duration
 	statsValues[3] = s3IOInputCount
