@@ -391,7 +391,6 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			p.blocks.Set(blockEntry)
 
-			//isSet := false
 			{
 				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
@@ -414,7 +413,6 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					if entry.Deleted &&
 						(!entryStateVector[i] && len(blockEntry.DeltaLoc) == 0) {
 						p.dirtyBlocks.Set(blockEntry)
-						//isSet = true
 						//for better performance, we can break here.
 						break
 					}
