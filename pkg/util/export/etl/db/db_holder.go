@@ -269,9 +269,9 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 		prepareSQLMap.Store(key, sqls)
 	}
 
-	tx, err := sqlDb.Begin()
+	tx, err := sqlDb.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return moerr.ConvertGoError(ctx, err)
 	}
 
 	var maxStmt *sql.Stmt
@@ -381,6 +381,9 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 			}
 			vals := make([]any, sqls.columns)
 			for _, row := range records {
+				if err != nil {
+					return moerr.ConvertGoError(ctx, err)
+				}
 				for i, field := range row {
 					escapedStr := field
 					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
@@ -389,33 +392,25 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 						vals[i] = field
 					}
 				}
-				_, err := oneStmt.ExecContext(ctx, vals...)
+				_, err = oneStmt.ExecContext(ctx, vals...)
 				if err != nil {
 					tx.Rollback()
-					return err
-				}
-				if ctx.Err() != nil {
-					tx.Rollback()
-					return ctx.Err()
+					return moerr.ConvertGoError(ctx, err)
 				}
 			}
 			err = oneStmt.Close()
 			if err != nil {
 				tx.Rollback()
-				return err
+				return moerr.ConvertGoError(ctx, err)
 			}
 			break
 		}
 	}
 
-	if ctx.Err() != nil {
-		tx.Rollback()
-		return ctx.Err()
-	}
-
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		logutil.Debug("sqlWriter commit failed", logutil.ErrorField(err))
-		return err
+		tx.Rollback()
+		return moerr.ConvertGoError(ctx, err)
 	}
 	return nil
 }
