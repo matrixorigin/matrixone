@@ -19,8 +19,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
-	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -1083,14 +1081,4 @@ func getConstValueByExpr(expr *plan.Expr,
 		return true, ret
 	}
 	return false, nil
-}
-
-// GetRoutineId gets the routine id
-func GetRoutineId() uint64 {
-	data := make([]byte, 64)
-	data = data[:runtime.Stack(data, false)]
-	data = bytes.TrimPrefix(data, []byte("goroutine "))
-	data = data[:bytes.IndexByte(data, ' ')]
-	id, _ := strconv.ParseUint(string(data), 10, 64)
-	return id
 }

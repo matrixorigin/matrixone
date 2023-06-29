@@ -64,6 +64,10 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	if len(mixin.columns.seqnums) != 0 {
 		panic(moerr.NewInternalErrorNoCtx("withFilterMixin tryUpdate called with different cols"))
 	}
+
+	// record the column selectivity
+	blockio.RecordColumnSelectivity(len(cols), len(mixin.tableDef.Cols))
+
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
 	// mixin.columns.colNulls = make([]bool, len(cols))
