@@ -55,8 +55,17 @@ type PartitionState struct {
 	// for primary key dedup, reading data is not required
 	noData bool
 
+	// some data need to be shared between all states
+	// should have been in the Partition structure, but doing that requires much more codes changes
+	// so just put it here.
+	shared *sharedStates
+}
+
+// sharedStates is shared among all PartitionStates
+type sharedStates struct {
+	sync.Mutex
 	// last block flush timestamp for table
-	lastFlushTimestamp *sync.Map
+	lastFlushTimestamp types.TS
 }
 
 // RowEntry represents a version of a row
@@ -137,23 +146,23 @@ func NewPartitionState(noData bool) *PartitionState {
 		Degree: 4,
 	}
 	return &PartitionState{
-		noData:             noData,
-		rows:               btree.NewBTreeGOptions((RowEntry).Less, opts),
-		blocks:             btree.NewBTreeGOptions((BlockEntry).Less, opts),
-		primaryIndex:       btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
-		dirtyBlocks:        btree.NewBTreeGOptions((BlockEntry).Less, opts),
-		lastFlushTimestamp: new(sync.Map),
+		noData:       noData,
+		rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
+		blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		primaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		dirtyBlocks:  btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		shared:       new(sharedStates),
 	}
 }
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		rows:               p.rows.Copy(),
-		blocks:             p.blocks.Copy(),
-		primaryIndex:       p.primaryIndex.Copy(),
-		noData:             p.noData,
-		dirtyBlocks:        p.dirtyBlocks.Copy(),
-		lastFlushTimestamp: p.lastFlushTimestamp,
+		rows:         p.rows.Copy(),
+		blocks:       p.blocks.Copy(),
+		primaryIndex: p.primaryIndex.Copy(),
+		noData:       p.noData,
+		dirtyBlocks:  p.dirtyBlocks.Copy(),
+		shared:       p.shared,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -202,7 +211,7 @@ func (p *PartitionState) HandleLogtailEntry(
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
-			p.HandleMetadataInsert(ctx, entry.TableId, entry.Bat)
+			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -349,13 +358,9 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	})
 }
 
-func (p *PartitionState) HandleMetadataInsert(ctx context.Context, tableId uint64, input *api.Batch) {
+func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Batch) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataInsert")
 	defer task.End()
-	var flushTS types.TS
-	if t, ok := p.lastFlushTimestamp.Load(tableId); ok {
-		flushTS = t.(types.TS)
-	}
 
 	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
@@ -368,10 +373,11 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, tableId uint6
 
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
-		if t := commitTimeVector[i]; t.Greater(flushTS) {
-			p.lastFlushTimestamp.Store(tableId, t)
-			flushTS = t
+		p.shared.Lock()
+		if t := commitTimeVector[i]; t.Greater(p.shared.lastFlushTimestamp) {
+			p.shared.lastFlushTimestamp = t
 		}
+		p.shared.Unlock()
 
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaInsert, func() {
 
