@@ -284,14 +284,8 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	return nil
 }
 
-func ForeachTable(doFunc func(tbl *table.Table) error) error {
-	var err error
-	for _, tbl := range tables {
-		if err = doFunc(tbl); err != nil {
-			return err
-		}
-	}
-	return nil
+func GetAllTables() []*table.Table {
+	return tables
 }
 
 // GetSchemaForAccount return account's table, and view's schema

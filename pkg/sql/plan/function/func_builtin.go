@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
@@ -443,29 +442,33 @@ func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 
 		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
 		if !ok {
-			moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 		}
 		exec := v.(executor.SQLExecutor)
+		tables := mometric.GetAllTables()
+		tables = append(tables, motrace.GetAllTables()...)
 		tableNames := strings.Split(util.UnsafeBytesToString(v1), ",")
 		for _, tblName := range tableNames {
-			purgeFunc := func(tbl *table.Table) error {
-				if tbl.TimestampColumn == nil {
-					return nil
+			found := false
+			for _, tbl := range tables {
+				if tbl.TimestampColumn != nil && strings.TrimSpace(tblName) == tbl.Table {
+					found = true
+					break
 				}
-				if strings.TrimSpace(tblName) == strings.TrimSpace(tbl.Table) {
+			}
+			if !found {
+				return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
+			}
+		}
+		for _, tblName := range tableNames {
+			for _, tbl := range tables {
+				if strings.TrimSpace(tblName) == tbl.Table {
 					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
 						tbl.Database, tbl.Table, tbl.TimestampColumn, v2.String())
 					opts := executor.Options{}.WithDatabase(tbl.Database)
 					_, err := exec.Exec(proc.Ctx, sql, opts)
 					return err
 				}
-				return nil
-			}
-			if err := motrace.ForeachTable(purgeFunc); err != nil {
-				return err
-			}
-			if err := mometric.ForeachTable(purgeFunc); err != nil {
-				return err
 			}
 		}
 

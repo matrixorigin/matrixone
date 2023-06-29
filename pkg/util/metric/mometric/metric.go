@@ -371,13 +371,8 @@ var SingleMetricTable = &table.Table{
 	SupportConstAccess: true,
 }
 
-func ForeachTable(doFunc func(tbl *table.Table) error) error {
-	var err error
-	tbl := SingleMetricTable
-	if err = doFunc(tbl); err != nil {
-		return err
-	}
-	return nil
+func GetAllTables() []*table.Table {
+	return []*table.Table{SingleMetricTable}
 }
 
 func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {
