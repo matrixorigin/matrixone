@@ -128,7 +128,7 @@ var (
 	defaultMetricStorageUsageCheckNewInterval = time.Minute
 
 	// defaultMergeCycle default: 15 minute
-	defaultMergeCycle = 15 * time.Minute
+	defaultMergeCycle = 5 * time.Minute
 
 	// defaultMaxFileSize default: 10 MB
 	defaultMaxFileSize = 10
