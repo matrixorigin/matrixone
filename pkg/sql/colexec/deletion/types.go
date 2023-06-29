@@ -87,6 +87,7 @@ type DeleteCtx struct {
 	Source                engine.Relation
 	Ref                   *plan.ObjectRef
 	AddAffectedRows       bool
+	PrimaryKeyIdx         int
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
@@ -116,7 +117,7 @@ func (arg *Argument) AffectedRows() uint64 {
 	return arg.affectedRows
 }
 
-func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch, pkIdx int, pkName string) error {
+func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch) error {
 	delCtx := arg.DeleteCtx
 	// If the target table is a partition table, group and split the batch data
 	if len(delCtx.PartitionSources) > 0 {
@@ -125,11 +126,11 @@ func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch, pkId
 			return err
 		}
 		for i, delBatch := range delBatches {
-			collectBatchInfo(proc, arg, delBatch, 0, i, pkIdx, pkName)
+			collectBatchInfo(proc, arg, delBatch, 0, i, delCtx.PrimaryKeyIdx)
 			delBatch.Clean(proc.Mp())
 		}
 	} else {
-		collectBatchInfo(proc, arg, srcBat, arg.DeleteCtx.RowIdIdx, 0, pkIdx, pkName)
+		collectBatchInfo(proc, arg, srcBat, arg.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	}
 	// we will flush all
 	if arg.ctr.batch_size >= flushThreshold {
@@ -190,7 +191,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 }
 
 // Collect relevant information about intermediate batche
-func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int, pkName string) {
+func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
 	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
 	arg.ctr.debug_len += uint32(len(vs))
@@ -233,7 +234,7 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 				var tmpBat *batch.Batch
 				tmpBat = arg.ctr.pool.get()
 				if tmpBat == nil {
-					tmpBat = batch.New(false, []string{catalog.Row_ID, pkName})
+					tmpBat = batch.New(false, []string{catalog.Row_ID, "pk"})
 					tmpBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
 					tmpBat.SetVector(1, vector.NewVec(*destBatch.GetVector(int32(pkIdx)).GetType()))
 				}
@@ -251,7 +252,7 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 					var bat *batch.Batch
 					bat = arg.ctr.pool.get()
 					if bat == nil {
-						bat = batch.New(false, []string{catalog.Row_ID, pkName})
+						bat = batch.New(false, []string{catalog.Row_ID, "pk"})
 						bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
 						bat.SetVector(1, vector.NewVec(*destBatch.GetVector(int32(pkIdx)).GetType()))
 					}

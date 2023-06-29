@@ -138,11 +138,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		// we will cache all rowId in memory,
 		// when the size is too large we will
 		// trigger write s3
-		pks, err := p.DeleteCtx.Source.GetPrimaryKeys(proc.Ctx)
-		if err != nil {
-			panic(err)
-		}
-		p.SplitBatch(proc, bat, int(pks[0].Seqnum), pks[0].Name)
+		p.SplitBatch(proc, bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}

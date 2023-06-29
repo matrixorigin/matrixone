@@ -657,6 +657,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
 			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
 			Ref:                   t.DeleteCtx.Ref,
+			PrimaryKeyIdx:         int32(t.DeleteCtx.PrimaryKeyIdx),
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
