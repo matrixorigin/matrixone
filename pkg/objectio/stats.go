@@ -113,13 +113,13 @@ func (s *Stats) ExportString() string {
 	}
 	fmt.Fprintf(&w, "SelectivityStats: BLK[%d/%d=%0.2f] ", whit, wtotal, wrate)
 	whit, wtotal = s.ExportColumnSelctivity()
-	wrate, rate = 0.0, 0.0
+	wrate = 0.0
 	if wtotal != 0 {
 		wrate = float64(whit) / float64(wtotal)
 	}
 	fmt.Fprintf(&w, "COL[%d/%d=%0.2f] ", whit, wtotal, wrate)
 	whit, wtotal, hit, total := s.ExportReadFilterSelectivity()
-	wrate, rate = 0.0, 0.0
+	wrate = 0.0
 	if wtotal != 0 {
 		wrate = float64(whit) / float64(wtotal)
 	}
