@@ -18,7 +18,9 @@ import (
 	"strconv"
 )
 
-type StatsArray []uint64
+type StatsArray struct {
+	arr []uint64
+}
 
 const (
 	StatsArrayVersion = StatsArrayVersion1
@@ -37,16 +39,22 @@ const (
 	StatsArrayLength
 )
 
-func (s *StatsArray) GetVersion() uint64         { return (*s)[StatsArrayIndexVersion] }
-func (s *StatsArray) GetTimeConsumed() uint64    { return (*s)[StatsArrayIndexTimeConsumed] }    // unit: ns
-func (s *StatsArray) GetMemorySize() uint64      { return (*s)[StatsArrayIndexMemorySize] }      // unit: byte
-func (s *StatsArray) GetS3IOInputCount() uint64  { return (*s)[StatsArrayIndexS3IOInputCount] }  // unit: count
-func (s *StatsArray) GetS3IOOutputCount() uint64 { return (*s)[StatsArrayIndexS3IOOutputCount] } // unit: count
+func NewStatsArray() *StatsArray {
+	return &StatsArray{
+		arr: make([]uint64, StatsArrayLength),
+	}
+}
 
-func (s *StatsArray) WithVersion(v uint64) *StatsArray { (*s)[StatsArrayIndexVersion] = v; return s }
+func (s *StatsArray) GetVersion() uint64         { return s.arr[StatsArrayIndexVersion] }
+func (s *StatsArray) GetTimeConsumed() uint64    { return s.arr[StatsArrayIndexTimeConsumed] }    // unit: ns
+func (s *StatsArray) GetMemorySize() uint64      { return s.arr[StatsArrayIndexMemorySize] }      // unit: byte
+func (s *StatsArray) GetS3IOInputCount() uint64  { return s.arr[StatsArrayIndexS3IOInputCount] }  // unit: count
+func (s *StatsArray) GetS3IOOutputCount() uint64 { return s.arr[StatsArrayIndexS3IOOutputCount] } // unit: count
+
+func (s *StatsArray) WithVersion(v uint64) *StatsArray { s.arr[StatsArrayIndexVersion] = v; return s }
 
 func (s *StatsArray) ToJson() []byte {
-	return ArrayUint64ToJson((*s)[:])
+	return ArrayUint64ToJson(s.arr)
 }
 
 func ArrayUint64ToJson(arr []uint64) []byte {
@@ -62,9 +70,6 @@ func ArrayUint64ToJson(arr []uint64) []byte {
 	return buf
 }
 
-var DefaultStatsJsonArray = getZeroStatsArray().ToJson()
-
-func getZeroStatsArray() (s *StatsArray) {
-	*s = make([]uint64, 0, StatsArrayLength)
-	return s.WithVersion(StatsArrayVersion)
-}
+var DefaultStatsArrayJson = NewStatsArray().
+	WithVersion(StatsArrayVersion).
+	ToJson()
