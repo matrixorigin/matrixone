@@ -392,8 +392,6 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			p.blocks.Set(blockEntry)
 
 			isSet := false
-			//if entryStateVector[i] ||
-			//	(!entryStateVector[i] && len(blockEntry.DeltaLoc) != 0) {
 			{
 				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
@@ -436,26 +434,13 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 							})
 						}
 					}
-
-					//p.rows.Delete(entry)
-					//numDeleted++
-					// delete primary index entry
-					//if len(entry.PrimaryIndexBytes) > 0 {
-					//	p.primaryIndex.Delete(&PrimaryIndexEntry{
-					//		Bytes:      entry.PrimaryIndexBytes,
-					//		RowEntryID: entry.ID,
-					//	})
-					//}
-
 				}
 				iter.Release()
 				//if the inserting block is non-appendable and has delta location,
 				//then delete it from the dirtyBlocks.
-				//if !entryStateVector[i] {
 				if !entryStateVector[i] && len(blockEntry.DeltaLoc) != 0 {
 					p.dirtyBlocks.Delete(blockEntry)
 				}
-				//}
 			}
 		})
 	}
