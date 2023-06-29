@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -224,6 +225,9 @@ type IoPipeline struct {
 
 	fetchFun     FetchFunc
 	prefetchFunc PrefetchFunc
+
+	stats        *objectio.Stats
+	statsManager *gc.Manager
 }
 
 func NewIOPipeline(
@@ -254,6 +258,14 @@ func NewIOPipeline(
 
 	p.fetchFun = readColumns
 	p.prefetchFunc = noopPrefetch
+
+	p.statsManager = gc.NewManager(gc.WithCronJob(
+		"print-stats",
+		time.Second*10,
+		func(ctx context.Context) error {
+			logutil.Info(p.stats.ExportString())
+			return nil
+		}))
 	return p
 }
 
@@ -267,6 +279,10 @@ func (p *IoPipeline) fillDefaults() {
 	if p.jobFactory == nil {
 		p.jobFactory = jobFactory
 	}
+
+	if p.stats == nil {
+		p.stats = objectio.NewStats()
+	}
 }
 
 func (p *IoPipeline) Start() {
@@ -275,6 +291,7 @@ func (p *IoPipeline) Start() {
 		p.waitQ.Start()
 		p.fetch.queue.Start()
 		p.prefetch.queue.Start()
+		p.statsManager.Start()
 	})
 }
 
@@ -289,6 +306,7 @@ func (p *IoPipeline) Stop() {
 		p.fetch.scheduler.Stop()
 
 		p.waitQ.Stop()
+		p.statsManager.Stop()
 	})
 }
 
