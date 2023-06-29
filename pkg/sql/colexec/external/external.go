@@ -1003,7 +1003,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
-				if err == strconv.ErrRange {
+				if errors.Is(err, strconv.ErrRange) {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int8 type for column %d", field, colIdx)
 				}
@@ -1023,7 +1023,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
-				if err == strconv.ErrRange {
+				if errors.Is(err, strconv.ErrRange) {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int16 type for column %d", field, colIdx)
 				}
@@ -1043,7 +1043,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
-				if err == strconv.ErrRange {
+				if errors.Is(err, strconv.ErrRange) {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int32 type for column %d", field, colIdx)
 				}
@@ -1063,7 +1063,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
-				if err == strconv.ErrRange {
+				if errors.Is(err, strconv.ErrRange) {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not int64 type for column %d", field, colIdx)
 				}
@@ -1083,7 +1083,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
-				if err == strconv.ErrRange {
+				if errors.Is(err, strconv.ErrRange) {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint8 type for column %d", field, colIdx)
 				}
@@ -1103,7 +1103,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
-				if err == strconv.ErrRange {
+				if errors.Is(err, strconv.ErrRange) {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field, colIdx)
 				}
@@ -1123,7 +1123,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
-				if err == strconv.ErrRange {
+				if errors.Is(err, strconv.ErrRange) {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint32 type for column %d", field, colIdx)
 				}
@@ -1143,7 +1143,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			} else {
-				if err == strconv.ErrRange {
+				if errors.Is(err, strconv.ErrRange) {
 					logutil.Errorf("parse field[%v] err:%v", field, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint64 type for column %d", field, colIdx)
 				}
