@@ -170,8 +170,10 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	var dbConn *sql.DB
 
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
-		logutil.Warn("sqlWriter WriteRowRecords failed above threshold", zap.Uint32("failures", DBConnErrCount.Load()), zap.Error(err))
-		dbConn.Close()
+		logutil.Warn("sqlWriter WriteRowRecords failed above threshold")
+		if dbConn != nil {
+			dbConn.Close()
+		}
 		dbConn, err = InitOrRefreshDBConn(true, true)
 		DBConnErrCount.Store(0)
 	} else {
