@@ -46,6 +46,8 @@ type S3Writer struct {
 
 	schemaVersion uint32
 	seqnums       []uint16
+	tablename     string
+	attrs         []string
 
 	writer  *blockio.BlockWriter
 	lengths []uint64
@@ -103,7 +105,25 @@ func (w *S3Writer) GetMetaLocBat() *batch.Batch {
 	return w.metaLocBat
 }
 
+func (w *S3Writer) tryExtractSeqnums(attrs []*engine.Attribute) {
+	if len(w.seqnums) > 0 {
+		return
+	}
+	w.seqnums = make([]uint16, 0, len(attrs))
+	for i, attr := range attrs {
+		if attr.Name == catalog.Row_ID {
+			// check rowid as the last column
+			if i != len(attrs)-1 {
+				logutil.Errorf("bad rowid position for %q, %+v", w.tablename, attrs)
+			}
+			break
+		}
+		w.seqnums = append(w.seqnums, attr.Seqnum)
+	}
+}
+
 func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
+	w.tryExtractSeqnums(attrs)
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].Primary {
 			if attrs[i].Name != catalog.FakePrimaryKeyColName {
@@ -124,6 +144,18 @@ func (w *S3Writer) SetSortIdx(sortIdx int) {
 	w.sortIndex = sortIdx
 }
 
+func (w *S3Writer) SetSchemaVer(ver uint32) {
+	w.schemaVersion = ver
+}
+
+func (w *S3Writer) SetTableName(name string) {
+	w.tablename = name
+}
+
+func (w *S3Writer) SetSeqnums(seqnums []uint16) {
+	w.seqnums = seqnums
+}
+
 func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, error) {
 	writer := &S3Writer{
 		sortIndex:      -1,
@@ -139,6 +171,7 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 			writer.seqnums = append(writer.seqnums, uint16(colDef.Seqnum))
 		}
 	}
+	writer.tablename = tableDef.GetName()
 
 	// Get Single Col pk index
 	for idx, colDef := range tableDef.Cols {
@@ -181,6 +214,7 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 
 		writers[i].schemaVersion = tableDef.Version
 		writers[i].seqnums = make([]uint16, 0)
+		writers[i].tablename = tableDef.Name
 		for _, colDef := range tableDef.Cols {
 			if colDef.Name != catalog.Row_ID {
 				writers[i].seqnums = append(writers[i].seqnums, uint16(colDef.Seqnum))
@@ -539,7 +573,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	if err != nil {
 		return nil, err
 	}
-	w.writer, err = blockio.NewBlockWriterNew(s3, segId, w.schemaVersion, nil)
+	w.writer, err = blockio.NewBlockWriterNew(s3, segId, w.schemaVersion, w.seqnums)
 	if err != nil {
 		return nil, err
 	}
@@ -584,6 +618,16 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 		pkIdx := uint16(w.pk)
 		w.writer.SetPrimaryKey(pkIdx)
 	}
+	if w.attrs == nil {
+		w.attrs = bat.Attrs
+	}
+	if len(w.seqnums) != len(bat.Vecs) {
+		// just warn becase writing delete s3 file does not need seqnums.
+		// print the attrs to tell if it is a delete batch
+		logutil.Warnf("CN write s3 table %q: seqnums length not match seqnums: %v, attrs: %v",
+			w.tablename, w.seqnums, bat.Attrs)
+	}
+	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.Vecs[0].Length(), w.tablename, w.seqnums, w.attrs)
 	_, err := w.writer.WriteBatch(bat)
 	if err != nil {
 		return err
@@ -622,6 +666,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 // For more information, please refer to the comment about func WriteEnd in Writer interface
 func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
+	logutil.Infof("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
 	if err != nil {
 		return nil, err
 	}
