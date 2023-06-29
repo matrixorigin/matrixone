@@ -21,10 +21,12 @@ import (
 type StatsArray []uint64
 
 const (
+	StatsArrayVersion = StatsArrayVersion1
+
 	StatsArrayVersion0 = 0 // raw statistics
 	StatsArrayVersion1 = 1 // int64 array
-	StatsArrayVersion  = StatsArrayVersion1
 )
+
 const (
 	StatsArrayIndexVersion = iota
 	StatsArrayIndexTimeConsumed
@@ -41,6 +43,8 @@ func (s *StatsArray) GetMemorySize() uint64      { return (*s)[StatsArrayIndexMe
 func (s *StatsArray) GetS3IOInputCount() uint64  { return (*s)[StatsArrayIndexS3IOInputCount] }  // unit: count
 func (s *StatsArray) GetS3IOOutputCount() uint64 { return (*s)[StatsArrayIndexS3IOOutputCount] } // unit: count
 
+func (s *StatsArray) WithVersion(v uint64) *StatsArray { (*s)[StatsArrayIndexVersion] = v; return s }
+
 func (s *StatsArray) ToJson() []byte {
 	return ArrayUint64ToJson((*s)[:])
 }
@@ -56,4 +60,11 @@ func ArrayUint64ToJson(arr []uint64) []byte {
 	}
 	buf = append(buf, ']')
 	return buf
+}
+
+var DefaultStatsJsonArray = getZeroStatsArray().ToJson()
+
+func getZeroStatsArray() (s *StatsArray) {
+	*s = make([]uint64, 0, StatsArrayLength)
+	return s.WithVersion(StatsArrayVersion)
 }

@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"log"
 	"strconv"
 	"strings"
@@ -370,12 +371,11 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 	if s.statsJsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
-		return []byte("[]")
+		return statistic.DefaultStatsJsonArray
 	} else {
 		s.statsJsonByte, stats = s.ExecPlan.Stats(ctx)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
-
 	}
 endL:
 	return s.statsJsonByte
