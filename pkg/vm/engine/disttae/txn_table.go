@@ -427,12 +427,10 @@ func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailrepl
 	return nil
 }
 
-func (tbl *txnTable) GetDirtyBlksIn(
-	state *logtailreplay.PartitionState,
-	in bool) []types.Blockid {
+func (tbl *txnTable) GetDirtyBlksIn(state *logtailreplay.PartitionState) []types.Blockid {
 	dirtyBlks := make([]types.Blockid, 0)
 	for blk := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-		if in != state.BlockVisible(
+		if !state.BlockVisible(
 			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
 			continue
 		}
@@ -714,10 +712,13 @@ func (tbl *txnTable) rangesOnePart(
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
+
+	//blks contains all visible blocks to this txn, namely
+	//includes committed blocks and uncommitted blocks by CN writing S3.
 	blks := make([]catalog.BlockInfo, 0, len(committedblocks))
 	blks = append(blks, committedblocks...)
 
-	//collect dirty blocks from PartitionState.dirtyBlocks.
+	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
 		iter := state.NewDirtyBlocksIter()
 		for iter.Next() {
@@ -729,8 +730,8 @@ func (tbl *txnTable) rangesOnePart(
 
 	}
 
-	//only collect dirty blocks in PartitionState.blocks into modifies.
-	for _, bid := range tbl.GetDirtyBlksIn(state, true) {
+	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
+	for _, bid := range tbl.GetDirtyBlksIn(state) {
 		dirtyBlks[bid] = struct{}{}
 	}
 	txn := tbl.db.txn
