@@ -427,6 +427,10 @@ func buildInMoPurgeLog(parameters []*vector.Vector, result vector.FunctionResult
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[1])
 
+	if proc.SessionInfo.AccountId != sysAccountID {
+		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
@@ -461,7 +465,7 @@ func buildInMoPurgeLog(parameters []*vector.Vector, result vector.FunctionResult
 			}
 		}
 
-		rs.Append(uint8(0), true)
+		rs.Append(uint8(0), false)
 	}
 
 	return nil
