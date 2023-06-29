@@ -898,6 +898,7 @@ func (tbl *txnTable) rangesOnePart(
 		blk.PartitionNum = -1
 		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
+	blockio.RecordBlockSelectivity(len(*ranges)-1, len(blks))
 	return
 }
 
