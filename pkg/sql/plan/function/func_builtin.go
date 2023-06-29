@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -27,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
@@ -435,16 +436,18 @@ func buildInMoPurgeLog(parameters []*vector.Vector, result vector.FunctionResult
 			continue
 		}
 
-		factory := motrace.GetSQLExecutorFactory()
-		if factory == nil {
-			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+		if !ok {
+			moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 		}
-		executor := factory()
+		exec := v.(executor.SQLExecutor)
 		purgeFunc := func(targetTable, db, tbl, tsColumn string) error {
 			if strings.TrimSpace(targetTable) == strings.TrimSpace(tbl) {
 				sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
 					db, tbl, tsColumn, v2.String())
-				return executor.Exec(proc.Ctx, sql, ie.NewOptsBuilder().Finish())
+				opts := executor.Options{}.WithDatabase(db)
+				_, err := exec.Exec(proc.Ctx, sql, opts)
+				return err
 			}
 			return nil
 		}
