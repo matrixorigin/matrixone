@@ -1003,6 +1003,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
 				Ref:                   t.Ref,
 				AddAffectedRows:       t.AddAffectedRows,
+				PrimaryKeyIdx:         int(t.PrimaryKeyIdx),
 			},
 		}
 	case vm.Insert:
