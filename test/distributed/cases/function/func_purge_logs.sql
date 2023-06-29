@@ -16,3 +16,8 @@ select purge_log('rawlog,statement_info,metric', '2023-06-30') a;
 -- check invalid args
 select purge_log('rawlog_not_exist', '2023-06-30') a;
 select purge_log('rawlog_not_exist', '123') a;
+
+-- check null arg
+select purge_log('rawlog_not_exist', NULL) a;
+select purge_log(NULL, '2023-06-30') a;
+select purge_log(NULL, NULL) a;

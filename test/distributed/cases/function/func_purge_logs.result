@@ -18,3 +18,12 @@ select purge_log('rawlog_not_exist', '2023-06-30') a;
 not supported: purge 'rawlog_not_exist'
 select purge_log('rawlog_not_exist', '123') a;
 invalid argument parsedate, bad value 123
+select purge_log('rawlog_not_exist', NULL) a;
+a
+NULL
+select purge_log(NULL, '2023-06-30') a;
+a
+NULL
+select purge_log(NULL, NULL) a;
+a
+NULL
