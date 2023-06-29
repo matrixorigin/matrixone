@@ -328,6 +328,8 @@ type MPool struct {
 	pools      [NumFixedPool]fixedPool
 	details    *mpoolDetails
 
+	pool *pool
+
 	// To remove: this thing is highly unlikely to be of any good use.
 	sels *sync.Pool
 }
@@ -395,7 +397,7 @@ func (mp *MPool) destroy() {
 }
 
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
-func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
+func NewMPool(tag string, cap int64, flag int, poolSize int) (*MPool, error) {
 	if cap > 0 {
 		// simple sanity check
 		if cap < 1024*1024 {
@@ -411,6 +413,7 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	mp.id = id
 	mp.tag = tag
 	mp.cap = cap
+	mp.pool = newPool(poolSize)
 
 	mp.noFixed = (flag & NoFixed) != 0
 	mp.noLock = (flag & NoFixed) != 0
@@ -434,7 +437,7 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 }
 
 func MustNew(tag string) *MPool {
-	mp, err := NewMPool(tag, 0, 0)
+	mp, err := NewMPool(tag, 0, 0, 0)
 	if err != nil {
 		panic(err)
 	}
@@ -446,7 +449,7 @@ func MustNewZero() *MPool {
 }
 
 func MustNewNoFixed(tag string) *MPool {
-	mp, err := NewMPool(tag, 0, NoFixed)
+	mp, err := NewMPool(tag, 0, NoFixed, 0)
 	if err != nil {
 		panic(err)
 	}
@@ -520,6 +523,14 @@ func sizeToIdx(size int) int {
 		}
 	}
 	return NumFixedPool
+}
+
+func Alloc[T any](mp *MPool) *T {
+	return alloc[T](mp.pool)
+}
+
+func Free[T any](mp *MPool, v *T) {
+	free(mp.pool, v)
 }
 
 func (mp *MPool) Alloc(sz int) ([]byte, error) {
@@ -716,29 +727,6 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int) ([]byte, error) {
 	copy(ret[len1:len1+len2], old2)
 	return ret, nil
 }
-
-/*
-func (mp *MPool) Increase(nb int64) error {
-	gcurr := globalStats.RecordAlloc("global", nb)
-	if gcurr > GlobalCap() {
-		globalStats.RecordFree(mp.tag, nb)
-		return moerr.NewOOMNoCtx()
-	}
-
-	// check if it is under my cap
-	mycurr := mp.stats.RecordAlloc(mp.tag, nb)
-	if mycurr > mp.Cap() {
-		mp.stats.RecordFree(mp.tag, nb)
-		return moerr.NewInternalErrorNoCtx("mpool out of space, alloc %d bytes, cap %d", nb, mp.cap)
-	}
-	return nil
-}
-
-func (mp *MPool) Decrease(nb int64) {
-	mp.stats.RecordFree(mp.tag, nb)
-	globalStats.RecordFree("global", nb)
-}
-*/
 
 func MakeSliceWithCap[T any](n, cap int, mp *MPool) ([]T, error) {
 	var t T

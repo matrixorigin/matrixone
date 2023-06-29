@@ -21,8 +21,100 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func BenchmarkPool(b *testing.B) {
+	cl := newPool(100 << 20)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var wg sync.WaitGroup
+		run := func() {
+			defer wg.Done()
+			for i := 0; i < 1000; i++ {
+				v := alloc[int64](cl)
+				free(cl, v)
+			}
+		}
+		for i := 0; i < 800; i++ {
+			wg.Add(1)
+			go run()
+		}
+		wg.Wait()
+	}
+}
+
+func BenchmarkMP(b *testing.B) {
+	pool, err := NewMPool("default", 0, 0, 0)
+	if err != nil {
+		panic(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var wg sync.WaitGroup
+		run := func() {
+			defer wg.Done()
+			for i := 0; i < 1000; i++ {
+				buf, err := pool.Alloc(8)
+				if err != nil {
+					panic(err)
+				}
+				pool.Free(buf)
+			}
+		}
+		for i := 0; i < 800; i++ {
+			wg.Add(1)
+			go run()
+		}
+		wg.Wait()
+	}
+}
+
+func TestPool(t *testing.T) {
+	type test1 struct {
+		e0 int8
+		e1 int8
+	}
+	type test2 struct {
+		e0 int32
+		e1 test1
+	}
+	cl := newPool(0)
+	for i := 0; i < 10000; i++ {
+		t1 := alloc[test1](cl)
+		t1.e0 = 1
+		t1.e1 = 2
+		require.Equal(t, int8(1), t1.e0)
+		require.Equal(t, int8(2), t1.e1)
+		free(cl, t1)
+		t2 := alloc[test2](cl)
+		t2.e0 = 1
+		t2.e1.e0 = 2
+		t2.e1.e1 = 3
+		require.Equal(t, int32(1), t2.e0)
+		require.Equal(t, int8(2), t2.e1.e0)
+		require.Equal(t, int8(3), t2.e1.e1)
+	}
+}
+
+// test race
+func TestPoolForRace(t *testing.T) {
+	cl := newPool(0)
+	var wg sync.WaitGroup
+	run := func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			v := alloc[int64](cl)
+			free(cl, v)
+		}
+	}
+	for i := 0; i < 800; i++ {
+		wg.Add(1)
+		go run()
+	}
+	wg.Wait()
+
+}
+
 func TestMPool(t *testing.T) {
-	m, err := NewMPool("test-mpool-small", 0, 0)
+	m, err := NewMPool("test-mpool-small", 0, 0, 0)
 	require.True(t, err == nil, "new mpool failed %v", err)
 
 	nb0 := m.CurrNB()
@@ -60,7 +152,7 @@ func TestMPool(t *testing.T) {
 
 func TestReportMemUsage(t *testing.T) {
 	// Just test a mid sized
-	m, err := NewMPool("testjson", 0, 0)
+	m, err := NewMPool("testjson", 0, 0, 0)
 	m.EnableDetailRecording()
 
 	require.True(t, err == nil, "new mpool failed %v", err)
@@ -92,7 +184,7 @@ func TestReportMemUsage(t *testing.T) {
 }
 
 func TestMP(t *testing.T) {
-	pool, err := NewMPool("default", 0, 0)
+	pool, err := NewMPool("default", 0, 0, 0)
 	if err != nil {
 		panic(err)
 	}
