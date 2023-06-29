@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/trace"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -53,6 +54,9 @@ type PartitionState struct {
 	// noData indicates whether to retain data batch
 	// for primary key dedup, reading data is not required
 	noData bool
+
+	// last block flush timestamp for table
+	lastFlushTimestamp *sync.Map
 }
 
 // RowEntry represents a version of a row
@@ -133,21 +137,23 @@ func NewPartitionState(noData bool) *PartitionState {
 		Degree: 4,
 	}
 	return &PartitionState{
-		noData:       noData,
-		rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
-		blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
-		primaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
-		dirtyBlocks:  btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		noData:             noData,
+		rows:               btree.NewBTreeGOptions((RowEntry).Less, opts),
+		blocks:             btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		primaryIndex:       btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		dirtyBlocks:        btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		lastFlushTimestamp: new(sync.Map),
 	}
 }
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		rows:         p.rows.Copy(),
-		blocks:       p.blocks.Copy(),
-		primaryIndex: p.primaryIndex.Copy(),
-		noData:       p.noData,
-		dirtyBlocks:  p.dirtyBlocks.Copy(),
+		rows:               p.rows.Copy(),
+		blocks:             p.blocks.Copy(),
+		primaryIndex:       p.primaryIndex.Copy(),
+		noData:             p.noData,
+		dirtyBlocks:        p.dirtyBlocks.Copy(),
+		lastFlushTimestamp: p.lastFlushTimestamp,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -196,7 +202,7 @@ func (p *PartitionState) HandleLogtailEntry(
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
-			p.HandleMetadataInsert(ctx, entry.Bat)
+			p.HandleMetadataInsert(ctx, entry.TableId, entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -343,9 +349,13 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	})
 }
 
-func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Batch) {
+func (p *PartitionState) HandleMetadataInsert(ctx context.Context, tableId uint64, input *api.Batch) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataInsert")
 	defer task.End()
+	var flushTS types.TS
+	if t, ok := p.lastFlushTimestamp.Load(tableId); ok {
+		flushTS = t.(types.TS)
+	}
 
 	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
@@ -358,6 +368,11 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
+		if t := commitTimeVector[i]; t.Greater(flushTS) {
+			p.lastFlushTimestamp.Store(tableId, t)
+			flushTS = t
+		}
+
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaInsert, func() {
 
 			pivot := BlockEntry{

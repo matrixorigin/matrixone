@@ -77,6 +77,12 @@ func (*StorageTxnClient) MinTimestamp() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
+func (*StorageTxnClient) WaitLogTailAppliedAt(
+	ctx context.Context,
+	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{}, nil
+}
+
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
