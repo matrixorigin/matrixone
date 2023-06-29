@@ -21,15 +21,15 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	projMap := make(map[[2]int32]*plan.Expr)
 	node := builder.qry.Nodes[nodeID]
 
-	increaseRefCntForExprList(node.ProjectList, colRefCnt)
-	increaseRefCntForExprList(node.OnList, colRefCnt)
-	increaseRefCntForExprList(node.FilterList, colRefCnt)
-	increaseRefCntForExprList(node.GroupBy, colRefCnt)
-	increaseRefCntForExprList(node.GroupingSet, colRefCnt)
-	increaseRefCntForExprList(node.AggList, colRefCnt)
-	increaseRefCntForExprList(node.WinSpecList, colRefCnt)
+	increaseRefCntForExprList(node.ProjectList, 1, colRefCnt)
+	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
+	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
+	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
+	increaseRefCntForExprList(node.GroupingSet, 1, colRefCnt)
+	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
+	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
 	for i := range node.OrderBy {
-		increaseRefCnt(node.OrderBy[i].Expr, colRefCnt)
+		increaseRefCnt(node.OrderBy[i].Expr, 1, colRefCnt)
 	}
 
 	switch node.NodeType {
@@ -106,9 +106,9 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	return nodeID, projMap
 }
 
-func increaseRefCntForExprList(exprs []*plan.Expr, colRefCnt map[[2]int32]int) {
+func increaseRefCntForExprList(exprs []*plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	for _, expr := range exprs {
-		increaseRefCnt(expr, colRefCnt)
+		increaseRefCnt(expr, inc, colRefCnt)
 	}
 }
 
@@ -717,4 +717,124 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32) int32 {
 
 	node.OnList = newOnList
 	return nodeID
+}
+
+func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[int32]int) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) == 0 {
+		return nodeID
+	}
+
+	increaseTagCntForExprList(node.ProjectList, 1, tagCnt)
+	increaseTagCntForExprList(node.OnList, 1, tagCnt)
+	increaseTagCntForExprList(node.FilterList, 1, tagCnt)
+	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
+	increaseTagCntForExprList(node.GroupingSet, 1, tagCnt)
+	increaseTagCntForExprList(node.AggList, 1, tagCnt)
+	increaseTagCntForExprList(node.WinSpecList, 1, tagCnt)
+	for i := range node.OrderBy {
+		increaseTagCnt(node.OrderBy[i].Expr, 1, tagCnt)
+	}
+
+	for i, childID := range node.Children {
+		node.Children[i] = builder.removeEffectlessLeftJoins(childID, tagCnt)
+	}
+
+	var (
+		rightChild *plan.Node
+		tableDef   *plan.TableDef
+		tag        int32
+		name2Pos   map[string]int
+		equiCols   []bool
+	)
+
+	increaseTagCntForExprList(node.OnList, -1, tagCnt)
+
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_LEFT {
+		goto END
+	}
+
+	rightChild = builder.qry.Nodes[node.Children[1]]
+	if rightChild.NodeType != plan.Node_TABLE_SCAN {
+		goto END
+	}
+
+	tag = rightChild.BindingTags[0]
+	if tagCnt[tag] > 0 {
+		goto END
+	}
+
+	tableDef = rightChild.TableDef
+	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) > len(node.OnList) {
+		goto END
+	}
+
+	equiCols = make([]bool, len(tableDef.Pkey.Names))
+	name2Pos = make(map[string]int)
+	for i, name := range tableDef.Pkey.Names {
+		name2Pos[name] = i
+	}
+
+	for _, cond := range node.OnList {
+		if f, ok := cond.Expr.(*plan.Expr_F); ok && SupportedJoinCondition(f.F.Func.Obj) {
+			if col, ok := f.F.Args[0].Expr.(*plan.Expr_Col); ok && col.Col.RelPos == tag && !hasTag(f.F.Args[1], tag) {
+				if pos, ok := name2Pos[col.Col.Name]; ok {
+					equiCols[pos] = true
+				}
+			}
+			if col, ok := f.F.Args[1].Expr.(*plan.Expr_Col); ok && col.Col.RelPos == tag && !hasTag(f.F.Args[0], tag) {
+				if pos, ok := name2Pos[col.Col.Name]; ok {
+					equiCols[pos] = true
+				}
+			}
+		}
+	}
+
+	for i := range equiCols {
+		if !equiCols[i] {
+			goto END
+		}
+	}
+
+	// All primary key columns of right table are presented in equi conditions
+	nodeID = node.Children[0]
+
+END:
+	increaseTagCntForExprList(node.ProjectList, -1, tagCnt)
+	increaseTagCntForExprList(node.FilterList, -1, tagCnt)
+	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
+	increaseTagCntForExprList(node.GroupingSet, -1, tagCnt)
+	increaseTagCntForExprList(node.AggList, -1, tagCnt)
+	increaseTagCntForExprList(node.WinSpecList, -1, tagCnt)
+	for i := range node.OrderBy {
+		increaseTagCnt(node.OrderBy[i].Expr, -1, tagCnt)
+	}
+
+	return nodeID
+}
+
+func increaseTagCntForExprList(exprs []*plan.Expr, inc int, tagCnt map[int32]int) {
+	for _, expr := range exprs {
+		increaseTagCnt(expr, inc, tagCnt)
+	}
+}
+
+func increaseTagCnt(expr *plan.Expr, inc int, tagCnt map[int32]int) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		tagCnt[exprImpl.Col.RelPos] += inc
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			increaseTagCnt(arg, inc, tagCnt)
+		}
+	case *plan.Expr_W:
+		increaseTagCnt(exprImpl.W.WindowFunc, inc, tagCnt)
+		for _, arg := range exprImpl.W.PartitionBy {
+			increaseTagCnt(arg, inc, tagCnt)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			increaseTagCnt(order.Expr, inc, tagCnt)
+		}
+	}
 }
