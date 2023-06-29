@@ -584,8 +584,6 @@ func TestGetExprValue(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		db := mock_frontend.NewMockDatabase(ctrl)
 		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
 		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
@@ -617,7 +615,7 @@ func TestGetExprValue(t *testing.T) {
 		eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 
 		ws := mock_frontend.NewMockWorkspace(ctrl)
-		ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
+		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -694,8 +692,6 @@ func TestGetExprValue(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		db := mock_frontend.NewMockDatabase(ctrl)
 		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
 
@@ -714,7 +710,7 @@ func TestGetExprValue(t *testing.T) {
 		eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 
 		ws := mock_frontend.NewMockWorkspace(ctrl)
-		ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
+		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()

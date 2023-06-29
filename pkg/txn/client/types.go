@@ -46,6 +46,8 @@ type TxnClient interface {
 	AbortAllRunningTxn()
 	// Close closes client.sender
 	Close() error
+	// WaitLogTailAppliedAt wait log tail applied at ts
+	WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error)
 }
 
 // TxnClientWithCtl TxnClient to support ctl command.
@@ -183,12 +185,13 @@ type TimestampWaiter interface {
 }
 
 type Workspace interface {
-	// IncrStatemenetID incr the execute statemenet id. It mantains the statement id, first statemenet is 1,
+	// IncrStatementID incr the execute statement id. It maintains the statement id, first statement is 1,
 	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
 	// workspace will update snapshot data for later read request.
-	IncrStatemenetID(ctx context.Context) error
+	IncrStatementID(ctx context.Context, commit bool) error
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
-	// DeleteTable deletes the table identified by tableName from table map in the transaction.
-	DeleteTable(ctx context.Context, dbID uint64, tableName string)
+
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
 }

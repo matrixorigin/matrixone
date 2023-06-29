@@ -126,6 +126,7 @@ func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch, pkId
 		}
 		for i, delBatch := range delBatches {
 			collectBatchInfo(proc, arg, delBatch, 0, i, pkIdx, pkName)
+			delBatch.Clean(proc.Mp())
 		}
 	} else {
 		collectBatchInfo(proc, arg, srcBat, arg.DeleteCtx.RowIdIdx, 0, pkIdx, pkName)

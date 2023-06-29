@@ -273,6 +273,24 @@ func TestMOSpan_End(t *testing.T) {
 	require.Equal(t, true, deadlineSpan.(*MOSpan).needRecord)
 	require.Equal(t, 1, len(deadlineSpan.(*MOSpan).ExtraFields))
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan.(*MOSpan).ExtraFields)
+
+	// span with deadline context (plus calling cancel2() before func return)
+	deadlineCtx2, cancel2 := context.WithTimeout(ctx, time.Millisecond)
+	defer cancel()
+	var deadlineSpan2 trace.Span
+	WG.Add(1)
+	go func() {
+		_, deadlineSpan2 = tracer.Start(deadlineCtx2, "deadlineCtx")
+		defer WG.Done()
+		defer deadlineSpan2.End()
+
+		time.Sleep(10 * time.Millisecond)
+		cancel2()
+	}()
+	WG.Wait()
+	require.Equal(t, true, deadlineSpan2.(*MOSpan).needRecord)
+	require.Equal(t, 1, len(deadlineSpan2.(*MOSpan).ExtraFields))
+	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan2.(*MOSpan).ExtraFields)
 }
 
 type dummyFileWriterFactory struct{}

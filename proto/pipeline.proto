@@ -92,6 +92,7 @@ message Insert{
   repeated string partition_table_names = 7;
   int32 partition_idx = 8;
   bool is_end         = 9;
+  plan.TableDef table_def = 10;
 }
 
 message Array{

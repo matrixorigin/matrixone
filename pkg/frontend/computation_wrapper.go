@@ -194,6 +194,27 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.GetTxnHandler().AttachTempStorageToTxnCtx()
 	}
+
+	txnHandler := cwft.ses.GetTxnHandler()
+	var txnCtx context.Context
+	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+	if err != nil {
+		return nil, err
+	}
+
+	// Increase the statement ID and update snapshot TS before build plan, because the
+	// snapshot TS is used when build plan.
+	// NB: In internal executor, we should also do the same action, which is increasing
+	// statement ID and updating snapshot TS.
+	// See `func (exec *txnExecutor) Exec(sql string)` for details.
+	txnOp := cwft.GetProcess().TxnOperator
+	if txnOp != nil {
+		err := txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
@@ -230,7 +251,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// The default count is 1. Setting it to 2 ensures that memory will not be reclaimed.
 		//  Convenient to reuse memory next time
 		if prepareStmt.InsertBat != nil {
-			prepareStmt.InsertBat.SetCnt(2)
+			prepareStmt.InsertBat.SetCnt(1000) //we will make sure :  when retry in lock error, we will not clean up this batch
 			cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
 			cwft.proc.SetPrepareExprList(prepareStmt.exprList)
 		}
@@ -288,12 +309,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		*/
 	}
 
-	txnHandler := cwft.ses.GetTxnHandler()
-	var txnCtx context.Context
-	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-	if err != nil {
-		return nil, err
-	}
 	addr := ""
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
 		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr

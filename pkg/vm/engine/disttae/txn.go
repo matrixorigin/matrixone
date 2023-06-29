@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -207,11 +209,21 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 		return nil, nil, err
 	}
 	s3Writer := &colexec.S3Writer{}
+	s3Writer.SetTableName(tbl.GetTableName())
 	s3Writer.SetSortIdx(-1)
 	s3Writer.Init(txn.proc)
 	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
 		s3Writer.SetSortIdx(sortIdx)
+	}
+	tdefs, err := tbl.TableDefs(txn.proc.Ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, def := range tdefs {
+		if attr, ok := def.(*engine.VersionDef); ok {
+			s3Writer.SetSchemaVer(attr.Version)
+		}
 	}
 	return s3Writer, tbl, nil
 }
@@ -494,4 +506,82 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 		writes = append(writes, entry)
 	}
 	return writes
+}
+
+// getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
+// Before it gets the cached table, it checks whether the table is deleted by another
+// transaction by go through the delete tables slice, and advance its cachedIndex.
+func (txn *Transaction) getCachedTable(
+	ctx context.Context, k tableKey, snapshotTS timestamp.Timestamp,
+) *txnTable {
+	if txn.meta.IsRCIsolation() {
+		oldIdx := txn.tableCache.cachedIndex
+		newIdx := txn.engine.catalog.GetDeletedTableIndex()
+		if oldIdx < newIdx {
+			deleteTables := txn.engine.catalog.GetDeletedTables(oldIdx, snapshotTS)
+			for _, item := range deleteTables {
+				txn.tableCache.tableMap.Delete(genTableKey(ctx, item.Name, item.DatabaseId))
+				txn.tableCache.cachedIndex++
+			}
+		}
+	}
+	if v, ok := txn.tableCache.tableMap.Load(k); ok {
+		return v.(*txnTable)
+	}
+	return nil
+}
+
+func (txn *Transaction) Commit(ctx context.Context) error {
+	logDebugf(txn.op.Txn(), "Transaction.Commit")
+	txn.IncrStatementID(ctx, true)
+	defer txn.delTransaction()
+	if txn.readOnly.Load() {
+		return nil
+	}
+	if err := txn.mergeTxnWorkspace(); err != nil {
+		return err
+	}
+	if err := txn.dumpBatch(true, 0); err != nil {
+		return err
+	}
+	reqs, err := genWriteReqs(ctx, txn.writes)
+	if err != nil {
+		return err
+	}
+	_, err = txn.op.Write(ctx, reqs)
+	return err
+}
+
+func (txn *Transaction) Rollback(ctx context.Context) error {
+	logDebugf(txn.op.Txn(), "Transaction.Rollback")
+	txn.delTransaction()
+	return nil
+}
+
+func (txn *Transaction) delTransaction() {
+	for i := range txn.writes {
+		if txn.writes[i].bat == nil {
+			continue
+		}
+		txn.proc.PutBatch(txn.writes[i].bat)
+	}
+	txn.tableCache.cachedIndex = -1
+	txn.tableCache.tableMap = nil
+	txn.createMap = nil
+	txn.databaseMap = nil
+	txn.deletedTableMap = nil
+	txn.blockId_dn_delete_metaLoc_batch = nil
+	txn.blockId_raw_batch = nil
+	txn.deletedBlocks = nil
+	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
+	segmentnames = append(segmentnames, txn.segId)
+	for blkId := range txn.cnBlkId_Pos {
+		// blkId:
+		// |------|----------|----------|
+		//   uuid    filelen   blkoffset
+		//    16        2          2
+		segmentnames = append(segmentnames, *blkId.Segment())
+	}
+	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
+	txn.cnBlkId_Pos = nil
 }
