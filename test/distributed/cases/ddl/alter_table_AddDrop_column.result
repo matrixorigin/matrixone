@@ -1,6 +1,25 @@
 drop database if exists test;
 create database test;
 use test;
+drop table if exists s3t;
+create table s3t (a int, b int, c int, primary key(a, b));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+alter table s3t add column d int after b;
+insert into s3t values (300001, 34, 23, 1);
+select count(*) from s3t;
+count(*)
+30001
+select * from s3t where d = 23;
+a    b    d    c
+300001    34    23    1
+alter table s3t drop column c;
+insert into s3t select result, 2, 12 from generate_series(30002, 60000, 1) g;
+select count(d) from s3t;
+count(d)
+30000
+select count(d) from s3t where d > 13;
+count(d)
+1
 drop table if exists add01;
 create table add01 (
 col1 int not null auto_increment primary key,
@@ -23,9 +42,9 @@ Table    Create Table
 add01    CREATE TABLE `add01` (\n`col9` INT DEFAULT NULL,\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(30) NOT NULL,\n`col2_3` VARCHAR(20) DEFAULT NULL,\n`col3` VARCHAR(20) NOT NULL,\n`col4` VARCHAR(4) NOT NULL,\n`col5` INT NOT NULL,\n`col7` VARCHAR(30) DEFAULT NULL,\n`col8` INT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 insert into add01 values(1,3,'nihao','hei','hu','jj',2,'varchar',1);
 insert into add01 values(2,3,'nihao',null,'hu','jj',2,'varchar',1);
-[unknown result because it is related to issue#8740]
+
 insert into add01 values(3,4,'nihao','hi','hu','jj',2,'varchar',null);
-[unknown result because it is related to issue#8740]
+
 show create table add01;
 Table    Create Table
 add01    CREATE TABLE `add01` (\n`col9` INT DEFAULT NULL,\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(30) NOT NULL,\n`col2_3` VARCHAR(20) DEFAULT NULL,\n`col3` VARCHAR(20) NOT NULL,\n`col4` VARCHAR(4) NOT NULL,\n`col5` INT NOT NULL,\n`col7` VARCHAR(30) DEFAULT NULL,\n`col8` INT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
@@ -393,19 +412,19 @@ show create table update01;
 Table    Create Table
 update01    CREATE TABLE `update01` (\n`col1` INT DEFAULT NULL,\n`col1_2` BINARY(1) DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` VARCHAR(20) DEFAULT NULL,\n`col5` BLOB DEFAULT NULL\n)
 insert into update01 values(1,'1',3,'ew83u829d3qcefq','q3829ff2e3qe');
-[unknown result because it is related to issue#10093]
+
 insert into update01 values(2,'3',6,'3214()_)_)','00');
-[unknown result because it is related to issue#10093]
+
 select * from update01;
-[unknown result because it is related to issue#10093]
+
 update update01 set col1 = 100 where col1 = 1;
-[unknown result because it is related to issue#10093]
+
 update update01 set col5 = '2798u3d3frew' where col2 = 6;
-[unknown result because it is related to issue#10093]
+
 delete from update01 where col1_2 is null;
-[unknown result because it is related to issue#10093]
+
 drop table update01;
-[unknown result because it is related to issue#10093]
+
 drop table if exists rename01;
 drop table if exists rename02;
 create table rename01(a int,b int);
