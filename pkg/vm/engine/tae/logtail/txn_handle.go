@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -298,7 +299,12 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		return
 	}
 	apiBat, err := containersBatchToProtoBatch(bat)
-	logutil.Debugf("[logtail] from table %d-%s, delete %v, batch length %d @%s", tid, tableName, delete, bat.Length(), b.txn.GetPrepareTS().ToString())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf(
+			"[logtail] from table %d-%s, delete %v, batch length %d @%s",
+			tid, tableName, delete, bat.Length(), b.txn.GetPrepareTS().ToString(),
+		)
+	})
 	if err != nil {
 		panic(err)
 	}

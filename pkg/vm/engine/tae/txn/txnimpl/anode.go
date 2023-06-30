@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -136,14 +135,17 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 }
 
 func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	var col *vector.Vector
-	if col, err = objectio.ConstructRowidColumn(
-		&n.meta.ID, startRow, length, common.DefaultAllocator,
+	col := n.table.store.rt.VectorPool.Transient.GetVector(&objectio.RowidType)
+	if err = objectio.ConstructRowidColumnTo(
+		col.GetDownstreamVector(),
+		&n.meta.ID, startRow, length,
+		col.GetAllocator(),
 	); err != nil {
+		col.Close()
 		return
 	}
-	err = n.data.Vecs[n.table.GetLocalSchema().PhyAddrKey.Idx].ExtendVec(col)
-	col.Free(common.DefaultAllocator)
+	err = n.data.Vecs[n.table.GetLocalSchema().PhyAddrKey.Idx].ExtendVec(col.GetDownstreamVector())
+	col.Close()
 	return
 }
 
