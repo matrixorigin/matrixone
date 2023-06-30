@@ -159,7 +159,7 @@ func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (ordered
 		}
 	}
 	for _, t := range tasks {
-		if time.Now().Sub(time.UnixMilli(t.LastHeartbeat)) > taskSchedulerDefaultTimeout {
+		if time.Since(time.UnixMilli(t.LastHeartbeat)) > taskSchedulerDefaultTimeout {
 			for _, e := range expired {
 				if t.ID == e.ID {
 					break
