@@ -2901,6 +2901,28 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `purge_log`
+	{
+		functionId: PURGE_LOG,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInPurgeLog
+				},
+			},
+		},
+	},
+
 	// function `month`
 	{
 		functionId: MONTH,
