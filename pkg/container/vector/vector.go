@@ -3081,13 +3081,13 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 
 func BuildVarlenaNoCopy(vec *Vector, v1, v2 *types.Varlena, area2 *[]byte, m *mpool.MPool) error {
 	vlen := int((*v2)[0])
-	bs := v2.GetByteSlice(*area2)
 	if vlen <= types.VarlenaInlineSize {
-		v1[0] = byte(vlen)
-		copy(v1[1:1+vlen], bs)
+		*v1 = *v2
 		return nil
 	}
 
+	bs := v2.GetByteSlice(*area2)
+	vlen = len(bs)
 	area1 := vec.GetArea()
 	voff := len(area1)
 	if voff+vlen < cap(area1) || m == nil {
