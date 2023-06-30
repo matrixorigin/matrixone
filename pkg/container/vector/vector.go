@@ -3082,7 +3082,7 @@ func BuildVarlenaInline(vec *Vector, v1, v2 *types.Varlena) error {
 	// use three dword operation to improve performance
 	p1 := v1.UnsafePtr()
 	p2 := v2.UnsafePtr()
-	*(**[3]int64)(p1) = *(**[3]int64)(p2)
+	*(*[3]int64)(p1) = *(*[3]int64)(p2)
 	return nil
 }
 
@@ -3108,7 +3108,7 @@ func BuildVarlenaNoInline(vec *Vector, v1, v2 *types.Varlena, area2 *[]byte, m *
 }
 
 func BuildVarlenaFast(vec *Vector, v1, v2 *types.Varlena, area2 *[]byte, m *mpool.MPool) error {
-	if area2 == nil {
+	if (*v2)[0] <= types.VarlenaInlineSize {
 		return BuildVarlenaInline(vec, v1, v2)
 	}
 	return BuildVarlenaNoInline(vec, v1, v2, area2, m)
