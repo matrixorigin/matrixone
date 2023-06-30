@@ -123,7 +123,7 @@ func SetDBConn(conn *sql.DB) {
 }
 
 func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
-
+	logger := getLogger()
 	initFunc := func() error {
 		dbMux.Lock()
 		defer dbMux.Unlock()
@@ -158,10 +158,10 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	if forceNewConn || db.Load() == nil {
 		err := initFunc()
 		if err != nil {
-			logutil.Error("sqlWriter db init failed", zap.Error(err))
+			logger.Error("sqlWriter db init failed", zap.Error(err))
 			return nil, err
 		}
-		logutil.Debug("sqlWriter db init", zap.Bool("force", forceNewConn), zap.Bool("randomCN", randomCN), zap.String("db", fmt.Sprintf("%v", db.Load())))
+		logger.Debug("sqlWriter db init", zap.Bool("force", forceNewConn), zap.Bool("randomCN", randomCN), zap.String("db", fmt.Sprintf("%v", db.Load())))
 	}
 	dbConn := db.Load().(*sql.DB)
 	return dbConn, nil
@@ -417,7 +417,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	}
 
 	if err = tx.Commit(); err != nil {
-		logger.Error("sqlWriter commit failed", logutil.ErrorField(err))
+		logger.Error("sqlWriter commit failed", zap.Error(err))
 		tx.Rollback()
 		return moerr.ConvertGoError(ctx, err)
 	}
@@ -432,7 +432,7 @@ func getLogger() *log.MOLogger {
 		} else {
 			moLogger = rt.Logger()
 		}
-		moLogger = moLogger.With(logutil.Discardable())
+		moLogger = moLogger.Named("etl/db_holder").With(logutil.Discardable())
 	})
 	return moLogger
 }
