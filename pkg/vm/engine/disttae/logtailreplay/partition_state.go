@@ -406,8 +406,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, tableId uint6
 
 			p.blocks.Set(blockEntry)
 
-			if entryStateVector[i] ||
-				(!entryStateVector[i] && len(blockEntry.DeltaLoc) != 0) {
+			{
 				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
 					BlockID: blockID,
@@ -417,20 +416,45 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, tableId uint6
 					if entry.BlockID != blockID {
 						break
 					}
-					// delete row entry
-					p.rows.Delete(entry)
-					numDeleted++
-					// delete primary index entry
-					if len(entry.PrimaryIndexBytes) > 0 {
-						p.primaryIndex.Delete(&PrimaryIndexEntry{
-							Bytes:      entry.PrimaryIndexBytes,
-							RowEntryID: entry.ID,
-						})
+					//it's tricky here.
+					//Due to consuming lazily the checkpoint,
+					//we have to take the following scenario into account:
+					//1. CN receives deletes for a non-appendable block from the log tail,
+					//   then apply the deletes into PartitionState.rows.
+					//2. CN receives block meta of the above non-appendable block to be inserted
+					//   from the checkpoint, then apply the block meta into PartitionState.blocks.
+					// So , if the above scenario happens, we need to set the non-appendable block into
+					// PartitionState.dirtyBlocks.
+					if !entryStateVector[i] && blockEntry.DeltaLocation().IsEmpty() {
+						//if entry.Deleted {
+						p.dirtyBlocks.Set(blockEntry)
+						//}
+						//for better performance, we can break here.
+						break
+					}
+
+					// if the inserting block is appendable, need to delete the rows for it;
+					// if the inserting block is non-appendable and has delta location, need to delete
+					// the deletes for it.
+					if entryStateVector[i] ||
+						(!entryStateVector[i] && !blockEntry.DeltaLocation().IsEmpty()) {
+						p.rows.Delete(entry)
+						numDeleted++
+
+					}
+					if entryStateVector[i] {
+						if len(entry.PrimaryIndexBytes) > 0 {
+							p.primaryIndex.Delete(&PrimaryIndexEntry{
+								Bytes:      entry.PrimaryIndexBytes,
+								RowEntryID: entry.ID,
+							})
+						}
 					}
 				}
 				iter.Release()
-				//delete dirty non-appendable block
-				if !entryStateVector[i] {
+				//if the inserting block is non-appendable and has delta location,
+				//then delete it from the dirtyBlocks.
+				if !entryStateVector[i] && !blockEntry.DeltaLocation().IsEmpty() {
 					p.dirtyBlocks.Delete(blockEntry)
 				}
 			}
