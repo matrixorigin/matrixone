@@ -3078,12 +3078,13 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 	return
 }
 
-func BuildVarlenaInline(vec *Vector, v1, v2 *types.Varlena) error {
+func BuildVarlenaInline(v1, v2 *types.Varlena) {
 	// use three dword operation to improve performance
 	p1 := v1.UnsafePtr()
 	p2 := v2.UnsafePtr()
-	*(*[3]int64)(p1) = *(*[3]int64)(p2)
-	return nil
+	*(*int64)(p1) = *(*int64)(p2)
+	*(*int64)(unsafe.Add(p1, 8)) = *(*int64)(unsafe.Add(p2, 8))
+	*(*int64)(unsafe.Add(p1, 16)) = *(*int64)(unsafe.Add(p2, 16))
 }
 
 func BuildVarlenaNoInline(vec *Vector, v1, v2 *types.Varlena, area2 *[]byte, m *mpool.MPool) error {
@@ -3109,7 +3110,8 @@ func BuildVarlenaNoInline(vec *Vector, v1, v2 *types.Varlena, area2 *[]byte, m *
 
 func BuildVarlenaFast(vec *Vector, v1, v2 *types.Varlena, area2 *[]byte, m *mpool.MPool) error {
 	if (*v2)[0] <= types.VarlenaInlineSize {
-		return BuildVarlenaInline(vec, v1, v2)
+		BuildVarlenaInline(v1, v2)
+		return nil
 	}
 	return BuildVarlenaNoInline(vec, v1, v2, area2, m)
 }
