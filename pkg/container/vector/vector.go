@@ -1398,7 +1398,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				if nulls.Contains(&w.nsp, uint64(i)) {
 					nulls.Add(&v.nsp, uint64(v.length))
 				} else {
-					err = BuildVarlenaNoCopy(v, &va, ws[i].GetByteSlice(w.area), mp)
+					err = BuildVarlenaNoCopy(v, &va, &ws[i], &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -1977,8 +1977,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	if v.GetType().IsVarlen() {
 		var err error
-		bs := w.col.([]types.Varlena)[sel].GetByteSlice(w.area)
-		err = BuildVarlenaNoCopy(v, &v.col.([]types.Varlena)[oldLen], bs, mp)
+		err = BuildVarlenaNoCopy(v, &v.col.([]types.Varlena)[oldLen], &(w.col.([]types.Varlena)[sel]), &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2016,8 +2015,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	if v.GetType().IsVarlen() {
 		var err error
 		var va types.Varlena
-		bs := w.col.([]types.Varlena)[sel].GetByteSlice(w.area)
-		err = BuildVarlenaNoCopy(v, &va, bs, mp)
+		err = BuildVarlenaNoCopy(v, &va, &(w.col.([]types.Varlena)[sel]), &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2052,8 +2050,7 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			bs := w.col.([]types.Varlena)[0].GetByteSlice(w.area)
-			err = BuildVarlenaNoCopy(v, &va, bs, mp)
+			err = BuildVarlenaNoCopy(v, &va, &(w.col.([]types.Varlena)[0]), &w.area, mp)
 			if err != nil {
 				return err
 			}
@@ -2142,8 +2139,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			bs := w.col.([]types.Varlena)[0].GetByteSlice(w.area)
-			err = BuildVarlenaNoCopy(v, &va, bs, mp)
+			err = BuildVarlenaNoCopy(v, &va, &(w.col.([]types.Varlena)[0]), &w.area, mp)
 			if err != nil {
 				return err
 			}
@@ -2171,8 +2167,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
-						bs := wCol[int(offset)+i].GetByteSlice(w.area)
-						err = BuildVarlenaNoCopy(v, &vCol[v.length], bs, mp)
+						err = BuildVarlenaNoCopy(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
 						if err != nil {
 							return err
 						}
@@ -2187,8 +2182,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
-						bs := wCol[int(offset)+i].GetByteSlice(w.area)
-						err = BuildVarlenaNoCopy(v, &vCol[v.length], bs, mp)
+						err = BuildVarlenaNoCopy(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
 						if err != nil {
 							return err
 						}
@@ -2199,8 +2193,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
-					bs := wCol[int(offset)+i].GetByteSlice(w.area)
-					err = BuildVarlenaNoCopy(v, &vCol[v.length], bs, mp)
+					err = BuildVarlenaNoCopy(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -2211,8 +2204,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if flags[i] == 0 {
 						continue
 					}
-					bs := wCol[int(offset)+i].GetByteSlice(w.area)
-					err = BuildVarlenaNoCopy(v, &vCol[v.length], bs, mp)
+					err = BuildVarlenaNoCopy(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -3087,29 +3079,29 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 	return
 }
 
-func BuildVarlenaNoCopy(vec *Vector, v *types.Varlena, bs []byte, m *mpool.MPool) error {
-	vlen := len(bs)
+func BuildVarlenaNoCopy(vec *Vector, v1, v2 *types.Varlena, area2 *[]byte, m *mpool.MPool) error {
+	vlen := int((*v2)[0])
 	if vlen <= types.VarlenaInlineSize {
-		v[0] = byte(vlen)
-		copy(v[1:1+vlen], bs)
+		*v1 = *v2
 		return nil
 	}
 
-	area := vec.GetArea()
-	voff := len(area)
-	if voff+vlen < cap(area) || m == nil {
-		area = append(area, bs...)
-		v.SetOffsetLen(uint32(voff), uint32(vlen))
-		vec.SetArea(area)
+	bs := v2.GetByteSlice(*area2)
+	area1 := vec.GetArea()
+	voff := len(area1)
+	if voff+vlen < cap(area1) || m == nil {
+		area1 = append(area1, bs...)
+		v1.SetOffsetLen(uint32(voff), uint32(vlen))
+		vec.SetArea(area1)
 		return nil
 	}
 
 	var err error
-	area, err = m.Grow2(area, bs, voff+vlen)
+	area1, err = m.Grow2(area1, bs, voff+vlen)
 	if err != nil {
 		return err
 	}
-	v.SetOffsetLen(uint32(voff), uint32(vlen))
-	vec.SetArea(area)
+	v1.SetOffsetLen(uint32(voff), uint32(vlen))
+	vec.SetArea(area1)
 	return nil
 }
