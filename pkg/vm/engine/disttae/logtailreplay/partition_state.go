@@ -410,7 +410,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					//   from the checkpoint, then apply the block meta into PartitionState.blocks.
 					// So , if the above scenario happens, we need to set the non-appendable block into
 					// PartitionState.dirtyBlocks.
-					if !entryStateVector[i] && len(blockEntry.DeltaLoc) == 0 {
+					if !entryStateVector[i] && blockEntry.DeltaLocation().IsEmpty() {
 						//if entry.Deleted {
 						p.dirtyBlocks.Set(blockEntry)
 						//}
@@ -422,7 +422,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					// if the inserting block is non-appendable and has delta location, need to delete
 					// the deletes for it.
 					if entryStateVector[i] ||
-						(!entryStateVector[i] && len(blockEntry.DeltaLoc) != 0) {
+						(!entryStateVector[i] && !blockEntry.DeltaLocation().IsEmpty()) {
 						p.rows.Delete(entry)
 						numDeleted++
 
@@ -439,7 +439,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				iter.Release()
 				//if the inserting block is non-appendable and has delta location,
 				//then delete it from the dirtyBlocks.
-				if !entryStateVector[i] && len(blockEntry.DeltaLoc) != 0 {
+				if !entryStateVector[i] && !blockEntry.DeltaLocation().IsEmpty() {
 					p.dirtyBlocks.Delete(blockEntry)
 				}
 			}
