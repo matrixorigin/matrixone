@@ -237,12 +237,21 @@ func (w *waiter) wait(
 
 	w.beforeSwapStatusAdjustFunc()
 
-	select {
-	case v := <-w.c:
+	apply := func(v notifyValue) {
 		logWaiterGetNotify(serviceID, w, v)
 		w.setStatus(serviceID, completed)
+	}
+	select {
+	case v := <-w.c:
+		apply(v)
 		return v
 	case <-ctx.Done():
+		select {
+		case v := <-w.c:
+			apply(v)
+			return v
+		default:
+		}
 	}
 
 	w.beforeSwapStatusAdjustFunc()
@@ -364,4 +373,8 @@ func (w *waiter) reset(serviceID string) {
 type notifyValue struct {
 	err error
 	ts  timestamp.Timestamp
+}
+
+func (v notifyValue) String() string {
+	return fmt.Sprintf("ts %s, error %+v", v.ts.DebugString(), v.err)
 }
