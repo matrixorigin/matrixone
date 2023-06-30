@@ -68,9 +68,10 @@ func newPool(size int) *pool {
 func alloc[T any](p *pool) *T {
 	var v T
 
-	sz := round(int(unsafe.Sizeof(v) + WordSize))
-	if data := p.alloc(sz); data != nil {
-		return (*T)(unsafe.Pointer(&data[0]))
+	if sz := round(int(unsafe.Sizeof(v) + WordSize)); sz < PageSize {
+		if data := p.alloc(sz); data != nil {
+			return (*T)(unsafe.Pointer(&data[0]))
+		}
 	}
 	return new(T)
 }
@@ -102,7 +103,7 @@ func (ck *chunk) alloc(sz int) []byte {
 		pg := &ck.pages[i]
 		if slotSize := atomic.LoadInt64(&pg.slotSize); slotSize == -1 {
 			for { // ensure that only one caller has exclusive access to this page
-				if atomic.CompareAndSwapInt64(&pg.slotSize, -1, int64(sz)) {
+				if atomic.CompareAndSwapInt64(&pg.slotSize, -1, 0) {
 					pg.init(sz)
 					return pg.alloc()
 				}
@@ -148,12 +149,12 @@ func newPage(data []byte) page {
 
 func (pg *page) init(sz int) {
 	atomic.StoreInt64(&pg.head, -1)
-	atomic.StoreInt64(&pg.slotSize, int64(sz))
 	for i := 0; i+sz < PageSize; i += sz {
 		atomic.StoreInt64((*int64)(unsafe.Pointer(&pg.data[i])),
 			atomic.LoadInt64(&pg.head))
 		atomic.StoreInt64(&pg.head, int64(i))
 	}
+	atomic.StoreInt64(&pg.slotSize, int64(sz))
 }
 
 func (pg *page) alloc() []byte {

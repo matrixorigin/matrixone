@@ -15,25 +15,37 @@
 package mpool
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
-func BenchmarkPool(b *testing.B) {
-	cl := newPool(100 << 20)
+type node plan.Node
+
+func runPool[T any](p *pool, b *testing.B, routines int,
+	allocs int, allocStep int, withGC bool) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var wg sync.WaitGroup
 		run := func() {
 			defer wg.Done()
-			for i := 0; i < 1000; i++ {
-				v := alloc[int64](cl)
-				free(cl, v)
+			vs := make([]*T, allocStep)
+			for i := 0; i < allocs; i += allocStep {
+				for j := 0; j < allocStep; j++ {
+					vs[j] = alloc[T](p)
+				}
+				for j := range vs {
+					free(p, vs[j])
+				}
+				if withGC {
+					runtime.GC()
+				}
 			}
 		}
-		for i := 0; i < 800; i++ {
+		for i := 0; i < routines; i++ {
 			wg.Add(1)
 			go run()
 		}
@@ -41,30 +53,152 @@ func BenchmarkPool(b *testing.B) {
 	}
 }
 
-func BenchmarkMP(b *testing.B) {
-	pool, err := NewMPool("default", 0, 0, 0)
-	if err != nil {
-		panic(err)
-	}
+func runSyncpool[T any](p *sync.Pool, b *testing.B, routines int,
+	allocs int, allocStep int, withGC bool) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var wg sync.WaitGroup
 		run := func() {
 			defer wg.Done()
-			for i := 0; i < 1000; i++ {
-				buf, err := pool.Alloc(8)
-				if err != nil {
-					panic(err)
+			vs := make([]*T, allocStep)
+			for i := 0; i < allocs; i += allocStep {
+				for j := 0; j < allocStep; j++ {
+					vs[j] = p.Get().(*T)
 				}
-				pool.Free(buf)
+				for j := range vs {
+					p.Put(vs[j])
+				}
+				if withGC {
+					runtime.GC()
+				}
 			}
 		}
-		for i := 0; i < 800; i++ {
+		for i := 0; i < routines; i++ {
 			wg.Add(1)
 			go run()
 		}
 		wg.Wait()
 	}
+}
+
+func BenchmarkPool(b *testing.B) {
+	p := newPool(0)
+	b.Run("pool_1_10000_1_withoutGC", func(b *testing.B) {
+		runPool[node](p, b, 1, 10000, 1, false)
+	})
+	b.Run("pool_1_10000_100_withoutGC", func(b *testing.B) {
+		runPool[node](p, b, 1, 10000, 100, false)
+	})
+	b.Run("pool_1_10000_1000_withoutGC", func(b *testing.B) {
+		runPool[node](p, b, 1, 10000, 1000, false)
+	})
+	b.Run("pool_10_10000_1_withoutGC", func(b *testing.B) {
+		runPool[node](p, b, 10, 10000, 1, false)
+	})
+	b.Run("pool_10_10000_100_withoutGC", func(b *testing.B) {
+		runPool[node](p, b, 10, 10000, 100, false)
+	})
+	b.Run("pool_10_10000_1000_withoutGC", func(b *testing.B) {
+		runPool[node](p, b, 10, 10000, 1000, false)
+	})
+	b.Run("pool_100_10000_1_withoutGC", func(b *testing.B) {
+		runPool[node](p, b, 100, 10000, 1, false)
+	})
+	b.Run("pool_100_10000_100_withoutGC", func(b *testing.B) {
+		runPool[node](p, b, 100, 10000, 100, false)
+	})
+	b.Run("pool_100_10000_1000_withoutGC", func(b *testing.B) {
+		runPool[node](p, b, 100, 10000, 1000, false)
+	})
+	b.Run("pool_1_10000_1_withGC", func(b *testing.B) {
+		runPool[node](p, b, 1, 10000, 1, true)
+	})
+	b.Run("pool_1_10000_100_withGC", func(b *testing.B) {
+		runPool[node](p, b, 1, 10000, 100, true)
+	})
+	b.Run("pool_1_10000_1000_withGC", func(b *testing.B) {
+		runPool[node](p, b, 1, 10000, 1000, true)
+	})
+	b.Run("pool_10_10000_1_withGC", func(b *testing.B) {
+		runPool[node](p, b, 10, 10000, 1, true)
+	})
+	b.Run("pool_10_10000_100_withGC", func(b *testing.B) {
+		runPool[node](p, b, 10, 10000, 100, true)
+	})
+	b.Run("pool_10_10000_1000_withGC", func(b *testing.B) {
+		runPool[node](p, b, 10, 10000, 1000, true)
+	})
+	b.Run("pool_100_10000_1_withGC", func(b *testing.B) {
+		runPool[node](p, b, 100, 10000, 1, true)
+	})
+	b.Run("pool_100_10000_100_withGC", func(b *testing.B) {
+		runPool[node](p, b, 100, 10000, 100, true)
+	})
+	b.Run("pool_100_10000_1000_withGC", func(b *testing.B) {
+		runPool[node](p, b, 100, 10000, 1000, true)
+	})
+}
+
+func BenchmarkSyncPool(b *testing.B) {
+	var p = &sync.Pool{
+		New: func() any {
+			return new(node)
+		},
+	}
+	b.Run("pool_1_10000_1_withoutGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 1, 10000, 1, false)
+	})
+	b.Run("pool_1_10000_100_withoutGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 1, 10000, 100, false)
+	})
+	b.Run("pool_1_10000_1000_withoutGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 1, 10000, 1000, false)
+	})
+	b.Run("pool_10_10000_1_withoutGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 10, 10000, 1, false)
+	})
+	b.Run("pool_10_10000_100_withoutGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 10, 10000, 100, false)
+	})
+	b.Run("pool_10_10000_1000_withoutGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 10, 10000, 1000, false)
+	})
+	b.Run("pool_100_10000_1_withoutGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 100, 10000, 1, false)
+	})
+	b.Run("pool_100_10000_100_withoutGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 100, 10000, 100, false)
+	})
+	b.Run("pool_100_10000_1000_withoutGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 100, 10000, 1000, false)
+	})
+	b.Run("pool_1_10000_1_withGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 1, 10000, 1, true)
+	})
+	b.Run("pool_1_10000_100_withGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 1, 10000, 100, true)
+	})
+	b.Run("pool_1_10000_1000_withGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 1, 10000, 1000, true)
+	})
+	b.Run("pool_10_10000_1_withGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 10, 10000, 1, true)
+	})
+	b.Run("pool_10_10000_100_withGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 10, 10000, 100, true)
+	})
+	b.Run("pool_10_10000_1000_withGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 10, 10000, 1000, true)
+	})
+	b.Run("pool_100_10000_1_withGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 100, 10000, 1, true)
+	})
+	b.Run("pool_100_10000_100_withGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 100, 10000, 100, true)
+	})
+	b.Run("pool_100_10000_1000_withGC", func(b *testing.B) {
+		runSyncpool[node](p, b, 100, 10000, 1000, true)
+	})
 }
 
 func TestPool(t *testing.T) {
