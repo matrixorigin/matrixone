@@ -685,6 +685,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 			blk.Insert(un)
 			blk.location = un.BaseNode.MetaLoc
 		}
+		blk.blkData.TryUpgrade()
 		return
 	}
 	blk = NewReplayBlockEntry()
@@ -693,7 +694,11 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	blk.BaseEntryImpl.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
 	blk.segment = seg
-	blk.blkData = dataFactory.MakeBlockFactory()(blk)
+	if blk.blkData == nil {
+		blk.blkData = dataFactory.MakeBlockFactory()(blk)
+	} else {
+		blk.blkData.TryUpgrade()
+	}
 	if observer != nil {
 		observer.OnTimeStamp(prepareTS)
 	}
@@ -765,7 +770,6 @@ func (catalog *Catalog) onReplayCreateBlock(
 		blk.segment = seg
 		blk.ID = *blkid
 		blk.state = state
-		blk.blkData = dataFactory.MakeBlockFactory()(blk)
 		seg.ReplayAddEntryLocked(blk)
 		un = &MVCCNode[*MetadataMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
@@ -796,6 +800,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 	}
 	blk.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
+	blk.blkData = dataFactory.MakeBlockFactory()(blk)
 }
 func (catalog *Catalog) onReplayDeleteBlock(
 	dbid, tid uint64,
@@ -852,6 +857,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 	}
 	blk.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
+	blk.blkData.TryUpgrade()
 }
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)
