@@ -124,7 +124,7 @@ func checkPartitionExprValid(ctx context.Context, tblInfo *plan.TableDef, expr t
 	return nil
 }
 
-// buildPartitionColumns enables the use of multiple columns in partitioning keys
+// buildPartitionExpr enables the use of multiple columns in partitioning keys
 func buildPartitionExpr(ctx context.Context, tblInfo *plan.TableDef, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, pExpr tree.Expr) error {
 	if err := checkPartitionExprValid(ctx, tblInfo, pExpr); err != nil {
 		return err
@@ -134,12 +134,11 @@ func buildPartitionExpr(ctx context.Context, tblInfo *plan.TableDef, partitionBi
 		return err
 	}
 	// TODO: format partition expression
-	//fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
-	//pExpr.Format(fmtCtx)
-	//exprStr := fmtCtx.ToString()
+	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
+	pExpr.Format(fmtCtx)
+	exprStr := fmtCtx.ToString()
 
 	// Temporary operation
-	exprStr := tree.String(pExpr, dialect.MYSQL)
 	partitionDef.PartitionExpr = &plan.PartitionExpr{
 		Expr:    planExpr,
 		ExprStr: exprStr,
@@ -195,7 +194,9 @@ func buildPartitionColumns(ctx context.Context, partitionBinder *PartitionBinder
 	var err error
 	columnsExpr := make([]*plan.Expr, len(columnList))
 	partitionColumns := make([]string, len(columnList))
+	partitionFmtColumns := make([]string, len(columnList))
 
+	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
 	// partition COLUMNS does not accept expressions, only names of columns.
 	for i, column := range columnList {
 		columnsExpr[i], err = partitionBinder.BindColRef(column, 0, true)
@@ -204,7 +205,7 @@ func buildPartitionColumns(ctx context.Context, partitionBinder *PartitionBinder
 		}
 		t := types.T(columnsExpr[i].Typ.Id)
 		columnName := tree.String(column, dialect.MYSQL)
-		//
+
 		if partitionDef.Type == plan.PartitionType_KEY || partitionDef.Type == plan.PartitionType_LINEAR_KEY {
 			// When partitioning by [LINEAR] KEY, it is possible to use columns of any valid MySQL data type other than TEXT or BLOB
 			// as partitioning keys, because MySQL's internal key-hashing functions produce the correct data type from these types.
@@ -227,10 +228,15 @@ func buildPartitionColumns(ctx context.Context, partitionBinder *PartitionBinder
 			}
 		}
 		partitionColumns[i] = columnName
+
+		column.Format(fmtCtx)
+		partitionFmtColumns[i] = fmtCtx.ToString()
+		fmtCtx.Reset()
 	}
 	partitionDef.PartitionColumns = &plan.PartitionColumns{
-		Columns:          columnsExpr,
-		PartitionColumns: partitionColumns,
+		Columns:             columnsExpr,
+		PartitionColumns:    partitionColumns,
+		PartitionFmtColumns: partitionFmtColumns,
 	}
 	return nil
 }

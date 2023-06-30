@@ -89,11 +89,6 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 		return err
 	}
 
-	err = buildKeyPartitionExpr(partitionBinder, stmt, partitionDef)
-	if err != nil {
-		return err
-	}
-
 	partitionDef.PartitionMsg = tree.String(partitionSyntaxDef, dialect.MYSQL)
 	tableDef.Partition = partitionDef
 	return nil
@@ -168,45 +163,4 @@ func chooseAvailableUniqueKey(ctx context.Context, tableDef *TableDef, uniqueInd
 		return nil, moerr.NewInvalidInput(ctx, "Field in list of fields for partition function not found in table")
 	}
 	return nil, nil
-}
-
-func buildKeyPartitionExpr(partitionBinder *PartitionBinder, stmt *tree.CreateTable, partitionDef *plan.PartitionByDef) error {
-	partitionOp := stmt.PartitionOption
-	partitionType := partitionOp.PartBy.PType.(*tree.KeyType)
-	keyList := partitionType.ColumnList
-	astExprs := make([]tree.Expr, len(keyList))
-	exprList := make([]*Expr, len(keyList))
-
-	isFirst := true
-	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
-	for i, expr := range keyList {
-		astExprs[i] = expr
-		if isFirst {
-			isFirst = false
-		} else {
-			fmtCtx.WritePlain(",")
-		}
-		expr.Format(fmtCtx)
-
-		planExpr, err := partitionBinder.BindExpr(expr, 0, true)
-		if err != nil {
-			return err
-		}
-		exprList[i] = planExpr
-	}
-	exprStr := fmtCtx.ToString()
-
-	expr := &plan.Expr{
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: exprList,
-			},
-		},
-	}
-
-	partitionDef.PartitionExpr = &plan.PartitionExpr{
-		Expr:    expr,
-		ExprStr: exprStr,
-	}
-	return nil
 }

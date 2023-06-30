@@ -49,7 +49,6 @@ func (hpb *hashPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 	if err != nil {
 		return err
 	}
-	//buildHashPartitionExpr(partitionBinder, partitionType, partitionDef)
 
 	err = hpb.buildPartitionDefs(ctx, partitionBinder, partitionDef, partitionSyntaxDef.Partitions)
 	if err != nil {
@@ -107,22 +106,5 @@ func (hpb *hashPartitionBuilder) buildEvalPartitionExpression(ctx context.Contex
 		return err
 	}
 	partitionDef.PartitionExpression = partitionExpression
-	return nil
-}
-
-func buildHashPartitionExpr(partitionBinder *PartitionBinder, partitionType *tree.HashType, partitionDef *plan.PartitionByDef) error {
-	planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
-	if err != nil {
-		return err
-	}
-
-	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
-	partitionType.Expr.Format(fmtCtx)
-	exprStr := fmtCtx.ToString()
-
-	partitionDef.PartitionExpr = &plan.PartitionExpr{
-		Expr:    planExpr,
-		ExprStr: exprStr,
-	}
 	return nil
 }

@@ -80,10 +80,10 @@ func (m CreateTable) IsSystemExternalRel() bool {
 func (m *PartitionByDef) GenPartitionExprString() string {
 	switch m.Type {
 	case PartitionType_HASH, PartitionType_LINEAR_HASH,
-		PartitionType_KEY, PartitionType_LINEAR_KEY,
 		PartitionType_RANGE, PartitionType_LIST:
 		return m.PartitionExpr.ExprStr
-	case PartitionType_LIST_COLUMNS, PartitionType_RANGE_COLUMNS:
+	case PartitionType_KEY, PartitionType_LINEAR_KEY,
+		PartitionType_LIST_COLUMNS, PartitionType_RANGE_COLUMNS:
 		partitionColumns := m.PartitionColumns
 		buf := bytes.NewBuffer(make([]byte, 0, 128))
 		for i, column := range partitionColumns.PartitionFmtColumns {
