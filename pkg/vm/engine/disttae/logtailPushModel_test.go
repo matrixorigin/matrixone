@@ -22,7 +22,8 @@ import (
 // should ensure that subscribe and unsubscribe methods are effective.
 func TestSubscribedTable(t *testing.T) {
 	var subscribeRecord subscribedTable
-	subscribeRecord.initTableSubscribeRecord()
+
+	subscribeRecord.m = make(map[subscribeID]tableSubscribeStatus)
 	require.Equal(t, 0, len(subscribeRecord.m))
 
 	tbls := []struct {

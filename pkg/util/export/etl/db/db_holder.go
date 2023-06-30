@@ -170,36 +170,31 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	var dbConn *sql.DB
 
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
-		logutil.Warn("sqlWriter WriteRowRecords failed above threshold", zap.Uint32("failures", DBConnErrCount.Load()), zap.Error(err))
+		logutil.Error("sqlWriter WriteRowRecords failed above threshold")
+		if dbConn != nil {
+			dbConn.Close()
+		}
 		dbConn, err = InitOrRefreshDBConn(true, true)
 		DBConnErrCount.Store(0)
 	} else {
 		dbConn, err = InitOrRefreshDBConn(false, false)
 	}
 	if err != nil {
-		logutil.Error("sqlWriter db init failed", zap.Error(err))
+		logutil.Debug("sqlWriter db init failed", zap.Error(err))
 		return 0, err
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go bulkInsert(ctx, done, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
-
-	select {
-	case err := <-done:
-		if err != nil {
-			DBConnErrCount.Add(1)
-		} else {
-			logutil.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
-			return len(records), nil
-		}
-	case <-ctx.Done():
+	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
+	if err != nil {
 		DBConnErrCount.Add(1)
-		err = ctx.Err()
+		return 0, moerr.NewInternalError(ctx, err.Error())
 	}
 
-	return 0, err
+	logutil.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
+	return len(records), nil
 }
 
 func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen int) *prepareSQLs {
@@ -257,10 +252,9 @@ func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen i
 	return prepareSQLS
 }
 
-func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) {
+func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
 	if len(records) == 0 {
-		done <- nil
-		return
+		return nil
 	}
 
 	var sqls *prepareSQLs
@@ -276,10 +270,9 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 		prepareSQLMap.Store(key, sqls)
 	}
 
-	tx, err := sqlDb.Begin()
+	tx, err := sqlDb.BeginTx(ctx, nil)
 	if err != nil {
-		done <- err
-		return
+		return moerr.ConvertGoError(ctx, err)
 	}
 
 	var maxStmt *sql.Stmt
@@ -294,8 +287,7 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 				maxStmt, err = tx.PrepareContext(ctx, sqls.maxRows)
 				if err != nil {
 					tx.Rollback()
-					done <- err
-					return
+					return err
 				}
 			}
 			vals := make([]any, sqls.columns*batchLen)
@@ -313,10 +305,13 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 			}
 			_, err := maxStmt.ExecContext(ctx, vals...)
 			if err != nil {
-				logutil.Error("sqlWriter batchInsert failed", zap.Error(err))
+				logutil.Debug("sqlWriter batchInsert failed", zap.Error(err))
 				tx.Rollback()
-				done <- err
-				return
+				return err
+			}
+			if ctx.Err() != nil {
+				tx.Rollback()
+				return ctx.Err()
 			}
 
 			records = records[batchLen:]
@@ -325,8 +320,7 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 				err = maxStmt.Close()
 				if err != nil {
 					tx.Rollback()
-					done <- err
-					return
+					return err
 				}
 				maxStmt = nil
 			}
@@ -334,8 +328,7 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 				middleStmt, err = tx.PrepareContext(ctx, sqls.middleRows)
 				if err != nil {
 					tx.Rollback()
-					done <- err
-					return
+					return err
 				}
 			}
 			vals := make([]any, sqls.columns*middleBatchLen)
@@ -353,10 +346,13 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 			}
 			_, err := middleStmt.ExecContext(ctx, vals...)
 			if err != nil {
-				logutil.Error("sqlWriter batchInsert failed", zap.Error(err))
+				logutil.Debug("sqlWriter batchInsert failed", zap.Error(err))
 				tx.Rollback()
-				done <- err
-				return
+				return err
+			}
+			if ctx.Err() != nil {
+				tx.Rollback()
+				return ctx.Err()
 			}
 
 			records = records[middleBatchLen:]
@@ -365,8 +361,7 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 				err = maxStmt.Close()
 				if err != nil {
 					tx.Rollback()
-					done <- err
-					return
+					return err
 				}
 				maxStmt = nil
 			}
@@ -374,8 +369,7 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 				err = middleStmt.Close()
 				if err != nil {
 					tx.Rollback()
-					done <- err
-					return
+					return err
 				}
 				middleStmt = nil
 			}
@@ -383,12 +377,14 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 				oneStmt, err = tx.PrepareContext(ctx, sqls.oneRow)
 				if err != nil {
 					tx.Rollback()
-					done <- err
-					return
+					return err
 				}
 			}
 			vals := make([]any, sqls.columns)
 			for _, row := range records {
+				if err != nil {
+					return moerr.ConvertGoError(ctx, err)
+				}
 				for i, field := range row {
 					escapedStr := field
 					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
@@ -397,27 +393,25 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 						vals[i] = field
 					}
 				}
-				_, err := oneStmt.ExecContext(ctx, vals...)
+				_, err = oneStmt.ExecContext(ctx, vals...)
 				if err != nil {
 					tx.Rollback()
-					done <- err
-					return
+					return moerr.ConvertGoError(ctx, err)
 				}
 			}
 			err = oneStmt.Close()
 			if err != nil {
 				tx.Rollback()
-				done <- err
-				return
+				return moerr.ConvertGoError(ctx, err)
 			}
 			break
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		logutil.Error("sqlWriter commit failed", logutil.ErrorField(err))
-		done <- err
-		return
+	if err = tx.Commit(); err != nil {
+		logutil.Debug("sqlWriter commit failed", logutil.ErrorField(err))
+		tx.Rollback()
+		return moerr.ConvertGoError(ctx, err)
 	}
-	done <- nil
+	return nil
 }

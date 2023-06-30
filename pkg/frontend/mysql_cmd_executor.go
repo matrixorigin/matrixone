@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -3945,14 +3946,14 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte []byte, stats
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		global := h.marshalPlan.Steps[0].GraphData.Global
 		statsValues := getStatsFromGlobal(global, uint64(h.stmt.Duration))
-		statsByte = []byte(fmt.Sprintf("%v", statsValues))
+		statsByte = statsValues.ToJsonString()
 	} else {
-		statsByte = []byte(fmt.Sprintf("%v", []uint64{1, 0, 0, 0, 0}))
+		statsByte = statistic.DefaultStatsArrayJsonString
 	}
 	return
 }
 
-func getStatsFromGlobal(global explain.Global, duration uint64) []uint64 {
+func getStatsFromGlobal(global explain.Global, duration uint64) *statistic.StatsArray {
 	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
 
 	for _, stat := range global.Statistics.Time {
@@ -3977,12 +3978,9 @@ func getStatsFromGlobal(global explain.Global, duration uint64) []uint64 {
 		}
 	}
 
-	statsValues := make([]uint64, 5)
-	statsValues[0] = 1 // this is the version number
-	statsValues[1] = timeConsumed
-	statsValues[2] = memorySize * duration
-	statsValues[3] = s3IOInputCount
-	statsValues[4] = s3IOOutputCount
-
-	return statsValues
+	return statistic.NewStatsArray().
+		WithTimeConsumed(timeConsumed).
+		WithMemorySize(memorySize * duration).
+		WithS3IOInputCount(s3IOInputCount).
+		WithS3IOOutputCount(s3IOOutputCount)
 }
