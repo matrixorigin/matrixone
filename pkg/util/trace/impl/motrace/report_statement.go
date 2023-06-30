@@ -371,7 +371,7 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 	if s.statsJsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
-		return statistic.DefaultStatsArrayJson
+		return statistic.DefaultStatsArrayJsonString
 	} else {
 		s.statsJsonByte, stats = s.ExecPlan.Stats(ctx)
 		s.RowsRead = stats.RowsRead

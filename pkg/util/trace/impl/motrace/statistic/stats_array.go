@@ -52,13 +52,29 @@ func (s *StatsArray) GetS3IOInputCount() uint64  { return s.arr[StatsArrayIndexS
 func (s *StatsArray) GetS3IOOutputCount() uint64 { return s.arr[StatsArrayIndexS3IOOutputCount] } // unit: count
 
 func (s *StatsArray) WithVersion(v uint64) *StatsArray { s.arr[StatsArrayIndexVersion] = v; return s }
-
-func (s *StatsArray) ToJson() []byte {
-	return ArrayUint64ToJson(s.arr)
+func (s *StatsArray) WithTimeConsumed(v uint64) *StatsArray {
+	s.arr[StatsArrayIndexTimeConsumed] = v
+	return s
+}
+func (s *StatsArray) WithMemorySize(v uint64) *StatsArray {
+	s.arr[StatsArrayIndexMemorySize] = v
+	return s
+}
+func (s *StatsArray) WithS3IOInputCount(v uint64) *StatsArray {
+	s.arr[StatsArrayIndexS3IOInputCount] = v
+	return s
+}
+func (s *StatsArray) WithS3IOOutputCount(v uint64) *StatsArray {
+	s.arr[StatsArrayIndexS3IOOutputCount] = v
+	return s
 }
 
-// ArrayUint64ToJson return json arr format
-func ArrayUint64ToJson(arr []uint64) []byte {
+func (s *StatsArray) ToJsonString() []byte {
+	return ArrayUint64ToJsonString(s.arr)
+}
+
+// ArrayUint64ToJsonString return json arr format
+func ArrayUint64ToJsonString(arr []uint64) []byte {
 	// len([1,184467440737095516161,18446744073709551616,18446744073709551616,18446744073709551616]") = 88
 	buf := make([]byte, 0, 128)
 	buf = append(buf, '[')
@@ -72,6 +88,6 @@ func ArrayUint64ToJson(arr []uint64) []byte {
 	return buf
 }
 
-var DefaultStatsArrayJson = NewStatsArray().
+var DefaultStatsArrayJsonString = NewStatsArray().
 	WithVersion(StatsArrayVersion).
-	ToJson()
+	ToJsonString()

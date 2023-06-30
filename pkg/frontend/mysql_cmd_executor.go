@@ -3946,14 +3946,14 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte []byte, stats
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		global := h.marshalPlan.Steps[0].GraphData.Global
 		statsValues := getStatsFromGlobal(global, uint64(h.stmt.Duration))
-		statsByte = statistic.ArrayUint64ToJson(statsValues)
+		statsByte = statsValues.ToJsonString()
 	} else {
 		statsByte = statistic.DefaultStatsArrayJson
 	}
 	return
 }
 
-func getStatsFromGlobal(global explain.Global, duration uint64) []uint64 {
+func getStatsFromGlobal(global explain.Global, duration uint64) *statistic.StatsArray {
 	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
 
 	for _, stat := range global.Statistics.Time {
@@ -3978,12 +3978,9 @@ func getStatsFromGlobal(global explain.Global, duration uint64) []uint64 {
 		}
 	}
 
-	statsValues := make([]uint64, statistic.StatsArrayLength)
-	statsValues[0] = statistic.StatsArrayVersion // this is the version number
-	statsValues[1] = timeConsumed
-	statsValues[2] = memorySize * duration
-	statsValues[3] = s3IOInputCount
-	statsValues[4] = s3IOOutputCount
-
-	return statsValues
+	return statistic.NewStatsArray().
+		WithTimeConsumed(timeConsumed).
+		WithMemorySize(memorySize * duration).
+		WithS3IOInputCount(s3IOInputCount).
+		WithS3IOOutputCount(s3IOOutputCount)
 }
