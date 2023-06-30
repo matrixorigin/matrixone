@@ -898,6 +898,7 @@ func (tbl *txnTable) rangesOnePart(
 		blk.PartitionNum = -1
 		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
+	blockio.RecordBlockSelectivity(len(*ranges)-1, len(blks))
 	return
 }
 
@@ -1794,5 +1795,5 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	if err != nil {
 		return false, err
 	}
-	return part.PrimaryKeysMayBeModified(from, to, keysVector, packer), nil
+	return part.PrimaryKeysMayBeModified(tbl.tableId, from, to, keysVector, packer), nil
 }
