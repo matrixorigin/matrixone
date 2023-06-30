@@ -52,7 +52,7 @@ func MakeDefaultSmallPool(name string) *containers.VectorPool {
 		name,
 		memtableCapacity,
 		containers.WithAllocationLimit(limit),
-		containers.WithMPool(common.MutMemAllocator),
+		containers.WithMPool(common.SmallAllocator),
 	)
 }
 
