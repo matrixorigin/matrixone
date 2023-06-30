@@ -106,15 +106,16 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
+	logger.Info("started")
 	defer func() {
-		logger.Debug("finished", zap.Error(err))
+		logger.Info("finished", zap.Error(err))
 	}()
 
 	// start background task to check new account
 	go checkNewAccountSize(ctx, logger, sqlExecutor)
 
-	next := time.NewTicker(time.Second)
-	defer next.Stop()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -122,10 +123,9 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			logger.Debug("receive context signal", zap.Error(ctx.Err()))
 			StorageUsageFactory.Reset() // clean CN data for next cron task.
 			return ctx.Err()
-
-		case <-next.C:
-			logger.Debug("start next round")
+		case <-ticker.C:
 		}
+		logger.Debug("start next round")
 
 		// mysql> show accounts;
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
@@ -143,31 +143,27 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 
 		cnt := result.RowCount()
 		if cnt == 0 {
-			next.Reset(time.Minute)
+			ticker.Reset(time.Minute)
 			logger.Warn("got empty account info, wait shortly")
 			continue
 		}
 		logger.Debug("collect storage_usage cnt", zap.Uint64("cnt", cnt))
 		StorageUsageFactory.Reset()
 		for rowIdx := uint64(0); rowIdx < cnt; rowIdx++ {
-
 			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
 			if err != nil {
 				return err
 			}
-
 			sizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSize)
 			if err != nil {
 				return err
 			}
-
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
 			StorageUsage(account).Set(sizeMB)
 		}
 
 		// next round
-		next.Reset(GetUpdateStorageUsageInterval())
-		logger.Debug("wait next round")
+		ticker.Reset(GetUpdateStorageUsageInterval())
 	}
 }
 
