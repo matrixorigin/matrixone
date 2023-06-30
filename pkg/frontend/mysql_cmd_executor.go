@@ -3948,7 +3948,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte []byte, stats
 		statsValues := getStatsFromGlobal(global, uint64(h.stmt.Duration))
 		statsByte = statsValues.ToJsonString()
 	} else {
-		statsByte = statistic.DefaultStatsArrayJson
+		statsByte = statistic.DefaultStatsArrayJsonString
 	}
 	return
 }
