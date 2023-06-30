@@ -164,7 +164,7 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 		seg.tableHandle = tableData.GetHandle()
 	}
 	appended := uint32(0)
-	vec := seg.table.store.rt.VectorPool.Transient.GetVector(&objectio.RowidType)
+	vec := seg.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	for appended < node.Rows() {
 		appender, err := seg.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
@@ -200,7 +200,7 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 			return err
 		}
 		blockId := appender.GetMeta().(*catalog.BlockEntry).ID
-		col := seg.table.store.rt.VectorPool.Transient.GetVector(&objectio.RowidType)
+		col := seg.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer col.Close()
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),

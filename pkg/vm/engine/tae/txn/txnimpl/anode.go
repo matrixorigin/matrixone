@@ -106,7 +106,7 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 			schema.AllNames(),
 			schema.AllTypes(),
 			capacity,
-			n.table.store.rt.VectorPool.Transient,
+			n.table.store.rt.VectorPool.Small,
 		)
 
 		// n.data = containers.BuildBatch(
@@ -135,7 +135,7 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 }
 
 func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col := n.table.store.rt.VectorPool.Transient.GetVector(&objectio.RowidType)
+	col := n.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	if err = objectio.ConstructRowidColumnTo(
 		col.GetDownstreamVector(),
 		&n.meta.ID, startRow, length,

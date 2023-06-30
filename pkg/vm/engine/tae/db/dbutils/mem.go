@@ -25,7 +25,7 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
-func MakeDefaultMemtablePool(name string) *containers.VectorPool {
+func MakeDefaultSmallPool(name string) *containers.VectorPool {
 	var (
 		limit            int
 		memtableCapacity int
@@ -35,17 +35,17 @@ func MakeDefaultMemtablePool(name string) *containers.VectorPool {
 		panic(err)
 	}
 	if memStats.Total > mpool.GB*20 {
-		limit = mpool.MB * 2
-		memtableCapacity = 256
+		limit = mpool.KB * 64
+		memtableCapacity = 10240
 	} else if memStats.Total > mpool.GB*10 {
-		limit = mpool.MB * 2
-		memtableCapacity = 128
+		limit = mpool.KB * 32
+		memtableCapacity = 10240
 	} else if memStats.Total > mpool.GB*5 {
-		limit = mpool.MB * 2
-		memtableCapacity = 64
+		limit = mpool.KB * 16
+		memtableCapacity = 10240
 	} else {
-		limit = mpool.MB * 1
-		memtableCapacity = 64
+		limit = mpool.KB * 8
+		memtableCapacity = 10240
 	}
 
 	return containers.NewVectorPool(

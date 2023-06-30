@@ -148,10 +148,10 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 	mybat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
 	mybat.AddVector(
 		catalog.AttrRowID,
-		src.GetVectorByName(catalog.AttrRowID).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Transient),
+		src.GetVectorByName(catalog.AttrRowID).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
 	)
 	tsType := types.T_TS.ToType()
-	commitVec := b.rt.VectorPool.Transient.GetVector(&tsType)
+	commitVec := b.rt.VectorPool.Small.GetVector(&tsType)
 	commitVec.PreExtend(src.Length())
 	for i := 0; i < src.Length(); i++ {
 		commitVec.Append(b.txn.GetPrepareTS(), false)
@@ -165,7 +165,7 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 		for len(mybat.Vecs) < 2+int(seqnum) {
 			mybat.AppendPlaceholder()
 		}
-		vec := src.Vecs[i].CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Transient)
+		vec := src.Vecs[i].CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small)
 		mybat.AddVector(src.Attrs[i], vec)
 	}
 
