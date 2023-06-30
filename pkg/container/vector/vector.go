@@ -312,8 +312,7 @@ func SetFixedAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
 
 func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
 	var va types.Varlena
-	var err error
-	err = BuildVarlenaFromByteSlice(v, &va, &bs, mp)
+	err := BuildVarlenaFromByteSlice(v, &va, &bs, mp)
 	if err != nil {
 		return err
 	}
