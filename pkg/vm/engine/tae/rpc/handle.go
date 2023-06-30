@@ -17,6 +17,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"os"
 	"sync"
 	"syscall"
@@ -874,11 +875,11 @@ func (h *Handle) HandleWrite(
 		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
-		// TODO: delete this debug log
+		// TODO: delete this debug log after issue 10227
 		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %d-%s txn: %s",
+			logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %s txn: %s",
 				req.Type, req.TableID,
-				req.TableName, req.DatabaseId, req.DatabaseName,
+				req.TableName, common.PrintMoBatch(req.Batch, 3),
 				txn.String(),
 			)
 		}
@@ -905,7 +906,12 @@ func (h *Handle) HandleWrite(
 				}
 				locations = append(locations, location)
 			}
-
+			// TODO: delete this debug log after issue 10227
+			n := len(req.MetaLocs)
+			if n > 2 {
+				n = 2
+			}
+			logutil.Infof("[precommit](%s) metalocs: %v", hex.EncodeToString(meta.GetID()), req.MetaLocs[:n])
 			err = tb.AddBlksWithMetaLoc(ctx, locations)
 			return
 		}

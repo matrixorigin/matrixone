@@ -46,6 +46,8 @@ type TxnClient interface {
 	AbortAllRunningTxn()
 	// Close closes client.sender
 	Close() error
+	// WaitLogTailAppliedAt wait log tail applied at ts
+	WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error)
 }
 
 // TxnClientWithCtl TxnClient to support ctl command.

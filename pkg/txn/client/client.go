@@ -17,11 +17,12 @@ package client
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -230,6 +231,15 @@ func (client *txnClient) MinTimestamp() timestamp.Timestamp {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	return client.mu.minTS
+}
+
+func (client *txnClient) WaitLogTailAppliedAt(
+	ctx context.Context,
+	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	if client.timestampWaiter == nil {
+		return timestamp.Timestamp{}, nil
+	}
+	return client.timestampWaiter.GetTimestamp(ctx, ts)
 }
 
 func (client *txnClient) getTxnIsolation() txn.TxnIsolation {
