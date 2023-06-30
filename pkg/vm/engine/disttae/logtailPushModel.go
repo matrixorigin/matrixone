@@ -402,7 +402,7 @@ func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 				return
 
 			case <-ticker.C:
-				if client.receivedLogTailTime.ready.Load() == false {
+				if !client.receivedLogTailTime.ready.Load() {
 					continue
 				}
 				if client.subscriber == nil {
