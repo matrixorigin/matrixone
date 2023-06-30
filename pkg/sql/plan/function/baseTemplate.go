@@ -1520,6 +1520,53 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	return nil
 }
 
+func opBinaryVarlenaVarlenaToFixed(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[bool](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[bool](rsVec)
+
+	v1, v2 := parameters[0], parameters[1]
+	if v1.IsConstNull() || v2.IsConstNull() {
+		nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+	}
+	col1, _ := vector.MustVarlenaRawData(v1)
+	col2, _ := vector.MustVarlenaRawData(v2)
+
+	if v1.IsConst() && v2.IsConst() {
+		p1 := col1[0].UnsafePtr()
+		p2 := col2[0].UnsafePtr()
+		ret := *(*[3]int64)(p1) == *(*[3]int64)(p2)
+		for i := uint64(0); i < uint64(length); i++ {
+			rss[i] = ret
+		}
+		return nil
+	}
+
+	if !v1.IsConst() && !v2.IsConst() {
+		for i := 0; i < length; i++ {
+			p1 := col1[i].UnsafePtr()
+			p2 := col2[i].UnsafePtr()
+			rss[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
+		}
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+	} else if v1.IsConst() {
+		p1 := col1[0].UnsafePtr()
+		for i := 0; i < length; i++ {
+			p2 := col2[i].UnsafePtr()
+			rss[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
+		}
+		nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+	} else {
+		p2 := col2[0].UnsafePtr()
+		for i := 0; i < length; i++ {
+			p1 := col1[i].UnsafePtr()
+			rss[i] = *(*[3]int64)(p1) == *(*[3]int64)(p2)
+		}
+		nulls.Or(parameters[0].GetNulls(), rsVec.GetNulls(), rsVec.GetNulls())
+	}
+	return nil
+}
+
 func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 string) Tr) error {

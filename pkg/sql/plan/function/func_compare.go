@@ -124,11 +124,10 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a == b
 		})
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
-			return v1 == v2
-		})
-	case types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
+		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
+			return opBinaryVarlenaVarlenaToFixed(parameters, rs, proc, length)
+		}
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
 			return v1 == v2
 		})
