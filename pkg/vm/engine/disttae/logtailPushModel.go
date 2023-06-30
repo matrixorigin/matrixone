@@ -62,8 +62,10 @@ const (
 	unsubscribeTimer         = 1 * time.Hour
 
 	// log tail consumer related constants.
-	consumerNumber       = 4
-	consumerBufferLength = 256
+	// if buffer is almost full (percent > consumerWarningPercent, we will send a message to log.
+	consumerNumber         = 4
+	consumerBufferLength   = 8192
+	consumerWarningPercent = 0.9
 )
 
 // pushClient is a structure responsible for all operations related to the log tail push model.
@@ -336,6 +338,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 				case <-ctx.Done():
 					cancel()
+					logutil.Infof("[log-tail-push-client] context has done, log tail receive routine is going to clean and exit.")
 					goto cleanAndReconnect
 				}
 			}
@@ -352,7 +355,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			e.setPushClientStatus(false)
 
 			if ctx.Err() != nil {
-				logutil.Infof("[log-tail-push-client] context is done, exit log tail receive routine.")
+				logutil.Infof("[log-tail-push-client] context has done, exit log tail receive routine.")
 				return
 			}
 
@@ -809,14 +812,13 @@ type routineController struct {
 	closeChan  chan bool
 	signalChan chan routineControlCmd
 
-	// Debug for issue #10138.
-	issue10138limitLine int
+	// monitor the consumption speed of logs.
+	warningBufferLen int
 }
 
 func (rc *routineController) sendSubscribeResponse(ctx context.Context, r *logtail.SubscribeResponse) {
-	// debug for issue #10138.
-	if l := len(rc.signalChan); l > rc.issue10138limitLine {
-		rc.issue10138limitLine = l
+	if l := len(rc.signalChan); l > rc.warningBufferLen {
+		rc.warningBufferLen = l
 		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, maybe consume is too slow", rc.routineId, l)
 	}
 
@@ -824,9 +826,8 @@ func (rc *routineController) sendSubscribeResponse(ctx context.Context, r *logta
 }
 
 func (rc *routineController) sendTableLogTail(r logtail.TableLogtail) {
-	// debug for issue #10138.
-	if l := len(rc.signalChan); l > rc.issue10138limitLine {
-		rc.issue10138limitLine = l
+	if l := len(rc.signalChan); l > rc.warningBufferLen {
+		rc.warningBufferLen = l
 		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, maybe consume is too slow", rc.routineId, l)
 	}
 
@@ -834,9 +835,8 @@ func (rc *routineController) sendTableLogTail(r logtail.TableLogtail) {
 }
 
 func (rc *routineController) updateTimeFromT(t timestamp.Timestamp) {
-	// debug for issue #10138.
-	if l := len(rc.signalChan); l > rc.issue10138limitLine {
-		rc.issue10138limitLine = l
+	if l := len(rc.signalChan); l > rc.warningBufferLen {
+		rc.warningBufferLen = l
 		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, maybe consume is too slow", rc.routineId, l)
 	}
 
@@ -845,8 +845,8 @@ func (rc *routineController) updateTimeFromT(t timestamp.Timestamp) {
 
 func (rc *routineController) sendUnSubscribeResponse(r *logtail.UnSubscribeResponse) {
 	// debug for issue #10138.
-	if l := len(rc.signalChan); l > rc.issue10138limitLine {
-		rc.issue10138limitLine = l
+	if l := len(rc.signalChan); l > rc.warningBufferLen {
+		rc.warningBufferLen = l
 		logutil.Infof("[log-tail-push-client] consume-routine %d signalChan len is %d, maybe consume is too slow", rc.routineId, l)
 	}
 
@@ -889,7 +889,7 @@ func createRoutineToConsumeLogTails(
 		signalChan: make(chan routineControlCmd, signalBufferLength),
 
 		// Debug for issue #10138.
-		issue10138limitLine: 200,
+		warningBufferLen: int(float64(signalBufferLength) * consumerWarningPercent),
 	}
 
 	go singleRoutineToConsumeLogTail(ctx, e, &controller, errOut)

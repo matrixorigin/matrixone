@@ -31,6 +31,9 @@ import (
 )
 
 func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
+	if !zm.IsInited() {
+		return -1 /*for new added column, its zonemap will be empty and not initialized*/
+	}
 	switch t.Oid {
 	case types.T_bool:
 		return 2

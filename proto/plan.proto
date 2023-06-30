@@ -319,10 +319,10 @@ message CheckDef {
 }
 
 message ClusterByDef {
-	repeated Expr parts = 1;
-
 	// XXX: Deprecated and to be removed soon.
-	string name = 2;
+	string name = 1;
+	// Composite cluster by column definition
+	ColDef comp_cbkey_col = 2;
 }
 
 message PropertyDef {
