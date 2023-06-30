@@ -71,10 +71,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		// append on duplicate key node
 		tableDef = DeepCopyTableDef(tableDef)
 		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+			//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+			tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
 		}
 		if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+			//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+			tableDef.Cols = append(tableDef.Cols, tableDef.ClusterBy.CompCbkeyCol)
 		}
 		dupProjection := getProjectionByLastNode(builder, lastNodeId)
 		onDuplicateKeyNode := &Node{

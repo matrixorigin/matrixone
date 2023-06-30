@@ -209,11 +209,21 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 		return nil, nil, err
 	}
 	s3Writer := &colexec.S3Writer{}
+	s3Writer.SetTableName(tbl.GetTableName())
 	s3Writer.SetSortIdx(-1)
 	s3Writer.Init(txn.proc)
 	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
 		s3Writer.SetSortIdx(sortIdx)
+	}
+	tdefs, err := tbl.TableDefs(txn.proc.Ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, def := range tdefs {
+		if attr, ok := def.(*engine.VersionDef); ok {
+			s3Writer.SetSchemaVer(attr.Version)
+		}
 	}
 	return s3Writer, tbl, nil
 }
