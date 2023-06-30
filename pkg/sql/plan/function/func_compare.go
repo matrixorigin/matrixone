@@ -126,7 +126,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
 		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
-			return opBinaryVarlenaVarlenaToFixed(parameters, rs, proc, length)
+			return compareVarlenaEqual(parameters, rs, proc, length)
 		}
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
 			return v1 == v2

@@ -1520,7 +1520,7 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	return nil
 }
 
-func opBinaryVarlenaVarlenaToFixed(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func compareVarlenaEqual(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedCol[bool](rsVec)
@@ -1528,6 +1528,7 @@ func opBinaryVarlenaVarlenaToFixed(parameters []*vector.Vector, result vector.Fu
 	v1, v2 := parameters[0], parameters[1]
 	if v1.IsConstNull() || v2.IsConstNull() {
 		nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		return nil
 	}
 	col1, _ := vector.MustVarlenaRawData(v1)
 	col2, _ := vector.MustVarlenaRawData(v2)
