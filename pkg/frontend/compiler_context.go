@@ -405,16 +405,16 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Seqnum:    uint32(attr.Attr.Seqnum),
 			}
 			// Is it a composite primary key
-			if attr.Attr.Name == catalog.CPrimaryKeyColName {
-				continue
-			}
+			//if attr.Attr.Name == catalog.CPrimaryKeyColName {
+			//	continue
+			//}
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
 					Name: attr.Attr.Name,
 				}
-				if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
-					continue
-				}
+				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+				//	continue
+				//}
 			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
@@ -477,10 +477,12 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		//cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		primarykey.CompPkeyCol = plan2.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+		//cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
 	}
 	rowIdCol := plan2.MakeRowIdColDef()
 	cols = append(cols, rowIdCol)
@@ -506,14 +508,13 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	tableDef := &plan2.TableDef{
-		TblId:     tableId,
-		Name:      tableName,
-		Cols:      cols,
-		Defs:      defs,
-		TableType: TableType,
-		Createsql: Createsql,
-		Pkey:      primarykey,
-		//CompositePkey: CompositePkey,
+		TblId:        tableId,
+		Name:         tableName,
+		Cols:         cols,
+		Defs:         defs,
+		TableType:    TableType,
+		Createsql:    Createsql,
+		Pkey:         primarykey,
 		ViewSql:      viewSql,
 		Partition:    partitionInfo,
 		Fkeys:        foreignKeys,
