@@ -119,6 +119,11 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
+		if !info.ColumnZMs[i].IsInited() {
+			s.MinValMap[colName] = 0
+			s.MaxValMap[colName] = 0
+			continue
+		}
 		switch info.DataTypes[i].Oid {
 		case types.T_int8:
 			s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
