@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metric
+package test
 
 import (
 	"context"
@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/golang/mock/gomock"
@@ -98,10 +99,10 @@ func TestCalculateStorageUsage(t *testing.T) {
 		return frontend.NewInternalExecutor(pu, aicm)
 	}
 
-	err = CalculateStorageUsage(ctx, ieFactory)
+	err = metric.CalculateStorageUsage(ctx, ieFactory)
 	require.Nil(t, err)
 
-	s := StorageUsage("sys")
+	s := metric.StorageUsage("sys")
 	dm := &dto.Metric{}
 	s.Write(dm)
 	logutil.Infof("size: %f", dm.GetGauge().GetValue())
