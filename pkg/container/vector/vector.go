@@ -313,7 +313,7 @@ func SetFixedAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
 func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
 	var va types.Varlena
 	var err error
-	va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+	err = BuildVarlenaFromByteSlice(v, &va, &bs, mp)
 	if err != nil {
 		return err
 	}
@@ -745,7 +745,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 			vva[vi] = wva[wi]
 		} else {
 			bs := wva[wi].GetByteSlice(w.area)
-			vva[vi], v.area, err = types.BuildVarlena(bs, v.area, mp)
+			err = BuildVarlenaFromByteSlice(v, &vva[vi], &bs, mp)
 			if err != nil {
 				return err
 			}
@@ -2078,7 +2078,7 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 					continue
 				}
 				bs := wCol[sel].GetByteSlice(w.area)
-				vCol[oldLen+i], v.area, err = types.BuildVarlena(bs, v.area, mp)
+				err = BuildVarlenaFromByteSlice(v, &vCol[oldLen+i], &bs, mp)
 				if err != nil {
 					return err
 				}
@@ -2086,7 +2086,7 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		} else {
 			for i, sel := range sels {
 				bs := wCol[sel].GetByteSlice(w.area)
-				vCol[oldLen+i], v.area, err = types.BuildVarlena(bs, v.area, mp)
+				err = BuildVarlenaFromByteSlice(v, &vCol[oldLen+i], &bs, mp)
 				if err != nil {
 					return err
 				}
@@ -2350,7 +2350,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	}
 	vec.class = CONSTANT
 	col := vec.col.([]types.Varlena)
-	va, vec.area, err = types.BuildVarlena(val, vec.area, mp)
+	err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 	if err != nil {
 		return err
 	}
@@ -2521,7 +2521,7 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
 	} else {
-		va, vec.area, err = types.BuildVarlena(val, vec.area, mp)
+		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
 		}
@@ -2558,7 +2558,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
 		col := vec.col.([]types.Varlena)
-		va, vec.area, err = types.BuildVarlena(val, vec.area, mp)
+		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
 		}
@@ -2600,7 +2600,7 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 		if len(isNulls) > 0 && isNulls[i] {
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
-			va, vec.area, err = types.BuildVarlena(w, vec.area, mp)
+			err = BuildVarlenaFromByteSlice(vec, &va, &w, mp)
 			if err != nil {
 				return err
 			}
@@ -2624,7 +2624,8 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 		if len(isNulls) > 0 && isNulls[i] {
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
-			va, vec.area, err = types.BuildVarlena([]byte(w), vec.area, mp)
+			bs := []byte(w)
+			err = BuildVarlenaFromByteSlice(vec, &va, &bs, mp)
 			if err != nil {
 				return err
 			}
@@ -3114,4 +3115,19 @@ func BuildVarlenaFromValena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m 
 	}
 	bs := v2.GetByteSlice(*area)
 	return BuildVarlenaNoInline(vec, v1, &bs, m)
+}
+
+func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpool.MPool) error {
+	vlen := len(*bs)
+	if vlen <= types.VarlenaInlineSize {
+		// first clear varlena to 0
+		p1 := v.UnsafePtr()
+		*(*int64)(p1) = 0
+		*(*int64)(unsafe.Add(p1, 8)) = 0
+		*(*int64)(unsafe.Add(p1, 16)) = 0
+		v[0] = byte(vlen)
+		copy(v[1:1+vlen], *bs)
+		return nil
+	}
+	return BuildVarlenaNoInline(vec, v, bs, m)
 }
