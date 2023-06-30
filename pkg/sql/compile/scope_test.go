@@ -43,7 +43,7 @@ func TestScopeSerialization(t *testing.T) {
 	for i, sourceScope := range sourceScopes {
 		data, errEncode := encodeScope(sourceScope)
 		require.NoError(t, errEncode)
-		targetScope, errDecode := decodeScope(data, sourceScope.Proc, false)
+		targetScope, errDecode := decodeScope(data, sourceScope.Proc, false, nil)
 		require.NoError(t, errDecode)
 
 		// Just do simple check
