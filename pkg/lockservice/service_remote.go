@@ -174,7 +174,7 @@ func (s *service) handleRemoteGetLock(
 		writeResponse(ctx, resp, err, cs)
 		return
 	}
-	var txns []*activeTxn
+
 	l.getLock(
 		req.GetTxnLock.TxnID,
 		req.GetTxnLock.Row,
@@ -182,19 +182,14 @@ func (s *service) handleRemoteGetLock(
 			n := lock.waiter.waiters.len()
 			if n > 0 {
 				resp.GetTxnLock.Value = int32(lock.value)
-				txns = make([]*activeTxn, 0, n)
+				values := make([]pb.WaitTxn, 0, n)
 				lock.waiter.waiters.iter(func(w *waiter) bool {
-					txn := s.activeTxnHolder.getActiveTxn(w.txnID, false, "")
-					if txn != nil {
-						txns = append(txns, txn)
-					}
+					values = append(values, w.belongTo)
 					return true
 				})
+				resp.GetTxnLock.WaitingList = values
 			}
 		})
-	for _, txn := range txns {
-		resp.GetTxnLock.WaitingList = append(resp.GetTxnLock.WaitingList, txn.toWaitTxn(s.cfg.ServiceID, false))
-	}
 	writeResponse(ctx, resp, err, cs)
 }
 

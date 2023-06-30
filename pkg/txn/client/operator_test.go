@@ -189,7 +189,7 @@ func TestMissingSenderWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(nil, txn.TxnMeta{})
+	newTxnOperator(nil, nil, txn.TxnMeta{})
 }
 
 func TestMissingTxnIDWillPanic(t *testing.T) {
@@ -200,7 +200,7 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{})
+	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{})
 }
 
 func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
@@ -211,7 +211,7 @@ func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
+	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -223,6 +223,7 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	newTxnOperator(
+		nil,
 		newTestTxnSender(),
 		txn.TxnMeta{ID: []byte{1}, SnapshotTS: timestamp.Timestamp{PhysicalTime: 1}},
 		WithTxnReadyOnly(),

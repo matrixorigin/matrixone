@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
@@ -163,15 +164,18 @@ type txnOperator struct {
 	}
 	workspace       Workspace
 	timestampWaiter TimestampWaiter
+	clock           clock.Clock
 }
 
 func newTxnOperator(
+	clock clock.Clock,
 	sender rpc.TxnSender,
 	txnMeta txn.TxnMeta,
 	options ...TxnOption) *txnOperator {
 	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
 	tc.txnID = txnMeta.ID
+	tc.clock = clock
 	for _, opt := range options {
 		opt(tc)
 	}
@@ -270,7 +274,7 @@ func (tc *txnOperator) UpdateSnapshot(
 	minTS := ts
 	// we need to waiter the latest snapshot ts which is greater than the current snapshot
 	if minTS.IsEmpty() {
-		minTS = tc.mu.txn.SnapshotTS
+		minTS, _ = tc.clock.Now()
 	}
 
 	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
@@ -483,6 +487,10 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			tc.closeLocked()
 			tc.mu.Unlock()
 		}()
+		if tc.mu.closed {
+			return nil, moerr.NewTxnClosedNoCtx(tc.txnID)
+		}
+
 		if tc.needUnlockLocked() {
 			tc.mu.txn.LockTables = tc.mu.lockTables
 			defer tc.unlock(ctx)
@@ -835,6 +843,8 @@ func (tc *txnOperator) needUnlockLocked() bool {
 }
 
 func (tc *txnOperator) closeLocked() {
-	tc.mu.closed = true
-	tc.triggerEventLocked(ClosedEvent)
+	if !tc.mu.closed {
+		tc.mu.closed = true
+		tc.triggerEventLocked(ClosedEvent)
+	}
 }
