@@ -182,7 +182,7 @@ func (s *service) handleRemoteGetLock(
 			n := lock.waiter.waiters.len()
 			if n > 0 {
 				resp.GetTxnLock.Value = int32(lock.value)
-				txns := make([]*activeTxn, 0, n)
+				txns = make([]*activeTxn, 0, n)
 				lock.waiter.waiters.iter(func(w *waiter) bool {
 					txn := s.activeTxnHolder.getActiveTxn(w.txnID, false, "")
 					if txn != nil {
