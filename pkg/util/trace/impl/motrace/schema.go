@@ -110,6 +110,8 @@ var (
 		Comment:       "record each statement and stats info",
 		PathBuilder:   table.NewAccountDatePathBuilder(),
 		AccountColumn: &accountCol,
+		// TimestampColumn
+		TimestampColumn: &respAtCol,
 		// SupportUserAccess
 		SupportUserAccess: true,
 		// SupportConstAccess
@@ -167,6 +169,8 @@ var (
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      table.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
+		// TimestampColumn
+		TimestampColumn: &timestampCol,
 		// SupportUserAccess
 		SupportUserAccess: false,
 		// SupportConstAccess
@@ -278,6 +282,10 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 
 	createCost = time.Since(instant)
 	return nil
+}
+
+func GetAllTables() []*table.Table {
+	return tables
 }
 
 // GetSchemaForAccount return account's table, and view's schema
