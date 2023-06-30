@@ -21,3 +21,6 @@ select purge_log('rawlog_not_exist', '123') a;
 select purge_log('rawlog_not_exist', NULL) a;
 select purge_log(NULL, '2023-06-30') a;
 select purge_log(NULL, NULL) a;
+
+-- clean
+drop account if exists bvt_purge_log;

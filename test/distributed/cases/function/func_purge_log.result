@@ -27,3 +27,4 @@ NULL
 select purge_log(NULL, NULL) a;
 a
 NULL
+drop account if exists bvt_purge_log;
