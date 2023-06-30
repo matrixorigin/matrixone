@@ -201,7 +201,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 		return err
 	}
 
-	if err := lockTable(c.proc, rel); err != nil {
+	if err := lockTable(c.e, c.proc, rel); err != nil {
 		return err
 	}
 
@@ -1061,7 +1061,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp {
 		// before dropping table, lock it. It only works on pessimistic mode.
-		if err := lockTable(c.proc, rel); err != nil {
+		if err := lockTable(c.e, c.proc, rel); err != nil {
 			return err
 		}
 	}
@@ -1244,7 +1244,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	if !isTemp && !isView {
 		// before dropping table, lock it. It only works on pessimistic mode.
-		if err := lockTable(c.proc, rel); err != nil {
+		if err := lockTable(c.e, c.proc, rel); err != nil {
 			return err
 		}
 	}
@@ -1785,6 +1785,7 @@ func getValue[T constraints.Integer](minus bool, num any) T {
 }
 
 func lockTable(
+	eng engine.Engine,
 	proc *process.Process,
 	rel engine.Relation) error {
 	id := rel.GetTableID(proc.Ctx)
@@ -1797,6 +1798,7 @@ func lockTable(
 	}
 
 	err = lockop.LockTable(
+		eng,
 		proc,
 		id,
 		defs[0].Type)
@@ -1804,6 +1806,7 @@ func lockTable(
 }
 
 func lockRows(
+	eng engine.Engine,
 	proc *process.Process,
 	rel engine.Relation,
 	vec *vector.Vector) error {
@@ -1815,6 +1818,7 @@ func lockRows(
 	id := rel.GetTableID(proc.Ctx)
 
 	err := lockop.LockRows(
+		eng,
 		proc,
 		id,
 		vec,
@@ -1907,7 +1911,7 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.proc, dbRel, vec); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec); err != nil {
 		return err
 	}
 	return nil
@@ -1922,7 +1926,7 @@ func lockMoTable(c *Compile, dbName string, tblName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.proc, dbRel, vec); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec); err != nil {
 		return err
 	}
 	return nil

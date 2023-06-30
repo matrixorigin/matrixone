@@ -182,7 +182,7 @@ func logLocalLockWaitOnResult(
 			bytesField("wait-on-key", key),
 			zap.String("opts", opts.DebugString()),
 			zap.Stringer("waiter", waiter),
-			zap.Any("result", notify))
+			zap.Stringer("result", notify))
 	}
 }
 
@@ -514,7 +514,7 @@ func logWaiterGetNotify(
 		logger.Debug("waiter read notify",
 			serviceIDField(serviceID),
 			zap.Stringer("waiter", w),
-			zap.Any("notify", v))
+			zap.Stringer("notify", v))
 	}
 }
 
@@ -527,7 +527,7 @@ func logWaiterNotified(
 		logger.Debug("waiter add notify",
 			serviceIDField(serviceID),
 			zap.Stringer("waiter", w),
-			zap.Any("notify", v))
+			zap.Stringer("notify", v))
 	}
 }
 
@@ -608,7 +608,7 @@ func logWaiterFetchNextWaiter(
 			serviceIDField(serviceID),
 			zap.Stringer("waiter", w),
 			zap.Stringer("next-waiter", next),
-			zap.Any("notify", v))
+			zap.Stringer("notify", v))
 	}
 }
 

@@ -842,21 +842,27 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			clusterByKeys = append(clusterByKeys, colName)
 		}
 
-		clusterByColName := clusterByKeys[0]
 		if lenClusterBy == 1 {
+			clusterByColName := clusterByKeys[0]
 			for _, col := range createTable.TableDef.Cols {
 				if col.Name == clusterByColName {
 					col.ClusterBy = true
 				}
 			}
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name: clusterByColName,
+			}
 		} else {
-			clusterByColName = util.BuildCompositeClusterByColumnName(clusterByKeys)
+			clusterByColName := util.BuildCompositeClusterByColumnName(clusterByKeys)
 			colDef := MakeHiddenColDefByName(clusterByColName)
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[clusterByColName] = colDef
-		}
-		createTable.TableDef.ClusterBy = &plan.ClusterByDef{
-			Name: clusterByColName,
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name:         clusterByColName,
+				CompCbkeyCol: colDef,
+			}
 		}
 	}
 
