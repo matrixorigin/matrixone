@@ -70,10 +70,9 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 
 // GetMetricStorageUsageExecutor collect metric server_storage_usage
 func GetMetricStorageUsageExecutor(sqlExecutor func() ie.InternalExecutor) func(ctx context.Context, task task.Task) error {
-	f := func(ctx context.Context, task task.Task) error {
+	return func(ctx context.Context, task task.Task) error {
 		return CalculateStorageUsage(ctx, sqlExecutor)
 	}
-	return f
 }
 
 const (
@@ -85,12 +84,14 @@ const (
 	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
 )
 
-var gUpdateStorageUsageInterval = defaultInterval()
+var (
+	gUpdateStorageUsageInterval atomic.Int64
+	gCheckNewInterval           atomic.Int64
+)
 
-func defaultInterval() *atomic.Int64 {
-	v := new(atomic.Int64)
-	v.Store(int64(time.Minute))
-	return v
+func init() {
+	gUpdateStorageUsageInterval.Store(int64(time.Minute))
+	gCheckNewInterval.Store(int64(time.Minute))
 }
 
 func SetUpdateStorageUsageInterval(interval time.Duration) {
@@ -99,11 +100,6 @@ func SetUpdateStorageUsageInterval(interval time.Duration) {
 
 func GetUpdateStorageUsageInterval() time.Duration {
 	return time.Duration(gUpdateStorageUsageInterval.Load())
-}
-
-var QuitableWait = func(ctx context.Context) (*time.Ticker, error) {
-	next := time.NewTicker(GetUpdateStorageUsageInterval())
-	return next, nil
 }
 
 func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) (err error) {
@@ -115,9 +111,10 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	}()
 
 	// start background task to check new account
-	go CheckNewAccountSize(ctx, logger, sqlExecutor)
+	go checkNewAccountSize(ctx, logger, sqlExecutor)
 
 	next := time.NewTicker(time.Second)
+	defer next.Stop()
 
 	for {
 		select {
@@ -137,9 +134,8 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		// | sys             | root       | 2023-01-17 09:56:10 | open   | NULL           |        6 |          56 |      2082 | 0.341 | system account |
 		// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
-		executor := sqlExecutor()
 		logger.Debug("query storage size")
-		result := executor.Query(ctx, ShowAllAccountSQL, ie.NewOptsBuilder().Finish())
+		result := sqlExecutor().Query(ctx, ShowAllAccountSQL, ie.NewOptsBuilder().Finish())
 		err = result.Error()
 		if err != nil {
 			return err
@@ -147,13 +143,13 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 
 		cnt := result.RowCount()
 		if cnt == 0 {
-			next = time.NewTicker(time.Minute)
+			next.Reset(time.Minute)
 			logger.Warn("got empty account info, wait shortly")
 			continue
 		}
 		logger.Debug("collect storage_usage cnt", zap.Uint64("cnt", cnt))
 		StorageUsageFactory.Reset()
-		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
+		for rowIdx := uint64(0); rowIdx < cnt; rowIdx++ {
 
 			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
 			if err != nil {
@@ -170,15 +166,10 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		}
 
 		// next round
-		next, err = QuitableWait(ctx)
-		if err != nil {
-			return err
-		}
+		next.Reset(GetUpdateStorageUsageInterval())
 		logger.Debug("wait next round")
 	}
 }
-
-var gCheckNewInterval = defaultInterval()
 
 func SetStorageUsageCheckNewInterval(interval time.Duration) {
 	gCheckNewInterval.Store(int64(interval))
@@ -188,12 +179,12 @@ func GetStorageUsageCheckNewInterval() time.Duration {
 	return time.Duration(gCheckNewInterval.Load())
 }
 
-func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor func() ie.InternalExecutor) {
+func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor func() ie.InternalExecutor) {
 	var err error
-	ctx, span := trace.Start(ctx, "CheckNewAccountSize")
+	ctx, span := trace.Start(ctx, "checkNewAccountSize")
 	defer span.End()
 	defer func() {
-		logger.Debug("CheckNewAccountSize exit", zap.Error(err))
+		logger.Debug("checkNewAccountSize exit", zap.Error(err))
 	}()
 
 	opts := ie.NewOptsBuilder().Finish()
@@ -280,5 +271,4 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		next.Reset(GetStorageUsageCheckNewInterval())
 		logger.Debug("wait next round, check new account")
 	}
-
 }

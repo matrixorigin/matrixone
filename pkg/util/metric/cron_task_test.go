@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package test
+package metric
 
 import (
 	"context"
@@ -27,12 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/golang/mock/gomock"
 	"github.com/lni/goutils/leaktest"
-	"github.com/prashantv/gostub"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -100,21 +98,14 @@ func TestCalculateStorageUsage(t *testing.T) {
 		return frontend.NewInternalExecutor(pu, aicm)
 	}
 
-	qStub := gostub.Stub(&metric.QuitableWait, func(ctx2 context.Context) (*time.Ticker, error) {
-		cancel()
-		return nil, ctx2.Err()
-	})
-	defer qStub.Reset()
-
-	err = metric.CalculateStorageUsage(ctx, ieFactory)
+	err = CalculateStorageUsage(ctx, ieFactory)
 	require.Nil(t, err)
 
-	s := metric.StorageUsage("sys")
+	s := StorageUsage("sys")
 	dm := &dto.Metric{}
 	s.Write(dm)
 	logutil.Infof("size: %f", dm.GetGauge().GetValue())
 	t.Logf("size: %f", dm.GetGauge().GetValue())
-
 }
 
 func TestGetTenantInfo(t *testing.T) {

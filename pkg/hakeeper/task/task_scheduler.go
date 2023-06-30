@@ -158,5 +158,15 @@ func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (ordered
 			expired = append(expired, t)
 		}
 	}
+	for _, t := range tasks {
+		if time.Now().Sub(time.UnixMilli(t.LastHeartbeat)) > taskSchedulerDefaultTimeout {
+			for _, e := range expired {
+				if t.ID == e.ID {
+					break
+				}
+			}
+			expired = append(expired, t)
+		}
+	}
 	return orderedMap, expired
 }
