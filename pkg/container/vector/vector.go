@@ -1976,8 +1976,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	}
 
 	if v.GetType().IsVarlen() {
-		var err error
-		err = BuildVarlenaNoCopy(v, &v.col.([]types.Varlena)[oldLen], &(w.col.([]types.Varlena)[sel]), &w.area, mp)
+		err := BuildVarlenaNoCopy(v, &v.col.([]types.Varlena)[oldLen], &(w.col.([]types.Varlena)[sel]), &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -3080,14 +3079,18 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 }
 
 func BuildVarlenaNoCopy(vec *Vector, v1, v2 *types.Varlena, area2 *[]byte, m *mpool.MPool) error {
-	vlen := int((*v2)[0])
-	if vlen <= types.VarlenaInlineSize {
-		*v1 = *v2
+	if (*v2)[0] <= types.VarlenaInlineSize {
+		// use three dword operation to improve performance
+		p1 := v1.UnsafePtr()
+		p2 := v2.UnsafePtr()
+		*(*int64)(p1) = *(*int64)(p2)
+		*(*int64)(unsafe.Add(p1, 8)) = *(*int64)(unsafe.Add(p2, 8))
+		*(*int64)(unsafe.Add(p1, 16)) = *(*int64)(unsafe.Add(p2, 16))
 		return nil
 	}
 
 	bs := v2.GetByteSlice(*area2)
-	vlen = len(bs)
+	vlen := len(bs)
 	area1 := vec.GetArea()
 	voff := len(area1)
 	if voff+vlen < cap(area1) || m == nil {
