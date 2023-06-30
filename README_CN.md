@@ -149,7 +149,7 @@ MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或�
 
 #### 使用源代码搭建
 
-**步骤 1.** 搭建 Go 语言环境（至少需要 1.19 版本）
+**步骤 1.** 搭建 Go 语言环境（至少需要 1.20 版本）
 
 点击 <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> 入到 **Go** 的官方文档，按照官方指导安装步骤完成 **Go** 语言的安装。
 
@@ -178,11 +178,11 @@ MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或�
 
 - *选项 2*：获取 MatrixOne(稳定版本) 代码，搭建 MatrixOne
 
-1. 如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.7.0** 版本分支。
+1. 如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.8.0** 版本分支。
 
     ```
     git clone https://github.com/matrixorigin/matrixone.git
-    git checkout 0.7.0
+    git checkout 0.8.0
     cd matrixone
     ```
 
@@ -250,11 +250,18 @@ Docker version 20.10.17, build 100c701
 
 使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择稳定版本镜像，或开发版本镜像。
 
-- 稳定版本的镜像（0.7.0）
+- 稳定版本的镜像（0.8.0）
 
 ```bash
-docker pull matrixorigin/matrixone:0.7.0
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.7.0
+docker pull matrixorigin/matrixone:0.8.0
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.8.0
+```
+
+如果你使用的是中国大陆的网络，你可以拉取阿里云上的 MatrixOne 稳定版本镜像：
+
+```bash
+docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:0.8.0
+docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:0.8.0
 ```
 
 - 开发版本的镜像
@@ -264,6 +271,13 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.7.0
 ```bash
 docker pull matrixorigin/matrixone:nightly-commitnumber
 docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
+```
+
+如果你使用的是中国大陆的网络，你可以拉取阿里云上的 MatrixOne 开发版本镜像：
+
+```bash
+docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-commitnumber
+docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-commitnumber
 ```
 
 !!! info
@@ -309,7 +323,7 @@ Enter password:
 ## 🙌 <a id="contributing">参与贡献</a>
 
 欢迎大家对 MatrixOne 的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.cn/0.7.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
+请查看[贡献指南](https://docs.matrixorigin.cn/0.8.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ### 👏贡献者们
 
