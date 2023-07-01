@@ -174,8 +174,7 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
 			inputSels []int32
 		)
 		for i := range filterFuncs {
-			pos := mixin.columns.compPKPositions[i]
-			vec := vecs[pos]
+			vec := vecs[i]
 			mixin.sels = mixin.sels[:0]
 			filterFuncs[i](vec, inputSels, &mixin.sels)
 			if len(mixin.sels) == 0 {
@@ -231,7 +230,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 	// it returns the offset of the primary key in the pk vector.
 	// if the primary key is not found, it returns empty slice
 	filter = func(vecs []*vector.Vector) []int32 {
-		vec := vecs[mixin.columns.pkPos]
+		vec := vecs[0]
 		row := searchFunc(vec)
 		if row < 0 {
 			return nil
