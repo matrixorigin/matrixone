@@ -212,3 +212,49 @@ jobs:
             ${{ github.workspace }}/matrixone/code_coverage_reports_${{ github.event.pull_request.number}}_${{ github.run_id }}.zip
           retention-days: 7
           
+  pr-size-label:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request_target'
+    steps:
+      - name: size-label
+        uses: "guguducken/label-size-action@v0.0.2"
+        with:
+          size_token: ${{ secrets.TOKEN_ACTION }}
+          ignore: ".md,.pb.go"
+          sizes: >
+            {
+              "XS":0,
+              "S":10,
+              "M":100,
+              "L":500,
+              "XL":1000,
+              "XXL":2000
+            }
+
+  ducu_issue_check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
+    steps:
+      - uses: guguducken/pull-issue-reviewer@v0.3.0
+        with:
+          token_action: ${{ secrets.TOKEN_ACTION }}
+          uri_notice: ${{ secrets.DOCU_GROUP_HOOK }}
+          name_label: "doc influence"
+          reviewers: "lacrimosaprinz,dengn"
+          mentions: "Prinz,DengNan"
+          
+  chatgpt-review:
+    name: ChatGPT Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
+    steps:
+    - uses: feiskyer/ChatGPT-Reviewer@v0
+      name: ChatGPT Review
+      env:
+        GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      with:
+        model: "gpt-3.5-turbo"
+        temperature: 0.2
+        review_per_file: false
+        comment_per_file: false          
