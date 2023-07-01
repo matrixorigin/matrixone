@@ -1,4 +1,4 @@
-name:  Build and Push images
+name:  Build and Push Images
 
 on:
   schedule:
