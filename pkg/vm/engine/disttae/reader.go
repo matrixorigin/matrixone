@@ -326,11 +326,11 @@ func (r *blockReader) Read(
 	}
 
 	// get the block read filter
-	filter, _ := r.getReadFilter(r.proc)
+	filter, positions := r.getReadFilter(r.proc)
 
 	// read the block
 	bat, err := blockio.BlockRead(
-		r.ctx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
+		r.ctx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts, positions, filter, r.fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err

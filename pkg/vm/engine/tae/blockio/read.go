@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -36,25 +37,110 @@ import (
 
 type ReadFilter = func([]*vector.Vector) []int32
 
+func ReadByFilter(
+	ctx context.Context,
+	info *pkgcatalog.BlockInfo,
+	inputDeletes []int64,
+	columns []uint16,
+	colTypes []types.Type,
+	ts types.TS,
+	filter ReadFilter,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (sels []int32, err error) {
+	bat, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp)
+	if err != nil {
+		return
+	}
+	var deleteMask nulls.Bitmap
+
+	// merge persisted deletes
+	if !info.DeltaLocation().IsEmpty() {
+		var persistedDeletes *batch.Batch
+		// load from storage
+		if persistedDeletes, err = readBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+			return
+		}
+		rows := evalDeleteRowsByTimestamp(persistedDeletes, ts)
+		deleteMask.Merge(rows)
+	}
+
+	// merge input deletes
+	for _, row := range inputDeletes {
+		deleteMask.Add(uint64(row))
+	}
+
+	sels = filter(bat.Vecs)
+
+	// deslect deleted rows from sels
+	if !deleteMask.IsEmpty() {
+		var rows []int32
+		for _, row := range sels {
+			if !deleteMask.Contains(uint64(row)) {
+				rows = append(rows, row)
+			}
+		}
+		sels = rows
+	}
+	return
+}
+
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
 func BlockRead(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
-	deletes []int64,
-	seqnums []uint16,
+	inputDeletes []int64,
+	columns []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
+	filterColumns []uint16,
 	filter ReadFilter,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debugf("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
+		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
+
+	var (
+		sels []int32
+		err  error
+	)
+
+	if filter != nil && info.Sorted {
+		filterTypes := make([]types.Type, len(filterColumns))
+		for i, col := range filterColumns {
+			filterTypes[i] = colTypes[col]
+		}
+		if sels, err = ReadByFilter(
+			ctx, info, inputDeletes, filterColumns, filterTypes,
+			types.TimestampToTS(ts), filter, fs, mp,
+		); err != nil {
+			return nil, err
+		}
+		if len(sels) == 0 {
+			RecordReadFilterSelectivity(1, 1)
+		} else {
+			RecordReadFilterSelectivity(0, 1)
+		}
+
+		if len(sels) == 0 {
+			result := batch.NewWithSize(len(colTypes))
+			for i, typ := range colTypes {
+				if vp == nil {
+					result.Vecs[i] = vector.NewVec(typ)
+				} else {
+					result.Vecs[i] = vp.GetVector(typ)
+				}
+			}
+			return result, nil
+		}
+	}
+
 	columnBatch, err := BlockReadInner(
-		ctx, info, deletes, seqnums, colTypes,
-		types.TimestampToTS(ts), filter, fs, mp, vp,
+		ctx, info, inputDeletes, columns, colTypes,
+		types.TimestampToTS(ts), sels, filter, fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err
@@ -108,9 +194,10 @@ func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
 	inputDeleteRows []int64,
-	seqnums []uint16,
+	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
+	filtered []int32,
 	filter ReadFilter,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
@@ -126,7 +213,7 @@ func BlockReadInner(
 
 	// read block data from storage specified by meta location
 	if loaded, rowidPos, deleteMask, err = readBlockData(
-		ctx, seqnums, colTypes, info, ts, fs, mp, vp,
+		ctx, columns, colTypes, info, ts, fs, mp, vp,
 	); err != nil {
 		return
 	}
@@ -179,16 +266,15 @@ func BlockReadInner(
 			selectRows = rows
 		}
 
-		if len(selectRows) == 0 {
-			RecordReadFilterSelectivity(1, 1)
-		} else {
-			RecordReadFilterSelectivity(0, 1)
-		}
-
 		// logutil.Debugf("sels/length: %d/%d=%f",
 		// 	len(selectRows),
 		// 	loaded.Vecs[0].Length(),
 		// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
+
+		if len(selectRows) != len(filtered) {
+			// logutil.Infof("blockread %s filter %d/%d: base %s filter out %v\n")
+			panic(fmt.Sprintf("xxxxxxx %d!=%d", len(selectRows), len(filtered)))
+		}
 
 		// no rows selected, return empty batch
 		if len(selectRows) == 0 {
