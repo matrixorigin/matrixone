@@ -14,7 +14,7 @@ concurrency:
 jobs:
   ut-linux-x86:
     runs-on: ubuntu-latest
-    name: UT Test on Ubuntu/x64      
+    name: UT Test on Ubuntu/x86      
     steps:
       - uses: actions/checkout@v3
         with:
@@ -55,7 +55,7 @@ jobs:
        
   sca:
     runs-on: ubuntu-latest
-    name: SCA Test on Ubuntu/x64
+    name: SCA Test on Ubuntu/x86
     steps:
       - uses: actions/checkout@v3
         with:
