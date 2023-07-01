@@ -445,9 +445,10 @@ type withFilterMixin struct {
 	filterState struct {
 		evaluated bool
 		//point select for primary key
-		expr      *plan.Expr
-		filter    blockio.ReadFilter
-		positions []uint16 // positions of the columns in the filter
+		expr     *plan.Expr
+		filter   blockio.ReadFilter
+		seqnums  []uint16 // seqnums of the columns in the filter
+		colTypes []types.Type
 	}
 
 	sels []int32

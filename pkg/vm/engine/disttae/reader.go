@@ -121,11 +121,10 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 }
 
 func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (
-	filter blockio.ReadFilter, positions []uint16,
+	filter blockio.ReadFilter,
 ) {
 	if mixin.filterState.evaluated {
 		filter = mixin.filterState.filter
-		positions = mixin.filterState.positions
 		return
 	}
 	pk := mixin.tableDef.Pkey
@@ -141,7 +140,7 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (
 }
 
 func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
-	filter blockio.ReadFilter, positions []uint16,
+	filter blockio.ReadFilter,
 ) {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
@@ -189,13 +188,17 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
 
 	mixin.filterState.evaluated = true
 	mixin.filterState.filter = filter
-	mixin.filterState.positions = mixin.columns.compPKPositions
-	positions = mixin.filterState.positions
+	mixin.filterState.seqnums = make([]uint16, 0, len(mixin.columns.compPKPositions))
+	mixin.filterState.colTypes = make([]types.Type, 0, len(mixin.columns.compPKPositions))
+	for _, pos := range mixin.columns.compPKPositions {
+		mixin.filterState.seqnums = append(mixin.filterState.seqnums, mixin.columns.seqnums[pos])
+		mixin.filterState.colTypes = append(mixin.filterState.colTypes, mixin.columns.colTypes[pos])
+	}
 	return
 }
 
 func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
-	filter blockio.ReadFilter, positions []uint16,
+	filter blockio.ReadFilter,
 ) {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
@@ -239,8 +242,8 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 	}
 	mixin.filterState.evaluated = true
 	mixin.filterState.filter = filter
-	mixin.filterState.positions = []uint16{uint16(mixin.columns.pkPos)}
-	positions = mixin.filterState.positions
+	mixin.filterState.seqnums = []uint16{uint16(mixin.columns.seqnums[mixin.columns.pkPos])}
+	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 	return
 }
 
@@ -318,12 +321,12 @@ func (r *blockReader) Read(
 	r.tryUpdateColumns(cols)
 
 	// get the block read filter
-	filter, positions := r.getReadFilter(r.proc)
+	filter := r.getReadFilter(r.proc)
 
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(positions, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
 		} else {
 			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
 		}
@@ -333,7 +336,11 @@ func (r *blockReader) Read(
 
 	// read the block
 	bat, err := blockio.BlockRead(
-		r.ctx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts, positions, filter, r.fs, mp, vp,
+		r.ctx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
+		r.filterState.seqnums,
+		r.filterState.colTypes,
+		filter,
+		r.fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err

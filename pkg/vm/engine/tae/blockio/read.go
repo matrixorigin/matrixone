@@ -92,7 +92,8 @@ func BlockRead(
 	columns []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
-	filterColumns []uint16,
+	filterSeqnums []uint16,
+	filterColTypes []types.Type,
 	filter ReadFilter,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
@@ -108,12 +109,8 @@ func BlockRead(
 	)
 
 	if filter != nil && info.Sorted {
-		filterTypes := make([]types.Type, len(filterColumns))
-		for i, col := range filterColumns {
-			filterTypes[i] = colTypes[col]
-		}
 		if sels, err = ReadByFilter(
-			ctx, info, inputDeletes, filterColumns, filterTypes,
+			ctx, info, inputDeletes, filterSeqnums, filterColTypes,
 			types.TimestampToTS(ts), filter, fs, mp,
 		); err != nil {
 			return nil, err
