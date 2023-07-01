@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 -- @session:id=1&user=default_1:admin&password=111111
 create role role1;
@@ -27,3 +28,4 @@ drop table db1.t3;
 drop database db1;
 -- @session
 drop account default_1;
+set global enable_privilege_cache = on;

@@ -53,7 +53,9 @@ func stopProfile() {
 }
 
 func main() {
-	tae, _ := db.Open(sampleDir, nil)
+	ctx := context.Background()
+
+	tae, _ := db.Open(ctx, sampleDir, nil)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(10, 3)
@@ -65,7 +67,7 @@ func main() {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName, "", "")
 		_, _ = db.CreateRelation(schema)
-		if err := txn.Commit(); err != nil {
+		if err := txn.Commit(context.Background()); err != nil {
 			panic(err)
 		}
 	}
@@ -88,7 +90,7 @@ func main() {
 			if err := rel.Append(context.Background(), b); err != nil {
 				panic(err)
 			}
-			if err := txn.Commit(); err != nil {
+			if err := txn.Commit(context.Background()); err != nil {
 				panic(err)
 			}
 		}
@@ -122,7 +124,7 @@ func main() {
 			for blkIt.Valid() {
 				blk := blkIt.GetBlock()
 				logutil.Info(blk.String())
-				view, err := blk.GetColumnDataById(0)
+				view, err := blk.GetColumnDataById(context.Background(), 0)
 				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), view.Length())
 				if err != nil {
 					panic(err)
@@ -132,9 +134,9 @@ func main() {
 			}
 			segIt.Next()
 		}
-		if err = txn.Commit(); err != nil {
+		if err = txn.Commit(context.Background()); err != nil {
 			panic(err)
 		}
 	}
-	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
+	logutil.Info(tae.Catalog.SimplePPString(common.PPL1))
 }

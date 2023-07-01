@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -176,6 +177,10 @@ type Config struct {
 		// feature was turned off in 0.8 and is not supported for now. The replacement solution is
 		// to return a retry error and let the whole computation re-execute.
 		EnableRefreshExpression bool `toml:"enable-refresh-expression"`
+		// EnableLeakCheck enable txn leak check
+		EnableLeakCheck bool `toml:"enable-leak-check"`
+		// MaxActiveAges a txn max active duration
+		MaxActiveAges toml.Duration `toml:"max-active-ages"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
@@ -183,6 +188,9 @@ type Config struct {
 
 	// AutoIncrement auto increment config
 	AutoIncrement incrservice.Config `toml:"auto-increment"`
+
+	// PrimaryKeyCheck
+	PrimaryKeyCheck bool `toml:"primary-key-check"`
 }
 
 func (c *Config) Validate() error {
@@ -255,9 +263,17 @@ func (c *Config) Validate() error {
 	if !txn.ValidTxnMode(c.Txn.Mode) {
 		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
 	}
+	if c.Txn.MaxActiveAges.Duration == 0 {
+		c.Txn.MaxActiveAges.Duration = time.Minute * 2
+	}
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
+	if c.PrimaryKeyCheck {
+		plan.CNPrimaryCheck = true
+	} else {
+		plan.CNPrimaryCheck = false
+	}
 	return nil
 }
 

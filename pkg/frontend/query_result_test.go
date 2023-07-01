@@ -70,8 +70,9 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
+	testutil.SetupAutoIncrService()
 	//new session
-	ses := NewSession(proto, testPool, pu, GSysVariables, true, nil)
+	ses := NewSession(proto, testPool, pu, GSysVariables, true, nil, nil)
 	return ses
 }
 

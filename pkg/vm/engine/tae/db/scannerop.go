@@ -317,7 +317,7 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 			return jobs.NewDelSegTask(ctx, txn, mergedSegs), nil
 		}
-		_, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, segScopes, factory)
+		_, err := s.db.Runtime.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, segScopes, factory)
 		if err != nil {
 			logutil.Infof("[Mergeblocks] Schedule del seg errinfo=%v", err)
 			return
@@ -332,9 +332,9 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, s.db.Scheduler)
+		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, s.db.Runtime)
 	}
-	task, err := s.db.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
+	task, err := s.db.Runtime.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
 		if err != tasks.ErrScheduleScopeConflict {
 			logutil.Infof("[Mergeblocks] Schedule error info=%v", err)

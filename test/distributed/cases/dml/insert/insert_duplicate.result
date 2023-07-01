@@ -282,7 +282,7 @@ create table indup_fk2(col1 int,col2 varchar(25),col3 tinyint primary key,constr
 insert into indup_fk1 values (2,'yellow',20),(10,'apple',50),(11,'opppo',51);
 insert into indup_fk2 values(2,'score',1),(2,'student',4),(10,'goods',2);
 insert into indup_fk2 values(10,'food',1)on duplicate key update col1=50;
-Cannot add or update a child row: a foreign key constraint fails (`insert_duplicate`.`indup_fk2`, CONSTRAINT `ck` FOREIGN KEY (`col1`) REFERENCES `indup_fk1` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT)
+internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into indup_fk2 values(50,'food',1)on duplicate key update col1=values(col1);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from indup_fk1;

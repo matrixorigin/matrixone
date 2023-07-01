@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
@@ -302,10 +301,6 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 		return bat, nil
 	}
 
-	// XXX Here is a good place to trigger an panic for fault injection.
-	// fault.AddFaultPoint("panic_in_batch_append", ":::", "PANIC", 0, "")
-	fault.TriggerFault("panic_in_batch_append")
-
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
 			return bat, err
@@ -339,6 +334,10 @@ func (bat *Batch) SubCnt(cnt int) {
 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
 }
 
+func (bat *Batch) SetCnt(cnt int64) {
+	atomic.StoreInt64(&bat.Cnt, cnt)
+}
+
 func (bat *Batch) GetCnt() int64 {
 	return atomic.LoadInt64(&bat.Cnt)
 }
@@ -352,27 +351,9 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 }
 
 func (bat *Batch) AntiShrink(sels []int64) {
-	selsMp := make(map[int64]bool)
-	for _, sel := range sels {
-		selsMp[sel] = true
-	}
-	newSels := make([]int64, 0, bat.Length()-len(sels))
-	for i := 0; i < bat.Length(); i++ {
-		if ok := selsMp[int64(i)]; !ok {
-			newSels = append(newSels, int64(i))
-		}
-	}
-	mp := make(map[*vector.Vector]uint8)
+	length := len(bat.Zs)
 	for _, vec := range bat.Vecs {
-		if _, ok := mp[vec]; ok {
-			continue
-		}
-		mp[vec]++
-		vec.Shrink(newSels, false)
+		vec.Shrink(sels, true)
 	}
-	vs := bat.Zs
-	for i, sel := range newSels {
-		vs[i] = vs[sel]
-	}
-	bat.Zs = bat.Zs[:len(newSels)]
+	bat.Zs = bat.Zs[:length-len(sels)]
 }

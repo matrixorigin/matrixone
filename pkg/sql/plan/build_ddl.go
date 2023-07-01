@@ -35,7 +35,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	var tableDef plan.TableDef
 
 	// check view statement
-	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{
-				NullAbility:  true,
+				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
 				OriginString: "",
 			},
@@ -249,7 +249,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 		}
 		dropSequence.Table = ""
 	}
-	if obj != nil && obj.PubAccountId != -1 {
+	if obj != nil && obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop sequence in subscription database")
 	}
 
@@ -280,6 +280,9 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
@@ -316,6 +319,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		createTable.Database = ctx.DefaultDatabase()
 	} else {
 		createTable.Database = string(stmt.Table.SchemaName)
+	}
+
+	if stmt.Temporary && stmt.PartitionOption != nil {
+		return nil, moerr.NewPartitionNoTemporary(ctx.GetContext())
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
@@ -448,7 +455,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			}})
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	bindContext := NewBindContext(builder, nil)
 
 	// set partition(unsupport now)
@@ -471,10 +478,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			return nil, err
 		}
 
-		//err = addPartitionTableDef(ctx.GetContext(), string(stmt.Table.ObjectName), createTable)
-		//if err != nil {
-		//	return nil, err
-		//}
+		err = addPartitionTableDef(ctx.GetContext(), string(stmt.Table.ObjectName), createTable)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &Plan{
@@ -490,58 +497,58 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 }
 
 // addPartitionTableDef constructs the table def for the partition table
-// func addPartitionTableDef(ctx context.Context, mainTableName string, createTable *plan.CreateTable) error {
-// 	//add partition table
-// 	//there is no index for the partition table
-// 	//there is no foreign key for the partition table
-// 	if !util.IsValidNameForPartitionTable(mainTableName) {
-// 		return moerr.NewInvalidInput(ctx, "invalid main table name %s", mainTableName)
-// 	}
+func addPartitionTableDef(ctx context.Context, mainTableName string, createTable *plan.CreateTable) error {
+	//add partition table
+	//there is no index for the partition table
+	//there is no foreign key for the partition table
+	if !util.IsValidNameForPartitionTable(mainTableName) {
+		return moerr.NewInvalidInput(ctx, "invalid main table name %s", mainTableName)
+	}
 
-// 	//common properties
-// 	partitionProps := []*plan.Property{
-// 		{
-// 			Key:   catalog.SystemRelAttr_Kind,
-// 			Value: catalog.SystemPartitionRel,
-// 		},
-// 		{
-// 			Key:   catalog.SystemRelAttr_CreateSQL,
-// 			Value: "",
-// 		},
-// 	}
-// 	partitionPropsDef := &plan.TableDef_DefType{
-// 		Def: &plan.TableDef_DefType_Properties{
-// 			Properties: &plan.PropertiesDef{
-// 				Properties: partitionProps,
-// 			},
-// 		}}
+	//common properties
+	partitionProps := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemPartitionRel,
+		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: "",
+		},
+	}
+	partitionPropsDef := &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: partitionProps,
+			},
+		}}
 
-// 	partitionDef := createTable.TableDef.Partition
-// 	partitionTableDefs := make([]*TableDef, partitionDef.PartitionNum)
+	partitionDef := createTable.TableDef.Partition
+	partitionTableDefs := make([]*TableDef, partitionDef.PartitionNum)
 
-// 	partitionTableNames := make([]string, partitionDef.PartitionNum)
-// 	for i := 0; i < int(partitionDef.PartitionNum); i++ {
-// 		part := partitionDef.Partitions[i]
-// 		ok, partitionTableName := util.MakeNameOfPartitionTable(part.GetPartitionName(), mainTableName)
-// 		if !ok {
-// 			return moerr.NewInvalidInput(ctx, "invalid partition table name %s", partitionTableName)
-// 		}
+	partitionTableNames := make([]string, partitionDef.PartitionNum)
+	for i := 0; i < int(partitionDef.PartitionNum); i++ {
+		part := partitionDef.Partitions[i]
+		ok, partitionTableName := util.MakeNameOfPartitionTable(part.GetPartitionName(), mainTableName)
+		if !ok {
+			return moerr.NewInvalidInput(ctx, "invalid partition table name %s", partitionTableName)
+		}
 
-// 		//save the table name for a partition
-// 		part.PartitionTableName = partitionTableName
-// 		partitionTableNames[i] = partitionTableName
+		//save the table name for a partition
+		part.PartitionTableName = partitionTableName
+		partitionTableNames[i] = partitionTableName
 
-// 		partitionTableDefs[i] = &TableDef{
-// 			Name: partitionTableName,
-// 			Cols: createTable.TableDef.Cols, //same as the main table's column defs
-// 		}
-// 		partitionTableDefs[i].Pkey = createTable.TableDef.GetPkey()
-// 		partitionTableDefs[i].Defs = append(partitionTableDefs[i].Defs, partitionPropsDef)
-// 	}
-// 	partitionDef.PartitionTableNames = partitionTableNames
-// 	createTable.PartitionTables = partitionTableDefs
-// 	return nil
-// }
+		partitionTableDefs[i] = &TableDef{
+			Name: partitionTableName,
+			Cols: createTable.TableDef.Cols, //same as the main table's column defs
+		}
+		partitionTableDefs[i].Pkey = createTable.TableDef.GetPkey()
+		partitionTableDefs[i].Defs = append(partitionTableDefs[i].Defs, partitionPropsDef)
+	}
+	partitionDef.PartitionTableNames = partitionTableNames
+	createTable.PartitionTables = partitionTableDefs
+	return nil
+}
 
 // buildPartitionByClause build partition by clause info and semantic check.
 // Currently, sub partition and partition value verification are not supported
@@ -835,21 +842,27 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			clusterByKeys = append(clusterByKeys, colName)
 		}
 
-		clusterByColName := clusterByKeys[0]
 		if lenClusterBy == 1 {
+			clusterByColName := clusterByKeys[0]
 			for _, col := range createTable.TableDef.Cols {
 				if col.Name == clusterByColName {
 					col.ClusterBy = true
 				}
 			}
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name: clusterByColName,
+			}
 		} else {
-			clusterByColName = util.BuildCompositeClusterByColumnName(clusterByKeys)
+			clusterByColName := util.BuildCompositeClusterByColumnName(clusterByKeys)
 			colDef := MakeHiddenColDefByName(clusterByColName)
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[clusterByColName] = colDef
-		}
-		createTable.TableDef.ClusterBy = &plan.ClusterByDef{
-			Name: clusterByColName,
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name:         clusterByColName,
+				CompCbkeyCol: colDef,
+			}
 		}
 	}
 
@@ -1185,7 +1198,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' which is published by other account", truncateTable.Table)
 		}
 
@@ -1268,7 +1281,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
 		}
 
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
 		}
 
@@ -1328,7 +1341,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		if tableDef.ViewSql == nil {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop view in subscription database")
 		}
 	}
@@ -1424,7 +1437,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create index in subscription database")
 	}
 	// check index
@@ -1512,7 +1525,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
 	}
 
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
 	}
 
@@ -1572,7 +1585,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 				viewName)
 		}
 	} else {
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter view in subscription database")
 		}
 		if oldViewDef.ViewSql == nil {
@@ -1627,7 +1640,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef.ViewSql != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
 	}
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
 	alterTable.Database = databaseName
@@ -2009,7 +2022,7 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tblName)
 		}
 
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot lock table in subscription database")
 		}
 

@@ -532,7 +532,7 @@ func TestMultipleRangeLocks(t *testing.T) {
 	)
 }
 
-func TestLockResultWithNoConfict(t *testing.T) {
+func TestLockResultWithNoConflict(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -565,7 +565,7 @@ func TestLockResultWithNoConfict(t *testing.T) {
 	)
 }
 
-func TestLockResultWithConfictAndTxnCommitted(t *testing.T) {
+func TestLockResultWithConflictAndTxnCommitted(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -616,7 +616,7 @@ func TestLockResultWithConfictAndTxnCommitted(t *testing.T) {
 	)
 }
 
-func TestLockResultWithConfictAndTxnAborted(t *testing.T) {
+func TestLockResultWithConflictAndTxnAborted(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -804,6 +804,7 @@ func waitWaiters(
 	s *service,
 	table uint64,
 	key []byte,
-	waitersCount int) {
-	require.NoError(t, WaitWaiters(s, table, key, waitersCount))
+	waitersCount int,
+	sameTxnCounts ...int) {
+	require.NoError(t, WaitWaiters(s, table, key, waitersCount, sameTxnCounts...))
 }

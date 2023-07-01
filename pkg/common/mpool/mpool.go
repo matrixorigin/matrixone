@@ -86,6 +86,10 @@ func (s *MPoolStats) RecordAlloc(tag string, sz int64) int64 {
 
 // Update free stats, return curr bytes.
 func (s *MPoolStats) RecordFree(tag string, sz int64) int64 {
+	if sz < 0 {
+		logutil.Errorf("Mpool %s free bug, stats: %s", tag, s.Report("    "))
+		panic(moerr.NewInternalErrorNoCtx("mpool freed -1"))
+	}
 	s.NumFree.Add(1)
 	s.NumFreeBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(-sz)
@@ -97,6 +101,10 @@ func (s *MPoolStats) RecordFree(tag string, sz int64) int64 {
 }
 
 func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
+	if sz < 0 {
+		logutil.Errorf("Mpool %s free bug, stats: %s", tag, s.Report("    "))
+		panic(moerr.NewInternalErrorNoCtx("mpool freed -1"))
+	}
 	s.NumFree.Add(nfree)
 	s.NumFreeBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(-sz)
@@ -122,15 +130,18 @@ const (
 // Pool emement size
 var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
-// Zeros, enough for largest pool element
-var kZeroSlice = make([]byte, 1024)
-
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
 	poolId       int64
 	allocSz      int32
 	fixedPoolIdx int8
 	guard        [3]uint8
+}
+
+func init() {
+	if unsafe.Sizeof(memHdr{}) != kMemHdrSz {
+		panic("memory header size assertion failed")
+	}
 }
 
 func (pHdr *memHdr) SetGuard() {
@@ -218,7 +229,10 @@ func (fp *fixedPool) alloc(sz int32) *memHdr {
 		pHdr.allocSz = sz
 		// Zero slice.  Go requires slice to be zeroed.
 		bs := unsafe.Slice((*byte)(unsafe.Add(ret, kMemHdrSz)), fp.eleSz)
-		copy(bs, kZeroSlice)
+		// the compiler will optimize this loop to memclr
+		for i := range bs {
+			bs[i] = 0
+		}
 		return pHdr
 	}
 }
@@ -303,14 +317,16 @@ func (d *mpoolDetails) reportJson() string {
 
 // The memory pool.
 type MPool struct {
-	id      int64      // mpool generated, used to look up the MPool
-	tag     string     // user supplied, for debug/inspect
-	cap     int64      // pool capacity
-	stats   MPoolStats // stats
-	noFixed bool
-	noLock  bool
-	pools   [NumFixedPool]fixedPool
-	details *mpoolDetails
+	id         int64      // mpool generated, used to look up the MPool
+	tag        string     // user supplied, for debug/inspect
+	cap        int64      // pool capacity
+	stats      MPoolStats // stats
+	noFixed    bool
+	noLock     bool
+	available  int32 // 0: available, 1: unavailable
+	inUseCount int32 // number of in use call
+	pools      [NumFixedPool]fixedPool
+	details    *mpoolDetails
 
 	// To remove: this thing is highly unlikely to be of any good use.
 	sels *sync.Pool
@@ -319,6 +335,11 @@ type MPool struct {
 const (
 	NoFixed = 1
 	NoLock  = 2
+)
+
+const (
+	Available = iota
+	Unavailable
 )
 
 func (mp *MPool) PutSels(sels []int64) {
@@ -351,6 +372,14 @@ func (mp *MPool) Cap() int64 {
 }
 
 func (mp *MPool) destroy() {
+	if atomic.LoadInt32(&mp.inUseCount) != 0 {
+		logutil.Errorf("Mpool %s already in use", mp.tag)
+		return
+	}
+	if !atomic.CompareAndSwapInt32(&mp.available, 0, 1) {
+		logutil.Errorf("Mpool %s double destroy", mp.tag)
+		return
+	}
 	if mp.stats.NumAlloc.Load() < mp.stats.NumFree.Load() {
 		logutil.Errorf("mp error: %s", mp.stats.Report(""))
 	}
@@ -503,6 +532,11 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 		// later when we try to free, we will not be able to get a[0]
 		return nil, nil
 	}
+	atomic.AddInt32(&mp.inUseCount, 1)
+	defer atomic.AddInt32(&mp.inUseCount, -1)
+	if atomic.LoadInt32(&mp.available) == Unavailable {
+		return nil, moerr.NewInternalErrorNoCtx("mpool %s unavailable for alloc", mp.tag)
+	}
 
 	// if global undercap
 	gcurr := globalStats.RecordAlloc("global", int64(sz))
@@ -556,9 +590,14 @@ func (mp *MPool) Free(bs []byte) {
 	if !pHdr.CheckGuard() {
 		panic(moerr.NewInternalErrorNoCtx("mp header corruption"))
 	}
+	if atomic.LoadInt32(&mp.available) == Unavailable {
+		panic(moerr.NewInternalErrorNoCtx("mpool %s unavailable for alloc", mp.tag))
+	}
 
 	if pHdr.poolId == mp.id {
-		if pHdr.allocSz == -1 {
+		atomic.AddInt32(&mp.inUseCount, 1)
+		defer atomic.AddInt32(&mp.inUseCount, -1)
+		if atomic.LoadInt32(&pHdr.allocSz) == -1 {
 			// double free.
 			panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 		}
@@ -573,7 +612,9 @@ func (mp *MPool) Free(bs []byte) {
 			mp.pools[pHdr.fixedPoolIdx].free(pHdr)
 		} else {
 			// non fixed pool just mark it freed
-			pHdr.allocSz = -1
+			if !atomic.CompareAndSwapInt32(&pHdr.allocSz, pHdr.allocSz, -1) {
+				panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
+			}
 		}
 	} else {
 		// cross pool free.
@@ -676,6 +717,7 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int) ([]byte, error) {
 	return ret, nil
 }
 
+/*
 func (mp *MPool) Increase(nb int64) error {
 	gcurr := globalStats.RecordAlloc("global", nb)
 	if gcurr > GlobalCap() {
@@ -696,6 +738,7 @@ func (mp *MPool) Decrease(nb int64) {
 	mp.stats.RecordFree(mp.tag, nb)
 	globalStats.RecordFree("global", nb)
 }
+*/
 
 func MakeSliceWithCap[T any](n, cap int, mp *MPool) ([]T, error) {
 	var t T

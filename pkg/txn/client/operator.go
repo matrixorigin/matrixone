@@ -65,14 +65,14 @@ var (
 	}
 )
 
-// WithTxnReadyOnly setup readyonly flag
+// WithTxnReadyOnly setup readonly flag
 func WithTxnReadyOnly() TxnOption {
 	return func(tc *txnOperator) {
 		tc.option.readyOnly = true
 	}
 }
 
-// WithTxnDisable1PCOpt disable 1pc optimisation on distributed transaction. By default, mo enables 1pc
+// WithTxnDisable1PCOpt disable 1pc opt on distributed transaction. By default, mo enables 1pc
 // optimization for distributed transactions. For write operations, if all partitions' prepares are
 // executed successfully, then the transaction is considered committed and returned directly to the
 // client. Partitions' prepared data are committed asynchronously.
@@ -82,7 +82,7 @@ func WithTxnDisable1PCOpt() TxnOption {
 	}
 }
 
-// WithTxnCNCoordinator set cn txn coodinator
+// WithTxnCNCoordinator set cn txn coordinator
 func WithTxnCNCoordinator() TxnOption {
 	return func(tc *txnOperator) {
 		tc.option.coordinator = true
@@ -93,6 +93,13 @@ func WithTxnCNCoordinator() TxnOption {
 func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	return func(tc *txnOperator) {
 		tc.option.lockService = lockService
+	}
+}
+
+// WithTxnCreateBy set txn create by.Used to check leak txn
+func WithTxnCreateBy(createBy string) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.createBy = createBy
 	}
 }
 
@@ -142,6 +149,7 @@ type txnOperator struct {
 		enableCacheWrite bool
 		disable1PCOpt    bool
 		coordinator      bool
+		createBy         string
 		lockService      lockservice.LockService
 	}
 
@@ -182,6 +190,7 @@ func newTxnOperatorWithSnapshot(
 
 	tc := &txnOperator{sender: sender}
 	tc.mu.txn = v.Txn
+	tc.mu.txn.Mirror = true
 	tc.txnID = v.Txn.ID
 	tc.mu.lockTables = v.LockTables
 	tc.option.disable1PCOpt = v.Disable1PCOpt
@@ -258,20 +267,19 @@ func (tc *txnOperator) UpdateSnapshot(
 		return nil
 	}
 
+	minTS := ts
 	// we need to waiter the latest snapshot ts which is greater than the current snapshot
-	if ts.IsEmpty() {
-		lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
-			ctx,
-			tc.mu.txn.SnapshotTS)
-		if err != nil {
-			return err
-		}
-		ts = lastSnapshotTS
+	if minTS.IsEmpty() {
+		minTS = tc.mu.txn.SnapshotTS
 	}
 
-	if tc.mu.txn.SnapshotTS.Less(ts) {
-		tc.mu.txn.SnapshotTS = ts
+	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
+		ctx,
+		minTS)
+	if err != nil {
+		return err
 	}
+	tc.mu.txn.SnapshotTS = lastSnapshotTS
 	return nil
 }
 
@@ -370,12 +378,22 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
 	util.LogTxnRollback(tc.getTxnMeta(false))
+	if tc.workspace != nil {
+		if err := tc.workspace.Rollback(ctx); err != nil {
+			return err
+		}
+	}
 
 	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if err := tc.checkStatus(true); err != nil {
+		return err
+	}
+
 	defer func() {
 		tc.mu.txn.Status = txn.TxnStatus_Aborted
 		tc.closeLocked()
-		tc.mu.Unlock()
 	}()
 
 	if tc.needUnlockLocked() {
@@ -409,8 +427,11 @@ func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
 		panic("lock in optimistic mode")
 	}
 
-	if err := tc.checkStatus(true); err != nil {
-		return err
+	// mirror txn can not check status, and the txn's status is on the creation cn of the txn.
+	if !tc.mu.txn.Mirror {
+		if err := tc.checkStatus(true); err != nil {
+			return err
+		}
 	}
 
 	return tc.doAddLockTableLocked(value)
@@ -452,6 +473,11 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if commit {
+		if tc.workspace != nil {
+			if err := tc.workspace.Commit(ctx); err != nil {
+				return nil, err
+			}
+		}
 		tc.mu.Lock()
 		defer func() {
 			tc.closeLocked()
@@ -741,7 +767,7 @@ func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) err
 	case txn.TxnStatus_Committed, txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtx("invalid respose status for commit, %v", txnMeta.Status))
+		panic(moerr.NewInternalErrorNoCtx("invalid response status for commit, %v", txnMeta.Status))
 	}
 }
 
@@ -759,7 +785,7 @@ func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) e
 	case txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtx("invalud response status for rollback %v", txnMeta.Status))
+		panic(moerr.NewInternalErrorNoCtx("invalid response status for rollback %v", txnMeta.Status))
 	}
 }
 
@@ -779,6 +805,17 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) {
+	// rc mode need to see the committed value, so wait logtail applied
+	if tc.mu.txn.IsRCIsolation() &&
+		tc.timestampWaiter != nil {
+		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
+		if err != nil {
+			util.GetLogger().Error("txn wait committed log applied failed in rc mode",
+				util.TxnField(tc.mu.txn),
+				zap.Error(err))
+		}
+	}
+
 	if err := tc.option.lockService.Unlock(
 		ctx,
 		tc.mu.txn.ID,

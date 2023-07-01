@@ -331,12 +331,16 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 		return
 	}
 	newCap := (size + 63) / 64
+	n.len = int64(size)
 	if newCap > cap(n.data) {
 		data := make([]uint64, newCap)
 		copy(data, n.data)
 		n.data = data
+		return
 	}
-	n.len = int64(size)
+	if len(n.data) < newCap {
+		n.data = n.data[:newCap]
+	}
 }
 
 func (n *Bitmap) Filter(sels []int64) *Bitmap {
@@ -355,8 +359,16 @@ func (n *Bitmap) Count() int {
 	if n.emptyFlag.Load() == kEmptyFlagEmpty { //must be empty
 		return 0
 	}
-	for i := 0; i < len(n.data); i++ {
+	for i := int64(0); i < n.len/64; i++ {
 		cnt += bits.OnesCount64(n.data[i])
+	}
+	if offset := n.len % 64; offset > 0 {
+		start := (n.len / 64) * 64
+		for i, j := start, start+offset; i < j; i++ {
+			if n.Contains(uint64(i)) {
+				cnt++
+			}
+		}
 	}
 	if cnt > 0 {
 		n.emptyFlag.Store(kEmptyFlagNotEmpty)
@@ -376,6 +388,20 @@ func (n *Bitmap) ToArray() []uint64 {
 	for itr.HasNext() {
 		r := itr.Next()
 		rows = append(rows, r)
+	}
+	return rows
+}
+
+func (n *Bitmap) ToI64Arrary() []int64 {
+	var rows []int64
+	if n.EmptyByFlag() {
+		return rows
+	}
+
+	itr := n.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		rows = append(rows, int64(r))
 	}
 	return rows
 }

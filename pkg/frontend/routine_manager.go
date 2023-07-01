@@ -67,7 +67,7 @@ func NewKillRecord(killtime time.Time, version uint64) KillRecord {
 }
 
 func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine, version uint64) {
-	if tenantID == sysAccountID || rt != nil {
+	if tenantID == sysAccountID || rt == nil {
 		return
 	}
 
@@ -80,7 +80,7 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine, ver
 }
 
 func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
-	if tenantID == sysAccountID || rt != nil {
+	if tenantID == sysAccountID || rt == nil {
 		return
 	}
 
@@ -202,7 +202,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm)
+	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm, nil)
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetConnectContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
@@ -320,6 +320,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
+	routine.updateGoroutineId()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	protocol := routine.getProtocol()

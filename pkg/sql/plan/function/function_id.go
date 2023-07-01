@@ -294,6 +294,7 @@ const (
 	MO_TABLE_COL_MIN // table column min value
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
+	PURGE_LOG   // purge mo internal log, like rawlog, statement_info, metric
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -497,6 +498,7 @@ var functionIdRegister = map[string]int32{
 	"json_quote":                     JSON_QUOTE,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
+	"dense_rank":                     DENSE_RANK,
 	"add_fault_point":                ADD_FAULT_POINT,
 	"remove_fault_point":             REMOVE_FAULT_POINT,
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
@@ -537,6 +539,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
 	"mo_log_date":                    MO_LOG_DATE,
+	"purge_log":                      PURGE_LOG,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,

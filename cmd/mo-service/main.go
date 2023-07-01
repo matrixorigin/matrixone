@@ -138,7 +138,7 @@ func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, gl
 		return err
 	}
 
-	fs, err := cfg.createFileService(defines.LocalFileServiceName, globalCounterSet, st, uuid)
+	fs, err := cfg.createFileService(ctx, defines.LocalFileServiceName, globalCounterSet, st, uuid)
 	if err != nil {
 		return err
 	}
@@ -165,6 +165,9 @@ func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, gl
 	}
 }
 
+// serviceWG control motrace/mometric quit as last one.
+var serviceWG sync.WaitGroup
+
 func startCNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
@@ -174,7 +177,9 @@ func startCNService(
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
 	}
+	serviceWG.Add(1)
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
+		defer serviceWG.Done()
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getCNServiceConfig()
@@ -222,7 +227,9 @@ func startDNService(
 	if err != nil {
 		return err
 	}
+	serviceWG.Add(1)
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
+		defer serviceWG.Done()
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getDNServiceConfig()
@@ -260,7 +267,9 @@ func startLogService(
 	if err := s.Start(); err != nil {
 		panic(err)
 	}
+	serviceWG.Add(1)
 	return stopper.RunNamedTask("log-service", func(ctx context.Context) {
+		defer serviceWG.Done()
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		if cfg.LogService.BootstrapConfig.BootstrapCluster {
 			logutil.Infof("bootstrapping hakeeper...")
@@ -281,7 +290,9 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
+	serviceWG.Add(1)
 	return stopper.RunNamedTask("proxy-service", func(ctx context.Context) {
+		defer serviceWG.Done()
 		s, err := proxy.NewServer(
 			ctx,
 			cfg.getProxyConfig(),
@@ -334,7 +345,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, SV.LogsExtension)
+		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, SV.LogsExtension, !SV.DisableSqlWriter)
 		_ = table.SetPathBuilder(ctx, SV.PathBuilder)
 	}
 	if !SV.DisableTrace {
@@ -352,6 +363,8 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			}
 			initWG.Done()
 			<-ctx.Done()
+			serviceWG.Wait()
+			logutil.Info("Shutdown service complete.")
 			// flush trace/log/error framework
 			if err = motrace.Shutdown(ctx); err != nil {
 				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())

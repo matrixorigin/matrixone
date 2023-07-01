@@ -17,36 +17,42 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"os"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-
 	"github.com/google/shlex"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+)
 
-	"go.uber.org/zap"
+const (
+	MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 300
+	MAX_TXN_COMMIT_LATENCY  = time.Minute * 2
 )
 
 // TODO::GC the abandoned txn.
@@ -57,6 +63,8 @@ type Handle struct {
 		//map txn id to txnContext.
 		txnCtxs map[string]*txnContext
 	}
+
+	GCManager *gc.Manager
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -64,6 +72,7 @@ var _ rpchandle.Handler = (*Handle)(nil)
 type txnContext struct {
 	//createAt is used to GC the abandoned txn.
 	createAt time.Time
+	deadline time.Time
 	meta     txn.TxnMeta
 	reqs     []any
 	//the table to create by this txn.
@@ -74,11 +83,11 @@ func (h *Handle) GetDB() *db.DB {
 	return h.db
 }
 
-func NewTAEHandle(path string, opt *options.Options) *Handle {
+func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handle {
 	if path == "" {
 		path = "./store"
 	}
-	tae, err := openTAE(path, opt)
+	tae, err := openTAE(ctx, path, opt)
 	if err != nil {
 		panic(err)
 	}
@@ -87,7 +96,33 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 		db: tae,
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
+
+	// clean h.mu.txnCtxs by interval
+	h.GCManager = gc.NewManager(
+		gc.WithCronJob(
+			"clean-txn-cache",
+			MAX_TXN_COMMIT_LATENCY,
+			func(ctx context.Context) error {
+				return h.GCCache(time.Now())
+			},
+		),
+	)
+	h.GCManager.Start()
+
 	return h
+}
+
+// TODO: vast items within h.mu.txnCtxs would incur performance penality.
+func (h *Handle) GCCache(now time.Time) error {
+	logutil.Infof("GC rpc handle txn cache")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id, txn := range h.mu.txnCtxs {
+		if txn.deadline.Before(now) {
+			delete(h.mu.txnCtxs, id)
+		}
+	}
+	return nil
 }
 
 func (h *Handle) HandleCommit(
@@ -97,14 +132,21 @@ func (h *Handle) HandleCommit(
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("HandleCommit start : %X\n",
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("HandleCommit start : %X",
 			string(meta.GetID()))
 	})
 	defer func() {
+		if ok {
+			//delete the txn's context.
+			h.mu.Lock()
+			delete(h.mu.txnCtxs, string(meta.GetID()))
+			h.mu.Unlock()
+		}
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof("HandleCommit end : %X, %s\n",
-				string(meta.GetID()), time.Since(start))
+			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
+				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
+			}
 		})
 	}()
 	//Handle precommit-write command for 1PC
@@ -160,7 +202,7 @@ func (h *Handle) HandleCommit(
 			//Need to roll back the txn.
 			if err != nil {
 				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback()
+				txn.Rollback(ctx)
 				return
 			}
 		}
@@ -173,13 +215,8 @@ func (h *Handle) HandleCommit(
 	if txn.Is2PC() {
 		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
-	err = txn.Commit()
+	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
-
-	//delete the txn's context.
-	h.mu.Lock()
-	delete(h.mu.txnCtxs, string(meta.GetID()))
-	h.mu.Unlock()
 	return
 }
 
@@ -199,7 +236,7 @@ func (h *Handle) HandleRollback(
 	if err != nil {
 		return err
 	}
-	err = txn.Rollback()
+	err = txn.Rollback(ctx)
 	return
 }
 
@@ -274,7 +311,7 @@ func (h *Handle) HandlePrepare(
 			//need to rollback the txn
 			if err != nil {
 				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback()
+				txn.Rollback(ctx)
 				return
 			}
 		}
@@ -289,7 +326,7 @@ func (h *Handle) HandlePrepare(
 	}
 	txn.SetParticipants(participants)
 	var ts types.TS
-	ts, err = txn.Prepare()
+	ts, err = txn.Prepare(ctx)
 	pts = ts.ToTimestamp()
 	//delete the txn's context.
 	h.mu.Lock()
@@ -310,6 +347,9 @@ func (h *Handle) HandleStartRecovery(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
+	if h.GCManager != nil {
+		h.GCManager.Stop()
+	}
 	return h.db.Close()
 }
 
@@ -322,8 +362,8 @@ func (h *Handle) HandleGetLogTail(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.SyncLogTailReq,
-	resp *api.SyncLogTailResp) (err error) {
-	res, err := logtail.HandleSyncLogTailReq(
+	resp *api.SyncLogTailResp) (closeCB func(), err error) {
+	res, closeCB, err := logtail.HandleSyncLogTailReq(
 		ctx,
 		h.db.BGCheckpointRunner,
 		h.db.LogtailMgr,
@@ -331,17 +371,17 @@ func (h *Handle) HandleGetLogTail(
 		*req,
 		true)
 	if err != nil {
-		return err
+		return
 	}
 	*resp = res
-	return nil
+	return
 }
 
 func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.FlushTable,
-	resp *api.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	// We use current TS instead of transaction ts.
 	// Here, the point of this handle function is to trigger a flush
@@ -355,31 +395,31 @@ func (h *Handle) HandleFlushTable(
 		req.DatabaseID,
 		req.TableID,
 		currTs)
-	return err
+	return nil, err
 }
 
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.Checkpoint,
-	resp *api.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	timeout := req.FlushDuration
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
 	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
-	return err
+	return nil, err
 }
 
 func (h *Handle) HandleInspectDN(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.InspectDN,
-	resp *db.InspectResp) (err error) {
+	resp *db.InspectResp) (cb func(), err error) {
 	args, _ := shlex.Split(req.Operation)
-	common.DoIfInfoEnabled(func() {
-		logutil.Info("Inspect", zap.Strings("args", args))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("Inspect", zap.Strings("args", args))
 	})
 	b := &bytes.Buffer{}
 
@@ -390,9 +430,9 @@ func (h *Handle) HandleInspectDN(
 		out:    b,
 		resp:   resp,
 	}
-	RunInspect(inspectCtx)
+	RunInspect(ctx, inspectCtx)
 	resp.Message = b.String()
-	return nil
+	return nil, nil
 }
 
 func (h *Handle) prefetchDeleteRowID(ctx context.Context,
@@ -421,7 +461,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	pref, err := blockio.BuildPrefetchParams(h.db.Fs.Service, loc)
+	pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
 	if err != nil {
 		return err
 	}
@@ -447,7 +487,7 @@ func (h *Handle) prefetchMetadata(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		err = blockio.PrefetchMeta(h.db.Fs.Service, loc)
+		err = blockio.PrefetchMeta(h.db.Runtime.Fs.Service, loc)
 		if err != nil {
 			return err
 		}
@@ -493,8 +533,10 @@ func (h *Handle) CacheTxnRequest(
 	h.mu.Lock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	if !ok {
+		now := time.Now()
 		txnCtx = &txnContext{
-			createAt: time.Now(),
+			createAt: now,
+			deadline: now.Add(MAX_TXN_COMMIT_LATENCY),
 			meta:     meta,
 			toCreate: make(map[uint64]*catalog2.Schema),
 		}
@@ -668,11 +710,11 @@ func (h *Handle) HandleCreateDatabase(
 	}
 
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
+		logutil.Infof("[precommit] create database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] create database end txn: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] create database end txn: %s", txn.String())
 		})
 	}()
 
@@ -705,11 +747,11 @@ func (h *Handle) HandleDropDatabase(
 	}
 
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
+		logutil.Infof("[precommit] drop database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] drop database end: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] drop database end: %s", txn.String())
 		})
 	}()
 
@@ -733,11 +775,12 @@ func (h *Handle) HandleCreateRelation(
 	}
 
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
+		logutil.Infof("[precommit] create relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] create relation end txn: %s\n", txn.String())
+		// do not turn it on in prod. This print outputs multiple duplicate lines
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] create relation end txn: %s", txn.String())
 		})
 	}()
 
@@ -770,11 +813,11 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	}
 
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
+		logutil.Infof("[precommit] drop/truncate relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] drop/truncate relation end txn: %s", txn.String())
 		})
 	}()
 
@@ -807,6 +850,7 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
+	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
 	switch req.PkCheck {
 	case db.FullDedup:
 		txn.SetDedupType(txnif.FullDedup)
@@ -820,17 +864,25 @@ func (h *Handle) HandleWrite(
 		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 	}
 	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
+		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",
 			req.Type, req.TableID,
 			req.TableName, req.DatabaseId, req.DatabaseName,
 			txn.String(),
 		)
-		logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
+		logutil.Debugf("[precommit] write batch: %s", common.DebugMoBatch(req.Batch))
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] handle write end txn: %s\n", txn.String())
+			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
+		// TODO: delete this debug log after issue 10227
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %s txn: %s",
+				req.Type, req.TableID,
+				req.TableName, common.PrintMoBatch(req.Batch, 3),
+				txn.String(),
+			)
+		}
 	}()
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
@@ -854,8 +906,13 @@ func (h *Handle) HandleWrite(
 				}
 				locations = append(locations, location)
 			}
-
-			err = tb.AddBlksWithMetaLoc(locations)
+			// TODO: delete this debug log after issue 10227
+			n := len(req.MetaLocs)
+			if n > 2 {
+				n = 2
+			}
+			logutil.Infof("[precommit](%s) metalocs: %v", hex.EncodeToString(meta.GetID()), req.MetaLocs[:n])
+			err = tb.AddBlksWithMetaLoc(ctx, locations)
 			return
 		}
 		//check the input batch passed by cn is valid.
@@ -881,6 +938,7 @@ func (h *Handle) HandleWrite(
 		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
 	}
+
 	//handle delete
 	if req.FileName != "" {
 		//wait for loading deleted row-id done.
@@ -900,7 +958,7 @@ func (h *Handle) HandleWrite(
 				ctx,
 				[]uint16{uint16(columnIdx)},
 				nil,
-				h.db.Fs.Service,
+				h.db.Runtime.Fs.Service,
 				location,
 				nil,
 			)
@@ -933,7 +991,7 @@ func (h *Handle) HandleAlterTable(
 	}
 
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] alter table: %v txn: %s\n", req.String(), txn.String())
+		logutil.Debugf("[precommit] alter table: %v txn: %s", req.String(), txn.String())
 	})
 
 	dbase, err := txn.GetDatabaseByID(req.DbId)
@@ -949,27 +1007,27 @@ func (h *Handle) HandleAlterTable(
 	return tbl.AlterTable(ctx, req)
 }
 
-func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
+func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {
 
 	if targetDir != "" {
 		mask := syscall.Umask(0)
 		if err := os.MkdirAll(targetDir, os.FileMode(0755)); err != nil {
 			syscall.Umask(mask)
-			logutil.Infof("Recreate dir error:%v\n", err)
+			logutil.Infof("Recreate dir error:%v", err)
 			return nil, err
 		}
 		syscall.Umask(mask)
-		tae, err = db.Open(targetDir+"/tae", opt)
+		tae, err = db.Open(ctx, targetDir+"/tae", opt)
 		if err != nil {
-			logutil.Infof("Open tae failed. error:%v", err)
+			logutil.Warnf("Open tae failed. error:%v", err)
 			return nil, err
 		}
 		return tae, nil
 	}
 
-	tae, err = db.Open(targetDir, opt)
+	tae, err = db.Open(ctx, targetDir, opt)
 	if err != nil {
-		logutil.Infof("Open tae failed. error:%v", err)
+		logutil.Warnf("Open tae failed. error:%v", err)
 		return nil, err
 	}
 	return

@@ -52,6 +52,9 @@ message Dispatch {
   repeated int32 ShuffleRegIdxLocal=5;
   repeated int32 ShuffleRegIdxRemote=6;
   bool  is_sink = 7;
+  int32 ShuffleType = 8;
+  int64 ShuffleColMin = 9;
+  int64 ShuffleColMax = 10;
 }
 
 message MultiArguemnt{
@@ -86,8 +89,10 @@ message Insert{
   repeated string attrs        = 5;
   // Align array index with the partition number
   repeated uint64 partition_table_ids = 6;
-  int32 partition_idx = 7;
-  bool is_end         = 8;
+  repeated string partition_table_names = 7;
+  int32 partition_idx = 8;
+  bool is_end         = 9;
+  plan.TableDef table_def = 10;
 }
 
 message Array{
@@ -106,14 +111,15 @@ message Deletion{
   uint32 NBucket = 5;
   // DeleteCtx
 
-  int32 row_id_idx                    = 6;
-  repeated uint64 partition_table_ids = 7;
-  int32 partition_index_in_batch      = 8;
-  plan.ObjectRef ref                  = 9;
-  bool add_affected_rows              = 10;
-  map<string,int32> SegmentMap        = 11;
-  bool can_truncate                   = 12;
-  bool is_end                         = 13;
+  int32 row_id_idx                      = 6;
+  repeated uint64 partition_table_ids   = 7;
+  repeated string partition_table_names = 8;
+  int32 partition_index_in_batch        = 9;
+  plan.ObjectRef ref                    = 10;
+  bool add_affected_rows                = 11;
+  map<string,int32> SegmentMap          = 12;
+  bool can_truncate                     = 13;
+  bool is_end                           = 14;
 }
 
 message PreInsert {
@@ -136,6 +142,7 @@ message LockTarget {
 
 message LockOp {
   repeated LockTarget targets = 1;
+  bool                block   = 2;
 }
 
 message PreInsertUnique {
@@ -276,6 +283,7 @@ message HashBuild {
   uint64 nbucket = 4;
   repeated plan.Type types = 5;
   repeated plan.Expr conds = 6;
+  repeated plan.RuntimeFilterSpec runtime_filter_list = 7;
 }
 
 message ExternalName2ColIndex {
@@ -354,6 +362,7 @@ message Source {
   plan.Expr  expr = 7;
   plan.TableDef tableDef = 8;
   timestamp.Timestamp timestamp = 9;
+  repeated plan.RuntimeFilterSpec runtime_filter_list = 10;
 }
 
 message NodeInfo {
@@ -390,6 +399,7 @@ message SessionInfo {
   string version = 6;
   bytes  time_zone = 7;
   string  account = 8;
+  repeated string query_id = 9;
 }
 
 message Pipeline {
@@ -426,4 +436,17 @@ message UuidToRegIdx {
   int32 idx = 1;
   bytes uuid = 2;
   string from_addr = 3;
+}
+
+message RuntimeFilter {
+  enum RuntimeFilterType {
+    NO_FILTER = 0;
+    IN = 1;
+    BITMAP = 2;
+    MIN_MAX = 3;
+    BINARY_FUSE = 4;
+  }
+
+  RuntimeFilterType typ = 1;
+  bytes data = 2;
 }

@@ -243,6 +243,12 @@ func (svbt SystemVariableBoolType) Zero() interface{} {
 }
 
 func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{}, error) {
+	if value == "on" {
+		return int8(1), nil
+	} else if value == "off" {
+		return int8(0), nil
+	}
+
 	convertVal, err := strconv.ParseInt(value, 10, 8)
 	if err != nil {
 		return nil, errorConvertFromStringToBoolFailed
@@ -251,6 +257,7 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 		return nil, errorConvertFromStringToBoolFailed
 	}
 	return int8(convertVal), nil
+
 }
 
 type SystemVariableIntType struct {
@@ -661,6 +668,9 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 	}
 
 	bldString := bld.String()
+	if len(bldString) == 0 {
+		return bldString, nil
+	}
 	return bldString[:len(bldString)-1], nil
 }
 
@@ -1160,7 +1170,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL"),
-		Default:           "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+		Default:           "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES",
 	},
 	"completion_type": {
 		Name:              "completion_type",
@@ -1348,6 +1358,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("net_buffer_length", 1024, 1048576, false),
 		Default:           int64(16384),
 	},
+	"enable_privilege_cache": {
+		Name:              "enable_privilege_cache",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("enable_privilege_cache"),
+		Default:           int64(1),
+	},
+	"clear_privilege_cache": {
+		Name:              "clear_privilege_cache",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("clear_privilege_cache"),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
@@ -1427,4 +1453,13 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 func getSystemTimeZone() string {
 	tz, _ := time.Now().Zone()
 	return tz
+}
+
+func valueIsBoolTrue(value interface{}) (bool, error) {
+	svbt := SystemVariableBoolType{}
+	newValue, err2 := svbt.Convert(value)
+	if err2 != nil {
+		return false, err2
+	}
+	return svbt.IsTrue(newValue), nil
 }

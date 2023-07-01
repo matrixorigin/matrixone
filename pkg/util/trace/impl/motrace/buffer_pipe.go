@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -118,6 +119,18 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		return table.NewRowRequest(nil)
 	}
 
+	// Initialize aggregator
+	var aggregator *Aggregator
+	if !GetTracerProvider().disableStmtAggregation {
+		aggregator = NewAggregator(
+			ctx,
+			GetTracerProvider().aggregationWindow,
+			StatementInfoNew,
+			StatementInfoUpdate,
+			StatementInfoFilter,
+		)
+	}
+
 	ts := time.Now()
 	writerMap := make(map[string]table.RowWriter, 2)
 	writeValues := func(item table.RowField) {
@@ -129,19 +142,65 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			if factory == nil {
 				factory = GetTracerProvider().writerFactory
 			}
-			w = factory(ctx, account, row.Table, ts)
+			w = factory.GetRowWriter(ctx, account, row.Table, ts)
 			writerMap[row.GetAccount()] = w
 		}
 		w.WriteRow(row)
+		if check, is := item.(table.NeedCheckWrite); is && check.NeedCheckWrite() {
+			if writer, support := w.(table.AfterWrite); support {
+				writer.AddAfter(check.GetCheckWriteHook())
+			}
+		}
 		row.Free()
 	}
 
 	for _, i := range in {
-		item, ok := i.(table.RowField)
-		if !ok {
-			panic("not MalCsv, dont support output CSV")
+		// Check if the item is a StatementInfo
+		if statementInfo, ok := i.(*StatementInfo); ok {
+			// If so, add it to the aggregator
+			var err error
+			if !GetTracerProvider().disableStmtAggregation {
+				_, err = aggregator.AddItem(statementInfo)
+
+			}
+			if err != nil {
+				item, ok := i.(table.RowField)
+				if !ok {
+					panic("not MalCsv, dont support output CSV")
+				}
+				writeValues(item)
+			}
+		} else {
+			// If not, process as before
+			item, ok := i.(table.RowField)
+			if !ok {
+				panic("not MalCsv, dont support output CSV")
+			}
+			writeValues(item)
 		}
-		writeValues(item)
+	}
+
+	// Get the aggregated results
+	if aggregator != nil {
+		groupedResults := aggregator.GetResults()
+
+		for _, i := range groupedResults {
+
+			// If not, process as before
+			item, ok := i.(table.RowField)
+			if !ok {
+				panic("not MalCsv, dont support output CSV")
+			}
+
+			stmt, stmt_ok := i.(*StatementInfo)
+			if stmt_ok {
+				stmt.Statement = stmt.StmtBuilder.String()
+				stmt.StmtBuilder.Reset()
+			}
+
+			writeValues(item)
+		}
+		aggregator.Close()
 	}
 
 	reqs := make(table.ExportRequests, 0, len(writerMap))

@@ -149,28 +149,28 @@ select table_name, column_name from key_column_usage limit 2;
 table_name    column_name
 desc columns;
 Field    Type    Null    Key    Default    Extra    Comment
-character_octet_length    BIGINT(0)    YES        null
-column_default    VARCHAR(65535)    YES        null
-column_key    VARCHAR(3)    YES        null
-table_schema    VARCHAR(256)    YES        null
-datetime_precision    BIGINT(0)    YES        null
-generation_expression    VARCHAR(500)    YES        null
-data_type    VARCHAR(65535)    YES        null
-extra    VARCHAR(14)    YES        null
-srs_id    BIGINT(0)    YES        null
-character_set_name    VARCHAR(4)    YES        null
-collation_name    VARCHAR(8)    YES        null
-table_catalog    VARCHAR(3)    YES        null
-table_name    VARCHAR(256)    YES        null
-numeric_scale    BIGINT(0)    YES        null
-numeric_precision    BIGINT(0)    YES        null
-is_nullable    VARCHAR(3)    YES        null
-column_comment    VARCHAR(2048)    YES        null
-privileges    VARCHAR(31)    YES        null
-column_name    VARCHAR(256)    YES        null
-column_type    VARCHAR(65535)    YES        null
-ordinal_position    INT(0)    YES        null
-character_maximum_length    BIGINT(0)    YES        null
+table_catalog    VARCHAR(3)    NO        null        
+table_schema    VARCHAR(256)    YES        null        
+table_name    VARCHAR(256)    YES        null        
+column_name    VARCHAR(256)    YES        null        
+ordinal_position    INT(0)    YES        null        
+column_default    VARCHAR(65535)    YES        null        
+is_nullable    VARCHAR(3)    YES        null        
+data_type    VARCHAR(65535)    YES        null        
+character_maximum_length    BIGINT(0)    YES        null        
+character_octet_length    BIGINT(0)    YES        null        
+numeric_precision    BIGINT(0)    YES        null        
+numeric_scale    BIGINT(0)    YES        null        
+datetime_precision    BIGINT(0)    YES        null        
+character_set_name    VARCHAR(4)    YES        null        
+collation_name    VARCHAR(8)    YES        null        
+column_type    VARCHAR(65535)    YES        null        
+column_key    VARCHAR(3)    YES        null        
+extra    VARCHAR(14)    YES        null        
+privileges    VARCHAR(31)    NO        null        
+column_comment    VARCHAR(2048)    YES        null        
+generation_expression    VARCHAR(500)    NO        null        
+srs_id    BIGINT(0)    YES        null        
 select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
 table_name    column_name
 mo_account    account_id
@@ -180,16 +180,16 @@ mo_account    created_time
 mo_account    status
 desc views;
 Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR(3)    YES        null
-table_schema    VARCHAR(5000)    YES        null
-table_name    VARCHAR(5000)    YES        null
-view_definition    TEXT(0)    YES        null
-check_option    VARCHAR(4)    YES        null
-is_updatable    VARCHAR(3)    YES        null
-definer    VARCHAR(65535)    YES        null
-security_type    VARCHAR(7)    YES        null
-character_set_client    VARCHAR(7)    YES        null
-collation_connection    VARCHAR(18)    YES        null
+table_catalog    VARCHAR(3)    NO        null        
+table_schema    VARCHAR(5000)    YES        null        
+table_name    VARCHAR(5000)    YES        null        
+view_definition    TEXT(0)    YES        null        
+check_option    VARCHAR(4)    NO        null        
+is_updatable    VARCHAR(3)    NO        null        
+definer    VARCHAR(65535)    YES        null        
+security_type    VARCHAR(7)    NO        null        
+character_set_client    VARCHAR(7)    NO        null        
+collation_connection    VARCHAR(18)    NO        null        
 select table_schema, table_name, definer from views where table_schema = 'system' order by table_name;
 table_schema    table_name    definer
 system    error_info    root@localhost
@@ -239,12 +239,12 @@ select grantee, table_catalog from user_privileges limit 2;
 grantee    table_catalog
 desc schemata;
 Field    Type    Null    Key    Default    Extra    Comment
-catalog_name    VARCHAR(5000)    YES        NULL
-schema_name    VARCHAR(5000)    YES        NULL
-default_character_set_name    VARCHAR(7)    YES        NULL
-default_collation_name    VARCHAR(18)    YES        NULL
-sql_path    VARCHAR(0)    YES        NULL
-default_encryption    VARCHAR(3)    YES        NULL
+catalog_name    VARCHAR(5000)    YES        null        
+schema_name    VARCHAR(5000)    YES        null        
+default_character_set_name    VARCHAR(7)    NO        null        
+default_collation_name    VARCHAR(18)    NO        null        
+sql_path    VARCHAR(0)    YES        null        
+default_encryption    VARCHAR(3)    NO        null        
 select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 catalog_name    schema_name
 def    mo_task
@@ -468,7 +468,11 @@ tx_isolation    REPEATABLE-READ
 select @@sql_mode;
 @@sql_mode
 ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
-set @@sql_mode = ONLY_FULL_GROUP_BY;
+set @@sql_mode ='';
+select @@sql_mode;
+@@sql_mode
+
+set @@sql_mode = 'ONLY_FULL_GROUP_BY';
 select @@sql_mode;
 @@sql_mode
 ONLY_FULL_GROUP_BY
@@ -477,6 +481,3 @@ select @@sql_mode;
 @@sql_mode
 ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 set @@sql_mode = default;
-select @@sql_mode;
-@@sql_mode
-ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES

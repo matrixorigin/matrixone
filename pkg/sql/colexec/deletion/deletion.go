@@ -28,6 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+//row id be divided into four types:
+// 1. RawBatchOffset : belong to txn's workspace
+// 2. CNBlockOffset  : belong to txn's workspace
+
+// 3. RawRowIdBatch  : belong to txn's snapshot data.
+// 4. FlushDeltaLoc   : belong to txn's snapshot data, which on S3 and pointed by delta location.
 const (
 	RawRowIdBatch = iota
 	// remember that, for one block,
@@ -36,7 +42,7 @@ const (
 	Compaction
 	CNBlockOffset
 	RawBatchOffset
-	FlushMetaLoc
+	FlushDeltaLoc
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -51,7 +57,7 @@ func Prepare(_ *process.Process, arg any) error {
 		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
 		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerSegment)}
 		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[string]*batch.Batch)
-		ap.ctr.partitionId_blockId_metaLoc = make(map[int]map[string]*batch.Batch)
+		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[string]*batch.Batch)
 	}
 	return nil
 }
@@ -93,16 +99,17 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				}
 			}
 
-			for pidx, blockId_metaLoc := range p.ctr.partitionId_blockId_metaLoc {
-				for blkid, bat := range blockId_metaLoc {
+			for pidx, blockId_deltaLoc := range p.ctr.partitionId_blockId_deltaLoc {
+				for blkid, bat := range blockId_deltaLoc {
 					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+					//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
 					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
 					bytes, err := bat.MarshalBinary()
 					if err != nil {
 						return true, err
 					}
 					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-					vector.AppendFixed(resBat.GetVector(2), int8(FlushMetaLoc), false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool())
 					vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
 				}
 			}
@@ -137,7 +144,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	var affectedRows uint64
-	var err error
 	delCtx := p.DeleteCtx
 
 	if len(delCtx.PartitionTableIDs) > 0 {
@@ -159,7 +165,10 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			}
 		}
 	} else {
-		delBatch := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
+		delBatch, err := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
+		if err != nil {
+			return false, err
+		}
 		affectedRows = uint64(delBatch.Length())
 		if affectedRows > 0 {
 			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
@@ -168,6 +177,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				return false, err
 			}
 		}
+		delBatch.Clean(proc.GetMPool())
 	}
 
 	proc.SetInputBatch(batch.EmptyBatch)

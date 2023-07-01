@@ -18,7 +18,9 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -50,21 +52,20 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
-
 	defer proc.PutBatch(bat)
-
 	newBat := batch.NewWithSize(len(arg.Attrs))
 	newBat.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
 		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
-		newBat.SetVector(int32(idx), proc.GetVector(*bat.GetVector(int32(idx)).GetType()))
-		err := newBat.Vecs[idx].UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
-		if err != nil {
+		srcVec := bat.Vecs[idx]
+		vec := proc.GetVector(*srcVec.GetType())
+		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
+			newBat.Clean(proc.Mp())
 			return false, err
 		}
+		newBat.SetVector(int32(idx), vec)
 	}
 	newBat.Zs = append(newBat.Zs, bat.Zs...)
-
 	if arg.HasAutoCol {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
@@ -72,7 +73,6 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 			return false, err
 		}
 	}
-
 	// check new rows not null
 	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
 	if err != nil {
@@ -86,13 +86,11 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
-
 	err = genClusterBy(newBat, proc, arg.TableDef)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
-
 	if arg.IsUpdate {
 		idx := len(bat.Vecs) - 1
 		newBat.Attrs = append(newBat.Attrs, catalog.Row_ID)
@@ -103,7 +101,6 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		}
 		newBat.Vecs = append(newBat.Vecs, rowIdVec)
 	}
-
 	proc.SetInputBatch(newBat)
 	return false, nil
 }
@@ -114,6 +111,9 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 		arg.TableDef.TblId,
 		bat)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return moerr.NewNoSuchTableNoCtx(arg.SchemaName, arg.TableDef.Name)
+		}
 		return err
 	}
 	proc.SetLastInsertID(lastInsertValue)

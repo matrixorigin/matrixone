@@ -127,11 +127,11 @@ var (
 	// defaultMetricStorageUsageCheckNewInterval default: 1 min
 	defaultMetricStorageUsageCheckNewInterval = time.Minute
 
-	// defaultMergeCycle default: 4 hours
-	defaultMergeCycle = 4 * time.Hour
+	// defaultMergeCycle default: 15 minute
+	defaultMergeCycle = 15 * time.Minute
 
-	// defaultMaxFileSize default: 128 MB
-	defaultMaxFileSize = 128
+	// defaultMaxFileSize default: 10 MB
+	defaultMaxFileSize = 10
 
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
@@ -162,6 +162,13 @@ var (
 
 	//defaultCleanKillQueueInterval default: 60 minutes
 	defaultCleanKillQueueInterval = 60
+
+	// defaultLongSpanTime default: 10 s
+	defaultLongSpanTime = 10 * time.Second
+
+	defaultAggregationWindow = 5 * time.Second
+
+	defaultSelectThreshold = 200 * time.Millisecond
 )
 
 // FrontendParameters of the frontend
@@ -299,7 +306,7 @@ type FrontendParameters struct {
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames string `toml:"lowerCaseTableNames"`
+	LowerCaseTableNames int64 `toml:"lowerCaseTableNames"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -437,8 +444,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.AutoIncrCacheSize = 3000000
 	}
 
-	if fp.LowerCaseTableNames == "" {
-		fp.LowerCaseTableNames = "1"
+	if fp.LowerCaseTableNames == 0 {
+		fp.LowerCaseTableNames = 1
 	}
 
 	if fp.PrintDebugInterval == 0 {
@@ -567,7 +574,7 @@ type ObservabilityParameters struct {
 	// MetricStorageUsageCheckNewInterval, default: 1 min
 	MetricStorageUsageCheckNewInterval toml.Duration `toml:"metricStorageUsageCheckNewInterval"`
 
-	// MergeCycle default: 14400 sec (4 hours).
+	// MergeCycle default: 900 sec (15 minutes).
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
 
@@ -582,6 +589,30 @@ type ObservabilityParameters struct {
 
 	// MergedExtension default: tae. Support val in [csv, tae]
 	MergedExtension string `toml:"mergedExtension"`
+
+	// DisableSpan default: false. Disable span collection
+	DisableSpan bool `toml:"disableSpan"`
+
+	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
+	LongSpanTime toml.Duration `toml:"longSpanTime"`
+
+	// SkipRunningStmt default: false. Skip status:Running entry while collect statement_info
+	SkipRunningStmt bool `toml:"skipRunningStmt"`
+
+	// If disabled, the logs will be written to files stored in s3
+	DisableSqlWriter bool `toml:"disableSqlWriter"`
+
+	// If disabled, the statements will not be aggregated
+	DisableStmtAggregation bool `toml:"disableStmtAggregation"`
+
+	// Seconds to aggregate the statements
+	AggregationWindow toml.Duration `toml:"aggregationWindow"`
+
+	// Duration to filter statements for aggregation
+	SelectAggrThreshold toml.Duration `toml:"selectAggrThreshold"`
+
+	// Disable merge statements
+	EnableStmtMerge bool `toml:"enableStmtMerge"`
 
 	OBCollectorConfig
 }
@@ -641,6 +672,18 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MergedExtension == "" {
 		op.MergedExtension = defaultMergedExtension
+	}
+
+	if op.LongSpanTime.Duration <= 0 {
+		op.LongSpanTime.Duration = defaultLongSpanTime
+	}
+
+	if op.AggregationWindow.Duration <= 0 {
+		op.AggregationWindow.Duration = defaultAggregationWindow
+	}
+
+	if op.SelectAggrThreshold.Duration <= 0 {
+		op.SelectAggrThreshold.Duration = defaultSelectThreshold
 	}
 }
 

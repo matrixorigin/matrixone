@@ -40,6 +40,8 @@ const (
 
 func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -48,7 +50,7 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 	writer, _ := NewBlockWriterNew(service, name, 0, nil)
 
@@ -109,6 +111,8 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 
 func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -117,7 +121,7 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchemaAll(13, 2)
@@ -187,14 +191,4 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 	require.True(t, zm.Contains(int32(40000)))
 	require.True(t, zm.Contains(int32(79999)))
 	require.False(t, zm.Contains(int32(80000)))
-}
-
-func TestMergeDeleteRows(t *testing.T) {
-	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, nil), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows(nil, []int64{1, 2, 3}), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows([]int64{2, 3, 7, 8, 9}, []int64{1, 2, 3}), []int64{1, 2, 3, 7, 8, 9})
-	require.Equal(t, mergeDeleteRows([]int64{2}, []int64{1, 2, 3}), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{1, 2, 3}), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{1}), []int64{1, 2, 3})
-	require.Equal(t, mergeDeleteRows([]int64{1, 2, 3}, []int64{3}), []int64{1, 2, 3})
 }

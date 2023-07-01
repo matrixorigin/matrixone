@@ -20,16 +20,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (txn *Transaction) getBlockInfos(
@@ -43,12 +45,16 @@ func (txn *Transaction) getBlockInfos(
 	}
 	var objectName objectio.ObjectNameShort
 	iter := state.NewBlocksIter(ts)
+	fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 	for iter.Next() {
 		entry := iter.Entry()
 		location := entry.MetaLocation()
 		if !objectio.IsSameObjectLocVsShort(location, &objectName) {
 			// Prefetch object meta
-			if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
+			if err = blockio.PrefetchMeta(fs, location); err != nil {
 				iter.Close()
 				return
 			}
@@ -90,7 +96,7 @@ func (txn *Transaction) WriteBatch(
 		if !insertBatchHasRowId {
 			txn.genBlock()
 			len := bat.Length()
-			vec := vector.NewVec(types.T_Rowid.ToType())
+			vec := txn.proc.GetVector(types.T_Rowid.ToType())
 			for i := 0; i < len; i++ {
 				if err := vector.AppendFixed(vec, txn.genRowId(), false,
 					txn.proc.Mp()); err != nil {
@@ -106,7 +112,7 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.workspaceSize += uint64(bat.Size())
 	}
-	txn.writes = append(txn.writes, Entry{
+	e := Entry{
 		typ:          typ,
 		bat:          bat,
 		tableId:      tableId,
@@ -115,27 +121,17 @@ func (txn *Transaction) WriteBatch(
 		databaseName: databaseName,
 		dnStore:      dnStore,
 		truncate:     truncate,
-	})
+	}
+	txn.writes = append(txn.writes, e)
 	return nil
 }
 
-func (txn *Transaction) DumpBatch(force bool, offset int) error {
+func (txn *Transaction) dumpBatch(force bool, offset int) error {
 	var size uint64
+
 	txn.Lock()
 	defer txn.Unlock()
-	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
-		(force && txn.workspaceSize >= colexec.TagS3Size)) {
-		return nil
-	}
-	for i := offset; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil {
-			continue
-		}
-		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			size += uint64(txn.writes[i].bat.Size())
-		}
-	}
-	if offset > 0 && size < txn.workspaceSize {
+	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
 	mp := make(map[[2]string][]*batch.Batch)
@@ -147,13 +143,14 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
 			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
 			bat := txn.writes[i].bat
+			size += uint64(bat.Size())
 			// skip rowid
 			bat.Attrs = bat.Attrs[1:]
 			bat.Vecs = bat.Vecs[1:]
 			mp[key] = append(mp[key], bat)
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-			// maybe this will cause that the log imcrements unlimitly
+			// maybe this will cause that the log increments unlimitedly
 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
 			// i--
 			txn.writes[i].bat = nil
@@ -187,54 +184,24 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 		// free batches
 		for _, bat := range mp[key] {
-			bat.Clean(txn.proc.GetMPool())
+			txn.proc.PutBatch(bat)
 		}
 	}
-	txn.workspaceSize -= size
-
+	if offset == 0 {
+		txn.workspaceSize = 0
+		writes := txn.writes[:0]
+		for i, write := range txn.writes {
+			if write.bat != nil {
+				writes = append(writes, txn.writes[i])
+			}
+		}
+		txn.writes = writes
+		txn.statements[txn.statementID-1] = len(txn.writes)
+	} else {
+		txn.workspaceSize -= size
+	}
 	return nil
 }
-
-// func (txn *Transaction) dumpWrites(offset int) (size uint64, mp map[[2]string][]*batch.Batch) {
-// 	txn.Lock()
-// 	defer txn.Unlock()
-
-// 	for i := offset; i < len(txn.writes); i++ {
-// 		if txn.writes[i].bat == nil {
-// 			continue
-// 		}
-// 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-// 			size += uint64(txn.writes[i].bat.Size())
-// 		}
-// 	}
-// 	if offset > 0 && size < txn.workspaceSize {
-// 		return 0, nil
-// 	}
-
-// 	mp = make(map[[2]string][]*batch.Batch)
-// 	for i := offset; i < len(txn.writes); i++ {
-// 		// TODO: after shrink, we should update workspace size
-// 		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
-// 			continue
-// 		}
-// 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-// 			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
-// 			bat := txn.writes[i].bat
-// 			// skip rowid
-// 			bat.Attrs = bat.Attrs[1:]
-// 			bat.Vecs = bat.Vecs[1:]
-// 			mp[key] = append(mp[key], bat)
-// 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
-// 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-// 			// maybe this will cause that the log imcrements unlimitly
-// 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-// 			// i--
-// 			txn.writes[i].bat = nil
-// 		}
-// 	}
-
-// 	return
-// }
 
 func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Relation, error) {
 	sortIdx, attrs, tbl, err := txn.getSortIdx(key)
@@ -242,11 +209,21 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 		return nil, nil, err
 	}
 	s3Writer := &colexec.S3Writer{}
+	s3Writer.SetTableName(tbl.GetTableName())
 	s3Writer.SetSortIdx(-1)
 	s3Writer.Init(txn.proc)
 	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
 		s3Writer.SetSortIdx(sortIdx)
+	}
+	tdefs, err := tbl.TableDefs(txn.proc.Ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, def := range tdefs {
+		if attr, ok := def.(*engine.VersionDef); ok {
+			s3Writer.SetSchemaVer(attr.Version)
+		}
 	}
 	return s3Writer, tbl, nil
 }
@@ -259,7 +236,7 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 	if err != nil {
 		return -1, nil, nil, err
 	}
-	tbl, err := database.Relation(txn.proc.Ctx, tableName)
+	tbl, err := database.Relation(txn.proc.Ctx, tableName, nil)
 	if err != nil {
 		return -1, nil, nil, err
 	}
@@ -269,23 +246,57 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 	}
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].ClusterBy ||
-			(attrs[i].Primary && !attrs[i].IsHidden) {
+			(attrs[i].Primary && attrs[i].Name != catalog.FakePrimaryKeyColName) {
 			return i, attrs, tbl, err
 		}
 	}
 	return -1, attrs, tbl, nil
 }
 
+// vec contains block infos.
+func (txn *Transaction) insertPosForCNBlock(vec *vector.Vector, idx int) error {
+	blks := vector.MustBytesCol(vec)
+	for i, blk := range blks {
+		blkInfo := *catalog.DecodeBlockInfo(blk)
+		txn.cnBlkId_Pos[blkInfo.BlockID] = Pos{
+			idx:     idx,
+			offset:  int64(i),
+			blkInfo: blkInfo}
+	}
+	return nil
+}
+
+// vec contains meta locations
+func (txn *Transaction) delPosForCNBlock(vec *vector.Vector, deletes []int64) error {
+	for _, offset := range deletes {
+		metaLoc := vec.GetStringAt(int(offset))
+		location, err := blockio.EncodeLocationFromString(metaLoc)
+		if err != nil {
+			return err
+		}
+		sid := location.Name().SegmentId()
+		blkid := objectio.NewBlockid(&sid, location.Name().Num(), location.ID())
+		delete(txn.cnBlkId_Pos, *blkid)
+	}
+	return nil
+}
+
+// vec contains meta locations
 func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 	metaLocs := vector.MustStrCol(vec)
 	for i, metaLoc := range metaLocs {
-		if location, err := blockio.EncodeLocationFromString(metaLoc); err != nil {
+		location, err := blockio.EncodeLocationFromString(metaLoc)
+		if err != nil {
 			return err
-		} else {
-			sid := location.Name().SegmentId()
-			blkid := objectio.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
-			txn.cnBlkId_Pos[*blkid] = Pos{idx: idx, offset: int64(i)}
 		}
+		sid := location.Name().SegmentId()
+		blkid := objectio.NewBlockid(&sid, location.Name().Num(), location.ID())
+
+		pos, ok := txn.cnBlkId_Pos[*blkid]
+		if !ok {
+			panic("updatePosForCNBlock: block id not found")
+		}
+		txn.cnBlkId_Pos[*blkid] = Pos{idx: idx, offset: int64(i), blkInfo: pos.blkInfo}
 	}
 	return nil
 }
@@ -294,12 +305,25 @@ func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
+	newBat := bat
 	idx := len(txn.writes)
-	// used for cn block compaction (next pr)
-	if typ == COMPACTION_CN {
-		typ = INSERT
-	} else if typ == INSERT {
-		txn.updatePosForCNBlock(bat.GetVector(0), idx)
+	if typ == INSERT {
+		//bat.Attrs = {catalog.BlockMeta_BlockInfo}
+		txn.insertPosForCNBlock(bat.GetVector(0), idx)
+
+		newBat = batch.NewWithSize(len(bat.Vecs))
+		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc})
+		newBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+
+		for _, blk := range vector.MustBytesCol(bat.GetVector(0)) {
+			blkInfo := *catalog.DecodeBlockInfo(blk)
+			vector.AppendBytes(
+				newBat.GetVector(0),
+				[]byte(blkInfo.MetaLocation().String()),
+				false,
+				txn.proc.Mp())
+		}
+		newBat.SetZs(bat.Vecs[0].Length(), txn.proc.Mp())
 	}
 	txn.readOnly.Store(false)
 	txn.writes = append(txn.writes, Entry{
@@ -309,16 +333,16 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		tableName:    tableName,
 		databaseName: databaseName,
 		fileName:     fileName,
-		bat:          bat,
+		bat:          newBat,
 		dnStore:      dnStore,
 	})
-
-	if uid, err := types.ParseUuid(strings.Split(fileName, "_")[0]); err != nil {
+	//the first part of the file name is the segment id which generated by cn through writing S3.
+	if sid, err := types.ParseUuid(strings.Split(fileName, "_")[0]); err != nil {
 		panic("fileName parse Uuid error")
 	} else {
 		// get uuid string
 		if typ == INSERT {
-			colexec.Srv.PutCnSegment(&uid, colexec.CnBlockIdType)
+			colexec.Srv.PutCnSegment(&sid, colexec.CnBlockIdType)
 		}
 	}
 	return nil
@@ -392,7 +416,8 @@ func (txn *Transaction) deleteTableWrites(
 			continue
 		}
 		// for 3 and 4 above.
-		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+		if e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc ||
+			e.bat.Attrs[0] == catalog.BlockMeta_DeltaLoc {
 			continue
 		}
 		sels = sels[:0]
@@ -454,82 +479,19 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-func (txn *Transaction) mergeTxnWorkspace() {
+func (txn *Transaction) mergeTxnWorkspace() error {
 	txn.Lock()
 	defer txn.Unlock()
-	for _, e := range txn.writes {
-		if sels, ok := txn.batchSelectList[e.bat]; ok {
-			e.bat.Shrink(sels)
-			delete(txn.batchSelectList, e.bat)
-		}
-	}
-}
-
-func evalFilterExprWithZonemap(
-	ctx context.Context,
-	meta objectio.ColumnMetaFetcher,
-	expr *plan.Expr,
-	zms []objectio.ZoneMap,
-	vecs []*vector.Vector,
-	columnMap map[int]int,
-	proc *process.Process,
-) (selected bool) {
-	return colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
-}
-
-/* used by multi-dn
-func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,
-	priKeys []*engine.Attribute, dnStores []DNStore, proc *process.Process) []int {
-	var pk *engine.Attribute
-
-	fullList := func() []int {
-		dnList := make([]int, len(dnStores))
-		for i := range dnStores {
-			dnList[i] = i
-		}
-		return dnList
-	}
-	if len(dnStores) == 1 {
-		return []int{0}
-	}
-	for _, key := range priKeys {
-		// If it is a composite primary key, skip
-		if key.Name == catalog.CPrimaryKeyColName {
-			continue
-		}
-		pk = key
-		break
-	}
-	// have no PrimaryKey, return all the list
-	if expr == nil || pk == nil || tableDef == nil {
-		return fullList()
-	}
-	if pk.Type.IsIntOrUint() {
-		canComputeRange, intPkRange := computeRangeByIntPk(expr, pk.Name, "")
-		if !canComputeRange {
-			return fullList()
-		}
-		if intPkRange.isRange {
-			r := intPkRange.ranges
-			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
-				return fullList()
-			}
-			intPkRange.isRange = false
-			for i := intPkRange.ranges[0]; i <= intPkRange.ranges[1]; i++ {
-				intPkRange.items = append(intPkRange.items, i)
+	if len(txn.batchSelectList) > 0 {
+		for _, e := range txn.writes {
+			if sels, ok := txn.batchSelectList[e.bat]; ok {
+				e.bat.Shrink(sels)
+				delete(txn.batchSelectList, e.bat)
 			}
 		}
-		return getListByItems(dnStores, intPkRange.items)
 	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(ctx, expr, pk.Name, proc)
-	if !canComputeRange {
-		return fullList()
-	}
-	listLen := uint64(len(dnStores))
-	idx := hashVal % listLen
-	return []int{int(idx)}
+	return nil
 }
-*/
 
 func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
 	txn.Lock()
@@ -544,4 +506,82 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 		writes = append(writes, entry)
 	}
 	return writes
+}
+
+// getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
+// Before it gets the cached table, it checks whether the table is deleted by another
+// transaction by go through the delete tables slice, and advance its cachedIndex.
+func (txn *Transaction) getCachedTable(
+	ctx context.Context, k tableKey, snapshotTS timestamp.Timestamp,
+) *txnTable {
+	if txn.meta.IsRCIsolation() {
+		oldIdx := txn.tableCache.cachedIndex
+		newIdx := txn.engine.catalog.GetDeletedTableIndex()
+		if oldIdx < newIdx {
+			deleteTables := txn.engine.catalog.GetDeletedTables(oldIdx, snapshotTS)
+			for _, item := range deleteTables {
+				txn.tableCache.tableMap.Delete(genTableKey(ctx, item.Name, item.DatabaseId))
+				txn.tableCache.cachedIndex++
+			}
+		}
+	}
+	if v, ok := txn.tableCache.tableMap.Load(k); ok {
+		return v.(*txnTable)
+	}
+	return nil
+}
+
+func (txn *Transaction) Commit(ctx context.Context) error {
+	logDebugf(txn.op.Txn(), "Transaction.Commit")
+	txn.IncrStatementID(ctx, true)
+	defer txn.delTransaction()
+	if txn.readOnly.Load() {
+		return nil
+	}
+	if err := txn.mergeTxnWorkspace(); err != nil {
+		return err
+	}
+	if err := txn.dumpBatch(true, 0); err != nil {
+		return err
+	}
+	reqs, err := genWriteReqs(ctx, txn.writes)
+	if err != nil {
+		return err
+	}
+	_, err = txn.op.Write(ctx, reqs)
+	return err
+}
+
+func (txn *Transaction) Rollback(ctx context.Context) error {
+	logDebugf(txn.op.Txn(), "Transaction.Rollback")
+	txn.delTransaction()
+	return nil
+}
+
+func (txn *Transaction) delTransaction() {
+	for i := range txn.writes {
+		if txn.writes[i].bat == nil {
+			continue
+		}
+		txn.proc.PutBatch(txn.writes[i].bat)
+	}
+	txn.tableCache.cachedIndex = -1
+	txn.tableCache.tableMap = nil
+	txn.createMap = nil
+	txn.databaseMap = nil
+	txn.deletedTableMap = nil
+	txn.blockId_dn_delete_metaLoc_batch = nil
+	txn.blockId_raw_batch = nil
+	txn.deletedBlocks = nil
+	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
+	segmentnames = append(segmentnames, txn.segId)
+	for blkId := range txn.cnBlkId_Pos {
+		// blkId:
+		// |------|----------|----------|
+		//   uuid    filelen   blkoffset
+		//    16        2          2
+		segmentnames = append(segmentnames, *blkId.Segment())
+	}
+	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
+	txn.cnBlkId_Pos = nil
 }

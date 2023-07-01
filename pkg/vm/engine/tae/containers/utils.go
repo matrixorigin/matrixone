@@ -17,11 +17,10 @@ package containers
 import (
 	"fmt"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -61,34 +60,6 @@ func ToDNVector(v *movec.Vector) Vector {
 	vec := MakeVector(*v.GetType())
 	vec.setDownstreamVector(v)
 	return vec
-}
-
-// ### Deep copy Functions
-
-func CopyToCNVector(vec Vector) (mov *movec.Vector) {
-	//TODO: can be updated if Dup(nil) is supported by CN vector.
-	vecLen := vec.GetDownstreamVector().Length()
-	res, err := vec.GetDownstreamVector().CloneWindow(0, vecLen, nil)
-	if err != nil {
-		panic(err)
-	}
-	return res
-}
-
-func CopyToCNVectors(vecs []Vector) []*movec.Vector {
-	movecs := make([]*movec.Vector, len(vecs))
-	for i := range movecs {
-		movecs[i] = CopyToCNVector(vecs[i])
-	}
-	return movecs
-}
-
-func CopyToCNBatch(bat *Batch) *batch.Batch {
-	ret := batch.New(true, bat.Attrs)
-	for i := range bat.Vecs {
-		ret.Vecs[i] = CopyToCNVector(bat.Vecs[i])
-	}
-	return ret
 }
 
 // ### Get Functions
@@ -153,7 +124,7 @@ var mockMp = common.DefaultAllocator
 
 func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any, isNull bool) {
 	if isNull {
-		cnNulls.Add(vec.GetNulls(), uint64(row))
+		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
 		err := movec.SetFixedAt(vec, int(row), v.(T))
 		if err != nil {
@@ -167,7 +138,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 
 func GenericUpdateBytes(vec *movec.Vector, row uint32, v any, isNull bool) {
 	if isNull {
-		cnNulls.Add(vec.GetNulls(), uint64(row))
+		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
 		err := movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
 		if err != nil {
@@ -290,7 +261,7 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	return bat
 }
 
-func ForeachVector(vec Vector, op any, sel *roaring.Bitmap) (err error) {
+func ForeachVector(vec Vector, op any, sel *nulls.Bitmap) (err error) {
 	return ForeachVectorWindow(vec, 0, vec.Length(), op, nil, sel)
 }
 
@@ -299,16 +270,17 @@ func ForeachVectorWindow(
 	start, length int,
 	op1 any,
 	op2 ItOp,
-	sel *roaring.Bitmap,
+	sel *nulls.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
+	col := vec.GetDownstreamVector()
 	if typ.IsVarlen() {
 		var op func([]byte, bool, int) error
 		if op1 != nil {
 			op = op1.(func([]byte, bool, int) error)
 		}
 		return ForeachWindowVarlen(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -322,7 +294,7 @@ func ForeachVectorWindow(
 			op = op1.(func(bool, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -334,7 +306,7 @@ func ForeachVectorWindow(
 			op = op1.(func(int8, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -346,7 +318,7 @@ func ForeachVectorWindow(
 			op = op1.(func(int16, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -358,7 +330,7 @@ func ForeachVectorWindow(
 			op = op1.(func(int32, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -370,7 +342,7 @@ func ForeachVectorWindow(
 			op = op1.(func(int64, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -382,7 +354,7 @@ func ForeachVectorWindow(
 			op = op1.(func(uint8, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -394,7 +366,7 @@ func ForeachVectorWindow(
 			op = op1.(func(uint16, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -406,7 +378,7 @@ func ForeachVectorWindow(
 			op = op1.(func(uint32, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -418,7 +390,7 @@ func ForeachVectorWindow(
 			op = op1.(func(uint64, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -430,7 +402,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Decimal64, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -442,7 +414,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Decimal128, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -454,7 +426,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Decimal256, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -466,7 +438,7 @@ func ForeachVectorWindow(
 			op = op1.(func(float32, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -478,7 +450,7 @@ func ForeachVectorWindow(
 			op = op1.(func(float64, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -490,7 +462,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Timestamp, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -502,7 +474,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Date, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -514,7 +486,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Time, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -526,7 +498,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Datetime, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -538,7 +510,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.TS, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -550,7 +522,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Blockid, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -562,7 +534,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Uuid, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -574,7 +546,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Rowid, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -586,35 +558,35 @@ func ForeachVectorWindow(
 }
 
 func ForeachWindowBytes(
-	vec Vector,
+	vec *movec.Vector,
 	start, length int,
 	op ItOpT[[]byte],
-	sels *roaring.Bitmap,
+	sels *nulls.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
 		return ForeachWindowVarlen(vec, start, length, op, nil, sels)
 	}
-	cnVec := vec.GetDownstreamVector()
 	tsize := typ.TypeSize()
-	data := cnVec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
-	if sels == nil || sels.IsEmpty() {
+	data := vec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
+	if sels.IsEmpty() {
 		for i := 0; i < length; i++ {
-			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(i+start), i+start); err != nil {
+			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(uint64(i+start)), i+start); err != nil {
 				break
 			}
 		}
 	} else {
-		idxes := sels.ToArray()
 		end := start + length
-		for _, idx := range idxes {
+		it := sels.GetBitmap().Iterator()
+		for it.HasNext() {
+			idx := uint32(it.Next())
 			if int(idx) < start {
 				continue
 			} else if int(idx) >= end {
 				break
 			}
 			i := int(idx)
-			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(i), i); err != nil {
+			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(uint64(i)), i); err != nil {
 				break
 			}
 		}
@@ -624,20 +596,19 @@ func ForeachWindowBytes(
 }
 
 func ForeachWindowFixed[T any](
-	vec Vector,
+	vec *movec.Vector,
 	start, length int,
 	op ItOpT[T],
 	opAny ItOp,
-	sels *roaring.Bitmap,
+	sels *nulls.Bitmap,
 ) (err error) {
-	src := vec.(*vectorWrapper)
-	if src.downstreamVector.IsConst() {
+	if vec.IsConst() {
 		var v T
 		isnull := false
-		if src.downstreamVector.IsConstNull() {
+		if vec.IsConstNull() {
 			isnull = true
 		} else {
-			v = movec.GetFixedAt[T](src.downstreamVector, 0)
+			v = movec.GetFixedAt[T](vec, 0)
 		}
 		for i := 0; i < length; i++ {
 			if op != nil {
@@ -653,24 +624,25 @@ func ForeachWindowFixed[T any](
 		}
 		return
 	}
-	slice := movec.MustFixedCol[T](src.downstreamVector)[start : start+length]
-	if sels == nil || sels.IsEmpty() {
+	slice := movec.MustFixedCol[T](vec)[start : start+length]
+	if sels.IsEmpty() {
 		for i, v := range slice {
 			if op != nil {
-				if err = op(v, src.IsNull(i+start), i+start); err != nil {
+				if err = op(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v, src.IsNull(i+start), i+start); err != nil {
+				if err = opAny(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
 					break
 				}
 			}
 		}
 	} else {
-		idxes := sels.ToArray()
 		end := start + length
-		for _, idx := range idxes {
+		it := sels.GetBitmap().Iterator()
+		for it.HasNext() {
+			idx := uint32(it.Next())
 			if int(idx) < start {
 				continue
 			} else if int(idx) >= end {
@@ -678,12 +650,12 @@ func ForeachWindowFixed[T any](
 			}
 			v := slice[int(idx)-start]
 			if op != nil {
-				if err = op(v, src.IsNull(int(idx)), int(idx)); err != nil {
+				if err = op(v, vec.IsNull(uint64(idx)), int(idx)); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v, src.IsNull(int(idx)), int(idx)); err != nil {
+				if err = opAny(v, vec.IsNull(uint64(idx)), int(idx)); err != nil {
 					break
 				}
 			}
@@ -693,20 +665,19 @@ func ForeachWindowFixed[T any](
 }
 
 func ForeachWindowVarlen(
-	vec Vector,
+	vec *movec.Vector,
 	start, length int,
 	op ItOpT[[]byte],
 	opAny ItOp,
-	sels *roaring.Bitmap,
+	sels *nulls.Bitmap,
 ) (err error) {
-	src := vec.(*vectorWrapper)
-	if src.downstreamVector.IsConst() {
+	if vec.IsConst() {
 		var v []byte
 		isnull := false
-		if src.downstreamVector.IsConstNull() {
+		if vec.IsConstNull() {
 			isnull = true
 		} else {
-			v = src.downstreamVector.GetBytesAt(0)
+			v = vec.GetBytesAt(0)
 		}
 		for i := 0; i < length; i++ {
 			if op != nil {
@@ -722,25 +693,26 @@ func ForeachWindowVarlen(
 		}
 		return
 	}
-	slice, area := movec.MustVarlenaRawData(src.downstreamVector)
+	slice, area := movec.MustVarlenaRawData(vec)
 	slice = slice[start : start+length]
-	if sels == nil || sels.IsEmpty() {
+	if sels.IsEmpty() {
 		for i, v := range slice {
 			if op != nil {
-				if err = op(v.GetByteSlice(area), src.IsNull(i+start), i+start); err != nil {
+				if err = op(v.GetByteSlice(area), vec.IsNull(uint64(i+start)), i+start); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v.GetByteSlice(area), src.IsNull(i+start), i+start); err != nil {
+				if err = opAny(v.GetByteSlice(area), vec.IsNull(uint64(i+start)), i+start); err != nil {
 					break
 				}
 			}
 		}
 	} else {
-		idxes := sels.ToArray()
 		end := start + length
-		for _, idx := range idxes {
+		it := sels.GetBitmap().Iterator()
+		for it.HasNext() {
+			idx := uint32(it.Next())
 			if int(idx) < start {
 				continue
 			} else if int(idx) >= end {
@@ -748,12 +720,12 @@ func ForeachWindowVarlen(
 			}
 			v := slice[int(idx)-start]
 			if op != nil {
-				if err = op(v.GetByteSlice(area), src.IsNull(int(idx)), int(idx)); err != nil {
+				if err = op(v.GetByteSlice(area), vec.IsNull(uint64(idx)), int(idx)); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v.GetByteSlice(area), src.IsNull(int(idx)), int(idx)); err != nil {
+				if err = opAny(v.GetByteSlice(area), vec.IsNull(uint64(idx)), int(idx)); err != nil {
 					break
 				}
 			}

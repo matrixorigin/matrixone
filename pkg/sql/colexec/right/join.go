@@ -40,16 +40,6 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	for i, typ := range ap.RightTypes {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
-	ap.ctr.constNullVecs = make([]*vector.Vector, len(ap.Result))
-	ap.ctr.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(ap.Result))
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			ap.ctr.constNullVecs[i] = vector.NewConstNull(ap.LeftTypes[rp.Pos], 1, proc.Mp())
-			ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.LeftTypes[rp.Pos], proc.Mp())
-		} else {
-			ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.RightTypes[rp.Pos], proc.Mp())
-		}
-	}
 
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	for i := range ap.Conditions[0] {
@@ -61,6 +51,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	if ap.Cond != nil {
 		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
 	}
+	ap.ctr.handledLast = false
 	return err
 }
 
@@ -74,7 +65,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, analyze); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			if ctr.mp == nil {
@@ -137,7 +127,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(bat.Length())
 		analyze.Alloc(ctr.mp.Map().Size())
@@ -146,6 +136,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 }
 
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
+	ctr.handledLast = true
+
 	if !ap.IsMerger {
 		ap.Channel <- ctr.matched
 		return true, nil
@@ -163,8 +155,8 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		}
 	}
 
-	ctr.matched.Negate()
 	count := ctr.bat.Length() - ctr.matched.Count()
+	ctr.matched.Negate()
 	sels := make([]int32, 0, count)
 	itr := ctr.matched.Iterator()
 	for itr.HasNext() {
@@ -183,20 +175,16 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		}
 	}
 
-	for j, rp := range ap.Result {
+	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			for range sels {
-				if err := ap.ctr.ufs[j](rbat.Vecs[j], ap.ctr.constNullVecs[j], 0); err != nil {
-					rbat.Clean(proc.Mp())
-					return false, err
-				}
+			if err := vector.AppendMultiFixed(rbat.Vecs[i], 0, true, count, proc.Mp()); err != nil {
+				rbat.Clean(proc.Mp())
+				return false, err
 			}
 		} else {
-			for _, sel := range sels {
-				if err := ap.ctr.ufs[j](rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], int64(sel)); err != nil {
-					rbat.Clean(proc.Mp())
-					return false, err
-				}
+			if err := rbat.Vecs[i].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
+				rbat.Clean(proc.Mp())
+				return false, err
 			}
 		}
 

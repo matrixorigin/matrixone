@@ -493,7 +493,7 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 		c,
 		func() *Future { return newFuture(nil) },
 		func(m *Future) error {
-			m.messageSended(nil)
+			m.messageSent(nil)
 			return nil
 		},
 		func(s *stream) {},
@@ -689,6 +689,26 @@ func TestIssue7678(t *testing.T) {
 	assert.Equal(t, uint32(0), s.lastReceivedSequence)
 }
 
+func TestWaitingFutureMustGetClosedError(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			return backendClosed
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := newTestMessage(1)
+			f, err := b.Send(ctx, req)
+			assert.NoError(t, err)
+			defer f.Close()
+
+			_, err = f.Get()
+			assert.Error(t, err)
+			assert.Equal(t, backendClosed, err)
+		},
+	)
+}
+
 func testBackendSend(t *testing.T,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	testFunc func(b *remoteBackend),
@@ -787,7 +807,7 @@ func (b *testBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 		make(chan Message, 1),
 		func() *Future { return newFuture(nil) },
 		func(m *Future) error {
-			m.messageSended(nil)
+			m.messageSent(nil)
 			return nil
 		},
 		func(s *stream) {

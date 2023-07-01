@@ -58,6 +58,8 @@ func InitTestEnv(module string, name string) string {
 }
 
 func TestNewObjectWriter(t *testing.T) {
+	ctx := context.Background()
+
 	dir := InitTestEnv(ModuleName, t.Name())
 	dir = path.Join(dir, "/local")
 	id := 1
@@ -72,7 +74,7 @@ func TestNewObjectWriter(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
@@ -185,7 +187,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0xa), buf[63])
 }
 
-func getObjectMeta(t *testing.B) ObjectMeta {
+func getObjectMeta(ctx context.Context, t *testing.B) ObjectMeta {
 	dir := InitTestEnv(ModuleName, t.Name())
 	dir = path.Join(dir, "/local")
 	id := 1
@@ -198,7 +200,7 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
@@ -231,7 +233,8 @@ func getObjectMeta(t *testing.B) ObjectMeta {
 }
 
 func BenchmarkMetadata(b *testing.B) {
-	meta := getObjectMeta(b)
+	ctx := context.Background()
+	meta := getObjectMeta(ctx, b)
 	b.Run("GetBlockMeta", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -256,6 +259,8 @@ func BenchmarkMetadata(b *testing.B) {
 
 func TestNewObjectReader(t *testing.T) {
 	t.Skip("use debug")
+	ctx := context.Background()
+
 	dir := InitTestEnv(ModuleName, t.Name())
 	dir = path.Join(dir, "/local")
 	id := 1
@@ -268,7 +273,7 @@ func TestNewObjectReader(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)

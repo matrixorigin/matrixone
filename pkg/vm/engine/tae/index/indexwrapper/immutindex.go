@@ -17,38 +17,31 @@ package indexwrapper
 import (
 	"context"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type ImmutIndex struct {
 	zm       index.ZM
 	bf       objectio.BloomFilter
 	location objectio.Location
-	cache    model.LRUCache
-	fs       fileservice.FileService
 }
 
 func NewImmutIndex(
 	zm index.ZM,
 	bf objectio.BloomFilter,
 	location objectio.Location,
-	cache model.LRUCache,
-	fs fileservice.FileService,
 ) ImmutIndex {
 	return ImmutIndex{
 		zm:       zm,
 		bf:       bf,
 		location: location,
-		cache:    cache,
-		fs:       fs,
 	}
 }
 
@@ -56,7 +49,8 @@ func (idx ImmutIndex) BatchDedup(
 	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
-) (sels *roaring.Bitmap, err error) {
+	rt *dbutils.Runtime,
+) (sels *nulls.Bitmap, err error) {
 	var exist bool
 	if keysZM.Valid() {
 		if exist = idx.zm.FastIntersect(keysZM); !exist {
@@ -64,7 +58,7 @@ func (idx ImmutIndex) BatchDedup(
 			return
 		}
 	} else {
-		if exist = idx.zm.FastContainsAny(keys); !exist {
+		if exist = idx.zm.FastContainsAny(keys.GetDownstreamVector()); !exist {
 			// all keys are not in [min, max]. definitely not
 			return
 		}
@@ -80,8 +74,8 @@ func (idx ImmutIndex) BatchDedup(
 		if bf, err = blockio.LoadBF(
 			ctx,
 			idx.location,
-			idx.cache,
-			idx.fs,
+			rt.Cache.FilterIndex,
+			rt.Fs.Service,
 			false,
 		); err != nil {
 			return
@@ -107,7 +101,9 @@ func (idx ImmutIndex) BatchDedup(
 	return
 }
 
-func (idx ImmutIndex) Dedup(ctx context.Context, key any) (err error) {
+func (idx ImmutIndex) Dedup(
+	ctx context.Context, key any, rt *dbutils.Runtime,
+) (err error) {
 	exist := idx.zm.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
 	if !exist {
@@ -121,8 +117,8 @@ func (idx ImmutIndex) Dedup(ctx context.Context, key any) (err error) {
 		if bf, err = blockio.LoadBF(
 			ctx,
 			idx.location,
-			idx.cache,
-			idx.fs,
+			rt.Cache.FilterIndex,
+			rt.Fs.Service,
 			false,
 		); err != nil {
 			return

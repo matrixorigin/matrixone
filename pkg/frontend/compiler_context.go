@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -199,11 +198,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	// logDebugf(ses.GetDebugString(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
-	table, err := db.Relation(txnCtx, tableName)
+	table, err := db.Relation(txnCtx, tableName, nil)
 	if err != nil {
 		tmpTable, e := tcc.getTmpRelation(txnCtx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
-			logutil.Errorf("get table %v error %v", tableName, err)
+			logErrorf(ses.GetDebugString(), "get table %v error %v", tableName, err)
 			return nil, nil, err
 		} else {
 			table = tmpTable
@@ -220,10 +219,10 @@ func (tcc *TxnCompilerContext) getTmpRelation(_ context.Context, tableName strin
 	}
 	db, err := e.Database(txnCtx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
-		logutil.Errorf("get temp database error %v", err)
+		logErrorf(tcc.GetSession().GetDebugString(), "get temp database error %v", err)
 		return nil, err
 	}
-	table, err := db.Relation(txnCtx, tableName)
+	table, err := db.Relation(txnCtx, tableName, nil)
 	return table, err
 }
 
@@ -383,14 +382,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var primarykey *plan2.PrimaryKeyDef
 	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
-	var subscriptionName string
-	var pubAccountId int32 = -1
-	if sub != nil {
-		subscriptionName = sub.SubName
-		pubAccountId = sub.AccountId
-		dbName = sub.DbName
-	}
-	isTemporary := table.GetEngineType() == engine.Memory
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -414,16 +405,16 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Seqnum:    uint32(attr.Attr.Seqnum),
 			}
 			// Is it a composite primary key
-			if attr.Attr.Name == catalog.CPrimaryKeyColName {
-				continue
-			}
+			//if attr.Attr.Name == catalog.CPrimaryKeyColName {
+			//	continue
+			//}
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
 					Name: attr.Attr.Name,
 				}
-				if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
-					continue
-				}
+				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+				//	continue
+				//}
 			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
@@ -486,31 +477,44 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		//cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		primarykey.CompPkeyCol = plan2.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+		//cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
 	}
 	rowIdCol := plan2.MakeRowIdColDef()
 	cols = append(cols, rowIdCol)
 
 	//convert
+	var subscriptionName string
+	var pubAccountId int32 = -1
+	if sub != nil {
+		subscriptionName = sub.SubName
+		pubAccountId = sub.AccountId
+		dbName = sub.DbName
+	}
+
 	obj := &plan2.ObjectRef{
 		SchemaName:       dbName,
 		ObjName:          tableName,
 		SubscriptionName: subscriptionName,
-		PubAccountId:     pubAccountId,
+	}
+	if pubAccountId != -1 {
+		obj.PubInfo = &plan.PubInfo{
+			TenantId: pubAccountId,
+		}
 	}
 
 	tableDef := &plan2.TableDef{
-		TblId:     tableId,
-		Name:      tableName,
-		Cols:      cols,
-		Defs:      defs,
-		TableType: TableType,
-		Createsql: Createsql,
-		Pkey:      primarykey,
-		//CompositePkey: CompositePkey,
+		TblId:        tableId,
+		Name:         tableName,
+		Cols:         cols,
+		Defs:         defs,
+		TableType:    TableType,
+		Createsql:    Createsql,
+		Pkey:         primarykey,
 		ViewSql:      viewSql,
 		Partition:    partitionInfo,
 		Fkeys:        foreignKeys,
@@ -518,7 +522,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
 		Version:      schemaVersion,
-		IsTemporary:  isTemporary,
+		IsTemporary:  table.GetEngineType() == engine.Memory,
 	}
 	return obj, tableDef
 }
@@ -539,7 +543,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.GetSession().GetGlobalVar(varName)
+			return tcc.GetSession().getGlobalSystemVariableValue(varName)
 		} else {
 			return tcc.GetSession().GetSessionVar(varName)
 		}
@@ -643,7 +647,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 
 	dbName := obj.GetSchemaName()
 	checkSub := true
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		checkSub = false
 	}
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub)
@@ -652,13 +656,39 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
-			AccountId: obj.PubAccountId,
+			AccountId: obj.PubInfo.TenantId,
 			DbName:    dbName,
 		}
 	}
 	tableName := obj.GetObjName()
 	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
-	return table.Stats(ctx, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
+
+	var partitionInfo *plan2.PartitionByDef
+	engineDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return false
+	}
+	for _, def := range engineDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan2.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return false
+				}
+				partitionInfo = p
+			}
+		}
+	}
+	var ptables []any
+	if partitionInfo != nil {
+		ptables = make([]any, len(partitionInfo.PartitionTableNames))
+		for i, PartitionTableName := range partitionInfo.PartitionTableNames {
+			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil)
+			ptables[i] = ptable
+		}
+	}
+	return table.Stats(ctx, ptables, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {

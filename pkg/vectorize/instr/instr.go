@@ -15,7 +15,6 @@
 package instr
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"strings"
 	"unicode"
 )
@@ -63,50 +62,9 @@ func Single(str string, substr string) int64 {
 		if !isASCII(substr) {
 			return 0
 		}
-		return int64(strings.Index(str, substr) + 1)
+		return int64(strings.Index(strings.ToLower(str), strings.ToLower(substr)) + 1)
 	}
-	r1, r2 := []rune(str), []rune(substr)
+
+	r1, r2 := []rune(strings.ToLower(str)), []rune(strings.ToLower(substr))
 	return kmp(r1, r2)
-}
-
-func Instr(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
-	s1GoOn, s2GoOn := len(s1) > 1, len(s2) > 1
-	if s1GoOn && s2GoOn {
-		instr3(s1, s2, snsp, rs, nsp)
-	} else if s1GoOn {
-		instr1(s1, s2, snsp, rs, nsp)
-	} else {
-		instr2(s1, s2, snsp, rs, nsp)
-	}
-}
-
-func instr1(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
-	substr := s2[0]
-	for i, str := range s1 {
-		if snsp[0].Contains(uint64(i)) {
-			nsp.Set(uint64(i))
-			continue
-		}
-		rs[i] = Single(str, substr)
-	}
-}
-func instr2(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
-	str := s1[0]
-	for i, substr := range s2 {
-		if snsp[1].Contains(uint64(i)) {
-			nsp.Set(uint64(i))
-			continue
-		}
-		rs[i] = Single(str, substr)
-	}
-}
-
-func instr3(s1, s2 []string, snsp []*nulls.Nulls, rs []int64, nsp *nulls.Nulls) {
-	for i, str := range s1 {
-		if snsp[0].Contains(uint64(i)) || snsp[1].Contains(uint64(i)) {
-			nsp.Set(uint64(i))
-			continue
-		}
-		rs[i] = Single(str, s2[i])
-	}
 }

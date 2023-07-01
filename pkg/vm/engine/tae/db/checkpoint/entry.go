@@ -36,6 +36,7 @@ type CheckpointEntry struct {
 	state      State
 	entryType  EntryType
 	location   objectio.Location
+	lastPrint  time.Time
 }
 
 func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
@@ -44,7 +45,20 @@ func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
 		end:       end,
 		state:     ST_Pending,
 		entryType: typ,
+		lastPrint: time.Now(),
 	}
+}
+
+func (e *CheckpointEntry) SetPrintTime() {
+	e.Lock()
+	defer e.Unlock()
+	e.lastPrint = time.Now()
+}
+
+func (e *CheckpointEntry) CheckPrintTime() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return time.Since(e.lastPrint) > 4*time.Minute
 }
 
 func (e *CheckpointEntry) GetStart() types.TS { return e.start }
@@ -190,8 +204,7 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 	if err != nil {
 		return
 	}
-	data := logtail.NewCheckpointData()
-	defer data.Close()
+	data := logtail.NewCNCheckpointData()
 	if err = data.PrefetchFrom(ctx, fs.Service, e.location); err != nil {
 		return
 	}

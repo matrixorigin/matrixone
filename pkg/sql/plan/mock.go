@@ -608,15 +608,14 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			objects[tableName] = &ObjectRef{
-				Server:       0,
-				Db:           0,
-				Schema:       0,
-				Obj:          tblId,
-				ServerName:   "",
-				DbName:       "",
-				SchemaName:   db,
-				ObjName:      tableName,
-				PubAccountId: -1,
+				Server:     0,
+				Db:         0,
+				Schema:     0,
+				Obj:        int64(tableIdx),
+				ServerName: "",
+				DbName:     "",
+				SchemaName: db,
+				ObjName:    tableName,
 			}
 
 			tableDef := &TableDef{
@@ -865,7 +864,7 @@ func NewMockOptimizer(_ bool) *MockOptimizer {
 
 func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	ctx := moc.CurrentContext()
-	query, err := BuildPlan(ctx, stmt)
+	query, err := BuildPlan(ctx, stmt, false)
 	if err != nil {
 		// logutil.Infof("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return nil, err

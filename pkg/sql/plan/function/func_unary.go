@@ -18,6 +18,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,18 +32,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/get_timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/json_quote"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/json_unquote"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/pi"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"io"
-	"strconv"
-	"strings"
-	"time"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
@@ -171,7 +169,7 @@ func binInteger[T constraints.Unsigned | constraints.Signed](v T, proc *process.
 }
 
 func binFloat[T constraints.Float](v T, proc *process.Process) (string, error) {
-	if err := overflowForNumericToNumeric[T, int64](proc.Ctx, []T{v}); err != nil {
+	if err := overflowForNumericToNumeric[T, int64](proc.Ctx, []T{v}, nil); err != nil {
 		return "", err
 	}
 	return uintToBinary(uint64(int64(v))), nil
@@ -278,21 +276,38 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 }
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, json_quote.Single)
+	single := func(str string) ([]byte, error) {
+		bj, err := types.ParseStringToByteJson(strconv.Quote(str))
+		if err != nil {
+			return nil, err
+		}
+		return bj.Marshal()
+	}
+
+	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, single)
 }
 
 func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	fSingle := json_unquote.JsonSingle
+	jsonSingle := func(v []byte) (string, error) {
+		bj := types.DecodeJson(v)
+		return bj.Unquote()
+	}
+
+	stringSingle := func(v []byte) (string, error) {
+		bj, err := types.ParseSliceToByteJson(v)
+		if err != nil {
+			return "", err
+		}
+		return bj.Unquote()
+	}
+
+	fSingle := jsonSingle
 	if ivecs[0].GetType().Oid.IsMySQLString() {
-		fSingle = json_unquote.StringSingle
+		fSingle = stringSingle
 	}
 
 	return opUnaryBytesToStrWithErrorCheck(ivecs, result, proc, length, fSingle)
 }
-
-const (
-	blobsize = 65536 // 2^16-1
-)
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
 	fs, readPath, err := fileservice.GetForETL(fs, Filepath)
@@ -339,7 +354,7 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if err != nil {
 		return err
 	}
-	if len(ctx) > blobsize {
+	if len(ctx) > 65536 /*blob size*/ {
 		return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
 	}
 	if len(ctx) == 0 {
@@ -791,6 +806,7 @@ func LastQueryIDWithoutParam(_ []*vector.Vector, result vector.FunctionResultWra
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
 		}
 		var idx int
 		idx, err = makeQueryIdIdx(-1, cnt, proc)
@@ -868,7 +884,7 @@ func User(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 }
 
 func Pi(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	r := pi.GetPi()
+	r := math.Pi
 
 	return opNoneParamToFixed[float64](result, proc, length, func() float64 {
 		return r
@@ -934,7 +950,7 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 func UTCTimestamp(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opNoneParamToFixed[types.Datetime](result, proc, length, func() types.Datetime {
-		return get_timestamp.GetUTCTimestamp()
+		return types.UTC()
 	})
 }
 

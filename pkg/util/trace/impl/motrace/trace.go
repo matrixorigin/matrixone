@@ -57,6 +57,15 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithBatchProcessMode(SV.BatchProcessor),
 		WithExportInterval(SV.TraceExportInterval),
 		WithLongQueryTime(SV.LongQueryTime),
+		WithLongSpanTime(SV.LongSpanTime.Duration),
+		WithSpanDisable(SV.DisableSpan),
+		WithSkipRunningStmt(SV.SkipRunningStmt),
+		WithSQLWriterDisable(SV.DisableSqlWriter),
+		WithAggregatorDisable(SV.DisableStmtAggregation),
+		WithAggregatorWindow(SV.AggregationWindow.Duration),
+		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
+		WithStmtMergeEnable(SV.EnableStmtMerge),
+
 		DebugMode(SV.EnableTraceDebug),
 		WithBufferSizeThreshold(SV.BufferSize),
 	)
@@ -73,11 +82,13 @@ func Init(ctx context.Context, opts ...TracerProviderOption) error {
 	SetTracerProvider(newMOTracerProvider(opts...))
 	config := &GetTracerProvider().tracerProviderConfig
 
-	// init Tracer
-	gTracer = GetTracerProvider().Tracer("MatrixOne")
-	_, span := gTracer.Start(ctx, "TraceInit")
-	defer span.End()
-	defer trace.SetDefaultTracer(gTracer)
+	if !config.disableSpan {
+		// init Tracer
+		gTracer = GetTracerProvider().Tracer("MatrixOne")
+		_, span := gTracer.Start(ctx, "TraceInit")
+		defer span.End()
+		defer trace.SetDefaultTracer(gTracer)
+	}
 
 	// init DefaultContext / DefaultSpanContext
 	var spanId trace.SpanID
@@ -97,7 +108,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) error {
 	logutil.SpanFieldKey.Store(trace.SpanFieldKey)
 	errutil.SetErrorReporter(ReportError)
 
-	logutil.Infof("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
+	logutil.Debugf("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
+	logutil.Debugf("trace with LongSpanTime: %v", GetTracerProvider().longSpanTime)
+	logutil.Debugf("trace with DisableSpan: %v", GetTracerProvider().disableSpan)
 
 	return nil
 }
@@ -140,6 +153,7 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 // PS: only in standalone or CN node can init schema
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
 	config := &GetTracerProvider().tracerProviderConfig
+	WithSQLExecutor(sqlExecutor).apply(config)
 	switch config.batchProcessMode {
 	case InternalExecutor, FileService:
 		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
@@ -199,6 +213,16 @@ func GetTracerProvider() *MOTracerProvider {
 	return gTracerProvider.Load().(*MOTracerProvider)
 }
 
+func GetSQLExecutorFactory() func() ie.InternalExecutor {
+	p := GetTracerProvider()
+	if p != nil {
+		p.mux.Lock()
+		defer p.mux.Unlock()
+		return p.tracerProviderConfig.sqlExecutor
+	}
+	return nil
+}
+
 type PipeImpl batchpipe.PipeImpl[batchpipe.HasName, any]
 
 type BatchProcessor interface {
@@ -206,6 +230,10 @@ type BatchProcessor interface {
 	Start() bool
 	Stop(graceful bool) error
 	Register(name batchpipe.HasName, impl PipeImpl)
+}
+
+type DiscardableCollector interface {
+	DiscardableCollect(context.Context, batchpipe.HasName) error
 }
 
 var _ BatchProcessor = &NoopBatchProcessor{}

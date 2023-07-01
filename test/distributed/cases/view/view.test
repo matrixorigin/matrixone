@@ -72,4 +72,7 @@ drop table if exists t1;
 create table t1(a int);
 create view v1 as select * from t1;
 SELECT relname, rel_createsql,relkind FROM mo_catalog.mo_tables WHERE reldatabase='test' order by relname;
+create table t2(a int not null, b varchar(20), c char(20));
+create view v2 as select * from t2;
+desc v2;
 drop database test;

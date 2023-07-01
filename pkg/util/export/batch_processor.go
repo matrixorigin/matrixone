@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
@@ -40,6 +41,8 @@ import (
 const defaultQueueSize = 1310720 // queue mem cost = 10MB
 
 const LoggerNameMOCollector = "MOCollector"
+
+const discardCollectTimeout = time.Millisecond
 
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
 // work like:
@@ -56,6 +59,7 @@ type bufferHolder struct {
 	// bufferPool
 	bufferPool *sync.Pool
 	bufferCnt  atomic.Int32
+	discardCnt atomic.Int32
 	// reminder
 	reminder batchpipe.Reminder
 	// signal send signal to Collector
@@ -123,6 +127,11 @@ func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, 
 	logutil.Debugf("release buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), b.c.bufferTotal.Load())
 }
 
+func (b *bufferHolder) discardBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
+	b.discardCnt.Add(1)
+	b.putBuffer(buffer)
+}
+
 // Add call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.Lock()
@@ -137,6 +146,8 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 	buf.Add(item)
 	b.mux.Unlock()
 	if buf.ShouldFlush() {
+		b.signal(b)
+	} else if checker, is := item.(table.NeedSyncWrite); is && checker.NeedSyncWrite() {
 		b.signal(b)
 	}
 }
@@ -185,7 +196,7 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	defer b.resetTrigger()
-	if b.buffer == nil {
+	if b.buffer == nil || b.buffer.IsEmpty() {
 		return nil
 	}
 	req := &bufferGenerateReq{
@@ -323,6 +334,20 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 	}
 }
 
+// DiscardableCollect implements motrace.DiscardableCollector
+// cooperate with logutil.Discardable() field
+func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.HasName) error {
+	select {
+	case <-c.stopCh:
+		ctx = errutil.ContextWithNoReport(ctx, true)
+		return moerr.NewInternalError(ctx, "MOCollector stopped")
+	case c.awakeCollect <- item:
+		return nil
+	case <-time.After(discardCollectTimeout):
+		return nil
+	}
+}
+
 // Start all goroutine worker, including collector, generator, and exporter
 func (c *MOCollector) Start() bool {
 	if atomic.LoadUint32(&c.started) != 0 {
@@ -337,7 +362,7 @@ func (c *MOCollector) Start() bool {
 
 	c.initCnt()
 
-	logutil.Infof("MOCollector Start")
+	logutil.Info("MOCollector Start")
 	for i := 0; i < c.collectorCnt; i++ {
 		c.stopWait.Add(1)
 		go c.doCollect(i)
@@ -424,8 +449,28 @@ type exportReq interface {
 var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		req := holder.getGenerateReq()
-		if req != nil {
-			c.awakeGenerate <- req
+		if req == nil {
+			return
+		}
+		if holder.name != motrace.RawLogTbl {
+			select {
+			case c.awakeGenerate <- req:
+			case <-time.After(time.Second * 3):
+				logutil.Warn("awakeBufferFactory: timeout after 3 seconds")
+				goto discardL
+			}
+		} else {
+			select {
+			case c.awakeGenerate <- req:
+			default:
+				logutil.Warn("awakeBufferFactory: awakeGenerate chan is full")
+				goto discardL
+			}
+		}
+		return
+	discardL:
+		if r, ok := req.(*bufferGenerateReq); ok {
+			r.b.discardBuffer(r.buffer)
 		}
 	}
 }
@@ -440,12 +485,16 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeGenerate:
-			if exportReq, err := req.handle(buf); err != nil {
+			if req == nil {
+				logutil.Warn("generate req is nil")
+			} else if exportReq, err := req.handle(buf); err != nil {
 				req.callback(err)
 			} else {
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
+				case <-time.After(time.Second * 10):
+					logutil.Info("awakeBatch: timeout after 10 seconds")
 				}
 			}
 		case <-c.stopCh:
@@ -463,10 +512,11 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeBatch:
-			if err := req.handle(); err != nil {
+			if req == nil {
+				logutil.Warn("export req is nil")
+			} else if err := req.handle(); err != nil {
 				req.callback(err)
 			}
-			//c.handleBatch(holder)
 		case <-c.stopCh:
 			c.mux.Lock()
 			for len(c.awakeBatch) > 0 {
@@ -493,6 +543,7 @@ loop:
 			fields = append(fields, zap.Int("QueueLength", len(c.awakeCollect)))
 			for _, b := range c.buffers {
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))
+				fields = append(fields, zap.Int32(fmt.Sprintf("%sDiscardCnt", b.name), b.discardCnt.Load()))
 			}
 			c.logger.Info("stats", fields...)
 		case <-c.stopCh:

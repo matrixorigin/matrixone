@@ -29,11 +29,11 @@ import (
 func TestComposedCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	composed := txnbase.NewComposedCmd()
+	composed := txnbase.NewComposedCmd(0)
 	defer composed.Close()
 
 	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog(nil)
+	c := catalog.MockCatalog()
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
@@ -72,8 +72,59 @@ func TestComposedCmd(t *testing.T) {
 
 	buf, err := composed.MarshalBinary()
 	assert.Nil(t, err)
-	vcomposed2, err := txnbase.BuildCommandFrom(buf)
+	_, err = txnbase.BuildCommandFrom(buf)
 	assert.Nil(t, err)
-	composed2 := vcomposed2.(*txnbase.ComposedCmd)
-	assert.Equal(t, composed.CmdSize, composed2.CmdSize)
+}
+
+func TestComposedCmdMaxSize(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	composed := txnbase.NewComposedCmd(2048)
+	defer composed.Close()
+
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog()
+	defer c.Close()
+
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	dbCmd, err := db.MakeCommand(1)
+	assert.Nil(t, err)
+	composed.AddCmd(dbCmd)
+
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	for i := 2; i <= 10; i++ {
+		cmd, err := table.MakeCommand(uint32(i))
+		assert.Nil(t, err)
+		composed.AddCmd(cmd)
+	}
+
+	buf, err := composed.MarshalBinary()
+	assert.Nil(t, err)
+	assert.Equal(t, true, composed.MoreCmds())
+	cmd, err := txnbase.BuildCommandFrom(buf)
+	assert.Nil(t, err)
+	c1, ok := cmd.(*txnbase.ComposedCmd)
+	assert.True(t, ok)
+	assert.NotNil(t, c1)
+	assert.Equal(t, composed.LastPos, len(c1.Cmds))
+
+	buf, err = composed.MarshalBinary()
+	assert.Nil(t, err)
+	assert.Equal(t, true, composed.MoreCmds())
+	cmd, err = txnbase.BuildCommandFrom(buf)
+	assert.Nil(t, err)
+	c2, ok := cmd.(*txnbase.ComposedCmd)
+	assert.True(t, ok)
+	assert.NotNil(t, c2)
+	assert.Equal(t, composed.LastPos, len(c1.Cmds)+len(c2.Cmds))
+
+	buf, err = composed.MarshalBinary()
+	assert.Nil(t, err)
+	assert.Equal(t, false, composed.MoreCmds())
+	cmd, err = txnbase.BuildCommandFrom(buf)
+	assert.Nil(t, err)
+	c3, ok := cmd.(*txnbase.ComposedCmd)
+	assert.True(t, ok)
+	assert.NotNil(t, c3)
+	assert.Equal(t, 10, len(c1.Cmds)+len(c2.Cmds)+len(c3.Cmds))
 }

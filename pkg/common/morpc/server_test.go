@@ -132,9 +132,9 @@ func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
 		assert.NoError(t, err)
 
 		defer f.Close()
-		resp, err := f.Get()
-		assert.Error(t, ctx.Err(), err)
-		assert.Nil(t, resp)
+		_, err = f.Get()
+		assert.Error(t, err)
+		assert.Equal(t, backendClosed, err)
 	})
 }
 
@@ -384,6 +384,21 @@ func TestCannotGetClosedBackend(t *testing.T) {
 		require.NoError(t, st.Close(true))
 
 		require.NoError(t, c.Ping(ctx, testAddr))
+	})
+}
+
+func TestPingError(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		c := newTestClient(t, WithClientMaxBackendPerHost(2))
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
+			return cs.Write(context.Background(), request.Message)
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		cancel()
+		require.Error(t, c.Ping(ctx, testAddr))
 	})
 }
 

@@ -21,55 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
-	sortedIdx := make([]uint32, cols[pk].Length())
-
-	// switch cols[pk].GetType().Oid {
-	// case types.T_bool:
-	// 	bools.Sort(cols[pk], sortedIdx)
-	// case types.T_int8:
-	// 	numerics.Sort[int8](cols[pk], sortedIdx)
-	// case types.T_int16:
-	// 	numerics.Sort[int16](cols[pk], sortedIdx)
-	// case types.T_int32:
-	// 	numerics.Sort[int32](cols[pk], sortedIdx)
-	// case types.T_int64:
-	// 	numerics.Sort[int64](cols[pk], sortedIdx)
-	// case types.T_uint8:
-	// 	numerics.Sort[uint8](cols[pk], sortedIdx)
-	// case types.T_uint16:
-	// 	numerics.Sort[uint16](cols[pk], sortedIdx)
-	// case types.T_uint32:
-	// 	numerics.Sort[uint32](cols[pk], sortedIdx)
-	// case types.T_uint64:
-	// 	numerics.Sort[uint64](cols[pk], sortedIdx)
-	// case types.T_float32:
-	// 	numerics.Sort[float32](cols[pk], sortedIdx)
-	// case types.T_float64:
-	// 	numerics.Sort[float64](cols[pk], sortedIdx)
-	// case types.T_date:
-	// 	numerics.Sort[types.Date](cols[pk], sortedIdx)
-	// case types.T_time:
-	// 	numerics.Sort[types.Time](cols[pk], sortedIdx)
-	// case types.T_datetime:
-	// 	numerics.Sort[types.Datetime](cols[pk], sortedIdx)
-	// case types.T_decimal64:
-	// 	decimal64s.Sort(cols[pk], sortedIdx)
-	// case types.T_decimal128:
-	// 	decimal128s.Sort(cols[pk], sortedIdx)
-	// case types.T_timestamp:
-	// 	numerics.Sort[types.Timestamp](cols[pk], sortedIdx)
-	// case types.T_uuid:
-	// 	uuids.Sort(cols[pk], sortedIdx)
-	// case types.T_TS:
-	// 	txnts.Sort(cols[pk], sortedIdx)
-	// case types.T_Rowid:
-	// 	rowid.Sort(cols[pk], sortedIdx)
-	// case types.T_char, types.T_json, types.T_varchar, types.T_blob, types.T_text:
-	// 	varchar.Sort(cols[pk], sortedIdx)
-	// default:
-	// 	panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
-	// }
+func SortBlockColumns(
+	cols []containers.Vector, pk int, pool *containers.VectorPool,
+) ([]int32, error) {
+	sortedIdx := make([]int32, cols[pk].Length())
 
 	switch cols[pk].GetType().Oid {
 	case types.T_bool:
@@ -125,58 +80,60 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 		if i == pk {
 			continue
 		}
-		cols[i] = Shuffle(cols[i], sortedIdx)
+		cols[i] = Shuffle(cols[i], sortedIdx, pool)
 	}
 	return sortedIdx, nil
 }
 
-func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
+func MergeSortedColumn(
+	column []containers.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
+) (ret []containers.Vector, mapping []uint32) {
 	switch column[0].GetType().Oid {
 	case types.T_bool:
-		ret, mapping = Merge(column, sortedIdx, boolLess, fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, boolLess, fromLayout, toLayout, pool)
 	case types.T_int8:
-		ret, mapping = Merge(column, sortedIdx, numericLess[int8], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[int8], fromLayout, toLayout, pool)
 	case types.T_int16:
-		ret, mapping = Merge(column, sortedIdx, numericLess[int16], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[int16], fromLayout, toLayout, pool)
 	case types.T_int32:
-		ret, mapping = Merge(column, sortedIdx, numericLess[int32], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[int32], fromLayout, toLayout, pool)
 	case types.T_int64:
-		ret, mapping = Merge(column, sortedIdx, numericLess[int64], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[int64], fromLayout, toLayout, pool)
 	case types.T_uint8:
-		ret, mapping = Merge(column, sortedIdx, numericLess[uint8], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[uint8], fromLayout, toLayout, pool)
 	case types.T_uint16:
-		ret, mapping = Merge(column, sortedIdx, numericLess[uint16], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[uint16], fromLayout, toLayout, pool)
 	case types.T_uint32:
-		ret, mapping = Merge(column, sortedIdx, numericLess[uint32], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[uint32], fromLayout, toLayout, pool)
 	case types.T_uint64:
-		ret, mapping = Merge(column, sortedIdx, numericLess[uint64], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[uint64], fromLayout, toLayout, pool)
 	case types.T_float32:
-		ret, mapping = Merge(column, sortedIdx, numericLess[float32], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[float32], fromLayout, toLayout, pool)
 	case types.T_float64:
-		ret, mapping = Merge(column, sortedIdx, numericLess[float64], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[float64], fromLayout, toLayout, pool)
 	case types.T_date:
-		ret, mapping = Merge(column, sortedIdx, numericLess[types.Date], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[types.Date], fromLayout, toLayout, pool)
 	case types.T_time:
-		ret, mapping = Merge(column, sortedIdx, numericLess[types.Time], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[types.Time], fromLayout, toLayout, pool)
 	case types.T_datetime:
-		ret, mapping = Merge(column, sortedIdx, numericLess[types.Datetime], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[types.Datetime], fromLayout, toLayout, pool)
 	case types.T_timestamp:
-		ret, mapping = Merge(column, sortedIdx, numericLess[types.Timestamp], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, numericLess[types.Timestamp], fromLayout, toLayout, pool)
 	case types.T_decimal64:
-		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Decimal64], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Decimal64], fromLayout, toLayout, pool)
 	case types.T_decimal128:
-		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Decimal128], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Decimal128], fromLayout, toLayout, pool)
 	case types.T_uuid:
-		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Uuid], fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Uuid], fromLayout, toLayout, pool)
 	case types.T_TS:
-		ret, mapping = Merge(column, sortedIdx, tsLess, fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, tsLess, fromLayout, toLayout, pool)
 	case types.T_Rowid:
-		ret, mapping = Merge(column, sortedIdx, rowidLess, fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, rowidLess, fromLayout, toLayout, pool)
 	case types.T_Blockid:
-		ret, mapping = Merge(column, sortedIdx, blockidLess, fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, blockidLess, fromLayout, toLayout, pool)
 	case types.T_char, types.T_json, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		ret, mapping = Merge(column, sortedIdx, bytesLess, fromLayout, toLayout)
+		ret, mapping = Merge(column, sortedIdx, bytesLess, fromLayout, toLayout, pool)
 	default:
 		panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))
 	}

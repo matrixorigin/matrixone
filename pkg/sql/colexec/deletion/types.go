@@ -53,7 +53,7 @@ func (pool *BatchPool) get() *batch.Batch {
 type container struct {
 	blockId_bitmap                 map[string]*nulls.Nulls
 	partitionId_blockId_rowIdBatch map[int]map[string]*batch.Batch // PartitionId -> blockId -> RowIdBatch
-	partitionId_blockId_metaLoc    map[int]map[string]*batch.Batch // PartitionId -> blockId -> MetaLocation
+	partitionId_blockId_deltaLoc   map[int]map[string]*batch.Batch // PartitionId -> blockId -> MetaLocation
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
@@ -81,6 +81,7 @@ type DeleteCtx struct {
 	CanTruncate           bool
 	RowIdIdx              int               // The array index position of the rowid column
 	PartitionTableIDs     []uint64          // Align array index with the partition number
+	PartitionTableNames   []string          // Align array index with the partition number
 	PartitionIndexInBatch int               // The array index position of the partition expression column
 	PartitionSources      []engine.Relation // Align array index with the partition number
 	Source                engine.Relation
@@ -97,7 +98,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			}
 		}
 
-		for _, blockId_metaLoc := range arg.ctr.partitionId_blockId_metaLoc {
+		for _, blockId_metaLoc := range arg.ctr.partitionId_blockId_deltaLoc {
 			for _, bat := range blockId_metaLoc {
 				bat.Clean(proc.GetMPool())
 			}
@@ -105,7 +106,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		arg.SegmentMap = nil
 		arg.ctr.blockId_bitmap = nil
 		arg.ctr.partitionId_blockId_rowIdBatch = nil
-		arg.ctr.partitionId_blockId_metaLoc = nil
+		arg.ctr.partitionId_blockId_deltaLoc = nil
 		arg.ctr.blockId_type = nil
 		arg.ctr.pool = nil
 	}
@@ -125,6 +126,7 @@ func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch) erro
 		}
 		for i, delBatch := range delBatches {
 			collectBatchInfo(proc, arg, delBatch, 0, i)
+			delBatch.Clean(proc.Mp())
 		}
 	} else {
 		collectBatchInfo(proc, arg, srcBat, arg.DeleteCtx.RowIdIdx, 0)
@@ -166,22 +168,22 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			ctr.pool.put(bat)
 			delete(blockId_rowIdBatch, blkid)
 		}
-		metaLocs, err := s3writer.WriteEndBlocks(proc)
+		blkInfos, err := s3writer.WriteEndBlocks(proc)
 		if err != nil {
 			return 0, err
 		}
-		for i, metaLoc := range metaLocs {
-			if _, has := ctr.partitionId_blockId_metaLoc[pidx]; !has {
-				ctr.partitionId_blockId_metaLoc[pidx] = make(map[string]*batch.Batch)
+		for i, blkInfo := range blkInfos {
+			if _, has := ctr.partitionId_blockId_deltaLoc[pidx]; !has {
+				ctr.partitionId_blockId_deltaLoc[pidx] = make(map[string]*batch.Batch)
 			}
-			blockId_metaLoc := ctr.partitionId_blockId_metaLoc[pidx]
-			if _, ok := blockId_metaLoc[blkids[i]]; !ok {
-				bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
+			blockId_deltaLoc := ctr.partitionId_blockId_deltaLoc[pidx]
+			if _, ok := blockId_deltaLoc[blkids[i]]; !ok {
+				bat := batch.New(false, []string{catalog.BlockMeta_DeltaLoc})
 				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-				blockId_metaLoc[blkids[i]] = bat
+				blockId_deltaLoc[blkids[i]] = bat
 			}
-			bat := blockId_metaLoc[blkids[i]]
-			vector.AppendBytes(bat.GetVector(0), []byte(metaLoc), false, proc.GetMPool())
+			bat := blockId_deltaLoc[blkids[i]]
+			vector.AppendBytes(bat.GetVector(0), []byte(blkInfo.MetaLocation().String()), false, proc.GetMPool())
 		}
 	}
 	return resSize, nil

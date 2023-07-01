@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestRead(t *testing.T) {
@@ -365,7 +366,9 @@ func TestSnapshotTxnOperator(t *testing.T) {
 
 		tc2, err := newTxnOperatorWithSnapshot(tc.sender, v)
 		assert.NoError(t, err)
+		assert.True(t, tc2.mu.txn.Mirror)
 
+		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true
@@ -419,29 +422,7 @@ func TestAddLockTable(t *testing.T) {
 	})
 }
 
-func TestUpdateSnaphotTS(t *testing.T) {
-	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
-		runOperatorTests(t,
-			func(
-				ctx context.Context,
-				tc *txnOperator,
-				_ *testTxnSender) {
-				tc.timestampWaiter = waiter
-				ts := int64(1000)
-				tc.mu.txn.SnapshotTS = newTestTimestamp(0)
-				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts)))
-				require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
-
-				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts-1)))
-				require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
-
-				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts+1)))
-				require.Equal(t, newTestTimestamp(ts+1), tc.Txn().SnapshotTS)
-			})
-	})
-}
-
-func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
+func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
 		runOperatorTests(t,
 			func(
@@ -464,17 +445,80 @@ func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
 	})
 }
 
-func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
+func TestRollbackMultiTimes(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		require.NoError(t, tc.Rollback(ctx))
+		require.Error(t, tc.Rollback(ctx))
+	})
+}
+
+func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
+	lockservice.RunLockServicesForTest(
+		zap.InfoLevel,
+		[]string{"s1"},
+		time.Second,
+		func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
+			l := ls[0]
+			tw := NewTimestampWaiter()
+			initTS := newTestTimestamp(1)
+			tw.NotifyLatestCommitTS(initTS)
+			runOperatorTestsWithOptions(
+				t,
+				func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+					require.Equal(t, initTS.Next(), tc.mu.txn.SnapshotTS)
+
+					_, err := l.Lock(ctx, 1, [][]byte{[]byte("k1")}, tc.mu.txn.ID, lock.LockOptions{})
+					require.NoError(t, err)
+
+					tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+
+					ctx2, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+					st := time.Now()
+					c := make(chan struct{})
+					go func() {
+						defer close(c)
+						time.Sleep(time.Second)
+						tw.NotifyLatestCommitTS(initTS.Next().Next())
+					}()
+					require.NoError(t, tc.Commit(ctx2))
+					<-c
+					require.True(t, time.Since(st) > time.Second)
+				},
+				newTestTimestamp(0),
+				[]TxnOption{WithTxnMode(txn.TxnMode_Pessimistic), WithTxnIsolation(txn.TxnIsolation_RC)},
+				WithTimestampWaiter(tw),
+				WithEnableSacrificingFreshness(),
+				WithLockService(l))
+		},
+		nil)
+}
+
+func runOperatorTests(
+	t *testing.T,
+	tc func(context.Context, *txnOperator, *testTxnSender),
+	options ...TxnOption) {
+	runOperatorTestsWithOptions(t, tc, newTestTimestamp(0), options)
+}
+
+func runOperatorTestsWithOptions(
+	t *testing.T,
+	tc func(context.Context, *txnOperator, *testTxnSender),
+	minTS timestamp.Timestamp,
+	options []TxnOption,
+	clientOptions ...TxnClientCreateOption) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	RunTxnTests(func(
-		c TxnClient,
-		ts rpc.TxnSender) {
-		txn, err := c.New(ctx, newTestTimestamp(0), options...)
-		assert.Nil(t, err)
-		tc(ctx, txn.(*txnOperator), ts.(*testTxnSender))
-	})
+	RunTxnTests(
+		func(
+			c TxnClient,
+			ts rpc.TxnSender) {
+			txn, err := c.New(ctx, minTS, options...)
+			assert.Nil(t, err)
+			tc(ctx, txn.(*txnOperator), ts.(*testTxnSender))
+		},
+		clientOptions...)
 }
 
 func newDNRequest(op uint32, dn uint64) txn.TxnRequest {

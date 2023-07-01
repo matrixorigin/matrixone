@@ -18,6 +18,9 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -32,7 +35,7 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, statsInfoMap any) bool {
+func (t *Table) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	return false
 }
 
@@ -367,6 +370,11 @@ func (t *Table) GetTableID(ctx context.Context) uint64 {
 	return uint64(t.id)
 }
 
+// GetTableName implements the engine.Relation interface.
+func (t *Table) GetTableName() string {
+	return t.tableName
+}
+
 func (t *Table) GetDBID(ctx context.Context) uint64 {
 	return 0
 }
@@ -375,6 +383,10 @@ func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) 
 	return nil, nil, nil
 }
 
-func (t *Table) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
+func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
 	return nil, nil
+}
+
+func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error) {
+	return true, nil
 }

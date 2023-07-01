@@ -18,15 +18,48 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"go/constant"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 )
+
+func BenchmarkInsert(b *testing.B) {
+	typ := types.T_varchar.ToType()
+	typ.Width = 1024
+	targetType := makePlan2Type(&typ)
+	targetType.Width = 1024
+
+	originStr := "0123456789"
+	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
+	targetT := &plan.Expr{
+		Typ: targetType,
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{
+				Typ: targetType,
+			},
+		},
+	}
+	ctx := context.TODO()
+	for i := 0; i < b.N; i++ {
+		binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+		expr, err := binder.BindExpr(testExpr, 0, true)
+		if err != nil {
+			break
+		}
+		_, err = forceCastExpr2(ctx, expr, typ, targetT)
+		if err != nil {
+			break
+		}
+	}
+}
 
 // only use in developing
 func TestSingleSQL(t *testing.T) {
@@ -455,6 +488,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 
 		"values row(1,1), row(2,2), row(3,3) order by column_0 limit 2",
 		"select * from (values row(1,1), row(2,2), row(3,3)) a (c1, c2)",
+		"select * from nation where n_name like ? or n_nationkey > 10 order by 2 limit '10' for update",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -472,6 +506,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
+		"select count(n_name) from nation limit 10 for update",
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
 	}
@@ -507,6 +542,8 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 		"SELECT N_NAME, R_REGIONKEY FROM NATION join REGION using(R_REGIONKEY)",                                              //column not exist
 		"SELECT N_NAME,N_REGIONKEY FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE aaaaa.N_REGIONKEY > 0", //table alias not exist
 		"select *", //No table used
+		"SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0 for update", //Not support
+		"select * from nation, nation2, region for update",                                                         // Not support
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -533,6 +570,7 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 		"select c_custkey2222 from (select c_custkey from CUSTOMER group by c_custkey ) a",    //column not exist
 		"select col1 from (select c_custkey from CUSTOMER group by c_custkey ) a(col1, col2)", //column length not match
 		"select c_custkey from (select c_custkey from CUSTOMER group by c_custkey) a(col1)",   //column not exist
+		"select c_custkey from (select c_custkey from CUSTOMER ) a for update ",               //not support
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -703,6 +741,7 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",    // related
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION) for update",                         // not support
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -1013,7 +1052,7 @@ func TestVisitRule(t *testing.T) {
 		makePlan2Int64ConstExprWithType(10),
 	}
 	resetParamRule := NewResetParamRefRule(ctx, params)
-	resetVarRule := NewResetVarRefRule(&mock.ctxt, &process.Process{})
+	resetVarRule := NewResetVarRefRule(&mock.ctxt, testutil.NewProc())
 	constantFoldRule := NewConstantFoldRule(&mock.ctxt)
 	vp = NewVisitPlan(plan, []VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
 	err = vp.Visit(ctx)
@@ -1074,7 +1113,7 @@ func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return BuildPlan(ctx, stmts[0])
+	return BuildPlan(ctx, stmts[0], false)
 }
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {

@@ -143,11 +143,11 @@ func timeBasedTruncateFactory(ts types.TS) func(b BlockT) bool {
 	}
 }
 
-func NewTxnTable(blockSize int, now func() types.TS) *TxnTable {
+func NewTxnTable(blockSize int, nowClock func() types.TS) *TxnTable {
 	factory := func(row RowT) BlockT {
 		ts := row.GetPrepareTS()
 		if ts == txnif.UncommitTS {
-			ts = now()
+			ts = nowClock()
 		}
 		return &txnBlock{
 			bornTS: ts,
@@ -197,7 +197,7 @@ func (table *TxnTable) ForeachRowInBetween(
 			minTs = blk.bornTS
 			return false
 		})
-		logutil.Warn("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
+		logutil.Info("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
 	}
 	snapshot.Ascend(pivot, func(blk BlockT) bool {
 		if blk.bornTS.Greater(to) {

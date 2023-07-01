@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create publication pub1 database t;
 internal error: database 't' does not exist
 create account acc0 admin_name 'root' identified by '111';
@@ -6,47 +7,50 @@ create account acc2 admin_name 'root' identified by '111';
 create database t;
 create publication pub1 database t;
 create publication pub2 database t account all;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near " all;";
 create publication pub3 database t account acc0,acc1;
 create publication pub4 database t account acc0,acc1,accx;
 create publication pub5 database t account accx comment 'test';
 show publications;
 Name    Database
 pub1    t
+pub2    t
 pub3    t
 pub4    t
 pub5    t
 show create publication pub1;
 Publication    Create Publication
-pub1    CREATE PUBLICATION `pub1` DATABASE `t` ACCOUNT ALL
+pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
 show create publication pub2;
-internal error: publication 'pub2' does not exist
+Publication    Create Publication
+pub2    CREATE PUBLICATION pub2 DATABASE t ACCOUNT all
 show create publication pub5;
 Publication    Create Publication
-pub5    CREATE PUBLICATION `pub5` DATABASE `t` ACCOUNT `accx` COMMENT 'test'
+pub5    CREATE PUBLICATION pub5 DATABASE t ACCOUNT accx
 alter publication pub1 account acc0,acc1;
 show create publication pub1;
 Publication    Create Publication
-pub1    CREATE PUBLICATION `pub1` DATABASE `t` ACCOUNT `acc0`, `acc1`
+pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT acc0,acc1
 alter publication pub2 account drop acc1;
-internal error: publication 'pub2' does not exist
+internal error: cannot drop accounts from all account option
 show create publication pub2;
-internal error: publication 'pub2' does not exist
+Publication    Create Publication
+pub2    CREATE PUBLICATION pub2 DATABASE t ACCOUNT all
 alter publication pub3 account add accx;
 show create publication pub3;
 Publication    Create Publication
-pub3    CREATE PUBLICATION `pub3` DATABASE `t` ACCOUNT `acc0`, `acc1`, `accx`
+pub3    CREATE PUBLICATION pub3 DATABASE t ACCOUNT acc0,acc1,accx
 alter publication pub4 account drop acc1,acc2;
 show create publication pub4;
 Publication    Create Publication
-pub4    CREATE PUBLICATION `pub4` DATABASE `t` ACCOUNT `acc0`, `accx`
+pub4    CREATE PUBLICATION pub4 DATABASE t ACCOUNT acc0,accx
 alter publication pub5 account all comment '1212';
 show create publication pub5;
 Publication    Create Publication
-pub5    CREATE PUBLICATION `pub5` DATABASE `t` ACCOUNT ALL COMMENT '1212'
+pub5    CREATE PUBLICATION pub5 DATABASE t ACCOUNT all
 drop publication pub1;
 show publications;
 Name    Database
+pub2    t
 pub3    t
 pub4    t
 pub5    t
@@ -56,12 +60,11 @@ Duplicate entry 'pub1' for key 'pub_name'
 alter publication pub1 account `all`;
 show create publication pub1;
 Publication    Create Publication
-pub1    CREATE PUBLICATION `pub1` DATABASE `t` ACCOUNT `all`
+pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
 show create publication pubx;
 internal error: publication 'pubx' does not exist
 drop publication pub1;
 drop publication pub2;
-internal error: publication 'pub2' does not exist
 drop publication pub3;
 drop publication pub4;
 drop publication pub5;
@@ -81,9 +84,9 @@ create publication sys_pub_1 database sys_db_1;
 show publications;
 Name    Database
 sys_pub_1    sys_db_1
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
-pub_name    database_name    account_list    all_account
-sys_pub_1    sys_db_1        true
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
+pub_name    database_name    account_list
+sys_pub_1    sys_db_1    all
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
@@ -127,9 +130,9 @@ Number of columns in sys_tbl_1
 show table_values from sys_tbl_1;
 max(a)    min(a)
 3    1
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
-pub_name    database_name    account_list    all_account
-sys_pub_1    sys_db_1        true
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
+pub_name    database_name    account_list
+sys_pub_1    sys_db_1    all
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
@@ -160,9 +163,9 @@ a
 2
 3
 alter publication sys_pub_1 account acc1;
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
-pub_name    database_name    account_list    all_account
-sys_pub_1    sys_db_1    acc1    false
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
+pub_name    database_name    account_list
+sys_pub_1    sys_db_1    acc1
 show subscriptions;
 Name    From_Account
 sub1    sys
@@ -183,9 +186,9 @@ a
 2
 3
 alter publication sys_pub_1 account add acc0;
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
-pub_name    database_name    account_list    all_account
-sys_pub_1    sys_db_1    acc0,acc1    false
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
+pub_name    database_name    account_list
+sys_pub_1    sys_db_1    acc0,acc1
 show subscriptions;
 Name    From_Account
 sub1    sys
@@ -315,3 +318,4 @@ drop publication pubname2;
 drop account test_tenant_1;
 drop account test_tenant_2;
 drop database db1;
+set global enable_privilege_cache = on;

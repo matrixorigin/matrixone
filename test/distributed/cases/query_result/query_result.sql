@@ -9,7 +9,9 @@ select count(*) from meta_scan(last_query_id()) as u;
 set global save_query_result = off;
 
 select * from tt;
+-- @bvt:issue#9886
 select * from result_scan(last_query_id()) as u;
+-- @bvt:issue
 set global save_query_result = on;
 drop table if exists t2;
 create table t2 (a int, b int, c int);
@@ -55,4 +57,6 @@ select * from meta_scan(last_query_id(-3)) as u;
 set role moadmin;
 drop role rrrqqq;
 select * from result_scan('d8fb97e7-e30e-11ed-8d80-d6aeb943c8b4') as u;
+--need to clean database db111
+drop database if exists db111;
 set global save_query_result = off;

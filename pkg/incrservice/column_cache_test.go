@@ -17,6 +17,8 @@ package incrservice
 import (
 	"context"
 	"math"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
@@ -57,7 +59,7 @@ func TestColumnCacheAllocate(t *testing.T) {
 			c *columnCache) {
 			c.Lock()
 			require.NoError(t, c.waitPrevAllocatingLocked(ctx))
-			require.NoError(t, c.allocateLocked(ctx, 0, 200))
+			require.NoError(t, c.allocateLocked(ctx, 0, 200, 0))
 			c.Unlock()
 
 			c.Lock()
@@ -78,7 +80,7 @@ func TestColumnCacheInsert(t *testing.T) {
 			c *columnCache) {
 			c.Lock()
 			require.NoError(t, c.waitPrevAllocatingLocked(ctx))
-			require.NoError(t, c.allocateLocked(ctx, 0, 200))
+			require.NoError(t, c.allocateLocked(ctx, 0, 200, 0))
 			c.Unlock()
 
 			c.Lock()
@@ -339,7 +341,7 @@ func TestOverflow(t *testing.T) {
 		func(
 			ctx context.Context,
 			cc *columnCache) {
-			require.NoError(t, cc.updateTo(ctx, 0, 1, math.MaxUint64))
+			require.NoError(t, cc.updateTo(ctx, 0, 1, math.MaxUint64, nil))
 			require.True(t, cc.overflow)
 
 			require.NoError(t,
@@ -383,6 +385,65 @@ func TestOverflowWithInit(t *testing.T) {
 	)
 }
 
+func TestMergeAllocate(t *testing.T) {
+	total := 3600000
+	goroutines := 60
+	batch := 6000
+	rowsPerGoroutine := total / goroutines
+	var added atomic.Uint64
+	capacity := 10000
+	runColumnCacheTests(
+		t,
+		capacity,
+		1,
+		func(
+			ctx context.Context,
+			cc *columnCache) {
+			var wg sync.WaitGroup
+			for i := 0; i < goroutines; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					n := rowsPerGoroutine / batch
+					for i := 0; i < n; i++ {
+						cc.applyAutoValues(
+							ctx,
+							0,
+							batch,
+							nil,
+							func(i int) bool { return false },
+							func(i int, u uint64) error {
+								added.Add(1)
+								return nil
+							})
+					}
+				}()
+			}
+
+			wg.Wait()
+			assert.Equal(t, uint64(total), added.Load())
+			assert.True(t, cc.allocateCount.Load() < 360)
+		},
+	)
+}
+
+func TestIssue9840(t *testing.T) {
+	fillValues := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
+	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	input := newTestVector[uint64](8, types.New(types.T_uint64, 0, 0), nil, nil)
+	// index 0 is manual, others is null, but index 1 has a invalid value
+	vector.SetFixedAt[uint64](input, 0, 1)
+	vector.SetFixedAt[uint64](input, 1, 5)
+	input.GetNulls().Del(0)
+	testColumnCacheInsert[uint64](
+		t,
+		8,
+		8,
+		input,
+		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
+	)
+}
+
 func testColumnCacheInsert[T constraints.Integer](
 	t *testing.T,
 	rows int,
@@ -396,7 +457,7 @@ func testColumnCacheInsert[T constraints.Integer](
 		func(
 			ctx context.Context,
 			c *columnCache) {
-			lastInsertValue, err := c.insertAutoValues(ctx, 0, input, rows)
+			lastInsertValue, err := c.insertAutoValues(ctx, 0, input, rows, nil)
 			require.NoError(t, err)
 			assert.Equal(t, expecLastInsertValue, lastInsertValue)
 			assert.Equal(t,
@@ -463,8 +524,9 @@ func runColumnCacheTestsWithInitOffset(
 			a.(*allocator).store.Create(
 				ctx,
 				0,
-				[]AutoColumn{col})
-			cc, err := newColumnCache(ctx, 0, col, Config{CountPerAllocate: capacity}, a)
+				[]AutoColumn{col},
+				nil)
+			cc, err := newColumnCache(ctx, 0, col, Config{CountPerAllocate: capacity}, a, nil)
 			require.NoError(t, err)
 			fn(ctx, cc)
 		},

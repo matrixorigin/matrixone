@@ -36,8 +36,10 @@ import (
 
 func TestReplayCatalog1(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	tae := initDB(ctx, t, nil)
 	schemas := make([]*catalog.Schema, 4)
 	for i := range schemas {
 		schemas[i] = catalog.MockSchema(2, 0)
@@ -46,7 +48,7 @@ func TestReplayCatalog1(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 	createTable := func(schema *catalog.Schema, wg *sync.WaitGroup, forceCkp bool) func() {
 		return func() {
 			defer wg.Done()
@@ -55,7 +57,7 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			_, err = db.CreateRelation(schema)
 			assert.Nil(t, err)
-			assert.Nil(t, txn.Commit())
+			assert.Nil(t, txn.Commit(context.Background()))
 			txn, _ = tae.StartTxn(nil)
 			db, err = txn.GetDatabase("db")
 			assert.Nil(t, err)
@@ -71,7 +73,7 @@ func TestReplayCatalog1(t *testing.T) {
 					assert.Nil(t, err)
 				}
 			}
-			assert.Nil(t, txn.Commit())
+			assert.Nil(t, txn.Commit(context.Background()))
 			if forceCkp || rand.Intn(100) > 80 {
 				err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 				assert.NoError(t, err)
@@ -94,11 +96,11 @@ func TestReplayCatalog1(t *testing.T) {
 	}
 	wg.Wait()
 	logutil.Info(tae.Catalog.SimplePPString(common.PPL1))
-	t.Logf("GetPenddingLSNCnt: %d", tae.Scheduler.GetPenddingLSNCnt())
-	t.Logf("GetCheckpointed: %d", tae.Scheduler.GetCheckpointedLSN())
+	t.Logf("GetPenddingLSNCnt: %d", tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	t.Logf("GetCheckpointed: %d", tae.Runtime.Scheduler.GetCheckpointedLSN())
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	defer tae2.Close()
 
@@ -114,13 +116,15 @@ func TestReplayCatalog1(t *testing.T) {
 func TestReplayCatalog2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase("db2", "", "")
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db", "", "")
@@ -136,19 +140,19 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = db.CreateRelation(schema2)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	_, err = txn.DropDatabase("db2")
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	_, err = db.DropRelationByName(schema2.Name)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
@@ -159,7 +163,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	err = seg.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
@@ -170,13 +174,13 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = seg.CreateBlock(false)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	defer tae2.Close()
 
@@ -192,13 +196,15 @@ func TestReplayCatalog2(t *testing.T) {
 func TestReplayCatalog3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase("db2", "", "")
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db", "", "")
@@ -214,19 +220,19 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = db.CreateRelation(schema2)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	_, err = txn.DropDatabase("db2")
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	_, err = db.DropRelationByName(schema2.Name)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
@@ -237,7 +243,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	err = seg.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
@@ -246,7 +252,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	seg, err = rel.CreateSegment(false)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
@@ -255,12 +261,12 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	err = rel.SoftDeleteSegment(seg.GetID())
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	defer tae2.Close()
 
@@ -278,12 +284,14 @@ func TestReplayCatalog3(t *testing.T) {
 func TestReplay1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
 	txn, _ := tae.StartTxn(nil)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db", "", "")
@@ -294,13 +302,13 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = seg.CreateBlock(false)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 	logutil.Infof("%d,%d", txn.GetStartTS(), txn.GetCommitTS())
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	c := tae2.Catalog
 	t.Log(c.SimplePPString(common.PPL1))
@@ -314,7 +322,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	err = rel.Append(context.Background(), bat)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
@@ -323,9 +331,9 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(10000), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	filter := handle.NewEQFilter(int32(5))
-	err = rel.UpdateByFilter(filter, uint16(0), int32(33), false)
+	err = rel.UpdateByFilter(context.Background(), filter, uint16(0), int32(33), false)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
@@ -334,15 +342,15 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(10000), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	filter.Val = int32(6)
-	err = rel.DeleteByFilter(filter)
+	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	t.Log(c.SimplePPString(common.PPL1))
 	c.Close()
 	tae2.Close()
 
-	tae3, err := Open(tae.Dir, nil)
+	tae3, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	c3 := tae3.Catalog
 	t.Log(c3.SimplePPString(common.PPL1))
@@ -354,14 +362,14 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(9999), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	filter.Val = int32(5)
-	val, _, err := rel.GetValueByFilter(filter, 0)
+	val, _, err := rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
 	assert.Equal(t, int32(33), val)
 
 	filter.Val = int32(6)
-	_, _, err = rel.GetValueByFilter(filter, 0)
+	_, _, err = rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.NotNil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	c3.Close()
 	tae3.Close()
@@ -382,7 +390,9 @@ func TestReplay1(t *testing.T) {
 func TestReplay2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
@@ -398,7 +408,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	err = rel.Append(context.Background(), bats[0])
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -408,14 +418,14 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 
 	filter := handle.NewEQFilter(int32(1500))
-	id, row, err := rel.GetByFilter(filter)
+	id, row, err := rel.GetByFilter(context.Background(), filter)
 	assert.Nil(t, err)
-	err = rel.UpdateByFilter(filter, uint16(0), int32(33), false)
+	err = rel.UpdateByFilter(context.Background(), filter, uint16(0), int32(33), false)
 	assert.Nil(t, err)
 
 	err = rel.RangeDelete(id, row+1, row+100, handle.DT_Normal)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -429,13 +439,13 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	err = seg.SoftDeleteBlock(blk.ID)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.Close()
 	//prevTs := tae.TxnMgr.TsAlloc.Get()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
 
@@ -454,12 +464,12 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, blkh.GetMeta().(*catalog.BlockEntry).HasDropCommittedLocked())
 
-	val, _, err := rel.GetValueByFilter(filter, 0)
+	val, _, err := rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
 	assert.Equal(t, int32(33), val)
 	_, _, err = rel.GetValue(id, row, 0)
 	assert.NotNil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	err = tae2.BGCheckpointRunner.ForceFlush(tae2.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*10)
 	assert.NoError(t, err)
@@ -474,12 +484,12 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	err = rel.Append(context.Background(), bats[1])
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
 	tae2.Close()
 
-	tae3, err := Open(tae.Dir, nil)
+	tae3, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	t.Log(tae3.Catalog.SimplePPString(common.PPL1))
 
@@ -493,16 +503,16 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = seg.GetBlock(blk.ID)
 	assert.Nil(t, err)
-	val, _, err = rel.GetValueByFilter(filter, 0)
+	val, _, err = rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
 	assert.Equal(t, int32(33), val)
 	_, _, err = rel.GetValue(id, row, 0)
 	assert.NotNil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	tae3.Close()
 
-	tae4, err := Open(tae.Dir, nil)
+	tae4, err := Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 	tae4.Close()
 }
@@ -517,7 +527,9 @@ func TestReplay2(t *testing.T) {
 func TestReplay3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := newTestEngine(t, nil)
+	ctx := context.Background()
+
+	tae := newTestEngine(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
@@ -537,46 +549,46 @@ func TestReplay3(t *testing.T) {
 	err = tbl.Append(context.Background(), bat)
 	assert.Nil(t, err)
 	for i := 0; i < 100; i++ {
-		err = tbl.UpdateByFilter(filter, 0, int32(33), false)
+		err = tbl.UpdateByFilter(context.Background(), filter, 0, int32(33), false)
 		assert.NoError(t, err)
 		err = tbl.Append(context.Background(), bat)
 		assert.Error(t, err)
-		err = tbl.DeleteByFilter(filter)
+		err = tbl.DeleteByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 		err = tbl.Append(context.Background(), bat)
 		assert.NoError(t, err)
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	for i := 0; i < 10; i++ {
 		txn, rel := tae.getRelation()
-		err = rel.UpdateByFilter(filter, 0, int32(33), false)
+		err = rel.UpdateByFilter(context.Background(), filter, 0, int32(33), false)
 		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit())
+		assert.NoError(t, txn.Commit(context.Background()))
 
 		txn, rel = tae.getRelation()
-		blkID, row, err := rel.GetByFilter(filter)
+		blkID, row, err := rel.GetByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 		err = rel.RangeDelete(blkID, row, row, handle.DT_Normal)
 		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit())
+		assert.NoError(t, txn.Commit(context.Background()))
 
 		txn, rel = tae.getRelation()
 		err = rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel := tae.getRelation()
 	assert.Equal(t, uint64(1), rel.GetMeta().(*catalog.TableEntry).GetRows())
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.getRelation()
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 // append, delete, compact, mergeblocks, ckp
@@ -592,7 +604,9 @@ func TestReplay3(t *testing.T) {
 func TestReplayTableRows(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
@@ -615,7 +629,7 @@ func TestReplayTableRows(t *testing.T) {
 	err = tbl.RangeDelete(blkID, 0, 99, handle.DT_Normal)
 	assert.Nil(t, err)
 	rows -= 100
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -631,11 +645,11 @@ func TestReplayTableRows(t *testing.T) {
 	err = tbl.RangeDelete(blkID, 0, 99, handle.DT_Normal)
 	assert.Nil(t, err)
 	rows -= 100
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 
 	txn, err = tae2.StartTxn(nil)
@@ -645,12 +659,12 @@ func TestReplayTableRows(t *testing.T) {
 	tbl, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	assert.Equal(t, rows, tbl.GetMeta().(*catalog.TableEntry).GetRows())
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	err = tae2.Close()
 	assert.Nil(t, err)
 
-	tae3, err := Open(tae.Dir, nil)
+	tae3, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 
 	txn, err = tae3.StartTxn(nil)
@@ -661,7 +675,7 @@ func TestReplayTableRows(t *testing.T) {
 	tbl, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	assert.Equal(t, rows, tbl.GetMeta().(*catalog.TableEntry).GetRows())
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 
 	// worker := ops.NewOpWorker("xx")
 	// worker.Start()
@@ -686,7 +700,7 @@ func TestReplayTableRows(t *testing.T) {
 	// 	err = task.WaitDone()
 	// 	assert.Nil(t, err)
 	// }
-	// assert.Nil(t, txn.Commit())
+	// assert.Nil(t, txn.Commit(context.Background()))
 	// worker.Stop()
 
 	err = tae3.Close()
@@ -703,7 +717,7 @@ func TestReplayTableRows(t *testing.T) {
 	// tbl, err = db.GetRelationByName(schema.Name)
 	// assert.Nil(t, err)
 	// assert.Equal(t, rows, tbl.GetMeta().(*catalog.TableEntry).GetRows())
-	// assert.Nil(t, txn.Commit())
+	// assert.Nil(t, txn.Commit(context.Background()))
 
 	// err = tae4.Close()
 	// assert.Nil(t, err)
@@ -713,8 +727,10 @@ func TestReplayTableRows(t *testing.T) {
 func TestReplay4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
@@ -726,11 +742,11 @@ func TestReplay4(t *testing.T) {
 	createRelationAndAppend(t, 0, tae, defaultTestDB, schema, bats[0], true)
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	_ = tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae2, schema.Name)
@@ -738,7 +754,7 @@ func TestReplay4(t *testing.T) {
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 	checkAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	compactBlocks(t, 0, tae2, defaultTestDB, schema, false)
 	txn, rel = getDefaultRelation(t, tae2, schema.Name)
@@ -747,13 +763,13 @@ func TestReplay4(t *testing.T) {
 	assert.NoError(t, err)
 	checkAllColRowsByScan(t, rel,
 		bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	compactBlocks(t, 0, tae2, defaultTestDB, schema, false)
 
 	txn, rel = getDefaultRelation(t, tae2, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:3]), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	mergeBlocks(t, 0, tae2, defaultTestDB, schema, false)
 
@@ -762,12 +778,12 @@ func TestReplay4(t *testing.T) {
 	err = rel.Append(context.Background(), bats[3])
 	assert.NoError(t, err)
 	checkAllColRowsByScan(t, rel, bat.Length(), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
 
 	tae2.Close()
 
-	tae3, err := Open(tae.Dir, nil)
+	tae3, err := Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 	defer tae3.Close()
 }
@@ -776,8 +792,10 @@ func TestReplay4(t *testing.T) {
 func TestReplay5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
@@ -789,10 +807,10 @@ func TestReplay5(t *testing.T) {
 	createRelationAndAppend(t, 0, tae, defaultTestDB, schema, bats[0], true)
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	_ = tae.Close()
-	tae, err := Open(tae.Dir, nil)
+	tae, err := Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -802,11 +820,11 @@ func TestReplay5(t *testing.T) {
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	t.Logf("LSN=%d", txn.GetLSN())
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, nil)
+	tae, err = Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -819,7 +837,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bats[3])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
@@ -828,10 +846,10 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:4]), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, nil)
+	tae, err = Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -842,7 +860,7 @@ func TestReplay5(t *testing.T) {
 		err = rel.Append(context.Background(), b)
 		assert.NoError(t, err)
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
 	assert.NoError(t, err)
@@ -852,14 +870,14 @@ func TestReplay5(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	printCheckpointStats(t, tae)
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, nil)
+	tae, err = Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:8]), false)
 	err = rel.Append(context.Background(), bats[0])
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	// testutils.WaitExpect(3000, func() bool {
 	// 	return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()/2
 	// })
@@ -868,14 +886,14 @@ func TestReplay5(t *testing.T) {
 	mergeBlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, nil)
+	tae, err = Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 	defer tae.Close()
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:8]), false)
 	err = rel.Append(context.Background(), bats[0])
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
 	assert.NoError(t, err)
@@ -886,7 +904,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	printCheckpointStats(t, tae)
 	assert.Equal(t, tae.Wal.GetCurrSeqNum(), tae.Wal.GetCheckpointed())
@@ -896,8 +914,10 @@ func TestReplay5(t *testing.T) {
 func TestReplay6(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -908,7 +928,7 @@ func TestReplay6(t *testing.T) {
 	createRelationAndAppend(t, 0, tae, defaultTestDB, schema, bats[0], true)
 
 	_ = tae.Close()
-	tae, err := Open(tae.Dir, opts)
+	tae, err := Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
@@ -917,12 +937,12 @@ func TestReplay6(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, opts)
+	tae, err = Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -933,7 +953,7 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bats[3])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 	mergeBlocks(t, 0, tae, defaultTestDB, schema, false)
 	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
@@ -942,12 +962,12 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, err)
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, opts)
+	tae, err = Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:4]), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	printCheckpointStats(t, tae)
 	_ = tae.Close()
 }
@@ -956,8 +976,10 @@ func TestReplay7(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	schema := catalog.MockSchemaAll(18, 14)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5
@@ -970,20 +992,22 @@ func TestReplay7(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 
 	_ = tae.Close()
-	tae, err := Open(tae.Dir, opts)
+	tae, err := Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 	defer tae.Close()
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bat.Length(), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func TestReplay8(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 13)
 	schema.BlockMaxRows = 10
@@ -998,46 +1022,46 @@ func TestReplay8(t *testing.T) {
 	txn, rel := tae.getRelation()
 	v := getSingleSortKeyValue(bats[0], schema, 2)
 	filter := handle.NewEQFilter(v)
-	err := rel.DeleteByFilter(filter)
+	err := rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.getRelation()
 	window := bat.CloneWindow(2, 1)
 	defer window.Close()
 	err = rel.Append(context.Background(), window)
 	assert.NoError(t, err)
-	_ = txn.Rollback()
+	_ = txn.Rollback(context.Background())
 
-	tae.restart()
+	tae.restart(ctx)
 
 	// Check the total rows by scan
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
 	err = rel.Append(context.Background(), bats[0])
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	// Try to append the delete row and then rollback
 	txn, rel = tae.getRelation()
 	err = rel.Append(context.Background(), window)
 	assert.NoError(t, err)
-	_ = txn.Rollback()
+	_ = txn.Rollback(context.Background())
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	err = rel.Append(context.Background(), window)
 	assert.NoError(t, err)
-	_ = txn.Rollback()
+	_ = txn.Rollback(context.Background())
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	err = rel.Append(context.Background(), window)
@@ -1045,13 +1069,13 @@ func TestReplay8(t *testing.T) {
 	tuple3 := bat.Window(3, 1)
 	err = rel.Append(context.Background(), tuple3)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
@@ -1063,10 +1087,10 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bats[3])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.compactBlocks(false)
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bat.Length(), true)
@@ -1075,24 +1099,24 @@ func TestReplay8(t *testing.T) {
 
 	v0_5 := getSingleSortKeyValue(bats[0], schema, 5)
 	filter = handle.NewEQFilter(v0_5)
-	err = rel.DeleteByFilter(filter)
+	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	v1_5 := getSingleSortKeyValue(bats[1], schema, 5)
 	filter = handle.NewEQFilter(v1_5)
-	err = rel.DeleteByFilter(filter)
+	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	v2_5 := getSingleSortKeyValue(bats[2], schema, 5)
 	filter = handle.NewEQFilter(v2_5)
-	err = rel.DeleteByFilter(filter)
+	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	v3_2 := getSingleSortKeyValue(bats[3], schema, 2)
 	filter = handle.NewEQFilter(v3_2)
-	err = rel.DeleteByFilter(filter)
+	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bat.Length()-4, true)
@@ -1109,14 +1133,14 @@ func TestReplay8(t *testing.T) {
 	err = rel.Append(context.Background(), tuple3_2)
 	assert.NoError(t, err)
 	checkAllColRowsByScan(t, rel, bat.Length(), true)
-	_ = txn.Rollback()
+	_ = txn.Rollback(context.Background())
 
 	tae.compactBlocks(false)
 	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bat.Length()-4, true)
@@ -1129,14 +1153,16 @@ func TestReplay8(t *testing.T) {
 	err = rel.Append(context.Background(), tuple3_2)
 	assert.NoError(t, err)
 	checkAllColRowsByScan(t, rel, bat.Length(), true)
-	_ = txn.Rollback()
+	_ = txn.Rollback(context.Background())
 }
 
 func TestReplay9(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 3)
 	schema.BlockMaxRows = 10
@@ -1151,54 +1177,54 @@ func TestReplay9(t *testing.T) {
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	v := getSingleSortKeyValue(bats[0], schema, 2)
 	filter := handle.NewEQFilter(v)
-	err := rel.UpdateByFilter(filter, 2, int32(999), false)
+	err := rel.UpdateByFilter(context.Background(), filter, 2, int32(999), false)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 	txn, rel = tae.getRelation()
-	actv, _, err := rel.GetValueByFilter(filter, 2)
+	actv, _, err := rel.GetValueByFilter(context.Background(), filter, 2)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(999), actv)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.compactBlocks(false)
 
-	tae.restart()
+	tae.restart(ctx)
 	txn, rel = tae.getRelation()
-	_, _, err = rel.GetByFilter(filter)
+	_, _, err = rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	actv, _, err = rel.GetValueByFilter(filter, 2)
+	actv, _, err = rel.GetValueByFilter(context.Background(), filter, 2)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(999), actv)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	tae.compactBlocks(false)
 
 	txn, rel = tae.getRelation()
 	v2 := getSingleSortKeyValue(bats[0], schema, 4)
 	filter2 := handle.NewEQFilter(v2)
-	err = rel.UpdateByFilter(filter2, 1, int16(199), false)
+	err = rel.UpdateByFilter(context.Background(), filter2, 1, int16(199), false)
 	assert.NoError(t, err)
-	actv, _, err = rel.GetValueByFilter(filter2, 1)
+	actv, _, err = rel.GetValueByFilter(context.Background(), filter2, 1)
 	assert.NoError(t, err)
 	assert.Equal(t, int16(199), actv)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
-	actv, _, err = rel.GetValueByFilter(filter2, 1)
+	actv, _, err = rel.GetValueByFilter(context.Background(), filter2, 1)
 	assert.NoError(t, err)
 	assert.Equal(t, int16(199), actv)
 	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bats[3])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.compactBlocks(false)
 	tae.mergeBlocks(false)
@@ -1206,33 +1232,35 @@ func TestReplay9(t *testing.T) {
 	txn, rel = tae.getRelation()
 	v3 := getSingleSortKeyValue(bats[1], schema, 3)
 	filter3 := handle.NewEQFilter(v3)
-	err = rel.UpdateByFilter(filter3, 5, uint16(88), false)
+	err = rel.UpdateByFilter(context.Background(), filter3, 5, uint16(88), false)
 	assert.NoError(t, err)
-	actv, _, err = rel.GetValueByFilter(filter3, 5)
+	actv, _, err = rel.GetValueByFilter(context.Background(), filter3, 5)
 	assert.NoError(t, err)
 	assert.Equal(t, uint16(88), actv)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
-	actv, _, err = rel.GetValueByFilter(filter, 2)
+	actv, _, err = rel.GetValueByFilter(context.Background(), filter, 2)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(999), actv)
-	actv, _, err = rel.GetValueByFilter(filter2, 1)
+	actv, _, err = rel.GetValueByFilter(context.Background(), filter2, 1)
 	assert.NoError(t, err)
 	assert.Equal(t, int16(199), actv)
-	actv, _, err = rel.GetValueByFilter(filter3, 5)
+	actv, _, err = rel.GetValueByFilter(context.Background(), filter3, 5)
 	assert.NoError(t, err)
 	assert.Equal(t, uint16(88), actv)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func TestReplay10(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5
@@ -1261,13 +1289,13 @@ func TestReplay10(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, opts)
+	tae, err = Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 	defer tae.Close()
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bat.Length(), false)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	schema1 := rel.Schema().(*catalog.Schema)
 
 	d1 := &plan.Default{}
@@ -1295,8 +1323,10 @@ func TestReplay10(t *testing.T) {
 // restart
 func TestReplaySnapshots(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
 
 	txn, err := tae.StartTxn(nil)
@@ -1309,7 +1339,7 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = seg.CreateBlock(false)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
@@ -1322,13 +1352,13 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.SoftDeleteSegment(seg.GetID())
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.restart()
+	tae.restart(ctx)
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	tae.Close()
@@ -1336,8 +1366,10 @@ func TestReplaySnapshots(t *testing.T) {
 
 func TestReplayDatabaseEntry(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	datypStr := "datyp"
@@ -1348,9 +1380,9 @@ func TestReplayDatabaseEntry(t *testing.T) {
 	db, err := txn.CreateDatabase("db", createSqlStr, datypStr)
 	assert.NoError(t, err)
 	dbID := db.GetID()
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 	t.Log(tae.Catalog.SimplePPString(3))
 	dbEntry, err := tae.Catalog.GetDatabaseByID(dbID)
 	assert.NoError(t, err)
@@ -1360,7 +1392,7 @@ func TestReplayDatabaseEntry(t *testing.T) {
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
 	assert.NoError(t, err)
 
-	tae.restart()
+	tae.restart(ctx)
 	dbEntry, err = tae.Catalog.GetDatabaseByID(dbID)
 	assert.NoError(t, err)
 	assert.Equal(t, datypStr, dbEntry.GetDatType())

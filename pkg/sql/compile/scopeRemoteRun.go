@@ -21,10 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -53,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
@@ -73,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
@@ -83,6 +81,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -159,7 +158,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 		// decode and rewrite the scope.
 		// insert operator needs to fill the engine info.
-		s, err := decodeScope(receiver.scopeData, c.proc, true)
+		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
 		if err != nil {
 			return err
 		}
@@ -241,8 +240,7 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 		}
 		nextAnalyze.Network(bat)
 		sendToConnectOperator(nextOperator, bat)
-		// XXX maybe we can use dataBuffer = dataBuffer[:0] to do memory reuse.
-		// but it seems that decode batch will do some memory reflect. but not copy.
+
 		dataBuffer = nil
 	}
 }
@@ -298,7 +296,7 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
-func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, error) {
+func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.Engine) (*Scope, error) {
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
@@ -315,7 +313,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, err
 	if err != nil {
 		return nil, err
 	}
-	if err := fillInstructionsForScope(s, ctx, p); err != nil {
+	if err := fillInstructionsForScope(s, ctx, p, eng); err != nil {
 		return nil, err
 	}
 
@@ -354,6 +352,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 			Database:     proc.SessionInfo.GetDatabase(),
 			Version:      proc.SessionInfo.GetVersion(),
 			TimeZone:     timeBytes,
+			QueryId:      proc.SessionInfo.QueryId,
 		}
 	}
 	return procInfo.Marshal()
@@ -445,6 +444,13 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			}
 			p.DataSource.Block = string(data)
 		}
+		//if len(s.DataSource.RuntimeFilterReceivers) > 0 {
+		//	rfSpecs := make([]*plan.RuntimeFilterSpec, len(s.DataSource.RuntimeFilterReceivers))
+		//	for i, recv := range s.DataSource.RuntimeFilterReceivers {
+		//		rfSpecs[i] = recv.Spec
+		//	}
+		//	p.DataSource.RuntimeFilterList = rfSpecs
+		//}
 	}
 	// PreScope
 	p.Children = make([]*pipeline.Pipeline, len(s.PreScopes))
@@ -554,6 +560,21 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			bat.Cnt = 1
 			s.DataSource.Bat = bat
 		}
+		//if len(dsc.RuntimeFilterList) > 0 {
+		//	rfReceivers := make([]*colexec.RuntimeFilterChan, len(dsc.RuntimeFilterList))
+		//	if ctx.runtimeFilterReceiverMap == nil {
+		//		ctx.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
+		//	}
+		//	for i, rfSpec := range dsc.RuntimeFilterList {
+		//		ch := make(chan *pipeline.RuntimeFilter, 1)
+		//		rfReceivers[i] = &colexec.RuntimeFilterChan{
+		//			Spec: rfSpec,
+		//			Chan: ch,
+		//		}
+		//		ctx.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+		//	}
+		//	s.DataSource.RuntimeFilterReceivers = rfReceivers
+		//}
 	}
 	if p.Node != nil {
 		s.NodeInfo.Id = p.Node.Id
@@ -587,17 +608,17 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 }
 
 // fillInstructionsForScope fills scope's instructions.
-func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline) error {
+func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline, eng engine.Engine) error {
 	var err error
 
 	for i := range s.PreScopes {
-		if err = fillInstructionsForScope(s.PreScopes[i], ctx.children[i], p.Children[i]); err != nil {
+		if err = fillInstructionsForScope(s.PreScopes[i], ctx.children[i], p.Children[i], eng); err != nil {
 			return err
 		}
 	}
 	s.Instructions = make([]vm.Instruction, len(p.InstructionList))
 	for i := range s.Instructions {
-		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx); err != nil {
+		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx, eng); err != nil {
 			return err
 		}
 	}
@@ -612,12 +633,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			ToWriteS3:         t.ToWriteS3,
-			Ref:               t.InsertCtx.Ref,
-			Attrs:             t.InsertCtx.Attrs,
-			AddAffectedRows:   t.InsertCtx.AddAffectedRows,
-			PartitionTableIds: t.InsertCtx.PartitionTableIDs,
-			PartitionIdx:      int32(t.InsertCtx.PartitionIndexInBatch),
+			ToWriteS3:           t.ToWriteS3,
+			Ref:                 t.InsertCtx.Ref,
+			Attrs:               t.InsertCtx.Attrs,
+			AddAffectedRows:     t.InsertCtx.AddAffectedRows,
+			PartitionTableIds:   t.InsertCtx.PartitionTableIDs,
+			PartitionTableNames: t.InsertCtx.PartitionTableNames,
+			PartitionIdx:        int32(t.InsertCtx.PartitionIndexInBatch),
+			TableDef:            t.InsertCtx.TableDef,
 		}
 	case *deletion.Argument:
 		in.Delete = &pipeline.Deletion{
@@ -630,6 +653,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			// deleteCtx
 			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
 			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
+			PartitionTableNames:   t.DeleteCtx.PartitionTableNames,
 			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
 			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
 			Ref:                   t.DeleteCtx.Ref,
@@ -650,6 +674,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *lockop.Argument:
 		in.LockOp = &pipeline.LockOp{
+			Block:   t.Block(),
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.Argument:
@@ -668,7 +693,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, FuncId: int32(t.FuncId)}
-		in.Dispatch.ShuffleColIdx = int32(t.ShuffleColIdx)
+		in.Dispatch.ShuffleColIdx = t.ShuffleColIdx
+		in.Dispatch.ShuffleType = t.ShuffleType
+		in.Dispatch.ShuffleColMax = t.ShuffleColMax
+		in.Dispatch.ShuffleColMin = t.ShuffleColMin
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
 		for i := range t.ShuffleRegIdxLocal {
 			in.Dispatch.ShuffleRegIdxLocal[i] = int32(t.ShuffleRegIdxLocal[i])
@@ -817,7 +845,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *offset.Argument:
 		in.Offset = t.Offset
 	case *order.Argument:
-		in.OrderBy = t.Fs
+		in.OrderBy = t.OrderBySpec
 	case *product.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -883,7 +911,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Limit = uint64(t.Limit)
 		in.OrderBy = t.Fs
 	case *mergeorder.Argument:
-		in.OrderBy = t.Fs
+		in.OrderBy = t.OrderBySpecs
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
@@ -924,6 +952,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Types:    convertToPlanTypes(t.Typs),
 			Conds:    t.Conditions,
 		}
+		//if len(t.RuntimeFilterSenders) > 0 {
+		//	rfSpecs := make([]*plan.RuntimeFilterSpec, len(t.RuntimeFilterSenders))
+		//	for i, sender := range t.RuntimeFilterSenders {
+		//		rfSpecs[i] = sender.Spec
+		//	}
+		//	in.HashBuild.RuntimeFilterList = rfSpecs
+		//}
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
 		i := 0
@@ -948,7 +983,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 }
 
 // convert pipeline.Instruction to vm.Instruction
-func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
+func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng engine.Engine) (vm.Instruction, error) {
 	v := vm.Instruction{Op: vm.OpType(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch v.Op {
 	case vm.Deletion:
@@ -963,6 +998,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				CanTruncate:           t.CanTruncate,
 				RowIdIdx:              int(t.RowIdIdx),
 				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionTableNames:   t.PartitionTableNames,
 				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
 				Ref:                   t.Ref,
 				AddAffectedRows:       t.AddAffectedRows,
@@ -977,7 +1013,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				AddAffectedRows:       t.AddAffectedRows,
 				Attrs:                 t.Attrs,
 				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionTableNames:   t.PartitionTableNames,
 				PartitionIndexInBatch: int(t.PartitionIdx),
+				TableDef:              t.TableDef,
 			},
 		}
 	case vm.PreInsert:
@@ -991,7 +1029,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.LockOp:
 		t := opr.GetLockOp()
-		lockArg := lockop.NewArgument()
+		lockArg := lockop.NewArgument(eng)
+		lockArg.SetBlock(t.Block)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
 			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
@@ -1060,7 +1099,10 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			FuncId:              int(t.FuncId),
 			LocalRegs:           regs,
 			RemoteRegs:          rrs,
-			ShuffleColIdx:       int(t.ShuffleColIdx),
+			ShuffleColIdx:       t.ShuffleColIdx,
+			ShuffleType:         t.ShuffleType,
+			ShuffleColMin:       t.ShuffleColMin,
+			ShuffleColMax:       t.ShuffleColMax,
 			ShuffleRegIdxLocal:  shuffleRegIdxLocal,
 			ShuffleRegIdxRemote: shuffleRegIdxRemote,
 		}
@@ -1173,7 +1215,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Offset:
 		v.Arg = &offset.Argument{Offset: opr.Offset}
 	case vm.Order:
-		v.Arg = &order.Argument{Fs: opr.OrderBy}
+		v.Arg = &order.Argument{OrderBySpec: opr.OrderBy}
 	case vm.Product:
 		t := opr.GetProduct()
 		v.Arg = &product.Argument{
@@ -1265,7 +1307,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.MergeOrder:
 		v.Arg = &mergeorder.Argument{
-			Fs: opr.OrderBy,
+			OrderBySpecs: opr.OrderBy,
 		}
 	case vm.TableFunction:
 		v.Arg = &table_function.Argument{
@@ -1277,6 +1319,18 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.HashBuild:
 		t := opr.GetHashBuild()
+		//var rfSenders []*colexec.RuntimeFilterChan
+		//if t.RuntimeFilterList != nil {
+		//	rfSenders = make([]*colexec.RuntimeFilterChan, 0, len(t.RuntimeFilterList))
+		//	for _, rfSpec := range t.RuntimeFilterList {
+		//		if ch, ok := ctx.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
+		//			rfSenders = append(rfSenders, &colexec.RuntimeFilterChan{
+		//				Spec: rfSpec,
+		//				Chan: ch,
+		//			})
+		//		}
+		//	}
+		//}
 		v.Arg = &hashbuild.Argument{
 			Ibucket:     t.Ibucket,
 			Nbucket:     t.Nbucket,
@@ -1284,6 +1338,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			NeedExpr:    t.NeedExpr,
 			Typs:        convertToTypes(t.Types),
 			Conditions:  t.Conds,
+			//RuntimeFilterSenders: rfSenders,
 		}
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1468,6 +1523,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 		Database:     sei.Database,
 		Version:      sei.Version,
 		Account:      sei.Account,
+		QueryId:      sei.QueryId,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)

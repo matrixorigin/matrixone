@@ -37,28 +37,18 @@ func (r *Rank) Eval(vs []int64, err error) ([]int64, error) {
 	idx := 0
 	for _, p := range r.Ps {
 		sn := int64(1)
-		vs[idx] = sn
 		for i := 1; i < len(p); i++ {
 
-			m := p[i] - p[i-1]
+			m := int(p[i] - p[i-1])
 
-			if m == 1 {
-				if i == len(p)-1 {
-					continue
-				}
-				idx++
-				sn++
+			tmp := sn
+			for t := 1; t <= m; t++ {
 				vs[idx] = sn
-				continue
-			}
-
-			for t := 1; t < int(m); t++ {
+				tmp++
 				idx++
-				vs[idx] = sn
 			}
-
+			sn = tmp
 		}
-		idx++
 	}
 	return vs, nil
 }

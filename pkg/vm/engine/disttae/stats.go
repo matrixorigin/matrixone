@@ -21,6 +21,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -29,6 +31,9 @@ import (
 )
 
 func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
+	if !zm.IsInited() {
+		return -1 /*for new added column, its zonemap will be empty and not initialized*/
+	}
 	switch t.Oid {
 	case types.T_bool:
 		return 2
@@ -79,15 +84,23 @@ func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDe
 	lenCols := len(tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 
-	var err error
 	var objectMeta objectio.ObjectMeta
 	lenobjs := 0
 
 	var init bool
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
 	for _, blk := range blocks {
 		location := blk.MetaLocation()
+		fs, err := fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
+		if err != nil {
+			return nil, err
+		}
+
 		if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
-			if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
+			if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 				return nil, err
 			}
 			lenobjs++

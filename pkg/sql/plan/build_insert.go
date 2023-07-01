@@ -19,11 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
+func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepareStmt bool) (p *Plan, err error) {
 	if isReplace {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}
@@ -47,7 +46,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
@@ -72,10 +71,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		// append on duplicate key node
 		tableDef = DeepCopyTableDef(tableDef)
 		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+			//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+			tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
 		}
 		if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+			//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+			tableDef.Cols = append(tableDef.Cols, tableDef.ClusterBy.CompCbkeyCol)
 		}
 		dupProjection := getProjectionByLastNode(builder, lastNodeId)
 		onDuplicateKeyNode := &Node{
@@ -138,8 +139,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 
 		// append sink node
-		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-		sourceStep = builder.appendStep(lastNodeId)
+		// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+		// sourceStep = builder.appendStep(lastNodeId)
 
 		// append plans like update
 		updateBindCtx := NewBindContext(builder, nil)
@@ -147,7 +148,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		upPlanCtx.objRef = objRef
 		upPlanCtx.tableDef = tableDef
 		upPlanCtx.beginIdx = 0
-		upPlanCtx.sourceStep = sourceStep
+		upPlanCtx.sourceStep = -1
 		upPlanCtx.isMulti = false
 		upPlanCtx.updateColLength = updateColLength
 		upPlanCtx.rowIdPos = rowIdPos
@@ -155,7 +156,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.checkInsertPkDup = checkInsertPkDup
 
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, lastNodeId)
 		if err != nil {
 			return nil, err
 		}
@@ -177,27 +178,53 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 }
 
 func getPkValueExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues int) *Expr {
-	for _, node := range builder.qry.Nodes {
-		if node.NodeType != plan.Node_VALUE_SCAN {
-			continue
-		}
-		if len(node.RowsetData.Cols[0].Data) != 1 {
-			continue
-		}
+	/*
 		pkPos, pkTyp := getPkPos(tableDef, true)
 		if pkPos == -1 || pkTyp.AutoIncr {
-			continue
+			return nil
+		}
+		colTyp := makeTypeByPlan2Type(pkTyp)
+		targetTyp := &plan.Expr{
+			Typ: pkTyp,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{
+					Typ: pkTyp,
+				},
+			},
 		}
 
-		oldExpr := node.RowsetData.Cols[pkPosInValues].Data[0]
-		if !rule.IsConstant(oldExpr) {
-			return nil
+		for _, node := range builder.qry.Nodes {
+			if node.NodeType != plan.Node_VALUE_SCAN {
+				continue
+			}
+			if len(node.RowsetData.Cols[0].Data) != 1 {
+				continue
+			}
+
+			for _, node := range builder.qry.Nodes {
+				if node.NodeType != plan.Node_VALUE_SCAN {
+					continue
+				}
+				if len(node.RowsetData.Cols[0].Data) != 1 {
+					continue
+				}
+
+				oldExpr := node.RowsetData.Cols[pkPosInValues].Data[0]
+				if !rule.IsConstant(oldExpr.Expr) {
+					return nil
+				}
+				pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr.Expr), colTyp, targetTyp)
+				if err != nil {
+					return nil
+				}
+				return pkValueExpr
+			}
+			pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr), colTyp, targetTyp)
+			if err != nil {
+				return nil
+			}
+			return pkValueExpr
 		}
-		pkValueExpr, err := forceCastExpr(builder.GetContext(), DeepCopyExpr(oldExpr), pkTyp)
-		if err != nil {
-			return nil
-		}
-		return pkValueExpr
-	}
+	*/
 	return nil
 }

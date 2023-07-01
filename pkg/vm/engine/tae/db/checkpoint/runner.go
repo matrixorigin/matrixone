@@ -21,7 +21,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/tidwall/btree"
@@ -183,8 +185,7 @@ type runner struct {
 	// logtail sourcer
 	source    logtail.Collector
 	catalog   *catalog.Catalog
-	scheduler tasks.TaskScheduler
-	fs        *objectio.ObjectFS
+	rt        *dbutils.Runtime
 	observers *observers
 	wal       wal.Driver
 	disabled  atomic.Bool
@@ -217,18 +218,16 @@ type runner struct {
 
 func NewRunner(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
+	rt *dbutils.Runtime,
 	catalog *catalog.Catalog,
-	scheduler tasks.TaskScheduler,
 	source logtail.Collector,
 	wal wal.Driver,
 	opts ...Option) *runner {
 	r := &runner{
 		ctx:       ctx,
+		rt:        rt,
 		catalog:   catalog,
-		scheduler: scheduler,
 		source:    source,
-		fs:        fs,
 		observers: new(observers),
 		wal:       wal,
 	}
@@ -327,12 +326,12 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	incrementals := r.GetAllIncrementalCheckpoints()
 	for _, incremental := range incrementals {
 		if incremental.LessEq(ts) {
-			err := incremental.GCEntry(r.fs)
+			err := incremental.GCEntry(r.rt.Fs)
 			if err != nil {
 				logutil.Warnf("gc %v failed: %v", incremental.String(), err)
 				panic(err)
 			}
-			err = incremental.GCMetadata(r.fs)
+			err = incremental.GCMetadata(r.rt.Fs)
 			if err != nil {
 				panic(err)
 			}
@@ -342,11 +341,11 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	globals := r.GetAllGlobalCheckpoints()
 	for _, global := range globals {
 		if global.LessEq(ts) {
-			err := global.GCEntry(r.fs)
+			err := global.GCEntry(r.rt.Fs)
 			if err != nil {
 				panic(err)
 			}
-			err = global.GCMetadata(r.fs)
+			err = global.GCMetadata(r.rt.Fs)
 			if err != nil {
 				panic(err)
 			}
@@ -394,11 +393,17 @@ func (r *runner) DeleteIncrementalEntry(entry *CheckpointEntry) {
 	r.storage.Lock()
 	defer r.storage.Unlock()
 	r.storage.entries.Delete(entry)
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DeleteIncrementalEntry.Add(1)
+	})
 }
 func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 	r.storage.Lock()
 	defer r.storage.Unlock()
 	r.storage.globals.Delete(entry)
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DeleteGlobalEntry.Add(1)
+	})
 }
 func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
 	makeCtx := func() *DirtyCtx {
@@ -442,7 +447,7 @@ func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.
 func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	bat := r.collectCheckpointMetadata(start, end)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.fs.Service)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
 	if err != nil {
 		return err
 	}
@@ -465,7 +470,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 
 	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(r.rt.Fs.Service, name, 0, nil)
 	if err != nil {
 		return err
 	}
@@ -475,6 +480,10 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	}
 	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
+
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
+	})
 	return
 }
 
@@ -489,7 +498,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 
 	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(r.rt.Fs.Service, name, 0, nil)
 	if err != nil {
 		return
 	}
@@ -501,6 +510,10 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	entry.SetLocation(location)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
+
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DoGlobalCheckPoint.Add(1)
+	})
 	return
 }
 
@@ -590,12 +603,16 @@ func (r *runner) tryScheduleCheckpoint() {
 
 	if entry.IsPendding() {
 		check := func() (done bool) {
+			if !r.source.IsCommitted(entry.GetStart(), entry.GetEnd()) {
+				return false
+			}
 			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
 			tree.GetTree().Compact()
-			if tree.IsEmpty() {
-				done = true
+			if !tree.IsEmpty() && entry.CheckPrintTime() {
+				logutil.Infof("waiting for dirty tree %s", tree.String())
+				entry.SetPrintTime()
 			}
-			return
+			return tree.IsEmpty()
 		}
 
 		if !check() {
@@ -649,6 +666,9 @@ func (r *runner) fillDefaults() {
 }
 
 func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, force bool) (err error) {
+	if !r.rt.Throttle.CanCompact() {
+		return
+	}
 	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
@@ -679,7 +699,7 @@ func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, for
 		return nil
 	}
 
-	if _, err = r.scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, factory); err != nil {
+	if _, err = r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, factory); err != nil {
 		logutil.Warnf("%s: %v", blkData.MutationInfo(), err)
 	}
 

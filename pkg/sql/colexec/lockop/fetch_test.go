@@ -15,6 +15,7 @@
 package lockop
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -80,7 +81,7 @@ func TestFetchInt8RowsWithFilter(t *testing.T) {
 			packer.EncodeInt8(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -120,7 +121,7 @@ func TestFetchInt16RowsWithFilter(t *testing.T) {
 			packer.EncodeInt16(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -160,7 +161,7 @@ func TestFetchInt32RowsWithFilter(t *testing.T) {
 			packer.EncodeInt32(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -200,7 +201,7 @@ func TestFetchInt64RowsWithFilter(t *testing.T) {
 			packer.EncodeInt64(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -240,7 +241,7 @@ func TestFetchUint8RowsWithFilter(t *testing.T) {
 			packer.EncodeUint8(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -280,7 +281,7 @@ func TestFetchUint16RowsWithFilter(t *testing.T) {
 			packer.EncodeUint16(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -320,7 +321,7 @@ func TestFetchUint32RowsWithFilter(t *testing.T) {
 			packer.EncodeUint32(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -360,7 +361,7 @@ func TestFetchUint64RowsWithFilter(t *testing.T) {
 			packer.EncodeUint64(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -400,7 +401,7 @@ func TestFetchFloat32RowsWithFilter(t *testing.T) {
 			packer.EncodeFloat32(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -440,7 +441,7 @@ func TestFetchFloat64RowsWithFilter(t *testing.T) {
 			packer.EncodeFloat64(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -480,7 +481,7 @@ func TestFetchDateRowsWithFilter(t *testing.T) {
 			packer.EncodeDate(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -520,7 +521,7 @@ func TestFetchTimeRowsWithFilter(t *testing.T) {
 			packer.EncodeTime(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -560,7 +561,7 @@ func TestFetchDateTimeRowsWithFilter(t *testing.T) {
 			packer.EncodeDatetime(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -600,11 +601,13 @@ func TestFetchTimestampRowsWithFilter(t *testing.T) {
 			packer.EncodeTimestamp(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
 func TestFetchDecimal64Rows(t *testing.T) {
+	max := types.Decimal64(999999999999999999)
+	min := max.Minus()
 	values := []types.Decimal64{1, 0}
 	expectRangeValues := []types.Decimal64{0, 1}
 	runFetchRowsTest(
@@ -615,7 +618,7 @@ func TestFetchDecimal64Rows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]types.Decimal64{0, math.MaxUint64},
+		[]types.Decimal64{min, max},
 		func(packer *types.Packer, v types.Decimal64) {
 			packer.EncodeDecimal64(v)
 		},
@@ -625,6 +628,8 @@ func TestFetchDecimal64Rows(t *testing.T) {
 }
 
 func TestFetchDecimal64RowsWithFilter(t *testing.T) {
+	max := types.Decimal64(999999999999999999)
+	min := max.Minus()
 	values := []types.Decimal64{1, 0, 2}
 	expectRangeValues := []types.Decimal64{0, 1}
 	runFetchRowsTest(
@@ -635,16 +640,18 @@ func TestFetchDecimal64RowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]types.Decimal64{0, math.MaxUint64},
+		[]types.Decimal64{min, max},
 		func(packer *types.Packer, v types.Decimal64) {
 			packer.EncodeDecimal64(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
 func TestFetchDecimal128Rows(t *testing.T) {
+	max, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	min := max.Minus()
 	values := []types.Decimal128{{B0_63: 1, B64_127: 1}, {B0_63: 0, B64_127: 0}}
 	expectRangeValues := []types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: 1, B64_127: 1}}
 	runFetchRowsTest(
@@ -655,7 +662,7 @@ func TestFetchDecimal128Rows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: math.MaxUint64, B64_127: math.MaxUint64}},
+		[]types.Decimal128{min, max},
 		func(packer *types.Packer, v types.Decimal128) {
 			packer.EncodeDecimal128(v)
 		},
@@ -665,6 +672,8 @@ func TestFetchDecimal128Rows(t *testing.T) {
 }
 
 func TestFetchDecimal128RowsWithFilter(t *testing.T) {
+	max, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	min := max.Minus()
 	values := []types.Decimal128{{B0_63: 1, B64_127: 1}, {B0_63: 0, B64_127: 0}, {B0_63: 2, B64_127: 2}}
 	expectRangeValues := []types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: 1, B64_127: 1}}
 	runFetchRowsTest(
@@ -675,12 +684,12 @@ func TestFetchDecimal128RowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: math.MaxUint64, B64_127: math.MaxUint64}},
+		[]types.Decimal128{min, max},
 		func(packer *types.Packer, v types.Decimal128) {
 			packer.EncodeDecimal128(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -720,7 +729,7 @@ func TestFetchUUIDRowsWithFilter(t *testing.T) {
 			packer.EncodeStringType(v[:])
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -760,7 +769,7 @@ func TestFetchCharRowsWithFilter(t *testing.T) {
 			packer.EncodeStringType(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -800,7 +809,26 @@ func TestFetchVarcharRowsWithFilter(t *testing.T) {
 			packer.EncodeStringType(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
+	)
+}
+
+func TestFetchRangeWithSameMinAndMax(t *testing.T) {
+	values := []int16{1, 1}
+	runFetchRowsTest(
+		t,
+		types.New(types.T_int16, 0, 0),
+		0,
+		values,
+		lock.Granularity_Row,
+		values[:1],
+		nil,
+		[]int16{math.MinInt16, math.MaxInt16},
+		func(packer *types.Packer, v int16) {
+			packer.EncodeInt16(v)
+		},
+		nil,
+		nil,
 	)
 }
 
@@ -815,7 +843,7 @@ func runFetchRowsTest[T any](
 	expectLockTableValues []T,
 	fn func(*types.Packer, T),
 	filter RowsFilter,
-	filterCols []int) {
+	filterCols []int32) {
 	runFetchRowsTestWithAppendFunc(
 		t,
 		tp,
@@ -845,7 +873,7 @@ func runFetchBytesRowsTest(
 	expectLockTableValues [][]byte,
 	fn func(*types.Packer, []byte),
 	filter RowsFilter,
-	filterCols []int) {
+	filterCols []int32) {
 	runFetchRowsTestWithAppendFunc(
 		t,
 		tp,
@@ -878,7 +906,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 	fn func(*types.Packer, T),
 	appendFunc func(vec *vector.Vector, mp *mpool.MPool),
 	filter RowsFilter,
-	filterCols []int) {
+	filterCols []int32) {
 	mp := mpool.MustNew("test")
 	vec := vector.NewVec(tp)
 	appendFunc(vec, mp)
@@ -900,14 +928,29 @@ func runFetchRowsTestWithAppendFunc[T any](
 	assertFN(expectValues, rows)
 
 	// many rows => range row
-	rows, g = fetcher(vec, packer, tp, max-1, false, filter, filterCols)
-	assert.Equal(t, lock.Granularity_Range, g)
-	assert.Equal(t, 2, len(rows))
-	assertFN(expectRangeValues, rows)
+	if len(expectRangeValues) > 0 {
+		rows, g = fetcher(vec, packer, tp, max-1, false, filter, filterCols)
+		assert.Equal(t, lock.Granularity_Range, g)
+		assert.Equal(t, 2, len(rows))
+		assertFN(expectRangeValues, rows)
+	}
 
 	// lock table
 	rows, g = fetcher(vec, packer, tp, max, true, filter, filterCols)
 	assert.Equal(t, lock.Granularity_Range, g)
 	assert.Equal(t, 2, len(rows))
 	assertFN(expectLockTableValues, rows)
+}
+
+func TestDecimal128(t *testing.T) {
+	packer := types.NewPacker(mpool.MustNew("test"))
+	decimal128Fn := func(v types.Decimal128) []byte {
+		packer.Reset()
+		packer.EncodeDecimal128(v)
+		return packer.Bytes()
+	}
+	max128, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	minDecimal128 := decimal128Fn(max128.Minus())
+	maxDecimal128 := decimal128Fn(max128)
+	assert.True(t, bytes.Compare(minDecimal128, maxDecimal128) < 0)
 }

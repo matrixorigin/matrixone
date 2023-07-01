@@ -18,14 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -76,7 +77,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		opt.ApplyTo(&initOpts)
 	}
 	// init global variables
-	initConfigByParamaterUnit(SV)
+	initConfigByParameterUnit(SV)
 	registry = prom.NewRegistry()
 	if initOpts.writerFactory != nil {
 		moCollector = newMetricFSCollector(initOpts.writerFactory, WithFlushInterval(initOpts.exportInterval), ExportMultiTable(initOpts.multiTable))
@@ -84,7 +85,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
-	statsLogWriter = newStatsLogWriter(&stats.DefaultRegistry, runtime.ProcessLevelRuntime().Logger().Named("StatsLog"), metric.GetStatsGatherInterval())
+	statsLogWriter = newStatsLogWriter(stats.DefaultRegistry, runtime.ProcessLevelRuntime().Logger().Named("StatsLog"), metric.GetStatsGatherInterval())
 
 	// register metrics and create tables
 	registerAllMetrics()
@@ -113,13 +114,13 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 				panic(fmt.Sprintf("status server error: %v", err))
 			}
 		}()
-		logutil.Infof("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
+		logutil.Debugf("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
 
 	metric.SetUpdateStorageUsageInterval(initOpts.updateInterval)
 	metric.SetStorageUsageCheckNewInterval(initOpts.checkNewInterval)
-	logutil.Infof("metric with ExportInterval: %v", initOpts.exportInterval)
-	logutil.Infof("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
+	logutil.Debugf("metric with ExportInterval: %v", initOpts.exportInterval)
+	logutil.Debugf("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
 }
 
 func StopMetricSync() {
@@ -175,7 +176,7 @@ func registerAllMetrics() {
 	}
 }
 
-func initConfigByParamaterUnit(SV *config.ObservabilityParameters) {
+func initConfigByParameterUnit(SV *config.ObservabilityParameters) {
 	metric.SetExportToProm(SV.EnableMetricToProm)
 	metric.SetGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
 }
@@ -223,7 +224,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 			mustExec(sql)
 		}
 	} else {
-		optFactory := table.GetOptionFactory(ctx, table.ExternalTableEngine)
+		optFactory := table.GetOptionFactory(ctx, table.NormalTableEngine)
 		buf := new(bytes.Buffer)
 		for desc := range descChan {
 			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -352,17 +353,26 @@ var (
 )
 
 var SingleMetricTable = &table.Table{
-	Account:          table.AccountAll,
+	Account:          table.AccountSys,
 	Database:         MetricDBConst,
 	Table:            `metric`,
 	Columns:          []table.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
 	PrimaryKeyColumn: []table.Column{},
-	Engine:           table.ExternalTableEngine,
+	ClusterBy:        []table.Column{metricCollectTimeColumn, metricNameColumn, metricAccountColumn},
+	Engine:           table.NormalTableEngine,
 	Comment:          `metric data`,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
+	// TimestampColumn
+	TimestampColumn: &metricCollectTimeColumn,
 	// SupportUserAccess
 	SupportUserAccess: true,
+	// SupportConstAccess
+	SupportConstAccess: true,
+}
+
+func GetAllTables() []*table.Table {
+	return []*table.Table{SingleMetricTable}
 }
 
 func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {

@@ -27,7 +27,6 @@ import (
 
 func init() {
 	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	ZeroTime = time.Unix(0, 0)
 }
 
 func TestNoopTableOptions_FormatDdl(t *testing.T) {
@@ -152,17 +151,17 @@ func TestRow_ToStrings(t *testing.T) {
 		{
 			name:   "nil",
 			fields: fields{Table: dummyTable, prepare: func(r *Row) { r.Reset() }},
-			want:   []string{"", "0", "0.0"},
+			want:   []string{"", "0", "0"},
 		},
 		{
 			name: "nil",
 			fields: fields{Table: dummyTable,
 				prepare: func(r *Row) {
 					r.SetColumnVal(dummyStrColumn, StringField("0"))
-					r.SetColumnVal(dummyFloat64Column, Float64Field(1.1))
+					r.SetColumnVal(dummyFloat64Column, Float64Field(1.1234567))
 					r.SetColumnVal(dummyInt64Column, Int64Field(1))
 				}},
-			want: []string{"0", "1", "1.1"},
+			want: []string{"0", "1", "1.1234567"},
 		},
 	}
 	for _, tt := range tests {
@@ -328,11 +327,27 @@ func TestColumnField_EncodedDatetime(t *testing.T) {
 		want   string
 	}{
 		{
-			name: "normal",
+			name: "zero",
 			fields: fields{
 				cf: TimeField(ZeroTime),
 			},
 			wantT: ZeroTime,
+			want:  "0001-01-01 00:00:00.000000",
+		},
+		{
+			name: "empty",
+			fields: fields{
+				cf: TimeField(time.Time{}),
+			},
+			wantT: time.Time{},
+			want:  "0001-01-01 00:00:00.000000",
+		},
+		{
+			name: "Unix_Zero",
+			fields: fields{
+				cf: TimeField(time.Unix(0, 0)),
+			},
+			wantT: time.Unix(0, 0),
 			want:  "1970-01-01 00:00:00.000000",
 		},
 	}
@@ -343,6 +358,29 @@ func TestColumnField_EncodedDatetime(t *testing.T) {
 			var bbuf [64]byte
 			dst := tt.fields.cf.EncodedDatetime(bbuf[:0])
 			require.Equal(t, tt.want, string(dst))
+		})
+	}
+}
+
+func TestTimeField(t *testing.T) {
+	type args struct {
+		val time.Time
+	}
+	tests := []struct {
+		name string
+		args args
+		want time.Time
+	}{
+		{
+			name: "empty",
+			args: args{},
+			want: time.Time{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := TimeField(tt.args.val)
+			assert.Equalf(t, tt.want, f.GetTime(), "TimeField(%v)", tt.args.val)
 		})
 	}
 }

@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildValues(stmt *tree.ValuesStatement, ctx CompilerContext) (p *Plan, err error) {
+func buildValues(stmt *tree.ValuesStatement, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
 	selectStmt := &tree.Select{
 		Select: &tree.ValuesClause{
 			Rows:    stmt.Rows,
@@ -27,5 +27,5 @@ func buildValues(stmt *tree.ValuesStatement, ctx CompilerContext) (p *Plan, err 
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	return BuildPlan(ctx, selectStmt)
+	return BuildPlan(ctx, selectStmt, isPrepareStmt)
 }

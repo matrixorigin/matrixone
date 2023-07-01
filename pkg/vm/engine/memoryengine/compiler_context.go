@@ -171,9 +171,8 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 	}
 
 	objRef = &plan.ObjectRef{
-		SchemaName:   schemaName,
-		ObjName:      tableName,
-		PubAccountId: -1,
+		SchemaName: schemaName,
+		ObjName:    tableName,
 	}
 
 	tableDef = &plan.TableDef{
@@ -227,6 +226,7 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs 
 	table, err := db.Relation(
 		c.ctx,
 		tableName,
+		nil,
 	)
 	if err != nil {
 		return nil, err

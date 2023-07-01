@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 --env prepare statement
 drop user if exists user1,user2,user3,user4,user5,user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_prepare_01;
 drop role if exists u_role,test_role,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_prepare_1;
@@ -111,9 +112,7 @@ select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catal
 use grant_db;
 show tables;
 create table grant_table_03 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
--- @bvt:issue#8320
 show create table grant_table_03;
--- @bvt:issue
 create view grant_v_1 as select * from grant_table_03;
 drop table grant_table_03;
 drop view  grant_v_1;
@@ -132,9 +131,7 @@ select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catal
 use grant_db4;
 show tables;
 create table grant_table_04 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
--- @bvt:issue#8320
 show create table grant_table_04;
--- @bvt:issue
 create view grant_v_2 as select * from grant_table_04;
 drop table grant_table_04;
 drop view grant_v_2;
@@ -297,3 +294,4 @@ drop table if exists table_4;
 drop table if exists grant_table_10;
 drop table if exists grant_table_30;
 drop role if exists r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
+set global enable_privilege_cache = on;

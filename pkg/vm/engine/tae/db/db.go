@@ -21,10 +21,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
-
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -34,10 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -53,15 +49,10 @@ type DB struct {
 
 	Catalog *catalog.Catalog
 
-	IndexCache model.LRUCache
-
-	TxnMgr        *txnbase.TxnManager
-	TransferTable *model.HashPageTable
+	TxnMgr *txnbase.TxnManager
 
 	LogtailMgr *logtail.Manager
 	Wal        wal.Driver
-
-	Scheduler tasks.TaskScheduler
 
 	GCManager *gc.Manager
 
@@ -69,9 +60,8 @@ type DB struct {
 	BGCheckpointRunner checkpoint.Runner
 
 	DiskCleaner *gc2.DiskCleaner
-	Pipeline    *blockio.IoPipeline
 
-	Fs *objectio.ObjectFS
+	Runtime *dbutils.Runtime
 
 	DBLocker io.Closer
 
@@ -119,7 +109,7 @@ func (db *DB) StartTxnWithLatestTS(info []byte) (txnif.AsyncTxn, error) {
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
-	return txn.Commit()
+	return txn.Commit(context.Background())
 }
 
 func (db *DB) GetTxnByID(id []byte) (txn txnif.AsyncTxn, err error) {
@@ -138,11 +128,10 @@ func (db *DB) GetOrCreateTxnWithMeta(
 }
 
 func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
-	return txn.Rollback()
+	return txn.Rollback(context.Background())
 }
 
 func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
-	// maxTs := db.Catalog.GetCheckpointed().MaxTS
 	replayer := newReplayer(dataFactory, db, maxTs)
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
@@ -161,12 +150,12 @@ func (db *DB) Close() error {
 	db.GCManager.Stop()
 	db.BGScanner.Stop()
 	db.BGCheckpointRunner.Stop()
-	db.Scheduler.Stop()
+	db.Runtime.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.LogtailMgr.Stop()
 	db.Wal.Close()
-	db.Opts.Catalog.Close()
+	db.Catalog.Close()
 	db.DiskCleaner.Stop()
-	db.TransferTable.Close()
+	db.Runtime.TransferTable.Close()
 	return db.DBLocker.Close()
 }

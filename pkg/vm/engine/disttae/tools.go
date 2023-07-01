@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
@@ -1338,19 +1339,19 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	}
 }
 
-func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
+func groupBlocksToObjects(blkInfos []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
 	var infos [][]*catalog.BlockInfo
 	objMap := make(map[string]int, 0)
 	lenObjs := 0
-	for i := range blocks {
-		block := blocks[i]
-		objName := block.MetaLocation().Name().String()
+	for _, blkInfo := range blkInfos {
+		//block := catalog.DecodeBlockInfo(blkInfos[i])
+		objName := blkInfo.MetaLocation().Name().String()
 		if idx, ok := objMap[objName]; ok {
-			infos[idx] = append(infos[idx], block)
+			infos[idx] = append(infos[idx], blkInfo)
 		} else {
 			objMap[objName] = lenObjs
 			lenObjs++
-			infos = append(infos, []*catalog.BlockInfo{block})
+			infos = append(infos, []*catalog.BlockInfo{blkInfo})
 		}
 	}
 	steps := make([]int, len(infos))
@@ -1365,17 +1366,14 @@ func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.Bl
 	return infos, steps
 }
 
-func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primarySeqnum int, ts timestamp.Timestamp, num int, expr *plan.Expr) []*blockReader {
+func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef,
+	primarySeqnum int, ts timestamp.Timestamp, num int, expr *plan.Expr,
+	proc *process.Process) []*blockReader {
 	rds := make([]*blockReader, num)
 	for i := 0; i < num; i++ {
-		rds[i] = &blockReader{
-			fs:            fs,
-			tableDef:      tblDef,
-			primarySeqnum: primarySeqnum,
-			expr:          expr,
-			ts:            ts,
-			ctx:           ctx,
-		}
+		rds[i] = newBlockReader(
+			ctx, tblDef, ts, nil, expr, fs, proc,
+		)
 	}
 	return rds
 }

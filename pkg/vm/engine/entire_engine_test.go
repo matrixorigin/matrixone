@@ -70,28 +70,6 @@ func TestEntireEngineNew(t *testing.T) {
 	assert.Equal(t, first_engine_then_tempengine, ee.state)
 }
 
-func TestEntireEngineCommit(t *testing.T) {
-	ctx := context.TODO()
-	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
-	ee.Commit(ctx, op)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.Commit(ctx, op)
-	assert.Equal(t, first_engine_then_tempengine, ee.state)
-}
-
-func TestEntireEngineRollback(t *testing.T) {
-	ctx := context.TODO()
-	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
-	ee.Rollback(ctx, op)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.Rollback(ctx, op)
-	assert.Equal(t, first_engine_then_tempengine, ee.state)
-}
-
 func TestEntireEngineDelete(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
@@ -159,10 +137,10 @@ func TestEntireEngineHints(t *testing.T) {
 func TestEntireEngineNewBlockReader(t *testing.T) {
 	ctx := context.TODO()
 	ee := buildEntireEngineWithoutTempEngine()
-	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil)
+	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil)
 	assert.Equal(t, only_engine, ee.state)
 	ee = buildEntireEngineWithTempEngine()
-	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil)
+	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil)
 	assert.Equal(t, only_engine, ee.state)
 }
 
@@ -291,7 +269,7 @@ func (e *testEngine) Hints() (h Hints) {
 }
 
 func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef) ([]Reader, error) {
+	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, proc any) ([]Reader, error) {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {
 		e.parent.state = e.parent.state + e.parent.step*e.parent.state

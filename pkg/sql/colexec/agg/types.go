@@ -47,6 +47,7 @@ const (
 
 	WinRank
 	WinRowNumber
+	WinDenseRank
 )
 
 var Names = [...]string{
@@ -68,6 +69,7 @@ var Names = [...]string{
 
 	WinRank:      "rank",
 	WinRowNumber: "row_number",
+	WinDenseRank: "dense_rank",
 }
 
 type Aggregate struct {
