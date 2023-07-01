@@ -26,9 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"net/http"
-	_ "net/http/pprof"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -41,10 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
-
-func init() {
-	go http.ListenAndServe("0.0.0.0:6060", nil)
-}
 
 var (
 	ErrClosed = moerr.NewInternalErrorNoCtx("tae: closed")

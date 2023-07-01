@@ -5410,7 +5410,7 @@ func TestAlwaysUpdate(t *testing.T) {
 }
 
 func TestInsertPerf(t *testing.T) {
-	// t.Skip(any("for debug"))
+	t.Skip(any("for debug"))
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -5418,14 +5418,14 @@ func TestInsertPerf(t *testing.T) {
 	options.WithFlushInterval(time.Second * 10)(opts)
 	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(10, -1)
-	schema.BlockMaxRows = 5000
+	schema := catalog.MockSchemaAll(10, 2)
+	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 5
 	tae.bindSchema(schema)
 
-	cnt := 10000
+	cnt := 1000
 	iBat := 1
-	poolSize := 80
+	poolSize := 20
 
 	bat := catalog.MockBatch(schema, cnt*iBat*poolSize*2)
 	defer bat.Close()
