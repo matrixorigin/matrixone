@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -41,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const (
@@ -430,12 +427,10 @@ func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailrepl
 	return nil
 }
 
-func (tbl *txnTable) GetDirtyBlksIn(
-	state *logtailreplay.PartitionState,
-	in bool) []types.Blockid {
+func (tbl *txnTable) GetDirtyBlksIn(state *logtailreplay.PartitionState) []types.Blockid {
 	dirtyBlks := make([]types.Blockid, 0)
 	for blk := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-		if in != state.BlockVisible(
+		if !state.BlockVisible(
 			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
 			continue
 		}
@@ -731,10 +726,13 @@ func (tbl *txnTable) rangesOnePart(
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
+
+	//blks contains all visible blocks to this txn, namely
+	//includes committed blocks and uncommitted blocks by CN writing S3.
 	blks := make([]catalog.BlockInfo, 0, len(committedblocks))
 	blks = append(blks, committedblocks...)
 
-	//collect dirty blocks from PartitionState.dirtyBlocks.
+	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
 		iter := state.NewDirtyBlocksIter()
 		for iter.Next() {
@@ -746,8 +744,8 @@ func (tbl *txnTable) rangesOnePart(
 
 	}
 
-	//only collect dirty blocks in PartitionState.blocks into modifies.
-	for _, bid := range tbl.GetDirtyBlksIn(state, true) {
+	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
+	for _, bid := range tbl.GetDirtyBlksIn(state) {
 		dirtyBlks[bid] = struct{}{}
 	}
 	txn := tbl.db.txn
@@ -901,6 +899,7 @@ func (tbl *txnTable) rangesOnePart(
 		blk.PartitionNum = -1
 		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
+	blockio.RecordBlockSelectivity(len(*ranges)-1, len(blks))
 	return
 }
 
@@ -1176,31 +1175,17 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 func (tbl *txnTable) compaction() error {
 	mp := make(map[int][]int64)
 	s3writer := &colexec.S3Writer{}
+	s3writer.SetTableName(tbl.tableName)
+	s3writer.SetSchemaVer(tbl.version)
 	batchNums := 0
 	name, err := s3writer.GenerateWriter(tbl.db.txn.proc)
 	if err != nil {
 		return err
 	}
-
 	var deletedIDs []*types.Blockid
 	defer func() {
 		tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
 	}()
-
-	// recover isn't allowed in this package by molint
-	// so we detect panic mannually.
-	hasPanic := true
-	defer func() {
-		// add log for issue 10193
-		if hasPanic {
-			logutil.Error("panic when compaction",
-				zap.Bool("is txn cleaned", tbl.db.txn.deletedBlocks == nil),
-				zap.Uint64("cleaner goroutine", tbl.db.txn.cleanRoutine.Load()),
-				zap.String("stack", string(debug.Stack())),
-			)
-		}
-	}()
-
 	tbl.db.txn.deletedBlocks.iter(func(id *types.Blockid, deleteOffsets []int64) bool {
 		pos := tbl.db.txn.cnBlkId_Pos[*id]
 		// just do compaction for current txnTable
@@ -1233,6 +1218,7 @@ func (tbl *txnTable) compaction() error {
 			tbl.seqnums = idxs
 			tbl.typs = typs
 		}
+		s3writer.SetSeqnums(tbl.seqnums)
 		bat, e := blockio.BlockCompactionRead(
 			tbl.db.txn.proc.Ctx,
 			location,
@@ -1259,14 +1245,12 @@ func (tbl *txnTable) compaction() error {
 		return true
 	})
 	if err != nil {
-		hasPanic = false
 		return err
 	}
 
 	if batchNums > 0 {
 		blkInfos, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
 		if err != nil {
-			hasPanic = false
 			return err
 		}
 		new_bat := batch.NewWithSize(1)
@@ -1290,7 +1274,6 @@ func (tbl *txnTable) compaction() error {
 			new_bat,
 			tbl.db.txn.dnStores[0])
 		if err != nil {
-			hasPanic = false
 			return err
 		}
 	}
@@ -1319,7 +1302,6 @@ func (tbl *txnTable) compaction() error {
 		}
 	}
 	tbl.db.txn.Unlock()
-	hasPanic = false
 	return nil
 }
 
@@ -1814,5 +1796,5 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	if err != nil {
 		return false, err
 	}
-	return part.PrimaryKeysMayBeModified(from, to, keysVector, packer), nil
+	return part.PrimaryKeysMayBeModified(tbl.tableId, from, to, keysVector, packer), nil
 }

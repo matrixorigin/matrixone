@@ -481,7 +481,7 @@ func (x Decimal128) Add128(y Decimal128) (Decimal128, error) {
 		z := x
 		z.B0_63, z.B64_127 = bits.Add64(x.B0_63, y.B0_63, 0)
 		z.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, z.B64_127)
-		if signx != x.Sign() {
+		if signx != z.Sign() {
 			err = moerr.NewInvalidInputNoCtx("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
 		}
 		return z, err
@@ -501,7 +501,7 @@ func (x Decimal256) Add256(y Decimal256) (Decimal256, error) {
 		z.B64_127, z.B128_191 = bits.Add64(x.B64_127, y.B64_127, z.B64_127)
 		z.B128_191, z.B192_255 = bits.Add64(x.B128_191, y.B128_191, z.B128_191)
 		z.B192_255, _ = bits.Add64(x.B192_255, y.B192_255, z.B192_255)
-		if signx != x.Sign() {
+		if signx != z.Sign() {
 			err = moerr.NewInvalidInputNoCtx("Decimal256 Add overflow: %s+%s", x.Format(0), y.Format(0))
 		}
 		return z, err

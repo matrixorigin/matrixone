@@ -64,17 +64,22 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	if len(mixin.columns.seqnums) != 0 {
 		panic(moerr.NewInternalErrorNoCtx("withFilterMixin tryUpdate called with different cols"))
 	}
+
+	// record the column selectivity
+	blockio.RecordColumnSelectivity(len(cols), len(mixin.tableDef.Cols))
+
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
 	// mixin.columns.colNulls = make([]bool, len(cols))
 	mixin.columns.pkPos = -1
 	mixin.columns.rowidPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
-	compPKName2Pos := make(map[string]int)
+	compPKName2Pos := make(map[string]struct{})
+	positions := make(map[string]int)
 	if mixin.tableDef.Pkey != nil && mixin.tableDef.Pkey.CompPkeyCol != nil {
 		pk := mixin.tableDef.Pkey
-		for i, name := range pk.Names {
-			compPKName2Pos[name] = i
+		for _, name := range pk.Names {
+			compPKName2Pos[name] = struct{}{}
 		}
 	}
 	for i, column := range cols {
@@ -91,7 +96,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.seqnums[i] = uint16(colDef.Seqnum)
 
 			if _, ok := compPKName2Pos[column]; ok {
-				compPKName2Pos[column] = i
+				positions[column] = i
 			}
 
 			if mixin.tableDef.Pkey != nil && mixin.tableDef.Pkey.PkeyColName == column {
@@ -104,9 +109,9 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			// }
 		}
 	}
-	if len(compPKName2Pos) != 0 {
+	if len(positions) != 0 {
 		for _, name := range mixin.tableDef.Pkey.Names {
-			if pos, ok := compPKName2Pos[name]; !ok {
+			if pos, ok := positions[name]; !ok {
 				break
 			} else {
 				mixin.columns.compPKPositions = append(mixin.columns.compPKPositions, pos)

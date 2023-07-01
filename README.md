@@ -147,17 +147,17 @@ MatrixOne's architecture is as below:
   <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
 </p>
 
-For more details, you can checkout [MatrixOne Architecture Design](https://docs.matrixorigin.cn/en/0.7.0/MatrixOne/Overview/matrixone-architecture-design/).
+For more details, you can checkout [MatrixOne Architecture Design](https://docs.matrixorigin.cn/en/0.8.0/MatrixOne/Overview/matrixone-architecture-design/).
 
 
 ## ⚡️ <a id="quick-start">Quick start</a>
 
 ### ⚙️ Install MatrixOne
 MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
-For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.cn/en/0.7.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
+For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.cn/en/0.8.0/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 #### **Building from source**
 
-**Step 1. Install Go (version 1.19 is required)**
+**Step 1. Install Go (version 1.20 is required)**
 
 Click <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> to enter its official documentation, and follow the installation steps to complete the **Go** installation.
 
@@ -186,11 +186,11 @@ The **main** branch is the default branch, the code on the main branch is always
 
 - *Option 2*: Get the MatrixOne(Stable Version) code, build MatrixOne
 
-1. If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.7.0** first.
+1. If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.8.0** first.
 
     ```
     git clone https://github.com/matrixorigin/matrixone.git
-    git checkout 0.7.0
+    git checkout 0.8.0
     cd matrixone
     ```
 
@@ -255,11 +255,18 @@ Docker version 20.10.17, build 100c701
 
 It will pull the image from Docker Hub if not exists. You can choose to pull the stable version image or the develop version image.
 
-- Stable Version Image(0.7.0 version)
+- Stable Version Image(0.8.0 version)
 
 ```bash
-docker pull matrixorigin/matrixone:0.7.0
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.7.0
+docker pull matrixorigin/matrixone:0.8.0
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.8.0
+```
+
+If you are using the network in mainland China, you can pull the MatrixOne stable version image on Alibaba Cloud:
+
+```bash
+docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:0.8.0
+docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:0.8.0
 ```
 
 - If you want to pull the develop version image, see [Docker Hub](https://hub.docker.com/r/matrixorigin/matrixone/tags), get the image tag. An example as below:
@@ -269,6 +276,13 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.7.0
     ```bash
     docker pull matrixorigin/matrixone:nightly-commitnumber
     docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
+    ```
+
+    If you are using the network in mainland China, you can pull the MatrixOne develop version image on Alibaba Cloud:
+
+    ```bash
+    docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-commitnumber
+    docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-commitnumber
     ```
 
     !!! info
@@ -315,7 +329,7 @@ Now, MatrixOne only supports the TCP listener.
 ## 🙌 <a id="contributing">Contributing</a>
 
 Contributions to MatrixOne are welcome from everyone.  
- See [Contribution Guide](https://docs.matrixorigin.cn/en/0.7.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
+ See [Contribution Guide](https://docs.matrixorigin.cn/en/0.8.0/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
 

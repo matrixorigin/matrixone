@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -208,11 +209,21 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 		return nil, nil, err
 	}
 	s3Writer := &colexec.S3Writer{}
+	s3Writer.SetTableName(tbl.GetTableName())
 	s3Writer.SetSortIdx(-1)
 	s3Writer.Init(txn.proc)
 	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
 		s3Writer.SetSortIdx(sortIdx)
+	}
+	tdefs, err := tbl.TableDefs(txn.proc.Ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, def := range tdefs {
+		if attr, ok := def.(*engine.VersionDef); ok {
+			s3Writer.SetSchemaVer(attr.Version)
+		}
 	}
 	return s3Writer, tbl, nil
 }
@@ -562,7 +573,6 @@ func (txn *Transaction) delTransaction() {
 	txn.blockId_dn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
 	txn.deletedBlocks = nil
-	txn.cleanRoutine.Store(GetRoutineId())
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, txn.segId)
 	for blkId := range txn.cnBlkId_Pos {

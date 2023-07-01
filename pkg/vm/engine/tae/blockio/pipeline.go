@@ -17,8 +17,10 @@ package blockio
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -224,6 +226,9 @@ type IoPipeline struct {
 
 	fetchFun     FetchFunc
 	prefetchFunc PrefetchFunc
+
+	stats        *objectio.Stats
+	statsManager *stopper.Stopper
 }
 
 func NewIOPipeline(
@@ -254,6 +259,8 @@ func NewIOPipeline(
 
 	p.fetchFun = readColumns
 	p.prefetchFunc = noopPrefetch
+
+	p.statsManager = stopper.NewStopper("PrintStatsRunner")
 	return p
 }
 
@@ -267,6 +274,10 @@ func (p *IoPipeline) fillDefaults() {
 	if p.jobFactory == nil {
 		p.jobFactory = jobFactory
 	}
+
+	if p.stats == nil {
+		p.stats = objectio.NewStats()
+	}
 }
 
 func (p *IoPipeline) Start() {
@@ -275,11 +286,15 @@ func (p *IoPipeline) Start() {
 		p.waitQ.Start()
 		p.fetch.queue.Start()
 		p.prefetch.queue.Start()
+		if err := p.statsManager.RunNamedTask("print-stats-job", p.crontask); err != nil {
+			panic(err)
+		}
 	})
 }
 
 func (p *IoPipeline) Stop() {
 	p.onceStop.Do(func() {
+		p.statsManager.Stop()
 		p.active.Store(false)
 
 		p.prefetch.queue.Stop()
@@ -405,4 +420,13 @@ func (p *IoPipeline) onWait(jobs ...any) {
 		}
 		putJob(job)
 	}
+}
+
+func (p *IoPipeline) crontask(ctx context.Context) {
+	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
+		logutil.Info(p.stats.ExportString())
+	}, nil)
+	hb.Start()
+	<-ctx.Done()
+	hb.Stop()
 }
