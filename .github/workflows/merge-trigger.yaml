@@ -8,9 +8,6 @@ on:
       - '**.go'
       - '**.c'
       - '**.h'
-    branches: 
-      - main
-      - '[0-9]+.[0-9]+.[0-9]+'
 env:
    branch: main
 
@@ -142,7 +139,6 @@ jobs:
           exit
           EOF
           exit
-
   test:
     if: ${{ needs.setup_mo_test_env.result == 'success' && github.event.pull_request.merged == true }}  #
     name: MO CHECKIN REGRESSION TEST
