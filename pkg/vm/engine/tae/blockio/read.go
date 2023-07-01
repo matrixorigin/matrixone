@@ -215,27 +215,6 @@ func BlockReadInner(
 		return
 	}
 
-	// read deletes from storage specified by delta location
-	if len(selectRows) == 0 && !info.DeltaLocation().IsEmpty() {
-		var deletes *batch.Batch
-		// load from storage
-		if deletes, err = readBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
-			return
-		}
-
-		// eval delete rows by timestamp
-		rows := evalDeleteRowsByTimestamp(deletes, ts)
-
-		// merge delete rows
-		deleteMask.Merge(rows)
-
-		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-			logutil.Debugf(
-				"blockread %s read delete %d: base %s filter out %v\n",
-				info.BlockID.String(), deletes.Length(), ts.ToString(), deleteMask.Count())
-		}
-	}
-
 	// assemble result batch for return
 	result = batch.NewWithSize(len(loaded.Vecs))
 
@@ -268,59 +247,88 @@ func BlockReadInner(
 				break
 			}
 		}
-	} else {
-		// merge deletes from input
-		// deletes from storage + deletes from input
-		for _, row := range inputDeleteRows {
-			deleteMask.Add(uint64(row))
-		}
-
-		// Note: it always goes here if no filter or the block is not sorted
-
-		// transform delete mask to deleted rows
-		// TODO: avoid this transformation
-		if !deleteMask.IsEmpty() {
-			deletedRows = deleteMask.ToI64Arrary()
-			// logutil.Debugf("deleted/length: %d/%d=%f",
-			// 	len(deletedRows),
-			// 	loaded.Vecs[0].Length(),
-			// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
-		}
-
-		// build rowid column if needed
-		if rowidPos >= 0 {
-			if loaded.Vecs[rowidPos], err = buildRowidColumn(
-				info, nil, mp, vp,
-			); err != nil {
-				return
+		if err != nil {
+			for _, col := range result.Vecs {
+				if col != nil {
+					col.Free(mp)
+				}
 			}
 		}
+		return
+	}
 
-		// assemble result batch
-		for i, col := range loaded.Vecs {
-			typ := *col.GetType()
+	// read deletes from storage specified by delta location
+	if !info.DeltaLocation().IsEmpty() {
+		var deletes *batch.Batch
+		// load from storage
+		if deletes, err = readBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+			return
+		}
 
-			if typ.Oid == types.T_Rowid {
-				// rowid is already allocted by the mpool, no need to create a new vector
-				result.Vecs[i] = col
+		// eval delete rows by timestamp
+		rows := evalDeleteRowsByTimestamp(deletes, ts)
+
+		// merge delete rows
+		deleteMask.Merge(rows)
+
+		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+			logutil.Debugf(
+				"blockread %s read delete %d: base %s filter out %v\n",
+				info.BlockID.String(), deletes.Length(), ts.ToString(), deleteMask.Count())
+		}
+	}
+
+	// merge deletes from input
+	// deletes from storage + deletes from input
+	for _, row := range inputDeleteRows {
+		deleteMask.Add(uint64(row))
+	}
+
+	// Note: it always goes here if no filter or the block is not sorted
+
+	// transform delete mask to deleted rows
+	// TODO: avoid this transformation
+	if !deleteMask.IsEmpty() {
+		deletedRows = deleteMask.ToI64Arrary()
+		// logutil.Debugf("deleted/length: %d/%d=%f",
+		// 	len(deletedRows),
+		// 	loaded.Vecs[0].Length(),
+		// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
+	}
+
+	// build rowid column if needed
+	if rowidPos >= 0 {
+		if loaded.Vecs[rowidPos], err = buildRowidColumn(
+			info, nil, mp, vp,
+		); err != nil {
+			return
+		}
+	}
+
+	// assemble result batch
+	for i, col := range loaded.Vecs {
+		typ := *col.GetType()
+
+		if typ.Oid == types.T_Rowid {
+			// rowid is already allocted by the mpool, no need to create a new vector
+			result.Vecs[i] = col
+		} else {
+			// for other types, we need to create a new vector
+			if vp == nil {
+				result.Vecs[i] = vector.NewVec(typ)
 			} else {
-				// for other types, we need to create a new vector
-				if vp == nil {
-					result.Vecs[i] = vector.NewVec(typ)
-				} else {
-					result.Vecs[i] = vp.GetVector(typ)
-				}
-				// copy the data from loaded vector to result vector
-				// TODO: avoid this allocation and copy
-				if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
-					break
-				}
+				result.Vecs[i] = vp.GetVector(typ)
 			}
+			// copy the data from loaded vector to result vector
+			// TODO: avoid this allocation and copy
+			if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
+				break
+			}
+		}
 
-			// shrink the vector by deleted rows
-			if len(deletedRows) > 0 {
-				result.Vecs[i].Shrink(deletedRows, true)
-			}
+		// shrink the vector by deleted rows
+		if len(deletedRows) > 0 {
+			result.Vecs[i].Shrink(deletedRows, true)
 		}
 	}
 
