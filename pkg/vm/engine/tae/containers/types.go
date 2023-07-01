@@ -93,6 +93,7 @@ type Batch struct {
 	Vecs    []Vector
 	Deletes *nulls.Bitmap
 	Nameidx map[string]int
+	Pool    *VectorPool
 	// refidx  map[int]int
 }
 
