@@ -358,3 +358,23 @@ func Test_newBufferHolder_AddAfterStop(t *testing.T) {
 		})
 	}
 }
+
+func TestMOCollector_DiscardableCollect(t *testing.T) {
+
+	ctx := context.TODO()
+	cfg := &config.OBCollectorConfig{}
+	cfg.SetDefaultValues()
+	collector := NewMOCollector(context.TODO(), WithOBCollectorConfig(cfg))
+	elem := newDummy(1)
+	for i := 0; i < defaultQueueSize; i++ {
+		collector.Collect(ctx, elem)
+	}
+	require.Equal(t, defaultQueueSize, len(collector.awakeCollect))
+
+	// check DisableStore will discard
+	now := time.Now()
+	collector.DiscardableCollect(ctx, elem)
+	require.Equal(t, defaultQueueSize, len(collector.awakeCollect))
+	require.True(t, time.Since(now) > discardCollectTimeout)
+	t.Logf("DiscardableCollect accept")
+}

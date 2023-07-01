@@ -16,14 +16,14 @@ package db_holder
 
 import (
 	"context"
-	"database/sql/driver"
 	"fmt"
 	"regexp"
 	"testing"
-	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+
+	"database/sql/driver"
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestGetPrepareSQL(t *testing.T) {
@@ -99,13 +99,7 @@ func TestBulkInsert(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	done := make(chan error)
-	go bulkInsert(ctx, done, db, records, tbl, 10, 1)
-
-	err = <-done
-	if err != nil {
-		t.Errorf("expected no error, but got: %v", err)
-	}
+	bulkInsert(ctx, db, records, tbl, 10, 1)
 
 	err = mock.ExpectationsWereMet()
 	if err != nil {
@@ -171,17 +165,7 @@ func TestBulkInsertWithBatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	done := make(chan error)
-	go bulkInsert(ctx, done, db, records, tbl, 10, 1)
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Errorf("unexpected error: %s", err)
-		}
-	case <-time.After(time.Minute):
-		t.Error("test timed out")
-	}
+	bulkInsert(ctx, db, records, tbl, 10, 1)
 
 	// we make sure that all expectations were met
 	if err := mock.ExpectationsWereMet(); err != nil {
