@@ -42,6 +42,8 @@ const defaultQueueSize = 1310720 // queue mem cost = 10MB
 
 const LoggerNameMOCollector = "MOCollector"
 
+const discardCollectTimeout = time.Millisecond
+
 // bufferHolder hold ItemBuffer content, handle buffer's new/flush/reset/reminder(base on timer) operations.
 // work like:
 // ---> Add ---> ShouldFlush or trigger.signal -----> StopAndGetBatch ---> FlushAndReset ---> Add ---> ...
@@ -328,6 +330,20 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 		ctx = errutil.ContextWithNoReport(ctx, true)
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
+		return nil
+	}
+}
+
+// DiscardableCollect implements motrace.DiscardableCollector
+// cooperate with logutil.Discardable() field
+func (c *MOCollector) DiscardableCollect(ctx context.Context, item batchpipe.HasName) error {
+	select {
+	case <-c.stopCh:
+		ctx = errutil.ContextWithNoReport(ctx, true)
+		return moerr.NewInternalError(ctx, "MOCollector stopped")
+	case c.awakeCollect <- item:
+		return nil
+	case <-time.After(discardCollectTimeout):
 		return nil
 	}
 }
