@@ -318,15 +318,19 @@ func (r *blockReader) Read(
 	// the columns is only updated once for all blocks
 	r.tryUpdateColumns(cols)
 
+	// get the block read filter
+	filter, positions := r.getReadFilter(r.proc)
+
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-		blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		if filter != nil && blockInfo.Sorted {
+			blockio.BlockPrefetch(positions, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		} else {
+			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
 	}
-
-	// get the block read filter
-	filter, positions := r.getReadFilter(r.proc)
 
 	// read the block
 	bat, err := blockio.BlockRead(
