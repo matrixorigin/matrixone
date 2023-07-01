@@ -1,4 +1,4 @@
-name: MatrixOne e2e CI(LAUNCH, PUSH)
+name: MatrixOne e2e CI(Standalone)
 
 on:
   pull_request:
