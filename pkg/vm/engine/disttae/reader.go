@@ -114,15 +114,18 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			if pos, ok := positions[name]; !ok {
 				break
 			} else {
-				mixin.columns.compPKPositions = append(mixin.columns.compPKPositions, pos)
+				mixin.columns.compPKPositions = append(mixin.columns.compPKPositions, uint16(pos))
 			}
 		}
 	}
 }
 
-func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (filter blockio.ReadFilter) {
+func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (
+	filter blockio.ReadFilter, positions []uint16,
+) {
 	if mixin.filterState.evaluated {
 		filter = mixin.filterState.filter
+		positions = mixin.filterState.positions
 		return
 	}
 	pk := mixin.tableDef.Pkey
@@ -137,7 +140,9 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (filter block
 	return mixin.getCompositPKFilter(proc)
 }
 
-func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (filter blockio.ReadFilter) {
+func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
+	filter blockio.ReadFilter, positions []uint16,
+) {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if len(mixin.columns.compPKPositions) == 0 || mixin.filterState.expr == nil {
@@ -185,10 +190,14 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (filter
 
 	mixin.filterState.evaluated = true
 	mixin.filterState.filter = filter
+	mixin.filterState.positions = mixin.columns.compPKPositions
+	positions = mixin.filterState.positions
 	return
 }
 
-func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (filter blockio.ReadFilter) {
+func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
+	filter blockio.ReadFilter, positions []uint16,
+) {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
@@ -231,6 +240,8 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (fil
 	}
 	mixin.filterState.evaluated = true
 	mixin.filterState.filter = filter
+	mixin.filterState.positions = []uint16{uint16(mixin.columns.pkPos)}
+	positions = mixin.filterState.positions
 	return
 }
 
@@ -315,7 +326,7 @@ func (r *blockReader) Read(
 	}
 
 	// get the block read filter
-	filter := r.getReadFilter(r.proc)
+	filter, _ := r.getReadFilter(r.proc)
 
 	// read the block
 	bat, err := blockio.BlockRead(
