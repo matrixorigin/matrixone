@@ -28,3 +28,4 @@ func TableField(val string) zap.Field        { return zap.String("table", val) }
 func PathField(val string) zap.Field         { return zap.String("path", val) }
 
 func NoReportFiled() zap.Field { return zap.Bool(MOInternalFiledKeyNoopReport, true) }
+func Discardable() zap.Field   { return zap.Bool(MOInternalFiledKeyDiscardable, true) }
