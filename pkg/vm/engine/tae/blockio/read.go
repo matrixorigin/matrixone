@@ -16,7 +16,6 @@ package blockio
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -140,7 +139,7 @@ func BlockRead(
 
 	columnBatch, err := BlockReadInner(
 		ctx, info, inputDeletes, columns, colTypes,
-		types.TimestampToTS(ts), sels, filter, fs, mp, vp,
+		types.TimestampToTS(ts), sels, fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err
@@ -197,15 +196,13 @@ func BlockReadInner(
 	columns []uint16,
 	colTypes []types.Type,
 	ts types.TS,
-	filtered []int32,
-	filter ReadFilter,
+	selectRows []int32, // if selectRows is not empty, it was already filtered by filter
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (result *batch.Batch, err error) {
 	var (
 		rowidPos    int
-		selectRows  []int32
 		deletedRows []int64
 		deleteMask  nulls.Bitmap
 		loaded      *batch.Batch
@@ -219,7 +216,7 @@ func BlockReadInner(
 	}
 
 	// read deletes from storage specified by delta location
-	if !info.DeltaLocation().IsEmpty() {
+	if len(selectRows) == 0 && !info.DeltaLocation().IsEmpty() {
 		var deletes *batch.Batch
 		// load from storage
 		if deletes, err = readBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
@@ -239,61 +236,8 @@ func BlockReadInner(
 		}
 	}
 
-	// merge deletes from input
-	// deletes from storage + deletes from input
-	for _, row := range inputDeleteRows {
-		deleteMask.Add(uint64(row))
-	}
-
 	// assemble result batch for return
 	result = batch.NewWithSize(len(loaded.Vecs))
-
-	// if there is a filter and the block is sorted,
-	// apply the filter to select rows
-	if filter != nil && info.Sorted {
-		// select rows by filter
-		selectRows = filter(loaded.Vecs)
-
-		// apply delete mask to selected rows
-		if !deleteMask.IsEmpty() {
-			var rows []int32
-			for _, row := range selectRows {
-				if deleteMask.Contains(uint64(row)) {
-					continue
-				}
-				rows = append(rows, row)
-			}
-			selectRows = rows
-		}
-
-		// logutil.Debugf("sels/length: %d/%d=%f",
-		// 	len(selectRows),
-		// 	loaded.Vecs[0].Length(),
-		// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
-
-		if len(selectRows) != len(filtered) {
-			// logutil.Infof("blockread %s filter %d/%d: base %s filter out %v\n")
-			panic(fmt.Sprintf("xxxxxxx %d!=%d", len(selectRows), len(filtered)))
-		}
-
-		// no rows selected, return empty batch
-		if len(selectRows) == 0 {
-			var typ types.Type
-			for i, col := range loaded.Vecs {
-				if i == rowidPos {
-					typ = objectio.RowidType
-				} else {
-					typ = *col.GetType()
-				}
-				if vp == nil {
-					result.Vecs[i] = vector.NewVec(typ)
-				} else {
-					result.Vecs[i] = vp.GetVector(typ)
-				}
-			}
-			return
-		}
-	}
 
 	if len(selectRows) > 0 {
 		// NOTE: it always goes here if there is a filter and the block is sorted
@@ -325,6 +269,12 @@ func BlockReadInner(
 			}
 		}
 	} else {
+		// merge deletes from input
+		// deletes from storage + deletes from input
+		for _, row := range inputDeleteRows {
+			deleteMask.Add(uint64(row))
+		}
+
 		// Note: it always goes here if no filter or the block is not sorted
 
 		// transform delete mask to deleted rows
