@@ -332,7 +332,7 @@ var (
 			"`tbl`.`relname` AS `TABLE_NAME`," +
 			"`part`.`name` AS `PARTITION_NAME`," +
 			"NULL AS `SUBPARTITION_NAME`," +
-			"(`part`.`number` + 1) AS `PARTITION_ORDINAL_POSITION`," +
+			"`part`.`number` AS `PARTITION_ORDINAL_POSITION`," +
 			"NULL AS `SUBPARTITION_ORDINAL_POSITION`," +
 			"(case `tbl`.`partition_type` when 'HASH' then 'HASH' " +
 			"when 'RANGE' then 'RANGE' " +
@@ -363,7 +363,8 @@ var (
 			"'default' AS `NODEGROUP`," +
 			"NULL AS `TABLESPACE_NAME` " +
 			"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
-			"ON `part`.`table_id` = `tbl`.`rel_id`;",
+			"ON `part`.`table_id` = `tbl`.`rel_id` " +
+			"WHERE `tbl`.`partitioned` = 1;",
 
 		"CREATE VIEW IF NOT EXISTS VIEWS AS " +
 			"SELECT 'def' AS `TABLE_CATALOG`," +

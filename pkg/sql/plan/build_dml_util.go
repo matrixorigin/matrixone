@@ -791,7 +791,8 @@ func makeInsertPlan(
 	if updateColLength == 0 {
 		for idx, indexdef := range tableDef.Indexes {
 			if indexdef.Unique {
-				idxRef, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
+				//idxRef, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
+				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
 				// remove row_id
 				for i, col := range idxTableDef.Cols {
 					if col.Name == catalog.Row_ID {

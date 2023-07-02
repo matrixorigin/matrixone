@@ -439,7 +439,7 @@ func genInsertMoTablePartitionsSql(eg engine.Engine, proc *process.Process, data
 		fmt.Fprintf(buffer, "%d, ", tableId)
 
 		// 3. database_id
-		fmt.Fprintf(buffer, "%d, ", databaseId)
+		fmt.Fprintf(buffer, "%s, ", databaseId)
 
 		// 4. partition number
 		fmt.Fprintf(buffer, "%d, ", partition.OrdinalPosition)
