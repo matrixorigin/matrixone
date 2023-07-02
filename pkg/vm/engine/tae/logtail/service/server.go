@@ -483,6 +483,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 						logger.Error("fail to publish incremental logtail", zap.Error(err),
 							zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
 						)
+						closeCB()
 						continue
 					}
 				}
