@@ -114,13 +114,15 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			if pos, ok := positions[name]; !ok {
 				break
 			} else {
-				mixin.columns.compPKPositions = append(mixin.columns.compPKPositions, pos)
+				mixin.columns.compPKPositions = append(mixin.columns.compPKPositions, uint16(pos))
 			}
 		}
 	}
 }
 
-func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (filter blockio.ReadFilter) {
+func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (
+	filter blockio.ReadFilter,
+) {
 	if mixin.filterState.evaluated {
 		filter = mixin.filterState.filter
 		return
@@ -137,7 +139,9 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (filter block
 	return mixin.getCompositPKFilter(proc)
 }
 
-func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (filter blockio.ReadFilter) {
+func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
+	filter blockio.ReadFilter,
+) {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if len(mixin.columns.compPKPositions) == 0 || mixin.filterState.expr == nil {
@@ -169,8 +173,7 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (filter
 			inputSels []int32
 		)
 		for i := range filterFuncs {
-			pos := mixin.columns.compPKPositions[i]
-			vec := vecs[pos]
+			vec := vecs[i]
 			mixin.sels = mixin.sels[:0]
 			filterFuncs[i](vec, inputSels, &mixin.sels)
 			if len(mixin.sels) == 0 {
@@ -185,10 +188,18 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (filter
 
 	mixin.filterState.evaluated = true
 	mixin.filterState.filter = filter
+	mixin.filterState.seqnums = make([]uint16, 0, len(mixin.columns.compPKPositions))
+	mixin.filterState.colTypes = make([]types.Type, 0, len(mixin.columns.compPKPositions))
+	for _, pos := range mixin.columns.compPKPositions {
+		mixin.filterState.seqnums = append(mixin.filterState.seqnums, mixin.columns.seqnums[pos])
+		mixin.filterState.colTypes = append(mixin.filterState.colTypes, mixin.columns.colTypes[pos])
+	}
 	return
 }
 
-func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (filter blockio.ReadFilter) {
+func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
+	filter blockio.ReadFilter,
+) {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
@@ -222,7 +233,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (fil
 	// it returns the offset of the primary key in the pk vector.
 	// if the primary key is not found, it returns empty slice
 	filter = func(vecs []*vector.Vector) []int32 {
-		vec := vecs[mixin.columns.pkPos]
+		vec := vecs[0]
 		row := searchFunc(vec)
 		if row < 0 {
 			return nil
@@ -231,6 +242,8 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (fil
 	}
 	mixin.filterState.evaluated = true
 	mixin.filterState.filter = filter
+	mixin.filterState.seqnums = []uint16{uint16(mixin.columns.seqnums[mixin.columns.pkPos])}
+	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 	return
 }
 
@@ -307,19 +320,27 @@ func (r *blockReader) Read(
 	// the columns is only updated once for all blocks
 	r.tryUpdateColumns(cols)
 
+	// get the block read filter
+	filter := r.getReadFilter(r.proc)
+
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-		blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		if filter != nil && blockInfo.Sorted {
+			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		} else {
+			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
 	}
 
-	// get the block read filter
-	filter := r.getReadFilter(r.proc)
-
 	// read the block
 	bat, err := blockio.BlockRead(
-		r.ctx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
+		r.ctx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
+		r.filterState.seqnums,
+		r.filterState.colTypes,
+		filter,
+		r.fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err
