@@ -436,7 +436,7 @@ type withFilterMixin struct {
 		colTypes []types.Type
 		// colNulls []bool
 
-		compPKPositions []int // composite primary key pos in the columns
+		compPKPositions []uint16 // composite primary key pos in the columns
 
 		pkPos    int // -1 means no primary key in columns
 		rowidPos int // -1 means no rowid in columns
@@ -447,8 +447,10 @@ type withFilterMixin struct {
 	filterState struct {
 		evaluated bool
 		//point select for primary key
-		expr   *plan.Expr
-		filter blockio.ReadFilter
+		expr     *plan.Expr
+		filter   blockio.ReadFilter
+		seqnums  []uint16 // seqnums of the columns in the filter
+		colTypes []types.Type
 	}
 
 	sels []int32
