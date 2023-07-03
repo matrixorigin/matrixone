@@ -28,8 +28,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -107,24 +105,14 @@ func Prepare(proc *process.Process, arg any) error {
 	param.Ctx = proc.Ctx
 	param.Zoneparam = &ZonemapFileparam{}
 	name2ColIndex := make(map[string]int32, len(param.Cols))
-	for i := 0; i < len(param.Cols); i++ {
-		name2ColIndex[param.Cols[i].Name] = int32(i)
+	for i, col := range param.Cols {
+		name2ColIndex[col.Name] = int32(i)
 	}
 	param.tableDef = &plan.TableDef{
 		Name2ColIndex: name2ColIndex,
 	}
-	var columns []int
-	param.Filter.columnMap, columns, _, param.Filter.maxCol = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
-	param.Filter.columns = make([]uint16, len(columns))
-	param.Filter.defColumns = make([]uint16, len(columns))
-	for i := 0; i < len(columns); i++ {
-		col := param.Cols[columns[i]]
-		param.Filter.columns[i] = uint16(param.Name2ColIndex[col.Name])
-		param.Filter.defColumns[i] = uint16(columns[i])
-	}
-
+	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
-	param.Filter.File2Size = make(map[string]int64)
 	return nil
 }
 
@@ -158,7 +146,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	bat, err := ScanFileData(ctx, param, proc)
+	bat, err := scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
 		return false, err
@@ -222,7 +210,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
-				vector.SetStringAt(vec, j, getAccountCol(fileList[j]), proc.Mp())
+				vector.SetStringAt(vec, j, getAccountCol(fileList[j]), proc.GetMPool())
 			}
 			bat.Vecs[i] = vec
 		} else if bat.Attrs[i] == catalog.ExternalFilePath {
@@ -230,7 +218,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
-				vector.SetStringAt(vec, j, fileList[j], proc.Mp())
+				vector.SetStringAt(vec, j, fileList[j], proc.GetMPool())
 			}
 			bat.Vecs[i] = vec
 		}
@@ -424,7 +412,7 @@ func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) *batc
 	for i := range param.Attrs {
 		typ := makeType(param.Cols[i].Typ, param.ParallelLoad)
 		bat.Vecs[i] = proc.GetVector(typ)
-		bat.Vecs[i].PreExtend(batchSize, proc.Mp())
+		bat.Vecs[i].PreExtend(batchSize, proc.GetMPool())
 		bat.Vecs[i].SetLength(batchSize)
 	}
 	return bat
@@ -488,7 +476,7 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				return nil, moerr.NewInternalError(proc.Ctx, ColumnCntLargerErrorInfo)
 			}
 		}
-		err = getOneRowData(bat, line, rowIdx, param, proc.Mp())
+		err = getOneRowData(bat, line, rowIdx, param, proc.GetMPool())
 		if err != nil {
 			return nil, err
 		}
@@ -502,7 +490,7 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			vec.SetLength(n)
 		}
 	}
-	bat.SetZs(n, proc.Mp())
+	bat.SetZs(n, proc.GetMPool())
 	return bat, nil
 }
 
@@ -530,7 +518,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 		cma = '\t'
 	}
 	plh := &ParseLineHandler{
-		moCsvReader:    newReaderWithOptions(param.reader, rune(cma), '#', true, false),
+		csvReader:      newReaderWithOptions(param.reader, rune(cma), '#', true, false),
 		moCsvLineArray: make([][]string, OneBatchMaxRow),
 	}
 	return plh, nil
@@ -551,7 +539,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	}
 	plh := param.plh
 	finish := false
-	cnt, finish, err = plh.moCsvReader.readLimitSize(proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
+	cnt, finish, err = readCountStringLimitSize(plh.csvReader, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
 	if err != nil {
 		logutil.Errorf("read external file meet error: %s", err.Error())
 		return nil, err
@@ -656,18 +644,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	}
 
 	n := bat.Vecs[0].Length()
-	sels := proc.Mp().GetSels()
-	if n > cap(sels) {
-		proc.Mp().PutSels(sels)
-		sels = make([]int64, n)
-	}
-	bat.Zs = sels[:n]
-	for k := 0; k < n; k++ {
-		bat.Zs[k] = 1
-	}
-	if !param.Extern.QueryResult {
-		param.Zoneparam.offset++
-	}
+	bat.SetZs(n, proc.GetMPool())
 	return bat, nil
 }
 
@@ -704,18 +681,9 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 
 func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (*batch.Batch, error) {
 	var err error
-	if param.Extern.QueryResult {
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
-		if err != nil {
-			return nil, err
-		}
-	} else if param.Zoneparam.bs == nil {
-		param.plh = &ParseLineHandler{}
-		var err error
-		param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
-		if err != nil {
-			return nil, err
-		}
+	param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
+	if err != nil {
+		return nil, err
 	}
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		bat := makeBatch(param, 0, proc)
@@ -726,74 +694,17 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 		for !needRead(ctx, param, proc) {
 			param.Zoneparam.offset++
 		}
-		return getBatchFromZonemapFile(ctx, param, proc, objectReader)
-	} else {
-		return getBatchFromZonemapFile(ctx, param, proc, objectReader)
 	}
+	return getBatchFromZonemapFile(ctx, param, proc, objectReader)
 }
 
 func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	if param.Filter.blockReader == nil || param.Extern.QueryResult {
-		dir, _ := filepath.Split(param.Fileparam.Filepath)
-		var service fileservice.FileService
-		var err error
-		var p fileservice.Path
-
-		if param.Extern.QueryResult {
-			service = param.Extern.FileService
-		} else {
-
-			// format filepath for local file
-			fp := param.Extern.Filepath
-			if p, err = fileservice.ParsePath(param.Extern.Filepath); err != nil {
-				return nil, err
-			} else if p.Service == "" {
-				if os.IsPathSeparator(filepath.Clean(param.Extern.Filepath)[0]) {
-					// absolute path
-					fp = "/"
-				} else {
-					// relative path.
-					// PS: this loop never trigger, caused by ReadDir() only support local file with absolute path
-					fp = "."
-				}
-			}
-
-			service, _, err = plan2.GetForETLWithType(param.Extern, fp)
-			if err != nil {
-				return nil, err
-			}
-		}
-		_, ok := param.Filter.File2Size[param.Fileparam.Filepath]
-		if !ok && param.Extern.QueryResult {
-			e, err := service.StatFile(proc.Ctx, param.Fileparam.Filepath)
-			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-					return nil, moerr.NewResultFileNotFound(ctx, param.Fileparam.Filepath)
-				}
-				return nil, err
-			}
-			param.Filter.File2Size[param.Fileparam.Filepath] = e.Size
-		} else if !ok {
-			fs := objectio.NewObjectFS(service, dir)
-			dirs, err := fs.ListDir(dir)
-			if err != nil {
-				return nil, err
-			}
-			for i := 0; i < len(dirs); i++ {
-				param.Filter.File2Size[dir+dirs[i].Name] = dirs[i].Size
-			}
-		}
-
-		param.Filter.blockReader, err = blockio.NewFileReader(service, param.Fileparam.Filepath)
-		if err != nil {
-			return nil, err
-		}
+	var err error
+	param.Filter.blockReader, err = blockio.NewFileReader(param.Extern.FileService, param.Fileparam.Filepath)
+	if err != nil {
+		return nil, err
 	}
 
-	_, ok := param.Filter.File2Size[param.Fileparam.Filepath]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("can' t find the filepath %s", param.Fileparam.Filepath)
-	}
 	bat, err := getZonemapBatch(ctx, param, proc, param.Filter.blockReader)
 	if err != nil {
 		return nil, err
@@ -812,8 +723,8 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 	return bat, nil
 }
 
-// ScanFileData read batch data from external file
-func ScanFileData(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+// scanFileData read batch data from external file
+func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	if param.Extern.QueryResult {
 		return scanZonemapFile(ctx, param, proc)
 	} else {
@@ -929,10 +840,9 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 }
 
 func getNullFlag(param *ExternalParam, attr, field string) bool {
-	list := param.Extern.NullMap[attr]
-	for i := 0; i < len(list); i++ {
-		field = strings.ToLower(field)
-		if list[i] == field {
+	field = strings.ToLower(field)
+	for _, v := range param.Extern.NullMap[attr] {
+		if v == field {
 			return true
 		}
 	}
@@ -944,16 +854,15 @@ const NULL_FLAG = "\\N"
 func getStrFromLine(line []string, colIdx int, param *ExternalParam) string {
 	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
 		return param.Fileparam.Filepath
-	} else {
-		str := line[param.Name2ColIndex[param.Attrs[colIdx]]]
-		if param.Close != 0 {
-			tmp := strings.TrimSpace(str)
-			if len(tmp) >= 2 && tmp[0] == param.Close && tmp[len(tmp)-1] == param.Close {
-				return tmp[1 : len(tmp)-1]
-			}
-		}
-		return str
 	}
+	str := line[param.Name2ColIndex[param.Attrs[colIdx]]]
+	if param.Close != 0 {
+		tmp := strings.TrimSpace(str)
+		if len(tmp) >= 2 && tmp[0] == param.Close && tmp[len(tmp)-1] == param.Close {
+			return tmp[1 : len(tmp)-1]
+		}
+	}
+	return str
 }
 
 func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
@@ -1307,10 +1216,6 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 // A successful call returns err == nil, not err == io.EOF. Because ReadAll is
 // defined to read until EOF, it does not treat end of file as an error to be
 // reported.
-func (r *moCSVReader) readLimitSize(ctx context.Context, size uint64, records [][]string) (int, bool, error) {
-	return readCountStringLimitSize(r.rCsv, ctx, size, records)
-}
-
 func readCountStringLimitSize(r *csv.Reader, ctx context.Context, size uint64, records [][]string) (int, bool, error) {
 	var curBatchSize uint64 = 0
 	for i := 0; i < OneBatchMaxRow; i++ {
