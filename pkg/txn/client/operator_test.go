@@ -432,6 +432,7 @@ func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 				_ *testTxnSender) {
 				tc.timestampWaiter = waiter
 				tc.mu.txn.SnapshotTS = newTestTimestamp(10)
+				tc.mu.txn.Isolation = txn.TxnIsolation_SI
 
 				ts := int64(100)
 				c := make(chan struct{})
