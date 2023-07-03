@@ -1801,10 +1801,12 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 
 	// append hidden column to tableDef
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
 	}
 	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+		//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+		tableDef.Cols = append(tableDef.Cols, tableDef.ClusterBy.CompCbkeyCol)
 	}
 
 	// Get table partition information

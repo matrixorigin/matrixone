@@ -436,12 +436,13 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 	if table.ClusterBy != nil {
 		newTable.ClusterBy = &plan.ClusterByDef{
-			Parts: make([]*plan.Expr, len(table.ClusterBy.Parts)),
-			Name:  table.ClusterBy.Name,
+			//Parts: make([]*plan.Expr, len(table.ClusterBy.Parts)),
+			Name:         table.ClusterBy.Name,
+			CompCbkeyCol: DeepCopyColDef(table.ClusterBy.CompCbkeyCol),
 		}
-		for i, part := range table.ClusterBy.Parts {
-			newTable.ClusterBy.Parts[i] = DeepCopyExpr(part)
-		}
+		//for i, part := range table.ClusterBy.Parts {
+		//	newTable.ClusterBy.Parts[i] = DeepCopyExpr(part)
+		//}
 	}
 
 	if table.ViewSql != nil {

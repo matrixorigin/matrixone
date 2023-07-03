@@ -25,9 +25,9 @@ import (
 
 type RuntimeOption func(*Runtime)
 
-func WithRuntimeMemtablePool(vp *containers.VectorPool) RuntimeOption {
+func WithRuntimeSmallPool(vp *containers.VectorPool) RuntimeOption {
 	return func(r *Runtime) {
-		r.VectorPool.Memtable = vp
+		r.VectorPool.Small = vp
 	}
 }
 
@@ -75,7 +75,7 @@ func WithRuntimeThrottle(t *Throttle) RuntimeOption {
 
 type Runtime struct {
 	VectorPool struct {
-		Memtable  *containers.VectorPool
+		Small     *containers.VectorPool
 		Transient *containers.VectorPool
 	}
 
@@ -103,8 +103,8 @@ func NewRuntime(opts ...RuntimeOption) *Runtime {
 }
 
 func (r *Runtime) fillDefaults() {
-	if r.VectorPool.Memtable == nil {
-		r.VectorPool.Memtable = MakeDefaultMemtablePool("memtable-vector-pool")
+	if r.VectorPool.Small == nil {
+		r.VectorPool.Small = MakeDefaultSmallPool("small-vector-pool")
 	}
 	if r.VectorPool.Transient == nil {
 		r.VectorPool.Transient = MakeDefaultTransientPool("trasient-vector-pool")
@@ -116,5 +116,5 @@ func (r *Runtime) fillDefaults() {
 
 func (r *Runtime) PrintVectorPoolUsage() {
 	logutil.Info(r.VectorPool.Transient.String())
-	logutil.Info(r.VectorPool.Memtable.String())
+	logutil.Info(r.VectorPool.Small.String())
 }

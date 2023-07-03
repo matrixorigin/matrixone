@@ -16,13 +16,14 @@ package db_holder
 
 import (
 	"context"
-	"database/sql/driver"
 	"fmt"
 	"regexp"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+
+	"database/sql/driver"
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestGetPrepareSQL(t *testing.T) {
