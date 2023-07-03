@@ -261,6 +261,8 @@ jobs:
           mv mo-service mo-service-upstream
           mv mo-service.log upstream-mo-service.log
           rm -rf mo-data/etl
+          # delete for clear the start status of mo
+          rm -rf mo-data/local/system_init_completed
           rm -rf etc
           rm -rf optools
           mv $GITHUB_WORKSPACE/head/etc .
