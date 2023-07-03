@@ -131,6 +131,9 @@ type TxnOperator interface {
 	AddWorkspace(workspace Workspace)
 	// GetWorkspace from the transaction
 	GetWorkspace() Workspace
+
+	ResetRetry(bool)
+	IsRetry() bool
 }
 
 // DebugableTxnOperator debugable txn operator

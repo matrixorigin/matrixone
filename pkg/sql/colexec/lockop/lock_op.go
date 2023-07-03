@@ -398,6 +398,7 @@ func doLock(
 
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
 	if !result.HasConflict &&
+		!txnOp.IsRetry() &&
 		txnOp.Txn().IsRCIsolation() {
 		snapshotTS := txnOp.Txn().SnapshotTS
 		lockedTS := result.Timestamp
