@@ -639,9 +639,9 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 // result of f(x, y) is null if any one of x, y is null value.
 // and if x, y were all normal value, result will not be an error.
 func opBinaryFixedFixedToFixed[
-T1 types.FixedSizeTExceptStrType,
-T2 types.FixedSizeTExceptStrType,
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T1 types.FixedSizeTExceptStrType,
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1 T1, v2 T2) Tr) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
@@ -743,9 +743,9 @@ Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.Fun
 }
 
 func opBinaryFixedFixedToFixedWithErrorCheck[
-T1 types.FixedSizeTExceptStrType,
-T2 types.FixedSizeTExceptStrType,
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T1 types.FixedSizeTExceptStrType,
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1 T1, v2 T2) (Tr, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
@@ -874,8 +874,8 @@ Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.Fun
 }
 
 func opBinaryStrFixedToFixedWithErrorCheck[
-T2 types.FixedSizeTExceptStrType,
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1 string, v2 T2) (Tr, error)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
@@ -1005,8 +1005,8 @@ Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.Fun
 }
 
 func opBinaryFixedStrToFixedWithErrorCheck[
-T1 types.FixedSizeTExceptStrType,
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T1 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1 T1, v2 string) (Tr, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
@@ -1136,7 +1136,7 @@ Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.Fun
 }
 
 func specialTemplateForModFunction[
-T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	modFn func(v1, v2 T) T) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
@@ -1260,7 +1260,7 @@ T constraints.Integer | constraints.Float](parameters []*vector.Vector, result v
 }
 
 func specialTemplateForDivFunction[
-T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	divFn func(v1, v2 T) T2) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
@@ -1882,8 +1882,8 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 // opUnaryFixedToFixed for unary functions whose result of f(x) is null if x is null.
 // and if x was not null, result will be not null.
 func opUnaryFixedToFixed[
-T types.FixedSizeTExceptStrType,
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) Tr) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
@@ -1928,7 +1928,7 @@ Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.Fun
 }
 
 func opUnaryBytesToFixed[
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) Tr) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
@@ -1973,7 +1973,7 @@ Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.Fun
 }
 
 func opUnaryStrToFixed[
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) Tr) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
@@ -2186,7 +2186,7 @@ func opUnaryStrToStr(
 }
 
 func opUnaryFixedToStr[
-T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) string) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2245,7 +2245,7 @@ T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.Func
 }
 
 func opUnaryFixedToStrWithErrorCheck[
-T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (string, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2445,8 +2445,8 @@ func opUnaryBytesToStrWithErrorCheck(
 }
 
 func opUnaryFixedToFixedWithErrorCheck[
-T types.FixedSizeTExceptStrType,
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (Tr, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
@@ -2501,7 +2501,7 @@ Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.Fun
 }
 
 func opUnaryBytesToFixedWithErrorCheck[
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) (Tr, error)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
@@ -2556,7 +2556,7 @@ Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.Fun
 }
 
 func opUnaryStrToFixedWithErrorCheck[
-Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) (Tr, error)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
