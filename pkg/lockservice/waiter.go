@@ -97,6 +97,7 @@ type waiter struct {
 	refCount       atomic.Int32
 	latestCommitTS timestamp.Timestamp
 	waitTxn        pb.WaitTxn
+	belongTo       pb.WaitTxn
 	event          event
 
 	// just used for testing
@@ -365,6 +366,7 @@ func (w *waiter) reset(serviceID string) {
 	w.latestCommitTS = timestamp.Timestamp{}
 	w.setStatus(serviceID, ready)
 	w.waitTxn = pb.WaitTxn{}
+	w.belongTo = pb.WaitTxn{}
 	w.waiters.reset()
 	w.sameTxnWaiters = w.sameTxnWaiters[:0]
 	waiterPool.Put(w)

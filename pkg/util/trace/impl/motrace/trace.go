@@ -232,6 +232,10 @@ type BatchProcessor interface {
 	Register(name batchpipe.HasName, impl PipeImpl)
 }
 
+type DiscardableCollector interface {
+	DiscardableCollect(context.Context, batchpipe.HasName) error
+}
+
 var _ BatchProcessor = &NoopBatchProcessor{}
 
 type NoopBatchProcessor struct {

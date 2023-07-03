@@ -2763,7 +2763,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			for i := start; i < end; i++ {
 				if !nulls.Contains(&v.nsp, uint64(i)) {
 					bs := vCol[i].GetByteSlice(v.area)
-					va, w.area, err = types.BuildVarlena(bs, w.area, mp)
+					err = BuildVarlenaFromByteSlice(w, &va, &bs, mp)
 					if err != nil {
 						return err
 					}

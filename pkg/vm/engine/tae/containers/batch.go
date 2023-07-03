@@ -255,7 +255,13 @@ func (bat *Batch) Equals(o *Batch) bool {
 func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 	var tmpn int64
-	buffer := MakeVector(types.T_varchar.ToType())
+	var buffer Vector
+	if bat.Pool != nil {
+		t := types.T_varchar.ToType()
+		buffer = bat.Pool.GetVector(&t)
+	} else {
+		buffer = MakeVector(types.T_varchar.ToType())
+	}
 	defer buffer.Close()
 	mp := buffer.GetAllocator()
 	bufVec := buffer.GetDownstreamVector()
