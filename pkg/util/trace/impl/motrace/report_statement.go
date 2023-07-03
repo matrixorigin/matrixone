@@ -19,13 +19,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -83,7 +84,7 @@ func StatementInfoUpdate(existing, new Item) {
 
 	if err != nil {
 		// handle error
-		log.Printf("Failed to merge stats: %v", err)
+		logutil.Errorf("Failed to merge stats: %v", err)
 	}
 }
 
@@ -324,18 +325,23 @@ func mergeStats(e, n *StatementInfo) error {
 
 	// Parse the strings to integers and add the values together
 	for i := 1; i < len(eStatsElements); i++ {
-		eVal, err := strconv.Atoi(strings.TrimSpace(eStatsElements[i]))
+		eVal, err := strconv.ParseUint(strings.TrimSpace(eStatsElements[i]), 10, 0)
 		if err != nil {
 			return err
 		}
 
-		nVal, err := strconv.Atoi(strings.TrimSpace(nStatsElements[i]))
+		nVal, err := strconv.ParseUint(strings.TrimSpace(nStatsElements[i]), 10, 0)
 		if err != nil {
 			return err
+		}
+
+		newVal := eVal + nVal
+		if newVal < eVal {
+			return moerr.NewInternalError(context.Background(), "overflow during merge stats")
 		}
 
 		// Store the sum back in eStatsElements
-		eStatsElements[i] = strconv.Itoa(eVal + nVal)
+		eStatsElements[i] = strconv.FormatUint(newVal, 10)
 	}
 
 	// Join eStatsElements with commas and convert back to byte slice
