@@ -7182,7 +7182,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
+			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, newTenant.GetTenantID(), newTenant.GetTenant(), variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
 	}

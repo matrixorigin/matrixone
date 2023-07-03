@@ -132,3 +132,28 @@ select * from result_scan('d8fb97e7-e30e-11ed-8d80-d6aeb943c8b4') as u;
 result file query_result_meta/sys_d8fb97e7-e30e-11ed-8d80-d6aeb943c8b4.blk not found
 drop database if exists db111;
 set global save_query_result = off;
+
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+set global save_query_result = on;
+create database test;
+use test;
+drop table if exists tt;
+create table tt (a int);
+insert into tt values(1), (2);
+select * from tt;
+a
+1
+2
+select * from result_scan(last_query_id()) as u;
+a
+1
+2
+select * from tt;
+a
+1
+2
+select count(*) from meta_scan(last_query_id()) as u;
+count(*)
+1
+set global save_query_result = off;
+drop account abc;

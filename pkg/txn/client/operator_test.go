@@ -189,7 +189,7 @@ func TestMissingSenderWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(nil, txn.TxnMeta{})
+	newTxnOperator(nil, nil, txn.TxnMeta{})
 }
 
 func TestMissingTxnIDWillPanic(t *testing.T) {
@@ -200,7 +200,7 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{})
+	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{})
 }
 
 func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
@@ -211,7 +211,7 @@ func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
+	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -223,6 +223,7 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	newTxnOperator(
+		nil,
 		newTestTxnSender(),
 		txn.TxnMeta{ID: []byte{1}, SnapshotTS: timestamp.Timestamp{PhysicalTime: 1}},
 		WithTxnReadyOnly(),
@@ -431,6 +432,7 @@ func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 				_ *testTxnSender) {
 				tc.timestampWaiter = waiter
 				tc.mu.txn.SnapshotTS = newTestTimestamp(10)
+				tc.mu.txn.Isolation = txn.TxnIsolation_SI
 
 				ts := int64(100)
 				c := make(chan struct{})
@@ -485,7 +487,7 @@ func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
 					<-c
 					require.True(t, time.Since(st) > time.Second)
 				},
-				newTestTimestamp(0),
+				newTestTimestamp(0).Next(),
 				[]TxnOption{WithTxnMode(txn.TxnMode_Pessimistic), WithTxnIsolation(txn.TxnIsolation_RC)},
 				WithTimestampWaiter(tw),
 				WithEnableSacrificingFreshness(),
