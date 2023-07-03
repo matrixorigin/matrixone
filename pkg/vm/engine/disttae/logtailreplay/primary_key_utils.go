@@ -48,13 +48,18 @@ func (p *PartitionState) PrimaryKeyMayBeModified(
 	defer iter.Close()
 
 	empty := true
-	for iter.Next() {
-		if ts, ok := p.lastFlushTimestamp.Load(tableID); ok {
-			if from.Greater(ts.(types.TS)) {
-				empty = false
-			}
-		} else {
+	if ts, ok := p.lastFlushTimestamp.Load(tableID); ok {
+		if from.Greater(ts.(types.TS)) {
 			empty = false
+		}
+	} else {
+		empty = false
+	}
+	for iter.Next() {
+		empty = false
+		row := iter.Entry()
+		if row.Time.Greater(from) {
+			return true
 		}
 	}
 	return empty
