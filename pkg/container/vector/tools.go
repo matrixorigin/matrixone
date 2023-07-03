@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -118,6 +119,12 @@ func ExpandBytesCol(v *Vector) [][]byte {
 		return vs
 	}
 	return MustBytesCol(v)
+}
+
+func MustVarlenaToInt64Slice(v *Vector) [][3]int64 {
+	data := MustFixedCol[types.Varlena](v)
+	pointer := (*[3]int64)(data[0].UnsafePtr())
+	return unsafe.Slice(pointer, len(data))
 }
 
 func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
