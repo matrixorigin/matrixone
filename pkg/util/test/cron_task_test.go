@@ -32,7 +32,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/lni/goutils/leaktest"
-	"github.com/prashantv/gostub"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -100,12 +99,6 @@ func TestCalculateStorageUsage(t *testing.T) {
 		return frontend.NewInternalExecutor(pu, aicm)
 	}
 
-	qStub := gostub.Stub(&metric.QuitableWait, func(ctx2 context.Context) (*time.Ticker, error) {
-		cancel()
-		return nil, ctx2.Err()
-	})
-	defer qStub.Reset()
-
 	err = metric.CalculateStorageUsage(ctx, ieFactory)
 	require.Nil(t, err)
 
@@ -114,7 +107,6 @@ func TestCalculateStorageUsage(t *testing.T) {
 	s.Write(dm)
 	logutil.Infof("size: %f", dm.GetGauge().GetValue())
 	t.Logf("size: %f", dm.GetGauge().GetValue())
-
 }
 
 func TestGetTenantInfo(t *testing.T) {

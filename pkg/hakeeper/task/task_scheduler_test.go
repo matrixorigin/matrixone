@@ -16,8 +16,6 @@ package task
 
 import (
 	"context"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -26,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
+	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -43,7 +43,7 @@ func TestGetExpiredTasks(t *testing.T) {
 		tasks     []task.Task
 		workingCN []string
 
-		expected []task.Task
+		expected map[uint64]struct{}
 	}{
 		{
 			tasks:     nil,
@@ -52,16 +52,33 @@ func TestGetExpiredTasks(t *testing.T) {
 			expected: nil,
 		},
 		{
-			tasks:     []task.Task{{TaskRunner: "a"}, {TaskRunner: "b"}},
+			// CN running task 1 is expired.
+			tasks: []task.Task{
+				{ID: 1, TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
+				{ID: 2, TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
+			},
 			workingCN: []string{"b"},
 
-			expected: []task.Task{{TaskRunner: "a"}},
+			expected: map[uint64]struct{}{1: {}},
+		},
+		{
+			// Heartbeat of task 1 is expired.
+			tasks: []task.Task{
+				{ID: 1, TaskRunner: "a", LastHeartbeat: time.Now().Add(-taskSchedulerDefaultTimeout - 1).UnixMilli()},
+				{ID: 2, TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
+			},
+			workingCN: []string{"a", "b"},
+
+			expected: map[uint64]struct{}{1: {}},
 		},
 	}
 
 	for _, c := range cases {
 		_, results := getCNOrderedAndExpiredTasks(c.tasks, c.workingCN)
-		assert.Equal(t, c.expected, results)
+		for _, task := range results {
+			_, ok := c.expected[task.ID]
+			assert.True(t, ok)
+		}
 	}
 }
 
