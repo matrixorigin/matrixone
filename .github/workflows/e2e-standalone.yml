@@ -74,6 +74,10 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/head
           mv mo-service.log mo-service.r1.log
+          
+          # delete for clear the start finish status of mo
+          rm -rf mo-data/local/system_init_completed
+          
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-multi-CN-tae-DN
       - name: Start BVT Test for MO with Version of Head Restarted
         id: bvt_on_latest_head_version_run2
@@ -261,8 +265,10 @@ jobs:
           mv mo-service mo-service-upstream
           mv mo-service.log upstream-mo-service.log
           rm -rf mo-data/etl
-          # delete for clear the start status of mo
+          
+          # delete for clear the start finishe status of mo
           rm -rf mo-data/local/system_init_completed
+          
           rm -rf etc
           rm -rf optools
           mv $GITHUB_WORKSPACE/head/etc .
