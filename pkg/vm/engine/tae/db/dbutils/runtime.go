@@ -15,6 +15,8 @@
 package dbutils
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -115,6 +117,9 @@ func (r *Runtime) fillDefaults() {
 }
 
 func (r *Runtime) PrintVectorPoolUsage() {
-	logutil.Info(r.VectorPool.Transient.String())
-	logutil.Info(r.VectorPool.Small.String())
+	var w bytes.Buffer
+	w.WriteString(r.VectorPool.Transient.String())
+	w.WriteByte('\n')
+	w.WriteString(r.VectorPool.Small.String())
+	logutil.Info(w.String())
 }
