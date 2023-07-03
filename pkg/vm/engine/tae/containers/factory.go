@@ -29,6 +29,7 @@ func BuildBatchWithPool(
 		Attrs:   make([]string, 0, len(attrs)),
 		Nameidx: make(map[string]int, len(attrs)),
 		Vecs:    make([]Vector, 0, len(attrs)),
+		Pool:    pool,
 	}
 	for i, attr := range attrs {
 		vec := pool.GetVector(&colTypes[i])
