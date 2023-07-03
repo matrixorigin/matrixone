@@ -987,8 +987,8 @@ insert into td(d) select d+2000 from td;
 insert into td(d) select d+3000 from td;
 select count(*) from td;
 
+-- @bvt:issue#10381
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
--- @bvt:issue#10043
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
 -- @bvt:issue
