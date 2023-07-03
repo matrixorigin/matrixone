@@ -345,3 +345,11 @@ func (o *testOperator) AddLockTable(lock.LockTable) error {
 func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }
+
+func (o *testOperator) ResetRetry(retry bool) {
+	panic("unimplemented")
+}
+
+func (o *testOperator) IsRetry() bool {
+	panic("unimplemented")
+}

@@ -102,6 +102,14 @@ func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
 	panic("unimplemented")
 }
 
+func (s *StorageTxnOperator) ResetRetry(retry bool) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) IsRetry() bool {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) Commit(ctx context.Context) error {
 	for _, storage := range s.storages {
 		if _, err := storage.Commit(ctx, s.meta); err != nil {
