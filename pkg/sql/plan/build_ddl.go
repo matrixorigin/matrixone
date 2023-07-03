@@ -1691,10 +1691,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				alterTableDrop.Typ = plan.AlterTableDrop_KEY
 			case tree.AlterTableDropPrimaryKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_PRIMARY_KEY
-				if tableDef.Pkey == nil {
+				if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 					return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP Primary Key; check that column/key exists")
 				}
-				name_not_found = false
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP exists Primary Key")
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
 				for _, fk := range tableDef.Fkeys {
@@ -1955,6 +1955,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				},
 			}
+		case *tree.TableOptionAutoIncrement:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Can't set AutoIncr column value.")
 		}
 	}
 
