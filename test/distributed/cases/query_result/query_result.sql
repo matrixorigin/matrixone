@@ -64,6 +64,8 @@ set global save_query_result = off;
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 -- @session:id=2&user=abc:admin&password=123456
 set global save_query_result = on;
+create database test;
+use test;
 drop table if exists tt;
 create table tt (a int);
 insert into tt values(1), (2);
