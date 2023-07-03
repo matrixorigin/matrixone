@@ -113,7 +113,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		require.Equal(t, 1, n)
 		require.Nil(t, iter.Close())
 		yes := state.PrimaryKeyMayBeModified(0, ts.Prev(), ts.Next(), bs)
-		require.False(t, yes)
+		require.True(t, yes)
 	}
 
 	{

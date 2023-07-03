@@ -615,21 +615,3 @@ jobs:
         with:
           msgtype: markdown
           content: "MatrixOne e2e CI(Race-Enabled) failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin>"
-
-  contribu-readme-job:
-    if: github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-    name: Contributor list
-    steps:
-      - name: First Contribution Check
-        id: first-check
-        uses: sukki37/first-contribution-check-action@v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
-      - name: Contribute List
-        uses: akhilmhdh/contributors-readme-action@v2.3.4
-        if: ${{ steps.first-check.outputs.isNewContributor == 'true' }}
-        with:
-          image_size: 30
-        env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
