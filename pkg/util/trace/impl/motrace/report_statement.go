@@ -170,8 +170,8 @@ type StatementInfo struct {
 	exported bool
 
 	// keep []byte as elem
-	jsonByte      []byte
-	statsJsonByte statistic.StatsArray
+	jsonByte   []byte
+	statsArray statistic.StatsArray
 }
 
 type Key struct {
@@ -216,7 +216,7 @@ func (s *StatementInfo) Size() int64 {
 	num := int64(unsafe.Sizeof(s)) + deltaStmtContentLength + int64(
 		len(s.Account)+len(s.User)+len(s.Host)+
 			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag)+
-			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsJsonByte),
+			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsArray)*8,
 	)
 	if s.jsonByte == nil {
 		return num + jsonByteLength
@@ -248,7 +248,7 @@ func (s *StatementInfo) Free() {
 		s.exported = false
 		// clean []byte
 		s.jsonByte = nil
-		s.statsJsonByte.Reset()
+		s.statsArray.Reset()
 		stmtPool.Put(s)
 	}
 }
@@ -308,7 +308,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 }
 
 func mergeStats(e, n *StatementInfo) error {
-	e.statsJsonByte.Add(&n.statsJsonByte)
+	e.statsArray.Add(&n.statsArray)
 	return nil
 }
 
@@ -339,10 +339,10 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 	if s.ExecPlan == nil {
 		return statistic.DefaultStatsArrayJsonString
 	} else {
-		s.statsJsonByte, stats = s.ExecPlan.Stats(ctx)
+		s.statsArray, stats = s.ExecPlan.Stats(ctx)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
-		return s.statsJsonByte.ToJsonString()
+		return s.statsArray.ToJsonString()
 	}
 }
 

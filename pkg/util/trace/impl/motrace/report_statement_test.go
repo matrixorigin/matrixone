@@ -192,9 +192,9 @@ var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]b
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), dummyStatsArray, Statistic{}
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), statistic.DefaultStatsArray, Statistic{}
 	}
-	return json, statistic.DefaultStatsArray, Statistic{RowsRead: 1, BytesScan: 1}
+	return json, dummyStatsArray, Statistic{RowsRead: 1, BytesScan: 1}
 }
 
 var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
@@ -203,10 +203,10 @@ var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), dummyStatsArray, Statistic{}
+		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), statistic.DefaultStatsArray, Statistic{}
 	}
 	val := fmt.Sprintf(`{"func":"dummy2","result":%s}`, json)
-	return []byte(val), statistic.DefaultStatsArray, Statistic{}
+	return []byte(val), dummyStatsArray, Statistic{}
 }
 
 func TestStatementInfo_ExecPlan2Json(t *testing.T) {
@@ -219,9 +219,10 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 	dummyEPJson := `{"func":"dummy2","result":{"int":1,"key":"val"}}`
 
 	tests := []struct {
-		name string
-		args args
-		want string
+		name          string
+		args          args
+		want          string
+		wantStatsByte []byte
 	}{
 		{
 			name: "dummyDefault_ep_Serialize",
@@ -229,7 +230,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          dummyExecPlan,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyEPJson,
+			want:          dummyEPJson,
+			wantStatsByte: dummyStatsArray.ToJsonString(),
 		},
 		{
 			name: "nil_ep_Serialize",
@@ -237,7 +239,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          dummyExecPlan,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyEPJson,
+			want:          dummyEPJson,
+			wantStatsByte: dummyStatsArray.ToJsonString(),
 		},
 		{
 			name: "dummyDefault_nil_Serialize",
@@ -245,7 +248,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          nil,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyNoExecPlanJsonResult2,
+			want:          dummyNoExecPlanJsonResult2,
+			wantStatsByte: statistic.DefaultStatsArrayJsonString,
 		},
 		{
 			name: "nil_nil_Serialize",
@@ -253,7 +257,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          nil,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyNoExecPlanJsonResult2,
+			want:          dummyNoExecPlanJsonResult2,
+			wantStatsByte: statistic.DefaultStatsArrayJsonString,
 		},
 	}
 
@@ -269,7 +274,7 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 			got := s.ExecPlan2Json(ctx)
 			stats := s.ExecPlan2Stats(ctx)
 			assert.Equalf(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
-			assert.Equalf(t, []byte("[]"), stats, "stats")
+			assert.Equalf(t, tt.wantStatsByte, stats, "stats")
 			mapper := new(map[string]any)
 			err := json.Unmarshal([]byte(got), mapper)
 			require.Nil(t, err, "jons.Unmarshal failed")
@@ -304,10 +309,10 @@ func (p *dummySerializableExecPlan) Stats(ctx context.Context) (statistic.StatsA
 
 func TestMergeStats(t *testing.T) {
 	e := &StatementInfo{}
-	e.statsJsonByte.Init().WithTimeConsumed(80335).WithMemorySize(1800).WithS3IOInputCount(1).WithS3IOOutputCount(0)
+	e.statsArray.Init().WithTimeConsumed(80335).WithMemorySize(1800).WithS3IOInputCount(1).WithS3IOOutputCount(0)
 
 	n := &StatementInfo{}
-	n.statsJsonByte.Init().WithTimeConsumed(147960).WithMemorySize(1800).WithS3IOInputCount(0).WithS3IOOutputCount(0)
+	n.statsArray.Init().WithTimeConsumed(147960).WithMemorySize(1800).WithS3IOInputCount(0).WithS3IOOutputCount(0)
 
 	err := mergeStats(e, n)
 	if err != nil {
@@ -315,10 +320,10 @@ func TestMergeStats(t *testing.T) {
 	}
 
 	wantBytes := []byte("[1,228295,3600,1,0]")
-	require.Equal(t, wantBytes, e.statsJsonByte.ToJsonString())
+	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 	n = &StatementInfo{}
-	n.statsJsonByte.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0)
+	n.statsArray.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0)
 
 	err = mergeStats(e, n)
 	if err != nil {
@@ -326,6 +331,6 @@ func TestMergeStats(t *testing.T) {
 	}
 
 	wantBytes = []byte("[1,228296,3601,1,0]")
-	require.Equal(t, wantBytes, e.statsJsonByte.ToJsonString())
+	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 }
