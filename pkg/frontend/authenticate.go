@@ -7047,7 +7047,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	}
 
 	//determine the status of the account
-	status := rootStatus
+	status := sysAccountStatus
 	if ca.StatusOption.Exist {
 		if ca.StatusOption.Option == tree.AccountStatusSuspend {
 			status = tree.AccountStatusSuspend.String()
