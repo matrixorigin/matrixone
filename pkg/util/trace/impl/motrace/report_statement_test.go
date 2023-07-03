@@ -294,7 +294,7 @@ func (p *dummySerializableExecPlan) Marshal(ctx context.Context) []byte {
 }
 func (p *dummySerializableExecPlan) Free() {}
 
-func (p *dummySerializableExecPlan) Stats(ctx context.Context) ([]byte, Statistic) {
+func (p *dummySerializableExecPlan) Stats(ctx context.Context) ([]uint64, Statistic) {
 	_, statByte, stats := p.f(ctx, p.plan, p.uuid)
 	return statByte, stats
 }

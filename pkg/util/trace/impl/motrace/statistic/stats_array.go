@@ -18,9 +18,7 @@ import (
 	"strconv"
 )
 
-type StatsArray struct {
-	arr []uint64
-}
+type StatsArray [StatsArrayLength]uint64
 
 const (
 	StatsArrayVersion = StatsArrayVersion1
@@ -39,38 +37,55 @@ const (
 	StatsArrayLength
 )
 
-func NewStatsArray() *StatsArray {
-	return &StatsArray{
-		arr: make([]uint64, StatsArrayLength),
-	}
+func (s *StatsArray) Init() *StatsArray {
+	return s.WithVersion(StatsArrayVersion)
 }
 
-func (s *StatsArray) GetVersion() uint64         { return s.arr[StatsArrayIndexVersion] }
-func (s *StatsArray) GetTimeConsumed() uint64    { return s.arr[StatsArrayIndexTimeConsumed] }    // unit: ns
-func (s *StatsArray) GetMemorySize() uint64      { return s.arr[StatsArrayIndexMemorySize] }      // unit: byte
-func (s *StatsArray) GetS3IOInputCount() uint64  { return s.arr[StatsArrayIndexS3IOInputCount] }  // unit: count
-func (s *StatsArray) GetS3IOOutputCount() uint64 { return s.arr[StatsArrayIndexS3IOOutputCount] } // unit: count
+func (s *StatsArray) Reset() *StatsArray {
+	return s.WithVersion(StatsArrayVersion).WithTimeConsumed(0).WithMemorySize(0).WithS3IOInputCount(0).WithS3IOOutputCount(0)
+}
 
-func (s *StatsArray) WithVersion(v uint64) *StatsArray { s.arr[StatsArrayIndexVersion] = v; return s }
+func (s *StatsArray) GetVersion() uint64         { return (*s)[StatsArrayIndexVersion] }
+func (s *StatsArray) GetTimeConsumed() uint64    { return (*s)[StatsArrayIndexTimeConsumed] }    // unit: ns
+func (s *StatsArray) GetMemorySize() uint64      { return (*s)[StatsArrayIndexMemorySize] }      // unit: byte
+func (s *StatsArray) GetS3IOInputCount() uint64  { return (*s)[StatsArrayIndexS3IOInputCount] }  // unit: count
+func (s *StatsArray) GetS3IOOutputCount() uint64 { return (*s)[StatsArrayIndexS3IOOutputCount] } // unit: count
+
+func (s *StatsArray) WithVersion(v uint64) *StatsArray { (*s)[StatsArrayIndexVersion] = v; return s }
 func (s *StatsArray) WithTimeConsumed(v uint64) *StatsArray {
-	s.arr[StatsArrayIndexTimeConsumed] = v
+	(*s)[StatsArrayIndexTimeConsumed] = v
 	return s
 }
 func (s *StatsArray) WithMemorySize(v uint64) *StatsArray {
-	s.arr[StatsArrayIndexMemorySize] = v
+	(*s)[StatsArrayIndexMemorySize] = v
 	return s
 }
 func (s *StatsArray) WithS3IOInputCount(v uint64) *StatsArray {
-	s.arr[StatsArrayIndexS3IOInputCount] = v
+	(*s)[StatsArrayIndexS3IOInputCount] = v
 	return s
 }
 func (s *StatsArray) WithS3IOOutputCount(v uint64) *StatsArray {
-	s.arr[StatsArrayIndexS3IOOutputCount] = v
+	(*s)[StatsArrayIndexS3IOOutputCount] = v
 	return s
 }
 
 func (s *StatsArray) ToJsonString() []byte {
-	return ArrayUint64ToJsonString(s.arr)
+	return ArrayUint64ToJsonString((*s)[:])
+}
+
+func (s *StatsArray) GetRawValue() []uint64 {
+	return (*s)[:]
+}
+
+func StatsArrayAdd(dst StatsArray, src StatsArray) StatsArray {
+	dstLen := len(src)
+	if len(dst) < len(src) {
+		dstLen = len(dst)
+	}
+	for idx := 1; idx < dstLen; idx++ {
+		dst[idx] += src[idx]
+	}
+	return dst
 }
 
 // ArrayUint64ToJsonString return json arr format
@@ -88,6 +103,8 @@ func ArrayUint64ToJsonString(arr []uint64) []byte {
 	return buf
 }
 
-var DefaultStatsArrayJsonString = NewStatsArray().
-	WithVersion(StatsArrayVersion).
-	ToJsonString()
+var initStatsArray = StatsArray{}
+
+var DefaultStatsArray = *initStatsArray.Init()
+
+var DefaultStatsArrayJsonString = initStatsArray.Init().ToJsonString()
