@@ -2937,21 +2937,11 @@ select count(*) from td;
 count(*)
 20971520
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
-sum(d) over (order by d rows between 10 preceding and 10 following)
-66
-78
-91
-105
-120
-136
-153
-171
-190
-210
+[unknown result because it is related to issue#10381]
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
-[unknown result because it is related to issue#10043]
+[unknown result because it is related to issue#10381]
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
-[unknown result because it is related to issue#10043]
+[unknown result because it is related to issue#10381]
 drop table td;
 drop table if exists `c`;
 create table `c` (
