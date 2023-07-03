@@ -83,12 +83,8 @@ type ZonemapFileparam struct {
 }
 
 type FilterParam struct {
-	maxCol      int
 	exprMono    bool
-	columns     []uint16 // save real index in table to read column's data from files
-	defColumns  []uint16 // save col index in tableDef.Cols, cooperate with columnMap
 	columnMap   map[int]int
-	File2Size   map[string]int64
 	FilterExpr  *plan.Expr
 	blockReader *blockio.BlockReader
 }
@@ -97,28 +93,23 @@ type Argument struct {
 	Es *ExternalParam
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-}
+func (arg *Argument) Free(*process.Process, bool) {}
 
 type ParseLineHandler struct {
-	moCsvReader *moCSVReader
+	csvReader *csv.Reader
 	//batch
 	batchSize int
 	//mo csv
 	moCsvLineArray [][]string
 }
 
-type moCSVReader struct {
-	rCsv *csv.Reader
-}
-
 // NewReader returns a new Reader with options that reads from r.
-func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *moCSVReader {
+func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Reader {
 	rCsv := csv.NewReader(bufio.NewReader(r))
 	rCsv.Comma = cma
 	rCsv.Comment = cmnt
 	rCsv.LazyQuotes = lazyQt
 	rCsv.TrimLeadingSpace = tls
 	rCsv.FieldsPerRecord = -1
-	return &moCSVReader{rCsv: rCsv}
+	return rCsv
 }
