@@ -73,3 +73,59 @@ func TestNewStatsArray(t *testing.T) {
 		})
 	}
 }
+
+func TestStatsArray_Add(t *testing.T) {
+	type field struct {
+		version      uint64
+		timeConsumed uint64
+		memory       uint64
+		s3in         uint64
+		s3out        uint64
+	}
+	tests := []struct {
+		name       string
+		field      field
+		wantString []byte
+	}{
+		{
+			name: "normal",
+			field: field{
+				version:      1,
+				timeConsumed: 2,
+				memory:       3,
+				s3in:         4,
+				s3out:        5,
+			},
+			wantString: []byte(`[1,3,5,7,9]`),
+		},
+		{
+			name: "random",
+			field: field{
+				version:      123,
+				timeConsumed: 65,
+				memory:       6,
+				s3in:         78,
+				s3out:        3494,
+			},
+			wantString: []byte(`[1,66,8,81,3498]`),
+		},
+	}
+
+	getInitStatsArray := func() *StatsArray {
+		return NewStatsArray().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := getInitStatsArray()
+			s := NewStatsArray().
+				WithVersion(tt.field.version).
+				WithTimeConsumed(tt.field.timeConsumed).
+				WithMemorySize(tt.field.memory).
+				WithS3IOInputCount(tt.field.s3in).
+				WithS3IOOutputCount(tt.field.s3out)
+			got := dst.Add(s).ToJsonString()
+			require.Equal(t, tt.wantString, got)
+		})
+	}
+}

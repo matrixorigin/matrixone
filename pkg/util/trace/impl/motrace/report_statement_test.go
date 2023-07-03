@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"testing"
 	"time"
 
@@ -183,27 +184,29 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
-var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
+var dummyStatsArray = *statistic.NewStatsArray().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4)
+
+var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult), []byte("[]"), Statistic{}
+		return []byte(dummyNoExecPlanJsonResult), statistic.DefaultStatsArray, Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), []byte("[]"), Statistic{}
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), dummyStatsArray, Statistic{}
 	}
-	return json, []byte("[]"), Statistic{RowsRead: 1, BytesScan: 1}
+	return json, statistic.DefaultStatsArray, Statistic{RowsRead: 1, BytesScan: 1}
 }
 
-var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
+var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult2), []byte("[]"), Statistic{}
+		return []byte(dummyNoExecPlanJsonResult2), statistic.DefaultStatsArray, Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), []byte("[]"), Statistic{}
+		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), dummyStatsArray, Statistic{}
 	}
 	val := fmt.Sprintf(`{"func":"dummy2","result":%s}`, json)
-	return []byte(val), []byte("[]"), Statistic{}
+	return []byte(val), statistic.DefaultStatsArray, Statistic{}
 }
 
 func TestStatementInfo_ExecPlan2Json(t *testing.T) {
@@ -294,39 +297,35 @@ func (p *dummySerializableExecPlan) Marshal(ctx context.Context) []byte {
 }
 func (p *dummySerializableExecPlan) Free() {}
 
-func (p *dummySerializableExecPlan) Stats(ctx context.Context) ([]uint64, Statistic) {
+func (p *dummySerializableExecPlan) Stats(ctx context.Context) (statistic.StatsArray, Statistic) {
 	_, statByte, stats := p.f(ctx, p.plan, p.uuid)
 	return statByte, stats
 }
 
 func TestMergeStats(t *testing.T) {
-	e := &StatementInfo{
-		statsJsonByte: []byte("[1, 80335, 1800, 1, 0]"),
-	}
+	e := &StatementInfo{}
+	e.statsJsonByte.Init().WithTimeConsumed(80335).WithMemorySize(1800).WithS3IOInputCount(1).WithS3IOOutputCount(0)
 
-	n := &StatementInfo{
-		statsJsonByte: []byte("[1, 147960, 1800, 0, 0]"),
-	}
+	n := &StatementInfo{}
+	n.statsJsonByte.Init().WithTimeConsumed(147960).WithMemorySize(1800).WithS3IOInputCount(0).WithS3IOOutputCount(0)
 
 	err := mergeStats(e, n)
 	if err != nil {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	if string(e.statsJsonByte) != "[1, 228295, 3600, 1, 0]" {
-		t.Errorf("Expected '[1, 228295, 3600, 0, 0]', got '%s'", string(e.statsJsonByte))
-	}
+	wantBytes := []byte("[1,228295,3600,1,0]")
+	require.Equal(t, wantBytes, e.statsJsonByte.ToJsonString())
 
-	n = &StatementInfo{
-		statsJsonByte: []byte("[1, 1, 1, 0, 0]"),
-	}
+	n = &StatementInfo{}
+	n.statsJsonByte.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0)
 
 	err = mergeStats(e, n)
 	if err != nil {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	if string(e.statsJsonByte) != "[1, 228296, 3601, 1, 0]" {
-		t.Errorf("Expected '[1, 228296, 3601, 0, 0]', got '%s'", string(e.statsJsonByte))
-	}
+	wantBytes = []byte("[1,228296,3601,1,0]")
+	require.Equal(t, wantBytes, e.statsJsonByte.ToJsonString())
+
 }

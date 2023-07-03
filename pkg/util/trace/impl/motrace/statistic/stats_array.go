@@ -37,6 +37,11 @@ const (
 	StatsArrayLength
 )
 
+func NewStatsArray() *StatsArray {
+	var s StatsArray
+	return s.Init()
+}
+
 func (s *StatsArray) Init() *StatsArray {
 	return s.WithVersion(StatsArrayVersion)
 }
@@ -73,19 +78,15 @@ func (s *StatsArray) ToJsonString() []byte {
 	return ArrayUint64ToJsonString((*s)[:])
 }
 
-func (s *StatsArray) GetRawValue() []uint64 {
-	return (*s)[:]
-}
-
-func StatsArrayAdd(dst StatsArray, src StatsArray) StatsArray {
-	dstLen := len(src)
-	if len(dst) < len(src) {
-		dstLen = len(dst)
+func (s *StatsArray) Add(src *StatsArray) *StatsArray {
+	dstLen := len(*src)
+	if len(*s) < len(*src) {
+		dstLen = len(*s)
 	}
 	for idx := 1; idx < dstLen; idx++ {
-		dst[idx] += src[idx]
+		(*s)[idx] += (*src)[idx]
 	}
-	return dst
+	return s
 }
 
 // ArrayUint64ToJsonString return json arr format

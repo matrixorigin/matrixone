@@ -308,7 +308,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 }
 
 func mergeStats(e, n *StatementInfo) error {
-	e.statsJsonByte = statistic.StatsArrayAdd(e.statsJsonByte, n.statsJsonByte)
+	e.statsJsonByte.Add(&n.statsJsonByte)
 	return nil
 }
 
@@ -350,7 +350,7 @@ func GetLongQueryTime() time.Duration {
 	return time.Duration(GetTracerProvider().longQueryTime)
 }
 
-type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
+type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson statistic.StatsArray, stats Statistic)
 
 type SerializableExecPlan interface {
 	Marshal(context.Context) []byte
