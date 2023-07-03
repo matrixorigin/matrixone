@@ -487,7 +487,7 @@ func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
 					<-c
 					require.True(t, time.Since(st) > time.Second)
 				},
-				newTestTimestamp(0),
+				newTestTimestamp(0).Next(),
 				[]TxnOption{WithTxnMode(txn.TxnMode_Pessimistic), WithTxnIsolation(txn.TxnIsolation_RC)},
 				WithTimestampWaiter(tw),
 				WithEnableSacrificingFreshness(),
