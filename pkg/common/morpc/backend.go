@@ -581,12 +581,20 @@ func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
 }
 
 func (rb *remoteBackend) makeAllWaitingFutureFailed() {
+	ids := make([]uint64, 0, len(rb.mu.futures))
+	waitings := make([]*Future, 0, len(rb.mu.futures))
+
 	rb.mu.Lock()
-	defer rb.mu.Unlock()
 	for id, f := range rb.mu.futures {
 		if f.waiting.Load() {
-			f.error(id, backendClosed, nil)
+			waitings = append(waitings, f)
+			ids = append(ids, id)
 		}
+	}
+	rb.mu.Unlock()
+
+	for i, f := range waitings {
+		f.error(ids[i], backendClosed, nil)
 	}
 }
 
