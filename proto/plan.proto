@@ -765,6 +765,7 @@ message DeleteCtx {
 	repeated uint64 partition_table_ids = 6;
 	repeated string partition_table_names = 7;
 	int32 partition_idx = 8;
+	int32 primary_key_idx = 9;
 }
 
 message Query {

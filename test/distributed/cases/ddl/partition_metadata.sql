@@ -30,6 +30,7 @@ select
     partition_comment
 from information_schema.partitions
 where table_name = 'lc' and table_schema = 'db1';
+drop table lc;
 
 drop table if exists client_firms;
 CREATE TABLE client_firms (
@@ -59,6 +60,7 @@ select
     partition_comment
 from information_schema.partitions
 where table_name = 'client_firms' and table_schema = 'db1';
+drop table client_firms;
 
 drop table if exists tk;
 CREATE TABLE tk (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col1, col2) PARTITIONS 4;
@@ -78,6 +80,7 @@ select
     partition_comment
 from information_schema.partitions
 where table_name = 'tk' and table_schema = 'db1';
+drop table tk;
 
 drop table if exists t1;
 CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;
@@ -97,6 +100,7 @@ select
     partition_comment
 from information_schema.partitions
 where table_name = 't1' and table_schema = 'db1';
+drop table t1;
 
 drop table if exists employees;
 CREATE TABLE employees (
@@ -134,6 +138,7 @@ select
     partition_comment
 from information_schema.partitions
 where table_name = 'employees' and table_schema = 'db1';
+drop table employees;
 
 drop table if exists trp;
 CREATE TABLE trp (
@@ -168,3 +173,4 @@ select
     partition_comment
 from information_schema.partitions
 where table_name = 'trp' and table_schema = 'db1';
+drop table trp;

@@ -110,6 +110,7 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		PartitionTableIds:   make([]uint64, len(ctx.PartitionTableIds)),
 		PartitionTableNames: make([]string, len(ctx.PartitionTableNames)),
 		PartitionIdx:        ctx.PartitionIdx,
+		PrimaryKeyIdx:       ctx.PrimaryKeyIdx,
 	}
 	copy(newCtx.PartitionTableIds, ctx.PartitionTableIds)
 	copy(newCtx.PartitionTableNames, ctx.PartitionTableNames)
