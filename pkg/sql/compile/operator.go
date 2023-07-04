@@ -452,6 +452,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		PartitionTableIDs:     oldCtx.PartitionTableIds,
 		PartitionTableNames:   oldCtx.PartitionTableNames,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
+		PrimaryKeyIdx:         int(oldCtx.PrimaryKeyIdx),
 	}
 	// get the relation instance of the original table
 	rel, _, err := getRel(proc.Ctx, proc, eg, oldCtx.Ref, nil)
