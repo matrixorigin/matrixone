@@ -388,13 +388,23 @@ func (l *localLockTable) addRangeLockLocked(
 		start,
 		nil,
 		func(key []byte, keyLock Lock) bool {
-			if bytes.Compare(key, end) > 0 {
-				return false
-			}
-
 			if !bytes.Equal(keyLock.txnID, txn.txnID) {
-				conflictWith = keyLock
-				conflictKey = key
+				hasConflict := false
+				if keyLock.isLockRow() {
+					// row lock,  start <= key <= end
+					hasConflict = bytes.Compare(key, end) <= 0
+				} else if keyLock.isLockRangeStart() {
+					// range start lock,  [1, 4] + [2, any]
+					hasConflict = bytes.Compare(key, end) <= 0
+				} else {
+					// range end lock,  always conflict
+					hasConflict = true
+				}
+
+				if hasConflict {
+					conflictWith = keyLock
+					conflictKey = key
+				}
 				return false
 			}
 
@@ -460,7 +470,7 @@ func (l *localLockTable) mergeRangeLocked(
 	seekLock Lock,
 	mc *mergeContext,
 	txn *activeTxn) (*waiter, []byte, []byte) {
-	// range lock encounted a row lock
+	// range lock encountered a row lock
 	if seekLock.isLockRow() {
 		// 5 + [1, 4] => [1, 4] + [5]
 		if bytes.Compare(seekKey, end) > 0 {
