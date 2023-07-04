@@ -15,19 +15,17 @@
 package shuffle
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
-	ctr   *container
-	IsEnd bool
+	ctr *container
 }
 
 type container struct {
-	sels         [][]int32
-	shuffledBats []*batch.Batch
-	batsCount    int
+	//sels         [][]int32
+	//shuffledBats []*batch.Batch
+	//batsCount    int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
