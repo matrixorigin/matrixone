@@ -67,7 +67,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 					nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 				} else {
 					r, _ := fValueValue(v1, v2)
-					for i := uint64(0); i < uint64(length); i++ {
+					rowCount := uint64(length)
+					for i := uint64(0); i < rowCount; i++ {
 						rss[i] = r
 					}
 				}
@@ -81,7 +82,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 				} else {
 					if p2.WithAnyNullValue() {
 						nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v2, null2 := p2.GetValue(i)
 							if null2 {
 								continue
@@ -90,7 +92,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 							rss[i] = r
 						}
 					} else {
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v2, _ := p2.GetValue(i)
 							rss[i], _ = fValueValue(v1, v2)
 						}
@@ -106,7 +109,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 				} else {
 					if p1.WithAnyNullValue() {
 						nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v1, null1 := p1.GetValue(i)
 							if null1 {
 								continue
@@ -115,7 +119,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 							rss[i] = r
 						}
 					} else {
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v1, _ := p1.GetValue(i)
 							rss[i], _ = fValueValue(v1, v2)
 						}
@@ -129,7 +134,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 				nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 			}
 
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				v1, _ := p1.GetValue(i)
 				v2, _ := p2.GetValue(i)
 				rss[i], _ = fValueValue(v1, v2)
@@ -160,7 +166,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 					if rnull {
 						nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 					} else {
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							rss[i] = v
 						}
 					}
@@ -169,13 +176,15 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 					if rnull {
 						nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 					} else {
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							rss[i] = v
 						}
 					}
 				} else {
 					v, _ := fValueValue(v1, v2)
-					for i := uint64(0); i < uint64(length); i++ {
+					rowCount := uint64(length)
+					for i := uint64(0); i < rowCount; i++ {
 						rss[i] = v
 					}
 				}
@@ -188,7 +197,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 				if !null1 {
 					if p2.WithAnyNullValue() {
 						nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v2, null2 := p2.GetValue(i)
 							if null2 {
 								r, ifnull := fValueNull(v1)
@@ -201,7 +211,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 							}
 						}
 					} else {
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v2, _ := p2.GetValue(i)
 							rss[i], _ = fValueValue(v1, v2)
 						}
@@ -209,7 +220,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 				} else {
 					if p2.WithAnyNullValue() {
 						nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v2, null2 := p2.GetValue(i)
 							if null2 {
 								continue
@@ -226,7 +238,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 						if rsVec.GetNulls() == nil {
 							rsVec.SetNulls(nulls.NewWithSize(0))
 						}
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v2, _ := p2.GetValue(i)
 							r, ifnull := fNullValue(v2)
 							if ifnull {
@@ -245,7 +258,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 				if !null2 {
 					if p1.WithAnyNullValue() {
 						nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v1, null1 := p1.GetValue(i)
 							if null1 {
 								r, ifnull := fNullValue(v2)
@@ -258,7 +272,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 							}
 						}
 					} else {
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v1, _ := p1.GetValue(i)
 							rss[i], _ = fValueValue(v1, v2)
 						}
@@ -268,7 +283,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 				} else {
 					if p1.WithAnyNullValue() {
 						nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v1, null1 := p1.GetValue(i)
 							if null1 {
 								continue
@@ -285,7 +301,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 						if rsVec.GetNulls() == nil {
 							rsVec.SetNulls(nulls.NewWithSize(0))
 						}
-						for i := uint64(0); i < uint64(length); i++ {
+						rowCount := uint64(length)
+						for i := uint64(0); i < rowCount; i++ {
 							v1, _ := p1.GetValue(i)
 							r, ifnull := fValueNull(v1)
 							if ifnull {
@@ -303,7 +320,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 			if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 				nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetValue(i)
 					v2, null2 := p2.GetValue(i)
 					if null1 && !null2 {
@@ -325,7 +343,8 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 				return nil
 			}
 
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				v1, _ := p1.GetValue(i)
 				v2, _ := p2.GetValue(i)
 				rss[i], _ = fValueValue(v1, v2)
@@ -363,7 +382,8 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -377,7 +397,8 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
 						continue
@@ -389,7 +410,8 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 					rss[i] = r
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					r, err := arithFn(v1, v2, scale1, scale2)
 					if err != nil {
@@ -409,7 +431,8 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
@@ -421,7 +444,8 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 					rss[i] = r
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
 					r, err := arithFn(v1, v2, scale1, scale2)
 					if err != nil {
@@ -438,7 +462,8 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 {
@@ -453,7 +478,8 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		r, err := arithFn(v1, v2, scale1, scale2)
@@ -488,7 +514,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -504,7 +531,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 
 				x := functionUtil.ConvertD64ToD128(v1)
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
 						continue
@@ -518,7 +546,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 				}
 			} else {
 				x := functionUtil.ConvertD64ToD128(v1)
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					y := functionUtil.ConvertD64ToD128(v2)
 					r, err := arithFn(x, y, scale1, scale2)
@@ -541,7 +570,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 
 				y := functionUtil.ConvertD64ToD128(v2)
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
@@ -555,7 +585,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 				}
 			} else {
 				y := functionUtil.ConvertD64ToD128(v2)
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
 					x := functionUtil.ConvertD64ToD128(v1)
 					r, err := arithFn(x, y, scale1, scale2)
@@ -573,7 +604,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 {
@@ -589,7 +621,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
@@ -625,7 +658,8 @@ func opBinaryFixedFixedToFixed[
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			r := resultFn(v1, v2)
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -639,7 +673,8 @@ func opBinaryFixedFixedToFixed[
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
 						continue
@@ -647,7 +682,8 @@ func opBinaryFixedFixedToFixed[
 					rss[i] = resultFn(v1, v2)
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					rss[i] = resultFn(v1, v2)
 				}
@@ -663,7 +699,8 @@ func opBinaryFixedFixedToFixed[
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
@@ -671,7 +708,8 @@ func opBinaryFixedFixedToFixed[
 					rss[i] = resultFn(v1, v2)
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
 					rss[i] = resultFn(v1, v2)
 				}
@@ -683,7 +721,8 @@ func opBinaryFixedFixedToFixed[
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 {
@@ -694,7 +733,8 @@ func opBinaryFixedFixedToFixed[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		rss[i] = resultFn(v1, v2)
@@ -725,7 +765,8 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -739,7 +780,8 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
 						continue
@@ -751,7 +793,8 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 					rss[i] = r
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					r, err := resultFn(v1, v2)
 					if err != nil {
@@ -771,7 +814,8 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
@@ -783,7 +827,8 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 					rss[i] = r
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
 					r, err := resultFn(v1, v2)
 					if err != nil {
@@ -799,7 +844,8 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 {
@@ -814,7 +860,8 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		r, err := resultFn(v1, v2)
@@ -848,7 +895,8 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -862,7 +910,8 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
 						continue
@@ -875,7 +924,8 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 				}
 			} else {
 				rv1 := functionUtil.QuickBytesToStr(v1)
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					r, err := resultFn(rv1, v2)
 					if err != nil {
@@ -895,7 +945,8 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if null1 {
 						continue
@@ -907,7 +958,8 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 					rss[i] = r
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetStrValue(i)
 					r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
 					if err != nil {
@@ -923,7 +975,8 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 {
@@ -938,7 +991,8 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		v2, _ := p2.GetValue(i)
 		r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
@@ -972,7 +1026,8 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -986,7 +1041,8 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetStrValue(i)
 					if null2 {
 						continue
@@ -998,7 +1054,8 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 					rss[i] = r
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetStrValue(i)
 					r, err := resultFn(v1, functionUtil.QuickBytesToStr(v2))
 					if err != nil {
@@ -1019,7 +1076,8 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 			rv2 := functionUtil.QuickBytesToStr(v2)
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
@@ -1031,7 +1089,8 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 					rss[i] = r
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
 					r, err := resultFn(v1, rv2)
 					if err != nil {
@@ -1047,7 +1106,8 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 {
@@ -1062,7 +1122,8 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetStrValue(i)
 		r, err := resultFn(v1, functionUtil.QuickBytesToStr(v2))
@@ -1092,7 +1153,8 @@ func specialTemplateForModFunction[
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			r := modFn(v1, v2)
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -1106,7 +1168,8 @@ func specialTemplateForModFunction[
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
 						continue
@@ -1121,7 +1184,8 @@ func specialTemplateForModFunction[
 				if rsVec.GetNulls() == nil {
 					rsVec.SetNulls(nulls.NewWithSize(0))
 				}
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
 						rsVec.GetNulls().Add(i)
@@ -1141,7 +1205,8 @@ func specialTemplateForModFunction[
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
@@ -1149,7 +1214,8 @@ func specialTemplateForModFunction[
 					rss[i] = modFn(v1, v2)
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
 					rss[i] = modFn(v1, v2)
 				}
@@ -1161,7 +1227,8 @@ func specialTemplateForModFunction[
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 {
@@ -1179,7 +1246,8 @@ func specialTemplateForModFunction[
 	if rsVec.GetNulls() == nil {
 		rsVec.SetNulls(nulls.NewWithSize(0))
 	}
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		if v2 == 0 {
@@ -1212,7 +1280,8 @@ func specialTemplateForDivFunction[
 				return moerr.NewDivByZeroNoCtx()
 			}
 			r := divFn(v1, v2)
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -1226,7 +1295,8 @@ func specialTemplateForDivFunction[
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
 						continue
@@ -1238,7 +1308,8 @@ func specialTemplateForDivFunction[
 					}
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
 						return moerr.NewDivByZeroNoCtx()
@@ -1261,7 +1332,8 @@ func specialTemplateForDivFunction[
 			}
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
@@ -1269,7 +1341,8 @@ func specialTemplateForDivFunction[
 					rss[i] = divFn(v1, v2)
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
 					rss[i] = divFn(v1, v2)
 				}
@@ -1281,7 +1354,8 @@ func specialTemplateForDivFunction[
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 {
@@ -1296,7 +1370,8 @@ func specialTemplateForDivFunction[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		if v2 == 0 {
@@ -1326,7 +1401,8 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			r := arithFn(v1, v2)
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -1340,7 +1416,8 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetStrValue(i)
 					if null2 {
 						continue
@@ -1348,7 +1425,8 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 					rss[i] = arithFn(v1, v2)
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetStrValue(i)
 					rss[i] = arithFn(v1, v2)
 				}
@@ -1364,7 +1442,8 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if null1 {
 						continue
@@ -1372,7 +1451,8 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 					rss[i] = arithFn(v1, v2)
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetStrValue(i)
 					rss[i] = arithFn(v1, v2)
 				}
@@ -1384,7 +1464,8 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 {
@@ -1395,7 +1476,8 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		v2, _ := p2.GetStrValue(i)
 		rss[i] = arithFn(v1, v2)
@@ -1424,7 +1506,8 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -1439,7 +1522,8 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetStrValue(i)
 					if null2 {
 						continue
@@ -1450,7 +1534,8 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 					}
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetStrValue(i)
 					rss[i], err = fn(v1, v2)
 					if err != nil {
@@ -1469,7 +1554,8 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if null1 {
 						continue
@@ -1480,7 +1566,8 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 					}
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetStrValue(i)
 					rss[i], err = fn(v1, v2)
 					if err != nil {
@@ -1495,7 +1582,8 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 {
@@ -1509,13 +1597,54 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		v2, _ := p2.GetStrValue(i)
 		rss[i], err = fn(v1, v2)
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func compareVarlenaEqual(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[bool](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[bool](rsVec)
+
+	v1, v2 := parameters[0], parameters[1]
+	if v1.IsConstNull() || v2.IsConstNull() {
+		nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		return nil
+	}
+	col1 := vector.MustVarlenaToInt64Slice(v1)
+	col2 := vector.MustVarlenaToInt64Slice(v2)
+
+	if v1.IsConst() && v2.IsConst() {
+		ret := col1[0] == col2[0]
+		for i := uint64(0); i < uint64(length); i++ {
+			rss[i] = ret
+		}
+		return nil
+	}
+
+	if !v1.IsConst() && !v2.IsConst() {
+		for i := 0; i < length; i++ {
+			rss[i] = col1[i] == col2[i]
+		}
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+	} else if v1.IsConst() {
+		for i := 0; i < length; i++ {
+			rss[i] = col1[0] == col2[i]
+		}
+		nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+	} else {
+		for i := 0; i < length; i++ {
+			rss[i] = col1[i] == col2[0]
+		}
+		nulls.Or(parameters[0].GetNulls(), rsVec.GetNulls(), rsVec.GetNulls())
 	}
 	return nil
 }
@@ -1538,7 +1667,8 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			r := arithFn(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -1553,7 +1683,8 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 			x := functionUtil.QuickBytesToStr(v1)
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetStrValue(i)
 					if null2 {
 						continue
@@ -1561,7 +1692,8 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 					rss[i] = arithFn(x, functionUtil.QuickBytesToStr(v2))
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetStrValue(i)
 					rss[i] = arithFn(x, functionUtil.QuickBytesToStr(v2))
 				}
@@ -1578,7 +1710,8 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 			y := functionUtil.QuickBytesToStr(v2)
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if null1 {
 						continue
@@ -1586,7 +1719,8 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 					rss[i] = arithFn(functionUtil.QuickBytesToStr(v1), y)
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetStrValue(i)
 					rss[i] = arithFn(functionUtil.QuickBytesToStr(v1), y)
 				}
@@ -1598,7 +1732,8 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 {
@@ -1609,7 +1744,8 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		v2, _ := p2.GetStrValue(i)
 		rss[i] = arithFn(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
@@ -1638,7 +1774,8 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -1654,7 +1791,8 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 			x := functionUtil.QuickBytesToStr(v1)
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetStrValue(i)
 					if null2 {
 						continue
@@ -1665,7 +1803,8 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 					}
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetStrValue(i)
 					rss[i], err = fn(x, functionUtil.QuickBytesToStr(v2))
 					if err != nil {
@@ -1685,7 +1824,8 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 			y := functionUtil.QuickBytesToStr(v2)
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if null1 {
 						continue
@@ -1696,7 +1836,8 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 					}
 				}
 			} else {
-				for i := uint64(0); i < uint64(length); i++ {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetStrValue(i)
 					rss[i], err = fn(functionUtil.QuickBytesToStr(v1), y)
 					if err != nil {
@@ -1711,7 +1852,8 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 {
@@ -1725,7 +1867,8 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		v2, _ := p2.GetStrValue(i)
 		rss[i], err = fn(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
@@ -1754,7 +1897,8 @@ func opUnaryFixedToFixed[
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			r := resultFn(v1)
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -1764,7 +1908,8 @@ func opUnaryFixedToFixed[
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			if null1 {
 				continue
@@ -1774,7 +1919,8 @@ func opUnaryFixedToFixed[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		rss[i] = resultFn(v1)
 	}
@@ -1796,7 +1942,8 @@ func opUnaryBytesToFixed[
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			r := resultFn(v1)
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -1806,7 +1953,8 @@ func opUnaryBytesToFixed[
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
 				continue
@@ -1816,7 +1964,8 @@ func opUnaryBytesToFixed[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		rss[i] = resultFn(v1)
 	}
@@ -1838,7 +1987,8 @@ func opUnaryStrToFixed[
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			r := resultFn(functionUtil.QuickBytesToStr(v1))
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -1848,7 +1998,8 @@ func opUnaryStrToFixed[
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
 				continue
@@ -1858,7 +2009,8 @@ func opUnaryStrToFixed[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		rss[i] = resultFn(functionUtil.QuickBytesToStr(v1))
 	}
@@ -1880,7 +2032,8 @@ func opUnaryBytesToBytes(
 		} else {
 			r := resultFn(v1)
 
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				if err := rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
@@ -1892,7 +2045,8 @@ func opUnaryBytesToBytes(
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -1908,7 +2062,8 @@ func opUnaryBytesToBytes(
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		r := resultFn(v1)
 		if err := rs.AppendMustBytesValue(r); err != nil {
@@ -1933,7 +2088,8 @@ func opUnaryBytesToStr(
 		} else {
 			r := resultFn(v1)
 
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
 					return err
 				}
@@ -1945,7 +2101,8 @@ func opUnaryBytesToStr(
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -1961,7 +2118,8 @@ func opUnaryBytesToStr(
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		r := resultFn(v1)
 		if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
@@ -1986,7 +2144,8 @@ func opUnaryStrToStr(
 		} else {
 			r := resultFn(functionUtil.QuickBytesToStr(v1))
 
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
 					return err
 				}
@@ -1998,7 +2157,8 @@ func opUnaryStrToStr(
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -2014,7 +2174,8 @@ func opUnaryStrToStr(
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		r := resultFn(functionUtil.QuickBytesToStr(v1))
 		if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
@@ -2040,7 +2201,8 @@ func opUnaryFixedToStr[
 			rb := resultFn(v1)
 			r := functionUtil.QuickStrToBytes(rb)
 
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				if err := rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
@@ -2052,7 +2214,8 @@ func opUnaryFixedToStr[
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			if null1 {
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -2069,7 +2232,8 @@ func opUnaryFixedToStr[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		rb := resultFn(v1)
 		r := functionUtil.QuickStrToBytes(rb)
@@ -2099,7 +2263,8 @@ func opUnaryFixedToStrWithErrorCheck[
 			}
 			r := functionUtil.QuickStrToBytes(rb)
 
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				if err = rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
@@ -2111,7 +2276,8 @@ func opUnaryFixedToStrWithErrorCheck[
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			if null1 {
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -2131,7 +2297,8 @@ func opUnaryFixedToStrWithErrorCheck[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		rb, err := resultFn(v1)
 		if err != nil {
@@ -2163,7 +2330,8 @@ func opUnaryStrToBytesWithErrorCheck(
 				return err
 			}
 
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				if err = rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
@@ -2175,7 +2343,8 @@ func opUnaryStrToBytesWithErrorCheck(
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -2194,7 +2363,8 @@ func opUnaryStrToBytesWithErrorCheck(
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		r, err := resultFn(functionUtil.QuickBytesToStr(v1))
 		if err != nil {
@@ -2225,7 +2395,8 @@ func opUnaryBytesToStrWithErrorCheck(
 				return err
 			}
 			r := functionUtil.QuickStrToBytes(rb)
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				if err = rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
@@ -2237,7 +2408,8 @@ func opUnaryBytesToStrWithErrorCheck(
 	// basic case.
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -2257,7 +2429,8 @@ func opUnaryBytesToStrWithErrorCheck(
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		rb, err := resultFn(v1)
 		if err != nil {
@@ -2290,7 +2463,8 @@ func opUnaryFixedToFixedWithErrorCheck[
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -2301,7 +2475,8 @@ func opUnaryFixedToFixedWithErrorCheck[
 	var err error
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetValue(i)
 			if null1 {
 				continue
@@ -2314,7 +2489,8 @@ func opUnaryFixedToFixedWithErrorCheck[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		rss[i], err = resultFn(v1)
 		if err != nil {
@@ -2342,7 +2518,8 @@ func opUnaryBytesToFixedWithErrorCheck[
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -2353,7 +2530,8 @@ func opUnaryBytesToFixedWithErrorCheck[
 	var err error
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
 				continue
@@ -2366,7 +2544,8 @@ func opUnaryBytesToFixedWithErrorCheck[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		rss[i], err = resultFn(v1)
 		if err != nil {
@@ -2394,7 +2573,8 @@ func opUnaryStrToFixedWithErrorCheck[
 			if err != nil {
 				return err
 			}
-			for i := uint64(0); i < uint64(length); i++ {
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
 			}
 		}
@@ -2405,7 +2585,8 @@ func opUnaryStrToFixedWithErrorCheck[
 	var err error
 	if p1.WithAnyNullValue() {
 		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
-		for i := uint64(0); i < uint64(length); i++ {
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
 				continue
@@ -2418,7 +2599,8 @@ func opUnaryStrToFixedWithErrorCheck[
 		return nil
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		rss[i], err = resultFn(functionUtil.QuickBytesToStr(v1))
 		if err != nil {

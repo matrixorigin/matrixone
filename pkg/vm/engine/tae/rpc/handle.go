@@ -17,6 +17,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"os"
 	"sync"
 	"syscall"
@@ -50,7 +51,7 @@ import (
 )
 
 const (
-	MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 100
+	MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 300
 	MAX_TXN_COMMIT_LATENCY  = time.Minute * 2
 )
 
@@ -708,8 +709,8 @@ func (h *Handle) HandleCreateDatabase(
 		return err
 	}
 
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] create database: %+v txn: %s", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] create database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
@@ -745,8 +746,8 @@ func (h *Handle) HandleDropDatabase(
 		return err
 	}
 
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] drop database: %+v txn: %s", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] drop database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
@@ -773,8 +774,8 @@ func (h *Handle) HandleCreateRelation(
 		return
 	}
 
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] create relation: %+v txn: %s", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] create relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		// do not turn it on in prod. This print outputs multiple duplicate lines
@@ -811,8 +812,8 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] drop/truncate relation: %+v txn: %s", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] drop/truncate relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
@@ -874,6 +875,14 @@ func (h *Handle) HandleWrite(
 		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
+		// TODO: delete this debug log after issue 10227
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %s txn: %s",
+				req.Type, req.TableID,
+				req.TableName, common.PrintMoBatch(req.Batch, 3),
+				txn.String(),
+			)
+		}
 	}()
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
@@ -897,7 +906,12 @@ func (h *Handle) HandleWrite(
 				}
 				locations = append(locations, location)
 			}
-
+			// TODO: delete this debug log after issue 10227
+			n := len(req.MetaLocs)
+			if n > 2 {
+				n = 2
+			}
+			logutil.Infof("[precommit](%s) metalocs: %v", hex.EncodeToString(meta.GetID()), req.MetaLocs[:n])
 			err = tb.AddBlksWithMetaLoc(ctx, locations)
 			return
 		}

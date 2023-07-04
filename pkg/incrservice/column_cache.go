@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -381,12 +382,15 @@ func (col *columnCache) allocateLocked(
 	}
 }
 
-func (col *columnCache) maybeAllocate(tableID uint64) {
+func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64) {
 	col.Lock()
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
 	if low {
-		col.preAllocate(context.Background(), tableID, col.cfg.CountPerAllocate, nil)
+		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
+			tableID,
+			col.cfg.CountPerAllocate,
+			nil)
 	}
 }
 
@@ -453,7 +457,7 @@ func insertAutoValues[T constraints.Integer](
 	// all values are filled after insert
 	defer func() {
 		vec.SetNulls(nil)
-		col.maybeAllocate(tableID)
+		col.maybeAllocate(ctx, tableID)
 	}()
 
 	vs := vector.MustFixedCol[T](vec)
@@ -467,9 +471,9 @@ func insertAutoValues[T constraints.Integer](
 		manuals := roaring64.NewBitmap()
 		maxValue := uint64(0)
 		col.lockDo(func() {
-			for idx, v := range vs {
+			for i, v := range vs {
 				// vector maybe has some invalid value, must use null bitmap to check the manual value
-				if !nulls.Contains(vec.GetNulls(), uint64(idx)) && v > 0 {
+				if !nulls.Contains(vec.GetNulls(), uint64(i)) && v > 0 {
 					manuals.Add(uint64(v))
 				}
 			}

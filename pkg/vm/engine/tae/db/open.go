@@ -94,7 +94,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		dbutils.WithRuntimeTransferTable(transferTable),
 		dbutils.WithRuntimeFilterIndexCache(indexCache),
 		dbutils.WithRuntimeObjectFS(fs),
-		dbutils.WithRuntimeMemtablePool(dbutils.MakeDefaultMemtablePool("memtable-vector-pool")),
+		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),
 		dbutils.WithRuntimeOptions(db.Opts),
@@ -184,8 +184,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			"clean-transfer-table",
 			opts.CheckpointCfg.FlushInterval,
 			func(_ context.Context) (err error) {
-				logutil.Info(db.Runtime.VectorPool.Transient.String())
-				logutil.Info(db.Runtime.VectorPool.Memtable.String())
+				db.Runtime.PrintVectorPoolUsage()
 				transferTable.RunTTL(time.Now())
 				return
 			}),

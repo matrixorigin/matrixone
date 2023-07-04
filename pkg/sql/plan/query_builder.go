@@ -22,9 +22,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -33,7 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
+func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool) *QueryBuilder {
 	var mysqlCompatible bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
@@ -49,12 +52,13 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 		qry: &Query{
 			StmtType: queryType,
 		},
-		compCtx:         ctx,
-		ctxByNode:       []*BindContext{},
-		nameByColRef:    make(map[[2]int32]string),
-		nextTag:         0,
-		mysqlCompatible: mysqlCompatible,
-		tag2Table:       make(map[int32]*TableDef),
+		compCtx:            ctx,
+		ctxByNode:          []*BindContext{},
+		nameByColRef:       make(map[[2]int32]string),
+		nextTag:            0,
+		mysqlCompatible:    mysqlCompatible,
+		tag2Table:          make(map[int32]*TableDef),
+		isPrepareStatement: isPrepareStatement,
 	}
 }
 
@@ -129,7 +133,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	switch node.NodeType {
 	case plan.Node_FUNCTION_SCAN:
 		for _, expr := range node.FilterList {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
 		internalRemapping := &ColRefRemapping{
@@ -166,7 +170,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		node.TableDef = newTableDef
 
 		for _, expr := range node.FilterList {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -228,7 +232,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			break
 		}
 		for _, expr := range node.TblFuncExprList {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 		childMap, err := builder.remapAllColRefs(childId, colRefCnt)
 
@@ -237,7 +241,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for _, expr := range node.TblFuncExprList {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err = builder.remapColRefForExpr(expr, childMap.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -246,15 +250,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
 		for _, expr := range node.FilterList {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
 		for _, expr := range node.BlockFilterList {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
-			increaseRefCnt(rfSpec.Expr, colRefCnt)
+			increaseRefCnt(rfSpec.Expr, 1, colRefCnt)
 		}
 
 		internalRemapping := &ColRefRemapping{
@@ -295,7 +299,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		node.TableDef = newTableDef
 
 		for _, expr := range node.FilterList {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -303,7 +307,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for _, expr := range node.BlockFilterList {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -311,7 +315,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
-			decreaseRefCnt(rfSpec.Expr, colRefCnt)
+			increaseRefCnt(rfSpec.Expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -375,7 +379,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		leftID := node.Children[0]
 		rightID := node.Children[1]
 		for i, expr := range node.ProjectList {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 			globalRef := [2]int32{thisTag, int32(i)}
 			remapping.addColRef(globalRef)
 		}
@@ -390,7 +394,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 							RelPos: projectTag,
 							ColPos: int32(i),
 						},
-					}}, colRefCnt)
+					}}, 1, colRefCnt)
 			}
 		}
 
@@ -410,7 +414,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for _, expr := range node.ProjectList {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(expr, internalMap)
 			if err != nil {
 				return nil, err
@@ -419,7 +423,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_JOIN:
 		for _, expr := range node.OnList {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
 		internalMap := make(map[[2]int32][2]int32)
@@ -445,7 +449,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for _, expr := range node.OnList {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(expr, internalMap)
 			if err != nil {
 				return nil, err
@@ -529,11 +533,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_AGG:
 		for _, expr := range node.GroupBy {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
 		for _, expr := range node.AggList {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
@@ -550,7 +554,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for idx, expr := range node.GroupBy {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -576,7 +580,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for idx, expr := range node.AggList {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -635,7 +639,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_WINDOW:
 		for _, expr := range node.WinSpecList {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
@@ -664,9 +668,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		windowTag := node.BindingTags[0]
+		l := len(childProjList)
+
+		for _, expr := range node.FilterList {
+			builder.remapWindowClause(expr, windowTag, int32(l))
+		}
 
 		for idx, expr := range node.WinSpecList {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -679,7 +688,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			remapping.addColRef(globalRef)
 
-			l := len(childProjList)
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{
@@ -694,7 +702,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_SORT:
 		for _, orderBy := range node.OrderBy {
-			increaseRefCnt(orderBy.Expr, colRefCnt)
+			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
@@ -703,7 +711,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for _, orderBy := range node.OrderBy {
-			decreaseRefCnt(orderBy.Expr, colRefCnt)
+			increaseRefCnt(orderBy.Expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(orderBy.Expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -748,7 +756,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_FILTER:
 		for _, expr := range node.FilterList {
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
@@ -757,7 +765,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for _, expr := range node.FilterList {
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -812,11 +820,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 
 			neededProj = append(neededProj, int32(i))
-			increaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
 		if len(neededProj) == 0 {
-			increaseRefCnt(node.ProjectList[0], colRefCnt)
+			increaseRefCnt(node.ProjectList[0], 1, colRefCnt)
 			neededProj = append(neededProj, 0)
 		}
 
@@ -828,7 +836,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		var newProjList []*plan.Expr
 		for _, needed := range neededProj {
 			expr := node.ProjectList[needed]
-			decreaseRefCnt(expr, colRefCnt)
+			increaseRefCnt(expr, -1, colRefCnt)
 			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -879,6 +887,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		remapping = childRemapping
 
 	case plan.Node_VALUE_SCAN:
+		node.NotCacheable = true
 		// VALUE_SCAN always have one column now
 		if node.TableDef == nil { // like select 1,2
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
@@ -932,13 +941,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			},
 		}
 
-		increaseRefCnt(pkexpr, colRefCnt)
+		increaseRefCnt(pkexpr, 1, colRefCnt)
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
 		if err != nil {
 			return nil, err
 		}
 
-		decreaseRefCnt(pkexpr, colRefCnt)
+		increaseRefCnt(pkexpr, -1, colRefCnt)
 		err = builder.remapColRefForExpr(pkexpr, childRemapping.globalToLocal)
 		if err != nil {
 			return nil, err
@@ -996,6 +1005,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID, _ = builder.pushdownFilters(rootID, nil, false)
 		colRefCnt := make(map[[2]int32]int)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+
+		tagCnt := make(map[int32]int)
+		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
+
 		ReCalcNodeStats(rootID, builder, true, true)
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
@@ -1481,9 +1494,24 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var lockNode *plan.Node
 
 	if clause == nil {
+		proc := builder.compCtx.GetProcess()
 		rowCount := len(valuesClause.Rows)
 		if len(valuesClause.Rows) == 0 {
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
+		}
+		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
+		strTyp := &plan.Type{
+			Id:          int32(types.T_text),
+			NotNullable: false,
+		}
+		strColTyp := makeTypeByPlan2Type(strTyp)
+		strColTargetTyp := &plan.Expr{
+			Typ: strTyp,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{
+					Typ: strTyp,
+				},
+			},
 		}
 		colCount := len(valuesClause.Rows[0])
 		for j := 1; j < rowCount; j++ {
@@ -1503,40 +1531,27 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 		ctx.binder = NewWhereBinder(builder, ctx)
 		for i := 0; i < colCount; i++ {
-			rows := make([]*plan.Expr, rowCount)
-			var colTyp *plan.Type
-			var tmpArgsType []types.Type
+			vec := proc.GetVector(types.T_text.ToType())
+			bat.Vecs[i] = vec
+			rowSetData.Cols[i] = &plan.ColData{}
 			for j := 0; j < rowCount; j++ {
+				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
+					bat.Clean(proc.Mp())
+					return 0, err
+				}
 				planExpr, err := ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true)
 				if err != nil {
 					return 0, err
 				}
-				if planExpr.Typ.Id != int32(types.T_any) {
-					tmpArgsType = append(tmpArgsType, makeTypeByPlan2Expr(planExpr))
-				}
-				rows[j] = planExpr
-			}
-
-			if len(tmpArgsType) > 0 {
-				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
+				planExpr, err = forceCastExpr2(builder.GetContext(), planExpr, strColTyp, strColTargetTyp)
 				if err != nil {
 					return 0, err
 				}
-				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
-				if len(argsCastType) > 0 {
-					colTyp = makePlan2Type(&argsCastType[0])
-					for j := 0; j < rowCount; j++ {
-						if rows[j].Typ.Id != int32(types.T_any) && rows[j].Typ.Id != colTyp.Id {
-							rows[j], err = appendCastBeforeExpr(builder.GetContext(), rows[j], colTyp)
-							if err != nil {
-								return 0, err
-							}
-						}
-					}
-				}
-			}
-			if colTyp == nil {
-				colTyp = rows[0].Typ
+				rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
+					RowPos: int32(j),
+					Expr:   planExpr,
+					Pos:    -1,
+				})
 			}
 
 			colName := fmt.Sprintf("column_%d", i) // like MySQL
@@ -1553,18 +1568,24 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			tableDef.Cols[i] = &plan.ColDef{
 				ColId: 0,
 				Name:  colName,
-				Typ:   colTyp,
-			}
-			rowSetData.Cols[i] = &plan.ColData{
-				Data: rows,
+				Typ:   strTyp,
 			}
 		}
+		bat.SetZs(rowCount, proc.Mp())
+		nodeUUID, _ := uuid.NewUUID()
 		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_VALUE_SCAN,
-			RowsetData:  rowSetData,
-			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewTag()},
+			NodeType:     plan.Node_VALUE_SCAN,
+			RowsetData:   rowSetData,
+			TableDef:     tableDef,
+			BindingTags:  []int32{builder.genNewTag()},
+			Uuid:         nodeUUID[:],
+			NotCacheable: true,
 		}, ctx)
+		if builder.isPrepareStatement {
+			proc.SetPrepareBatch(bat)
+		} else {
+			proc.SetValueScanBatch(nodeUUID, bat)
+		}
 
 		err = builder.addBinding(nodeID, tree.AliasClause{
 			Alias: "_ValueScan",

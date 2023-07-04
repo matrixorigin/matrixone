@@ -35,7 +35,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	var tableDef plan.TableDef
 
 	// check view statement
-	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
 	if err != nil {
 		return nil, err
 	}
@@ -455,7 +455,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			}})
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	bindContext := NewBindContext(builder, nil)
 
 	// set partition(unsupport now)
@@ -842,21 +842,27 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			clusterByKeys = append(clusterByKeys, colName)
 		}
 
-		clusterByColName := clusterByKeys[0]
 		if lenClusterBy == 1 {
+			clusterByColName := clusterByKeys[0]
 			for _, col := range createTable.TableDef.Cols {
 				if col.Name == clusterByColName {
 					col.ClusterBy = true
 				}
 			}
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name: clusterByColName,
+			}
 		} else {
-			clusterByColName = util.BuildCompositeClusterByColumnName(clusterByKeys)
+			clusterByColName := util.BuildCompositeClusterByColumnName(clusterByKeys)
 			colDef := MakeHiddenColDefByName(clusterByColName)
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[clusterByColName] = colDef
-		}
-		createTable.TableDef.ClusterBy = &plan.ClusterByDef{
-			Name: clusterByColName,
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name:         clusterByColName,
+				CompCbkeyCol: colDef,
+			}
 		}
 	}
 

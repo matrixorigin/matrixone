@@ -32,7 +32,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/lni/goutils/leaktest"
-	"github.com/prashantv/gostub"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -85,11 +84,9 @@ func TestCalculateStorageUsage(t *testing.T) {
 	table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 	db := mock_frontend.NewMockDatabase(ctrl)
 	db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
-	db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), txnOperator).Return(db, nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
@@ -102,12 +99,6 @@ func TestCalculateStorageUsage(t *testing.T) {
 		return frontend.NewInternalExecutor(pu, aicm)
 	}
 
-	qStub := gostub.Stub(&metric.QuitableWait, func(ctx2 context.Context) (*time.Ticker, error) {
-		cancel()
-		return nil, ctx2.Err()
-	})
-	defer qStub.Reset()
-
 	err = metric.CalculateStorageUsage(ctx, ieFactory)
 	require.Nil(t, err)
 
@@ -116,7 +107,6 @@ func TestCalculateStorageUsage(t *testing.T) {
 	s.Write(dm)
 	logutil.Infof("size: %f", dm.GetGauge().GetValue())
 	t.Logf("size: %f", dm.GetGauge().GetValue())
-
 }
 
 func TestGetTenantInfo(t *testing.T) {

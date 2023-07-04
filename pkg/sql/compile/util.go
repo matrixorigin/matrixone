@@ -367,3 +367,17 @@ func partsToColsStr(parts []string) string {
 	}
 	return temp
 }
+
+func haveSinkScanInPlan(nodes []*plan.Node, curNodeIdx int32) bool {
+	node := nodes[curNodeIdx]
+	if node.NodeType == plan.Node_SINK_SCAN {
+		return true
+	}
+	for _, newIdx := range node.Children {
+		flag := haveSinkScanInPlan(nodes, newIdx)
+		if flag {
+			return flag
+		}
+	}
+	return false
+}

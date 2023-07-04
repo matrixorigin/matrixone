@@ -37,31 +37,32 @@ import (
 	"go.uber.org/zap"
 )
 
+// S3Writer is used to write table data to S3 and package a series of `BlockWriter` write operations
 type S3Writer struct {
-	sortIndex      int
+	sortIndex      int // When writing table data, if table has sort key, need to sort data and then write to S3
 	pk             int
 	partitionIndex int16 // This value is aligned with the partition number
 	isClusterBy    bool
 
 	schemaVersion uint32
 	seqnums       []uint16
+	tablename     string
+	attrs         []string
 
 	writer  *blockio.BlockWriter
 	lengths []uint64
 
 	metaLocBat *batch.Batch
 
-	// buffers[i] stands the i-th buffer batch used
-	// for merge sort (corresponding to table_i,table_i could be unique
-	// table or main table)
+	// An intermediate cache after the merge sort of all `Bats` data
 	buffer *batch.Batch
 
 	//for memory multiplexing.
 	tableBatchBuffers []*batch.Batch
 
-	// tableBatches[i] used to store the batches of table_i
-	// when the batches' size is over 64M, we will use merge
-	// sort, and then write a segment in s3
+	// Bats[i] used to store the batches of table
+	// Each batch in Bats will be sorted internally, and all batches correspond to only one table
+	// when the batches' size is over 64M, we will use merge sort, and then write a segment in s3
 	Bats []*batch.Batch
 
 	// tableBatchSizes are used to record the table_i's batches'
@@ -104,7 +105,26 @@ func (w *S3Writer) GetMetaLocBat() *batch.Batch {
 	return w.metaLocBat
 }
 
+func (w *S3Writer) tryExtractSeqnums(attrs []*engine.Attribute) {
+	if len(w.seqnums) > 0 {
+		return
+	}
+	w.seqnums = make([]uint16, 0, len(attrs))
+	for i, attr := range attrs {
+		if attr.Name == catalog.Row_ID {
+			// check rowid as the last column
+			if i != len(attrs)-1 {
+				logutil.Errorf("bad rowid position for %q, %+v", w.tablename, attrs)
+			}
+			break
+		}
+		w.seqnums = append(w.seqnums, attr.Seqnum)
+	}
+	logutil.Infof("s3 table set from attrs %q seqnums: %+v", w.tablename, w.seqnums)
+}
+
 func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
+	w.tryExtractSeqnums(attrs)
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].Primary {
 			if attrs[i].Name != catalog.FakePrimaryKeyColName {
@@ -125,6 +145,19 @@ func (w *S3Writer) SetSortIdx(sortIdx int) {
 	w.sortIndex = sortIdx
 }
 
+func (w *S3Writer) SetSchemaVer(ver uint32) {
+	w.schemaVersion = ver
+}
+
+func (w *S3Writer) SetTableName(name string) {
+	w.tablename = name
+}
+
+func (w *S3Writer) SetSeqnums(seqnums []uint16) {
+	w.seqnums = seqnums
+	logutil.Infof("s3 table set directly %q seqnums: %+v", w.tablename, w.seqnums)
+}
+
 func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, error) {
 	writer := &S3Writer{
 		sortIndex:      -1,
@@ -134,12 +167,14 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 	writer.ResetMetaLocBat(proc)
 
 	writer.schemaVersion = tableDef.Version
-	writer.seqnums = make([]uint16, 0)
+	writer.seqnums = make([]uint16, 0, len(tableDef.Cols))
 	for _, colDef := range tableDef.Cols {
 		if colDef.Name != catalog.Row_ID {
 			writer.seqnums = append(writer.seqnums, uint16(colDef.Seqnum))
 		}
 	}
+	writer.tablename = tableDef.GetName()
+	logutil.Infof("s3 table set from AllocS3Writer %q seqnums: %+v", writer.tablename, writer.seqnums)
 
 	// Get Single Col pk index
 	for idx, colDef := range tableDef.Cols {
@@ -182,11 +217,13 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 
 		writers[i].schemaVersion = tableDef.Version
 		writers[i].seqnums = make([]uint16, 0)
+		writers[i].tablename = tableDef.Name
 		for _, colDef := range tableDef.Cols {
 			if colDef.Name != catalog.Row_ID {
 				writers[i].seqnums = append(writers[i].seqnums, uint16(colDef.Seqnum))
 			}
 		}
+		logutil.Infof("s3 table set from AllocS3WriterP%d %q seqnums: %+v", i, writers[i].tablename, writers[i].seqnums)
 
 		// Get Single Col pk index
 		for idx, colDef := range tableDef.Cols {
@@ -540,7 +577,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	if err != nil {
 		return nil, err
 	}
-	w.writer, err = blockio.NewBlockWriterNew(s3, segId, w.schemaVersion, nil)
+	w.writer, err = blockio.NewBlockWriterNew(s3, segId, w.schemaVersion, w.seqnums)
 	if err != nil {
 		return nil, err
 	}
@@ -585,6 +622,16 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 		pkIdx := uint16(w.pk)
 		w.writer.SetPrimaryKey(pkIdx)
 	}
+	if w.attrs == nil {
+		w.attrs = bat.Attrs
+	}
+	if len(w.seqnums) != len(bat.Vecs) {
+		// just warn becase writing delete s3 file does not need seqnums.
+		// print the attrs to tell if it is a delete batch
+		logutil.Warnf("CN write s3 table %q: seqnums length not match seqnums: %v, attrs: %v",
+			w.tablename, w.seqnums, bat.Attrs)
+	}
+	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.Vecs[0].Length(), w.tablename, w.seqnums, w.attrs)
 	_, err := w.writer.WriteBatch(bat)
 	if err != nil {
 		return err
@@ -623,19 +670,20 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 // For more information, please refer to the comment about func WriteEnd in Writer interface
 func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
+	logutil.Infof("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
 	if err != nil {
 		return nil, err
 	}
 	blkInfos := make([]catalog.BlockInfo, 0, len(blocks))
 	//TODO::block id ,segment id and location should be get from BlockObject.
 	for j := range blocks {
-		location, err := blockio.EncodeLocationFromString(
-			blockio.EncodeLocation(
-				w.writer.GetName(),
-				blocks[j].GetExtent(),
-				uint32(w.lengths[j]),
-				blocks[j].GetID(),
-			).String())
+		location := blockio.EncodeLocation(
+			w.writer.GetName(),
+			blocks[j].GetExtent(),
+			uint32(w.lengths[j]),
+			blocks[j].GetID(),
+		)
+
 		if err != nil {
 			return nil, err
 		}

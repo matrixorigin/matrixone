@@ -1,6 +1,25 @@
 drop database if exists test;
 create database test;
 use test;
+drop table if exists s3t;
+create table s3t (a int, b int, c int, primary key(a, b));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+alter table s3t add column d int after b;
+insert into s3t values (300001, 34, 23, 1);
+select count(*) from s3t;
+count(*)
+30001
+select * from s3t where d = 23;
+a    b    d    c
+300001    34    23    1
+alter table s3t drop column c;
+insert into s3t select result, 2, 12 from generate_series(30002, 60000, 1) g;
+select count(d) from s3t;
+count(d)
+30000
+select count(d) from s3t where d > 13;
+count(d)
+1
 drop table if exists add01;
 create table add01 (
 col1 int not null auto_increment primary key,
@@ -23,9 +42,9 @@ Table    Create Table
 add01    CREATE TABLE `add01` (\n`col9` INT DEFAULT NULL,\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(30) NOT NULL,\n`col2_3` VARCHAR(20) DEFAULT NULL,\n`col3` VARCHAR(20) NOT NULL,\n`col4` VARCHAR(4) NOT NULL,\n`col5` INT NOT NULL,\n`col7` VARCHAR(30) DEFAULT NULL,\n`col8` INT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 insert into add01 values(1,3,'nihao','hei','hu','jj',2,'varchar',1);
 insert into add01 values(2,3,'nihao',null,'hu','jj',2,'varchar',1);
-[unknown result because it is related to issue#8740]
+
 insert into add01 values(3,4,'nihao','hi','hu','jj',2,'varchar',null);
-[unknown result because it is related to issue#8740]
+
 show create table add01;
 Table    Create Table
 add01    CREATE TABLE `add01` (\n`col9` INT DEFAULT NULL,\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(30) NOT NULL,\n`col2_3` VARCHAR(20) DEFAULT NULL,\n`col3` VARCHAR(20) NOT NULL,\n`col4` VARCHAR(4) NOT NULL,\n`col5` INT NOT NULL,\n`col7` VARCHAR(30) DEFAULT NULL,\n`col8` INT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
@@ -353,26 +372,18 @@ show create table transaction03;
 no such table .transaction03
 drop table transaction03;
 drop table if exists transaction05;
-
 create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
-
 insert into transaction05(b,c) values ('aaaa','2020-09-08');
-
 insert into transaction05(b,c) values ('aaaa','2020-09-08');
-
 begin;
-
 alter table transaction05 rename to `conflict_test`;
-
 use ww_conflict;
 invalid database ww_conflict
 begin;
-
 alter table conflict_test drop column b;
 no such table .conflict_test
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
-
 alter table conflict_test add column colf int first;
 no such table .conflict_test
 select * from conflict_test;
@@ -383,23 +394,16 @@ show create table conflict_test;
 Table    Create Table
 conflict_test    CREATE TABLE `conflict_test` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` VARCHAR(25) NOT NULL,\n`c` DATETIME DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `bstr` (`b`),\nKEY `cdate` (`c`)\n)
 drop table conflict_test;
-
 drop table if exists update01;
-
 create table update01(col1 int, col2 int, col3 varchar(20));
-
 insert into update01 values(1,2,'cfewquier');
-
 insert into update01 values(2,3,'329382');
-
 select * from update01;
 col1    col2    col3
 1    2    cfewquier
 2    3    329382
 alter table update01 add column col1_2 binary after col1;
-
 alter table update01 add column col5 blob after col3;
-
 select * from update01;
 col1    col1_2    col2    col3    col5
 1    null    2    cfewquier    null
@@ -408,75 +412,55 @@ show create table update01;
 Table    Create Table
 update01    CREATE TABLE `update01` (\n`col1` INT DEFAULT NULL,\n`col1_2` BINARY(1) DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` VARCHAR(20) DEFAULT NULL,\n`col5` BLOB DEFAULT NULL\n)
 insert into update01 values(1,'1',3,'ew83u829d3qcefq','q3829ff2e3qe');
-[unknown result because it is related to issue#10093]
+
 insert into update01 values(2,'3',6,'3214()_)_)','00');
-[unknown result because it is related to issue#10093]
+
 select * from update01;
-[unknown result because it is related to issue#10093]
+
 update update01 set col1 = 100 where col1 = 1;
-[unknown result because it is related to issue#10093]
+
 update update01 set col5 = '2798u3d3frew' where col2 = 6;
-[unknown result because it is related to issue#10093]
+
 delete from update01 where col1_2 is null;
-[unknown result because it is related to issue#10093]
+
 drop table update01;
-[unknown result because it is related to issue#10093]
+
 drop table if exists rename01;
-
 drop table if exists rename02;
-
 create table rename01(a int,b int);
-
 insert into rename01 values(1,1);
-
 alter table rename01 rename to rename02;
-
 select * from rename01;
 SQL parser error: table "rename01" does not exist
 select * from rename02;
 a    b
 1    1
 insert into rename02 values(2,2);
-
 select * from rename02;
 a    b
 1    1
 2    2
 update rename02 set a = 10 where a = 1;
-
 select * from rename02;
 a    b
 2    2
 10    1
 delete from rename02 where a = 10;
-
 select * from rename02;
 a    b
 2    2
 create view view01 as select * from rename02;
-
 truncate table rename02;
-
 drop table rename02;
-
 drop table if exists rename02;
-
 drop table if exists rename03;
-
 drop table if exists rename04;
-
 create table rename02(a int primary key,b varchar(20));
-
 create table rename03(col1 int,col2 char);
-
 create table rename04(col1 binary,col2 text);
-
 alter table rename02 rename to rename_02;
-
 alter table rename03 rename to rename_03;
-
 alter table rename04 rename to rename04;
-
 show create table rename_02;
 Table    Create Table
 rename_02    CREATE TABLE `rename_02` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
@@ -487,21 +471,13 @@ show create table rename04;
 Table    Create Table
 rename04    CREATE TABLE `rename04` (\n`col1` BINARY(1) DEFAULT NULL,\n`col2` TEXT DEFAULT NULL\n)
 drop table rename_02;
-
 drop table rename_03;
-
 drop table rename04;
-
 drop table if exists rename05;
-
 create table rename05(col1 int,col2 text);
-
 insert into rename05 values(1,'jfhwuief3');
-
 insert into rename05 values(2,'ew8uif4324f');
-
 alter table rename05 rename to rename_05;
-
 select * from rename05;
 SQL parser error: table "rename05" does not exist
 select * from rename_05;
@@ -509,7 +485,6 @@ col1    col2
 1    jfhwuief3
 2    ew8uif4324f
 alter table rename_05 rename to rename05;
-
 select * from rename05;
 col1    col2
 1    jfhwuief3
@@ -517,17 +492,12 @@ col1    col2
 select * from rename_05;
 SQL parser error: table "rename_05" does not exist
 drop table rename05;
-
 drop table if exists rename06;
-
 create table rename06(col1 int);
-
 insert into rename06 values(1),(2);
-
 alter table rename06 rename to '';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 33 near " '';";
 drop table rename06;
-
 alter table system.statement_info rename to statement_info01;
 internal error: do not have privilege to execute the statement
 alter table mo_catalog.mo_account rename to mo_account01;
@@ -535,42 +505,28 @@ internal error: do not have privilege to execute the statement
 alter table mysql.procs_priv rename to `procs_priv01`;
 internal error: do not have privilege to execute the statement
 drop table if exists transaction01;
-
 create table transaction01 (c int primary key,d int);
-
 begin;
-
 insert into test_11 values(1,1);
 no such table test.test_11
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into test_11 values(2,2);
 no such table test.test_11
 alter table transaction01 rename to `test_transaction`;
-
 rollback;
-
 select * from transaction01;
 SQL parser error: table "transaction01" does not exist
 select * from test_transaction;
 c    d
 drop table test_transaction;
-
 drop table if exists transaction03;
-
 create table transaction03 (c int primary key,d int);
-
 insert into transaction03 values(1,1);
-
 insert into transaction03 values(2,2);
-
 begin;
-
 insert into transaction03 values(3,1);
-
 insert into transaction03 values(4,2);
-
 alter table transaction03 rename to `transaction04`;
-
 select * from transaction04;
 SQL parser error: table "transaction04" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
@@ -579,32 +535,23 @@ invalid database isolation
 select * from transaction04;
 SQL parser error: table "transaction04" does not exist
 commit;
-
 select * from transaction04;
 SQL parser error: table "transaction04" does not exist
 drop table transaction04;
 no such table test.transaction04
 drop table if exists transaction05;
-
 create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
-
 insert into transaction05(b,c) values ('aaaa','2020-09-08');
-
 insert into transaction05(b,c) values ('aaaa','2020-09-08');
-
 begin;
-
 alter table transaction05 rename to `conflict_test`;
-
 use ww_conflict;
 invalid database ww_conflict
 begin;
-
 alter table conflict_test add column colf int first;
 no such table .conflict_test
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
-
 alter table conflict_test add column colf int first;
 no such table .conflict_test
 select * from conflict_test;
@@ -615,45 +562,29 @@ show create table conflict_test;
 Table    Create Table
 conflict_test    CREATE TABLE `conflict_test` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` VARCHAR(25) NOT NULL,\n`c` DATETIME DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `bstr` (`b`),\nKEY `cdate` (`c`)\n)
 drop table conflict_test;
-
 drop table if exists `t+1`;
-
 drop table if exists `t+2`;
-
 create table `t+1` (c1 INT);
-
 alter table  `t+1` rename to `t+2`;
-
 create table `t+1` (c1 INT);
-
 alter table  `t+1` rename to `t+2`;
 ExpectedDup
 drop table `t+1`;
-
 drop table `t+2`;
-
 drop table if exists `#sql1`;
-
 drop table if exists `@0023sql2`;
-
 create table `#sql1` (c1 INT);
-
 create table `@0023sql2` (c1 INT);
-
 alter table `#sql1` rename to `@0023sql1`;
-
 show create table `@0023sql1`;
 Table    Create Table
 @0023sql1    CREATE TABLE `@0023sql1` (\n`c1` INT DEFAULT NULL\n)
 alter table `@0023sql2` rename to `#sql2`;
-
 show create table `#sql2`;
 Table    Create Table
 #sql2    CREATE TABLE `#sql2` (\n`c1` INT DEFAULT NULL\n)
 alter table `@0023sql1` rename to `#sql-1`;
-
 alter table `#sql2` rename to `@0023sql-2`;
-
 show create table `#sql-1`;
 Table    Create Table
 #sql-1    CREATE TABLE `#sql-1` (\n`c1` INT DEFAULT NULL\n)
@@ -661,9 +592,7 @@ show create table `@0023sql-2`;
 Table    Create Table
 @0023sql-2    CREATE TABLE `@0023sql-2` (\n`c1` INT DEFAULT NULL\n)
 insert into `#sql-1` values (1);
-
 insert into `@0023sql-2` values (2);
-
 select * from `#sql-1`;
 c1
 1
@@ -671,144 +600,91 @@ select * from `@0023sql-2`;
 c1
 2
 drop table `#sql-1`;
-
 drop table `@0023sql-2`;
-
 drop table if exists test03;
-
 create table test03(col1 int);
-
 insert into test03 values(100);
-
 alter table test03 rename to test03;
-
 drop table test03;
-
 drop table if exists test02;
-
 create table test02(a int);
-
 alter table test02 comment = "comment_1";
-
 show create table test02;
 Table    Create Table
 test02    CREATE TABLE `test02` (\n`a` INT DEFAULT NULL\n) COMMENT='comment_1'
 alter table test02 comment = "comment_2", comment = "comment_3";
-
 show create table test02;
 Table    Create Table
 test02    CREATE TABLE `test02` (\n`a` INT DEFAULT NULL\n) COMMENT='comment_3'
 drop table test02;
-
 drop table if exists test03;
-
 create table test03(a int);
-
 alter table test03 comment = '';
-
 show create table test03;
 Table    Create Table
 test03    CREATE TABLE `test03` (\n`a` INT DEFAULT NULL\n)
 alter table test03 comment = "comment_2", comment = "comment_3";
-
 show create table test03;
 Table    Create Table
 test03    CREATE TABLE `test03` (\n`a` INT DEFAULT NULL\n) COMMENT='comment_3'
 drop table test03;
-
 drop table if exists test04;
-
 create table test04(a int);
-
 alter table test04 comment = '数据库Database！';
-
 show create table test04;
 Table    Create Table
 test04    CREATE TABLE `test04` (\n`a` INT DEFAULT NULL\n) COMMENT='数据库Database！'
 alter table test04 comment = "3721  98479824309284093254324532";
-
 show create table test04;
 Table    Create Table
 test04    CREATE TABLE `test04` (\n`a` INT DEFAULT NULL\n) COMMENT='3721  98479824309284093254324532'
 alter table test04 comment = "#$%^&*(%$R%TYGHJHUWHDIU^&W%^&WWsUIHFW&W数据库*&()()()__";
-
 show create table test04;
 Table    Create Table
 test04    CREATE TABLE `test04` (\n`a` INT DEFAULT NULL\n) COMMENT='#$%^&*(%$R%TYGHJHUWHDIU^&W%^&WWsUIHFW&W数据库*&()()()__'
 alter table test04 comment = "47382749823409243f4oir32434",comment = "f73hjkrew473982u4f32g54jjUIHFW&W数据库*&()()()__";
-
 show create table test04;
 Table    Create Table
 test04    CREATE TABLE `test04` (\n`a` INT DEFAULT NULL\n) COMMENT='f73hjkrew473982u4f32g54jjUIHFW&W数据库*&()()()__'
 drop table test04;
-
 drop table if exists t1;
-
 create table t1 (i int unsigned not null auto_increment primary key);
-
 alter table t1 rename to t2;
-
 alter table t2 rename to t1;
-
 alter table t1 add column c char(10);
-
 alter table t1 comment = "no comment";
-
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n`i` INT UNSIGNED NOT NULL AUTO_INCREMENT,\n`c` CHAR(10) DEFAULT NULL,\nPRIMARY KEY (`i`)\n) COMMENT='no comment'
 alter table t1 comment = 'this is a comment';
-
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n`i` INT UNSIGNED NOT NULL AUTO_INCREMENT,\n`c` CHAR(10) DEFAULT NULL,\nPRIMARY KEY (`i`)\n) COMMENT='this is a comment'
 drop table t1;
-
 drop role if exists role_r1;
-
 drop user if exists role_u1;
-
 create role role_r1;
-
 create user role_u1 identified by '111' default role role_r1;
-
 drop table if exists rename01;
-
 create table rename01(col1 int);
-
 insert into rename01 values(1);
-
 insert into rename01 values(2);
-
 grant create database on account * to role_r1;
-
 grant show databases on account * to role_r1;
-
 grant connect on account * to role_r1;
-
 grant select on table * to role_r1;
-
 grant show tables on database * to role_r1;
-
 use test;
-
 alter table rename01 rename to newRename;
-
 grant alter table on database * to role_r1;
-
 use test;
-
 alter table rename01 rename to newRename;
 no such table test.rename01
 alter table newRename rename to `newRename`;
-
 show create table newRename;
 Table    Create Table
 newrename    CREATE TABLE `newrename` (\n`col1` INT DEFAULT NULL\n)
 drop table newRename;
-
 drop role role_r1;
-
 drop user role_u1;
-
 drop database test;

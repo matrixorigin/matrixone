@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 const BlockNumForceOneCN = 200
@@ -120,6 +119,11 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
+		if !info.ColumnZMs[i].IsInited() {
+			s.MinValMap[colName] = 0
+			s.MaxValMap[colName] = 0
+			continue
+		}
 		switch info.DataTypes[i].Oid {
 		case types.T_int8:
 			s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
@@ -583,21 +587,23 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 
 	case plan.Node_VALUE_SCAN:
-		if node.RowsetData == nil {
-			node.Stats = DefaultStats()
-		} else {
-			colsData := node.RowsetData.Cols
-			rowCount := float64(len(colsData[0].Data))
-			blockNumber := rowCount/float64(options.DefaultBlockMaxRows) + 1
-			node.Stats = &plan.Stats{
-				TableCnt:    (rowCount),
-				BlockNum:    int32(blockNumber),
-				Outcnt:      rowCount,
-				Cost:        rowCount,
-				Selectivity: 1,
+		node.Stats = DefaultStats()
+		/*
+			if node.RowsetData == nil {
+				node.Stats = DefaultStats()
+			} else {
+				colsData := node.RowsetData.Cols
+				rowCount := float64(len(colsData[0].Data))
+				blockNumber := rowCount/float64(options.DefaultBlockMaxRows) + 1
+				node.Stats = &plan.Stats{
+					TableCnt:    (rowCount),
+					BlockNum:    int32(blockNumber),
+					Outcnt:      rowCount,
+					Cost:        rowCount,
+					Selectivity: 1,
+				}
 			}
-		}
-
+		*/
 	case plan.Node_SINK_SCAN:
 		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
 

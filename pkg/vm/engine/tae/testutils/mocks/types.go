@@ -25,7 +25,7 @@ var testRunTime *dbutils.Runtime
 func init() {
 	testVectorPool = containers.NewVectorPool("for-test", 20)
 	testRunTime = dbutils.NewRuntime(
-		dbutils.WithRuntimeMemtablePool(testVectorPool),
+		dbutils.WithRuntimeSmallPool(testVectorPool),
 		dbutils.WithRuntimeTransientPool(testVectorPool),
 	)
 }

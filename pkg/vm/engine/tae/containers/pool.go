@@ -84,6 +84,7 @@ func (e *vectorPoolElement) put() {
 		newVec := vector.NewVec(*e.vec.GetType())
 		e.vec.Free(e.mp)
 		e.vec = newVec
+		e.pool.resetStats.Add(1)
 	}
 	if !e.inUse.CompareAndSwap(true, false) {
 		panic("vectorPoolElement.put: vector is not in use")
@@ -95,16 +96,16 @@ func (e *vectorPoolElement) isIdle() bool {
 }
 
 type VectorPool struct {
-	name         string
-	maxAlloc     int
-	ratio        float64
-	fixSizedPool []*vectorPoolElement
-	varlenPool   []*vectorPoolElement
-	fixHit       stats.Counter
-	varHit       stats.Counter
-	hit          stats.Counter
-	total        stats.Counter
-	mp           *mpool.MPool
+	name           string
+	maxAlloc       int
+	ratio          float64
+	fixSizedPool   []*vectorPoolElement
+	varlenPool     []*vectorPoolElement
+	fixHitStats    stats.Counter
+	varlenHitStats stats.Counter
+	resetStats     stats.Counter
+	totalStats     stats.Counter
+	mp             *mpool.MPool
 }
 
 func NewVectorPool(name string, cnt int, opts ...VectorPoolOption) *VectorPool {
@@ -145,33 +146,36 @@ func (p *VectorPool) String() string {
 	fixedUsedCnt, _ := p.FixedSizeUsed(false)
 	varlenUsedCnt, _ := p.VarlenUsed(false)
 	usedCnt := fixedUsedCnt + varlenUsedCnt
+	fixHit := p.fixHitStats.Load()
+	varlenHit := p.varlenHitStats.Load()
+	hit := fixHit + varlenHit
 	str := fmt.Sprintf(
-		"VectorPool[%s][%d/%d]: FixSizedVec[%d/%d] VarlenVec[%d/%d], Hit/Total: [(%d,%d)%d/%d]",
+		"VectorPool[%s][%d/%d]: FixSizedVec[%d/%d] VarlenVec[%d/%d], Reset/Hit/totalStats:[%d/(%d,%d)%d/%d]",
 		p.name,                                /* name */
-		usedCnt,                               /* total used vector cnt */
-		len(p.fixSizedPool)+len(p.varlenPool), /* total vector cnt */
+		usedCnt,                               /* totalStats used vector cnt */
+		len(p.fixSizedPool)+len(p.varlenPool), /* totalStats vector cnt */
 		fixedUsedCnt,                          /* used fixed sized vector cnt */
-		len(p.fixSizedPool),                   /* total fixed sized vector cnt */
+		len(p.fixSizedPool),                   /* totalStats fixed sized vector cnt */
 		varlenUsedCnt,                         /* used varlen vector cnt */
-		len(p.varlenPool),                     /* total varlen vector cnt */
-		p.fixHit.Load(),                       /* fixed sized vector hit cnt */
-		p.varHit.Load(),                       /* varlen vector hit cnt */
-		p.hit.Load(),                          /* hit cnt */
-		p.total.Load(),                        /* total cnt */
+		len(p.varlenPool),                     /* totalStats varlen vector cnt */
+		p.resetStats.Load(),                   /* reset cnt */
+		fixHit,                                /* fixed sized vector hit cnt */
+		varlenHit,                             /* varlen vector hit cnt */
+		hit,                                   /* hit cnt */
+		p.totalStats.Load(),                   /* totalStats cnt */
 	)
 	return str
 }
 
 func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
-	p.total.Add(1)
+	p.totalStats.Add(1)
 	if t.IsFixedLen() {
 		if len(p.fixSizedPool) > 0 {
 			for i := 0; i < 4; i++ {
 				idx := fastrand() % uint32(len(p.fixSizedPool))
 				element := p.fixSizedPool[idx]
 				if element.tryReuse(t) {
-					p.hit.Add(1)
-					p.fixHit.Add(1)
+					p.fixHitStats.Add(1)
 					return &vectorWrapper{
 						wrapped: element.vec,
 						mpool:   element.mp,
@@ -186,8 +190,7 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 				idx := fastrand() % uint32(len(p.varlenPool))
 				element := p.varlenPool[idx]
 				if element.tryReuse(t) {
-					p.hit.Add(1)
-					p.varHit.Add(1)
+					p.varlenHitStats.Add(1)
 					return &vectorWrapper{
 						wrapped: element.vec,
 						mpool:   element.mp,

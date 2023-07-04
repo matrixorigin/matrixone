@@ -440,8 +440,8 @@ func TestGetCompositePkValueByExpr(t *testing.T) {
 	}
 	pks := []string{"d", "c", "b"}
 	for i, expr := range tc.exprs {
-		vals := make([]*plan.Expr_C, len(pks))
-		ok := getCompositPKVals(expr, pks, vals)
+		vals := make([]*plan.Const, len(pks))
+		ok := getCompositPKVals(expr, pks, vals, nil)
 		for _, val := range vals {
 			t.Logf("val: %v", val)
 		}
@@ -489,7 +489,7 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 
 	t.Run("test getPkValueByExpr", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := getPkValueByExpr(testCase.expr, "a", testCase.typ)
+			result, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, nil)
 			if result != testCase.result {
 				t.Fatalf("test getPkValueByExpr at cases[%d], get result is different with expected", i)
 			}

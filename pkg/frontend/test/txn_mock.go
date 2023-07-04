@@ -114,6 +114,21 @@ func (mr *MockTxnClientMockRecorder) NewWithSnapshot(snapshot interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewWithSnapshot", reflect.TypeOf((*MockTxnClient)(nil).NewWithSnapshot), snapshot)
 }
 
+// WaitLogTailAppliedAt mocks base method.
+func (m *MockTxnClient) WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WaitLogTailAppliedAt", ctx, ts)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WaitLogTailAppliedAt indicates an expected call of WaitLogTailAppliedAt.
+func (mr *MockTxnClientMockRecorder) WaitLogTailAppliedAt(ctx, ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitLogTailAppliedAt", reflect.TypeOf((*MockTxnClient)(nil).WaitLogTailAppliedAt), ctx, ts)
+}
+
 // MockTxnClientWithCtl is a mock of TxnClientWithCtl interface.
 type MockTxnClientWithCtl struct {
 	ctrl     *gomock.Controller
@@ -236,6 +251,21 @@ func (m *MockTxnClientWithCtl) SetLatestCommitTS(arg0 timestamp.Timestamp) {
 func (mr *MockTxnClientWithCtlMockRecorder) SetLatestCommitTS(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetLatestCommitTS", reflect.TypeOf((*MockTxnClientWithCtl)(nil).SetLatestCommitTS), arg0)
+}
+
+// WaitLogTailAppliedAt mocks base method.
+func (m *MockTxnClientWithCtl) WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WaitLogTailAppliedAt", ctx, ts)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WaitLogTailAppliedAt indicates an expected call of WaitLogTailAppliedAt.
+func (mr *MockTxnClientWithCtlMockRecorder) WaitLogTailAppliedAt(ctx, ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitLogTailAppliedAt", reflect.TypeOf((*MockTxnClientWithCtl)(nil).WaitLogTailAppliedAt), ctx, ts)
 }
 
 // MockTxnClientWithFeature is a mock of TxnClientWithFeature interface.
@@ -388,6 +418,21 @@ func (mr *MockTxnClientWithFeatureMockRecorder) Resume() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resume", reflect.TypeOf((*MockTxnClientWithFeature)(nil).Resume))
 }
 
+// WaitLogTailAppliedAt mocks base method.
+func (m *MockTxnClientWithFeature) WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WaitLogTailAppliedAt", ctx, ts)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WaitLogTailAppliedAt indicates an expected call of WaitLogTailAppliedAt.
+func (mr *MockTxnClientWithFeatureMockRecorder) WaitLogTailAppliedAt(ctx, ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitLogTailAppliedAt", reflect.TypeOf((*MockTxnClientWithFeature)(nil).WaitLogTailAppliedAt), ctx, ts)
+}
+
 // MockTxnOperator is a mock of TxnOperator interface.
 type MockTxnOperator struct {
 	ctrl     *gomock.Controller
@@ -479,6 +524,20 @@ func (mr *MockTxnOperatorMockRecorder) GetWorkspace() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkspace", reflect.TypeOf((*MockTxnOperator)(nil).GetWorkspace))
 }
 
+// IsRetry mocks base method.
+func (m *MockTxnOperator) IsRetry() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsRetry")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsRetry indicates an expected call of IsRetry.
+func (mr *MockTxnOperatorMockRecorder) IsRetry() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockTxnOperator)(nil).IsRetry))
+}
+
 // Read mocks base method.
 func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
@@ -492,6 +551,18 @@ func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.
 func (mr *MockTxnOperatorMockRecorder) Read(ctx, ops interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockTxnOperator)(nil).Read), ctx, ops)
+}
+
+// ResetRetry mocks base method.
+func (m *MockTxnOperator) ResetRetry(arg0 bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ResetRetry", arg0)
+}
+
+// ResetRetry indicates an expected call of ResetRetry.
+func (mr *MockTxnOperatorMockRecorder) ResetRetry(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetRetry", reflect.TypeOf((*MockTxnOperator)(nil).ResetRetry), arg0)
 }
 
 // Rollback mocks base method.
@@ -701,6 +772,20 @@ func (mr *MockDebugableTxnOperatorMockRecorder) GetWorkspace() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkspace", reflect.TypeOf((*MockDebugableTxnOperator)(nil).GetWorkspace))
 }
 
+// IsRetry mocks base method.
+func (m *MockDebugableTxnOperator) IsRetry() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsRetry")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsRetry indicates an expected call of IsRetry.
+func (mr *MockDebugableTxnOperatorMockRecorder) IsRetry() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockDebugableTxnOperator)(nil).IsRetry))
+}
+
 // Read mocks base method.
 func (m *MockDebugableTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
@@ -714,6 +799,18 @@ func (m *MockDebugableTxnOperator) Read(ctx context.Context, ops []txn.TxnReques
 func (mr *MockDebugableTxnOperatorMockRecorder) Read(ctx, ops interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Read), ctx, ops)
+}
+
+// ResetRetry mocks base method.
+func (m *MockDebugableTxnOperator) ResetRetry(arg0 bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ResetRetry", arg0)
+}
+
+// ResetRetry indicates an expected call of ResetRetry.
+func (mr *MockDebugableTxnOperatorMockRecorder) ResetRetry(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetRetry", reflect.TypeOf((*MockDebugableTxnOperator)(nil).ResetRetry), arg0)
 }
 
 // Rollback mocks base method.
@@ -925,6 +1022,20 @@ func (mr *MockEventableTxnOperatorMockRecorder) GetWorkspace() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkspace", reflect.TypeOf((*MockEventableTxnOperator)(nil).GetWorkspace))
 }
 
+// IsRetry mocks base method.
+func (m *MockEventableTxnOperator) IsRetry() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsRetry")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsRetry indicates an expected call of IsRetry.
+func (mr *MockEventableTxnOperatorMockRecorder) IsRetry() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockEventableTxnOperator)(nil).IsRetry))
+}
+
 // Read mocks base method.
 func (m *MockEventableTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
@@ -938,6 +1049,18 @@ func (m *MockEventableTxnOperator) Read(ctx context.Context, ops []txn.TxnReques
 func (mr *MockEventableTxnOperatorMockRecorder) Read(ctx, ops interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockEventableTxnOperator)(nil).Read), ctx, ops)
+}
+
+// ResetRetry mocks base method.
+func (m *MockEventableTxnOperator) ResetRetry(arg0 bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ResetRetry", arg0)
+}
+
+// ResetRetry indicates an expected call of ResetRetry.
+func (mr *MockEventableTxnOperatorMockRecorder) ResetRetry(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetRetry", reflect.TypeOf((*MockEventableTxnOperator)(nil).ResetRetry), arg0)
 }
 
 // Rollback mocks base method.
@@ -1163,30 +1286,46 @@ func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 	return m.recorder
 }
 
-// DeleteTable mocks base method.
-func (m *MockWorkspace) DeleteTable(ctx context.Context, dbID uint64, tableName string) {
+// Commit mocks base method.
+func (m *MockWorkspace) Commit(ctx context.Context) error {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "DeleteTable", ctx, dbID, tableName)
-}
-
-// DeleteTable indicates an expected call of DeleteTable.
-func (mr *MockWorkspaceMockRecorder) DeleteTable(ctx, dbID, tableName interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteTable", reflect.TypeOf((*MockWorkspace)(nil).DeleteTable), ctx, dbID, tableName)
-}
-
-// IncrStatemenetID mocks base method.
-func (m *MockWorkspace) IncrStatemenetID(ctx context.Context) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IncrStatemenetID", ctx)
+	ret := m.ctrl.Call(m, "Commit", ctx)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// IncrStatemenetID indicates an expected call of IncrStatemenetID.
-func (mr *MockWorkspaceMockRecorder) IncrStatemenetID(ctx interface{}) *gomock.Call {
+// Commit indicates an expected call of Commit.
+func (mr *MockWorkspaceMockRecorder) Commit(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatemenetID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatemenetID), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockWorkspace)(nil).Commit), ctx)
+}
+
+// IncrStatementID mocks base method.
+func (m *MockWorkspace) IncrStatementID(ctx context.Context, commit bool) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IncrStatementID", ctx, commit)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// IncrStatementID indicates an expected call of IncrStatementID.
+func (mr *MockWorkspaceMockRecorder) IncrStatementID(ctx, commit interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatementID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatementID), ctx, commit)
+}
+
+// Rollback mocks base method.
+func (m *MockWorkspace) Rollback(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Rollback", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Rollback indicates an expected call of Rollback.
+func (mr *MockWorkspaceMockRecorder) Rollback(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockWorkspace)(nil).Rollback), ctx)
 }
 
 // RollbackLastStatement mocks base method.

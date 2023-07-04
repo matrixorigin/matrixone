@@ -15,16 +15,19 @@
 package db_holder
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"go.uber.org/zap"
 )
@@ -43,6 +46,11 @@ var (
 	dbMux sync.Mutex
 
 	DBConnErrCount atomic.Uint32
+
+	prepareSQLMap sync.Map
+
+	moLogger   *log.MOLogger
+	loggerInit sync.Once
 )
 
 const MOLoggerUser = "mo_logger"
@@ -50,7 +58,36 @@ const MaxConnectionNumber = 1
 
 const DBConnRetryThreshold = 8
 
-const MAX_CHUNK_SIZE = 1024 * 1024 * 4
+const MaxInsertLen = 200
+const MiddleInsertLen = 10
+
+var maxRowBufPool sync.Pool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+
+var middleRowBufPool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+var oneRowBufPool = sync.Pool{
+	New: func() any {
+		return &bytes.Buffer{}
+	},
+}
+
+type prepareSQLs struct {
+	maxRowNum int
+	maxRows   string
+
+	middleRowNum int
+	middleRows   string
+
+	oneRow  string
+	columns int
+}
 
 type DBUser struct {
 	UserName string
@@ -86,7 +123,7 @@ func SetDBConn(conn *sql.DB) {
 }
 
 func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
-
+	logger := getLogger()
 	initFunc := func() error {
 		dbMux.Lock()
 		defer dbMux.Unlock()
@@ -121,10 +158,10 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	if forceNewConn || db.Load() == nil {
 		err := initFunc()
 		if err != nil {
-			logutil.Error("sqlWriter db init failed", zap.Error(err))
+			logger.Error("sqlWriter db init failed", zap.Error(err))
 			return nil, err
 		}
-		logutil.Debug("sqlWriter db init", zap.Bool("force", forceNewConn), zap.Bool("randomCN", randomCN), zap.String("db", fmt.Sprintf("%v", db.Load())))
+		logger.Debug("sqlWriter db init", zap.Bool("force", forceNewConn), zap.Bool("randomCN", randomCN), zap.String("db", fmt.Sprintf("%v", db.Load())))
 	}
 	dbConn := db.Load().(*sql.DB)
 	return dbConn, nil
@@ -138,101 +175,264 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 
 	var dbConn *sql.DB
 
+	var logger = getLogger()
+
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
-		logutil.Warn("sqlWriter WriteRowRecords failed above threshold", zap.Uint32("failures", DBConnErrCount.Load()), zap.Error(err))
+		logger.Error("sqlWriter WriteRowRecords failed above threshold")
+		if dbConn != nil {
+			dbConn.Close()
+		}
 		dbConn, err = InitOrRefreshDBConn(true, true)
 		DBConnErrCount.Store(0)
 	} else {
 		dbConn, err = InitOrRefreshDBConn(false, false)
 	}
 	if err != nil {
-		logutil.Error("sqlWriter db init failed", zap.Error(err))
+		logger.Debug("sqlWriter db init failed", zap.Error(err))
 		return 0, err
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go bulkInsert(ctx, done, dbConn, records, tbl, MAX_CHUNK_SIZE)
-
-	select {
-	case err := <-done:
-		if err != nil {
-			DBConnErrCount.Add(1)
-		} else {
-			logutil.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
-			return len(records), nil
-		}
-	case <-ctx.Done():
+	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
+	if err != nil {
 		DBConnErrCount.Add(1)
-		err = ctx.Err()
+		return 0, moerr.NewInternalError(ctx, err.Error())
 	}
 
-	return 0, err
+	logger.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
+	return len(records), nil
 }
 
-func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int) {
+func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen int) *prepareSQLs {
+	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
+	oneRowBuf := oneRowBufPool.Get().(*bytes.Buffer)
+	for i := 0; i < columns; i++ {
+		if i == 0 {
+			oneRowBuf.WriteByte('?')
+		} else {
+			oneRowBuf.WriteString(",?")
+		}
+	}
+	oneRow := fmt.Sprintf("%s (%s)", prefix, oneRowBuf.String())
+
+	maxRowBuf := maxRowBufPool.Get().(*bytes.Buffer)
+	maxRowBuf.WriteString(prefix)
+	for i := 0; i < batchLen; i++ {
+		if i == 0 {
+			maxRowBuf.WriteByte('(')
+		} else {
+			maxRowBuf.WriteString(",(")
+		}
+		maxRowBuf.Write(oneRowBuf.Bytes())
+		maxRowBuf.WriteByte(')')
+	}
+
+	middleRowBuf := middleRowBufPool.Get().(*bytes.Buffer)
+	middleRowBuf.WriteString(prefix)
+	for i := 0; i < middleBatchLen; i++ {
+		if i == 0 {
+			middleRowBuf.WriteByte('(')
+		} else {
+			middleRowBuf.WriteString(",(")
+		}
+		middleRowBuf.Write(oneRowBuf.Bytes())
+		middleRowBuf.WriteByte(')')
+	}
+
+	prepareSQLS := &prepareSQLs{
+		maxRowNum: batchLen,
+		maxRows:   maxRowBuf.String(),
+
+		middleRowNum: middleBatchLen,
+		middleRows:   middleRowBuf.String(),
+
+		oneRow:  oneRow,
+		columns: columns,
+	}
+	oneRowBuf.Reset()
+	maxRowBuf.Reset()
+	middleRowBuf.Reset()
+	oneRowBufPool.Put(oneRowBuf)
+	maxRowBufPool.Put(maxRowBuf)
+	middleRowBufPool.Put(middleRowBuf)
+	return prepareSQLS
+}
+
+func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
 	if len(records) == 0 {
-		done <- nil
-		return
+		return nil
+	}
+	var logger = getLogger()
+	var sqls *prepareSQLs
+	key := fmt.Sprintf("%s_%s", tbl.Database, tbl.Table)
+	if val, ok := prepareSQLMap.Load(key); ok {
+		sqls = val.(*prepareSQLs)
+		if sqls.columns != len(records[0]) {
+			sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
+			prepareSQLMap.Store(key, sqls)
+		}
+	} else {
+		sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
+		prepareSQLMap.Store(key, sqls)
 	}
 
-	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
-
-	sb := strings.Builder{}
-	defer sb.Reset()
-
-	tx, err := sqlDb.Begin()
+	tx, err := sqlDb.BeginTx(ctx, nil)
 	if err != nil {
-		done <- err
-		return
+		return moerr.ConvertGoError(ctx, err)
 	}
 
-	for idx, row := range records {
-		if len(row) == 0 {
-			continue
-		}
+	var maxStmt *sql.Stmt
+	var middleStmt *sql.Stmt
+	var oneStmt *sql.Stmt
 
-		sb.WriteString("(")
-		for i, field := range row {
-			if i != 0 {
-				sb.WriteString(",")
+	for {
+		if len(records) == 0 {
+			break
+		} else if len(records) >= batchLen {
+			if maxStmt == nil {
+				maxStmt, err = tx.PrepareContext(ctx, sqls.maxRows)
+				if err != nil {
+					tx.Rollback()
+					return err
+				}
 			}
-			escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
-			if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-				sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
-			} else {
-				sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
+			vals := make([]any, sqls.columns*batchLen)
+			idx := 0
+			for _, row := range records[:batchLen] {
+				for i, field := range row {
+					escapedStr := field
+					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+						vals[idx] = field[:tbl.Columns[i].Scale-1]
+					} else {
+						vals[idx] = field
+					}
+					idx++
+				}
 			}
-		}
-		sb.WriteString(")")
+			_, err := maxStmt.ExecContext(ctx, vals...)
+			if err != nil {
+				logger.Error("sqlWriter batchInsert failed", zap.Error(err))
+				tx.Rollback()
+				return err
+			}
+			if ctx.Err() != nil {
+				tx.Rollback()
+				return ctx.Err()
+			}
 
-		if sb.Len() >= maxLen || idx == len(records)-1 {
-			stmt := baseStr + sb.String() + ";"
-			_, err := tx.ExecContext(ctx, stmt)
+			records = records[batchLen:]
+		} else if len(records) >= middleBatchLen {
+			if maxStmt != nil {
+				err = maxStmt.Close()
+				if err != nil {
+					tx.Rollback()
+					return err
+				}
+				maxStmt = nil
+			}
+			if middleStmt == nil {
+				middleStmt, err = tx.PrepareContext(ctx, sqls.middleRows)
+				if err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
+			vals := make([]any, sqls.columns*middleBatchLen)
+			idx := 0
+			for _, row := range records[:middleBatchLen] {
+				for i, field := range row {
+					escapedStr := field
+					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+						vals[idx] = field[:tbl.Columns[i].Scale-1]
+					} else {
+						vals[idx] = field
+					}
+					idx++
+				}
+			}
+			_, err := middleStmt.ExecContext(ctx, vals...)
+			if err != nil {
+				logger.Error("sqlWriter batchInsert failed", zap.Error(err))
+				tx.Rollback()
+				return err
+			}
+			if ctx.Err() != nil {
+				tx.Rollback()
+				return ctx.Err()
+			}
+
+			records = records[middleBatchLen:]
+		} else {
+			if maxStmt != nil {
+				err = maxStmt.Close()
+				if err != nil {
+					tx.Rollback()
+					return err
+				}
+				maxStmt = nil
+			}
+			if middleStmt != nil {
+				err = middleStmt.Close()
+				if err != nil {
+					tx.Rollback()
+					return err
+				}
+				middleStmt = nil
+			}
+			if oneStmt == nil {
+				oneStmt, err = tx.PrepareContext(ctx, sqls.oneRow)
+				if err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
+			vals := make([]any, sqls.columns)
+			for _, row := range records {
+				if err != nil {
+					return moerr.ConvertGoError(ctx, err)
+				}
+				for i, field := range row {
+					escapedStr := field
+					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+						vals[i] = field[:tbl.Columns[i].Scale-1]
+					} else {
+						vals[i] = field
+					}
+				}
+				_, err = oneStmt.ExecContext(ctx, vals...)
+				if err != nil {
+					tx.Rollback()
+					return moerr.ConvertGoError(ctx, err)
+				}
+			}
+			err = oneStmt.Close()
 			if err != nil {
 				tx.Rollback()
-				sb.Reset()
-				done <- err
-				return
+				return moerr.ConvertGoError(ctx, err)
 			}
-			select {
-			case <-ctx.Done():
-				// If context deadline is exceeded, rollback the transaction
-				tx.Rollback()
-				done <- ctx.Err()
-				return
-			default:
-			}
-			sb.Reset()
-		} else {
-			sb.WriteString(",")
+			break
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		logutil.Error("sqlWriter commit failed", logutil.ErrorField(err))
-		done <- err
-		return
+
+	if err = tx.Commit(); err != nil {
+		logger.Error("sqlWriter commit failed", zap.Error(err))
+		tx.Rollback()
+		return moerr.ConvertGoError(ctx, err)
 	}
-	done <- nil
+	return nil
+}
+
+func getLogger() *log.MOLogger {
+	loggerInit.Do(func() {
+		rt := runtime.ProcessLevelRuntime()
+		if rt == nil {
+			moLogger = log.GetServiceLogger(logutil.Adjust(logutil.GetGlobalLogger()), metadata.ServiceType_CN, "uuid")
+		} else {
+			moLogger = rt.Logger()
+		}
+		moLogger = moLogger.Named("etl/db_holder").With(logutil.Discardable())
+	})
+	return moLogger
 }

@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"context"
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -347,13 +348,18 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
-		op:              op,
-		proc:            proc,
-		engine:          e,
-		meta:            op.TxnRef(),
-		idGen:           e.idGen,
-		dnStores:        e.getDNServices(),
-		tableMap:        new(sync.Map),
+		op:       op,
+		proc:     proc,
+		engine:   e,
+		meta:     op.TxnRef(),
+		idGen:    e.idGen,
+		dnStores: e.getDNServices(),
+		tableCache: struct {
+			cachedIndex int
+			tableMap    *sync.Map
+		}{
+			tableMap: new(sync.Map),
+		},
 		databaseMap:     new(sync.Map),
 		createMap:       new(sync.Map),
 		deletedTableMap: new(sync.Map),
@@ -374,47 +380,15 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
+	if txn.meta.IsRCIsolation() {
+		txn.tableCache.cachedIndex = e.catalog.GetDeletedTableIndex()
+	}
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
 	e.pClient.validLogTailMustApplied(txn.meta.SnapshotTS)
-	return nil
-}
-
-func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
-	logDebugf(op.Txn(), "Engine.Commit")
-	txn := e.getTransaction(op)
-	if txn == nil {
-		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
-	}
-	txn.IncrStatemenetID(ctx)
-	defer e.delTransaction(txn)
-	if txn.readOnly.Load() {
-		return nil
-	}
-	txn.mergeTxnWorkspace()
-	err := txn.DumpBatch(true, 0)
-	if err != nil {
-		return err
-	}
-	reqs, err := genWriteReqs(ctx, txn.writes)
-	if err != nil {
-		return err
-	}
-	_, err = op.Write(ctx, reqs)
-	return err
-}
-
-func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
-	logDebugf(op.Txn(), "Engine.Rollback")
-	txn := e.getTransaction(op)
-	if txn == nil {
-		return nil // compatible with existing logic
-		//	return moerr.NewTxnClosed()
-	}
-	defer e.delTransaction(txn)
 	return nil
 }
 
@@ -465,7 +439,7 @@ func (e *Engine) Hints() (h engine.Hints) {
 }
 
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
+	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	blkInfos := make([]*catalog.BlockInfo, 0, len(ranges))
 	for _, r := range ranges {
@@ -476,7 +450,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 			//FIXME::why set blk.EntryState = false ?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs,
+				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs, proc.(*process.Process),
 			)
 		}
 		for j := len(blkInfos); j < num; j++ {
@@ -486,7 +460,11 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	}
 
 	infos, steps := groupBlocksToObjects(blkInfos, num)
-	blockReaders := newBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr)
+	fs, err := fileservice.Get[fileservice.FileService](e.fs, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	blockReaders := newBlockReaders(ctx, fs, tblDef, -1, ts, num, expr, proc.(*process.Process))
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
 		rds[i] = blockReaders[i]
@@ -500,33 +478,6 @@ func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
 
 func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 	return op.GetWorkspace().(*Transaction)
-}
-
-func (e *Engine) delTransaction(txn *Transaction) {
-	for i := range txn.writes {
-		if txn.writes[i].bat == nil {
-			continue
-		}
-		txn.writes[i].bat.Clean(e.mp)
-	}
-	txn.tableMap = nil
-	txn.createMap = nil
-	txn.databaseMap = nil
-	txn.deletedTableMap = nil
-	txn.blockId_dn_delete_metaLoc_batch = nil
-	txn.blockId_raw_batch = nil
-	txn.deletedBlocks = nil
-	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
-	segmentnames = append(segmentnames, txn.segId)
-	for blkId := range txn.cnBlkId_Pos {
-		// blkId:
-		// |------|----------|----------|
-		//   uuid    filelen   blkoffset
-		//    16        2          2
-		segmentnames = append(segmentnames, *blkId.Segment())
-	}
-	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
-	txn.cnBlkId_Pos = nil
 }
 
 func (e *Engine) getDNServices() []DNStore {

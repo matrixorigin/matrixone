@@ -864,7 +864,7 @@ func NewMockOptimizer(_ bool) *MockOptimizer {
 
 func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	ctx := moc.CurrentContext()
-	query, err := BuildPlan(ctx, stmt)
+	query, err := BuildPlan(ctx, stmt, false)
 	if err != nil {
 		// logutil.Infof("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return nil, err

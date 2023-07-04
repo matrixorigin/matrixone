@@ -17,14 +17,14 @@ package client
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -199,6 +199,7 @@ func (client *txnClient) New(
 		WithTxnCNCoordinator(),
 		WithTxnLockService(client.lockService))
 	op := newTxnOperator(
+		client.clock,
 		client.sender,
 		txnMeta,
 		options...)
@@ -232,6 +233,15 @@ func (client *txnClient) MinTimestamp() timestamp.Timestamp {
 	return client.mu.minTS
 }
 
+func (client *txnClient) WaitLogTailAppliedAt(
+	ctx context.Context,
+	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	if client.timestampWaiter == nil {
+		return timestamp.Timestamp{}, nil
+	}
+	return client.timestampWaiter.GetTimestamp(ctx, ts)
+}
+
 func (client *txnClient) getTxnIsolation() txn.TxnIsolation {
 	if v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnIsolation); ok {
 		return v.(txn.TxnIsolation)
@@ -261,7 +271,9 @@ func (client *txnClient) determineTxnSnapshot(
 	ctx context.Context,
 	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
 	// always use the current ts as txn's snapshot ts is enableSacrificingFreshness
-	if !client.enableSacrificingFreshness {
+	if !client.enableSacrificingFreshness ||
+		(client.getTxnIsolation() == txn.TxnIsolation_RC &&
+			minTS.IsEmpty()) {
 		// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
 		// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 		// conflicts due to clock uncertainty.

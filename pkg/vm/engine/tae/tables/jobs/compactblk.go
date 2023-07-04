@@ -124,6 +124,7 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 		}
 		task.deletes = views.DeleteMask
 		views.ApplyDeletes()
+		defer views.Close()
 		for i := 0; i < colLen; i++ {
 			if schema.ColDefs[i].IsPhyAddr() {
 				continue

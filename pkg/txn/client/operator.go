@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
@@ -160,18 +161,22 @@ type txnOperator struct {
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
 		callbacks    map[EventType][]func(txn.TxnMeta)
+		retry        bool
 	}
 	workspace       Workspace
 	timestampWaiter TimestampWaiter
+	clock           clock.Clock
 }
 
 func newTxnOperator(
+	clock clock.Clock,
 	sender rpc.TxnSender,
 	txnMeta txn.TxnMeta,
 	options ...TxnOption) *txnOperator {
 	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
 	tc.txnID = txnMeta.ID
+	tc.clock = clock
 	for _, opt := range options {
 		opt(tc)
 	}
@@ -269,8 +274,8 @@ func (tc *txnOperator) UpdateSnapshot(
 
 	minTS := ts
 	// we need to waiter the latest snapshot ts which is greater than the current snapshot
-	if minTS.IsEmpty() {
-		minTS = tc.mu.txn.SnapshotTS
+	if minTS.IsEmpty() && tc.mu.txn.IsRCIsolation() {
+		minTS, _ = tc.clock.Now()
 	}
 
 	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
@@ -378,6 +383,11 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
 	util.LogTxnRollback(tc.getTxnMeta(false))
+	if tc.workspace != nil {
+		if err := tc.workspace.Rollback(ctx); err != nil {
+			return err
+		}
+	}
 
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -432,6 +442,18 @@ func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
 	return tc.doAddLockTableLocked(value)
 }
 
+func (tc *txnOperator) ResetRetry(retry bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.retry = retry
+}
+
+func (tc *txnOperator) IsRetry() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.retry
+}
+
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
 	for _, l := range tc.mu.lockTables {
 		if l.Table == value.Table {
@@ -468,11 +490,20 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if commit {
+		if tc.workspace != nil {
+			if err := tc.workspace.Commit(ctx); err != nil {
+				return nil, err
+			}
+		}
 		tc.mu.Lock()
 		defer func() {
 			tc.closeLocked()
 			tc.mu.Unlock()
 		}()
+		if tc.mu.closed {
+			return nil, moerr.NewTxnClosedNoCtx(tc.txnID)
+		}
+
 		if tc.needUnlockLocked() {
 			tc.mu.txn.LockTables = tc.mu.lockTables
 			defer tc.unlock(ctx)
@@ -795,6 +826,17 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) {
+	// rc mode need to see the committed value, so wait logtail applied
+	if tc.mu.txn.IsRCIsolation() &&
+		tc.timestampWaiter != nil {
+		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
+		if err != nil {
+			util.GetLogger().Error("txn wait committed log applied failed in rc mode",
+				util.TxnField(tc.mu.txn),
+				zap.Error(err))
+		}
+	}
+
 	if err := tc.option.lockService.Unlock(
 		ctx,
 		tc.mu.txn.ID,
@@ -814,6 +856,8 @@ func (tc *txnOperator) needUnlockLocked() bool {
 }
 
 func (tc *txnOperator) closeLocked() {
-	tc.mu.closed = true
-	tc.triggerEventLocked(ClosedEvent)
+	if !tc.mu.closed {
+		tc.mu.closed = true
+		tc.triggerEventLocked(ClosedEvent)
+	}
 }

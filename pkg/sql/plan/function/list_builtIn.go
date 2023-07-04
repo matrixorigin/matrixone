@@ -2437,7 +2437,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId:      0,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					typ := types.T_timestamp.ToType()
+					typ.Scale = 6
+					return typ
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInCurrentTimestamp
@@ -2894,6 +2896,28 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInMoLogDate
+				},
+			},
+		},
+	},
+
+	// function `purge_log`
+	{
+		functionId: PURGE_LOG,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInPurgeLog
 				},
 			},
 		},

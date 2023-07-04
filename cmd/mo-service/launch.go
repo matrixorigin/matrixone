@@ -16,8 +16,8 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"runtime/debug"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -34,15 +34,6 @@ var (
 	cnProxy goetty.Proxy
 )
 
-func hackGoMemoryPolicy() {
-	// hack go memory policy
-	// for other hacks like GC Policy, goes here before the loop.
-	tick := time.Tick(time.Minute * 1)
-	for range tick {
-		debug.FreeOSMemory()
-	}
-}
-
 func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet *perfcounter.CounterSet) error {
 	if *launchFile == "" {
 		panic("launch file not set")
@@ -52,8 +43,6 @@ func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet 
 	if err := parseConfigFromFile(*launchFile, cfg); err != nil {
 		return err
 	}
-
-	go hackGoMemoryPolicy()
 
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet); err != nil {
 		return err
@@ -69,7 +58,6 @@ func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet 
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -197,12 +185,15 @@ func waitHAKeeperReady(cfg logservice.HAKeeperClientConfig) (logservice.CNHAKeep
 }
 
 func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*2)
 	defer cancel()
 
 	// wait HAKeeper running
 	for {
 		state, err := client.GetClusterState(ctx)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 			state.State != logpb.HAKeeperRunning {
 			// not ready

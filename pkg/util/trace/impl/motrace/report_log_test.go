@@ -16,7 +16,12 @@ package motrace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,4 +125,60 @@ func TestReportZap(t *testing.T) {
 			require.Equal(t, tt.want, got.String())
 		})
 	}
+}
+
+var _ BatchProcessor = (*dummyCollectorCounter)(nil)
+var _ DiscardableCollector = (*dummyCollectorCounter)(nil)
+
+type dummyCollectorCounter struct {
+	collectCnt atomic.Int64
+	discardCnt atomic.Int64
+}
+
+func newDummyCollectorCounter() *dummyCollectorCounter {
+	return &dummyCollectorCounter{}
+}
+
+func (d *dummyCollectorCounter) DiscardableCollect(ctx context.Context, name batchpipe.HasName) error {
+	d.discardCnt.Add(1)
+	return nil
+}
+
+func (d *dummyCollectorCounter) Collect(ctx context.Context, name batchpipe.HasName) error {
+	d.collectCnt.Add(1)
+	return nil
+}
+
+func (d *dummyCollectorCounter) Start() bool                                    { return true }
+func (d *dummyCollectorCounter) Stop(graceful bool) error                       { return nil }
+func (d *dummyCollectorCounter) Register(name batchpipe.HasName, impl PipeImpl) {}
+
+func TestReportZap_Discardable(t *testing.T) {
+
+	exportMux.Lock()
+	defer exportMux.Unlock()
+
+	// Setup a Runtime
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+
+	collector := newDummyCollectorCounter()
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithBatchProcessor(collector))
+	oldP := GetTracerProvider()
+	defer SetTracerProvider(oldP)
+	SetTracerProvider(p)
+
+	logutil.Info("normal log 1")
+	require.Equal(t, int64(1), collector.collectCnt.Load())
+
+	logutil.Info("discard log 1", logutil.Discardable())
+	require.Equal(t, int64(1), collector.discardCnt.Load())
+
+	logger := runtime.ProcessLevelRuntime().Logger().With(logutil.Discardable())
+	logger.Info("discard log 2")
+	require.Equal(t, int64(2), collector.discardCnt.Load())
+	logger.Info("discard log 3")
+	require.Equal(t, int64(3), collector.discardCnt.Load())
+
+	logutil.Info("normal log 2")
+	require.Equal(t, int64(2), collector.collectCnt.Load())
 }

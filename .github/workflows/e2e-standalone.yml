@@ -1,10 +1,9 @@
-name: MatrixOne e2e CI(LAUNCH, PUSH)
+name: MatrixOne e2e CI(Standalone)
 
 on:
   pull_request:
     types: [ opened, synchronize, reopened ]
     branches: [ main,'[0-9]+.[0-9]+.[0-9]+' ]
-
   workflow_dispatch:
 
 jobs:
@@ -13,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     name: e2e BVT Test on Linux/x64(LAUNCH, PUSH, 1CN)
     timeout-minutes: 60
-
     steps:
       - name: checkout head
         uses: actions/checkout@v3
@@ -22,41 +20,34 @@ jobs:
           path: ./head
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
-
       - name: Set up Go
         uses: ./head/.github/actions/setup_env
-
       - name: Build MatrixOne
         run: |
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
-
       - name: echo config
         run: |
           cd $GITHUB_WORKSPACE/head
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-CN-tae-DN/cn.toml
           cat ./etc/launch-tae-CN-tae-DN/cn.toml
           cat ./etc/launch-tae-CN-tae-DN/dn.toml
-
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-CN-tae-DN
-
       - name: Clone test-tool repository
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
           ref: main
-
       - name: Set up JDK 8 for x64
         uses: actions/setup-java@v3
         with:
           java-version: '8'
           distribution: 'adopt'
           architecture: x64
-
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
@@ -64,7 +55,6 @@ jobs:
           locale
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
-
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
@@ -80,26 +70,26 @@ jobs:
             fi
             sleep 2
           done
-
       - name: Restart the Version of Head of MO
         run: |
           cd $GITHUB_WORKSPACE/head
           mv mo-service.log mo-service.r1.log
+          
+          # delete for clear the start finish status of mo
+          rm -rf mo-data/local/system_init_completed
+          
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-multi-CN-tae-DN
-
       - name: Start BVT Test for MO with Version of Head Restarted
         id: bvt_on_latest_head_version_run2
         run: |
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases/benchmark/tpch 2>&1
-
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
       - name: Dump restarted mo-service goroutines 
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/restarted-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
-          
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/restarted-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi               
       - name: generate upload files
         if: ${{ always() }}
         continue-on-error: true
@@ -110,7 +100,6 @@ jobs:
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/head/dump-stacks* ${{ github.workspace }}/upload/
-
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
@@ -120,125 +109,10 @@ jobs:
             ${{ github.workspace }}/upload
           retention-days: 7
 
-  multi-cn-bvt-linux-x86:
-    runs-on: ubuntu-latest
-    name: Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PUSH)
-    timeout-minutes: 60
-
-    steps:
-      - name: checkout head
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: '3'
-          path: ./head
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-
-      - name: Set up Go
-        uses: ./head/.github/actions/setup_env
-
-      - name: Build MatrixOne
-        run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make build
-          git rev-parse --short HEAD
-
-      - name: echo dn.toml
-        run: |
-          cd $GITHUB_WORKSPACE/head
-          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
-          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
-          cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
-          cat ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
-          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml
-
-      - name: Start MO
-        run: |
-          cd $GITHUB_WORKSPACE/head
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-multi-CN-tae-DN
-
-      - name: Clone test-tool repository
-        uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/mo-tester
-          path: ./mo-tester
-          ref: main
-
-      - name: Set up JDK 8 for x64
-        uses: actions/setup-java@v3
-        with:
-          java-version: '8'
-          distribution: 'adopt'
-          architecture: x64
-
-      - name: Start BVT Test
-        id: bvt_on_pr_version
-        run: |
-          export LC_ALL="C.UTF-8"
-          locale
-          cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
-
-      - name: Dump mo-service goroutines
-        if: ${{ always() && !cancelled() }}
-        run: |
-          max_retry=5
-          retry=0
-          while [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; do
-            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks${retry}.log
-            pkill -9 mo-service
-            retry=$((retry+1))
-            if [ ${retry} -ge ${max_retry} ]; then
-              echo 'after retry, still cannot shutdown mo-service'
-              exit 1
-            fi
-            sleep 2
-          done
-
-      - name: Restart the Version of Head of MO
-        run: |
-          cd $GITHUB_WORKSPACE/head
-          mv mo-service.log mo-service.r1.log
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-CN-tae-DN
-
-      - name: Start BVT Test for MO with Version of Head Restarted
-        id: bvt_on_latest_head_version_run2
-        run: |
-          export LC_ALL="C.UTF-8"
-          locale
-          cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
-
-      - name: Dump restarted mo-service goroutines 
-        if: ${{ always() && !cancelled() }}
-        run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/restarted-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
-  
-
-      - name: generate upload files
-        if: ${{ always() }}
-        continue-on-error: true
-        run: |
-          mkdir -p ${{ github.workspace }}/upload
-          rm -rf ./mo-tester/.git
-          rm -rf ./mo-tester/lib
-          mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/head/dump-stacks.log ${{ github.workspace }}/upload/
-
-      - uses: actions/upload-artifact@v3
-        if: ${{ failure() || cancelled()}}
-        continue-on-error: true
-        with:
-          name: multi-cn-e2e-linux-x86-reports
-          path: |
-            ${{ github.workspace }}/upload
-          retention-days: 7
-
   multi-cn-proxy-bvt-linux-x86:
     runs-on: ubuntu-latest
     name: Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PROXY, PUSH)
     timeout-minutes: 60
-
     steps:
       - name: checkout head
         uses: actions/checkout@v3
@@ -247,41 +121,34 @@ jobs:
           path: ./head
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
-
       - name: Set up Go
         uses: ./head/.github/actions/setup_env
-
       - name: Build MatrixOne
         run: |
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
-
       - name: echo cn.toml dn.toml
         run: |
           cd $GITHUB_WORKSPACE/head
           cat ./etc/launch-with-proxy/cn1.toml
           cat ./etc/launch-with-proxy/cn2.toml
           cat ./etc/launch-with-proxy/dn.toml
-
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-with-proxy -with-proxy
-
       - name: Clone test-tool repository
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
           ref: main
-
       - name: Set up JDK 8 for x64
         uses: actions/setup-java@v3
         with:
           java-version: '8'
           distribution: 'adopt'
           architecture: x64
-
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
@@ -290,12 +157,10 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           sed -i 's/127.0.0.1:6001/127.0.0.1:6009/' ./mo.yml
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1
-
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
-
       - name: generate upload files
         if: ${{ always() }}
         continue-on-error: true
@@ -306,7 +171,6 @@ jobs:
           mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/head/dump-stacks.log ${{ github.workspace }}/upload/
-
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
@@ -315,3 +179,145 @@ jobs:
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
+
+  multi-cn-bvt-linux-x86:
+    runs-on: ubuntu-latest
+    name: Multi-CN e2e BVT Compatibility Test on Linux/x64(LAUNCH, PUSH)
+    timeout-minutes: 60
+    steps:
+      - name: checkout head
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '3'
+          path: ./head
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: checkout upstream
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '3'
+          path: ./upstream
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: ${{ github.event.pull_request.base.ref }}       
+      - name: Set up Go
+        uses: ./head/.github/actions/setup_env
+      - name: Build MatrixOne for head
+        run: |
+          cd $GITHUB_WORKSPACE/head && make clean && make build
+          git rev-parse --short HEAD               
+      - name: Build MatrixOne for upstream
+        run: |
+          cd $GITHUB_WORKSPACE/upstream && make clean && make build          
+          git rev-parse --short HEAD
+      - name: Create path for execution
+        run: |
+          cd $GITHUB_WORKSPACE && mkdir workspace                           
+      - name: Start the Latest Version of Main of MO
+        run: |
+          cd $GITHUB_WORKSPACE/workspace
+          mv $GITHUB_WORKSPACE/upstream/etc .
+          mv $GITHUB_WORKSPACE/upstream/mo-service .
+          mv $GITHUB_WORKSPACE/upstream/optools .
+          echo "==============configuration of upstram=============="
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml     
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-multi-CN-tae-DN           
+      - name: Clone test-tool repository
+        uses: actions/checkout@v3
+        with:
+          repository: matrixorigin/mo-tester
+          path: ./mo-tester
+          ref: main
+      - name: Set up JDK 8 for x64
+        uses: actions/setup-java@v3
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          architecture: x64
+      - name: Start BVT Test for MO with the Latest Version of Main
+        id: bvt_on_latest_main_version
+        run: |
+          export LC_ALL="C.UTF-8"
+          locale
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/upstream/test/distributed/cases 2>&1
+      - name: Dump mo-service goroutines
+        if: ${{ always() && !cancelled() }}
+        run: |
+          max_retry=5
+          retry=0
+          while [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; do
+            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/upstream-dump-stacks${retry}.log
+            pkill -9 mo-service
+            retry=$((retry+1))
+            if [ ${retry} -ge ${max_retry} ]; then
+              echo 'after retry, still cannot shutdown mo-service'
+              exit 1
+            fi
+            sleep 2
+          done
+      - name: Start the Version of Head of MO
+        run: |
+          cd $GITHUB_WORKSPACE/workspace
+          mv mo-service mo-service-upstream
+          mv mo-service.log upstream-mo-service.log
+          rm -rf mo-data/etl
+          
+          # delete for clear the start finishe status of mo
+          rm -rf mo-data/local/system_init_completed
+          
+          rm -rf etc
+          rm -rf optools
+          mv $GITHUB_WORKSPACE/head/etc .
+          mv $GITHUB_WORKSPACE/head/optools .
+          mv $GITHUB_WORKSPACE/head/mo-service .
+          echo "==============configuration of head=============="
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml      
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-multi-CN-tae-DN         
+      - name: Start BVT Test for MO with Version of Head
+        id: bvt_on_latest_head_version
+        run: |
+          export LC_ALL="C.UTF-8"
+          locale
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases 2>&1         
+      - name: Dump mo-service-new goroutines
+        if: ${{ always() && !cancelled() }}
+        run: |
+          max_retry=5
+          retry=0
+          while [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; do
+            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/new-dump-stacks${retry}.log
+            pkill -9 mo-service
+            retry=$((retry+1))
+            if [ ${retry} -ge ${max_retry} ]; then
+              echo 'after retry, still cannot shutdown mo-service'
+              exit 1
+            fi
+            sleep 2
+          done
+      - name: generate upload files
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          mkdir -p ${{ github.workspace }}/upload
+          rm -rf ./mo-tester/.git
+          rm -rf ./mo-tester/lib
+          mv ${{ github.workspace }}/workspace ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/          
+      - uses: actions/upload-artifact@v3
+        if: ${{ failure() || cancelled()}}
+        continue-on-error: true
+        with:
+          name: multi-cn-e2e-linux-x86-reports
+          path: |
+            ${{ github.workspace }}/upload
+          retention-days: 7
+          

@@ -31,7 +31,8 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+	// mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectPrepare("INSERT INTO `testDB`.`testTable`").ExpectExec().WithArgs("record1").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	db_holder.SetDBConn(db)
@@ -40,11 +41,13 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 	var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
 
 	tbl := &table.Table{
-		Columns: []table.Column{dummyStrColumn},
+		Database: "testDB",
+		Table:    "testTable",
+		Columns:  []table.Column{dummyStrColumn},
 	}
 	records := [][]string{
 		{"record1"},
-		{"record2"},
+		// {"record2"},
 		// add more records as needed
 	}
 
