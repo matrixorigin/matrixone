@@ -161,6 +161,7 @@ type txnOperator struct {
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
 		callbacks    map[EventType][]func(txn.TxnMeta)
+		retry        bool
 	}
 	workspace       Workspace
 	timestampWaiter TimestampWaiter
@@ -439,6 +440,18 @@ func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
 	}
 
 	return tc.doAddLockTableLocked(value)
+}
+
+func (tc *txnOperator) ResetRetry(retry bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.retry = retry
+}
+
+func (tc *txnOperator) IsRetry() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.retry
 }
 
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {

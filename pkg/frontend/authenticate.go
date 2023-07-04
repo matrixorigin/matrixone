@@ -7046,7 +7046,15 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		comment = ca.Comment.Comment
 	}
 
-	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+	//determine the status of the account
+	status := sysAccountStatus
+	if ca.StatusOption.Exist {
+		if ca.StatusOption.Option == tree.AccountStatusSuspend {
+			status = tree.AccountStatusSuspend.String()
+		}
+	}
+
+	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, status, types.CurrentTimestamp().String2(time.UTC, 0), comment)
 	//execute the insert
 	err = bh.Exec(ctx, initMoAccount)
 	if err != nil {
