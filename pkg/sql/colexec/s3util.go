@@ -38,6 +38,10 @@ import (
 )
 
 // S3Writer is used to write table data to S3 and package a series of `BlockWriter` write operations
+// Currently there are two scenarios will let cn write s3 directly
+// scenario 1 is insert operator directly go s3, when a one-time insert/load data volume is relatively large will trigger the scenario
+// scenario 2 is txn.workspace exceeds the threshold value, in the txn.dumpBatch function trigger a write s3
+// TODO: There are currently two sets of initialization logic for S3Writer, and we will try to refactor it to make it one
 type S3Writer struct {
 	sortIndex      int // When writing table data, if table has sort key, need to sort data and then write to S3
 	pk             int
@@ -134,6 +138,10 @@ func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
 			break
 		}
 	}
+}
+
+func (w *S3Writer) SetClusterBy(isClusterBy bool) {
+	w.isClusterBy = isClusterBy
 }
 
 func (w *S3Writer) Init(proc *process.Process) {
