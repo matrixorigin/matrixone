@@ -113,10 +113,11 @@ func startFileServiceProfile() func() {
 	if err != nil {
 		panic(err)
 	}
-	stop := fileservice.FSProfileHandler.StartProfile(f)
+	write, stop := fileservice.FSProfileHandler.StartProfile()
 	logutil.Infof("File service profiling enabled, writing to %s", filePath)
 	return func() {
 		stop()
+		write(f)
 		f.Close()
 	}
 }

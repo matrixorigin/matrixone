@@ -524,6 +524,20 @@ func (mr *MockTxnOperatorMockRecorder) GetWorkspace() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkspace", reflect.TypeOf((*MockTxnOperator)(nil).GetWorkspace))
 }
 
+// IsRetry mocks base method.
+func (m *MockTxnOperator) IsRetry() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsRetry")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsRetry indicates an expected call of IsRetry.
+func (mr *MockTxnOperatorMockRecorder) IsRetry() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockTxnOperator)(nil).IsRetry))
+}
+
 // Read mocks base method.
 func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
@@ -537,6 +551,18 @@ func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.
 func (mr *MockTxnOperatorMockRecorder) Read(ctx, ops interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockTxnOperator)(nil).Read), ctx, ops)
+}
+
+// ResetRetry mocks base method.
+func (m *MockTxnOperator) ResetRetry(arg0 bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ResetRetry", arg0)
+}
+
+// ResetRetry indicates an expected call of ResetRetry.
+func (mr *MockTxnOperatorMockRecorder) ResetRetry(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetRetry", reflect.TypeOf((*MockTxnOperator)(nil).ResetRetry), arg0)
 }
 
 // Rollback mocks base method.
@@ -746,6 +772,20 @@ func (mr *MockDebugableTxnOperatorMockRecorder) GetWorkspace() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkspace", reflect.TypeOf((*MockDebugableTxnOperator)(nil).GetWorkspace))
 }
 
+// IsRetry mocks base method.
+func (m *MockDebugableTxnOperator) IsRetry() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsRetry")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsRetry indicates an expected call of IsRetry.
+func (mr *MockDebugableTxnOperatorMockRecorder) IsRetry() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockDebugableTxnOperator)(nil).IsRetry))
+}
+
 // Read mocks base method.
 func (m *MockDebugableTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
@@ -759,6 +799,18 @@ func (m *MockDebugableTxnOperator) Read(ctx context.Context, ops []txn.TxnReques
 func (mr *MockDebugableTxnOperatorMockRecorder) Read(ctx, ops interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Read), ctx, ops)
+}
+
+// ResetRetry mocks base method.
+func (m *MockDebugableTxnOperator) ResetRetry(arg0 bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ResetRetry", arg0)
+}
+
+// ResetRetry indicates an expected call of ResetRetry.
+func (mr *MockDebugableTxnOperatorMockRecorder) ResetRetry(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetRetry", reflect.TypeOf((*MockDebugableTxnOperator)(nil).ResetRetry), arg0)
 }
 
 // Rollback mocks base method.
@@ -970,6 +1022,20 @@ func (mr *MockEventableTxnOperatorMockRecorder) GetWorkspace() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkspace", reflect.TypeOf((*MockEventableTxnOperator)(nil).GetWorkspace))
 }
 
+// IsRetry mocks base method.
+func (m *MockEventableTxnOperator) IsRetry() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsRetry")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsRetry indicates an expected call of IsRetry.
+func (mr *MockEventableTxnOperatorMockRecorder) IsRetry() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockEventableTxnOperator)(nil).IsRetry))
+}
+
 // Read mocks base method.
 func (m *MockEventableTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
@@ -983,6 +1049,18 @@ func (m *MockEventableTxnOperator) Read(ctx context.Context, ops []txn.TxnReques
 func (mr *MockEventableTxnOperatorMockRecorder) Read(ctx, ops interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockEventableTxnOperator)(nil).Read), ctx, ops)
+}
+
+// ResetRetry mocks base method.
+func (m *MockEventableTxnOperator) ResetRetry(arg0 bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ResetRetry", arg0)
+}
+
+// ResetRetry indicates an expected call of ResetRetry.
+func (mr *MockEventableTxnOperatorMockRecorder) ResetRetry(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetRetry", reflect.TypeOf((*MockEventableTxnOperator)(nil).ResetRetry), arg0)
 }
 
 // Rollback mocks base method.

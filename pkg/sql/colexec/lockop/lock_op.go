@@ -143,6 +143,9 @@ func callBlocking(
 		// no input batch any more, means all lock performed.
 		if bat == nil {
 			arg.rt.step = stepDownstream
+			if len(arg.rt.cachedBatches) == 0 {
+				arg.rt.step = stepEnd
+			}
 			return false, nil
 		}
 
@@ -165,6 +168,7 @@ func callBlocking(
 			arg.rt.step = stepEnd
 			return false, nil
 		}
+
 		bat := arg.rt.cachedBatches[0]
 		arg.rt.cachedBatches = arg.rt.cachedBatches[1:]
 		if len(arg.rt.cachedBatches) == 0 {
@@ -398,6 +402,7 @@ func doLock(
 
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
 	if !result.HasConflict &&
+		!txnOp.IsRetry() &&
 		txnOp.Txn().IsRCIsolation() {
 		snapshotTS := txnOp.Txn().SnapshotTS
 		lockedTS := result.Timestamp
@@ -675,6 +680,9 @@ func hasNewVersionInRange(
 	eng engine.Engine,
 	vec *vector.Vector,
 	from, to timestamp.Timestamp) (bool, error) {
+	if vec == nil {
+		return true, nil
+	}
 	txnClient := proc.TxnClient
 	txnOp, err := txnClient.New(proc.Ctx, to.Prev())
 	if err != nil {
