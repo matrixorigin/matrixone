@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -121,6 +122,8 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	TableFunction: table_function.String,
 
 	LockOp: lockop.String,
+
+	Shuffle: shuffle.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -177,6 +180,8 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	TableFunction: table_function.Prepare,
 
 	LockOp: lockop.Prepare,
+
+	Shuffle: shuffle.Prepare,
 }
 
 var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
@@ -234,4 +239,6 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	TableFunction: table_function.Call,
 
 	LockOp: lockop.Call,
+
+	Shuffle: shuffle.Call,
 }

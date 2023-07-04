@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -378,6 +379,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			}
 			res.Arg = arg
 		}
+	case vm.Shuffle:
+		arg := &shuffle.Argument{}
+		res.Arg = arg
 	case vm.Dispatch:
 		ok := false
 		if regMap != nil {

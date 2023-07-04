@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -691,6 +692,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond: t.Conditions[1],
 			Result:    t.Result,
 		}
+	case *shuffle.Argument:
+		in.Shuffle = &pipeline.Shuffle{}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleColIdx = t.ShuffleColIdx
@@ -1065,6 +1068,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			},
 			Result: t.Result,
 		}
+	case vm.Shuffle:
+		//t := opr.GetShuffle()
+		v.Arg = &dispatch.Argument{}
 	case vm.Dispatch:
 		t := opr.GetDispatch()
 		regs := make([]*process.WaitRegister, len(t.LocalConnector))
