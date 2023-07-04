@@ -77,14 +77,14 @@ func (m CreateTable) IsSystemExternalRel() bool {
 	return m.TableDef.TableType == SystemExternalRel
 }
 
-func (m *PartitionByDef) GenPartitionExprString() string {
-	switch m.Type {
+func (p *PartitionByDef) GenPartitionExprString() string {
+	switch p.Type {
 	case PartitionType_HASH, PartitionType_LINEAR_HASH,
 		PartitionType_RANGE, PartitionType_LIST:
-		return m.PartitionExpr.ExprFmtStr
+		return p.PartitionExpr.ExprFmtStr
 	case PartitionType_KEY, PartitionType_LINEAR_KEY,
 		PartitionType_LIST_COLUMNS, PartitionType_RANGE_COLUMNS:
-		partitionColumns := m.PartitionColumns
+		partitionColumns := p.PartitionColumns
 		buf := bytes.NewBuffer(make([]byte, 0, 128))
 		for i, column := range partitionColumns.PartitionFmtColumns {
 			if i == 0 {
