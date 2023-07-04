@@ -388,6 +388,10 @@ func (l *localLockTable) addRangeLockLocked(
 		start,
 		nil,
 		func(key []byte, keyLock Lock) bool {
+			if bytes.Compare(key, end) > 0 {
+				return false
+			}
+
 			if !bytes.Equal(keyLock.txnID, txn.txnID) {
 				conflictWith = keyLock
 				conflictKey = key
