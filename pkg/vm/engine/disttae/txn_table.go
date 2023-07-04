@@ -1117,7 +1117,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		false); err != nil {
 		return err
 	}
-	return tbl.db.txn.dumpBatch(false, tbl.writesOffset)
+	return tbl.db.txn.dumpBatch(tbl.writesOffset)
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
