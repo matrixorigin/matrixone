@@ -398,6 +398,7 @@ func doLock(
 
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
 	if !result.HasConflict &&
+		!txnOp.IsRetry() &&
 		txnOp.Txn().IsRCIsolation() {
 		snapshotTS := txnOp.Txn().SnapshotTS
 		lockedTS := result.Timestamp
@@ -675,6 +676,9 @@ func hasNewVersionInRange(
 	eng engine.Engine,
 	vec *vector.Vector,
 	from, to timestamp.Timestamp) (bool, error) {
+	if vec == nil {
+		return true, nil
+	}
 	txnClient := proc.TxnClient
 	txnOp, err := txnClient.New(proc.Ctx, to.Prev())
 	if err != nil {
