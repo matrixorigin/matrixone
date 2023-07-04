@@ -447,7 +447,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	// Todo: review how to aggregate the internal SQL statements logging
 	if s.User == "internal" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
-			s.Free()
+			go s.Free()
 			return nil
 		}
 	}
