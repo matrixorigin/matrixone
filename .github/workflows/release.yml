@@ -17,6 +17,8 @@ jobs:
         with:
           repository: matrixorigin/matrixone
           ref: ${{ env.branch }}
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -52,6 +54,8 @@ jobs:
         with:
           repository: matrixorigin/matrixone
           ref: ${{ env.branch }}         
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -87,6 +91,8 @@ jobs:
         with:
           repository: matrixorigin/matrixone
           ref: ${{ env.branch }}          
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -140,6 +146,8 @@ jobs:
         with:
           repository: matrixorigin/matrixone
           ref: ${{ env.branch }}
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Check go Version
         run: |
           go version
