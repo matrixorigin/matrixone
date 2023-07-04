@@ -676,6 +676,9 @@ func hasNewVersionInRange(
 	eng engine.Engine,
 	vec *vector.Vector,
 	from, to timestamp.Timestamp) (bool, error) {
+	if vec == nil {
+		return true, nil
+	}
 	txnClient := proc.TxnClient
 	txnOp, err := txnClient.New(proc.Ctx, to.Prev())
 	if err != nil {

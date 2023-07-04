@@ -158,6 +158,7 @@ func (txn *Transaction) dumpBatch(force bool, offset int) error {
 	}
 
 	for key := range mp {
+		// scenario 2 for cn write s3, more in the comment of S3Writer
 		s3Writer, tbl, err := txn.getS3Writer(key)
 		if err != nil {
 			return err
@@ -204,7 +205,7 @@ func (txn *Transaction) dumpBatch(force bool, offset int) error {
 }
 
 func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Relation, error) {
-	sortIdx, attrs, tbl, err := txn.getSortIdx(key)
+	sortIdx, attrs, tbl, err, isClusterBy := txn.getSortIdx(key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -213,6 +214,8 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 	s3Writer.SetSortIdx(-1)
 	s3Writer.Init(txn.proc)
 	s3Writer.SetMp(attrs)
+	s3Writer.SetClusterBy(isClusterBy)
+
 	if sortIdx != -1 {
 		s3Writer.SetSortIdx(sortIdx)
 	}
@@ -228,29 +231,32 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 	return s3Writer, tbl, nil
 }
 
-func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, engine.Relation, error) {
+func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, engine.Relation, error, bool) {
 	databaseName := key[0]
 	tableName := key[1]
 
 	database, err := txn.engine.Database(txn.proc.Ctx, databaseName, txn.proc.TxnOperator)
 	if err != nil {
-		return -1, nil, nil, err
+		return -1, nil, nil, err, false
 	}
 	tbl, err := database.Relation(txn.proc.Ctx, tableName, nil)
 	if err != nil {
-		return -1, nil, nil, err
+		return -1, nil, nil, err, false
 	}
 	attrs, err := tbl.TableColumns(txn.proc.Ctx)
 	if err != nil {
-		return -1, nil, nil, err
+		return -1, nil, nil, err, false
 	}
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].ClusterBy ||
 			(attrs[i].Primary && attrs[i].Name != catalog.FakePrimaryKeyColName) {
-			return i, attrs, tbl, err
+			if attrs[i].ClusterBy {
+				return i, attrs, tbl, err, true
+			}
+			return i, attrs, tbl, err, false
 		}
 	}
-	return -1, attrs, tbl, nil
+	return -1, attrs, tbl, nil, false
 }
 
 // vec contains block infos.
