@@ -236,4 +236,17 @@ alter table index08 add index zxxxx(col3);
 show index from index08;
 drop table index08;
 
+CREATE TABLE `t2` (
+`a` INT DEFAULT NULL
+) COMMENT='New table comment';
+
+alter table t2 drop primary key;
+alter table t2 AUTO_INCREMENT=10;
+
+CREATE TABLE `t3` (
+`a` INT NOT NULL,
+PRIMARY KEY (`a`)
+);
+alter table t3 drop primary key;
+
 drop database test;
