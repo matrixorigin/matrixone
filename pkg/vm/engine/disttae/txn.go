@@ -126,7 +126,8 @@ func (txn *Transaction) WriteBatch(
 	return nil
 }
 
-func (txn *Transaction) dumpBatch(force bool, offset int) error {
+// dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
+func (txn *Transaction) dumpBatch(offset int) error {
 	var size uint64
 
 	txn.Lock()
@@ -134,6 +135,7 @@ func (txn *Transaction) dumpBatch(force bool, offset int) error {
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
+
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		// TODO: after shrink, we should update workspace size
@@ -158,11 +160,17 @@ func (txn *Transaction) dumpBatch(force bool, offset int) error {
 	}
 
 	for key := range mp {
-		// scenario 2 for cn write s3, more in the comment of S3Writer
-		s3Writer, tbl, err := txn.getS3Writer(key)
+		// scenario 2 for cn write s3, more info in the comment of S3Writer
+		tbl, err := txn.getTable(key)
 		if err != nil {
 			return err
 		}
+		s3Writer, err := colexec.AllocS3Writer(txn.proc, tbl.(*txnTable).getTableDef())
+		if err != nil {
+			return err
+		}
+		defer s3Writer.Free(txn.proc)
+
 		s3Writer.InitBuffers(txn.proc, mp[key][0])
 		for i := 0; i < len(mp[key]); i++ {
 			s3Writer.Put(mp[key][i], txn.proc)
@@ -204,59 +212,19 @@ func (txn *Transaction) dumpBatch(force bool, offset int) error {
 	return nil
 }
 
-func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Relation, error) {
-	sortIdx, attrs, tbl, err, isClusterBy := txn.getSortIdx(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	s3Writer := &colexec.S3Writer{}
-	s3Writer.SetTableName(tbl.GetTableName())
-	s3Writer.SetSortIdx(-1)
-	s3Writer.Init(txn.proc)
-	s3Writer.SetMp(attrs)
-	s3Writer.SetClusterBy(isClusterBy)
-
-	if sortIdx != -1 {
-		s3Writer.SetSortIdx(sortIdx)
-	}
-	tdefs, err := tbl.TableDefs(txn.proc.Ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, def := range tdefs {
-		if attr, ok := def.(*engine.VersionDef); ok {
-			s3Writer.SetSchemaVer(attr.Version)
-		}
-	}
-	return s3Writer, tbl, nil
-}
-
-func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, engine.Relation, error, bool) {
+func (txn *Transaction) getTable(key [2]string) (engine.Relation, error) {
 	databaseName := key[0]
 	tableName := key[1]
 
 	database, err := txn.engine.Database(txn.proc.Ctx, databaseName, txn.proc.TxnOperator)
 	if err != nil {
-		return -1, nil, nil, err, false
+		return nil, err
 	}
 	tbl, err := database.Relation(txn.proc.Ctx, tableName, nil)
 	if err != nil {
-		return -1, nil, nil, err, false
+		return nil, err
 	}
-	attrs, err := tbl.TableColumns(txn.proc.Ctx)
-	if err != nil {
-		return -1, nil, nil, err, false
-	}
-	for i := 0; i < len(attrs); i++ {
-		if attrs[i].ClusterBy ||
-			(attrs[i].Primary && attrs[i].Name != catalog.FakePrimaryKeyColName) {
-			if attrs[i].ClusterBy {
-				return i, attrs, tbl, err, true
-			}
-			return i, attrs, tbl, err, false
-		}
-	}
-	return -1, attrs, tbl, nil, false
+	return tbl, nil
 }
 
 // vec contains block infos.
@@ -547,7 +515,7 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 	if err := txn.mergeTxnWorkspace(); err != nil {
 		return err
 	}
-	if err := txn.dumpBatch(true, 0); err != nil {
+	if err := txn.dumpBatch(0); err != nil {
 		return err
 	}
 	reqs, err := genWriteReqs(ctx, txn.writes)
