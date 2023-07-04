@@ -729,7 +729,7 @@ func maybeAddTestLockWithDeadlock(
 	granularity pb.Granularity) pb.Result {
 	t.Logf("%s try lock %+v", string(txnID), lock)
 	res, err := l.Lock(ctx, table, lock, txnID, pb.LockOptions{
-		Granularity: pb.Granularity_Row,
+		Granularity: granularity,
 		Mode:        pb.LockMode_Exclusive,
 		Policy:      pb.WaitPolicy_Wait,
 	})
