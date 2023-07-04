@@ -41,11 +41,13 @@ created_time    TIMESTAMP(0)    YES        null
 creator    INT UNSIGNED(0)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
 account_id    INT UNSIGNED(0)    YES        null        
+partition_type    VARCHAR(50)    YES        null        
+partition_expression    VARCHAR(2048)    YES        null        
 partitioned    TINYINT(0)    YES        null        
 partition_info    BLOB(0)    YES        null        
 viewdef    VARCHAR(5000)    YES        null        
 constraint    VARCHAR(5000)    YES        null        
-rel_version    INT UNSIGNED(0)    YES        null
+rel_version    INT UNSIGNED(0)    YES        null        
 select datname, dat_createsql from mo_database;
 datname    dat_createsql
 system    create database system
@@ -86,8 +88,8 @@ system
 system_metrics
 information_schema
 mysql
-mo_catalog
 account_db
+mo_catalog
 update mo_catalog.mo_tables set relname='mo_aaaa';
 internal error: do not have privilege to execute the statement
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');

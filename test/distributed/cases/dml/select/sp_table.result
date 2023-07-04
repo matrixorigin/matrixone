@@ -14,6 +14,7 @@ mo_role    r
 mo_role_grant    r
 mo_role_privs    r
 mo_stored_procedure    r
+mo_table_partitions    r
 mo_tables    r
 mo_user    r
 mo_user_defined_function    r

@@ -351,7 +351,7 @@ var (
 			"`part`.`description_utf8` AS `PARTITION_DESCRIPTION`," +
 			"mo_table_rows(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `TABLE_ROWS`," +
 			"0 AS `AVG_ROW_LENGTH`," +
-			"0 AS `DATA_LENGTH`," +
+			"mo_table_size(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `DATA_LENGTH`," +
 			"0 AS `MAX_DATA_LENGTH`," +
 			"0 AS `INDEX_LENGTH`," +
 			"0 AS `DATA_FREE`," +

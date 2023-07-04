@@ -367,6 +367,7 @@ message PartitionByDef {
 message PartitionExpr {
 	Expr expr = 1;
 	string expr_str = 2;
+	string expr_fmt_str = 3;
 }
 
 message PartitionColumns {

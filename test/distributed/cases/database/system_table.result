@@ -156,6 +156,7 @@ schemata
 character_sets
 triggers
 tables
+partitions
 views
 engines
 routines

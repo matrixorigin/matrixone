@@ -421,42 +421,33 @@ func genInsertMoTablePartitionsSql(eg engine.Engine, proc *process.Process, data
 
 	isFirst := true
 	for _, partition := range partitionByDef.Partitions {
-		ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
-		defer cancelFunc()
-		partition_id, err := eg.AllocateIDByKey(ctx, ALLOCID_PARTITION_KEY)
-		if err != nil {
-			return "", err
-		}
-
-		// 1. partition_id
+		// 1. tableId
 		if isFirst {
-			fmt.Fprintf(buffer, "(%d, ", partition_id)
+			fmt.Fprintf(buffer, "(%d, ", tableId)
 			isFirst = false
 		} else {
-			fmt.Fprintf(buffer, ", (%d, ", partition_id)
+			fmt.Fprintf(buffer, ", (%d, ", tableId)
 		}
-		// 2. table_id
-		fmt.Fprintf(buffer, "%d, ", tableId)
 
-		// 3. database_id
+		// 2. database_id
 		fmt.Fprintf(buffer, "%s, ", databaseId)
 
-		// 4. partition number
+		// 3. partition number
 		fmt.Fprintf(buffer, "%d, ", partition.OrdinalPosition)
 
-		// 5. partition name
+		// 4. partition name
 		fmt.Fprintf(buffer, "'%s', ", partition.PartitionName)
 
-		// 6. description_utf8
+		// 5. description_utf8
 		fmt.Fprintf(buffer, "'%s', ", partition.Description)
 
-		// 7. partition item comment
+		// 6. partition item comment
 		fmt.Fprintf(buffer, "'%s', ", partition.Comment)
 
-		// 8. partition item options
+		// 7. partition item options
 		fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
-		// 9. partition_table_name
+		// 8. partition_table_name
 		fmt.Fprintf(buffer, "'%s')", partition.PartitionTableName)
 	}
 	buffer.WriteString(";")

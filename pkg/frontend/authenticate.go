@@ -781,7 +781,6 @@ var (
 			);`, catalog.MO_INDEXES)
 
 	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
-			  id bigint unsigned NOT NULL,
 			  table_id bigint unsigned NOT NULL,
 			  database_id bigint unsigned not null,
 			  number smallint unsigned NOT NULL,
@@ -790,9 +789,7 @@ var (
 			  comment varchar(2048) NOT NULL,
 			  options text,
 			  partition_table_name varchar(1024) NOT NULL,
-			  PRIMARY KEY (id),
-			  UNIQUE KEY table_id (table_id,name),
-			  UNIQUE KEY table_id_2 (table_id,number)
+			  PRIMARY KEY table_id (table_id, name)
 			);`, catalog.MO_TABLE_PARTITIONS)
 
 	//the sqls creating many tables for the tenant.

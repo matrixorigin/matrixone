@@ -133,15 +133,16 @@ func buildPartitionExpr(ctx context.Context, tblInfo *plan.TableDef, partitionBi
 	if err != nil {
 		return err
 	}
-	// TODO: format partition expression
+	//TODO: format partition expression
 	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
 	pExpr.Format(fmtCtx)
-	exprStr := fmtCtx.ToString()
+	exprFmtStr := fmtCtx.ToString()
 
 	// Temporary operation
 	partitionDef.PartitionExpr = &plan.PartitionExpr{
-		Expr:    planExpr,
-		ExprStr: exprStr,
+		Expr:       planExpr,
+		ExprStr:    tree.String(pExpr, dialect.MYSQL),
+		ExprFmtStr: exprFmtStr,
 	}
 	return nil
 }
@@ -580,7 +581,11 @@ func checkPartitionExprType(ctx context.Context, _ *PartitionBinder, _ *TableDef
 		t := types.T(expr.Typ.Id)
 		if partitionDef.Type == plan.PartitionType_HASH || partitionDef.Type == plan.PartitionType_LINEAR_HASH {
 			if !t.IsInteger() {
-				return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
+				if _, ok := expr.Expr.(*plan.Expr_Col); ok {
+					return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
+				} else {
+					return moerr.NewPartitionFuncNotAllowed(ctx, "PARTITION")
+				}
 			}
 		}
 

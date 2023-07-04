@@ -81,7 +81,7 @@ func (m *PartitionByDef) GenPartitionExprString() string {
 	switch m.Type {
 	case PartitionType_HASH, PartitionType_LINEAR_HASH,
 		PartitionType_RANGE, PartitionType_LIST:
-		return m.PartitionExpr.ExprStr
+		return m.PartitionExpr.ExprFmtStr
 	case PartitionType_KEY, PartitionType_LINEAR_KEY,
 		PartitionType_LIST_COLUMNS, PartitionType_RANGE_COLUMNS:
 		partitionColumns := m.PartitionColumns

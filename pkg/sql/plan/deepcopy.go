@@ -464,8 +464,9 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		}
 		if table.Partition.PartitionExpr != nil {
 			partitionDef.PartitionExpr = &plan.PartitionExpr{
-				Expr:    DeepCopyExpr(table.Partition.PartitionExpr.Expr),
-				ExprStr: table.Partition.PartitionExpr.GetExprStr(),
+				Expr:       DeepCopyExpr(table.Partition.PartitionExpr.Expr),
+				ExprStr:    table.Partition.PartitionExpr.GetExprStr(),
+				ExprFmtStr: table.Partition.PartitionExpr.GetExprFmtStr(),
 			}
 		}
 

@@ -223,6 +223,7 @@ use mo_catalog;
 show tables;
 Tables_in_mo_catalog
 mo_indexes
+mo_table_partitions
 mo_user
 mo_account
 mo_role

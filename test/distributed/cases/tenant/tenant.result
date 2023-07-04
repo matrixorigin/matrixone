@@ -9,10 +9,10 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 drop account if exists tenant_test;
 select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' order by relname;
 account_id    relname    relkind
-0    mo_increment_columns    
 0    mo_account    r
 0    mo_columns    r
 0    mo_database    r
+0    mo_increment_columns    
 0    mo_indexes    r
 0    mo_mysql_compatibility_mode    r
 0    mo_pubs    r
@@ -20,6 +20,7 @@ account_id    relname    relkind
 0    mo_role_grant    r
 0    mo_role_privs    r
 0    mo_stored_procedure    r
+0    mo_table_partitions    r
 0    mo_tables    r
 0    mo_user    r
 0    mo_user_defined_function    r
