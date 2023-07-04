@@ -48,23 +48,35 @@ func NewProfileHandler() *ProfileHandler {
 	}
 }
 
-func (p *ProfileHandler) StartProfile(w io.Writer) (stop func()) {
+func (p *ProfileHandler) StartProfile() (
+	write func(w io.Writer),
+	stop func(),
+) {
+
+	// register
 	state := <-p.stateChan
 	id := atomic.AddInt64(&p.nextProfilerID, 1)
 	profiler := newProfiler()
 	state.profilers[id] = profiler
 	p.profiling.Store(true)
 	p.stateChan <- state
-	return func() {
+
+	write = func(w io.Writer) {
 		state := <-p.stateChan
-		profiler := state.profilers[id]
+		state.profilers[id].profile.Write(w)
+		p.stateChan <- state
+	}
+
+	stop = func() {
+		state := <-p.stateChan
 		delete(state.profilers, id)
 		if len(state.profilers) == 0 {
 			p.profiling.Store(false)
 		}
 		p.stateChan <- state
-		profiler.profile.Write(w)
 	}
+
+	return
 }
 
 func (p *ProfileHandler) AddSample() {
@@ -85,8 +97,9 @@ func (p *ProfileHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		sec = 30
 	}
 
-	stop := p.StartProfile(w)
+	write, stop := p.StartProfile()
 	defer stop()
+	defer write(w)
 
 	select {
 	case <-req.Context().Done():
