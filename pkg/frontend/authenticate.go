@@ -7072,7 +7072,15 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		comment = ca.Comment.Comment
 	}
 
-	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+	//determine the status of the account
+	status := sysAccountStatus
+	if ca.StatusOption.Exist {
+		if ca.StatusOption.Option == tree.AccountStatusSuspend {
+			status = tree.AccountStatusSuspend.String()
+		}
+	}
+
+	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, status, types.CurrentTimestamp().String2(time.UTC, 0), comment)
 	//execute the insert
 	err = bh.Exec(ctx, initMoAccount)
 	if err != nil {
@@ -7208,7 +7216,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
+			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, newTenant.GetTenantID(), newTenant.GetTenant(), variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
 	}
