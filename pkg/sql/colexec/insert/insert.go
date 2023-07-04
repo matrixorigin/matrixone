@@ -66,6 +66,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 	bat := proc.InputBatch()
 	if bat == nil {
+		// scenario 1 for cn write s3, more in the comment of S3Writer
 		if ap.ToWriteS3 {
 			// If the target is partition table
 			if len(ap.InsertCtx.PartitionTableIDs) > 0 {
@@ -105,6 +106,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	defer proc.PutBatch(bat)
 	insertCtx := ap.InsertCtx
 
+	// scenario 1 for cn write s3, more in the comment of S3Writer
 	if ap.ToWriteS3 {
 		// If the target is partition table
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
