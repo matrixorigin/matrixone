@@ -1387,6 +1387,7 @@ func makeOneDeletePlan(
 			PartitionTableIds:   delNodeInfo.partTableIDs,
 			PartitionTableNames: delNodeInfo.partTableNames,
 			PartitionIdx:        int32(delNodeInfo.partitionIdx),
+			PrimaryKeyIdx:       int32(delNodeInfo.pkPos),
 		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)

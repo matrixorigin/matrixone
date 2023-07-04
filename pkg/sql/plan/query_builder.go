@@ -929,40 +929,35 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 	case plan.Node_LOCK_OP:
-
-		// get pk expr
+		preNode := builder.qry.Nodes[node.Children[0]]
 		pkexpr := &plan.Expr{
 			Typ: node.LockTargets[0].GetPrimaryColTyp(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
+					RelPos: preNode.BindingTags[0],
 					ColPos: node.LockTargets[0].PrimaryColIdxInBat,
 				},
 			},
 		}
-
+		oldPos := [2]int32{preNode.BindingTags[0], node.LockTargets[0].PrimaryColIdxInBat}
 		increaseRefCnt(pkexpr, 1, colRefCnt)
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
 		if err != nil {
 			return nil, err
 		}
-
-		increaseRefCnt(pkexpr, -1, colRefCnt)
-		err = builder.remapColRefForExpr(pkexpr, childRemapping.globalToLocal)
-		if err != nil {
-			return nil, err
+		if newPos, ok := childRemapping.globalToLocal[oldPos]; ok {
+			node.LockTargets[0].PrimaryColIdxInBat = newPos[1]
 		}
+		increaseRefCnt(pkexpr, -1, colRefCnt)
 
-		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
-
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: childProjList[i].Typ,
+				Typ: preNode.ProjectList[i].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -973,15 +968,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
-		node.LockTargets[0].PrimaryColIdxInBat = int32(len(childProjList) - 1)
-
 		if len(node.ProjectList) == 0 {
 			if len(childRemapping.localToGlobal) > 0 {
 				remapping.addColRef(childRemapping.localToGlobal[0])
 			}
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: childProjList[0].Typ,
+				Typ: preNode.ProjectList[0].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
