@@ -30,6 +30,7 @@ show columns from `SCHEMATA`;
 show columns from `CHARACTER_SETS`;
 show columns from `TRIGGERS`;
 show columns from `TABLES`;
+show columns from `PARTITIONS`;
 drop database if exists test;
 create database test;
 use test;

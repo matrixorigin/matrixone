@@ -48,6 +48,7 @@ show column_number from mo_tables;
 show column_number from mo_database;
 show column_number from mo_columns;
 show column_number from mo_indexes;
+show column_number from mo_table_partitions;
 
 use system_metrics;
 show column_number from metric;
@@ -243,6 +244,7 @@ show column_number from engines;
 show column_number from routines;
 show column_number from parameters;
 show column_number from keywords;
+show column_number from partitions;
 
 use mysql;
 show column_number from user;
