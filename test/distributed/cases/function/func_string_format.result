@@ -653,3 +653,66 @@ null    null    -1    -1.0
 null    null    11111    11,111.0
 drop table t1;
 drop table t2;
+SELECT FORMAT("12332.2", "2","ca_ES");
+format(12332.2, 2, ca_ES)
+12332,20
+SELECT FORMAT("12332.2", "2","de_AT");
+format(12332.2, 2, de_AT)
+12332,20
+SELECT FORMAT("12332.2", "2","el_GR");
+format(12332.2, 2, el_GR)
+12332,20
+SELECT FORMAT("12332.2", "2","eu_ES");
+format(12332.2, 2, eu_ES)
+12332,20
+SELECT FORMAT("12332.2", "2","fr_BE");
+format(12332.2, 2, fr_BE)
+12332,20
+SELECT FORMAT("12332.2", "2","fr_CA");
+format(12332.2, 2, fr_CA)
+12332,20
+SELECT FORMAT("12332.2", "2","fr_CH");
+format(12332.2, 2, fr_CH)
+12332,20
+SELECT FORMAT("12332.2", "2","fr_FR");
+format(12332.2, 2, fr_FR)
+12332,20
+SELECT FORMAT("12332.2", "2","fr_LU");
+format(12332.2, 2, fr_LU)
+12332,20
+SELECT FORMAT("12332.2", "2","gl_ES");
+format(12332.2, 2, gl_ES)
+12332,20
+SELECT FORMAT("12332.2", "2","hr_HR");
+format(12332.2, 2, hr_HR)
+12332,20
+SELECT FORMAT("12332.2", "2","it_IT");
+format(12332.2, 2, it_IT)
+12332,20
+SELECT FORMAT("12332.2", "2","nl_BE");
+format(12332.2, 2, nl_BE)
+12332,20
+SELECT FORMAT("12332.2", "2","nl_NL");
+format(12332.2, 2, nl_NL)
+12332,20
+SELECT FORMAT("12332.2", "2","pl_PL");
+format(12332.2, 2, pl_PL)
+12332,20
+SELECT FORMAT("12332.2", "2","pt_BR");
+format(12332.2, 2, pt_BR)
+12332,20
+SELECT FORMAT("12332.2", "2","pt_PT");
+format(12332.2, 2, pt_PT)
+12332,20
+SELECT FORMAT("12332.2", "2","sl_SI");
+format(12332.2, 2, sl_SI)
+12332,20
+SELECT FORMAT("12332.2", "2","it_CH");
+format(12332.2, 2, it_CH)
+12'332,20
+SELECT FORMAT("12332.2", "2","rm_CH");
+format(12332.2, 2, rm_CH)
+12'332,20
+SELECT FORMAT("12332.2", "2","ro_RO");
+format(12332.2, 2, ro_RO)
+12.332,20
