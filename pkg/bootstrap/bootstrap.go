@@ -95,10 +95,7 @@ var (
 			create_at					bigint,
 			update_at					bigint)`,
 			catalog.MOTaskDB),
-	}
 
-	// create system init task
-	step3InitSQLs = []string{
 		fmt.Sprintf(`insert into %s.sys_async_task(
                               task_metadata_id,
                               task_metadata_executor,
@@ -159,23 +156,13 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 		getLogger().Info("bootstrap mo step 1 completed")
 
 		// make sure txn start at now, and make sure can see the data of step1
-		opts = opts.WithMinCommittedTS(b.now())
+		opts = opts.WithMinCommittedTS(b.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
 		if err := b.exec.ExecTxn(ctx, execFunc(step2InitSQLs), opts); err != nil {
 			getLogger().Error("bootstrap mo step 2 failed",
 				zap.Error(err))
 			return err
 		}
-
 		getLogger().Info("bootstrap mo step 2 completed")
-
-		// make sure txn start at now, and make sure can see the data of step2
-		opts = opts.WithMinCommittedTS(b.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
-		if err := b.exec.ExecTxn(ctx, execFunc(step3InitSQLs), opts); err != nil {
-			getLogger().Error("bootstrap mo step 3 failed",
-				zap.Error(err))
-			return err
-		}
-		getLogger().Info("bootstrap mo step 3 completed")
 
 		if b.client != nil {
 			getLogger().Info("wait bootstrap logtail applied")

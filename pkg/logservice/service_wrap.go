@@ -15,14 +15,10 @@
 package logservice
 
 import (
-	"context"
-	"time"
-
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type WrappedService struct {
@@ -68,14 +64,6 @@ func (w *WrappedService) SetInitialClusterInfo(
 	return w.svc.store.setInitialClusterInfo(
 		logShardNum, dnShardNum, logReplicaNum,
 	)
-}
-
-func (w *WrappedService) CreateInitTasks() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	ctx, span := trace.Start(ctx, "CreateInitTasks")
-	defer span.End()
-	return nil
 }
 
 func (w *WrappedService) GetTaskService() (taskservice.TaskService, bool) {
