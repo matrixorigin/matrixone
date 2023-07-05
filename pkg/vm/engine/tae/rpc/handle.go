@@ -1007,6 +1007,14 @@ func (h *Handle) HandleAlterTable(
 	return tbl.AlterTable(ctx, req)
 }
 
+func (h *Handle) HandleAddFaultPoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.FaultPoint,
+	resp *api.SyncLogTailResp) (func(), error) {
+	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
+}
+
 func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {
 
 	if targetDir != "" {
