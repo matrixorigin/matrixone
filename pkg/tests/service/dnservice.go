@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/google/uuid"
@@ -142,13 +141,12 @@ type dnOptions []dnservice.Option
 // newDNService initializes an instance of `DNService`.
 func newDNService(
 	cfg *dnservice.Config,
-	cnCfg cnservice.Config,
 	rt runtime.Runtime,
 	fs fileservice.FileService,
 	opts dnOptions,
 ) (DNService, error) {
 	CounterSet := new(perfcounter.CounterSet)
-	svc, err := dnservice.NewService(CounterSet, cfg, cnCfg, rt, fs, opts...)
+	svc, err := dnservice.NewService(CounterSet, cfg, rt, fs, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +189,7 @@ func buildDNConfig(
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.
-	if err := cfg.Validate(cnservice.Config{}); err != nil {
+	if err := cfg.Validate(); err != nil {
 		panic(fmt.Sprintf("fatal when building dnservice.Config: %s", err))
 	}
 

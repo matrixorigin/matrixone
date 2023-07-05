@@ -20,13 +20,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -151,7 +149,7 @@ type Config struct {
 	Ctl ctlservice.Config `toml:"ctl"`
 }
 
-func (c *Config) Validate(cnCfg cnservice.Config) error {
+func (c *Config) Validate() error {
 	foundMachineHost := ""
 	if c.UUID == "" {
 		return moerr.NewInternalError(context.Background(), "Config.UUID not set")
@@ -238,11 +236,12 @@ func (c *Config) Validate(cnCfg cnservice.Config) error {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
 	if c.Txn.IncrementalDedup == "" {
-		if cnCfg.Txn.Mode == txn.TxnMode_Pessimistic.String() {
-			c.Txn.IncrementalDedup = "true"
-		} else {
-			c.Txn.IncrementalDedup = "false"
-		}
+		// todo : base CN.Txn.Mode to set defaule value of c.Txn.IncrementalDedup
+		// if cnCfg.Txn.Mode == txn.TxnMode_Pessimistic.String() {
+		// 	c.Txn.IncrementalDedup = "true"
+		// } else {
+		c.Txn.IncrementalDedup = "false"
+		// }
 	} else {
 		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
 		if c.Txn.IncrementalDedup != "true" && c.Txn.IncrementalDedup != "false" {

@@ -237,7 +237,6 @@ func startDNService(
 		s, err := dnservice.NewService(
 			perfCounterSet,
 			&c,
-			cfg.getCNServiceConfig(),
 			r,
 			fileService)
 		if err != nil {

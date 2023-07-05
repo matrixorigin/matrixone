@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -263,7 +262,6 @@ func newTestStore(
 	s, err := NewService(
 		CounterSet,
 		c,
-		cnservice.Config{},
 		rt,
 		fs, options...)
 	assert.NoError(t, err)
