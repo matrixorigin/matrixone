@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -72,24 +71,6 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	s.allocateTasks(expiredTasks, orderedCN)
 }
 
-func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error {
-	ts := s.taskServiceGetter()
-	if ts == nil {
-		return moerr.NewInternalError(ctx, "failed to get task service")
-	}
-	if err := ts.CreateBatch(ctx, tasks); err != nil {
-		runtime.ProcessLevelRuntime().Logger().Error("failed to create new tasks")
-		return err
-	}
-	runtime.ProcessLevelRuntime().Logger().Debug("new tasks created", zap.Int("created", len(tasks)))
-	v, err := ts.QueryTask(ctx)
-	if len(v) == 0 && err == nil {
-		panic("cannot read created tasks")
-	}
-	runtime.ProcessLevelRuntime().Logger().Debug("new tasks created, query", zap.Int("created", len(v)), zap.Error(err))
-	return nil
-}
-
 func (s *scheduler) StartScheduleCronTask() {
 	if ts := s.taskServiceGetter(); ts != nil {
 		ts.StartScheduleCronTask()
@@ -113,7 +94,8 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.Task {
 	tasks, err := ts.QueryTask(ctx, taskservice.WithTaskStatusCond(taskservice.EQ, status))
 	if err != nil {
 		runtime.ProcessLevelRuntime().Logger().Error("failed to query tasks",
-			zap.String("status", status.String()))
+			zap.String("status", status.String()),
+			zap.Error(err))
 		return nil
 	}
 	return tasks

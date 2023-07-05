@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/lni/dragonboat/v4"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -76,18 +75,6 @@ func (w *WrappedService) CreateInitTasks() error {
 	defer cancel()
 	ctx, span := trace.Start(ctx, "CreateInitTasks")
 	defer span.End()
-
-	for i := 0; i < checkBootstrapCycles; i++ {
-		select {
-		case <-ctx.Done():
-			return moerr.NewInternalError(ctx, "failed to create init tasks")
-		default:
-		}
-		if err := w.svc.createInitTasks(ctx); err == nil {
-			break
-		}
-		time.Sleep(time.Second)
-	}
 	return nil
 }
 

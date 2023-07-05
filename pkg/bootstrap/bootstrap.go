@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -95,6 +96,23 @@ var (
 			update_at					bigint)`,
 			catalog.MOTaskDB),
 	}
+
+	// create system init task
+	step3InitSQLs = []string{
+		fmt.Sprintf(`insert into %s.sys_async_task(
+                              task_metadata_id,
+                              task_metadata_executor,
+                              task_metadata_context,
+		                      task_metadata_option,
+		                      task_parent_id,
+		                      task_status,
+		                      task_runner,
+		                      task_epoch,
+		                      last_heartbeat,
+		                      create_at,
+		                      end_at) values ("SystemInit", 1, "", "{}", 0, 0, 0, 0, 0, %d, 0)`,
+			catalog.MOTaskDB, time.Now().UnixNano()),
+	}
 )
 
 type bootstrapper struct {
@@ -134,42 +152,15 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	if ok {
 
 		opts := executor.Options{}
-		err := b.exec.ExecTxn(
-			ctx,
-			func(te executor.TxnExecutor) error {
-				for _, sql := range step1InitSQLs {
-					res, err := te.Exec(sql)
-					if err != nil {
-						return err
-					}
-					res.Close()
-				}
-				return nil
-			},
-			opts)
-		if err != nil {
+		if err := b.exec.ExecTxn(ctx, execFunc(step1InitSQLs), opts); err != nil {
 			return err
 		}
 
 		getLogger().Info("bootstrap mo step 1 completed")
 
-		now, _ := b.clock.Now()
 		// make sure txn start at now, and make sure can see the data of step1
-		opts = opts.WithMinCommittedTS(now)
-		err = b.exec.ExecTxn(
-			ctx,
-			func(te executor.TxnExecutor) error {
-				for _, sql := range step2InitSQLs {
-					res, err := te.Exec(sql)
-					if err != nil {
-						return err
-					}
-					res.Close()
-				}
-				return nil
-			},
-			opts)
-		if err != nil {
+		opts = opts.WithMinCommittedTS(b.now())
+		if err := b.exec.ExecTxn(ctx, execFunc(step2InitSQLs), opts); err != nil {
 			getLogger().Error("bootstrap mo step 2 failed",
 				zap.Error(err))
 			return err
@@ -177,13 +168,21 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 
 		getLogger().Info("bootstrap mo step 2 completed")
 
+		// make sure txn start at now, and make sure can see the data of step2
+		opts = opts.WithMinCommittedTS(b.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
+		if err := b.exec.ExecTxn(ctx, execFunc(step3InitSQLs), opts); err != nil {
+			getLogger().Error("bootstrap mo step 3 failed",
+				zap.Error(err))
+			return err
+		}
+		getLogger().Info("bootstrap mo step 3 completed")
+
 		if b.client != nil {
 			getLogger().Info("wait bootstrap logtail applied")
 
 			// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
 			// bootstrap data.
-			now, _ = b.clock.Now()
-			b.client.(client.TxnClientWithCtl).SetLatestCommitTS(now)
+			b.client.(client.TxnClientWithCtl).SetLatestCommitTS(b.now())
 		}
 
 		getLogger().Info("successfully completed bootstrap")
@@ -207,12 +206,11 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 }
 
 func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
-	now, _ := b.clock.Now()
 	opts := executor.Options{}
 	res, err := b.exec.Exec(
 		ctx,
 		"show databases",
-		opts.WithMinCommittedTS(now))
+		opts.WithMinCommittedTS(b.now()))
 	if err != nil {
 		return false, err
 	}
@@ -229,4 +227,22 @@ func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, erro
 		}
 	}
 	return false, nil
+}
+
+func (b *bootstrapper) now() timestamp.Timestamp {
+	n, _ := b.clock.Now()
+	return n
+}
+
+func execFunc(sql []string) func(executor.TxnExecutor) error {
+	return func(e executor.TxnExecutor) error {
+		for _, s := range sql {
+			r, err := e.Exec(s)
+			if err != nil {
+				return err
+			}
+			r.Close()
+		}
+		return nil
+	}
 }

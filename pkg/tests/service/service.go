@@ -1595,14 +1595,6 @@ func (c *testCluster) rangeHAKeeperService(
 }
 
 func (c *testCluster) waitSystemInitCompleted(ctx context.Context) error {
-	log, err := c.GetLogServiceIndexed(0)
-	if err != nil {
-		return err
-	}
-	if err := log.CreateInitTasks(); err != nil {
-		return err
-	}
-
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	cn, err := c.GetCNServiceIndexed(0)
 	if err != nil {
