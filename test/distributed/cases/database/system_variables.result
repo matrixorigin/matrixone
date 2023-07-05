@@ -263,7 +263,7 @@ action_statement    TEXT(0)    YES        null
 action_condition    BINARY(0)    YES        null
 trigger_schema    VARCHAR(64)    YES        null
 action_reference_new_table    BINARY(0)    YES        null
-created    TIMESTAMP(0)    YES        null
+created    TIMESTAMP(2)    YES        null
 definer    VARCHAR(288)    YES        null
 sql_mode    VARCHAR(10)    YES        null
 action_reference_old_row    VARCHAR(3)    YES        null

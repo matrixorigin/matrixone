@@ -267,7 +267,7 @@ action_reference_old_table    BINARY(0)    YES        null
 action_reference_new_table    BINARY(0)    YES        null
 action_reference_old_row    VARCHAR(3)    YES        null
 action_reference_new_row    VARCHAR(3)    YES        null
-created    TIMESTAMP(0)    YES        null
+created    TIMESTAMP(2)    YES        null
 sql_mode    VARCHAR(10)    YES        null
 definer    VARCHAR(288)    YES        null
 character_set_client    VARCHAR(64)    YES        null
