@@ -25,6 +25,7 @@
 | 3010          | 1        |  TxnCommand_Table
 | 3011          | 1        |  TxnCommand_Segment
 | 3012          | 1        |  TxnCommand_Block
+| 3013          | 1        |  TxnCommand_PersistedDeleteNode
 
 ### Data
 

@@ -759,6 +759,30 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 	return
 }
 
+func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+	node := tbl.deleteNodes[*id]
+	if node != nil {
+		return
+	}
+
+	blk, err := tbl.store.warChecker.CacheGet(
+		tbl.entry.GetDB().ID,
+		id.TableID, id.SegmentID(),
+		&id.BlockID)
+	if err != nil {
+		return
+	}
+	blkData := blk.GetBlockData()
+	node2, ok, err := blkData.TryDeleteByDeltaloc(tbl.store.txn, deltaloc)
+	if err == nil {
+		if err = tbl.AddDeleteNode(id, node2); err != nil {
+			return
+		}
+		tbl.store.warChecker.Insert(blk)
+	}
+	return
+}
+
 func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	if tbl.localSegment != nil {
 		id, offset, err = tbl.localSegment.GetByFilter(filter)

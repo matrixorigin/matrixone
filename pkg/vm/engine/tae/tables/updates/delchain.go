@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -60,13 +61,16 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		links:     make(map[uint32]*DeleteNode),
 		mvcc:      mvcc,
 		mask:      &nulls.Bitmap{},
+		persisted: &nulls.Bitmap{},
 	}
 	return chain
 }
 func (chain *DeleteChain) AddDeleteCnt(cnt uint32) {
 	chain.cnt.Add(cnt)
 }
-
+func (chain *DeleteChain) IsEmpty() bool {
+	return chain.persisted.IsEmpty() && chain.mask.IsEmpty()
+}
 func (chain *DeleteChain) GetDeleteCnt() uint32 {
 	return chain.cnt.Load()
 }
@@ -159,6 +163,15 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.De
 	node.AttachTo(chain)
 	return node
 }
+
+func (chain *DeleteChain) AddPersistedNodeLocked(txn txnif.AsyncTxn, deltaloc objectio.Location) txnif.DeleteNode {
+	node := NewPersistedDeleteNode(txn, deltaloc)
+	node.AttachTo(chain)
+	mask := node.getPersistedRows()
+	node.chain.Load().persisted = mask
+	return node
+}
+
 func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode) {
 	if chain.links[row] != nil {
 		panic(fmt.Sprintf("row %d already in delete view", row))

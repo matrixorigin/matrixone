@@ -245,6 +245,7 @@ type TxnStore interface {
 	AddBlksWithMetaLoc(ctx context.Context, dbId, id uint64, metaLocs []objectio.Location) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error
+	TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
 	GetByFilter(ctx context.Context, dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
 	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
 

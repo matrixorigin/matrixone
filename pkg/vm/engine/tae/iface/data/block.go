@@ -81,6 +81,7 @@ type Block interface {
 
 	MakeAppender() (BlockAppender, error)
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32, dt handle.DeleteType) (txnif.DeleteNode, error)
+	TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location) (node txnif.DeleteNode, ok bool, err error)
 
 	GetTotalChanges() int
 	CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (*containers.BlockView, error)

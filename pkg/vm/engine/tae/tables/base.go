@@ -493,6 +493,22 @@ func (blk *baseBlock) RangeDelete(
 	return
 }
 
+func (blk *baseBlock) TryDeleteByDeltaloc(
+	txn txnif.AsyncTxn,
+	deltaLoc objectio.Location) (node txnif.DeleteNode, ok bool, err error) {
+	if blk.meta.IsAppendable() {
+		return
+	}
+	blk.Lock()
+	defer blk.Unlock()
+	if !blk.mvcc.GetDeleteChain().IsEmpty() {
+		return
+	}
+	blk.mvcc.CreatePersistedDeleteNode(txn, deltaLoc)
+	ok = true
+	return
+}
+
 func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) string {
 	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows())
 	if level >= common.PPL1 {

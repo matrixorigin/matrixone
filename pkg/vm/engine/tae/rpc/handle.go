@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -953,6 +954,7 @@ func (h *Handle) HandleWrite(
 			if err != nil {
 				return err
 			}
+			var ok bool
 			var bat *batch.Batch
 			bat, err = blockio.LoadColumns(
 				ctx,
@@ -964,6 +966,23 @@ func (h *Handle) HandleWrite(
 			)
 			if err != nil {
 				return
+			}
+			blkids := getBlkIDsFromRowids(bat.Vecs[0])
+			id := tb.GetMeta().(*catalog2.TableEntry).AsCommonID()
+			if len(blkids) == 1 {
+				for blkID := range blkids {
+					id.BlockID = blkID
+				}
+				ok, err = tb.TryDeleteByDeltaloc(id, location)
+				if err != nil {
+					return
+				}
+				if ok {
+					continue
+				}
+				logutil.Warnf("try delete by deltaloc failed")
+			} else {
+				logutil.Warnf("multiply blocks in one deltalocation")
 			}
 			vec := containers.ToDNVector(bat.Vecs[0])
 			defer vec.Close()
@@ -977,6 +996,16 @@ func (h *Handle) HandleWrite(
 	defer vec.Close()
 	err = tb.DeleteByPhyAddrKeys(vec)
 	return
+}
+
+func getBlkIDsFromRowids(vec *vector.Vector) map[types.Blockid]struct{} {
+	rowids := vector.MustFixedCol[types.Rowid](vec)
+	blkids := make(map[types.Blockid]struct{})
+	for _, rowid := range rowids {
+		blkID := *rowid.BorrowBlockID()
+		blkids[blkID] = struct{}{}
+	}
+	return blkids
 }
 
 func (h *Handle) HandleAlterTable(

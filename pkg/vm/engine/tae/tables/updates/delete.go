@@ -15,16 +15,24 @@
 package updates
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -35,6 +43,7 @@ type NodeType int8
 const (
 	NT_Normal NodeType = iota
 	NT_Merge
+	NT_Persisted
 )
 
 func (node *DeleteNode) Less(b *DeleteNode) int {
@@ -44,11 +53,12 @@ func (node *DeleteNode) Less(b *DeleteNode) int {
 type DeleteNode struct {
 	*common.GenericDLNode[*DeleteNode]
 	*txnbase.TxnMVCCNode
-	chain atomic.Pointer[DeleteChain]
-	mask  *roaring.Bitmap
-	nt    NodeType
-	id    *common.ID
-	dt    handle.DeleteType
+	chain    atomic.Pointer[DeleteChain]
+	mask     *roaring.Bitmap
+	deltaloc objectio.Location
+	nt       NodeType
+	id       *common.ID
+	dt       handle.DeleteType
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
@@ -80,6 +90,26 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 		if err != nil {
 			panic(err)
 		}
+	}
+	return n
+}
+
+func NewPersistedDeleteNode(txn txnif.AsyncTxn, deltaloc objectio.Location) *DeleteNode {
+	n := &DeleteNode{
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+		nt:          NT_Persisted,
+		dt:          handle.DT_Normal,
+		deltaloc:    deltaloc,
+	}
+	return n
+
+}
+
+func NewEmptyPersistedDeleteNode() *DeleteNode {
+	n := &DeleteNode{
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
+		nt:          NT_Persisted,
+		id:          &common.ID{},
 	}
 	return n
 }
@@ -149,6 +179,7 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 	}
 	node.chain.Load().mvcc.IncChangeIntentionCnt()
 }
+
 func (node *DeleteNode) DeletedRows() (rows []uint32) {
 	if node.mask == nil {
 		return
@@ -161,6 +192,11 @@ func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.
 func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
+	if node.nt == NT_Persisted {
+		if node.chain.Load().Depth() != 1 {
+			return moerr.NewTxnWWConflict(node.Txn.GetContext())
+		}
+	}
 	_, err = node.TxnMVCCNode.PrepareCommit()
 	if err != nil {
 		return
@@ -188,16 +224,97 @@ func (node *DeleteNode) ApplyRollback() (err error) {
 	return
 }
 
+func (node *DeleteNode) getPersistedRows() *nulls.Bitmap {
+	if node.nt != NT_Persisted {
+		panic("unsupport")
+	}
+	bat, err := LoadPersistedDeletes(
+		node.Txn.GetContext(),
+		"pk",
+		node.chain.Load().mvcc.meta.GetBlockData().GetFs(),
+		node.deltaloc)
+	if err != nil {
+		for {
+			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
+			bat, err = LoadPersistedDeletes(
+				node.Txn.GetContext(),
+				"pk",
+				node.chain.Load().mvcc.meta.GetBlockData().GetFs(),
+				node.deltaloc)
+			if err == nil {
+				break
+			}
+		}
+	}
+	mask := &nulls.Bitmap{}
+	rowids := bat.GetVectorByName(catalog.AttrRowID)
+	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) {
+		offset := rowid.GetRowOffset()
+		mask.Add(uint64(offset))
+	}, nil)
+	if err != nil {
+		panic(err)
+	}
+	return mask
+}
+
+func LoadPersistedDeletes(
+	ctx context.Context,
+	pkName string,
+	fs *objectio.ObjectFS,
+	location objectio.Location) (bat *containers.Batch, err error) {
+	movbat, err := blockio.LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
+	if err != nil {
+		return
+	}
+	bat = containers.NewBatch()
+	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, pkName, catalog.AttrAborted}
+	if persistedByCN(movbat) {
+		bat.AddVector(catalog.AttrRowID, containers.ToDNVector(movbat.Vecs[0]))
+		bat.AddVector("pk", containers.ToDNVector(movbat.Vecs[1]))
+	} else {
+		for i := 0; i < 4; i++ {
+			bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
+		}
+	}
+	return
+}
+
+func persistedByCN(bat *batch.Batch) bool {
+	return len(vector.MustFixedCol[bool](bat.Vecs[3])) == 0
+}
+
 func (node *DeleteNode) GeneralString() string {
-	return fmt.Sprintf("%s;Cnt=%d", node.TxnMVCCNode.String(), node.mask.GetCardinality())
+	switch node.nt {
+	case NT_Merge, NT_Normal:
+		return fmt.Sprintf("%s;Cnt=%d", node.TxnMVCCNode.String(), node.mask.GetCardinality())
+	case NT_Persisted:
+		return fmt.Sprintf("%s;DeltaLoc=%s", node.TxnMVCCNode.String(), node.deltaloc.String())
+	default:
+		panic(fmt.Sprintf("not support type %d", node.nt))
+	}
 }
 
 func (node *DeleteNode) GeneralDesc() string {
-	return fmt.Sprintf("%s;Cnt=%d", node.TxnMVCCNode.String(), node.mask.GetCardinality())
+	switch node.nt {
+	case NT_Merge, NT_Normal:
+		return fmt.Sprintf("%s;Cnt=%d", node.TxnMVCCNode.String(), node.mask.GetCardinality())
+	case NT_Persisted:
+		return fmt.Sprintf("%s;DeltaLoc=%s", node.TxnMVCCNode.String(), node.deltaloc.String())
+	default:
+		panic(fmt.Sprintf("not support type %d", node.nt))
+	}
 }
 
 func (node *DeleteNode) GeneralVerboseString() string {
-	return fmt.Sprintf("%s;Cnt=%d;Deletes=%v", node.TxnMVCCNode.String(), node.mask.GetCardinality(), node.mask)
+	switch node.nt {
+	case NT_Merge, NT_Normal:
+		return fmt.Sprintf("%s;Cnt=%d;Deletes=%v", node.TxnMVCCNode.String(), node.mask.GetCardinality(), node.mask)
+	case NT_Persisted:
+		return fmt.Sprintf("%s;DeltaLoc=%s", node.TxnMVCCNode.String(), node.deltaloc.String())
+	default:
+		panic(fmt.Sprintf("not support type %d", node.nt))
+	}
 }
 
 func (node *DeleteNode) StringLocked() string {
@@ -205,11 +322,21 @@ func (node *DeleteNode) StringLocked() string {
 	if node.nt == NT_Merge {
 		ntype = "MERGE"
 	}
+	if node.nt == NT_Persisted {
+		ntype = "PERSISTED"
+	}
 	commitState := "C"
 	if node.GetEnd() == txnif.UncommitTS {
 		commitState = "UC"
 	}
-	s := fmt.Sprintf("[%s:%s][%d:%s]%s", ntype, commitState, node.mask.GetCardinality(), node.mask.String(), node.TxnMVCCNode.String())
+	payload := ""
+	switch node.nt {
+	case NT_Normal, NT_Merge:
+		payload = fmt.Sprintf("[%d:%s]", node.mask.GetCardinality(), node.mask.String())
+	case NT_Persisted:
+		payload = fmt.Sprintf("[delta=%s]", node.deltaloc.String())
+	}
+	s := fmt.Sprintf("[%s:%s]%s%s", ntype, commitState, payload, node.TxnMVCCNode.String())
 	return s
 }
 
@@ -219,9 +346,15 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(cn)
-	buf, err := node.mask.ToBytes()
-	if err != nil {
-		return
+	var buf []byte
+	switch node.nt {
+	case NT_Merge, NT_Normal:
+		buf, err = node.mask.ToBytes()
+		if err != nil {
+			return
+		}
+	case NT_Persisted:
+		buf = node.deltaloc
 	}
 	var sn int64
 	if sn, err = objectio.WriteBytes(buf, w); err != nil {
@@ -251,10 +384,15 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn2
-	node.mask = roaring.New()
-	err = node.mask.UnmarshalBinary(buf)
-	if err != nil {
-		return
+	switch node.nt {
+	case NT_Merge, NT_Normal:
+		node.mask = roaring.New()
+		err = node.mask.UnmarshalBinary(buf)
+		if err != nil {
+			return
+		}
+	case NT_Persisted:
+		node.deltaloc = buf
 	}
 	if sn2, err = node.TxnMVCCNode.ReadFrom(r); err != nil {
 		return
@@ -275,8 +413,13 @@ func (node *DeleteNode) Is1PC() bool { return node.TxnMVCCNode.Is1PC() }
 func (node *DeleteNode) PrepareRollback() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
-	node.chain.Load().RemoveNodeLocked(node)
-	node.chain.Load().DeleteInDeleteView(node)
+	switch node.nt {
+	case NT_Merge, NT_Normal:
+		node.chain.Load().RemoveNodeLocked(node)
+		node.chain.Load().DeleteInDeleteView(node)
+	case NT_Persisted:
+		node.chain.Load().persisted = nil
+	}
 	node.TxnMVCCNode.PrepareRollback()
 	return
 }

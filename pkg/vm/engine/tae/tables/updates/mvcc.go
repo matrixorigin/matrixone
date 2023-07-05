@@ -130,6 +130,10 @@ func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.Dele
 	return n.deletes.Load().AddNodeLocked(txn, deleteType)
 }
 
+func (n *MVCCHandle) CreatePersistedDeleteNode(txn txnif.AsyncTxn, deltaloc objectio.Location) txnif.DeleteNode {
+	return n.deletes.Load().AddPersistedNodeLocked(txn, deltaloc)
+}
+
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
 	n.deletes.Load().OnReplayNode(deleteNode.(*DeleteNode))
 }
