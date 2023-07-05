@@ -195,6 +195,7 @@ func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, e
 	}
 	if needToSendShuffledBats(ap) {
 		proc.SetInputBatches(ap.ctr.shuffledBats)
+		ap.ctr.batsCount = 0
 	} else {
 		proc.SetInputBatches([]*batch.Batch{batch.EmptyBatch})
 	}
@@ -359,6 +360,7 @@ func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, 
 	}
 	if needToSendShuffledBats(ap) {
 		proc.SetInputBatches(ap.ctr.shuffledBats)
+		ap.ctr.batsCount = 0
 	} else {
 		proc.SetInputBatches([]*batch.Batch{batch.EmptyBatch})
 	}
