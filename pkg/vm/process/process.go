@@ -181,6 +181,7 @@ func (proc *Process) OperatorOutofMemory(size int64) bool {
 
 func (proc *Process) SetInputBatch(bat *batch.Batch) {
 	proc.Reg.InputBatch = bat
+	proc.Reg.InputBatches = nil
 }
 
 func (proc *Process) InputBatch() *batch.Batch {
@@ -189,6 +190,7 @@ func (proc *Process) InputBatch() *batch.Batch {
 
 func (proc *Process) SetInputBatches(bats []*batch.Batch) {
 	proc.Reg.InputBatches = bats
+	proc.Reg.InputBatch = nil
 }
 
 func (proc *Process) InputBatches() []*batch.Batch {
