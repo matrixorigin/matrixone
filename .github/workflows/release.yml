@@ -5,8 +5,6 @@ name: release
 on:
   release:
     types: [published]
-env: 
-   branch: main
 
 jobs:
   linux-amd64-build-job:
@@ -14,9 +12,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -47,11 +44,9 @@ jobs:
     runs-on: arm64-runner
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
-          
+        uses: actions/checkout@v3     
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -84,11 +79,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
-          
+        uses: actions/checkout@v3     
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -139,10 +132,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
-
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Check go Version
         run: |
           go version
