@@ -940,22 +940,29 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	// static credential
 	if apiKey != "" && apiSecret != "" {
 		// static
-		credentialProvider = aws.NewCredentialsCache(
-			credentials.NewStaticCredentialsProvider(apiKey, apiSecret, ""),
-		)
+		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
 	}
 
 	// credentials for 3rd-party services
-	//TODO fix this
-	//if credentialProvider == nil && endpointURL != nil {
-	//	hostname := endpointURL.Hostname()
-	//	if strings.Contains(hostname, "aliyuncs.com") {
-	//		credentialProvider = newAliyunCredentialsProvider()
-	//	} else if strings.Contains(hostname, "myqcloud.com") ||
-	//		strings.Contains(hostname, "tencentcos.cn") {
-	//		credentialProvider = newTencentCloudCredentialsProvider()
-	//	}
-	//}
+	if credentialProvider == nil && endpointURL != nil {
+		hostname := endpointURL.Hostname()
+		if strings.Contains(hostname, "aliyuncs.com") {
+			credentialProvider = newAliyunCredentialsProvider()
+			_, err := credentialProvider.Retrieve(ctx)
+			if err != nil {
+				// bad config, fallback to aws default
+				credentialProvider = nil
+			}
+		} else if strings.Contains(hostname, "myqcloud.com") ||
+			strings.Contains(hostname, "tencentcos.cn") {
+			credentialProvider = newTencentCloudCredentialsProvider()
+			_, err := credentialProvider.Retrieve(ctx)
+			if err != nil {
+				// bad config, fallback to aws default
+				credentialProvider = nil
+			}
+		}
+	}
 
 	// role arn credential
 	if roleARN != "" {
@@ -972,22 +979,25 @@ func newS3FS(arguments []string) (*S3FS, error) {
 				options.Region = region
 			}
 		})
-		credentialProvider = aws.NewCredentialsCache(
-			stscreds.NewAssumeRoleProvider(
-				stsSvc,
-				roleARN,
-				func(opts *stscreds.AssumeRoleOptions) {
-					if externalID != "" {
-						opts.ExternalID = &externalID
-					}
-				},
-			),
+		credentialProvider = stscreds.NewAssumeRoleProvider(
+			stsSvc,
+			roleARN,
+			func(opts *stscreds.AssumeRoleOptions) {
+				if externalID != "" {
+					opts.ExternalID = &externalID
+				}
+			},
 		)
 		// validate
 		_, err = credentialProvider.Retrieve(ctx)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// credentials cache
+	if credentialProvider != nil {
+		credentialProvider = aws.NewCredentialsCache(credentialProvider)
 	}
 
 	// load configs
