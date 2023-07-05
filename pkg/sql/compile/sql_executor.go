@@ -95,7 +95,8 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		return exec.rollback()
+		_ = exec.rollback()
+		return err
 	}
 	if err = exec.commit(); err != nil {
 		return err
