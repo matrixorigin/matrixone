@@ -40,8 +40,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil {
-		if needToSendShuffledBats(ap) {
+		if ap.ctr.batsCount > 0 {
 			proc.SetInputBatches(ap.ctr.shuffledBats)
+			ap.ctr.batsCount = 0
 		}
 		return true, nil
 	}
