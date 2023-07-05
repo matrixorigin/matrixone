@@ -38,7 +38,7 @@ type MVCCHandle struct {
 	meta            *catalog.BlockEntry
 	appends         *txnbase.MVCCSlice[*AppendNode]
 	changes         atomic.Uint32
-	deletesListener func(uint64, common.RowGen, types.TS) error
+	deletesListener func(uint64, types.TS) error
 	appendListener  func(txnif.AppendNode) error
 	persistedTS     types.TS
 }
@@ -93,11 +93,11 @@ func (n *MVCCHandle) UpgradeDeleteChainByTS(flushed types.TS) {
 	n.Unlock()
 }
 
-func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, types.TS) error) {
+func (n *MVCCHandle) SetDeletesListener(l func(uint64, types.TS) error) {
 	n.deletesListener = l
 }
 
-func (n *MVCCHandle) GetDeletesListener() func(uint64, common.RowGen, types.TS) error {
+func (n *MVCCHandle) GetDeletesListener() func(uint64, types.TS) error {
 	return n.deletesListener
 }
 

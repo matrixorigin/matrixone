@@ -220,6 +220,7 @@ type AppendNode interface {
 type DeleteNode interface {
 	BaseMVCCNode
 	TxnEntry
+	IsPersistedDeletedNode()bool
 	StringLocked() string
 	GetChain() DeleteChain
 	DeletedRows() []uint32

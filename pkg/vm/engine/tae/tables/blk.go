@@ -58,7 +58,6 @@ func (blk *block) Init() (err error) {
 
 func (blk *block) OnApplyDelete(
 	deleted uint64,
-	gen common.RowGen,
 	ts types.TS) (err error) {
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return

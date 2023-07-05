@@ -504,7 +504,7 @@ func (blk *baseBlock) TryDeleteByDeltaloc(
 	if !blk.mvcc.GetDeleteChain().IsEmpty() {
 		return
 	}
-	blk.mvcc.CreatePersistedDeleteNode(txn, deltaLoc)
+	node = blk.mvcc.CreatePersistedDeleteNode(txn, deltaLoc)
 	ok = true
 	return
 }

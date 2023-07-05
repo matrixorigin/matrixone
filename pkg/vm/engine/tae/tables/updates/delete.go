@@ -204,7 +204,9 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.Load().UpdateLocked(node)
 	return
 }
-
+func (node *DeleteNode) IsPersistedDeletedNode() bool {
+	return node.nt == NT_Persisted
+}
 func (node *DeleteNode) ApplyCommit() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
@@ -212,7 +214,11 @@ func (node *DeleteNode) ApplyCommit() (err error) {
 	if err != nil {
 		return
 	}
-	node.chain.Load().AddDeleteCnt(uint32(node.mask.GetCardinality()))
+	switch node.nt {
+	// AddDeleteCnt is for checkpoint, deletes in NT_PERSISTED node have already flushed
+	case NT_Normal, NT_Merge:
+		node.chain.Load().AddDeleteCnt(uint32(node.mask.GetCardinality()))
+	}
 	return node.OnApply()
 }
 
@@ -228,29 +234,33 @@ func (node *DeleteNode) getPersistedRows() *nulls.Bitmap {
 	if node.nt != NT_Persisted {
 		panic("unsupport")
 	}
-	bat, err := LoadPersistedDeletes(
+	bat, err := blockio.LoadColumns(
 		node.Txn.GetContext(),
-		"pk",
-		node.chain.Load().mvcc.meta.GetBlockData().GetFs(),
-		node.deltaloc)
+		[]uint16{0},
+		nil,
+		node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
+		node.deltaloc,
+		nil,
+	)
 	if err != nil {
 		for {
 			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
-			bat, err = LoadPersistedDeletes(
+			bat, err = blockio.LoadColumns(
 				node.Txn.GetContext(),
-				"pk",
-				node.chain.Load().mvcc.meta.GetBlockData().GetFs(),
-				node.deltaloc)
-			if err == nil {
-				break
-			}
+				[]uint16{0},
+				nil,
+				node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
+				node.deltaloc,
+				nil,
+			)
 		}
 	}
 	mask := &nulls.Bitmap{}
-	rowids := bat.GetVectorByName(catalog.AttrRowID)
-	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) {
+	rowids := containers.ToDNVector(bat.Vecs[0])
+	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
 		offset := rowid.GetRowOffset()
 		mask.Add(uint64(offset))
+		return nil
 	}, nil)
 	if err != nil {
 		panic(err)
@@ -430,7 +440,12 @@ func (node *DeleteNode) OnApply() (err error) {
 		if listener == nil {
 			return
 		}
-		err = listener(node.mask.GetCardinality(), node.mask.Iterator(), node.GetCommitTSLocked())
+		switch node.nt {
+		case NT_Merge, NT_Normal:
+			err = listener(node.mask.GetCardinality(), node.GetCommitTSLocked())
+		case NT_Persisted:
+			err = listener(uint64(node.chain.Load().persisted.GetCardinality()), node.GetCommitTSLocked())
+		}
 	}
 	return
 }
