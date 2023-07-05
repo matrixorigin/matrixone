@@ -3865,6 +3865,7 @@ type marshalPlanHandler struct {
 func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
+	stmt.MarkResponseAt()
 	if plan == nil || plan.GetQuery() == nil {
 		return &marshalPlanHandler{
 			marshalPlan: nil,

@@ -383,6 +383,13 @@ func (s *StatementInfo) Report(ctx context.Context) {
 	ReportStatement(ctx, s)
 }
 
+func (s *StatementInfo) MarkResponseAt() {
+	if s.ResponseAt.IsZero() {
+		s.ResponseAt = time.Now()
+		s.Duration = s.ResponseAt.Sub(s.RequestAt)
+	}
+}
+
 var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
@@ -398,8 +405,7 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 		s.end = true
 		s.ResultCount = sentRows
 		s.AggrCount = 0
-		s.ResponseAt = time.Now()
-		s.Duration = s.ResponseAt.Sub(s.RequestAt)
+		s.MarkResponseAt()
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err
