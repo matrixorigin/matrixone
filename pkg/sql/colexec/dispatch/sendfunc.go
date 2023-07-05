@@ -87,6 +87,19 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 }
 
 func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch) error {
+	for i, reg := range ap.LocalRegs {
+		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
+		if bat.ShuffleIDX == batIndex {
+			if bat != nil && bat.Length() != 0 {
+				select {
+				case <-reg.Ctx.Done():
+					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
+				case reg.Ch <- bat:
+				}
+			}
+		}
+	}
+
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := uint32(ap.ctr.remoteToIdx[r.uuid])
 		if bat.ShuffleIDX == batIndex {
@@ -101,19 +114,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch) error
 			}
 		}
 	}
-
-	for i, reg := range ap.LocalRegs {
-		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if bat.ShuffleIDX == batIndex {
-			if bat != nil && bat.Length() != 0 {
-				select {
-				case <-reg.Ctx.Done():
-					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
-				case reg.Ch <- bat:
-				}
-			}
-		}
-	}
+	
 	return nil
 }
 
@@ -128,7 +129,6 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 			return true, nil
 		}
 	}
-
 	return false, sendBatToIndex(ap, proc, bat)
 }
 

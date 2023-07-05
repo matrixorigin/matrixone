@@ -91,24 +91,6 @@ func Prepare(proc *process.Process, arg any) error {
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
-
-	if ap.FuncId == ShuffleToAllFunc {
-		bats := proc.InputBatches()
-		if len(bats) == 0 {
-			return true, nil
-		}
-		for _, bat := range bats {
-			end, err := shuffleToAllFunc(bat, ap, proc)
-			if err != nil {
-				return false, err
-			}
-			if end {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil

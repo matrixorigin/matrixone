@@ -32,6 +32,29 @@ func Prepare(_ *process.Process, _ any) error {
 func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	ap := arg.(*Argument)
 	reg := ap.Reg
+
+	// if last operator is shuffle, need to handle batches
+	bats := proc.InputBatches()
+	if len(bats) > 0 {
+		for _, bat := range bats {
+			if bat.Length() == 0 {
+				continue
+			}
+			select {
+			case <-proc.Ctx.Done():
+				proc.PutBatch(bat)
+				logutil.Warn("proc context done during connector send")
+				return true, nil
+			case <-reg.Ctx.Done():
+				proc.PutBatch(bat)
+				logutil.Warn("reg.Ctx done during connector send")
+				return true, nil
+			case reg.Ch <- bat:
+			}
+		}
+		return false, nil
+	}
+
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
