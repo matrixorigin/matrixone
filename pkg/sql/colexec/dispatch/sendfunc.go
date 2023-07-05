@@ -99,7 +99,6 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch) error
 			}
 		}
 	}
-
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := uint32(ap.ctr.remoteToIdx[r.uuid])
 		if bat.ShuffleIDX == batIndex {
@@ -114,7 +113,6 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch) error
 			}
 		}
 	}
-	
 	return nil
 }
 
