@@ -42,7 +42,7 @@ backend = "TAE"
 log-backend = "logservice"
 
 [dn.Txn]
-incremental-dedup = false
+incremental-dedup = "false"
 
 [dn.Ckp]
 flush-interval = "60s"
