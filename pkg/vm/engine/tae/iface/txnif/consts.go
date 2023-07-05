@@ -77,3 +77,12 @@ func TxnStrState(state TxnState) string {
 	}
 	panic("state not support")
 }
+
+const (
+	FreezePhase         = "Phase_Freeze"
+	RollbackPhase       = "Phase_Rollback"
+	PrePreparePhase     = "Phase_PrePrepare"
+	PrepareCommitPhase  = "Phase_PrepareCommit"
+	PreApplyCommitPhase = "Phase_PreApplyCommit"
+	ApplyCommitPhase    = "Phase_ApplyCommit"
+)

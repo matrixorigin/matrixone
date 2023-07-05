@@ -320,7 +320,7 @@ commit ;
 select * from dis_table_01;
 a    b
 begin ;
-delete from dis_table_02 where a>1;;
+delete from dis_table_02 where a>1;
 select b, c from dis_table_02;
 b    c
 pppp    2020-09-08 00:00:00

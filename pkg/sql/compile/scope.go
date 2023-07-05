@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"hash/crc32"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -102,20 +103,38 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
+	var wg sync.WaitGroup
 	for _, scope := range s.PreScopes {
+		wg.Add(1)
 		switch scope.Magic {
 		case Normal:
-			go func(cs *Scope) { errChan <- cs.Run(c) }(scope)
+			go func(cs *Scope) {
+				errChan <- cs.Run(c)
+				wg.Done()
+			}(scope)
 		case Merge, MergeInsert:
-			go func(cs *Scope) { errChan <- cs.MergeRun(c) }(scope)
+			go func(cs *Scope) {
+				errChan <- cs.MergeRun(c)
+				wg.Done()
+			}(scope)
 		case Remote:
-			go func(cs *Scope) { errChan <- cs.RemoteRun(c) }(scope)
+			go func(cs *Scope) {
+				errChan <- cs.RemoteRun(c)
+				wg.Done()
+			}(scope)
 		case Parallel:
-			go func(cs *Scope) { errChan <- cs.ParallelRun(c, cs.IsRemote) }(scope)
+			go func(cs *Scope) {
+				errChan <- cs.ParallelRun(c, cs.IsRemote)
+				wg.Done()
+			}(scope)
 		case Pushdown:
-			go func(cs *Scope) { errChan <- cs.PushdownRun() }(scope)
+			go func(cs *Scope) {
+				errChan <- cs.PushdownRun()
+				wg.Done()
+			}(scope)
 		}
 	}
+	defer wg.Wait()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	var errReceiveChan chan error
@@ -211,7 +230,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
-			s.NodeInfo.Data, s.DataSource.TableDef)
+			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return err
 		}
@@ -256,7 +275,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			return err
 		}
 		s.NodeInfo.Data = nil
-
+	//FIXME:: s.NodeInfo.Rel == nil, partition table?
 	default:
 		var err error
 		var db engine.Database
@@ -270,32 +289,69 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if err != nil {
 			return err
 		}
-		rel, err = db.Relation(ctx, s.DataSource.RelationName)
+		rel, err = db.Relation(ctx, s.DataSource.RelationName, c.proc)
 		if err != nil {
 			var e error // avoid contamination of error messages
 			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, s.Proc.TxnOperator)
 			if e != nil {
 				return e
 			}
-			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName))
+			rel, e = db.Relation(c.ctx, engine.GetTempTableName(s.DataSource.SchemaName, s.DataSource.RelationName), c.proc)
 			if e != nil {
 				return err
 			}
 		}
-		if mainRds, err := rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
-			return err
-		} else {
+		if rel.GetEngineType() == engine.Memory ||
+			s.DataSource.PartitionRelationNames == nil {
+			mainRds, err := rel.NewReader(
+				ctx,
+				mcpu,
+				s.DataSource.Expr,
+				s.NodeInfo.Data)
+			if err != nil {
+				return err
+			}
 			rds = append(rds, mainRds...)
-		}
+		} else {
+			//handle partition table.
+			dirtyRanges := make(map[int][][]byte, 0)
+			cleanRanges := make([][]byte, 0, len(s.NodeInfo.Data))
+			ranges := s.NodeInfo.Data[1:]
+			for _, r := range ranges {
+				blkInfo := catalog.DecodeBlockInfo(r)
+				if !blkInfo.CanRemote {
+					if _, ok := dirtyRanges[blkInfo.PartitionNum]; !ok {
+						newRanges := make([][]byte, 0, 1)
+						newRanges = append(newRanges, []byte{})
+						dirtyRanges[blkInfo.PartitionNum] = newRanges
+					}
+					dirtyRanges[blkInfo.PartitionNum] =
+						append(dirtyRanges[blkInfo.PartitionNum], r)
+					continue
+				}
+				cleanRanges = append(cleanRanges, r)
+			}
 
-		// get readers of partitioned tables
-		if s.DataSource.PartitionRelationNames != nil {
-			for _, relName := range s.DataSource.PartitionRelationNames {
-				subrel, err := db.Relation(c.ctx, relName)
+			if len(cleanRanges) > 0 {
+				// create readers for reading clean blocks from main table.
+				mainRds, err := rel.NewReader(
+					ctx,
+					mcpu,
+					s.DataSource.Expr,
+					cleanRanges)
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, nil)
+				rds = append(rds, mainRds...)
+
+			}
+			// create readers for reading dirty blocks from partition table.
+			for num, relName := range s.DataSource.PartitionRelationNames {
+				subrel, err := db.Relation(c.ctx, relName, c.proc)
+				if err != nil {
+					return err
+				}
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, dirtyRanges[num])
 				if err != nil {
 					return err
 				}
@@ -728,7 +784,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for i := range s.RemoteReceivRegInfos {
 		op := &s.RemoteReceivRegInfos[i]
 		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
-
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
 				close(reg.Ch)
@@ -773,12 +828,13 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 
 func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, forwardCh chan *batch.Batch) error {
 	var val morpc.Message
+	var dataBuffer []byte
 	var ok bool
 	var m *pbpipeline.Message
 	for {
 		select {
 		case <-proc.Ctx.Done():
-			logutil.Errorf("proc ctx done during forward")
+			logutil.Warnf("proc ctx done during forward")
 			return nil
 		case val, ok = <-receiveCh:
 			if val == nil || !ok {
@@ -802,14 +858,15 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 		}
 
 		// normal receive
+		dataBuffer = append(dataBuffer, m.Data...)
 		switch m.GetSid() {
 		case pbpipeline.WaitingNext:
 			continue
 		case pbpipeline.Last:
-			if m.Checksum != crc32.ChecksumIEEE(m.Data) {
+			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}
-			bat, err := decodeBatch(proc.Mp(), nil, m.Data)
+			bat, err := decodeBatch(proc.Mp(), nil, dataBuffer)
 			if err != nil {
 				return err
 			}
@@ -820,6 +877,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 				// used for BroadCastJoin
 				forwardCh <- bat
 			}
+			dataBuffer = nil
 		}
 	}
 }

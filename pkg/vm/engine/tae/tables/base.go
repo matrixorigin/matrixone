@@ -23,17 +23,19 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -48,13 +50,11 @@ type BlockT[T common.IRef] interface {
 type baseBlock struct {
 	common.RefHelper
 	*sync.RWMutex
-	indexCache model.LRUCache
-	fs         *objectio.ObjectFS
-	scheduler  tasks.TaskScheduler
-	meta       *catalog.BlockEntry
-	mvcc       *updates.MVCCHandle
-	ttl        time.Time
-	impl       data.Block
+	rt   *dbutils.Runtime
+	meta *catalog.BlockEntry
+	mvcc *updates.MVCCHandle
+	ttl  time.Time
+	impl data.Block
 
 	node atomic.Pointer[Node]
 }
@@ -62,16 +62,13 @@ type baseBlock struct {
 func newBaseBlock(
 	impl data.Block,
 	meta *catalog.BlockEntry,
-	indexCache model.LRUCache,
-	fs *objectio.ObjectFS,
-	scheduler tasks.TaskScheduler) *baseBlock {
+	rt *dbutils.Runtime,
+) *baseBlock {
 	blk := &baseBlock{
-		impl:       impl,
-		indexCache: indexCache,
-		fs:         fs,
-		scheduler:  scheduler,
-		meta:       meta,
-		ttl:        time.Now(),
+		impl: impl,
+		rt:   rt,
+		meta: meta,
+		ttl:  time.Now(),
 	}
 	blk.mvcc = updates.NewMVCCHandle(meta)
 	blk.RWMutex = blk.mvcc.RWMutex
@@ -91,6 +88,10 @@ func (blk *baseBlock) PinNode() *Node {
 	return n
 }
 
+func (blk *baseBlock) GCInMemeoryDeletesByTS(ts types.TS) {
+	blk.mvcc.UpgradeDeleteChainByTS(ts)
+}
+
 func (blk *baseBlock) Rows() int {
 	node := blk.PinNode()
 	defer node.Unref()
@@ -103,7 +104,7 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
-func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -111,7 +112,7 @@ func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) e
 		defer blk.RUnlock()
 		return node.MustMNode().Foreach(colIdx, op, sels)
 	} else {
-		return node.MustPNode().Foreach(blk.meta.GetSchema(), colIdx, op, sels)
+		return node.MustPNode().Foreach(ctx, blk.meta.GetSchema(), colIdx, op, sels)
 	}
 }
 
@@ -133,25 +134,22 @@ func (blk *baseBlock) TryUpgrade() (err error) {
 }
 
 func (blk *baseBlock) GetMeta() any              { return blk.meta }
-func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.fs }
+func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.rt.Fs }
 func (blk *baseBlock) GetID() *common.ID         { return blk.meta.AsCommonID() }
 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
 	txn txnif.TxnReader,
-	view *model.BaseView,
+	view *containers.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
-	n, err := chain.CollectDeletesLocked(txn, rwlocker)
-	if err != nil {
+	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
+	if err != nil || deletes.IsEmpty() {
 		return
 	}
-	dnode := n.(*updates.DeleteNode)
-	if dnode != nil {
-		if view.DeleteMask == nil {
-			view.DeleteMask = dnode.GetDeleteMaskLocked()
-		} else {
-			view.DeleteMask.Or(dnode.GetDeleteMaskLocked())
-		}
+	if view.DeleteMask == nil {
+		view.DeleteMask = deletes
+	} else {
+		view.DeleteMask.Or(deletes)
 	}
 	return
 }
@@ -168,7 +166,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
-		blk.fs.Service,
+		blk.rt.Fs.Service,
 		location,
 		nil,
 	)
@@ -207,7 +205,7 @@ func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catal
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
 		ctx,
-		blk.fs,
+		blk.rt,
 		blk.meta.AsCommonID(),
 		def,
 		location)
@@ -222,35 +220,74 @@ func (blk *baseBlock) LoadPersistedDeletes(ctx context.Context) (bat *containers
 	return LoadPersistedDeletes(
 		ctx,
 		pkName,
-		blk.fs,
+		blk.rt.Fs,
 		location)
 }
 
 func (blk *baseBlock) FillPersistedDeletes(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	view *model.BaseView) (err error) {
+	view *containers.BaseView) (err error) {
+	blk.fillPersistedDeletesInRange(
+		ctx,
+		types.TS{},
+		txn.GetStartTS(),
+		view)
+	return nil
+}
+
+func (blk *baseBlock) fillPersistedDeletesInRange(
+	ctx context.Context,
+	start, end types.TS,
+	view *containers.BaseView) (err error) {
+	blk.foreachPersistedDeletesCommittedInRange(
+		ctx,
+		start,
+		end,
+		true,
+		func(i int, rowIdVec *vector.Vector) {
+			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
+			row := rowid.GetRowOffset()
+			if view.DeleteMask == nil {
+				view.DeleteMask = nulls.NewWithSize(int(row) + 1)
+			}
+			view.DeleteMask.Add(uint64(row))
+		},
+		nil,
+	)
+	return nil
+}
+
+func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
+	ctx context.Context,
+	start, end types.TS,
+	skipAbort bool,
+	loopOp func(int, *vector.Vector),
+	postOp func(*containers.Batch),
+) (err error) {
 	deletes, err := blk.LoadPersistedDeletes(ctx)
 	if deletes == nil || err != nil {
-		return nil
+		return
 	}
+	abortVec := deletes.Vecs[3].GetDownstreamVector()
+	commitTsVec := deletes.Vecs[1].GetDownstreamVector()
+	rowIdVec := deletes.Vecs[0].GetDownstreamVector()
 	for i := 0; i < deletes.Length(); i++ {
-		abort := deletes.Vecs[3].Get(i).(bool)
-		if abort {
-			continue
+		if skipAbort {
+			abort := vector.GetFixedAt[bool](abortVec, i)
+			if abort {
+				continue
+			}
 		}
-		commitTS := deletes.Vecs[1].Get(i).(types.TS)
-		if commitTS.Greater(txn.GetStartTS()) {
-			continue
+		commitTS := vector.GetFixedAt[types.TS](commitTsVec, i)
+		if commitTS.GreaterEq(start) && commitTS.LessEq(end) {
+			loopOp(i, rowIdVec)
 		}
-		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
-		row := rowid.GetRowOffset()
-		if view.DeleteMask == nil {
-			view.DeleteMask = roaring.NewBitmap()
-		}
-		view.DeleteMask.Add(row)
 	}
-	return nil
+	if postOp != nil {
+		postOp(deletes)
+	}
+	return
 }
 
 func (blk *baseBlock) Prefetch(idxes []uint16) error {
@@ -260,25 +297,24 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 		return nil
 	} else {
 		key := blk.meta.GetMetaLoc()
-		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.fs.Service, key)
+		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
 	}
 }
 
 func (blk *baseBlock) ResolvePersistedColumnDatas(
 	ctx context.Context,
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxs []int,
-	skipDeletes bool) (view *model.BlockView, err error) {
+	skipDeletes bool) (view *containers.BlockView, err error) {
 
-	view = model.NewBlockView()
-	for _, colIdx := range colIdxs {
-		vec, err := blk.LoadPersistedColumnData(ctx, readSchema, colIdx)
-		if err != nil {
-			return nil, err
-		}
-		view.SetData(colIdx, vec)
+	view = containers.NewBlockView()
+	vecs, err := LoadPersistedColumnDatas(ctx, readSchema, blk.rt, blk.meta.AsCommonID(), colIdxs, blk.meta.GetMetaLoc())
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range vecs {
+		view.SetData(colIdxs[i], vec)
 	}
 
 	if skipDeletes {
@@ -296,15 +332,8 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	}
 
 	blk.RLock()
-	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	if view.BaseView.DeleteMask != nil {
-		for _, colIdx := range colIdxs {
-			vec := view.Columns[colIdx].GetData()
-			view.SetData(colIdx, vec.CloneWindow(0, vec.Length(), nil))
-			vec.Close()
-		}
-	}
+	blk.RUnlock()
 	return
 }
 
@@ -313,8 +342,8 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdx int,
-	skipDeletes bool) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(colIdx)
+	skipDeletes bool) (view *containers.ColumnView, err error) {
+	view = containers.NewColumnView(colIdx)
 	vec, err := blk.LoadPersistedColumnData(context.Background(), readSchema, colIdx)
 	if err != nil {
 		return
@@ -336,12 +365,8 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	}
 
 	blk.RLock()
-	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	if view.BaseView.DeleteMask != nil {
-		view.SetData(vec.CloneWindow(0, vec.Length(), nil))
-		vec.Close()
-	}
+	blk.RUnlock()
 	return
 }
 
@@ -349,7 +374,7 @@ func (blk *baseBlock) dedupWithLoad(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	keys containers.Vector,
-	sels *roaring.Bitmap,
+	sels *nulls.Bitmap,
 	rowmask *roaring.Bitmap,
 	isAblk bool,
 ) (err error) {
@@ -366,17 +391,21 @@ func (blk *baseBlock) dedupWithLoad(
 	}
 	if rowmask != nil {
 		if view.DeleteMask == nil {
-			view.DeleteMask = rowmask
+			view.DeleteMask = common.RoaringToMOBitmap(rowmask)
 		} else {
-			view.DeleteMask.Or(rowmask)
+			common.MOOrRoaringBitmap(view.DeleteMask, rowmask)
 		}
 	}
 	defer view.Close()
 	var dedupFn any
 	if isAblk {
-		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn)
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn,
+		)
 	} else {
-		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def)
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def,
+		)
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
@@ -396,8 +425,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		ctx,
 		blk.meta,
 		bf,
-		blk.indexCache,
-		blk.fs.Service,
+		blk.rt,
 	)
 	if err != nil {
 		return
@@ -406,6 +434,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		ctx,
 		keys,
 		keysZM,
+		blk.rt,
 	)
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return
@@ -415,12 +444,11 @@ func (blk *baseBlock) PersistedBatchDedup(
 
 func (blk *baseBlock) getPersistedValue(
 	ctx context.Context,
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	schema *catalog.Schema,
 	row, col int,
 	skipMemory bool) (v any, isNull bool, err error) {
-	view := model.NewColumnView(col)
+	view := containers.NewColumnView(col)
 	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}
@@ -432,7 +460,7 @@ func (blk *baseBlock) getPersistedValue(
 			return
 		}
 	}
-	if view.DeleteMask != nil && view.DeleteMask.ContainsInt(row) {
+	if view.DeleteMask.Contains(uint64(row)) {
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
@@ -485,27 +513,65 @@ func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool)
 	return
 }
 
-func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *model.BlockView, err error) {
-	view = model.NewBlockView()
+func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *containers.BlockView, err error) {
+	view = containers.NewBlockView()
+	view.DeleteMask, err = blk.inMemoryCollectDeletesInRange(startTs, endTs)
+	blk.fillPersistedDeletesInRange(ctx, startTs, endTs, view.BaseView)
+	return
+}
+
+func (blk *baseBlock) inMemoryCollectDeletesInRange(start, end types.TS) (deletes *nulls.Bitmap, err error) {
 	blk.RLock()
 	defer blk.RUnlock()
 	deleteChain := blk.mvcc.GetDeleteChain()
-	view.DeleteMask, err =
-		deleteChain.CollectDeletesInRange(startTs, endTs, blk.RWMutex)
+	deletes, err =
+		deleteChain.CollectDeletesInRange(start, end, blk.RWMutex)
 	return
 }
 
 func (blk *baseBlock) CollectDeleteInRange(
+	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDelete(start, end)
+	bat, persistedTS, err := blk.inMemoryCollectDeleteInRange(
+		ctx,
+		start,
+		end,
+		withAborted)
+	if err != nil {
+		return
+	}
+	if end.Greater(persistedTS) {
+		end = persistedTS
+	}
+	bat, err = blk.persistedCollectDeleteInRange(
+		ctx,
+		bat,
+		start,
+		end,
+		withAborted)
+	return
+}
+
+func (blk *baseBlock) inMemoryCollectDeleteInRange(
+	ctx context.Context,
+	start, end types.TS,
+	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
+	blk.RLock()
+	persistedTS = blk.mvcc.GetDeletesPersistedTS()
+	if persistedTS.GreaterEq(end) {
+		blk.RUnlock()
+		return
+	}
+	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start, end)
+	blk.RUnlock()
 	if rowID == nil {
 		return
 	}
 	pkDef := blk.meta.GetSchema().GetPrimaryKey()
 	pkVec := containers.MakeVector(pkDef.Type)
 	pkIdx := pkDef.Idx
-	blk.Foreach(pkIdx, func(v any, isNull bool, row int) error {
+	blk.Foreach(ctx, pkIdx, func(v any, isNull bool, row int) error {
 		pkVec.Append(v, false)
 		return nil
 	}, deletes)
@@ -521,6 +587,56 @@ func (blk *baseBlock) CollectDeleteInRange(
 		bat.Compact()
 	}
 	return
+}
+
+// collect the row if its committs is in [start,end]
+func (blk *baseBlock) persistedCollectDeleteInRange(
+	ctx context.Context,
+	b *containers.Batch,
+	start, end types.TS,
+	withAborted bool,
+) (bat *containers.Batch, err error) {
+	if b != nil {
+		bat = b
+	}
+	t := types.T_int32.ToType()
+	sels := blk.rt.VectorPool.Transient.GetVector(&t)
+	defer sels.Close()
+	selsVec := sels.GetDownstreamVector()
+	mp := sels.GetAllocator()
+	blk.foreachPersistedDeletesCommittedInRange(
+		ctx,
+		start, end,
+		!withAborted,
+		func(row int, rowIdVec *vector.Vector) {
+			_ = vector.AppendFixed[int32](selsVec, int32(row), false, mp)
+		},
+		func(delBat *containers.Batch) {
+			if sels.Length() == 0 {
+				return
+			}
+			if bat == nil {
+				bat = containers.NewBatchWithCapacity(len(delBat.Attrs))
+				for i, name := range delBat.Attrs {
+					bat.AddVector(
+						name,
+						blk.rt.VectorPool.Transient.GetVector(delBat.Vecs[i].GetType()),
+					)
+				}
+			}
+			for _, name := range delBat.Attrs {
+				retVec := bat.GetVectorByName(name)
+				srcVec := delBat.GetVectorByName(name)
+				retVec.PreExtend(sels.Length())
+				retVec.GetDownstreamVector().Union(
+					srcVec.GetDownstreamVector(),
+					vector.MustFixedCol[int32](sels.GetDownstreamVector()),
+					retVec.GetAllocator(),
+				)
+			}
+		},
+	)
+	return bat, nil
 }
 
 func (blk *baseBlock) adjustScore(
@@ -553,13 +669,17 @@ func (blk *baseBlock) adjustScore(
 	deleteCnt := blk.mvcc.GetDeleteCnt()
 	ratio = float32(deleteCnt) / float32(blk.meta.GetSchema().BlockMaxRows)
 	if ratio <= 1 && ratio > 0.5 {
-		ttl /= 10
+		ttl /= 8
 	} else if ratio <= 0.5 && ratio > 0.3 {
-		ttl /= 5
+		ttl /= 4
 	} else if ratio <= 0.3 && ratio > 0.2 {
-		ttl /= 3
-	} else if ratio <= 0.2 && ratio > 0.1 {
 		ttl /= 2
+	} else if ratio <= 0.2 && ratio > 0.1 {
+		ttl /= 1
+	} else {
+		factor := 1.25 - ratio
+		factor = factor * factor * factor * factor
+		ttl = time.Duration(float32(ttl) * factor)
 	}
 
 	if time.Now().After(blk.ttl.Add(ttl)) {
@@ -600,25 +720,18 @@ func (blk *baseBlock) GetRowsOnReplay() uint64 {
 }
 
 func (blk *baseBlock) GetTotalChanges() int {
-	return int(blk.mvcc.GetChangeNodeCnt())
+	return int(blk.mvcc.GetDeleteCnt())
 }
 
 func (blk *baseBlock) IsAppendable() bool { return false }
 
 func (blk *baseBlock) MutationInfo() string {
 	rows := blk.Rows()
-	totalChanges := blk.mvcc.GetChangeNodeCnt()
+	deleteCnt := blk.mvcc.GetDeleteCnt()
 	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d",
 		blk.meta.AsCommonID().BlockString(),
-		totalChanges,
+		deleteCnt,
 		rows)
-	if totalChanges == 0 {
-		return s
-	}
-	deleteCnt := blk.mvcc.GetDeleteCnt()
-	if deleteCnt != 0 {
-		s = fmt.Sprintf("%s, Del:%d/%d", s, deleteCnt, rows)
-	}
 	return s
 }
 
@@ -632,7 +745,7 @@ func (blk *baseBlock) BuildCompactionTaskFactory() (
 		return
 	}
 
-	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.rt)
 	taskType = tasks.DataCompactionTask
 	scopes = append(scopes, *blk.meta.AsCommonID())
 	return

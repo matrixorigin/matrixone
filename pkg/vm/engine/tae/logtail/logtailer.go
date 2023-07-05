@@ -77,7 +77,7 @@ func NewLogtailer(
 // from Now and use the timestamp to collect logtail, in that case, all txn prepared
 // before it are visible.
 func (l *LogtailerImpl) Now() (timestamp.Timestamp, timestamp.Timestamp) {
-	ts := l.mgr.now() // now in logtail manager is the same with the one in TxnManager
+	ts := l.mgr.nowClock() // now in logtail manager is the same with the one in TxnManager
 
 	return ts.ToTimestamp(), timestamp.Timestamp{}
 }
@@ -234,7 +234,7 @@ func (b *tableRespBuilder) collect() (api.SyncLogTailResp, func(), error) {
 			logutil.Info("[Logtail] not found", zap.Any("t_id", b.tid))
 			return api.SyncLogTailResp{}, nil, nil
 		}
-		builder = NewTableLogtailRespBuilder(b.ckpLoc, b.reader.from, b.reader.to, tableEntry)
+		builder = NewTableLogtailRespBuilder(b.ctx, b.ckpLoc, b.reader.from, b.reader.to, tableEntry)
 	} else {
 		builder = NewCatalogLogtailRespBuilder(b.ctx, b.scope, b.ckpLoc, b.reader.from, b.reader.to)
 	}

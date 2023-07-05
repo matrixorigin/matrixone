@@ -158,7 +158,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 		// decode and rewrite the scope.
 		// insert operator needs to fill the engine info.
-		s, err := decodeScope(receiver.scopeData, c.proc, true)
+		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
 		if err != nil {
 			return err
 		}
@@ -188,6 +188,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var err error
+	var dataBuffer []byte
 	var sequence uint64
 
 	if sender.receiveCh == nil {
@@ -225,19 +226,22 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 		}
 		sequence++
 
+		dataBuffer = append(dataBuffer, m.Data...)
 		if m.WaitingNextToMerge() {
 			continue
 		}
-		if m.Checksum != crc32.ChecksumIEEE(m.Data) {
+		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err := decodeBatch(c.proc.Mp(), c.proc, m.Data)
+		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
 		if err != nil {
 			return err
 		}
 		nextAnalyze.Network(bat)
 		sendToConnectOperator(nextOperator, bat)
+
+		dataBuffer = nil
 	}
 }
 
@@ -292,7 +296,7 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
-func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, error) {
+func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.Engine) (*Scope, error) {
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
@@ -309,7 +313,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool) (*Scope, err
 	if err != nil {
 		return nil, err
 	}
-	if err := fillInstructionsForScope(s, ctx, p); err != nil {
+	if err := fillInstructionsForScope(s, ctx, p, eng); err != nil {
 		return nil, err
 	}
 
@@ -604,17 +608,17 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 }
 
 // fillInstructionsForScope fills scope's instructions.
-func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline) error {
+func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline, eng engine.Engine) error {
 	var err error
 
 	for i := range s.PreScopes {
-		if err = fillInstructionsForScope(s.PreScopes[i], ctx.children[i], p.Children[i]); err != nil {
+		if err = fillInstructionsForScope(s.PreScopes[i], ctx.children[i], p.Children[i], eng); err != nil {
 			return err
 		}
 	}
 	s.Instructions = make([]vm.Instruction, len(p.InstructionList))
 	for i := range s.Instructions {
-		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx); err != nil {
+		if s.Instructions[i], err = convertToVmInstruction(p.InstructionList[i], ctx, eng); err != nil {
 			return err
 		}
 	}
@@ -629,12 +633,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			ToWriteS3:         t.ToWriteS3,
-			Ref:               t.InsertCtx.Ref,
-			Attrs:             t.InsertCtx.Attrs,
-			AddAffectedRows:   t.InsertCtx.AddAffectedRows,
-			PartitionTableIds: t.InsertCtx.PartitionTableIDs,
-			PartitionIdx:      int32(t.InsertCtx.PartitionIndexInBatch),
+			ToWriteS3:           t.ToWriteS3,
+			Ref:                 t.InsertCtx.Ref,
+			Attrs:               t.InsertCtx.Attrs,
+			AddAffectedRows:     t.InsertCtx.AddAffectedRows,
+			PartitionTableIds:   t.InsertCtx.PartitionTableIDs,
+			PartitionTableNames: t.InsertCtx.PartitionTableNames,
+			PartitionIdx:        int32(t.InsertCtx.PartitionIndexInBatch),
+			TableDef:            t.InsertCtx.TableDef,
 		}
 	case *deletion.Argument:
 		in.Delete = &pipeline.Deletion{
@@ -647,9 +653,11 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			// deleteCtx
 			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
 			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
+			PartitionTableNames:   t.DeleteCtx.PartitionTableNames,
 			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
 			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
 			Ref:                   t.DeleteCtx.Ref,
+			PrimaryKeyIdx:         int32(t.DeleteCtx.PrimaryKeyIdx),
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -667,6 +675,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *lockop.Argument:
 		in.LockOp = &pipeline.LockOp{
+			Block:   t.Block(),
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.Argument:
@@ -975,7 +984,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 }
 
 // convert pipeline.Instruction to vm.Instruction
-func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
+func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng engine.Engine) (vm.Instruction, error) {
 	v := vm.Instruction{Op: vm.OpType(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
 	switch v.Op {
 	case vm.Deletion:
@@ -990,9 +999,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				CanTruncate:           t.CanTruncate,
 				RowIdIdx:              int(t.RowIdIdx),
 				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionTableNames:   t.PartitionTableNames,
 				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
 				Ref:                   t.Ref,
 				AddAffectedRows:       t.AddAffectedRows,
+				PrimaryKeyIdx:         int(t.PrimaryKeyIdx),
 			},
 		}
 	case vm.Insert:
@@ -1004,7 +1015,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				AddAffectedRows:       t.AddAffectedRows,
 				Attrs:                 t.Attrs,
 				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionTableNames:   t.PartitionTableNames,
 				PartitionIndexInBatch: int(t.PartitionIdx),
+				TableDef:              t.TableDef,
 			},
 		}
 	case vm.PreInsert:
@@ -1018,7 +1031,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.LockOp:
 		t := opr.GetLockOp()
-		lockArg := lockop.NewArgument()
+		lockArg := lockop.NewArgument(eng)
+		lockArg.SetBlock(t.Block)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
 			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())

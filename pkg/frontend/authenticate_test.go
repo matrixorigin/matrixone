@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"strings"
 	"testing"
 	"time"
@@ -7316,7 +7317,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, GSysVariables, false, nil, nil)
+	ses := NewSession(proto, nil, pu, GSysVariables, true, nil, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
@@ -7349,6 +7350,21 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 type backgroundExecTest struct {
 	currentSql string
 	sql2result map[string]ExecResult
+}
+
+func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (bt *backgroundExecTest) GetExecResultBatches() []*batch.Batch {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (bt *backgroundExecTest) ClearExecResultBatches() {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (bt *backgroundExecTest) init() {

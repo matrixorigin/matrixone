@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -180,7 +181,8 @@ func TestVector3(t *testing.T) {
 func TestVector5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
-	sels := roaring.BitmapOf(2, 6)
+	sels := nulls.NewWithSize(1)
+	sels.Add(uint64(2), uint64(6))
 	for _, vecType := range vecTypes {
 		vec := MockVector(vecType, 10, false, nil)
 		rows := make([]int, 0)
@@ -221,7 +223,8 @@ func TestVector5(t *testing.T) {
 func TestVector6(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
-	sels := roaring.BitmapOf(2, 6)
+	sels := nulls.NewWithSize(1)
+	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)
 		if nullable {
@@ -648,7 +651,8 @@ func overLoadFactory[T any](t *testing.T, rows *roaring.Bitmap, vec Vector) func
 func TestForeachSelectBitmap(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
-	sels := roaring.BitmapOf(2, 6)
+	sels := nulls.NewWithSize(1)
+	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)
 		rows := roaring.New()
@@ -669,4 +673,81 @@ func TestForeachSelectBitmap(t *testing.T) {
 	_ = ForeachVectorWindow(vec2, 0, 5, nil, func(_ any, _ bool, _ int) (err error) {
 		return
 	}, nil)
+}
+
+func TestVectorPool(t *testing.T) {
+	cnt := 10
+	pool := NewVectorPool(t.Name(), cnt)
+	assert.Equal(t, cnt, len(pool.fixSizedPool)+len(pool.varlenPool))
+
+	allTypes := []types.Type{
+		types.T_bool.ToType(),
+		types.T_int32.ToType(),
+		types.T_uint8.ToType(),
+		types.T_float32.ToType(),
+		types.T_datetime.ToType(),
+		types.T_date.ToType(),
+		types.T_decimal64.ToType(),
+		types.T_char.ToType(),
+		types.T_char.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_json.ToType(),
+	}
+	vecs := make([]*vectorWrapper, 0, len(allTypes))
+	for _, typ := range allTypes {
+		vec := pool.GetVector(&typ)
+		assert.Equal(t, *vec.GetType(), typ)
+		vecs = append(vecs, vec)
+	}
+
+	assert.Equal(t, 0, pool.Allocated())
+
+	for _, vec := range vecs {
+		vec.PreExtend(100)
+	}
+
+	allocated := pool.Allocated()
+
+	if pool.ratio >= 0.6 && pool.ratio < 0.7 {
+		t.Log(pool.String())
+		usedCnt, _ := pool.FixedSizeUsed(false)
+		assert.GreaterOrEqual(t, 6, usedCnt)
+		usedCnt, _ = pool.VarlenUsed(false)
+		assert.GreaterOrEqual(t, 4, usedCnt)
+		usedCnt, _ = pool.Used(false)
+		assert.GreaterOrEqual(t, 10, usedCnt)
+	}
+
+	for _, vec := range vecs {
+		vec.Close()
+	}
+
+	t.Log(pool.String())
+	assert.Equal(t, allocated, pool.Allocated())
+}
+
+func TestVectorPool2(t *testing.T) {
+	pool := NewVectorPool(t.Name(), 10, WithAllocationLimit(1024))
+	typ := types.T_int32.ToType()
+	vec := pool.GetVector(&typ)
+	vec.PreExtend(300)
+	t.Log(pool.String())
+	assert.Less(t, 1024, pool.Allocated())
+	vec.Close()
+	assert.Equal(t, 0, pool.Allocated())
+}
+
+func TestVectorPool3(t *testing.T) {
+	pool := NewVectorPool(t.Name(), 10)
+	typ := types.T_int32.ToType()
+	vec1 := NewVector(typ)
+	vec1.Append(int32(1), false)
+	vec1.Append(int32(2), false)
+	vec1.Append(int32(3), false)
+
+	vec2 := vec1.CloneWindowWithPool(0, 3, pool)
+	t.Log(vec2.PPString(0))
+	vec1.Close()
+	vec2.Close()
 }

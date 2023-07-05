@@ -172,7 +172,7 @@ select (col1,col3) != ('2017-06-15','2022-01-02 00:00:01.5123-5') from row04;
 
 select (col1,col2,date(col3)) >= ('2017-06-15','2000-01-01 00:00:00','2022-01-02') from row04;
 select (col1,col2,to_date(col3,'%Y-%m-%d %H:%i:%s')) <= (col1,col2,'2023-01-02 00:00:01.512345')from row04;
-select (date_add(col1,interval 45 day),col2) > ('1999-01-01','1999-01-04 00:00:09') from row04;;
+select (date_add(col1,interval 45 day),col2) > ('1999-01-01','1999-01-04 00:00:09') from row04;
 select (date_sub(col1,interval 45 day),col3) < ('1970-01-01','2055-01-01 10:10:10') from row04;
 select (year(col1),year(col2)) > (1999,2003) from row04;
 select (month(col1),month(col2)) <= (12,12) from row04;

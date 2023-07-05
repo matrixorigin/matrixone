@@ -149,6 +149,7 @@ const (
 	BlockMeta_Delete_ID       = "block_delete_id"
 	BlockMeta_EntryState      = "entry_state"
 	BlockMeta_Sorted          = "sorted"
+	BlockMeta_BlockInfo       = "%!%mo__block_info"
 	BlockMeta_MetaLoc         = "%!%mo__meta_loc"
 	BlockMeta_DeltaLoc        = "delta_loc"
 	BlockMeta_CommitTs        = "committs"
@@ -317,6 +318,11 @@ type BlockInfo struct {
 	DeltaLoc   ObjectLocation
 	CommitTs   types.TS
 	SegmentID  types.Uuid
+
+	//TODO::putting them here is a bad idea, remove
+	//this block can be distributed to remote nodes.
+	CanRemote    bool
+	PartitionNum int
 }
 
 func (b *BlockInfo) MetaLocation() objectio.Location {
@@ -626,93 +632,3 @@ const (
 	AST_IDX          = 12
 	COLUMN_MAP_IDX   = 13
 )
-
-type MetadataScanInfo struct {
-	ColName      string
-	BlockId      objectio.Blockid
-	EntryState   bool
-	Sorted       bool
-	MetaLoc      ObjectLocation
-	DelLoc       ObjectLocation
-	CommitTs     types.TS
-	SegId        types.Uuid
-	RowCnt       int64
-	NullCnt      int64
-	CompressSize int64
-	OriginSize   int64
-	Min          []byte
-	Max          []byte
-}
-
-var (
-	MetadataScanInfoTypes = []types.Type{
-		types.New(types.T_varchar, types.MaxVarcharLen, 0), // column_name
-		types.New(types.T_Blockid, types.MaxVarcharLen, 0), // block_id
-		types.New(types.T_bool, 0, 0),                      // entry_state
-		types.New(types.T_bool, 0, 0),                      // sorted
-		types.New(types.T_varchar, types.MaxVarcharLen, 0), // meta_loc
-		types.New(types.T_varchar, types.MaxVarcharLen, 0), // delta_loc
-		types.New(types.T_TS, 0, 0),                        // commit_ts
-		types.New(types.T_uuid, 0, 0),                      // meta_seg
-		types.New(types.T_int64, 0, 0),                     // row_count
-		types.New(types.T_int64, 0, 0),                     // null_count
-		types.New(types.T_int64, 0, 0),                     // compress_size
-		types.New(types.T_int64, 0, 0),                     // origin_size
-		types.New(types.T_varchar, types.MaxVarcharLen, 0), // min
-		types.New(types.T_varchar, types.MaxVarcharLen, 0), // max
-	}
-
-	MetadataScanInfoNames = []string{
-		"column_name",
-		"block_id",
-		"entry_state",
-		"sorted",
-		"meta_loc",
-		"delta_loc",
-		"commit_ts",
-		"meta_seg",
-		"rows_count",
-		"null_count",
-		"compress_size",
-		"origin_size",
-		"min",
-		"max",
-	}
-)
-
-const (
-	MetadataScanInfoSize = unsafe.Sizeof(MetadataScanInfo{})
-
-	COL_NAME      = 0
-	BLOCK_ID      = 1
-	ENTRY_STATE   = 2
-	SORTED        = 3
-	META_LOC      = 4
-	DELTA_LOC     = 5
-	COMMIT_TS     = 6
-	SEG_ID        = 7
-	ROWS_CNT      = 8
-	NULL_CNT      = 9
-	COMPRESS_SIZE = 10
-	ORIGIN_SIZE   = 11
-	MIN           = 12
-	MAX           = 13
-)
-
-func (m *MetadataScanInfo) FillBlockInfo(info *BlockInfo) {
-	m.BlockId = info.BlockID
-	m.EntryState = info.EntryState
-	m.Sorted = info.Sorted
-	m.MetaLoc = info.MetaLoc
-	m.DelLoc = info.DeltaLoc
-	m.CommitTs = info.CommitTs
-	m.SegId = info.SegmentID
-}
-
-func EncodeMetadataScanInfo(info *MetadataScanInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(info)), MetadataScanInfoSize)
-}
-
-func DecodeMetadataScanInfo(buf []byte) *MetadataScanInfo {
-	return (*MetadataScanInfo)(unsafe.Pointer(&buf[0]))
-}

@@ -543,6 +543,9 @@ type Relation interface {
 
 	GetTableID(context.Context) uint64
 
+	// GetTableName returns the name of the table.
+	GetTableName() string
+
 	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
@@ -555,7 +558,9 @@ type Relation interface {
 
 	GetEngineType() EngineType
 
-	GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error)
+	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
+
+	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 }
 
 type Reader interface {
@@ -565,7 +570,7 @@ type Reader interface {
 
 type Database interface {
 	Relations(context.Context) ([]string, error)
-	Relation(context.Context, string) (Relation, error)
+	Relation(context.Context, string, any) (Relation, error)
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
@@ -578,8 +583,6 @@ type Database interface {
 type Engine interface {
 	// transaction interface
 	New(ctx context.Context, op client.TxnOperator) error
-	Commit(ctx context.Context, op client.TxnOperator) error
-	Rollback(ctx context.Context, op client.TxnOperator) error
 
 	// Delete deletes a database
 	Delete(ctx context.Context, databaseName string, op client.TxnOperator) error
@@ -603,7 +606,7 @@ type Engine interface {
 	Hints() Hints
 
 	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
+		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)

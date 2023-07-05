@@ -89,8 +89,10 @@ message Insert{
   repeated string attrs        = 5;
   // Align array index with the partition number
   repeated uint64 partition_table_ids = 6;
-  int32 partition_idx = 7;
-  bool is_end         = 8;
+  repeated string partition_table_names = 7;
+  int32 partition_idx = 8;
+  bool is_end         = 9;
+  plan.TableDef table_def = 10;
 }
 
 message Array{
@@ -109,14 +111,16 @@ message Deletion{
   uint32 NBucket = 5;
   // DeleteCtx
 
-  int32 row_id_idx                    = 6;
-  repeated uint64 partition_table_ids = 7;
-  int32 partition_index_in_batch      = 8;
-  plan.ObjectRef ref                  = 9;
-  bool add_affected_rows              = 10;
-  map<string,int32> SegmentMap        = 11;
-  bool can_truncate                   = 12;
-  bool is_end                         = 13;
+  int32 row_id_idx                      = 6;
+  repeated uint64 partition_table_ids   = 7;
+  repeated string partition_table_names = 8;
+  int32 partition_index_in_batch        = 9;
+  plan.ObjectRef ref                    = 10;
+  bool add_affected_rows                = 11;
+  map<string,int32> SegmentMap          = 12;
+  bool can_truncate                     = 13;
+  bool is_end                           = 14;
+  int32 primary_key_idx                 = 15;
 }
 
 message PreInsert {
@@ -139,6 +143,7 @@ message LockTarget {
 
 message LockOp {
   repeated LockTarget targets = 1;
+  bool                block   = 2;
 }
 
 message PreInsertUnique {

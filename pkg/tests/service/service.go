@@ -281,7 +281,7 @@ type testCluster struct {
 }
 
 // NewCluster construct a cluster for integration test.
-func NewCluster(t *testing.T, opt Options) (Cluster, error) {
+func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
 		Level:  "debug",
 		Format: "console",
@@ -312,7 +312,7 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	// build cn service configurations
 	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
 	// build FileService instances
-	c.fileservices = c.buildFileServices()
+	c.fileservices = c.buildFileServices(ctx)
 
 	return c, nil
 }

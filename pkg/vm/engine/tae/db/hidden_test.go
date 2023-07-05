@@ -22,8 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -39,7 +39,9 @@ import (
 func TestHiddenWithPK1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
@@ -73,7 +75,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		// assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 	}
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
@@ -97,7 +99,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	}
 
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	err = rel.Append(context.Background(), bats[1])
@@ -110,7 +112,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bats[5])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	compactBlocks(t, 0, tae, "db", schema, false)
 
@@ -145,12 +147,12 @@ func TestHiddenWithPK1(t *testing.T) {
 		}
 	}
 
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	{
 		seg := segMeta.GetSegmentData()
 		factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
 		assert.NoError(t, err)
-		task, err := tae.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
+		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 		assert.NoError(t, err)
 		err = task.WaitDone()
 		assert.NoError(t, err)
@@ -186,7 +188,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		}
 	}
 
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
@@ -196,7 +198,9 @@ func TestHiddenWithPK1(t *testing.T) {
 func TestHidden2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, -1)
 	schema.BlockMaxRows = 10
@@ -209,7 +213,7 @@ func TestHidden2(t *testing.T) {
 	err := rel.Append(context.Background(), bats[0])
 	{
 		blk := getOneBlock(rel)
-		var hidden *model.ColumnView
+		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
 			assert.NoError(t, err)
@@ -241,12 +245,12 @@ func TestHidden2(t *testing.T) {
 		}
 	}
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		blk := getOneBlock(rel)
-		var hidden *model.ColumnView
+		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
 			assert.NoError(t, err)
@@ -282,7 +286,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
@@ -296,13 +300,13 @@ func TestHidden2(t *testing.T) {
 		for _, blk := range blks {
 			factory, taskType, scopes, err := blk.BuildCompactionTaskFactory()
 			assert.NoError(t, err)
-			task, err := tae.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
+			task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 			assert.NoError(t, err)
 			err = task.WaitDone()
 			assert.NoError(t, err)
 		}
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -320,14 +324,14 @@ func TestHidden2(t *testing.T) {
 			if factory == nil {
 				continue
 			}
-			task, err := tae.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
+			task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 			assert.NoError(t, err)
 			err = task.WaitDone()
 			assert.NoError(t, err)
 		}
 
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	t.Log(rel.Rows())
@@ -346,6 +350,6 @@ func TestHidden2(t *testing.T) {
 		}
 		assert.Equal(t, 26, rows)
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }

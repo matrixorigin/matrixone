@@ -65,9 +65,20 @@ col1
 -75
 110
 create table pt_table_5(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255))partition by hash(year(col12));
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_3;
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_5;
 select col12 from pt_table_5;
 col12
+4149-04-30
+2865-02-22
+6316-02-16
+9948-05-08
+7854-05-11
+2316-05-27
+8499-01-03
+9687-10-15
+1295-04-12
+1619-06-04
+3674-02-25
 show create table pt_table_5;
 Table    Create Table
 pt_table_5    CREATE TABLE `pt_table_5` (\n`col1` TINYINT DEFAULT NULL,\n`col2` SMALLINT DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`clo4` BIGINT DEFAULT NULL,\n`col5` TINYINT UNSIGNED DEFAULT NULL,\n`col6` SMALLINT UNSIGNED DEFAULT NULL,\n`col7` INT UNSIGNED DEFAULT NULL,\n`col8` BIGINT UNSIGNED DEFAULT NULL,\n`col9` FLOAT DEFAULT NULL,\n`col10` DOUBLE DEFAULT NULL,\n`col11` VARCHAR(255) DEFAULT NULL,\n`col12` DATE DEFAULT NULL,\n`col13` DATETIME DEFAULT NULL,\n`col14` TIMESTAMP DEFAULT NULL,\n`col15` BOOL DEFAULT NULL,\n`col16` DECIMAL(5,2) DEFAULT NULL,\n`col17` TEXT DEFAULT NULL,\n`col18` VARCHAR(255) DEFAULT NULL,\n`col19` VARCHAR(255) DEFAULT NULL,\n`col20` CHAR(255) DEFAULT NULL\n) partition by hash (year(col12))
@@ -87,13 +98,13 @@ col2
 11896
 -18596
 create table pt_table_10(col1 tinyint,col2 smallint,col3 int,primary key(col1))partition by hash(col2);
-invalid input: partition key is not part of primary key
+A PRIMARY KEY must include all columns in the table's partitioning function
 create table pt_table_11(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by hash(col9) partitions 6;
-SQL syntax error: type FLOAT not allowed in partition clause
+Field 'col9' is of a not allowed type for this type of partitioning
 create table pt_table_12(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255))partition by hash(col20);
-SQL syntax error: type CHAR not allowed in partition clause
+Field 'col20' is of a not allowed type for this type of partitioning
 create table pt_table_13(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255))partition by hash(col12);
-SQL syntax error: type DATE not allowed in partition clause
+Field 'col12' is of a not allowed type for this type of partitioning
 create table pt_table_13(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255))partition by (col12);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 351 near " (col12);";
 create table pt_table_21(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col2))partition by key(col2)partitions 4;
@@ -202,20 +213,7 @@ col2
 -23777
 19053
 create table pt_table_34(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by range(year(col14))(PARTITION p0 VALUES LESS THAN (1991) comment ='expression range',PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (2009)comment ='range',PARTITION p3 VALUES LESS THAN (2010),PARTITION p5 VALUES LESS THAN MAXVALUE);
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_34;
-select col14 from pt_table_34;
-col14
-1975-09-09 23:59:59
-1985-01-12 23:59:59
-1977-03-18 23:59:59
-1996-08-27 23:59:59
-2034-02-10 00:00:00
-2011-03-10 00:00:00
-2036-08-23 00:00:00
-2037-12-04 00:00:00
-2035-05-25 00:00:00
-2014-09-26 00:00:00
-2011-10-04 00:00:00
+Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed
 create table pt_table_35(col1 tinyint not null,col2 smallint,col3 int not null,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col1))partition by range columns(col1,col3)(PARTITION p0 VALUES LESS THAN (100,300),PARTITION p1 VALUES LESS THAN (300,500),PARTITION p2 VALUES LESS THAN (500,MAXVALUE),PARTITION p3 VALUES LESS THAN (6000,MAXVALUE),PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_35;
 select col14 from pt_table_35;
@@ -247,17 +245,17 @@ col2
 -18596
 19053
 create table pt_table_37(col1 tinyint,col2 smallint,col3 int,col4 bigint)partition by range(col90)(PARTITION p0 VALUES LESS THAN (100),PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
-invalid input: column col90 does not exist
+Unknown column 'col90' in 'partition function'
 create table pt_table_37(col1 tinyint,col11 varchar(255),col12 Date)partition by range(col11)(PARTITION p0 VALUES LESS THAN (100),PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
-SQL syntax error: type VARCHAR not allowed in partition clause
+Field 'col11' is of a not allowed type for this type of partitioning
 create table pt_table_37(col1 tinyint,col11 varchar(255),col12 timestamp)partition by range(col12)(PARTITION p0 VALUES LESS THAN (100),PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
-SQL syntax error: type TIMESTAMP not allowed in partition clause
+Field 'col12' is of a not allowed type for this type of partitioning
 create table pt_table_37(col1 tinyint,col11 float,col12 timestamp)partition by range(col11)(PARTITION p0 VALUES LESS THAN (1991),PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (2009),PARTITION p3 VALUES LESS THAN (2010),PARTITION p5 VALUES LESS THAN MAXVALUE);
-SQL syntax error: type FLOAT not allowed in partition clause
+Field 'col11' is of a not allowed type for this type of partitioning
 create table pt_table_37(col1 tinyint,col11 float,col12 timestamp)partition by range(ceil(col11))(PARTITION p0 VALUES LESS THAN (100),PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
-SQL syntax error: type DOUBLE not allowed in partition clause
+Field 'ceil(col11)' is of a not allowed type for this type of partitioning
 create table pt_table_37(col1 tinyint,col11 float,col12 timestamp)partition by range(col1);
-invalid input: range partition cannot be empty
+For RANGE partitions each partition must be defined
 create table pt_table_41(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4)) partition by list(col4) (PARTITION r0 VALUES IN (-6041648745842399623, 2267877015687134490, 7769629822818484334),PARTITION r1 VALUES IN (1234138289513302348, -3038428195984464330, -1681456935776973509),PARTITION r2 VALUES IN (-484407619835391694, -5246968895134993792, -3237107390156157130),PARTITION r3 VALUES IN (-2998549470145089608, 6123486173032718578, 6123486173032718570));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_41;
 select col8 from pt_table_41 order by col8;
@@ -289,7 +287,7 @@ col8
 17397115807377870895
 18225693328091251880
 create table pt_table_43(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by list(col10) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
-SQL syntax error: type DOUBLE not allowed in partition clause
+The PARTITION function returns the wrong type
 create table pt_table_44(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col4)) partition by list columns(col3,col4) (PARTITION p0 VALUES IN( (-1889972806, 7769629822818484334), (NULL,NULL) ),PARTITION p1 VALUES IN( (-1030254547, -5246968895134993792),(-1006909301, -6041648745842399623),( -232972021, -3237107390156157130)) comment='list column comment' ,PARTITION p2 VALUES IN( (-179559641, 1234138289513302348),(330484802, -2998549470145089608),(476482983, -484407619835391694) ),PARTITION p3 VALUES IN( (837702822, 6123486173032718578),(1124555433, -1681456935776973509),(1287532466, -3038428195984464330),(1449911253, 2267877015687134490)));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_44;
 select col3,col4 from pt_table_44 order by col3,col4;
@@ -324,19 +322,21 @@ show create table pt_table_45;
 Table    Create Table
 pt_table_45    CREATE TABLE `pt_table_45` (\n`col1` TINYINT DEFAULT NULL,\n`col2` SMALLINT DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\n`col5` TINYINT UNSIGNED DEFAULT NULL,\n`col6` SMALLINT UNSIGNED DEFAULT NULL,\n`col7` INT UNSIGNED DEFAULT NULL,\n`col8` BIGINT UNSIGNED DEFAULT NULL,\n`col9` FLOAT DEFAULT NULL,\n`col10` DOUBLE DEFAULT NULL,\n`col11` VARCHAR(255) DEFAULT NULL,\n`col12` DATE DEFAULT NULL,\n`col13` DATETIME DEFAULT NULL,\n`col14` TIMESTAMP DEFAULT NULL,\n`col15` BOOL DEFAULT NULL,\n`col16` DECIMAL(5,2) DEFAULT NULL,\n`col17` TEXT DEFAULT NULL,\n`col18` VARCHAR(255) DEFAULT NULL,\n`col19` VARCHAR(255) DEFAULT NULL,\n`col20` TEXT DEFAULT NULL\n) partition by list(year(col13)) (partition r0 values in (5732, 9976, 3647, 6216), partition r1 values in (7031, 6868, 4844, 6438), partition r2 values in (3114, 1014, 4023, 2008))
 create table pt_table_46(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by list(col20) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
-SQL syntax error: type TEXT not allowed in partition clause
+The PARTITION function returns the wrong type
 create table pt_table_47(col13 DateTime,col14 timestamp,col15 bool,partition by list(col13) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 76 near "partition by list(col13) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));";
 create table pt_table_48(col1 tinyint,col2 smallint,col10 decimal)partition by list(col10) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22));
-SQL syntax error: type DECIMAL128 not allowed in partition clause
+The PARTITION function returns the wrong type
 create table pt_table_49(col1 tinyint,col2 smallint,col15 bool)partition by list(col15) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22));
-SQL syntax error: type BOOL not allowed in partition clause
+The PARTITION function returns the wrong type
 create table pt_table_50(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4,col3,col11))partition by list(col3) (PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),PARTITION r1 VALUES IN (2, 6, 10, 14/2, 18, 22),PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
 invalid input: operator / is not allowed in the partition expression
 create table pt_table_51(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by list(year(col13))(PARTITION r0 VALUES IN (1999, 2001, 2003),PARTITION r1 VALUES IN (1999, 2001, 2003),PARTITION r2 VALUES IN (1999, 2001, 2003));
-internal error: Multiple definition of same constant in list partitioning
+Multiple definition of same constant in list partitioning
 create table pt_table_52(col1 tinyint,col2 smallint,col3 int,col4 bigint,col11 varchar(255),col12 Date,col13 DateTime,primary key(col4,col3,col11))partition by list(col2) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
-invalid input: partition key is not part of primary key
+A PRIMARY KEY must include all columns in the table's partitioning function
 create table pt_table_53(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4,col3,col11))partition by list(col3) (PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),PARTITION r1 VALUES IN (2, 6, 10, 14*2, 18, 22),PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
-internal error: Multiple definition of same constant in list partitioning
+Multiple definition of same constant in list partitioning
 create table pt_table_54(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4,col3,col11))partition by list(col3) (PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),PARTITION r1 VALUES IN (2, 6, 11, 14*2, 18, 22),PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
+create table p_hash_table_test(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(ceil(col3)) partitions 2;
+Field 'ceil(col3)' is of a not allowed type for this type of partitioning

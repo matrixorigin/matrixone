@@ -163,8 +163,12 @@ var (
 	//defaultCleanKillQueueInterval default: 60 minutes
 	defaultCleanKillQueueInterval = 60
 
-	// defaultLongSpanTime default: 1 s
-	defaultLongSpanTime = time.Second
+	// defaultLongSpanTime default: 10 s
+	defaultLongSpanTime = 10 * time.Second
+
+	defaultAggregationWindow = 5 * time.Second
+
+	defaultSelectThreshold = 200 * time.Millisecond
 )
 
 // FrontendParameters of the frontend
@@ -302,7 +306,7 @@ type FrontendParameters struct {
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames string `toml:"lowerCaseTableNames"`
+	LowerCaseTableNames int64 `toml:"lowerCaseTableNames"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -440,8 +444,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.AutoIncrCacheSize = 3000000
 	}
 
-	if fp.LowerCaseTableNames == "" {
-		fp.LowerCaseTableNames = "1"
+	if fp.LowerCaseTableNames == 0 {
+		fp.LowerCaseTableNames = 1
 	}
 
 	if fp.PrintDebugInterval == 0 {
@@ -589,11 +593,26 @@ type ObservabilityParameters struct {
 	// DisableSpan default: false. Disable span collection
 	DisableSpan bool `toml:"disableSpan"`
 
-	// LongSpanTime default: 500 ms. Only record span, which duration > LongSpanTime
+	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
 	LongSpanTime toml.Duration `toml:"longSpanTime"`
+
+	// SkipRunningStmt default: false. Skip status:Running entry while collect statement_info
+	SkipRunningStmt bool `toml:"skipRunningStmt"`
 
 	// If disabled, the logs will be written to files stored in s3
 	DisableSqlWriter bool `toml:"disableSqlWriter"`
+
+	// If disabled, the statements will not be aggregated
+	DisableStmtAggregation bool `toml:"disableStmtAggregation"`
+
+	// Seconds to aggregate the statements
+	AggregationWindow toml.Duration `toml:"aggregationWindow"`
+
+	// Duration to filter statements for aggregation
+	SelectAggrThreshold toml.Duration `toml:"selectAggrThreshold"`
+
+	// Disable merge statements
+	EnableStmtMerge bool `toml:"enableStmtMerge"`
 
 	OBCollectorConfig
 }
@@ -657,6 +676,14 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.LongSpanTime.Duration <= 0 {
 		op.LongSpanTime.Duration = defaultLongSpanTime
+	}
+
+	if op.AggregationWindow.Duration <= 0 {
+		op.AggregationWindow.Duration = defaultAggregationWindow
+	}
+
+	if op.SelectAggrThreshold.Duration <= 0 {
+		op.SelectAggrThreshold.Duration = defaultSelectThreshold
 	}
 }
 

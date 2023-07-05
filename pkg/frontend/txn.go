@@ -263,7 +263,7 @@ func (th *TxnHandler) CommitTxn() error {
 	if val != nil {
 		ctx2 = context.WithValue(ctx2, defines.PkCheckByDN{}, val.(int8))
 	}
-	var err, err2 error
+	var err error
 	defer func() {
 		// metric count
 		tenant := ses.GetTenantName(nil)
@@ -278,17 +278,6 @@ func (th *TxnHandler) CommitTxn() error {
 	defer func() {
 		logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
 	}()
-	if err = storage.Commit(ctx2, txnOp); err != nil {
-		logErrorf(sessionInfo, "CommitTxn: storage commit failed. txnId:%s error:%v", txnId, err)
-		if txnOp != nil {
-			err2 = txnOp.Rollback(ctx2)
-			if err2 != nil {
-				logErrorf(sessionInfo, "CommitTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
-			}
-		}
-		th.SetTxnOperatorInvalid()
-		return err
-	}
 	if txnOp != nil {
 		err = txnOp.Commit(ctx2)
 		if err != nil {
@@ -326,7 +315,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	var err, err2 error
+	var err error
 	defer func() {
 		// metric count
 		tenant := ses.GetTenantName(nil)
@@ -342,17 +331,6 @@ func (th *TxnHandler) RollbackTxn() error {
 	defer func() {
 		logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
 	}()
-	if err = storage.Rollback(ctx2, txnOp); err != nil {
-		logErrorf(sessionInfo, "RollbackTxn: storage rollback failed. txnId:%s error:%v", txnId, err)
-		if txnOp != nil {
-			err2 = txnOp.Rollback(ctx2)
-			if err2 != nil {
-				logErrorf(sessionInfo, "RollbackTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
-			}
-		}
-		th.SetTxnOperatorInvalid()
-		return err
-	}
 	if txnOp != nil {
 		err = txnOp.Rollback(ctx2)
 		if err != nil {
@@ -412,6 +390,12 @@ func (ses *Session) OptionBitsIsSet(bit uint32) bool {
 	return ses.optionBits&bit != 0
 }
 
+func (ses *Session) GetOptionBits() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.optionBits
+}
+
 func (ses *Session) SetServerStatus(bit uint16) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -428,6 +412,12 @@ func (ses *Session) ServerStatusIsSet(bit uint16) bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.serverStatus&bit != 0
+}
+
+func (ses *Session) GetServerStatus() uint16 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.serverStatus
 }
 
 /*
@@ -660,4 +650,9 @@ func (ses *Session) SetAutocommit(on bool) error {
 		ses.SetOptionBits(OPTION_NOT_AUTOCOMMIT)
 	}
 	return nil
+}
+
+func (ses *Session) setAutocommitOn() {
+	ses.ClearOptionBits(OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT)
+	ses.SetServerStatus(SERVER_STATUS_AUTOCOMMIT)
 }

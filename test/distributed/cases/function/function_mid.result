@@ -55,7 +55,7 @@ INSERT INTO mid_01 VALUES(3, '2',-2, 2);
 INSERT into mid_01 VALUES(4, '*', NULL, 3);
 INSERT INTO mid_01 VALUES(5, 'd', 2, NULL);
 INSERT INTO mid_01 VALUES(6, 'ehiuwjqnelfkw', NULL, 3);
-internal error: Can't cast 'ehiuwjqnelfkw' from VARCHAR type to CHAR type. Src length 13 is larger than Dest length 1
+internal error: Can't cast 'ehiuwjqnelfkw' to CHAR type. Src length 13 is larger than Dest length 1
 INSERT INTO mid_01 VALUES(7, '2',-2147483649, 0);
 Data truncation: data out of range: data type int32, value '-2147483649'
 INSERT INTO mid_01 VALUES(8, '1', 328, 258);
@@ -128,7 +128,7 @@ INSERT INTO mid_02 VALUES(5, NULL, 2, 4);
 INSERT INTO mid_02 VALUES(6, 'ehwqkjf8392__+ ',NULL,6);
 INSERT INTO mid_02 values(7, '123', 0, 2);
 INSERT INTO mid_02 VALUES(8, 'ehiuwjey73y8213092kjfm3e#$%^WHJfne32edwfdewvvcqeveqnelfkw', NULL, 3);
-internal error: Can't cast 'ehiuwjey73y8213092kjfm3e#$%!^(MISSING)WHJfne32edwfdewvvcqeveqnelfkw' from VARCHAR type to VARCHAR type. Src length 57 is larger than Dest length 50
+internal error: Can't cast 'ehiuwjey73y8213092kjfm3e#$%!^(MISSING)WHJfne32edwfdewvvcqeveqnelfkw' to VARCHAR type. Src length 57 is larger than Dest length 50
 INSERT INTO mid_02 VALUES(9, '2',32769, 0);
 Data truncation: data out of range: data type int16, value '32769'
 INSERT INTO mid_02 VALUES(10, '1', 328, 18446744073709551618);

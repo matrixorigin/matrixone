@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -77,7 +78,18 @@ func (l *remoteLockTable) lock(
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
 
+	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
+	// after rpc completed
+	txn.Unlock()
 	resp, err := l.client.Send(ctx, req)
+	txn.Lock()
+
+	// txn closed
+	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+		cb(pb.Result{}, ErrTxnNotFound)
+		return
+	}
+
 	if err == nil {
 		defer releaseResponse(resp)
 		if err := l.maybeHandleBindChanged(resp); err != nil {
@@ -86,11 +98,7 @@ func (l *remoteLockTable) lock(
 			return
 		}
 
-		// we use mutex lock here to avoid the deadlock detection
-		// mechanism reading an incorrect data.
-		txn.Lock()
-		defer txn.Unlock()
-		txn.lockAdded(l.serviceID, l.bind.Table, rows, true)
+		txn.lockAdded(l.serviceID, l.bind.Table, rows, nil)
 		logRemoteLockAdded(l.serviceID, txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, nil)
 		return

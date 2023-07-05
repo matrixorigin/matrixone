@@ -53,7 +53,7 @@ func (pool *BatchPool) get() *batch.Batch {
 type container struct {
 	blockId_bitmap                 map[string]*nulls.Nulls
 	partitionId_blockId_rowIdBatch map[int]map[string]*batch.Batch // PartitionId -> blockId -> RowIdBatch
-	partitionId_blockId_metaLoc    map[int]map[string]*batch.Batch // PartitionId -> blockId -> MetaLocation
+	partitionId_blockId_deltaLoc   map[int]map[string]*batch.Batch // PartitionId -> blockId -> MetaLocation
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
@@ -81,11 +81,13 @@ type DeleteCtx struct {
 	CanTruncate           bool
 	RowIdIdx              int               // The array index position of the rowid column
 	PartitionTableIDs     []uint64          // Align array index with the partition number
+	PartitionTableNames   []string          // Align array index with the partition number
 	PartitionIndexInBatch int               // The array index position of the partition expression column
 	PartitionSources      []engine.Relation // Align array index with the partition number
 	Source                engine.Relation
 	Ref                   *plan.ObjectRef
 	AddAffectedRows       bool
+	PrimaryKeyIdx         int
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
@@ -97,7 +99,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			}
 		}
 
-		for _, blockId_metaLoc := range arg.ctr.partitionId_blockId_metaLoc {
+		for _, blockId_metaLoc := range arg.ctr.partitionId_blockId_deltaLoc {
 			for _, bat := range blockId_metaLoc {
 				bat.Clean(proc.GetMPool())
 			}
@@ -105,7 +107,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		arg.SegmentMap = nil
 		arg.ctr.blockId_bitmap = nil
 		arg.ctr.partitionId_blockId_rowIdBatch = nil
-		arg.ctr.partitionId_blockId_metaLoc = nil
+		arg.ctr.partitionId_blockId_deltaLoc = nil
 		arg.ctr.blockId_type = nil
 		arg.ctr.pool = nil
 	}
@@ -124,10 +126,11 @@ func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch) erro
 			return err
 		}
 		for i, delBatch := range delBatches {
-			collectBatchInfo(proc, arg, delBatch, 0, i)
+			collectBatchInfo(proc, arg, delBatch, 0, i, delCtx.PrimaryKeyIdx)
+			delBatch.Clean(proc.Mp())
 		}
 	} else {
-		collectBatchInfo(proc, arg, srcBat, arg.DeleteCtx.RowIdIdx, 0)
+		collectBatchInfo(proc, arg, srcBat, arg.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	}
 	// we will flush all
 	if arg.ctr.batch_size >= flushThreshold {
@@ -166,33 +169,33 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			ctr.pool.put(bat)
 			delete(blockId_rowIdBatch, blkid)
 		}
-		metaLocs, err := s3writer.WriteEndBlocks(proc)
+		blkInfos, err := s3writer.WriteEndBlocks(proc)
 		if err != nil {
 			return 0, err
 		}
-		for i, metaLoc := range metaLocs {
-			if _, has := ctr.partitionId_blockId_metaLoc[pidx]; !has {
-				ctr.partitionId_blockId_metaLoc[pidx] = make(map[string]*batch.Batch)
+		for i, blkInfo := range blkInfos {
+			if _, has := ctr.partitionId_blockId_deltaLoc[pidx]; !has {
+				ctr.partitionId_blockId_deltaLoc[pidx] = make(map[string]*batch.Batch)
 			}
-			blockId_metaLoc := ctr.partitionId_blockId_metaLoc[pidx]
-			if _, ok := blockId_metaLoc[blkids[i]]; !ok {
-				bat := batch.New(false, []string{catalog.BlockMeta_MetaLoc})
+			blockId_deltaLoc := ctr.partitionId_blockId_deltaLoc[pidx]
+			if _, ok := blockId_deltaLoc[blkids[i]]; !ok {
+				bat := batch.New(false, []string{catalog.BlockMeta_DeltaLoc})
 				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-				blockId_metaLoc[blkids[i]] = bat
+				blockId_deltaLoc[blkids[i]] = bat
 			}
-			bat := blockId_metaLoc[blkids[i]]
-			vector.AppendBytes(bat.GetVector(0), []byte(metaLoc), false, proc.GetMPool())
+			bat := blockId_deltaLoc[blkids[i]]
+			vector.AppendBytes(bat.GetVector(0), []byte(blkInfo.MetaLocation().String()), false, proc.GetMPool())
 		}
 	}
 	return resSize, nil
 }
 
 // Collect relevant information about intermediate batche
-func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Batch, rowIdIdx int, pIdx int) {
+func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
 	vs := vector.MustFixedCol[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
 	arg.ctr.debug_len += uint32(len(vs))
-	for _, rowId := range vs {
+	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
 		segid := rowId.CloneSegmentID()
 		blkOffset := rowId.GetBlockOffset()
@@ -231,8 +234,9 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 				var tmpBat *batch.Batch
 				tmpBat = arg.ctr.pool.get()
 				if tmpBat == nil {
-					tmpBat = batch.New(false, []string{catalog.Row_ID})
+					tmpBat = batch.New(false, []string{catalog.Row_ID, "pk"})
 					tmpBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+					tmpBat.SetVector(1, vector.NewVec(*destBatch.GetVector(int32(pkIdx)).GetType()))
 				}
 				blockIdRowIdBatchMap[str] = tmpBat
 			} else {
@@ -248,8 +252,9 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 					var bat *batch.Batch
 					bat = arg.ctr.pool.get()
 					if bat == nil {
-						bat = batch.New(false, []string{catalog.Row_ID})
+						bat = batch.New(false, []string{catalog.Row_ID, "pk"})
 						bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
+						bat.SetVector(1, vector.NewVec(*destBatch.GetVector(int32(pkIdx)).GetType()))
 					}
 					blockIdRowIdBatchMap[str] = bat
 				} else {
@@ -263,7 +268,9 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 		rbat := arg.ctr.partitionId_blockId_rowIdBatch[pIdx][str]
 		offset := rowId.GetRowOffset()
 		if !offsetFlag {
+			pk := getNonNullValue(destBatch.GetVector(int32(pkIdx)), uint32(i))
 			vector.AppendFixed(rbat.GetVector(0), rowId, false, proc.GetMPool())
+			vector.AppendAny(rbat.GetVector(1), pk, false, proc.GetMPool())
 		} else {
 			vector.AppendFixed(rbat.GetVector(0), int64(offset), false, proc.GetMPool())
 		}
@@ -272,5 +279,58 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 			continue
 		}
 		arg.ctr.batch_size += 24
+	}
+}
+
+func getNonNullValue(col *vector.Vector, row uint32) any {
+
+	switch col.GetType().Oid {
+	case types.T_bool:
+		return vector.GetFixedAt[bool](col, int(row))
+	case types.T_int8:
+		return vector.GetFixedAt[int8](col, int(row))
+	case types.T_int16:
+		return vector.GetFixedAt[int16](col, int(row))
+	case types.T_int32:
+		return vector.GetFixedAt[int32](col, int(row))
+	case types.T_int64:
+		return vector.GetFixedAt[int64](col, int(row))
+	case types.T_uint8:
+		return vector.GetFixedAt[uint8](col, int(row))
+	case types.T_uint16:
+		return vector.GetFixedAt[uint16](col, int(row))
+	case types.T_uint32:
+		return vector.GetFixedAt[uint32](col, int(row))
+	case types.T_uint64:
+		return vector.GetFixedAt[uint64](col, int(row))
+	case types.T_decimal64:
+		return vector.GetFixedAt[types.Decimal64](col, int(row))
+	case types.T_decimal128:
+		return vector.GetFixedAt[types.Decimal128](col, int(row))
+	case types.T_uuid:
+		return vector.GetFixedAt[types.Uuid](col, int(row))
+	case types.T_float32:
+		return vector.GetFixedAt[float32](col, int(row))
+	case types.T_float64:
+		return vector.GetFixedAt[float64](col, int(row))
+	case types.T_date:
+		return vector.GetFixedAt[types.Date](col, int(row))
+	case types.T_time:
+		return vector.GetFixedAt[types.Time](col, int(row))
+	case types.T_datetime:
+		return vector.GetFixedAt[types.Datetime](col, int(row))
+	case types.T_timestamp:
+		return vector.GetFixedAt[types.Timestamp](col, int(row))
+	case types.T_TS:
+		return vector.GetFixedAt[types.TS](col, int(row))
+	case types.T_Rowid:
+		return vector.GetFixedAt[types.Rowid](col, int(row))
+	case types.T_Blockid:
+		return vector.GetFixedAt[types.Blockid](col, int(row))
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+		return col.GetBytesAt(int(row))
+	default:
+		//return vector.ErrVecTypeNotSupport
+		panic(any("No Support"))
 	}
 }

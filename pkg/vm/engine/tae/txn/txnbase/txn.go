@@ -47,6 +47,7 @@ const (
 )
 
 type OpTxn struct {
+	ctx context.Context
 	Txn txnif.AsyncTxn
 	Op  OpType
 }
@@ -128,10 +129,10 @@ func NewPersistedTxn(
 		ApplyCommitFn:     applyCommitFn,
 	}
 }
-func (txn *Txn) GetLsn() uint64 { return txn.LSN }
-func (txn *Txn) IsReplay() bool { return txn.isReplay }
-
-func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
+func (txn *Txn) GetLsn() uint64              { return txn.LSN }
+func (txn *Txn) IsReplay() bool              { return txn.isReplay }
+func (txn *Txn) GetContext() context.Context { return txn.Store.GetContext() }
+func (txn *Txn) MockIncWriteCnt() int        { return txn.Store.IncreateWriteCnt() }
 
 func (txn *Txn) SetError(err error) { txn.Err = err }
 func (txn *Txn) GetError() error    { return txn.Err }
@@ -162,7 +163,7 @@ func (txn *Txn) GetDedupType() txnif.DedupType                      { return txn
 //  1. How to handle the case in which log service timed out?
 //  2. For a 2pc transaction, Rollback message may arrive before Prepare message,
 //     should handle this case by TxnStorage?
-func (txn *Txn) Prepare() (pts types.TS, err error) {
+func (txn *Txn) Prepare(ctx context.Context) (pts types.TS, err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warn("tae : txn is not found in TxnManager")
 		//txn.Err = ErrTxnNotFound
@@ -176,6 +177,7 @@ func (txn *Txn) Prepare() (pts types.TS, err error) {
 	}
 	txn.Add(1)
 	err = txn.Mgr.OnOpTxn(&OpTxn{
+		ctx: ctx,
 		Txn: txn,
 		Op:  OpPrepare,
 	})
@@ -198,7 +200,7 @@ func (txn *Txn) Prepare() (pts types.TS, err error) {
 // Rollback is used to roll back a 1PC or 2PC transaction.
 // Notice that there may be a such scenario in which a 2PC distributed transaction in ACTIVE
 // will be rollbacked, since Rollback message may arrive before the Prepare message.
-func (txn *Txn) Rollback() (err error) {
+func (txn *Txn) Rollback(ctx context.Context) (err error) {
 	//idempotent check
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warnf("tae : txn %s is not found in TxnManager", txn.GetID())
@@ -211,10 +213,10 @@ func (txn *Txn) Rollback() (err error) {
 	}
 
 	if txn.Is2PC() {
-		return txn.rollback2PC()
+		return txn.rollback2PC(ctx)
 	}
 
-	return txn.rollback1PC()
+	return txn.rollback1PC(ctx)
 }
 
 // Committing is used to record a "committing" status for coordinator.
@@ -260,20 +262,20 @@ func (txn *Txn) doCommitting(inRecovery bool) (err error) {
 // Commit is used to commit a 1PC or 2PC transaction running on Coordinator or running on Participant.
 // Notice that the Commit of a 2PC transaction must be success once the Commit message arrives,
 // since Preparing had already succeeded.
-func (txn *Txn) Commit() (err error) {
+func (txn *Txn) Commit(ctx context.Context) (err error) {
 	probe := trace.StartRegion(context.Background(), "Commit")
 	defer probe.End()
 
-	err = txn.doCommit(false)
+	err = txn.doCommit(ctx, false)
 	return
 }
 
 // CommitInRecovery is called during recovery
-func (txn *Txn) CommitInRecovery() (err error) {
-	return txn.doCommit(true)
+func (txn *Txn) CommitInRecovery(ctx context.Context) (err error) {
+	return txn.doCommit(ctx, true)
 }
 
-func (txn *Txn) doCommit(inRecovery bool) (err error) {
+func (txn *Txn) doCommit(ctx context.Context, inRecovery bool) (err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		err = moerr.NewTxnNotFoundNoCtx()
 		return
@@ -288,7 +290,7 @@ func (txn *Txn) doCommit(inRecovery bool) (err error) {
 		return txn.commit2PC(inRecovery)
 	}
 
-	return txn.commit1PC(inRecovery)
+	return txn.commit1PC(ctx, inRecovery)
 }
 
 func (txn *Txn) GetStore() txnif.TxnStore {
@@ -367,8 +369,12 @@ func (txn *Txn) ApplyRollback() (err error) {
 	return
 }
 
-func (txn *Txn) PrePrepare() error {
-	return txn.Store.PrePrepare()
+func (txn *Txn) PrePrepare(ctx context.Context) error {
+	return txn.Store.PrePrepare(ctx)
+}
+
+func (txn *Txn) Freeze() error {
+	return txn.Store.Freeze()
 }
 
 func (txn *Txn) PrepareRollback() (err error) {
@@ -386,8 +392,8 @@ func (txn *Txn) String() string {
 	return fmt.Sprintf("%s: %v", str, txn.GetError())
 }
 
-func (txn *Txn) WaitPrepared() error {
-	return txn.Store.WaitPrepared()
+func (txn *Txn) WaitPrepared(ctx context.Context) error {
+	return txn.Store.WaitPrepared(ctx)
 }
 
 func (txn *Txn) WaitDone(err error, isAbort bool) error {

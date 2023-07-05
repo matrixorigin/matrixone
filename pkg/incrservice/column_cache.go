@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 )
@@ -56,7 +58,8 @@ func newColumnCache(
 	tableID uint64,
 	col AutoColumn,
 	cfg Config,
-	allocator valueAllocator) (*columnCache, error) {
+	allocator valueAllocator,
+	txnOp client.TxnOperator) (*columnCache, error) {
 	item := &columnCache{
 		logger:    getLogger(),
 		col:       col,
@@ -65,7 +68,7 @@ func newColumnCache(
 		overflow:  col.Offset == math.MaxUint64,
 		ranges:    &ranges{step: col.Step, values: make([]uint64, 0, 1)},
 	}
-	item.preAllocate(ctx, tableID, cfg.CountPerAllocate)
+	item.preAllocate(ctx, tableID, cfg.CountPerAllocate, txnOp)
 	item.Lock()
 	defer item.Unlock()
 	if err := item.waitPrevAllocatingLocked(ctx); err != nil {
@@ -89,7 +92,8 @@ func (col *columnCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
 	vec *vector.Vector,
-	rows int) (uint64, error) {
+	rows int,
+	txnOp client.TxnOperator) (uint64, error) {
 	switch vec.GetType().Oid {
 	case types.T_int8:
 		return insertAutoValues[int8](
@@ -105,7 +109,8 @@ func (col *columnCache) insertAutoValues(
 					"tinyint",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_int16:
 		return insertAutoValues[int16](
 			ctx,
@@ -120,7 +125,8 @@ func (col *columnCache) insertAutoValues(
 					"smallint",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_int32:
 		return insertAutoValues[int32](
 			ctx,
@@ -134,7 +140,8 @@ func (col *columnCache) insertAutoValues(
 					"int",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_int64:
 		return insertAutoValues[int64](
 			ctx,
@@ -149,7 +156,8 @@ func (col *columnCache) insertAutoValues(
 					"bigint",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_uint8:
 		return insertAutoValues[uint8](
 			ctx,
@@ -164,7 +172,8 @@ func (col *columnCache) insertAutoValues(
 					"tinyint unsigned",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_uint16:
 		return insertAutoValues[uint16](
 			ctx,
@@ -179,7 +188,8 @@ func (col *columnCache) insertAutoValues(
 					"smallint unsigned",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_uint32:
 		return insertAutoValues[uint32](
 			ctx,
@@ -194,7 +204,8 @@ func (col *columnCache) insertAutoValues(
 					"int unsigned",
 					"value %v",
 					v)
-			})
+			},
+			txnOp)
 	case types.T_uint64:
 		return insertAutoValues[uint64](
 			ctx,
@@ -209,7 +220,8 @@ func (col *columnCache) insertAutoValues(
 					"bigint unsigned",
 					"auto_incrment column constant value overflows bigint unsigned",
 				)
-			})
+			},
+			txnOp)
 	default:
 		return 0, moerr.NewInvalidInput(ctx, "invalid auto_increment type '%v'", vec.GetType().Oid)
 	}
@@ -225,7 +237,8 @@ func (col *columnCache) updateTo(
 	ctx context.Context,
 	tableID uint64,
 	count int,
-	manualValue uint64) error {
+	manualValue uint64,
+	txnOp client.TxnOperator) error {
 	col.Lock()
 
 	contains := col.ranges.updateTo(manualValue)
@@ -243,7 +256,8 @@ func (col *columnCache) updateTo(
 		ctx,
 		tableID,
 		col.col.ColName,
-		manualValue)
+		manualValue,
+		txnOp)
 }
 
 func (col *columnCache) applyAutoValues(
@@ -302,7 +316,8 @@ func (col *columnCache) applyAutoValues(
 func (col *columnCache) preAllocate(
 	ctx context.Context,
 	tableID uint64,
-	count int) {
+	count int,
+	txnOp client.TxnOperator) {
 	col.Lock()
 	defer col.Unlock()
 
@@ -319,11 +334,12 @@ func (col *columnCache) preAllocate(
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
-	col.allocator.asyncAlloc(
+	col.allocator.asyncAllocate(
 		ctx,
 		tableID,
 		col.col.ColName,
 		count,
+		txnOp,
 		func(from, to uint64, err error) {
 			if err == nil {
 				col.applyAllocate(from, to)
@@ -352,11 +368,12 @@ func (col *columnCache) allocateLocked(
 		n = 1
 	}
 	for {
-		from, to, err := col.allocator.alloc(
+		from, to, err := col.allocator.allocate(
 			ctx,
 			tableID,
 			col.col.ColName,
-			count*n)
+			count*n,
+			nil)
 		if err == nil {
 			col.allocateCount.Add(1)
 			col.applyAllocateLocked(from, to)
@@ -365,12 +382,15 @@ func (col *columnCache) allocateLocked(
 	}
 }
 
-func (col *columnCache) maybeAllocate(tableID uint64) {
+func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64) {
 	col.Lock()
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
 	if low {
-		col.preAllocate(context.Background(), tableID, col.cfg.CountPerAllocate)
+		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
+			tableID,
+			col.cfg.CountPerAllocate,
+			nil)
 	}
 }
 
@@ -432,11 +452,12 @@ func insertAutoValues[T constraints.Integer](
 	rows int,
 	max T,
 	col *columnCache,
-	outOfRangeError func(v uint64) error) (uint64, error) {
+	outOfRangeError func(v uint64) error,
+	txnOp client.TxnOperator) (uint64, error) {
 	// all values are filled after insert
 	defer func() {
 		vec.SetNulls(nil)
-		col.maybeAllocate(tableID)
+		col.maybeAllocate(ctx, tableID)
 	}()
 
 	vs := vector.MustFixedCol[T](vec)
@@ -450,8 +471,9 @@ func insertAutoValues[T constraints.Integer](
 		manuals := roaring64.NewBitmap()
 		maxValue := uint64(0)
 		col.lockDo(func() {
-			for _, v := range vs {
-				if v > 0 {
+			for i, v := range vs {
+				// vector maybe has some invalid value, must use null bitmap to check the manual value
+				if !nulls.Contains(vec.GetNulls(), uint64(i)) && v > 0 {
 					manuals.Add(uint64(v))
 				}
 			}
@@ -473,12 +495,13 @@ func insertAutoValues[T constraints.Integer](
 				ctx,
 				tableID,
 				rows,
-				maxValue); err != nil {
+				maxValue,
+				txnOp); err != nil {
 				return 0, err
 			}
 		}
 	}
-	col.preAllocate(ctx, tableID, rows)
+	col.preAllocate(ctx, tableID, rows, nil)
 	err := col.applyAutoValues(
 		ctx,
 		tableID,

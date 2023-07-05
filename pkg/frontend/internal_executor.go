@@ -16,9 +16,10 @@ package frontend
 
 import (
 	"context"
+	"sync"
+
 	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const DefaultTenantMoAdmin = "sys:internal:moadmin"
@@ -46,7 +48,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 }
 
 type internalMiniExec interface {
-	doComQuery(requestCtx context.Context, sql string) error
+	doComQuery(requestCtx context.Context, input *UserInput) error
 	SetSession(*Session)
 }
 
@@ -139,7 +141,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer sess.Close()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
-	return ie.executor.doComQuery(ctx, sql)
+	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -150,7 +152,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
-	err := ie.executor.doComQuery(ctx, sql)
+	err := ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
 	return res
@@ -248,8 +250,12 @@ func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }
 
-func (ip *internalProtocol) ParseExecuteData(ctx context.Context, stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
-	return nil, nil, nil
+func (ip *internalProtocol) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
+func (ip *internalProtocol) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
 }
 
 func (ip *internalProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {

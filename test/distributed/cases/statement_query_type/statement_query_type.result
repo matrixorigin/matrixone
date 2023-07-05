@@ -211,16 +211,14 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 112;
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 99;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    external_sql
 use system    Other    external_sql
 rollback    TCL    external_sql
 deallocate prepare s1    Other    external_sql
-execute s1 using @a    Other    external_sql
 set @a=2    Other    external_sql
 prepare s1 from select * from test_table where col1=?    Other    external_sql
-select * from unnest('{"a":1}') as f    DQL    external_sql
 drop database db2    DDL    external_sql
 drop table table_2    DDL    external_sql
 drop view view_2    DDL    external_sql
@@ -239,8 +237,6 @@ create database if not exists db1    DDL    external_sql
 create user user_name identified by '******'    DCL    external_sql
 create role test_role    DCL    external_sql
 create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    external_sql
-insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    external_sql
-WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    external_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    external_sql
 show index from test_table    Other    external_sql
 show tables    Other    external_sql
@@ -257,26 +253,19 @@ show create database test_db    Other    external_sql
 create view test_view as select * from test_table    DDL    external_sql
 create table test_table(\ncol1 int,\ncol2 varchar\n)    DDL    external_sql
 use test_db    Other    external_sql
-create database test_db    DDL    external_sql
 begin    TCL    external_sql
+create database test_db    DDL    external_sql
 use statement_query_type    Other    external_sql
 drop database test_db    DDL    external_sql
 drop table test_01    DDL    external_sql
 truncate table test_01    DDL    external_sql
-delete from test_01 where a=1    DML    external_sql
 explain select * from test_01    Other    external_sql
-select * from test_01    DQL    external_sql
-update test_01 set a=100 where b='b'    DML    external_sql
-insert into test_01 values (2,'b')    DML    external_sql
-insert into test_01 values (1,'a')    DML    external_sql
 show create table test_01    Other    external_sql
 create table test_01(a int, b varchar)    DDL    external_sql
 drop table if exists test_01    DDL    external_sql
 deallocate prepare s1    Other    external_sql
-execute s1 using @a    Other    external_sql
 set @a=2    Other    external_sql
 prepare s1 from select * from test_table where col1=?    Other    external_sql
-select * from unnest('{"a":1}') as f    DQL    external_sql
 drop database db2    DDL    external_sql
 drop table table_2    DDL    external_sql
 drop view view_2    DDL    external_sql
@@ -295,10 +284,6 @@ create database if not exists db1    DDL    external_sql
 create user user_name identified by '******'    DCL    external_sql
 create role test_role    DCL    external_sql
 create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    external_sql
-delete from test_table where col1=3    DML    external_sql
-update test_table set col2='xxx' where col1=1    DML    external_sql
-insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    external_sql
-WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    external_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    external_sql
 show index from test_table    Other    external_sql
 show collation like '%'    Other    external_sql
@@ -323,8 +308,10 @@ create database test_db    DDL    external_sql
 drop database if exists test_db    DDL    external_sql
 rollback    TCL    external_sql
 start transaction    TCL    external_sql
-commit    TCL    external_sql
 begin    TCL    external_sql
+create database statement_query_type    DDL    external_sql
+SET character_set_results = utf8    Other    external_sql
+deallocate prepare s1    Other    external_sql
 /* cloud_user */ use statement_query_type;
 /* cloud_user */ begin;
 /* cloud_user */ commit;

@@ -35,8 +35,8 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr = new(container)
 	ap.ctr.state = Process
 	if ap.ToWriteS3 {
-		// If the target is partition table, just only apply writers for all partitioned sub tables
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+			// If the target is partition table, just only apply writers for all partitioned sub tables
 			s3Writers, err := colexec.AllocPartitionS3Writer(proc, ap.InsertCtx.TableDef)
 			if err != nil {
 				return err
@@ -66,6 +66,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 	bat := proc.InputBatch()
 	if bat == nil {
+		// scenario 1 for cn write s3, more in the comment of S3Writer
 		if ap.ToWriteS3 {
 			// If the target is partition table
 			if len(ap.InsertCtx.PartitionTableIDs) > 0 {
@@ -105,6 +106,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	defer proc.PutBatch(bat)
 	insertCtx := ap.InsertCtx
 
+	// scenario 1 for cn write s3, more in the comment of S3Writer
 	if ap.ToWriteS3 {
 		// If the target is partition table
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
@@ -117,8 +119,10 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			for pidx, writer := range ap.ctr.partitionS3Writers {
 				if err = writer.WriteS3Batch(proc, insertBatches[pidx]); err != nil {
 					ap.ctr.state = End
+					insertBatches[pidx].Clean(proc.Mp())
 					return false, err
 				}
+				insertBatches[pidx].Clean(proc.Mp())
 			}
 		} else {
 			// Normal non partition table
@@ -181,7 +185,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 // Collect all partition subtables' s3writers  metaLoc information and output it
 func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
 	res := batch.NewWithSize(len(attrs))
 	res.SetAttributes(attrs)
 	res.Vecs[0] = proc.GetVector(types.T_int16.ToType())

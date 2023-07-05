@@ -53,9 +53,7 @@ func NewTimestampWaiter() TimestampWaiter {
 	return tw
 }
 
-func (tw *timestampWaiter) GetTimestamp(
-	ctx context.Context,
-	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
 	latest := tw.latestTS.Load()
 	if latest != nil && latest.GreaterEq(ts) {
 		return latest.Next(), nil
@@ -84,7 +82,8 @@ func (tw *timestampWaiter) Close() {
 func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) *waiter {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
-	if tw.mu.lastNotified.GreaterEq(ts) {
+	if !tw.mu.lastNotified.IsEmpty() &&
+		tw.mu.lastNotified.GreaterEq(ts) {
 		return nil
 	}
 
@@ -148,7 +147,7 @@ var (
 	waitersPool = sync.Pool{
 		New: func() any {
 			w := &waiter{
-				c: make(chan struct{}),
+				c: make(chan struct{}, 1),
 			}
 			runtime.SetFinalizer(w, func(w *waiter) {
 				close(w.c)
@@ -172,7 +171,9 @@ func newWaiter(ts timestamp.Timestamp) *waiter {
 
 func (w *waiter) init(ts timestamp.Timestamp) {
 	w.waitAfter = ts
-	w.ref()
+	if w.ref() != 1 {
+		panic("BUG: waiter init must has ref count 1")
+	}
 }
 
 func (w *waiter) wait(ctx context.Context) error {
@@ -188,12 +189,16 @@ func (w *waiter) notify() {
 	w.c <- struct{}{}
 }
 
-func (w *waiter) ref() {
-	w.refCount.Add(1)
+func (w *waiter) ref() int32 {
+	return w.refCount.Add(1)
 }
 
 func (w *waiter) unref() {
-	if w.refCount.Add(-1) == 0 {
+	n := w.refCount.Add(-1)
+	if n < 0 {
+		panic("BUG: negative ref count")
+	}
+	if n == 0 {
 		w.reset()
 		waitersPool.Put(w)
 	}

@@ -81,11 +81,19 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 type Ws struct {
 }
 
-func (w *Ws) IncrStatemenetID(ctx context.Context) error {
+func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
 	return nil
 }
 
 func (w *Ws) RollbackLastStatement(ctx context.Context) error {
+	return nil
+}
+
+func (w *Ws) Commit(ctx context.Context) error {
+	return nil
+}
+
+func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
@@ -98,6 +106,7 @@ func TestCompile(t *testing.T) {
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClientWithFeature(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -136,7 +145,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 	e, _, compilerCtx := testengine.New(context.Background())
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
-	pn, err := plan2.BuildPlan(compilerCtx, stmts[0])
+	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
 	if err != nil {
 		panic(err)
 	}

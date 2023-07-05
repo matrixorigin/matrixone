@@ -1,5 +1,7 @@
+set global enable_privilege_cache = off;
 create user u_a identified by 'a111', u_b identified by 'b111' default role public lock;
 create user if not exists u_a identified by 'a111', u_b identified by 'b111' default role public lock;
 create user u_c identified by 'a111', u_d identified by 'b111';
 select user_name,authentication_string from mo_catalog.mo_user;
 drop user if exists u_a,u_b,u_c,u_d;
+set global enable_privilege_cache = on;

@@ -363,10 +363,16 @@ var SingleMetricTable = &table.Table{
 	Comment:          `metric data`,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
+	// TimestampColumn
+	TimestampColumn: &metricCollectTimeColumn,
 	// SupportUserAccess
 	SupportUserAccess: true,
 	// SupportConstAccess
 	SupportConstAccess: true,
+}
+
+func GetAllTables() []*table.Table {
+	return []*table.Table{SingleMetricTable}
 }
 
 func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {

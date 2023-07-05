@@ -57,4 +57,22 @@ select * from meta_scan(last_query_id(-3)) as u;
 set role moadmin;
 drop role rrrqqq;
 select * from result_scan('d8fb97e7-e30e-11ed-8d80-d6aeb943c8b4') as u;
+--need to clean database db111
+drop database if exists db111;
 set global save_query_result = off;
+
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=2&user=abc:admin&password=123456
+set global save_query_result = on;
+create database test;
+use test;
+drop table if exists tt;
+create table tt (a int);
+insert into tt values(1), (2);
+select * from tt;
+select * from result_scan(last_query_id()) as u;
+select * from tt;
+select count(*) from meta_scan(last_query_id()) as u;
+set global save_query_result = off;
+-- @session
+drop account abc;

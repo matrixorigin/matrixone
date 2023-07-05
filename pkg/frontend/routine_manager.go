@@ -67,7 +67,7 @@ func NewKillRecord(killtime time.Time, version uint64) KillRecord {
 }
 
 func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine, version uint64) {
-	if tenantID == sysAccountID || rt != nil {
+	if tenantID == sysAccountID || rt == nil {
 		return
 	}
 
@@ -80,7 +80,7 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine, ver
 }
 
 func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
-	if tenantID == sysAccountID || rt != nil {
+	if tenantID == sysAccountID || rt == nil {
 		return
 	}
 

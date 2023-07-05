@@ -371,12 +371,13 @@ create account if not exists `abc2` admin_name 'user' identified by '111';
 create database if not exists ssb;
 use ssb;
 create table test_table(
-col1 int,
+col1 int AUTO_INCREMENT,
 col2 float,
 col3 bool,
 col4 Date,
 col5 varchar(255),
-col6 text
+col6 text,
+PRIMARY KEY (`col1`)
 );
 load data infile '$resources/load_data/test_1.csv' into table test_table parallel 'true';
 select * from test_table;

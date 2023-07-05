@@ -35,7 +35,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	var tableDef plan.TableDef
 
 	// check view statement
-	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
 	if err != nil {
 		return nil, err
 	}
@@ -321,6 +321,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		createTable.Database = string(stmt.Table.SchemaName)
 	}
 
+	if stmt.Temporary && stmt.PartitionOption != nil {
+		return nil, moerr.NewPartitionNoTemporary(ctx.GetContext())
+	}
+
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			return nil, moerr.NewNoDB(ctx.GetContext())
@@ -451,7 +455,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			}})
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	bindContext := NewBindContext(builder, nil)
 
 	// set partition(unsupport now)
@@ -838,21 +842,27 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			clusterByKeys = append(clusterByKeys, colName)
 		}
 
-		clusterByColName := clusterByKeys[0]
 		if lenClusterBy == 1 {
+			clusterByColName := clusterByKeys[0]
 			for _, col := range createTable.TableDef.Cols {
 				if col.Name == clusterByColName {
 					col.ClusterBy = true
 				}
 			}
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name: clusterByColName,
+			}
 		} else {
-			clusterByColName = util.BuildCompositeClusterByColumnName(clusterByKeys)
+			clusterByColName := util.BuildCompositeClusterByColumnName(clusterByKeys)
 			colDef := MakeHiddenColDefByName(clusterByColName)
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[clusterByColName] = colDef
-		}
-		createTable.TableDef.ClusterBy = &plan.ClusterByDef{
-			Name: clusterByColName,
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name:         clusterByColName,
+				CompCbkeyCol: colDef,
+			}
 		}
 	}
 
@@ -1687,10 +1697,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				alterTableDrop.Typ = plan.AlterTableDrop_KEY
 			case tree.AlterTableDropPrimaryKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_PRIMARY_KEY
-				if tableDef.Pkey == nil {
+				if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 					return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP Primary Key; check that column/key exists")
 				}
-				name_not_found = false
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP exists Primary Key")
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
 				for _, fk := range tableDef.Fkeys {
@@ -1951,6 +1961,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				},
 			}
+		case *tree.TableOptionAutoIncrement:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Can't set AutoIncr column value.")
 		}
 	}
 

@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -55,6 +56,8 @@ func (s *service) initRemote() {
 func (s *service) initRemoteHandler() {
 	s.remote.server.RegisterMethodHandler(pb.Method_Lock,
 		s.handleRemoteLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_ForwardLock,
+		s.handleForwardLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_Unlock,
 		s.handleRemoteUnlock)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetTxnLock,
@@ -78,7 +81,18 @@ func (s *service) handleRemoteLock(
 		writeResponse(ctx, resp, err, cs)
 		return
 	}
+
 	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+		writeResponse(ctx, resp, ErrTxnNotFound, cs)
+		return
+	}
+	if txn.deadlockFound {
+		writeResponse(ctx, resp, ErrDeadLockDetected, cs)
+		return
+	}
 
 	l.lock(
 		ctx,
@@ -86,6 +100,45 @@ func (s *service) handleRemoteLock(
 		req.Lock.Rows,
 		LockOptions{LockOptions: req.Lock.Options, async: true},
 		func(result pb.Result, err error) {
+			resp.Lock.Result = result
+			writeResponse(ctx, resp, err, cs)
+		})
+}
+
+func (s *service) handleForwardLock(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	l, err := s.getLockTable(req.LockTable.Table)
+	if err != nil ||
+		l == nil {
+		// means that the lockservice sending the lock request holds a stale
+		// lock table binding.
+		writeResponse(ctx, resp, err, cs)
+		return
+	}
+
+	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, "")
+	txn.Lock()
+	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+		txn.Unlock()
+		writeResponse(ctx, resp, ErrTxnNotFound, cs)
+		return
+	}
+	if txn.deadlockFound {
+		txn.Unlock()
+		writeResponse(ctx, resp, ErrDeadLockDetected, cs)
+		return
+	}
+
+	l.lock(
+		ctx,
+		txn,
+		req.Lock.Rows,
+		LockOptions{LockOptions: req.Lock.Options, async: true},
+		func(result pb.Result, err error) {
+			txn.Unlock()
 			resp.Lock.Result = result
 			writeResponse(ctx, resp, err, cs)
 		})
@@ -121,6 +174,7 @@ func (s *service) handleRemoteGetLock(
 		writeResponse(ctx, resp, err, cs)
 		return
 	}
+
 	l.getLock(
 		req.GetTxnLock.TxnID,
 		req.GetTxnLock.Row,
@@ -130,10 +184,7 @@ func (s *service) handleRemoteGetLock(
 				resp.GetTxnLock.Value = int32(lock.value)
 				values := make([]pb.WaitTxn, 0, n)
 				lock.waiter.waiters.iter(func(w *waiter) bool {
-					txn := s.activeTxnHolder.getActiveTxn(w.txnID, false, "")
-					if txn != nil {
-						values = append(values, txn.toWaitTxn(s.cfg.ServiceID, false))
-					}
+					values = append(values, w.belongTo)
 					return true
 				})
 				resp.GetTxnLock.WaitingList = values

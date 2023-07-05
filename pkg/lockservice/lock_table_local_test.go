@@ -17,7 +17,9 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,8 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestCloseLocalLockTable(t *testing.T) {
@@ -580,7 +584,7 @@ func TestMergeRangeWithConflict(t *testing.T) {
 		})
 }
 
-func TestLocalLockTableMulitiRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
+func TestLocalLockTableMultipleRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -644,4 +648,230 @@ func getRowOptions() pb.LockOptions {
 
 func getRangeOptions() pb.LockOptions {
 	return pb.LockOptions{Granularity: pb.Granularity_Range}
+}
+
+func TestIssue9856(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx := context.Background()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			values := `{"start": "073a150a3a153100", "end": "083a15083a1608c000", "mode": "Exclusive"}
+			{"start": "013a15093a150100", "end": "033a15093a160bb800", "mode": "Exclusive"}
+			{"start": "013a15013a150100", "end": "033a15013a160bb800", "mode": "Exclusive"}
+			{"start": "093a15053a150100", "end": "0a3a15053a160bb800", "mode": "Exclusive"}
+			{"start": "053a15043a160ba300", "end": "083a15013a160bb800", "mode": "Exclusive"}
+			{"start": "093a15023a150100", "end": "0a3a15023a160baf00", "mode": "Exclusive"}
+			{"start": "013a15073a150c00", "end": "043a15063a160bb800", "mode": "Exclusive"}
+			{"start": "093a15083a150100", "end": "0a3a15083a160bb800", "mode": "Exclusive"}
+			{"start": "053a15023a1608b300", "end": "073a15023a160bb800", "mode": "Exclusive"}
+			{"start": "013a15033a150100", "end": "043a15013a160bb800", "mode": "Exclusive"}
+			{"start": "053a15093a150100", "end": "083a15053a160bb800", "mode": "Exclusive"}
+			{"start": "013a15063a150100", "end": "043a15043a160bb800", "mode": "Exclusive"}
+			{"start": "053a15083a150100", "end": "083a15043a160bb800", "mode": "Exclusive"}
+			{"start": "013a15043a1605d500", "end": "043a15033a160bb800", "mode": "Exclusive"}
+			{"start": "053a15063a150100", "end": "073a15053a160bb800", "mode": "Exclusive"}
+			{"start": "013a150a3a1605db00", "end": "053a15013a1602b200", "mode": "Exclusive"}
+			{"start": "083a15083a1608c100", "end": "093a15013a16059800", "mode": "Exclusive"}
+			{"start": "013a15093a160b8600", "end": "043a15083a160bb800", "mode": "Exclusive"}
+			{"start": "093a15013a16059900", "end": "0a3a15013a16031f00", "mode": "Exclusive"}
+			{"start": "093a15063a1602e000", "end": "0a3a15063a160bb800", "mode": "Exclusive"}
+			{"start": "053a15053a150100", "end": "083a15023a16055200", "mode": "Exclusive"}
+			{"start": "013a15083a150100", "end": "043a15073a16057300", "mode": "Exclusive"}
+			{"start": "013a15063a1605a300", "end": "043a15053a160bb800", "mode": "Exclusive"}
+			{"start": "093a15073a160b7000", "end": "0a3a15073a1608ff00", "mode": "Exclusive"}
+			{"start": "073a15053a150100", "end": "083a15023a160bb800", "mode": "Exclusive"}
+			{"start": "053a15033a16058b00", "end": "073a15033a160bb800", "mode": "Exclusive"}
+			{"start": "033a15093a150100", "end": "043a15073a160bb800", "mode": "Exclusive"}
+			{"start": "013a15023a150100", "end": "033a15023a160bb800", "mode": "Exclusive"}
+			{"start": "013a15073a150100", "end": "023a15073a160bb800", "mode": "Exclusive"}
+			{"start": "093a15093a1605d800", "end": "0a3a150a3a1602af00", "mode": "Exclusive"}
+			{"start": "013a150a3a150100", "end": "023a150a3a160bb800", "mode": "Exclusive"}
+			{"start": "053a15073a150100", "end": "083a15033a160bb800", "mode": "Exclusive"}
+			{"start": "093a15033a150100", "end": "0a3a15033a160bb800", "mode": "Exclusive"}
+			{"start": "013a15053a150100", "end": "033a15053a160bb800", "mode": "Exclusive"}
+			{"start": "053a15083a1602ed00", "end": "073a15083a160b7c00", "mode": "Exclusive"}
+			{"start": "023a15023a16056900", "end": "043a15013a1602ed00", "mode": "Exclusive"}
+			{"start": "0a3a150a3a1602b000", "end": "0a3a150a3a160bb800", "mode": "Exclusive"}
+			{"start": "053a15043a16026300", "end": "053a15043a160ba200", "mode": "Exclusive"}
+			{"start": "053a15013a1602b300", "end": "073a15013a160b4200", "mode": "Exclusive"}
+			{"start": "013a15033a160b7e00", "end": "043a15023a160bb800", "mode": "Exclusive"}
+			{"start": "023a15053a160b3d00", "end": "043a15043a1608ca00", "mode": "Exclusive"}
+			{"start": "073a15083a160b7d00", "end": "083a15053a16090700", "mode": "Exclusive"}
+			{"start": "053a150a3a150100", "end": "083a15063a160bb800", "mode": "Exclusive"}
+			{"start": "093a15043a16088800", "end": "0a3a15043a16060700", "mode": "Exclusive"}
+			{"start": "053a15023a150100", "end": "073a15013a160bb800", "mode": "Exclusive"}`
+			for idx, r := range strings.Split(values, "\n") {
+				getLogger().Info(">>>>>>>>>>>>>>", zap.Int("idx", idx))
+				v := &target{}
+				json.MustUnmarshal([]byte(r), v)
+				_, err := l.Lock(ctx, 1, [][]byte{[]byte(v.Start), []byte(v.End)}, []byte("txn1"), option)
+				require.NoError(t, err)
+				vv, err := l.getLockTable(1)
+				require.NoError(t, err)
+				lt := vv.(*localLockTable)
+				lt.mu.Lock()
+				var keys []string
+				lt.mu.store.Iter(func(b []byte, l Lock) bool {
+					keys = append(keys, fmt.Sprintf("%s(%p)", string(b), l.waiter))
+					return true
+				})
+				lt.mu.Unlock()
+				getLogger().Info(">>>>>>>>>>>>>>, keys", zap.Int("idx", idx), zap.Strings("keys", keys))
+			}
+		},
+	)
+}
+
+func TestRangeLockConflict(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Second*1000)
+			defer cancel()
+
+			tableID := uint64(1)
+			txnID1 := []byte{1}
+			txnID2 := []byte{2}
+
+			cases := []struct {
+				rows        [][]byte
+				g           pb.Granularity
+				hasConflict bool
+				ranges      [][]byte
+			}{
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: false,
+					ranges:      [][]byte{{1}, {2}},
+				},
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: true,
+					ranges:      [][]byte{{1}, {3}},
+				},
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: true,
+					ranges:      [][]byte{{1}, {4}},
+				},
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: true,
+					ranges:      [][]byte{{3}, {4}},
+				},
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: false,
+					ranges:      [][]byte{{4}, {5}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: false,
+					ranges:      [][]byte{{1}, {2}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{1}, {3}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{1}, {4}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{3}, {4}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{3}, {5}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{3}, {6}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{5}, {6}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: false,
+					ranges:      [][]byte{{6}, {7}},
+				},
+			}
+
+			for _, c := range cases {
+				mustAddTestLock(
+					t,
+					ctx,
+					l,
+					tableID,
+					txnID1,
+					c.rows,
+					c.g)
+
+				var wg sync.WaitGroup
+				wg.Add(1)
+				fn := func() {
+					defer func() {
+						require.NoError(t, l.Unlock(ctx, txnID2, timestamp.Timestamp{}))
+						wg.Done()
+					}()
+					mustAddTestLock(
+						t,
+						ctx,
+						l,
+						tableID,
+						txnID2,
+						c.ranges,
+						pb.Granularity_Range)
+				}
+
+				if !c.hasConflict {
+					fn()
+					require.NoError(t, l.Unlock(ctx, txnID1, timestamp.Timestamp{}))
+				} else {
+					go fn()
+					waitWaiters(t, l, tableID, c.rows[0], 1)
+					require.NoError(t, l.Unlock(ctx, txnID1, timestamp.Timestamp{}))
+				}
+
+				wg.Wait()
+			}
+		})
+}
+
+type target struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
 }

@@ -59,6 +59,18 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
 
+func formatStr(str string) string {
+	tmp := strings.Replace(str, "`", "``", -1)
+	strLen := len(tmp)
+	if strLen < 2 {
+		return tmp
+	}
+	if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
+		return "'" + strings.Replace(tmp[1:strLen-1], "'", "''", -1) + "'"
+	}
+	return strings.Replace(tmp, "'", "''", -1)
+}
+
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
 	tblName := stmt.Name.Parts[0]
 	dbName := ctx.DefaultDatabase()
@@ -92,13 +104,13 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	var createStr string
 	if tableDef.TableType == catalog.SystemOrdinaryRel {
-		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
+		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(tblName))
 	} else if tableDef.TableType == catalog.SystemExternalRel {
-		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", tblName)
+		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE `%s` (", formatStr(tblName))
 	} else if tableDef.TableType == catalog.SystemClusterRel {
-		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s` (", tblName)
+		createStr = fmt.Sprintf("CREATE CLUSTER TABLE `%s` (", formatStr(tblName))
 	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
-		createStr = fmt.Sprintf("CREATE TABLE `%s` (", tblName)
+		createStr = fmt.Sprintf("CREATE TABLE `%s` (", formatStr(tblName))
 	}
 
 	rowCount := 0
@@ -124,7 +136,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		nullOrNot := "NOT NULL"
 		// col.Default must be not nil
 		if len(col.Default.OriginString) > 0 {
-			nullOrNot = "DEFAULT " + col.Default.OriginString
+			nullOrNot = "DEFAULT " + formatStr(col.Default.OriginString)
 		} else if col.Default.NullAbility {
 			nullOrNot = "DEFAULT NULL"
 		}
@@ -160,7 +172,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
 		}
-		createStr += fmt.Sprintf("`%s` %s %s%s%s", colName, typeStr, nullOrNot, updateOpt, hasAttrComment)
+		createStr += fmt.Sprintf("`%s` %s %s%s%s", formatStr(colName), typeStr, nullOrNot, updateOpt, hasAttrComment)
 		rowCount++
 		if col.Primary {
 			pkDefs = append(pkDefs, colName)
@@ -176,9 +188,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		pkStr := "PRIMARY KEY ("
 		for i, def := range pkDefs {
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`", def)
+				pkStr += fmt.Sprintf("`%s`", formatStr(def))
 			} else {
-				pkStr += fmt.Sprintf("`%s`,", def)
+				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
 			}
 		}
 		pkStr += ")"
@@ -196,18 +208,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			} else {
 				indexStr = "KEY "
 			}
-			indexStr += fmt.Sprintf("`%s` (", indexdef.IndexName)
+			indexStr += fmt.Sprintf("`%s` (", formatStr(indexdef.IndexName))
 			for num, part := range indexdef.Parts {
 				if num == len(indexdef.Parts)-1 {
-					indexStr += fmt.Sprintf("`%s`", part)
+					indexStr += fmt.Sprintf("`%s`", formatStr(part))
 				} else {
-					indexStr += fmt.Sprintf("`%s`,", part)
+					indexStr += fmt.Sprintf("`%s`,", formatStr(part))
 				}
 			}
 			indexStr += ")"
 			if indexdef.Comment != "" {
 				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", indexdef.Comment)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
@@ -235,7 +247,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			createStr += ",\n"
 		}
 		createStr += fmt.Sprintf("CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-			fk.Name, strings.Join(colNames, "`,`"), fkTableDef.Name, strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+			formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
 	}
 
 	if rowCount != 0 {
@@ -250,14 +262,14 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			for i, cbName := range cbNames {
 				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", cbName)
+					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
 				} else {
-					clusterby += fmt.Sprintf("`%s`", cbName)
+					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
 				}
 			}
 		} else {
 			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", tableDef.ClusterBy.Name)
+			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
 		}
 		clusterby += ")"
 		createStr += clusterby
@@ -694,12 +706,21 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
 		keyStr = "case when attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
 	} else {
-		if tableDef.Pkey != nil {
+		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 {
 			keyStr += "case"
-			for _, name := range tableDef.Pkey.Names {
-				keyStr += " when attname = "
-				keyStr += "'" + name + "'"
-				keyStr += " then 'PRI'"
+			if tableDef.Pkey != nil {
+				for _, name := range tableDef.Pkey.Names {
+					keyStr += " when attname = "
+					keyStr += "'" + name + "'"
+					keyStr += " then 'PRI'"
+				}
+			}
+			if len(tableDef.Fkeys) != 0 {
+				for _, fk := range tableDef.Fkeys {
+					keyStr += " when attname = "
+					keyStr += "'" + tableDef.Cols[fk.Cols[0]].GetName() + "'"
+					keyStr += " then 'MUL'"
+				}
 			}
 			keyStr += " else '' END as `Key`"
 		} else {
@@ -1096,7 +1117,7 @@ func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) 
 
 func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	queryPlan, err := BuildPlan(ctx, stmt)
+	queryPlan, err := BuildPlan(ctx, stmt, false)
 	if err != nil {
 		return nil, err
 	}
