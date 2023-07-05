@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAggregator(t *testing.T) {
@@ -185,6 +186,10 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, 50*time.Millisecond, results[1].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[2].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
+	require.Equal(t, []byte(`[1,5,10,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[1,5,10,15,20]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[1,5,10,15,20]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[1,5,10,15,20]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
 
 	aggregator.Close()
 	// Update
@@ -212,5 +217,6 @@ func TestAggregator(t *testing.T) {
 	results = aggregator.GetResults()
 
 	assert.Equal(t, "Update 11", results[0].(*StatementInfo).StmtBuilder.String())
+	require.Equal(t, []byte(`[1,5,10,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 
 }
