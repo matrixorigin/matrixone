@@ -229,24 +229,50 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 // buildDeletePlans  build preinsert plan.
 /*
-   [o1]sink_scan -> project -> [agg] -> [filter] -> sink
-        [o1]sink_scan -> join[u1] -> sink
-            [u1]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u1
-			[u1]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u1
-        [o1]sink_scan -> join[u2] -> sink
-            [u2]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u2
-			[u2]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u2
-        [o1]sink_scan -> predelete[get partition] -> lock -> delete -> [mergedelete]
+[o1]sink_scan -> join[u1] -> sink
+	[u1]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u1
+	[u1]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u1
+[o1]sink_scan -> join[u2] -> sink
+	[u2]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u2
+	[u2]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u2
+[o1]sink_scan -> predelete[get partition] -> lock -> delete -> [mergedelete]
 
-		[o1]sink_scan -> join[f1 semi join c1 on c1.fid=f1.id, get f1.id] -> filter(assert(isempty(id)))   // if have refChild table with no action
-		[o1sink_scan -> join[f1 inner join c2 on f1.id = c2.fid, 取c2.*, null] -> sink ...(like update)   // if have refChild table with set null
-		[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*] -> sink ...(like delete)   // delete stmt: if have refChild table with cascade
-		[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
-
-   [o2]sink_scan -> project -> [agg] -> [filter] -> sink
-        ...
+[o1]sink_scan -> join[f1 semi join c1 on c1.fid=f1.id, get f1.id] -> filter(assert(isempty(id)))   // if have refChild table with no action
+[o1]sink_scan -> join[f1 inner join c2 on f1.id = c2.fid, 取c2.*, null] -> sink ...(like update)   // if have refChild table with set null
+[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*] -> sink ...(like delete)   // delete stmt: if have refChild table with cascade
+[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
 */
 func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, lastNodeId int32) error {
+	if sinkNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
+		sinkNode := builder.qry.Nodes[sinkNodeId]
+		childNode := builder.qry.Nodes[sinkNode.Children[0]]
+
+		thisDelPlanSinkNode := builder.qry.Nodes[builder.qry.Steps[delCtx.sourceStep]]
+		thisDelPlanPreSinkNodeId := thisDelPlanSinkNode.Children[0]
+
+		if childNode.NodeType != plan.Node_UNION {
+			childProjectList := getProjectionByLastNode(builder, sinkNode.Children[0])
+			childNode = &plan.Node{
+				NodeType:    plan.Node_UNION,
+				Children:    []int32{sinkNode.Children[0], thisDelPlanPreSinkNodeId},
+				ProjectList: childProjectList,
+			}
+			childNodeId := builder.appendNode(childNode, bindCtx)
+			sinkNode.Children = []int32{childNodeId}
+
+			thisDelPlanSinkNode.Children = []int32{}
+			builder.qry.Steps[delCtx.sourceStep] = childNodeId
+		} else {
+			childNode.Children = append(childNode.Children, thisDelPlanPreSinkNodeId)
+		}
+
+		return nil
+	} else {
+		if delCtx.sourceStep != -1 {
+			builder.deleteNode[delCtx.tableDef.TblId] = delCtx.sourceStep //取的应该是
+		}
+	}
+
 	isUpdate := delCtx.updateColLength > 0
 
 	// delete unique table
