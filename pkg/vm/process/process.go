@@ -187,6 +187,14 @@ func (proc *Process) InputBatch() *batch.Batch {
 	return proc.Reg.InputBatch
 }
 
+func (proc *Process) SetInputBatches(bats []*batch.Batch) {
+	proc.Reg.InputBatches = bats
+}
+
+func (proc *Process) InputBatches() []*batch.Batch {
+	return proc.Reg.InputBatches
+}
+
 func (proc *Process) ResetContextFromParent(parent context.Context) context.Context {
 	newctx, cancel := context.WithCancel(parent)
 

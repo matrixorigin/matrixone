@@ -380,7 +380,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			res.Arg = arg
 		}
 	case vm.Shuffle:
-		arg := &shuffle.Argument{}
+		sourceArg := sourceIns.Arg.(*shuffle.Argument)
+		arg := &shuffle.Argument{
+			ShuffleType:   sourceArg.ShuffleType,
+			ShuffleColIdx: sourceArg.ShuffleColIdx,
+			ShuffleColMax: sourceArg.ShuffleColMax,
+			ShuffleColMin: sourceArg.ShuffleColMin,
+			AliveRegCnt:   sourceArg.AliveRegCnt,
+		}
 		res.Arg = arg
 	case vm.Dispatch:
 		ok := false
@@ -1110,19 +1117,23 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 	return hasRemote, arg
 }
 
+func constructShuffleArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
+	arg := new(shuffle.Argument)
+	arg.ShuffleColIdx = plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx]).ColPos
+	arg.ShuffleType = int32(node.Stats.ShuffleType)
+	arg.ShuffleColMin = node.Stats.ShuffleColMin
+	arg.ShuffleColMax = node.Stats.ShuffleColMax
+	arg.AliveRegCnt = int32(len(ss))
+	return arg
+}
+
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
 func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
 	if node.Stats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
-		arg.ShuffleColIdx = plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx]).ColPos
-		arg.ShuffleType = int32(node.Stats.ShuffleType)
-		arg.ShuffleColMin = node.Stats.ShuffleColMin
-		arg.ShuffleColMax = node.Stats.ShuffleColMax
-		return arg
-	}
-	if hasRemote {
+	} else if hasRemote {
 		arg.FuncId = dispatch.SendToAllFunc
 	} else {
 		arg.FuncId = dispatch.SendToAllLocalFunc

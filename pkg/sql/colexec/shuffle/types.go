@@ -15,17 +15,25 @@
 package shuffle
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const shuffleBatchSize = 1024 * 8 //8k
+
 type Argument struct {
-	ctr *container
+	ctr           *container
+	ShuffleColIdx int32
+	ShuffleType   int32
+	ShuffleColMin int64
+	ShuffleColMax int64
+	AliveRegCnt   int32
 }
 
 type container struct {
-	//sels         [][]int32
-	//shuffledBats []*batch.Batch
-	//batsCount    int
+	sels         [][]int32
+	shuffledBats []*batch.Batch
+	batsCount    int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

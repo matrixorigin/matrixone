@@ -1955,7 +1955,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Shuffle,
-				Arg: nil,
+				Arg: constructShuffleArg(ss, n),
 			})
 
 			ss[i].appendInstruction(vm.Instruction{
