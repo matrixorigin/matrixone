@@ -31,6 +31,12 @@ func (node *SetVar) Format(ctx *FmtCtx) {
 	}
 }
 
+// Accept implements NodeChecker interface.
+func (node *SetVar) Accept(v Visitor) (Expr, bool) {
+	//TODO: unimplement Accept interface
+	panic("tree.SetVar Unimplement Accept")
+}
+
 func (node *SetVar) GetStatementType() string { return "Set Var" }
 func (node *SetVar) GetQueryType() string     { return QueryTypeOth }
 
@@ -189,3 +195,89 @@ func NewSetPassword(u *User, p string) *SetPassword {
 
 func (node *SetPassword) GetStatementType() string { return "Set Password" }
 func (node *SetPassword) GetQueryType() string     { return QueryTypeOth }
+
+type IsolationLevelType int
+
+const (
+	ISOLATION_LEVEL_NONE IsolationLevelType = iota
+	ISOLATION_LEVEL_REPEATABLE_READ
+	ISOLATION_LEVEL_READ_COMMITTED
+	ISOLATION_LEVEL_READ_UNCOMMITTED
+	ISOLATION_LEVEL_SERIALIZABLE
+)
+
+func (ilt IsolationLevelType) String() string {
+	switch ilt {
+	case ISOLATION_LEVEL_NONE:
+		return "isolation level none"
+	case ISOLATION_LEVEL_REPEATABLE_READ:
+		return "isolation level repeatable read"
+	case ISOLATION_LEVEL_READ_COMMITTED:
+		return "isolation level read committed"
+	case ISOLATION_LEVEL_READ_UNCOMMITTED:
+		return "isolation level read uncommitted"
+	case ISOLATION_LEVEL_SERIALIZABLE:
+		return "isolation level serializable"
+	default:
+		return "isolation level unknown"
+	}
+}
+
+type AccessModeType int
+
+const (
+	ACCESS_MODE_NONE AccessModeType = iota
+	ACCESS_MODE_READ_WRITE
+	ACCESS_MODE_READ_ONLY
+)
+
+func (amt AccessModeType) String() string {
+	switch amt {
+	case ACCESS_MODE_NONE:
+		return "none"
+	case ACCESS_MODE_READ_WRITE:
+		return "read write"
+	case ACCESS_MODE_READ_ONLY:
+		return "read only"
+	default:
+		return "unknown"
+	}
+}
+
+type TransactionCharacteristic struct {
+	IsLevel   bool
+	Isolation IsolationLevelType
+	Access    AccessModeType
+}
+
+func (tc *TransactionCharacteristic) Format(ctx *FmtCtx) {
+	if tc.IsLevel {
+		ctx.WriteString(tc.Isolation.String())
+	} else {
+		ctx.WriteString(tc.Access.String())
+	}
+}
+
+type SetTransaction struct {
+	statementImpl
+	Global        bool
+	CharacterList []*TransactionCharacteristic
+}
+
+func (node *SetTransaction) Format(ctx *FmtCtx) {
+	ctx.WriteString("set")
+	if node.Global {
+		ctx.WriteString(" global")
+	}
+	ctx.WriteString(" transaction ")
+
+	for i, c := range node.CharacterList {
+		if i > 0 {
+			ctx.WriteString(" , ")
+		}
+		c.Format(ctx)
+	}
+}
+
+func (node *SetTransaction) GetStatementType() string { return "Set Transaction" }
+func (node *SetTransaction) GetQueryType() string     { return QueryTypeTCL }

@@ -15,9 +15,11 @@
 package types
 
 import (
+	"bytes"
 	crand "crypto/rand"
 	"math"
 	"math/rand"
+	"sort"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -142,6 +144,58 @@ func TestMulTypeTuple(t *testing.T) {
 		packer := NewPacker(mp)
 		encodeBufToPacker(tuple, packer)
 		tt, _ := Unpack(packer.GetBuf())
+		for i := range tuple {
+			require.Equal(t, tuple[i], tt[i])
+		}
+	}
+}
+
+func TestDecimalOrderTuple(t *testing.T) {
+	tests := []struct {
+		args Tuple
+	}{
+		{
+			args: Tuple{Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())},
+				Decimal128{uint64(rand.Int()), uint64(rand.Int())}},
+		},
+	}
+	for _, test := range tests {
+		tuple := test.args
+		mp := mpool.MustNewZero()
+		packer := NewPacker(mp)
+		encodeBufToPacker(tuple, packer)
+		for i := 1; i < 10; i++ {
+			for j := i; j > 0; j-- {
+				left := make([]byte, 17)
+				right := make([]byte, 17)
+				copy(left, packer.buf[(j-1)*17:j*17])
+				copy(right, packer.buf[j*17:(j+1)*17])
+				if bytes.Compare(left, right) > 0 {
+					copy(packer.buf[(j-1)*17:j*17], right)
+					copy(packer.buf[j*17:(j+1)*17], left)
+				}
+			}
+		}
+		tt, _ := Unpack(packer.GetBuf())
+		sort.Slice(tuple, func(i, j int) bool {
+			switch left := tuple[i].(type) {
+			case Decimal128:
+				switch right := tuple[j].(type) {
+				case Decimal128:
+					return left.Less(right)
+				}
+			}
+			return false
+		})
+		require.Equal(t, tuple.String(), tt.String())
 		for i := range tuple {
 			require.Equal(t, tuple[i], tt[i])
 		}

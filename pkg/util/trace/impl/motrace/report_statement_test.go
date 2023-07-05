@@ -18,13 +18,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"testing"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestStatementInfo_Report_EndStatement(t *testing.T) {
@@ -52,6 +54,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 	type args struct {
 		ctx context.Context
 		err error
+		fun func()
 	}
 
 	tests := []struct {
@@ -59,6 +62,8 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 		fields        fields
 		args          args
 		wantReportCnt int
+		// check after call EndStatement
+		wantReportCntAfterEnd int
 	}{
 		{
 			name: "Report_Export_EndStatement",
@@ -70,7 +75,8 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				ctx: context.Background(),
 				err: nil,
 			},
-			wantReportCnt: 2,
+			wantReportCnt:         1,
+			wantReportCntAfterEnd: 2,
 		},
 		{
 			name: "Report_EndStatement",
@@ -82,7 +88,8 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				ctx: context.Background(),
 				err: nil,
 			},
-			wantReportCnt: 1,
+			wantReportCnt:         1,
+			wantReportCntAfterEnd: 1,
 		},
 		{
 			name: "just_EndStatement",
@@ -94,7 +101,25 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				ctx: context.Background(),
 				err: nil,
 			},
-			wantReportCnt: 1,
+			wantReportCnt:         0,
+			wantReportCntAfterEnd: 1,
+		},
+		{
+			name: "skip_running_stmt",
+			fields: fields{
+				Status:   StatementStatusRunning,
+				doReport: false,
+				doExport: false,
+			},
+			args: args{
+				ctx: context.Background(),
+				err: nil,
+				fun: func() {
+					GetTracerProvider().skipRunningStmt = true
+				},
+			},
+			wantReportCnt:         0,
+			wantReportCntAfterEnd: 1,
 		},
 	}
 
@@ -103,8 +128,8 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 		gotCnt++
 		return nil
 	}
-	s := gostub.Stub(&ReportStatement, dummyReportStmFunc)
-	defer s.Reset()
+	stub := gostub.Stub(&ReportStatement, dummyReportStmFunc)
+	defer stub.Reset()
 
 	dummyExport := func(s *StatementInfo) {
 		s.mux.Lock()
@@ -133,12 +158,16 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				ResponseAt:           tt.fields.ResponseAt,
 				Duration:             tt.fields.Duration,
 			}
+			if tt.args.fun != nil {
+				tt.args.fun()
+			}
 			if tt.fields.doExport && !tt.fields.doReport {
 				t.Errorf("export(%v) need report(%v) first.", tt.fields.doExport, tt.fields.doReport)
 			}
 			if tt.fields.doReport {
 				s.Report(tt.args.ctx)
 			}
+			require.Equal(t, tt.wantReportCnt, gotCnt)
 			if tt.fields.doExport {
 				dummyExport(s)
 			}
@@ -147,7 +176,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 
 			stmCtx := ContextWithStatement(tt.args.ctx, s)
 			EndStatement(stmCtx, tt.args.err, 0)
-			require.Equal(t, tt.wantReportCnt, gotCnt)
+			require.Equal(t, tt.wantReportCntAfterEnd, gotCnt)
 		})
 	}
 }
@@ -155,27 +184,29 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
-var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
+var dummyStatsArray = *statistic.NewStatsArray().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4)
+
+var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult), []byte{}, Statistic{}
+		return []byte(dummyNoExecPlanJsonResult), statistic.DefaultStatsArray, Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), []byte{}, Statistic{}
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), statistic.DefaultStatsArray, Statistic{}
 	}
-	return json, []byte{}, Statistic{RowsRead: 1, BytesScan: 1}
+	return json, dummyStatsArray, Statistic{RowsRead: 1, BytesScan: 1}
 }
 
-var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
+var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult2), []byte{}, Statistic{}
+		return []byte(dummyNoExecPlanJsonResult2), statistic.DefaultStatsArray, Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), []byte{}, Statistic{}
+		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), statistic.DefaultStatsArray, Statistic{}
 	}
 	val := fmt.Sprintf(`{"func":"dummy2","result":%s}`, json)
-	return []byte(val), []byte{}, Statistic{}
+	return []byte(val), dummyStatsArray, Statistic{}
 }
 
 func TestStatementInfo_ExecPlan2Json(t *testing.T) {
@@ -188,9 +219,10 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 	dummyEPJson := `{"func":"dummy2","result":{"int":1,"key":"val"}}`
 
 	tests := []struct {
-		name string
-		args args
-		want string
+		name          string
+		args          args
+		want          string
+		wantStatsByte []byte
 	}{
 		{
 			name: "dummyDefault_ep_Serialize",
@@ -198,7 +230,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          dummyExecPlan,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyEPJson,
+			want:          dummyEPJson,
+			wantStatsByte: dummyStatsArray.ToJsonString(),
 		},
 		{
 			name: "nil_ep_Serialize",
@@ -206,7 +239,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          dummyExecPlan,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyEPJson,
+			want:          dummyEPJson,
+			wantStatsByte: dummyStatsArray.ToJsonString(),
 		},
 		{
 			name: "dummyDefault_nil_Serialize",
@@ -214,7 +248,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          nil,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyNoExecPlanJsonResult2,
+			want:          dummyNoExecPlanJsonResult2,
+			wantStatsByte: statistic.DefaultStatsArrayJsonString,
 		},
 		{
 			name: "nil_nil_Serialize",
@@ -222,7 +257,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          nil,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyNoExecPlanJsonResult2,
+			want:          dummyNoExecPlanJsonResult2,
+			wantStatsByte: statistic.DefaultStatsArrayJsonString,
 		},
 	}
 
@@ -235,9 +271,10 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				f:    tt.args.SerializeExecPlan,
 			}
 			s.SetSerializableExecPlan(p)
-			got, _ := s.ExecPlan2Json(ctx)
+			got := s.ExecPlan2Json(ctx)
+			stats := s.ExecPlan2Stats(ctx)
 			assert.Equalf(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
-
+			assert.Equalf(t, tt.wantStatsByte, stats, "stats")
 			mapper := new(map[string]any)
 			err := json.Unmarshal([]byte(got), mapper)
 			require.Nil(t, err, "jons.Unmarshal failed")
@@ -259,7 +296,41 @@ func NewDummySerializableExecPlan(plan any, f SerializeExecPlanFunc, uuid2 uuid.
 	}
 }
 
-func (p *dummySerializableExecPlan) Marshal(ctx context.Context) ([]byte, []byte, Statistic) {
-	return p.f(ctx, p.plan, p.uuid)
+func (p *dummySerializableExecPlan) Marshal(ctx context.Context) []byte {
+	res, _, _ := p.f(ctx, p.plan, p.uuid)
+	return res
 }
 func (p *dummySerializableExecPlan) Free() {}
+
+func (p *dummySerializableExecPlan) Stats(ctx context.Context) (statistic.StatsArray, Statistic) {
+	_, statByte, stats := p.f(ctx, p.plan, p.uuid)
+	return statByte, stats
+}
+
+func TestMergeStats(t *testing.T) {
+	e := &StatementInfo{}
+	e.statsArray.Init().WithTimeConsumed(80335).WithMemorySize(1800).WithS3IOInputCount(1).WithS3IOOutputCount(0)
+
+	n := &StatementInfo{}
+	n.statsArray.Init().WithTimeConsumed(147960).WithMemorySize(1800).WithS3IOInputCount(0).WithS3IOOutputCount(0)
+
+	err := mergeStats(e, n)
+	if err != nil {
+		t.Fatalf("mergeStats failed: %v", err)
+	}
+
+	wantBytes := []byte("[1,228295,3600,1,0]")
+	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
+
+	n = &StatementInfo{}
+	n.statsArray.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0)
+
+	err = mergeStats(e, n)
+	if err != nil {
+		t.Fatalf("mergeStats failed: %v", err)
+	}
+
+	wantBytes = []byte("[1,228296,3601,1,0]")
+	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
+
+}

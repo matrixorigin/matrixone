@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
@@ -44,6 +45,9 @@ func TestNewTxn(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
+	if tc, ok := c.(TxnClientWithFeature); ok {
+		tc.Resume()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0))
@@ -62,6 +66,9 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
+	if tc, ok := c.(TxnClientWithFeature); ok {
+		tc.Resume()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0), WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
@@ -70,4 +77,50 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
+}
+
+func TestTxnClientAbortAllRunningTxn(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	runtime.SetupProcessLevelRuntime(rt)
+
+	c := NewTxnClient(newTestTxnSender())
+	if tc, ok := c.(TxnClientWithFeature); ok {
+		tc.Resume()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	for i := 0; i < 10; i++ {
+		_, err := c.New(ctx, newTestTimestamp(0))
+		assert.Nil(t, err)
+	}
+	require.Equal(t, 10, len(c.(*txnClient).mu.txns))
+
+	c.AbortAllRunningTxn()
+	txnList := c.(*txnClient).mu.txns
+	for i := range txnList {
+		require.Equal(t, txn.TxnStatus_Aborted, txnList[i].Status)
+	}
+}
+
+func TestTxnClientPauseAndResume(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	runtime.SetupProcessLevelRuntime(rt)
+	c := NewTxnClient(newTestTxnSender())
+
+	tcFeature, ok1 := c.(TxnClientWithFeature)
+	tcClient, ok2 := c.(*txnClient)
+	require.Equal(t, true, ok1 && ok2)
+	tcFeature.Pause()
+	require.Equal(t, paused, tcClient.mu.state)
+	tcFeature.Resume()
+	require.Equal(t, normal, tcClient.mu.state)
 }

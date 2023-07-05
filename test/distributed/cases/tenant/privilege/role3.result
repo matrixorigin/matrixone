@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop role if exists role_r1;
 create role role_r1;
 drop database if exists d;
@@ -294,3 +295,4 @@ revoke execute on table t from role_r1,rx;
 internal error: there is no role rx
 drop role role_r1;
 drop database if exists d;
+set global enable_privilege_cache = on;

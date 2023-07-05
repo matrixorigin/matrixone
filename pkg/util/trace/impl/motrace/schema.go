@@ -62,10 +62,11 @@ var (
 	execPlanCol  = table.TextDefaultColumn("exec_plan", `{}`, "statement execution plan")
 	rowsReadCol  = table.Int64Column("rows_read", "rows read total")
 	bytesScanCol = table.Int64Column("bytes_scan", "bytes scan total")
-	statsCol     = table.TextDefaultColumn("stats", `{}`, "global stats info in exec_plan")
+	statsCol     = table.TextDefaultColumn("stats", `[]`, "global stats info in exec_plan")
 	stmtTypeCol  = table.StringColumn("statement_type", "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]")
 	queryTypeCol = table.StringColumn("query_type", "query type, val in [DQL, DDL, DML, DCL, TCL]")
 	sqlTypeCol   = table.TextColumn("sql_source_type", "sql statement source type")
+	aggrCntCol   = table.Int64Column("aggr_count", "the number of statements aggregated")
 	resultCntCol = table.Int64Column("result_count", "the number of rows of sql execution results")
 
 	SingleStatementTable = &table.Table{
@@ -99,6 +100,7 @@ var (
 			queryTypeCol,
 			roleIdCol,
 			sqlTypeCol,
+			aggrCntCol,
 			resultCntCol,
 		},
 		PrimaryKeyColumn: nil,
@@ -108,6 +110,8 @@ var (
 		Comment:       "record each statement and stats info",
 		PathBuilder:   table.NewAccountDatePathBuilder(),
 		AccountColumn: &accountCol,
+		// TimestampColumn
+		TimestampColumn: &respAtCol,
 		// SupportUserAccess
 		SupportUserAccess: true,
 		// SupportConstAccess
@@ -165,6 +169,8 @@ var (
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      table.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
+		// TimestampColumn
+		TimestampColumn: &timestampCol,
 		// SupportUserAccess
 		SupportUserAccess: false,
 		// SupportConstAccess
@@ -226,6 +232,7 @@ var (
 			endTimeCol,
 			durationCol,
 			resourceCol,
+			extraCol,
 		},
 		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: spanInfoTbl},
 	}
@@ -275,6 +282,10 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 
 	createCost = time.Since(instant)
 	return nil
+}
+
+func GetAllTables() []*table.Table {
+	return tables
 }
 
 // GetSchemaForAccount return account's table, and view's schema

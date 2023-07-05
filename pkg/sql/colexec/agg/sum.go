@@ -105,7 +105,7 @@ func (s *Decimal64Sum) Grows(_ int) {
 }
 
 func (s *Decimal64Sum) Eval(vs []types.Decimal64, err error) ([]types.Decimal64, error) {
-	return vs, nil
+	return vs, err
 }
 
 func (s *Decimal64Sum) Fill(_ int64, value types.Decimal64, ov types.Decimal64, z int64, isEmpty bool, isNull bool) (types.Decimal64, bool, error) {
@@ -152,7 +152,7 @@ func (s *Decimal128Sum) Grows(_ int) {
 }
 
 func (s *Decimal128Sum) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
-	return vs, nil
+	return vs, err
 }
 
 func (s *Decimal128Sum) Fill(_ int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {

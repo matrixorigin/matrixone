@@ -15,6 +15,7 @@
 package logtail
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -27,7 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -49,6 +52,7 @@ const (
 )
 
 type TxnLogtailRespBuilder struct {
+	rt                        *dbutils.Runtime
 	currDBName, currTableName string
 	currDBID, currTableID     uint64
 	txn                       txnif.AsyncTxn
@@ -61,9 +65,10 @@ type TxnLogtailRespBuilder struct {
 	insertBatch  *roaring.Bitmap
 }
 
-func NewTxnLogtailRespBuilder() *TxnLogtailRespBuilder {
+func NewTxnLogtailRespBuilder(rt *dbutils.Runtime) *TxnLogtailRespBuilder {
 	logtails := make([]logtail.TableLogtail, 0)
 	return &TxnLogtailRespBuilder{
+		rt:           rt,
 		batches:      make([]*containers.Batch, batchTotalNum),
 		logtails:     &logtails,
 		batchToClose: make([]*containers.Batch, 0),
@@ -72,12 +77,8 @@ func NewTxnLogtailRespBuilder() *TxnLogtailRespBuilder {
 }
 
 func (b *TxnLogtailRespBuilder) Close() {
-	for i, bat := range b.batchToClose {
-		if b.insertBatch.Contains(uint32(i)) {
-			b.closeInsertBatch(bat)
-		} else {
-			bat.Close()
-		}
+	for _, bat := range b.batchToClose {
+		bat.Close()
 	}
 }
 
@@ -145,8 +146,13 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 	// sort by seqnums
 	sort.Sort(src)
 	mybat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
-	mybat.AddVector(catalog.AttrRowID, src.GetVectorByName(catalog.AttrRowID).CloneWindow(0, src.Length()))
-	commitVec := containers.MakeVector(types.T_TS.ToType())
+	mybat.AddVector(
+		catalog.AttrRowID,
+		src.GetVectorByName(catalog.AttrRowID).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+	)
+	tsType := types.T_TS.ToType()
+	commitVec := b.rt.VectorPool.Small.GetVector(&tsType)
+	commitVec.PreExtend(src.Length())
 	for i := 0; i < src.Length(); i++ {
 		commitVec.Append(b.txn.GetPrepareTS(), false)
 	}
@@ -159,25 +165,19 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 		for len(mybat.Vecs) < 2+int(seqnum) {
 			mybat.AppendPlaceholder()
 		}
-		mybat.AddVector(src.Attrs[i], src.Vecs[i])
+		vec := src.Vecs[i].CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small)
+		mybat.AddVector(src.Attrs[i], vec)
 	}
 
 	if b.batches[dataInsBatch] == nil {
 		b.batches[dataInsBatch] = mybat
 	} else {
 		b.batches[dataInsBatch].Extend(mybat)
-		b.closeInsertBatch(mybat)
+		mybat.Close()
 	}
 }
 
-// closeInsertBatch closes rowid and committs
-// Other vectors are closed in localsegment
-func (b *TxnLogtailRespBuilder) closeInsertBatch(bat *containers.Batch) {
-	bat.Vecs[0].Close()
-	bat.Vecs[1].Close()
-}
-
-func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
+func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.DeleteNode) {
 	if b.batches[dataDelBatch] == nil {
 		b.batches[dataDelBatch] = makeRespBatchFromSchema(DelSchema)
 	}
@@ -207,6 +207,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
 		dels.Add(uint64(del))
 	}
 	_ = meta.GetBlockData().Foreach(
+		ctx,
 		pkDef.Idx,
 		func(v any, isNull bool, row int) error {
 			pkVec.Append(v, false)
@@ -298,7 +299,12 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		return
 	}
 	apiBat, err := containersBatchToProtoBatch(bat)
-	logutil.Debugf("[logtail] from table %d-%s, delete %v, batch length %d @%s", tid, tableName, delete, bat.Length(), b.txn.GetPrepareTS().ToString())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf(
+			"[logtail] from table %d-%s, delete %v, batch length %d @%s",
+			tid, tableName, delete, bat.Length(), b.txn.GetPrepareTS().ToString(),
+		)
+	})
 	if err != nil {
 		panic(err)
 	}

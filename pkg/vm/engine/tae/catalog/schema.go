@@ -201,7 +201,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		if coldef.IsAutoIncrement() || coldef.IsClusterBy() || coldef.IsPrimary() || coldef.IsPhyAddr() {
 			return moerr.NewInternalErrorNoCtx("drop a column with constraint")
 		}
-		logutil.Debugf("[Alter] drop column %s %d %d", coldef.Name, coldef.Idx, coldef.SeqNum)
+		logutil.Infof("[Alter] drop column %s %d %d", coldef.Name, coldef.Idx, coldef.SeqNum)
 		delete(s.NameMap, coldef.Name)
 		delete(s.SeqnumMap, coldef.SeqNum)
 		fixed, pending := s.ColDefs[:coldef.Idx], s.ColDefs[coldef.Idx+1:]
@@ -222,6 +222,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		if s.Extra.OldName == "" {
 			s.Extra.OldName = s.Name
 		}
+		logutil.Infof("[Alter] rename table %s -> %s", s.Name, rename.NewName)
 		s.Name = rename.NewName
 	default:
 		return moerr.NewNYINoCtx("unsupported alter kind: %v", req.Kind)

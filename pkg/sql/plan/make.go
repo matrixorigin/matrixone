@@ -368,3 +368,14 @@ func isSameColumnType(t1 *Type, t2 *Type) bool {
 	}
 	return true
 }
+
+// GetColDefFromTable Find the target column definition from the predefined
+// table columns and return its deep copy
+func GetColDefFromTable(Cols []*ColDef, hidenColName string) *ColDef {
+	for _, coldef := range Cols {
+		if coldef.Name == hidenColName {
+			return DeepCopyColDef(coldef)
+		}
+	}
+	panic("Unable to find target column from predefined table columns")
+}

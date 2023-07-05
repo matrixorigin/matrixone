@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type txnSysBlock struct {
@@ -215,6 +214,11 @@ func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Ta
 		}
 	}
 }
+
+func (blk *txnSysBlock) GetDeltaPersistedTS() types.TS {
+	return types.TS{}
+}
+
 func (blk *txnSysBlock) getColumnTableVec(ts types.TS, colIdx int) (colData containers.Vector, err error) {
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
 	colData = containers.MakeVector(col.Type)
@@ -234,9 +238,9 @@ func (blk *txnSysBlock) getColumnTableVec(ts types.TS, colIdx int) (colData cont
 	}
 	return
 }
-func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *containers.ColumnView, err error) {
 	ts := blk.Txn.GetStartTS()
-	view = model.NewColumnView(colIdx)
+	view = containers.NewColumnView(colIdx)
 	colData, err := blk.getColumnTableVec(ts, colIdx)
 	view.SetData(colData)
 	return
@@ -303,9 +307,9 @@ func (blk *txnSysBlock) getRelTableVec(ts types.TS, colIdx int) (colData contain
 	return
 }
 
-func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) getRelTableData(colIdx int) (view *containers.ColumnView, err error) {
 	ts := blk.Txn.GetStartTS()
-	view = model.NewColumnView(colIdx)
+	view = containers.NewColumnView(colIdx)
 	colData, err := blk.getRelTableVec(ts, colIdx)
 	view.SetData(colData)
 	return
@@ -347,14 +351,14 @@ func (blk *txnSysBlock) getDBTableVec(colIdx int) (colData containers.Vector, er
 	}
 	return
 }
-func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(colIdx)
+func (blk *txnSysBlock) getDBTableData(colIdx int) (view *containers.ColumnView, err error) {
+	view = containers.NewColumnView(colIdx)
 	colData, err := blk.getDBTableVec(colIdx)
 	view.SetData(colData)
 	return
 }
 
-func (blk *txnSysBlock) GetColumnDataById(ctx context.Context, colIdx int) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataById(ctx context.Context, colIdx int) (view *containers.ColumnView, err error) {
 	if !blk.isSysTable() {
 		return blk.txnBlock.GetColumnDataById(ctx, colIdx)
 	}
@@ -373,16 +377,16 @@ func (blk *txnSysBlock) Prefetch(idxes []uint16) error {
 	return nil
 }
 
-func (blk *txnSysBlock) GetColumnDataByName(ctx context.Context, attr string) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataByName(ctx context.Context, attr string) (view *containers.ColumnView, err error) {
 	colIdx := blk.entry.GetSchema().GetColIdx(attr)
 	return blk.GetColumnDataById(ctx, colIdx)
 }
 
-func (blk *txnSysBlock) GetColumnDataByNames(attrs []string) (view *model.BlockView, err error) {
+func (blk *txnSysBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (view *containers.BlockView, err error) {
 	if !blk.isSysTable() {
-		return blk.txnBlock.GetColumnDataByNames(attrs)
+		return blk.txnBlock.GetColumnDataByNames(ctx, attrs)
 	}
-	view = model.NewBlockView()
+	view = containers.NewBlockView()
 	ts := blk.Txn.GetStartTS()
 	switch blk.table.GetID() {
 	case pkgcatalog.MO_DATABASE_ID:

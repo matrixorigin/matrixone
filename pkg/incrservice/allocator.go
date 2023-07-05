@@ -84,18 +84,14 @@ func (a *allocator) asyncAllocate(
 	count int,
 	txnOp client.TxnOperator,
 	apply func(uint64, uint64, error)) {
-	select {
-	case <-ctx.Done():
-		apply(0, 0, ctx.Err())
-	case a.c <- action{
+	a.c <- action{
 		txnOp:         txnOp,
 		accountID:     getAccountID(ctx),
 		actionType:    allocType,
 		tableID:       tableID,
 		col:           col,
 		count:         count,
-		applyAllocate: apply}:
-	}
+		applyAllocate: apply}
 }
 
 func (a *allocator) updateMinValue(
@@ -110,10 +106,7 @@ func (a *allocator) updateMinValue(
 		err = e
 		close(c)
 	}
-	select {
-	case <-ctx.Done():
-		fn(ctx.Err())
-	case a.c <- action{
+	a.c <- action{
 		txnOp:       txnOp,
 		accountID:   getAccountID(ctx),
 		actionType:  updateType,
@@ -121,7 +114,6 @@ func (a *allocator) updateMinValue(
 		col:         col,
 		minValue:    minValue,
 		applyUpdate: fn,
-	}:
 	}
 	<-c
 	return err
@@ -163,6 +155,7 @@ func (a *allocator) doAllocate(act action) {
 			zap.Uint64("next", to),
 			zap.Error(err))
 	}
+
 	act.applyAllocate(from, to, err)
 }
 

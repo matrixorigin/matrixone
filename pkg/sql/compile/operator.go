@@ -452,6 +452,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		PartitionTableIDs:     oldCtx.PartitionTableIds,
 		PartitionTableNames:   oldCtx.PartitionTableNames,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
+		PrimaryKeyIdx:         int(oldCtx.PrimaryKeyIdx),
 	}
 	// get the relation instance of the original table
 	rel, _, err := getRel(proc.Ctx, proc, eg, oldCtx.Ref, nil)
@@ -468,7 +469,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		delCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableNames))
 		// get the relation instances for each partition sub table
 		for i, pTableName := range oldCtx.PartitionTableNames {
-			pRel, err := dbSource.Relation(proc.Ctx, pTableName)
+			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
 			if err != nil {
 				return nil, err
 			}
@@ -509,7 +510,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 		if err != nil {
 			return nil, err
 		}
-		if _, err = dbSource.Relation(proc.Ctx, preCtx.Ref.ObjName); err != nil {
+		if _, err = dbSource.Relation(proc.Ctx, preCtx.Ref.ObjName, proc); err != nil {
 			schemaName = defines.TEMPORARY_DBNAME
 		}
 	}
@@ -532,8 +533,8 @@ func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique
 	}, nil
 }
 
-func constructLockOp(n *plan.Node, proc *process.Process) (*lockop.Argument, error) {
-	arg := lockop.NewArgument()
+func constructLockOp(n *plan.Node, proc *process.Process, eng engine.Engine) (*lockop.Argument, error) {
+	arg := lockop.NewArgument(eng)
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
 		if target.IsPartitionTable {
@@ -590,7 +591,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		newCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableNames))
 		// get the relation instances for each partition sub table
 		for i, pTableName := range oldCtx.PartitionTableNames {
-			pRel, err := dbSource.Relation(proc.Ctx, pTableName)
+			pRel, err := dbSource.Relation(proc.Ctx, pTableName, proc)
 			if err != nil {
 				return nil, err
 			}
@@ -1599,7 +1600,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 		if err != nil {
 			return nil, nil, err
 		}
-		relation, err = dbSource.Relation(ctx, ref.ObjName)
+		relation, err = dbSource.Relation(ctx, ref.ObjName, proc)
 		if err == nil {
 			isTemp = defines.TEMPORARY_DBNAME == ref.SchemaName
 		} else {
@@ -1611,7 +1612,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 			newSchemaName := defines.TEMPORARY_DBNAME
 			ref.SchemaName = newSchemaName
 			ref.ObjName = newObjeName
-			relation, err = dbSource.Relation(ctx, newObjeName)
+			relation, err = dbSource.Relation(ctx, newObjeName, proc)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1633,9 +1634,9 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 					var indexTable engine.Relation
 					if indexdef.TableExist {
 						if isTemp {
-							indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName))
+							indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName), proc)
 						} else {
-							indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName)
+							indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName, proc)
 						}
 						if err != nil {
 							return nil, nil, err

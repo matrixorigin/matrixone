@@ -54,8 +54,6 @@ func TestInsertOperator(t *testing.T) {
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()

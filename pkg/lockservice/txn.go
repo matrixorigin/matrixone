@@ -200,18 +200,32 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	waiters func(pb.WaitTxn) bool,
 	lockTableFunc func(uint64) (lockTable, error)) bool {
 	txn.RLock()
-	defer txn.RUnlock()
 	// txn already closed
 	if !bytes.Equal(txn.txnID, txnID) {
+		txn.RUnlock()
 		return true
 	}
-
 	// if this is a remote transaction, meaning that all the information is in the
 	// remote, we need to execute the logic.
 	if txn.isRemoteLocked() {
+		txn.RUnlock()
 		panic("can not fetch waiting txn on remote txn")
 	}
+	tables := make([]uint64, 0, len(txn.holdLocks))
+	lockKeys := make([]*fixedSlice, 0, len(txn.holdLocks))
 	for table, cs := range txn.holdLocks {
+		tables = append(tables, table)
+		lockKeys = append(lockKeys, cs.slice())
+	}
+	txn.RUnlock()
+
+	defer func() {
+		for _, cs := range lockKeys {
+			cs.unref()
+		}
+	}()
+
+	for idx, table := range tables {
 		l, err := lockTableFunc(table)
 		if err != nil {
 			// if a remote transaction, then the corresponding locktable should be local
@@ -221,8 +235,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 			// the remote LockTable, it is a bug.
 			panic(err)
 		}
-
-		locks := cs.slice()
+		locks := lockKeys[idx]
 		hasDeadLock := false
 		locks.iter(func(lockKey []byte) bool {
 			l.getLock(
@@ -245,7 +258,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 				})
 			return !hasDeadLock
 		})
-		locks.unref()
+
 		if hasDeadLock {
 			return false
 		}

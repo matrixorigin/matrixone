@@ -81,9 +81,10 @@ func TestTaskServiceCanCreate(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// initialize cluster
-	c, err := NewCluster(t, DefaultOptions().
+	c, err := NewCluster(ctx, t, DefaultOptions().
 		WithCNServiceNum(1).
 		WithCNShardNum(1).
 		WithDNServiceNum(1).
@@ -116,10 +117,11 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	opt := DefaultOptions()
 	// initialize cluster
-	c, err := NewCluster(t, opt)
+	c, err := NewCluster(ctx, t, opt)
 	require.NoError(t, err)
 
 	// close the cluster
@@ -167,13 +169,14 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	cnSvcNum := 2
 	opt := DefaultOptions().
 		WithCNServiceNum(cnSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt)
+	c, err := NewCluster(ctx, t, opt)
 	require.NoError(t, err)
 
 	halt := make(chan bool)
@@ -235,9 +238,10 @@ func TestTaskRunner(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	ch := make(chan int)
-	taskExecutor := func(ctx context.Context, task task.Task) error {
+	taskExecutor := func(_ context.Context, task task.Task) error {
 		t.Logf("task %d is running", task.ID)
 		ch <- int(task.ID)
 		return nil
@@ -248,7 +252,7 @@ func TestTaskRunner(t *testing.T) {
 		WithCNServiceNum(cnSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
+	c, err := NewCluster(ctx, t, opt.WithLogLevel(zap.DebugLevel))
 	require.NoError(t, err)
 
 	// close the cluster
@@ -289,10 +293,11 @@ func TestCronTask(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	opt := DefaultOptions()
 	// initialize cluster
-	c, err := NewCluster(t, opt.WithLogLevel(zap.DebugLevel))
+	c, err := NewCluster(ctx, t, opt.WithLogLevel(zap.DebugLevel))
 	require.NoError(t, err)
 
 	ch := make(chan int)

@@ -5,15 +5,24 @@ metadata:
   namespace: nsformocheckin
 spec:
   nodeSelector:
-    role: mo-big-data-pr
+    role: mo-big-data-pr 
+    kubernetes.io/arch: arm64
   dn:
     overlay:
+      tolerations:
+      - effect: NoSchedule
+        key: role/mo-big-data-pr
+        operator: Exists    
       imagePullSecrets:
       - name: dockerhub
+      env:
+      - name: GOMEMLIMIT
+        value: "8000MiB"
     cacheVolume:
       size: 100Gi
+      storageClassName: gp3
     sharedStorageCache:
-      memoryCacheSize: 1Gi
+      memoryCacheSize: 512Mi
       diskCacheSize: 100Gi
     config: |
       [dn.Txn.Storage]
@@ -36,13 +45,17 @@ spec:
     resources:
       requests:
         cpu: 3
-        memory: 12Gi
+        memory: 15Gi
       limits:
         cpu: 8
-        memory: 16Gi
-  imageRepository: matrixorigin/matrixone
+        memory: 15Gi
+  imageRepository: matrixorigin/matrixone-dev
   logService:
     overlay:
+      tolerations:
+      - effect: NoSchedule
+        key: role/mo-big-data-pr
+        operator: Exists    
       imagePullSecrets:
       - name: dockerhub
     replicas: 3
@@ -52,7 +65,7 @@ spec:
         memory: 2Gi
       limits:
         cpu: 8
-        memory: 16Gi
+        memory: 2Gi
     sharedStorage:
       s3:
         path: s3pathformocheckin
@@ -62,6 +75,7 @@ spec:
     pvcRetentionPolicy: Delete
     volume:
       size: 100Gi
+      storageClassName: gp3
     config: |
       [log]
       level = "info"
@@ -70,6 +84,7 @@ spec:
   tp:
     cacheVolume:
       size: 100Gi
+      storageClassName: gp3
     sharedStorageCache:
       memoryCacheSize: 1Gi
       diskCacheSize: 100Gi
@@ -86,17 +101,23 @@ spec:
       [cn.txn]
       enable-sacrificing-freshness = true
       enable-cn-based-consistency = false
+      [cn.ctl.address]
+      listen-address = "0.0.0.0:19958"
     replicas: 2
     overlay:
+      tolerations:
+      - effect: NoSchedule
+        key: role/mo-big-data-pr
+        operator: Exists    
       imagePullSecrets:
       - name: dockerhub
       env:
       - name: GOMEMLIMIT
-        value: "10000MiB"
+        value: "8000MiB"
     resources:
       requests:
         cpu: 6
-        memory: 16Gi
+        memory: 15Gi
       limits:
         cpu: 8
         memory: 16Gi

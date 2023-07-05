@@ -552,6 +552,9 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 			}
 		}
 	case <-rb.resetConnC:
+		// If the connect needs to be reset, then all futures in the waiting response state will never
+		// get the response and need to be notified of an error immediately.
+		rb.makeAllWaitingFutureFailed()
 		rb.handleResetConn()
 	case <-rb.stopWriteC:
 		for {
@@ -574,6 +577,27 @@ func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
 		default:
 			return
 		}
+	}
+}
+
+func (rb *remoteBackend) makeAllWaitingFutureFailed() {
+	var ids []uint64
+	var waitings []*Future
+	func() {
+		rb.mu.Lock()
+		defer rb.mu.Unlock()
+		ids = make([]uint64, 0, len(rb.mu.futures))
+		waitings = make([]*Future, 0, len(rb.mu.futures))
+		for id, f := range rb.mu.futures {
+			if f.waiting.Load() {
+				waitings = append(waitings, f)
+				ids = append(ids, id)
+			}
+		}
+	}()
+
+	for i, f := range waitings {
+		f.error(ids[i], backendClosed, nil)
 	}
 }
 

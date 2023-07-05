@@ -89,6 +89,7 @@ var _ zapcore.Encoder = (*TraceLogEncoder)(nil)
 type TraceLogEncoder struct {
 	zapcore.Encoder
 	spanContextField zap.Field
+	discardable      bool
 }
 
 func (e *TraceLogEncoder) Clone() zapcore.Encoder {
@@ -108,9 +109,19 @@ func (e *TraceLogEncoder) AddObject(key string, val zapcore.ObjectMarshaler) err
 	return e.Encoder.AddObject(key, val)
 }
 
+// AddBool implements zapcore.ObjectEncoder, hook zapcore.Core's With(...) api
+func (e *TraceLogEncoder) AddBool(key string, value bool) {
+	if key == MOInternalFiledKeyDiscardable {
+		e.discardable = true
+	}
+}
+
 func (e *TraceLogEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
 	if e.spanContextField.Key == SpanFieldKey.Load().(string) {
 		fields = append(fields, e.spanContextField)
+	}
+	if e.discardable {
+		fields = append(fields, Discardable())
 	}
 	for _, v := range fields {
 		if v.Type == zapcore.BoolType && v.Key == MOInternalFiledKeyNoopReport {
@@ -121,6 +132,9 @@ func (e *TraceLogEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Fiel
 }
 
 const MOInternalFiledKeyNoopReport = "MOInternalFiledKeyNoopReport"
+
+// MOInternalFiledKeyDiscardable mark
+const MOInternalFiledKeyDiscardable = "MODiscardable"
 
 func newTraceLogEncoder() *TraceLogEncoder {
 	// default like zap.NewProductionEncoderConfig(), but clean core-elems ENCODE

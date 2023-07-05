@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop database if exists db1;
 create database db1;
 -- table b
@@ -109,3 +110,4 @@ SELECT mo_table_size('mo_catalog', 'mo_instance') as t;
 -- @session
 drop table mo_instance;
 drop account if exists acc_idx;
+set global enable_privilege_cache = on;

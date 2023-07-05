@@ -56,6 +56,7 @@ func New(
 		vp: &vectorPool{
 			vecs: make(map[uint8][]*vector.Vector),
 		},
+		valueScanBatch: make(map[[16]byte]*batch.Batch),
 	}
 }
 
@@ -74,6 +75,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.vp = p.vp
 	proc.mp = p.Mp()
 	proc.prepareBatch = p.prepareBatch
+	proc.prepareExprList = p.prepareExprList
 	proc.Lim = p.Lim
 	proc.TxnClient = p.TxnClient
 	proc.TxnOperator = p.TxnOperator
@@ -86,6 +88,9 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.LockService = p.LockService
 	proc.Aicm = p.Aicm
 	proc.LoadTag = p.LoadTag
+
+	proc.prepareParams = p.prepareParams
+	proc.resolveVariableFunc = p.resolveVariableFunc
 
 	// reg and cancel
 	proc.Ctx = newctx
@@ -146,12 +151,28 @@ func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
 }
 
+func (proc *Process) GetPrepareParams() *vector.Vector {
+	return proc.prepareParams
+}
+
+func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
+	proc.prepareParams = prepareParams
+}
+
 func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
 	proc.prepareBatch = bat
 }
 
 func (proc *Process) GetPrepareBatch() *batch.Batch {
 	return proc.prepareBatch
+}
+
+func (proc *Process) SetPrepareExprList(exprList any) {
+	proc.prepareExprList = exprList
+}
+
+func (proc *Process) GetPrepareExprList() any {
+	return proc.prepareExprList
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {
@@ -202,6 +223,14 @@ func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
 }
 
+func (proc *Process) CopyValueScanBatch(src *Process) {
+	proc.valueScanBatch = src.valueScanBatch
+}
+
+func (proc *Process) CopyVectorPool(src *Process) {
+	proc.vp = src.vp
+}
+
 func (proc *Process) PutBatch(bat *batch.Batch) {
 	if bat == batch.EmptyBatch {
 		return
@@ -214,10 +243,11 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	}
 	for i := range bat.Vecs {
 		if bat.Vecs[i] != nil {
-			if !bat.Vecs[i].IsConst() {
+			if !bat.Vecs[i].IsConst() && !bat.Vecs[i].NeedDup() {
 				vec := bat.Vecs[i]
-				bat.ReplaceVector(vec, nil)
-				proc.vp.putVector(vec)
+				if proc.vp.putVector(vec) {
+					bat.ReplaceVector(vec, nil)
+				}
 			} else {
 				bat.Vecs[i].Free(proc.Mp())
 			}
@@ -241,7 +271,9 @@ func (proc *Process) FreeVectors() {
 }
 
 func (proc *Process) PutVector(vec *vector.Vector) {
-	proc.vp.putVector(vec)
+	if !proc.vp.putVector(vec) {
+		vec.Free(proc.Mp())
+	}
 }
 
 func (proc *Process) GetVector(typ types.Type) *vector.Vector {
@@ -263,11 +295,15 @@ func (vp *vectorPool) freeVectors(mp *mpool.MPool) {
 	}
 }
 
-func (vp *vectorPool) putVector(vec *vector.Vector) {
+func (vp *vectorPool) putVector(vec *vector.Vector) bool {
 	vp.Lock()
 	defer vp.Unlock()
 	key := uint8(vec.GetType().Oid)
+	if len(vp.vecs[key]) > VectorLimit {
+		return false
+	}
 	vp.vecs[key] = append(vp.vecs[key], vec)
+	return true
 }
 
 func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
@@ -275,8 +311,8 @@ func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
 	defer vp.Unlock()
 	key := uint8(typ.Oid)
 	if vecs := vp.vecs[key]; len(vecs) > 0 {
-		vec := vecs[0]
-		vp.vecs[key] = vecs[1:]
+		vec := vecs[len(vecs)-1]
+		vp.vecs[key] = vecs[:len(vecs)-1]
 		return vec
 	}
 	return nil

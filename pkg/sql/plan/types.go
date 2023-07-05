@@ -153,8 +153,11 @@ type QueryBuilder struct {
 	ctxByNode    []*BindContext
 	nameByColRef map[[2]int32]string
 
+	tag2Table map[int32]*TableDef
+
 	nextTag int32
 
+	isPrepareStatement bool
 	mysqlCompatible    bool
 	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 	isForUpdate        bool // if it's a query plan for update

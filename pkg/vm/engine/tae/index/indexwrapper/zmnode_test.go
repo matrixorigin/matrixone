@@ -38,6 +38,8 @@ const (
 func TestBlockZoneMapIndex(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	var err error
+	ctx := context.Background()
+
 	// var res bool
 	dir := testutils.InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
@@ -49,7 +51,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 
 	objectWriter, err := objectio.NewObjectWriterSpecial(objectio.WriterNormal, name, service)

@@ -48,7 +48,7 @@ func NewScheduler(taskServiceGetter func() taskservice.TaskService, cfg hakeeper
 }
 
 func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
-	workingCN, expiredCN := parseCNStores(s.cfg, cnState, currentTick)
+	workingCN := getWorkingCNs(s.cfg, cnState, currentTick)
 
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
@@ -67,11 +67,8 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	if len(tasks) == 0 {
 		return
 	}
-	orderedCN := getCNOrdered(runningTasks, workingCN)
-
+	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, workingCN)
 	s.allocateTasks(createdTasks, orderedCN)
-
-	expiredTasks := getExpiredTasks(runningTasks, expiredCN)
 	s.allocateTasks(expiredTasks, orderedCN)
 }
 
@@ -152,22 +149,24 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 	orderedCN.inc(t.TaskRunner)
 }
 
-func getExpiredTasks(tasks []task.Task, expiredCN []string) (expired []task.Task) {
-	for _, t := range tasks {
-		if contains(expiredCN, t.TaskRunner) {
-			expired = append(expired, t)
-		}
-	}
-	return
-}
-
-func getCNOrdered(tasks []task.Task, workingCN []string) *cnMap {
-	orderedMap := newOrderedMap(workingCN)
+func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (orderedMap *cnMap, expired []task.Task) {
+	orderedMap = newOrderedMap(workingCN)
 	for _, t := range tasks {
 		if contains(workingCN, t.TaskRunner) {
 			orderedMap.inc(t.TaskRunner)
+		} else {
+			expired = append(expired, t)
 		}
 	}
-
-	return orderedMap
+	for _, t := range tasks {
+		if time.Since(time.UnixMilli(t.LastHeartbeat)) > taskSchedulerDefaultTimeout {
+			for _, e := range expired {
+				if t.ID == e.ID {
+					break
+				}
+			}
+			expired = append(expired, t)
+		}
+	}
+	return orderedMap, expired
 }

@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 const (
@@ -55,7 +55,6 @@ type localSegment struct {
 	appends     []*appendCtx
 	tableHandle data.TableHandle
 	nseg        handle.Segment
-	//sched  tasks.TaskScheduler
 }
 
 func newLocalSegment(table *txnTable) *localSegment {
@@ -165,7 +164,7 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 		seg.tableHandle = tableData.GetHandle()
 	}
 	appended := uint32(0)
-	vec := containers.MakeVector(objectio.RowidType)
+	vec := seg.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	for appended < node.Rows() {
 		appender, err := seg.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
@@ -201,16 +200,18 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 			return err
 		}
 		blockId := appender.GetMeta().(*catalog.BlockEntry).ID
-		col, err := objectio.ConstructRowidColumn(
+		col := seg.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+		defer col.Close()
+		if err = objectio.ConstructRowidColumnTo(
+			col.GetDownstreamVector(),
 			&blockId,
 			anode.GetMaxRow()-toAppend,
 			toAppend,
-			common.DefaultAllocator)
-		if err != nil {
+			col.GetAllocator(),
+		); err != nil {
 			return err
 		}
-		defer col.Free(common.DefaultAllocator)
-		if err = vec.ExtendVec(col); err != nil {
+		if err = vec.ExtendVec(col.GetDownstreamVector()); err != nil {
 			return err
 		}
 		ctx := &appendCtx{
@@ -493,19 +494,20 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]
 	return n.GetColumnDataByIds(colIdxes)
 }
 
 func (seg *localSegment) GetColumnDataById(
+	ctx context.Context,
 	blk *catalog.BlockEntry,
 	colIdx int,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]
-	return n.GetColumnDataById(colIdx)
+	return n.GetColumnDataById(ctx, colIdx)
 }
 
 func (seg *localSegment) Prefetch(blk *catalog.BlockEntry, idxes []uint16) error {

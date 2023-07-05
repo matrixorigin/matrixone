@@ -43,7 +43,7 @@ func TestScopeSerialization(t *testing.T) {
 	for i, sourceScope := range sourceScopes {
 		data, errEncode := encodeScope(sourceScope)
 		require.NoError(t, errEncode)
-		targetScope, errDecode := decodeScope(data, sourceScope.Proc, false)
+		targetScope, errDecode := decodeScope(data, sourceScope.Proc, false, nil)
 		require.NoError(t, errDecode)
 
 		// Just do simple check
@@ -75,7 +75,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		ctx := compilerCtx.GetContext()
 		stmts, err := mysql.Parse(ctx, sql, 1)
 		require.NoError(t1, err)
-		qry, err := opt.Optimize(stmts[0])
+		qry, err := opt.Optimize(stmts[0], false)
 		require.NoError(t1, err)
 		c := New("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil)
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, nil, func(a any, batch *batch.Batch) error {

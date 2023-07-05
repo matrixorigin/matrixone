@@ -92,6 +92,7 @@ message Insert{
   repeated string partition_table_names = 7;
   int32 partition_idx = 8;
   bool is_end         = 9;
+  plan.TableDef table_def = 10;
 }
 
 message Array{
@@ -119,6 +120,7 @@ message Deletion{
   map<string,int32> SegmentMap          = 12;
   bool can_truncate                     = 13;
   bool is_end                           = 14;
+  int32 primary_key_idx                 = 15;
 }
 
 message PreInsert {
@@ -141,6 +143,7 @@ message LockTarget {
 
 message LockOp {
   repeated LockTarget targets = 1;
+  bool                block   = 2;
 }
 
 message PreInsertUnique {

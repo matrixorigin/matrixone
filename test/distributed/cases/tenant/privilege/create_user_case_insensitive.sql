@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop user if exists eBswy6OUZtiMWDHI,CrmtLr,J52C5Wn@cLQjHXMhCxabiOfqw8dge;
 create user eBswy6OUZtiMWDHI identified by '20攝柀狆20380寡376',CrmtLr identified by '13432栓4橬2512欫熥',J52C5Wn@cLQjHXMhCxabiOfqw8dge identified by '芸05弻542阍硉12311';
 create user eBswy6OUZtiMWDHI identified by '20攝柀狆20380寡376',CrmtLr identified by '13432栓4橬2512欫熥',J52C5Wn@cLQjHXMhCxabiOfqw8dge identified by '芸05弻542阍硉12311';
@@ -13,3 +14,4 @@ drop user if exists LXT5kBkD2Q393W@Xri3e3Uq3G8y;
 create user LXT5kBkD2Q393W@Xri3e3Uq3G8y identified by '438悍420阉扄663萍4';
 drop user LXT5kBkD2Q393W@Xri3e3Uq3G8y,LXT5kBkD2Q393W@Xri3e3Uq3G8y,LXT5kBkD2Q393W@Xri3e3Uq3G8y;
 drop user LXT5kBkD2Q393W@Xri3e3Uq3G8y;
+set global enable_privilege_cache = on;

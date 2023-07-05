@@ -130,15 +130,18 @@ const (
 // Pool emement size
 var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
-// Zeros, enough for largest pool element
-var kZeroSlice = make([]byte, 1024)
-
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
 	poolId       int64
 	allocSz      int32
 	fixedPoolIdx int8
 	guard        [3]uint8
+}
+
+func init() {
+	if unsafe.Sizeof(memHdr{}) != kMemHdrSz {
+		panic("memory header size assertion failed")
+	}
 }
 
 func (pHdr *memHdr) SetGuard() {
@@ -226,7 +229,10 @@ func (fp *fixedPool) alloc(sz int32) *memHdr {
 		pHdr.allocSz = sz
 		// Zero slice.  Go requires slice to be zeroed.
 		bs := unsafe.Slice((*byte)(unsafe.Add(ret, kMemHdrSz)), fp.eleSz)
-		copy(bs, kZeroSlice)
+		// the compiler will optimize this loop to memclr
+		for i := range bs {
+			bs[i] = 0
+		}
 		return pHdr
 	}
 }

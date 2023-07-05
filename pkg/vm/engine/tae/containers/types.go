@@ -41,6 +41,7 @@ type Vector interface {
 	Get(i int) any
 	Append(v any, isNull bool)
 	CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector
+	CloneWindowWithPool(offset, length int, pool *VectorPool) Vector
 	PreExtend(length int) error
 
 	WriteTo(w io.Writer) (int64, error)
@@ -92,6 +93,7 @@ type Batch struct {
 	Vecs    []Vector
 	Deletes *nulls.Bitmap
 	Nameidx map[string]int
+	Pool    *VectorPool
 	// refidx  map[int]int
 }
 

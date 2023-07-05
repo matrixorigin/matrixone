@@ -18,30 +18,33 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-// DN vectorWrapper is different from CN vector by
-// 2. Window - DN uses shared-memory Window
-// 3. Mpool  - DN stores mpool reference within the vector
-// 4. SharedMemory Logic - DN ResetWithData() doesn't allocate mpool memory unless Append() is called.
 type vectorWrapper struct {
-	downstreamVector *cnVector.Vector
+	// wrapped is the vector.Vector that is wrapped by this vectorWrapper.
+	wrapped *vector.Vector
 
-	// Used in Append()
+	// mpool is the memory pool used by the wrapped vector.Vector.
 	mpool *mpool.MPool
+
+	// it is used to call Close in an idempotent way
+	closed atomic.Bool
+
+	element *vectorPoolElement
 }
 
 func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 	vec := &vectorWrapper{
-		downstreamVector: cnVector.NewVec(typ),
+		wrapped: vector.NewVec(typ),
 	}
 
 	// setting mpool variables
@@ -58,7 +61,7 @@ func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 	}
 	vec.mpool = alloc
 	if capacity > 0 {
-		if err := vec.downstreamVector.PreExtend(capacity, vec.mpool); err != nil {
+		if err := vec.wrapped.PreExtend(capacity, vec.mpool); err != nil {
 			panic(err)
 		}
 	}
@@ -66,12 +69,12 @@ func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 }
 
 func (vec *vectorWrapper) PreExtend(length int) (err error) {
-	vec.tryCoW()
-	return vec.downstreamVector.PreExtend(length, vec.mpool)
+	vec.tryCOW()
+	return vec.wrapped.PreExtend(length, vec.mpool)
 }
 
 func (vec *vectorWrapper) Get(i int) any {
-	if vec.downstreamVector.IsConstNull() {
+	if vec.wrapped.IsConstNull() {
 		return nil
 	}
 	if vec.GetType().IsVarlen() {
@@ -81,26 +84,26 @@ func (vec *vectorWrapper) Get(i int) any {
 		return any(ret)
 	}
 
-	return getNonNullValue(vec.downstreamVector, uint32(i))
+	return getNonNullValue(vec.wrapped, uint32(i))
 }
 
 func (vec *vectorWrapper) ShallowGet(i int) any {
-	return getNonNullValue(vec.downstreamVector, uint32(i))
+	return getNonNullValue(vec.wrapped, uint32(i))
 }
 
 func (vec *vectorWrapper) Length() int {
-	return vec.downstreamVector.Length()
+	return vec.wrapped.Length()
 }
 
 func (vec *vectorWrapper) Append(v any, isNull bool) {
 	// innsert AppendAny will check IsConst
-	vec.tryCoW()
+	vec.tryCOW()
 
 	var err error
 	if isNull {
-		err = cnVector.AppendAny(vec.downstreamVector, nil, true, vec.mpool)
+		err = vector.AppendAny(vec.wrapped, nil, true, vec.mpool)
 	} else {
-		err = cnVector.AppendAny(vec.downstreamVector, v, false, vec.mpool)
+		err = vector.AppendAny(vec.wrapped, v, false, vec.mpool)
 	}
 	if err != nil {
 		panic(err)
@@ -112,7 +115,7 @@ func (vec *vectorWrapper) GetAllocator() *mpool.MPool {
 }
 
 func (vec *vectorWrapper) IsNull(i int) bool {
-	inner := vec.downstreamVector
+	inner := vec.wrapped
 	if inner.IsConstNull() {
 		return true
 	}
@@ -123,11 +126,11 @@ func (vec *vectorWrapper) IsNull(i int) bool {
 }
 
 func (vec *vectorWrapper) NullMask() *nulls.Nulls {
-	return vec.downstreamVector.GetNulls()
+	return vec.wrapped.GetNulls()
 }
 
 func (vec *vectorWrapper) GetType() *types.Type {
-	return vec.downstreamVector.GetType()
+	return vec.wrapped.GetType()
 }
 
 func (vec *vectorWrapper) Extend(src Vector) {
@@ -135,11 +138,11 @@ func (vec *vectorWrapper) Extend(src Vector) {
 }
 
 func (vec *vectorWrapper) Update(i int, v any, isNull bool) {
-	if vec.downstreamVector.IsConst() {
+	if vec.wrapped.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("update to const vectorWrapper"))
 	}
-	vec.tryCoW()
-	UpdateValue(vec.downstreamVector, uint32(i), v, isNull)
+	vec.tryCOW()
+	UpdateValue(vec.wrapped, uint32(i), v, isNull)
 }
 
 func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
@@ -148,7 +151,7 @@ func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 	var size int64
 	_, _ = bs.Write(types.EncodeInt64(&size))
 
-	if err = vec.downstreamVector.MarshalBinaryWithBuffer(&bs); err != nil {
+	if err = vec.wrapped.MarshalBinaryWithBuffer(&bs); err != nil {
 		return
 	}
 
@@ -181,10 +184,10 @@ func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 
 	n += int64(len(buf))
 
-	t := vec.downstreamVector.GetType()
-	vec.releaseDownstream()
-	vec.downstreamVector = cnVector.NewVec(*t)
-	if err = vec.downstreamVector.UnmarshalBinary(buf); err != nil {
+	t := vec.wrapped.GetType()
+	vec.releaseWrapped()
+	vec.wrapped = vector.NewVec(*t)
+	if err = vec.wrapped.UnmarshalBinary(buf); err != nil {
 		return
 	}
 
@@ -192,20 +195,20 @@ func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (vec *vectorWrapper) HasNull() bool {
-	if vec.downstreamVector.IsConstNull() {
+	if vec.wrapped.IsConstNull() {
 		return true
 	}
-	if vec.downstreamVector.IsConst() {
+	if vec.wrapped.IsConst() {
 		return false
 	}
 	return vec.NullMask() != nil && !vec.NullMask().IsEmpty()
 }
 
 func (vec *vectorWrapper) NullCount() int {
-	if vec.downstreamVector.IsConstNull() {
+	if vec.wrapped.IsConstNull() {
 		return vec.Length()
 	}
-	if vec.downstreamVector.IsConst() {
+	if vec.wrapped.IsConst() {
 		return 0
 	}
 	if vec.NullMask() != nil {
@@ -216,7 +219,7 @@ func (vec *vectorWrapper) NullCount() int {
 
 // conver a const vectorWrapper to a normal one, getting ready to edit
 func (vec *vectorWrapper) TryConvertConst() Vector {
-	if vec.downstreamVector.IsConstNull() {
+	if vec.wrapped.IsConstNull() {
 		ret := NewVector(*vec.GetType())
 		ret.mpool = vec.mpool
 		for i := 0; i < vec.Length(); i++ {
@@ -225,7 +228,7 @@ func (vec *vectorWrapper) TryConvertConst() Vector {
 		return ret
 	}
 
-	if vec.downstreamVector.IsConst() {
+	if vec.wrapped.IsConst() {
 		ret := NewVector(*vec.GetType())
 		ret.mpool = vec.mpool
 		v := vec.Get(0)
@@ -238,7 +241,7 @@ func (vec *vectorWrapper) TryConvertConst() Vector {
 }
 
 func (vec *vectorWrapper) Foreach(op ItOp, sels *nulls.Bitmap) error {
-	return vec.ForeachWindow(0, vec.downstreamVector.Length(), op, sels)
+	return vec.ForeachWindow(0, vec.wrapped.Length(), op, sels)
 }
 
 func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) (err error) {
@@ -246,47 +249,58 @@ func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls
 }
 
 func (vec *vectorWrapper) Close() {
-	vec.releaseDownstream()
-}
-
-func (vec *vectorWrapper) releaseDownstream() {
-	if vec.downstreamVector == nil {
+	if !vec.closed.CompareAndSwap(false, true) {
 		return
 	}
-	if !vec.downstreamVector.NeedDup() {
-		vec.downstreamVector.Free(vec.mpool)
+	if vec.element != nil {
+		vec.element.put()
+		vec.element = nil
+		vec.wrapped = nil
+		return
 	}
-	vec.downstreamVector = nil
+
+	// if this wrapper is not get from a pool, we should release the wrapped vector
+	vec.releaseWrapped()
+}
+
+func (vec *vectorWrapper) releaseWrapped() {
+	if vec.wrapped == nil {
+		return
+	}
+	if !vec.wrapped.NeedDup() {
+		vec.wrapped.Free(vec.mpool)
+	}
+	vec.wrapped = nil
 }
 
 func (vec *vectorWrapper) Allocated() int {
-	if vec.downstreamVector.NeedDup() {
+	if vec.wrapped.NeedDup() {
 		return 0
 	}
-	return vec.downstreamVector.Size()
+	return vec.wrapped.Allocated()
 }
 
 // When a new Append() is happening on a SharedMemory vectorWrapper, we allocate the data[] from the mpool.
-func (vec *vectorWrapper) tryCoW() {
-	if !vec.downstreamVector.NeedDup() {
+func (vec *vectorWrapper) tryCOW() {
+	if !vec.wrapped.NeedDup() {
 		return
 	}
 
-	newCnVector, err := vec.downstreamVector.Dup(vec.mpool)
+	newCnVector, err := vec.wrapped.Dup(vec.mpool)
 	if err != nil {
 		panic(err)
 	}
-	vec.downstreamVector = newCnVector
+	vec.wrapped = newCnVector
 }
 
 func (vec *vectorWrapper) Window(offset, length int) Vector {
-	if vec.downstreamVector.IsConst() {
+	if vec.wrapped.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("foreach to const vectorWrapper"))
 	}
 	var err error
 	win := new(vectorWrapper)
 	win.mpool = vec.mpool
-	win.downstreamVector, err = vec.downstreamVector.Window(offset, offset+length)
+	win.wrapped, err = vec.wrapped.Window(offset, offset+length)
 	if err != nil {
 		panic(err)
 	}
@@ -303,21 +317,17 @@ func (vec *vectorWrapper) CloneWindow(offset, length int, allocator ...*mpool.MP
 	}
 
 	cloned := NewVector(*vec.GetType(), opts)
-	if vec.downstreamVector.IsConstNull() {
-		cloned.downstreamVector = cnVector.NewConstNull(*vec.GetType(), length, vec.GetAllocator())
-		return cloned
-	}
-
-	if vec.downstreamVector.IsConst() {
-		panic(moerr.NewInternalErrorNoCtx("cloneWindow to const vectorWrapper"))
-	}
-
-	var err error
-	cloned.downstreamVector, err = vec.downstreamVector.CloneWindow(offset, offset+length, cloned.GetAllocator())
-	if err != nil {
+	if err := vec.wrapped.CloneWindowTo(cloned.wrapped, offset, offset+length, cloned.GetAllocator()); err != nil {
 		panic(err)
 	}
+	return cloned
+}
 
+func (vec *vectorWrapper) CloneWindowWithPool(offset, length int, pool *VectorPool) Vector {
+	cloned := pool.GetVector(vec.GetType())
+	if err := vec.wrapped.CloneWindowTo(cloned.wrapped, offset, offset+length, cloned.GetAllocator()); err != nil {
+		panic(err)
+	}
 	return cloned
 }
 
@@ -327,12 +337,12 @@ func (vec *vectorWrapper) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	}
 }
 
-func (vec *vectorWrapper) ExtendVec(src *cnVector.Vector) (err error) {
+func (vec *vectorWrapper) ExtendVec(src *vector.Vector) (err error) {
 	return vec.extendWithOffset(src, 0, src.Length())
 }
 
-func (vec *vectorWrapper) extendWithOffset(src *cnVector.Vector, srcOff, srcLen int) (err error) {
-	if vec.downstreamVector.IsConst() {
+func (vec *vectorWrapper) extendWithOffset(src *vector.Vector, srcOff, srcLen int) (err error) {
+	if vec.wrapped.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("extend to const vectorWrapper"))
 	}
 	if srcLen <= 0 {
@@ -340,10 +350,10 @@ func (vec *vectorWrapper) extendWithOffset(src *cnVector.Vector, srcOff, srcLen 
 	}
 
 	if srcOff == 0 && srcLen == src.Length() {
-		err = cnVector.GetUnionAllFunction(
+		err = vector.GetUnionAllFunction(
 			*vec.GetType(),
 			vec.mpool,
-		)(vec.downstreamVector, src)
+		)(vec.wrapped, src)
 		return
 	}
 
@@ -351,7 +361,7 @@ func (vec *vectorWrapper) extendWithOffset(src *cnVector.Vector, srcOff, srcLen 
 	for j := 0; j < srcLen; j++ {
 		sels[j] = int32(j) + int32(srcOff)
 	}
-	err = vec.downstreamVector.Union(src, sels, vec.mpool)
+	err = vec.wrapped.Union(src, sels, vec.mpool)
 	return
 }
 
@@ -359,14 +369,14 @@ func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Bitmap) {
 	if mask.IsEmpty() {
 		return
 	}
-	vec.tryCoW()
+	vec.tryCOW()
 
 	dels := vec.mpool.GetSels()
 	mask.Foreach(func(i uint64) bool {
 		dels = append(dels, int64(i))
 		return true
 	})
-	vec.downstreamVector.Shrink(dels, true)
+	vec.wrapped.Shrink(dels, true)
 	vec.mpool.PutSels(dels)
 }
 
@@ -374,7 +384,7 @@ func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
 	if deletes == nil || deletes.IsEmpty() {
 		return
 	}
-	vec.tryCoW()
+	vec.tryCOW()
 
 	dels := vec.mpool.GetSels()
 	itr := deletes.Iterator()
@@ -383,16 +393,16 @@ func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
 		dels = append(dels, int64(r))
 	}
 
-	vec.downstreamVector.Shrink(dels, true)
+	vec.wrapped.Shrink(dels, true)
 	vec.mpool.PutSels(dels)
 }
 
-func (vec *vectorWrapper) GetDownstreamVector() *cnVector.Vector {
-	return vec.downstreamVector
+func (vec *vectorWrapper) GetDownstreamVector() *vector.Vector {
+	return vec.wrapped
 }
 
-func (vec *vectorWrapper) setDownstreamVector(dsVec *cnVector.Vector) {
-	vec.downstreamVector = dsVec
+func (vec *vectorWrapper) setDownstreamVector(dsVec *vector.Vector) {
+	vec.wrapped = dsVec
 }
 
 /****** Below functions are not used in critical path. Used mainly for testing */
@@ -453,6 +463,7 @@ func (vec *vectorWrapper) PPString(num int) string {
 		_, _ = w.WriteString("...")
 	}
 	_, _ = w.WriteString(")]")
+	_, _ = w.WriteString(fmt.Sprintf(")][%v]", vec.element != nil))
 	return w.String()
 }
 
@@ -489,7 +500,7 @@ func (vec *vectorWrapper) Equals(o Vector) bool {
 		}
 	}
 	mask := vec.NullMask()
-	typ := vec.downstreamVector.GetType()
+	typ := vec.wrapped.GetType()
 	for i := 0; i < vec.Length(); i++ {
 		if mask != nil && mask.Contains(uint64(i)) {
 			continue

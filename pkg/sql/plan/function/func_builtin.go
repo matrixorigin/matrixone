@@ -20,12 +20,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
@@ -415,6 +420,64 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
+// buildInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
+func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint8](result)
+
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](parameters[1])
+
+	if proc.SessionInfo.AccountId != sysAccountID {
+		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		// fixme: should we need to support null date?
+		if null1 || null2 {
+			rs.Append(uint8(1), true)
+			continue
+		}
+
+		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+		if !ok {
+			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
+		}
+		exec := v.(executor.SQLExecutor)
+		tables := mometric.GetAllTables()
+		tables = append(tables, motrace.GetAllTables()...)
+		tableNames := strings.Split(util.UnsafeBytesToString(v1), ",")
+		for _, tblName := range tableNames {
+			found := false
+			for _, tbl := range tables {
+				if tbl.TimestampColumn != nil && strings.TrimSpace(tblName) == tbl.Table {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return moerr.NewNotSupported(proc.Ctx, "purge '%s'", tblName)
+			}
+		}
+		for _, tblName := range tableNames {
+			for _, tbl := range tables {
+				if strings.TrimSpace(tblName) == tbl.Table {
+					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
+						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
+					opts := executor.Options{}.WithDatabase(tbl.Database)
+					_, err := exec.Exec(proc.Ctx, sql, opts)
+					return err
+				}
+			}
+		}
+
+		rs.Append(uint8(0), false)
+	}
+
+	return nil
+}
+
 func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -745,7 +808,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	fillGroupStr := func(keys [][]byte, vec *vector.Vector, n int, sz int, start int) {
-		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
+		data := unsafe.Slice(vector.GetPtrAt[byte](vec, 0), (n+start)*sz)
 		if !vec.GetNulls().Any() {
 			for i := 0; i < n; i++ {
 				keys[i] = append(keys[i], byte(0))
@@ -1471,6 +1534,8 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 type opBuiltInRand struct {
 	seed *rand.Rand
 }
+
+var _ = newOpBuiltInRand().builtInRand
 
 func newOpBuiltInRand() *opBuiltInRand {
 	return new(opBuiltInRand)

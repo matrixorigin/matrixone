@@ -270,7 +270,7 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 				}
 				continue
 			}
-			c.w = getWaiter(l.bind.ServiceID, c.w, c.txn.txnID)
+			c.w = getWaiter(l.bind.ServiceID, c.w, c.txn)
 			c.offset = idx
 			if c.opts.async {
 				l.events.add(c)
@@ -278,7 +278,7 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 			l.handleLockConflictLocked(c.txn, c.w, key, lock)
 			return c
 		}
-		l.addRowLockLocked(c.txn, row, getWaiter(l.bind.ServiceID, c.w, c.txn.txnID), c.opts.Mode)
+		l.addRowLockLocked(c.txn, row, getWaiter(l.bind.ServiceID, c.w, c.txn), c.opts.Mode)
 		// lock added, need create new waiter next time
 		c.w = nil
 	}
@@ -299,11 +299,11 @@ func (l *localLockTable) acquireRangeLockLocked(c lockContext) lockContext {
 		}
 
 		logLocalLockRange(l.bind.ServiceID, c.txn, l.bind.Table, start, end, c.opts.Mode)
-		c.w = getWaiter(l.bind.ServiceID, c.w, c.txn.txnID)
+		c.w = getWaiter(l.bind.ServiceID, c.w, c.txn)
 
 		conflict, conflictWith := l.addRangeLockLocked(c.w, c.txn, start, end, c.opts.Mode)
 		if len(conflict) > 0 {
-			c.w = getWaiter(l.bind.ServiceID, c.w, c.txn.txnID)
+			c.w = getWaiter(l.bind.ServiceID, c.w, c.txn)
 			if c.opts.async {
 				l.events.add(c)
 			}
@@ -360,11 +360,13 @@ func (l *localLockTable) handleLockConflictLocked(
 func getWaiter(
 	serviceID string,
 	w *waiter,
-	txnID []byte) *waiter {
+	txn *activeTxn) *waiter {
 	if w != nil {
 		return w
 	}
-	return acquireWaiter(serviceID, txnID)
+	w = acquireWaiter(serviceID, txn.txnID)
+	w.belongTo = txn.toWaitTxn(serviceID, true)
+	return w
 }
 
 func (l *localLockTable) addRangeLockLocked(
@@ -372,7 +374,7 @@ func (l *localLockTable) addRangeLockLocked(
 	txn *activeTxn,
 	start, end []byte,
 	mode pb.LockMode) ([]byte, Lock) {
-	w = getWaiter(l.bind.ServiceID, w, txn.txnID)
+	w = getWaiter(l.bind.ServiceID, w, txn)
 	mc := newMergeContext(w)
 	defer mc.close()
 
@@ -387,8 +389,22 @@ func (l *localLockTable) addRangeLockLocked(
 		nil,
 		func(key []byte, keyLock Lock) bool {
 			if !bytes.Equal(keyLock.txnID, txn.txnID) {
-				conflictWith = keyLock
-				conflictKey = key
+				hasConflict := false
+				if keyLock.isLockRow() {
+					// row lock,  start <= key <= end
+					hasConflict = bytes.Compare(key, end) <= 0
+				} else if keyLock.isLockRangeStart() {
+					// range start lock,  [1, 4] + [2, any]
+					hasConflict = bytes.Compare(key, end) <= 0
+				} else {
+					// range end lock,  always conflict
+					hasConflict = true
+				}
+
+				if hasConflict {
+					conflictWith = keyLock
+					conflictKey = key
+				}
 				return false
 			}
 
@@ -454,7 +470,7 @@ func (l *localLockTable) mergeRangeLocked(
 	seekLock Lock,
 	mc *mergeContext,
 	txn *activeTxn) (*waiter, []byte, []byte) {
-	// range lock encounted a row lock
+	// range lock encountered a row lock
 	if seekLock.isLockRow() {
 		// 5 + [1, 4] => [1, 4] + [5]
 		if bytes.Compare(seekKey, end) > 0 {

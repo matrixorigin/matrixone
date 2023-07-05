@@ -89,7 +89,7 @@ func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.
 	if err != nil {
 		return "", err
 	}
-	rel, err := dbHandler.Relation(proc.Ctx, tblname)
+	rel, err := dbHandler.Relation(proc.Ctx, tblname, nil)
 	if err != nil {
 		return "", err
 	}
@@ -319,7 +319,7 @@ func setval(tblname, setnum string, iscalled bool, proc *process.Process, txn cl
 	if err != nil {
 		return "", err
 	}
-	rel, err := dbHandler.Relation(proc.Ctx, tblname)
+	rel, err := dbHandler.Relation(proc.Ctx, tblname, nil)
 	if err != nil {
 		return "", err
 	}
@@ -449,7 +449,7 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 		} else {
 			var rel engine.Relation
-			rel, err = dbHandler.Relation(proc.Ctx, string(v))
+			rel, err = dbHandler.Relation(proc.Ctx, string(v), nil)
 			if err != nil {
 				return
 			}
