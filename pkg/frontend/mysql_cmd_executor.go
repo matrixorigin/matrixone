@@ -3256,6 +3256,27 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	return retErr
 }
 
+// record goroutine info when ddl stmt run timeout
+func recordGoutineInfo(requestCtx context.Context, stmt tree.Statement) {
+	switch stmt.(type) {
+	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
+		go func() {
+			ctx, cancel := context.WithTimeout(requestCtx, time.Minute)
+			select {
+			case <-requestCtx.Done():
+				cancel()
+				return
+			case <-ctx.Done():
+				_, span := trace.Start(ctx, "ExecRequest", trace.WithProfileGoroutine())
+				span.End()
+				cancel()
+			}
+		}()
+	default:
+		break
+	}
+}
+
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
 	beginInstant := time.Now()
@@ -3387,6 +3408,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 			}
 		}
 
+		recordGoutineInfo(requestCtx, stmt)
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant)
 		if err != nil {
 			return err
