@@ -44,7 +44,7 @@ type FetchLockRowsFunc func(
 
 // LockOptions lock operation options
 type LockOptions struct {
-	maxBytesPerLock          int
+	maxCountPerLock          int
 	mode                     lock.LockMode
 	lockTable                bool
 	parker                   *types.Packer
