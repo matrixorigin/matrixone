@@ -17,14 +17,15 @@ package dnservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestValidate(t *testing.T) {
 	c := &Config{}
-	assert.Error(t, c.Validate())
+	assert.Error(t, c.Validate(cnservice.Config{}))
 	c.UUID = "dn1"
-	assert.NoError(t, c.Validate())
+	assert.NoError(t, c.Validate(cnservice.Config{}))
 	assert.Equal(t, c.ListenAddress, defaultListenAddress)
 	assert.Equal(t, c.ServiceAddress, defaultServiceAddress)
 	assert.Equal(t, StorageTAE, c.Txn.Storage.Backend)
@@ -33,4 +34,5 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, defaultHeatbeatInterval, c.HAKeeper.HeatbeatInterval.Duration)
 	assert.Equal(t, defaultHeatbeatTimeout, c.HAKeeper.HeatbeatTimeout.Duration)
 	assert.Equal(t, defaultConnectTimeout, c.LogService.ConnectTimeout.Duration)
+	assert.Equal(t, "false", c.Txn.IncrementalDedup)
 }

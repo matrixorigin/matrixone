@@ -233,6 +233,11 @@ func startDNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getDNServiceConfig()
+
+		if err := c.Validate(cfg.getCNServiceConfig()); err != nil {
+			panic(err)
+		}
+
 		s, err := dnservice.NewService(
 			perfCounterSet,
 			&c,

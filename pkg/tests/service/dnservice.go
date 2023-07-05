@@ -17,10 +17,12 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/google/uuid"
 
@@ -188,7 +190,7 @@ func buildDNConfig(
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.Validate(cnservice.Config{}); err != nil {
 		panic(fmt.Sprintf("fatal when building dnservice.Config: %s", err))
 	}
 

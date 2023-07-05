@@ -16,9 +16,10 @@ package dnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -123,9 +124,9 @@ func NewService(
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
 	opts ...Option) (Service, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
+	// if err := cfg.Validate(); err != nil {
+	// 	return nil, err
+	// }
 
 	// start common stuff
 	common.InitTAEMPool()
