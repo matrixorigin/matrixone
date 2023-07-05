@@ -466,8 +466,9 @@ func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
 						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
 					opts := executor.Options{}.WithDatabase(tbl.Database)
-					_, err := exec.Exec(proc.Ctx, sql, opts)
-					return err
+					if _, err := exec.Exec(proc.Ctx, sql, opts); err != nil {
+						return err
+					}
 				}
 			}
 		}
