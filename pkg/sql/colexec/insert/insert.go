@@ -35,8 +35,8 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr = new(container)
 	ap.ctr.state = Process
 	if ap.ToWriteS3 {
-		// If the target is partition table, just only apply writers for all partitioned sub tables
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+			// If the target is partition table, just only apply writers for all partitioned sub tables
 			s3Writers, err := colexec.AllocPartitionS3Writer(proc, ap.InsertCtx.TableDef)
 			if err != nil {
 				return err

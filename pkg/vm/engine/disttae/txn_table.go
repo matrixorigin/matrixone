@@ -381,8 +381,16 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 			}
 		}
 
-		bid := location.ID()
+		blkmeta := meta.GetBlockMeta(uint32(location.ID()))
+		maxSeq := uint32(blkmeta.GetMaxSeqnum())
 		for _, col := range needCols {
+			// Blocks will have different col info becuase of ddl
+			// So we have to check whether the block includes needed col
+			// or not first.
+			if col.Seqnum > maxSeq {
+				continue
+			}
+
 			newInfo := &plan.MetadataScanInfo{
 				ColName:    col.Name,
 				EntryState: blk.EntryState,
@@ -390,7 +398,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 				IsHidden:   col.Hidden,
 			}
 			FillByteFamilyTypeForBlockInfo(newInfo, blk)
-			blkmeta := meta.GetBlockMeta(uint32(bid))
 			colmeta := blkmeta.ColumnMeta(uint16(col.Seqnum))
 
 			newInfo.RowCnt = int64(blkmeta.GetRows())
@@ -1117,7 +1124,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		false); err != nil {
 		return err
 	}
-	return tbl.db.txn.dumpBatch(false, tbl.writesOffset)
+	return tbl.db.txn.dumpBatch(tbl.writesOffset)
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
