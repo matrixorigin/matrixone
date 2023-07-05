@@ -124,7 +124,7 @@ type Config struct {
 
 		// If IncrementalDedup is 'true', it will enable the incremental dedup feature.
 		// If incremental dedup feature is disable,
-		// If empty, it will set 'false' when CN.txn.Mode is optimistic,  set 'true'
+		// If empty, it will set 'false' when CN.Txn.Mode is optimistic,  set 'true' when CN.Txn.Mode is pessimistic
 		// IncrementalDedup will be treated as FullSkipWorkspaceDedup.
 		IncrementalDedup string `toml:"incremental-dedup"`
 
