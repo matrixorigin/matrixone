@@ -23,7 +23,7 @@ import (
 
 var (
 	defaultLockListenAddress      = "127.0.0.1:6003"
-	defaultMaxLockRowBytes        = 1 << 10 // 1kb
+	defaultMaxLockRowCount        = 1024
 	defaultMaxFixedSliceSize      = 1 << 20 // 1mb
 	defaultKeepRemoteLockDuration = time.Second
 	defaultKeepBindTimeout        = time.Second * 10
@@ -53,11 +53,11 @@ type Config struct {
 	// RemoteLockTimeout how long does it take to receive a heartbeat that maintains the
 	// remote lock before releasing the lock
 	RemoteLockTimeout toml.Duration `toml:"remote-lock-timeout"`
-	// MaxLockRowBytes each time a lock is added, some LockRow is stored in the lockservice, if
+	// MaxLockRowCount each time a lock is added, some LockRow is stored in the lockservice, if
 	// too many LockRows are put in each time, it will cause too much memory overhead, this value
-	// limits the maximum size of LocRow put into the LockService each time, beyond this size it
+	// limits the maximum count of LocRow put into the LockService each time, beyond this value it
 	// will be converted into a Range of locks
-	MaxLockRowBytes toml.ByteSize `toml:"remote-lock-timeout"`
+	MaxLockRowCount toml.ByteSize `toml:"max-row-lock-count"`
 	// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will
 	// continuously hold the bind, and if no hold request is received after the configured time,
 	// then all bindings for the service will fail.
@@ -75,8 +75,8 @@ func (c *Config) Validate() {
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = c.ListenAddress
 	}
-	if c.MaxLockRowBytes == 0 {
-		c.MaxLockRowBytes = toml.ByteSize(defaultMaxLockRowBytes)
+	if c.MaxLockRowCount == 0 {
+		c.MaxLockRowCount = toml.ByteSize(defaultMaxLockRowCount)
 	}
 	if c.MaxFixedSliceSize == 0 {
 		c.MaxFixedSliceSize = toml.ByteSize(defaultMaxFixedSliceSize)
