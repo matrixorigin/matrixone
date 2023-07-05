@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -121,12 +122,13 @@ type store struct {
 func NewService(
 	perfCounter *perfcounter.CounterSet,
 	cfg *Config,
+	cnCfg cnservice.Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
 	opts ...Option) (Service, error) {
-	// if err := cfg.Validate(); err != nil {
-	// 	return nil, err
-	// }
+	if err := cfg.Validate(cnCfg); err != nil {
+		return nil, err
+	}
 
 	// start common stuff
 	common.InitTAEMPool()

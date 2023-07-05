@@ -1340,6 +1340,7 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		}
 		ds, err := newDNService(
 			cfg,
+			*c.cn.cfgs[i],
 			c.newRuntime(),
 			fs,
 			opt)

@@ -16,13 +16,15 @@ package dnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"math"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -261,6 +263,7 @@ func newTestStore(
 	s, err := NewService(
 		CounterSet,
 		c,
+		cnservice.Config{},
 		rt,
 		fs, options...)
 	assert.NoError(t, err)

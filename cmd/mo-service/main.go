@@ -234,13 +234,10 @@ func startDNService(
 		cfg.initMetaCache()
 		c := cfg.getDNServiceConfig()
 
-		if err := c.Validate(cfg.getCNServiceConfig()); err != nil {
-			panic(err)
-		}
-
 		s, err := dnservice.NewService(
 			perfCounterSet,
 			&c,
+			cfg.getCNServiceConfig(),
 			r,
 			fileService)
 		if err != nil {

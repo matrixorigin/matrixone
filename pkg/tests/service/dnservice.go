@@ -142,12 +142,13 @@ type dnOptions []dnservice.Option
 // newDNService initializes an instance of `DNService`.
 func newDNService(
 	cfg *dnservice.Config,
+	cnCfg cnservice.Config,
 	rt runtime.Runtime,
 	fs fileservice.FileService,
 	opts dnOptions,
 ) (DNService, error) {
 	CounterSet := new(perfcounter.CounterSet)
-	svc, err := dnservice.NewService(CounterSet, cfg, rt, fs, opts...)
+	svc, err := dnservice.NewService(CounterSet, cfg, cnCfg, rt, fs, opts...)
 	if err != nil {
 		return nil, err
 	}
