@@ -191,6 +191,9 @@ type Config struct {
 
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
+
+	// MaxPreparedStmtCount
+	MaxPreparedStmtCount int `toml:"max_prepared_stmt_count"`
 }
 
 func (c *Config) Validate() error {
@@ -273,6 +276,11 @@ func (c *Config) Validate() error {
 		plan.CNPrimaryCheck = true
 	} else {
 		plan.CNPrimaryCheck = false
+	}
+	if c.MaxPreparedStmtCount > 0 {
+		frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
+	} else {
+		frontend.MaxPrepareNumberInOneSession = 1024
 	}
 	return nil
 }

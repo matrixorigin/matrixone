@@ -48,7 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const MaxPrepareNumberInOneSession = 64
+var MaxPrepareNumberInOneSession int
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
