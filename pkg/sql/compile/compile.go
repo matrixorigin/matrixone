@@ -365,7 +365,6 @@ func (c *Compile) Run(_ uint64) error {
 
 // run once
 func (c *Compile) runOnce() error {
-	fmt.Printf("[ccompile] %s\n", DebugShowScopes(c.scope))
 	var wg sync.WaitGroup
 
 	errC := make(chan error, len(c.scope))
