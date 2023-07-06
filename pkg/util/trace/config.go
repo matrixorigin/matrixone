@@ -178,18 +178,25 @@ type SpanConfig struct {
 
 	// LongTimeThreshold set by WithLongTimeThreshold
 	LongTimeThreshold time.Duration `json:"-"`
-	profileGoroutine  bool
-	profileHeap       bool
+	profileRuntime    uint64
 	profileCpuDur     time.Duration
+	profileTraceDur   time.Duration // WithProfileTraceSecs
 }
+
+const (
+	PROFILE_RUNTIME_GOROUTINE = 1 << iota
+	PROFILE_RUNTIME_THREADCREATE
+	PROFILE_RUNTIME_HEAP
+	PROFILE_RUNTIME_ALLOCS
+	PROFILE_RUNTIME_BLOCK
+	PROFILE_RUNTIME_MUTEX
+)
 
 func (c *SpanConfig) Reset() {
 	c.SpanContext.Reset()
 	c.NewRoot = false
 	c.Parent = nil
 	c.LongTimeThreshold = 0
-	c.profileGoroutine = false
-	c.profileHeap = false
 	c.profileCpuDur = 0
 }
 
@@ -199,17 +206,38 @@ func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
 
 // ProfileGoroutine return the value set by WithProfileGoroutine
 func (c *SpanConfig) ProfileGoroutine() bool {
-	return c.profileGoroutine
+	return c.profileRuntime&PROFILE_RUNTIME_GOROUTINE > 0
 }
 
 // ProfileHeap return the value set by WithProfileHeap
 func (c *SpanConfig) ProfileHeap() bool {
-	return c.profileHeap
+	return c.profileRuntime&PROFILE_RUNTIME_HEAP > 0
+}
+
+func (c *SpanConfig) ProfileThreadCreate() bool {
+	return c.profileRuntime&PROFILE_RUNTIME_THREADCREATE > 0
+}
+
+func (c *SpanConfig) ProfileAllocs() bool {
+	return c.profileRuntime&PROFILE_RUNTIME_ALLOCS > 0
+}
+
+func (c *SpanConfig) ProfileBlock() bool {
+	return c.profileRuntime&PROFILE_RUNTIME_BLOCK > 0
+}
+
+func (c *SpanConfig) ProfileMutex() bool {
+	return c.profileRuntime&PROFILE_RUNTIME_MUTEX > 0
 }
 
 // ProfileCpuSecs return the value set by WithProfileCpuSecs
 func (c *SpanConfig) ProfileCpuSecs() time.Duration {
 	return c.profileCpuDur
+}
+
+// ProfileTraceSecs return the value set by WithProfileTraceSecs
+func (c *SpanConfig) ProfileTraceSecs() time.Duration {
+	return c.profileTraceDur
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
@@ -258,13 +286,37 @@ func WithLongTimeThreshold(d time.Duration) SpanStartOption {
 
 func WithProfileGoroutine() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileGoroutine = true
+		cfg.profileRuntime |= PROFILE_RUNTIME_GOROUTINE
 	})
 }
 
 func WithProfileHeap() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileHeap = true
+		cfg.profileRuntime |= PROFILE_RUNTIME_HEAP
+	})
+}
+
+func WithProfileThreadCreate() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileRuntime |= PROFILE_RUNTIME_THREADCREATE
+	})
+}
+
+func WithProfileAllocs() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileRuntime |= PROFILE_RUNTIME_ALLOCS
+	})
+}
+
+func WithProfileBlock() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileRuntime |= PROFILE_RUNTIME_BLOCK
+	})
+}
+
+func WithProfileMutex() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileRuntime |= PROFILE_RUNTIME_MUTEX
 	})
 }
 
@@ -274,6 +326,12 @@ func WithProfileHeap() SpanStartOption {
 func WithProfileCpuSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileCpuDur = d
+	})
+}
+
+func WithProfileTraceSecs(d time.Duration) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileTraceDur = d
 	})
 }
 

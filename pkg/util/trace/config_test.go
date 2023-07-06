@@ -135,3 +135,72 @@ func TestSpanContext_IsEmpty(t *testing.T) {
 		})
 	}
 }
+
+func TestSpanConfig_ProfileRuntime(t *testing.T) {
+	type fields struct {
+		goroutine    bool
+		heap         bool
+		alloc        bool
+		threadCreate bool
+		block        bool
+		mutex        bool
+	}
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			name:   "goroutinue",
+			fields: fields{goroutine: true, heap: false, alloc: false, threadCreate: false, block: false, mutex: false},
+		},
+		{
+			name:   "heap",
+			fields: fields{goroutine: false, heap: true, alloc: false, threadCreate: false, block: false, mutex: false},
+		},
+		{
+			name:   "alloc",
+			fields: fields{goroutine: false, heap: false, alloc: true, threadCreate: false, block: false, mutex: false},
+		},
+		{
+			name:   "threadcreate",
+			fields: fields{goroutine: false, heap: false, alloc: false, threadCreate: true, block: false, mutex: false},
+		},
+		{
+			name:   "block",
+			fields: fields{goroutine: false, heap: false, alloc: false, threadCreate: false, block: true, mutex: false},
+		},
+		{
+			name:   "mutex",
+			fields: fields{goroutine: false, heap: false, alloc: false, threadCreate: false, block: false, mutex: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &SpanConfig{}
+			if tt.fields.goroutine {
+				WithProfileGoroutine().ApplySpanStart(c)
+			}
+			if tt.fields.heap {
+				WithProfileHeap().ApplySpanStart(c)
+			}
+			if tt.fields.alloc {
+				WithProfileAllocs().ApplySpanStart(c)
+			}
+			if tt.fields.threadCreate {
+				WithProfileThreadCreate().ApplySpanStart(c)
+			}
+			if tt.fields.block {
+				WithProfileBlock().ApplySpanStart(c)
+			}
+			if tt.fields.mutex {
+				WithProfileMutex().ApplySpanStart(c)
+			}
+			assert.Equal(t, tt.fields.goroutine, c.ProfileGoroutine())
+			assert.Equal(t, tt.fields.heap, c.ProfileHeap())
+			assert.Equal(t, tt.fields.alloc, c.ProfileAllocs())
+			assert.Equal(t, tt.fields.threadCreate, c.ProfileThreadCreate())
+			assert.Equal(t, tt.fields.block, c.ProfileBlock())
+			assert.Equal(t, tt.fields.mutex, c.ProfileMutex())
+		})
+	}
+}

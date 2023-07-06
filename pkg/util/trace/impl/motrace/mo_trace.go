@@ -207,37 +207,48 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	}
 }
 
+func (s *MOSpan) doProfileRuntime(ctx context.Context, name string, debug int) {
+	factory := s.tracer.provider.writerFactory
+	filepath := profile.GetProfileName(name, s.SpanID.String(), s.EndTime)
+	w := factory.GetWriter(ctx, filepath)
+	err := profile.ProfileRuntime(name, w, debug)
+	if err == nil {
+		err = w.Close()
+	}
+	if err != nil {
+		s.AddExtraFields(zap.String(name, err.Error()))
+	} else {
+		s.AddExtraFields(zap.String(name, filepath))
+	}
+}
+
 // doProfile is sync op.
 func (s *MOSpan) doProfile() {
 	factory := s.tracer.provider.writerFactory
 	ctx := DefaultContext()
 	// do profile goroutine txt
 	if s.ProfileGoroutine() {
-		filepath := profile.GetProfileName(profile.GOROUTINE, s.SpanID.String(), s.EndTime)
-		w := factory.GetWriter(ctx, filepath)
-		err := profile.ProfileGoroutine(w, 2)
-		if err == nil {
-			err = w.Close()
-		}
-		if err != nil {
-			s.AddExtraFields(zap.String(profile.GOROUTINE, err.Error()))
-		} else {
-			s.AddExtraFields(zap.String(profile.GOROUTINE, filepath))
-		}
+		s.doProfileRuntime(ctx, profile.GOROUTINE, 2)
 	}
 	// do profile heap pprof
 	if s.ProfileHeap() {
-		filepath := profile.GetProfileName(profile.HEAP, s.SpanID.String(), s.EndTime)
-		w := factory.GetWriter(ctx, filepath)
-		err := profile.ProfileHeap(w, 0)
-		if err == nil {
-			err = w.Close()
-		}
-		if err != nil {
-			s.AddExtraFields(zap.String(profile.HEAP, err.Error()))
-		} else {
-			s.AddExtraFields(zap.String(profile.HEAP, filepath))
-		}
+		s.doProfileRuntime(ctx, profile.HEAP, 0)
+	}
+	// do profile allocs
+	if s.ProfileAllocs() {
+		s.doProfileRuntime(ctx, profile.ALLOCS, 0)
+	}
+	// do profile threadcreate
+	if s.ProfileThreadCreate() {
+		s.doProfileRuntime(ctx, profile.THREADCREATE, 0)
+	}
+	// do profile block
+	if s.ProfileBlock() {
+		s.doProfileRuntime(ctx, profile.BLOCK, 0)
+	}
+	// do profile mutex
+	if s.ProfileMutex() {
+		s.doProfileRuntime(ctx, profile.MUTEX, 0)
 	}
 	// profile cpu should be the last one op, caused by it will sustain few seconds
 	if s.ProfileCpuSecs() > 0 {
@@ -251,6 +262,20 @@ func (s *MOSpan) doProfile() {
 			s.AddExtraFields(zap.String(profile.CPU, err.Error()))
 		} else {
 			s.AddExtraFields(zap.String(profile.CPU, filepath))
+		}
+	}
+	// profile trace is a sync-op, it will sustain few seconds
+	if s.ProfileTraceSecs() > 0 {
+		filepath := profile.GetProfileName(profile.TRACE, s.SpanID.String(), s.EndTime)
+		w := factory.GetWriter(ctx, filepath)
+		err := profile.ProfileTrace(w, s.ProfileTraceSecs())
+		if err == nil {
+			err = w.Close()
+		}
+		if err != nil {
+			s.AddExtraFields(zap.String(profile.TRACE, err.Error()))
+		} else {
+			s.AddExtraFields(zap.String(profile.TRACE, filepath))
 		}
 	}
 }

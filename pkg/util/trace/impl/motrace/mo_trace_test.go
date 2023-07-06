@@ -357,9 +357,49 @@ func TestMOSpan_doProfile(t *testing.T) {
 			},
 		},
 		{
+			name: "threadcreate",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileThreadCreate()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "allocs",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileAllocs()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "block",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileBlock()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "mutex",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileMutex()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
 			name: "cpu",
 			fields: fields{
 				opts:   []trace.SpanStartOption{trace.WithProfileCpuSecs(time.Second)},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "trace",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileTraceSecs(time.Second)},
 				ctx:    ctx,
 				tracer: tracer,
 			},
