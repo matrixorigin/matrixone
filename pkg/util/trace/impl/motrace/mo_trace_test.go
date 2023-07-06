@@ -295,22 +295,44 @@ func TestMOSpan_End(t *testing.T) {
 	require.Equal(t, true, deadlineSpan2.(*MOSpan).doneProfile)
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan2.(*MOSpan).ExtraFields)
 
-	// span with deadline context (plus calling cancel2() before func return)
-	defer cancel()
-	var hungSpan trace.Span
-	WG.Add(1)
-	go func() {
-		_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Millisecond))
-		defer WG.Done()
-		defer hungSpan.End()
+	// span with hung option, with Deadline situation
+	caseHungOptionWithDeadline := func() {
+		defer cancel()
+		var hungSpan trace.Span
+		WG.Add(1)
+		go func() {
+			_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Millisecond))
+			defer WG.Done()
+			defer hungSpan.End()
 
-		time.Sleep(10 * time.Millisecond)
-	}()
-	WG.Wait()
-	require.Equal(t, true, hungSpan.(*MOHungSpan).needRecord)
-	require.Equal(t, 1, len(hungSpan.(*MOHungSpan).ExtraFields))
-	require.Equal(t, true, hungSpan.(*MOHungSpan).doneProfile)
-	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, hungSpan.(*MOHungSpan).ExtraFields)
+			time.Sleep(10 * time.Millisecond)
+		}()
+		WG.Wait()
+		require.Equal(t, true, hungSpan.(*MOHungSpan).needRecord)
+		require.Equal(t, 1, len(hungSpan.(*MOHungSpan).ExtraFields))
+		require.Equal(t, true, hungSpan.(*MOHungSpan).doneProfile)
+		require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, hungSpan.(*MOHungSpan).ExtraFields)
+	}
+	caseHungOptionWithDeadline()
+
+	// span with hung option, with NO Deadline situation
+	caseHungOptionWithoutDeadline := func() {
+		defer cancel()
+		var hungSpan trace.Span
+		WG.Add(1)
+		go func() {
+			_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Minute))
+			defer WG.Done()
+			defer hungSpan.End()
+
+			time.Sleep(10 * time.Millisecond)
+		}()
+		WG.Wait()
+		require.Equal(t, false, hungSpan.(*MOHungSpan).needRecord)
+		require.Equal(t, 0, len(hungSpan.(*MOHungSpan).ExtraFields))
+		require.Equal(t, false, hungSpan.(*MOHungSpan).doneProfile)
+	}
+	caseHungOptionWithoutDeadline()
 
 }
 
