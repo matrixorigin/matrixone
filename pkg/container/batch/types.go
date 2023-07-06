@@ -23,15 +23,17 @@ import (
 )
 
 var (
-	EmptyBatch             = &Batch{}
+	EmptyBatch             = &Batch{rowCount: 0}
 	EmptyForConstFoldBatch = NewWithSize(0)
 )
 
 func init() {
+	EmptyForConstFoldBatch.rowCount = 1
 	EmptyForConstFoldBatch.Zs = []int64{1}
 }
 
 type EncodeBatch struct {
+	rowCount int64
 	Zs       []int64
 	Vecs     []*vector.Vector
 	Attrs    []string
@@ -43,6 +45,10 @@ func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
 	// | len | Zs... | len | Vecs... | len | Attrs... | len | AggInfos... |
 	// --------------------------------------------------------------------
 	var buf bytes.Buffer
+
+	// row count.
+	rl := int64(m.rowCount)
+	buf.Write(types.EncodeInt64(&rl))
 
 	// Zs
 	l := int32(len(m.Zs))
@@ -99,6 +105,10 @@ func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
 	// types.DecodeXXX plays with raw pointer, so we make a copy of binary data
 	buf := make([]byte, len(data))
 	copy(buf, data)
+
+	// row count
+	m.rowCount = types.DecodeInt64(buf[:8])
+	buf = buf[8:]
 
 	// Zs
 	l := types.DecodeInt32(buf[:4])
@@ -184,6 +194,9 @@ type Batch struct {
 	// ring
 	Zs   []int64
 	Aggs []agg.Agg[any]
+
+	// row count of batch, to instead of old len(Zs).
+	rowCount int
 
 	AuxData any // hash table, runtime filter, etc.
 }

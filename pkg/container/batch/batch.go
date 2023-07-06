@@ -31,31 +31,19 @@ import (
 
 func New(ro bool, attrs []string) *Batch {
 	return &Batch{
-		Ro:    ro,
-		Cnt:   1,
-		Attrs: attrs,
-		Vecs:  make([]*vector.Vector, len(attrs)),
+		Ro:       ro,
+		Cnt:      1,
+		Attrs:    attrs,
+		Vecs:     make([]*vector.Vector, len(attrs)),
+		rowCount: 0,
 	}
 }
 
 func NewWithSize(n int) *Batch {
 	return &Batch{
-		Cnt:  1,
-		Vecs: make([]*vector.Vector, n),
-	}
-}
-
-func Reorder(bat *Batch, attrs []string) {
-	if bat.Ro {
-		Cow(bat)
-	}
-	for i, name := range attrs {
-		for j, attr := range bat.Attrs {
-			if name == attr {
-				bat.Vecs[i], bat.Vecs[j] = bat.Vecs[j], bat.Vecs[i]
-				bat.Attrs[i], bat.Attrs[j] = bat.Attrs[j], bat.Attrs[i]
-			}
-		}
+		Cnt:      1,
+		Vecs:     make([]*vector.Vector, n),
+		rowCount: 0,
 	}
 }
 
@@ -64,17 +52,11 @@ func SetLength(bat *Batch, n int) {
 		vec.SetLength(n)
 	}
 	bat.Zs = bat.Zs[:n]
+	bat.rowCount = n
 }
 
 func Length(bat *Batch) int {
 	return len(bat.Zs)
-}
-
-func Cow(bat *Batch) {
-	attrs := make([]string, len(bat.Attrs))
-	copy(attrs, bat.Attrs)
-	bat.Ro = false
-	bat.Attrs = attrs
 }
 
 func (info *aggInfo) MarshalBinary() ([]byte, error) {
@@ -142,7 +124,6 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// I think Shrink should have a mpool!!!
 func (bat *Batch) Shrink(sels []int64) {
 	for _, vec := range bat.Vecs {
 		vec.Shrink(sels, false)
@@ -152,6 +133,7 @@ func (bat *Batch) Shrink(sels []int64) {
 		vs[i] = vs[sel]
 	}
 	bat.Zs = bat.Zs[:len(sels)]
+	bat.rowCount = len(sels)
 }
 
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
@@ -169,6 +151,7 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 
 		ws := make([]int64, len(sels))
 		bat.Zs = shuffle.FixedLengthShuffle(bat.Zs, ws, sels)
+		bat.rowCount = len(sels)
 	}
 	return nil
 }
@@ -184,6 +167,10 @@ func (bat *Batch) Size() int {
 
 func (bat *Batch) Length() int {
 	return len(bat.Zs)
+}
+
+func (bat *Batch) RowCount() int {
+	return bat.rowCount
 }
 
 func (bat *Batch) VectorCount() int {
@@ -218,6 +205,7 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
 	rbat.Zs = append([]int64{}, bat.Zs...)
+	rbat.rowCount += bat.rowCount
 	return rbat
 }
 
@@ -248,6 +236,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	}
 	bat.Attrs = nil
 	bat.Zs = nil
+	bat.rowCount = 0
 	bat.Vecs = nil
 }
 
@@ -260,6 +249,7 @@ func (bat *Batch) CleanOnlyData() {
 	if len(bat.Zs) != 0 {
 		bat.Zs = bat.Zs[:0]
 	}
+	bat.rowCount = 0
 }
 
 func (bat *Batch) String() string {
@@ -287,6 +277,7 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 		rbat.SetVector(int32(j), rvec)
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.rowCount = bat.rowCount
 	return rbat, nil
 }
 
@@ -307,6 +298,7 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 		}
 	}
 	bat.Zs = append(bat.Zs, b.Zs...)
+	bat.rowCount += b.rowCount
 	return bat, nil
 }
 
@@ -316,6 +308,10 @@ func (bat *Batch) SetZs(len int, m *mpool.MPool) {
 	for i := 0; i < len; i++ {
 		bat.Zs = append(bat.Zs, 1)
 	}
+}
+
+func (bat *Batch) SetRowCount(rowCount int) {
+	bat.rowCount = rowCount
 }
 
 // InitZsOne init Batch.Zs and values are all 1
@@ -356,4 +352,5 @@ func (bat *Batch) AntiShrink(sels []int64) {
 		vec.Shrink(sels, true)
 	}
 	bat.Zs = bat.Zs[:length-len(sels)]
+	bat.rowCount -= len(sels)
 }
