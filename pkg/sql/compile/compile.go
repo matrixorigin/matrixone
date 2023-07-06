@@ -317,6 +317,8 @@ func (c *Compile) Run(_ uint64) error {
 			}
 			c.anal.analInfos = nil
 		}
+
+		c.proc.CleanValueScanBatchs()
 		pool.Put(c)
 	}()
 	if c.proc.TxnOperator != nil {
@@ -346,7 +348,8 @@ func (c *Compile) Run(_ uint64) error {
 				c.tenant,
 				c.uid,
 				c.proc.Ctx,
-				c.e, c.proc,
+				c.e,
+				c.proc,
 				c.stmt,
 				c.isInternal,
 				c.cnLabel)

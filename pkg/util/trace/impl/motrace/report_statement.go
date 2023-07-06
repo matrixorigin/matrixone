@@ -19,9 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	"log"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,8 +26,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
 )
@@ -65,6 +64,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 	}
 	return nil
 }
+
 func StatementInfoUpdate(existing, new Item) {
 
 	e := existing.(*StatementInfo)
@@ -79,11 +79,9 @@ func StatementInfoUpdate(existing, new Item) {
 	// reponseAt is the last response time
 	e.ResponseAt = n.ResponseAt
 	n.ExecPlan2Stats(context.Background())
-	err := mergeStats(e, n)
-
-	if err != nil {
+	if err := mergeStats(e, n); err != nil {
 		// handle error
-		log.Printf("Failed to merge stats: %v", err)
+		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
 	}
 }
 
@@ -172,7 +170,8 @@ type StatementInfo struct {
 	exported bool
 
 	// keep []byte as elem
-	jsonByte, statsJsonByte []byte
+	jsonByte   []byte
+	statsArray statistic.StatsArray
 }
 
 type Key struct {
@@ -217,7 +216,7 @@ func (s *StatementInfo) Size() int64 {
 	num := int64(unsafe.Sizeof(s)) + deltaStmtContentLength + int64(
 		len(s.Account)+len(s.User)+len(s.Host)+
 			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag)+
-			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsJsonByte),
+			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsArray)*8,
 	)
 	if s.jsonByte == nil {
 		return num + jsonByteLength
@@ -249,7 +248,7 @@ func (s *StatementInfo) Free() {
 		s.exported = false
 		// clean []byte
 		s.jsonByte = nil
-		s.statsJsonByte = nil
+		s.statsArray.Reset()
 		stmtPool.Put(s)
 	}
 }
@@ -309,38 +308,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 }
 
 func mergeStats(e, n *StatementInfo) error {
-	// Convert statsJsonByte back to string and trim the square brackets
-	eStatsStr := strings.Trim(string(e.statsJsonByte), "[]")
-	nStatsStr := strings.Trim(string(n.statsJsonByte), "[]")
-
-	// Split the strings by comma to get the individual elements
-	eStatsElements := strings.Split(eStatsStr, ",")
-	nStatsElements := strings.Split(nStatsStr, ",")
-
-	// Ensure both arrays have the same length
-	if len(eStatsElements) != len(nStatsElements) {
-		return moerr.NewInternalError(context.Background(), "statsJsonByte length mismatch")
-	}
-
-	// Parse the strings to integers and add the values together
-	for i := 1; i < len(eStatsElements); i++ {
-		eVal, err := strconv.Atoi(strings.TrimSpace(eStatsElements[i]))
-		if err != nil {
-			return err
-		}
-
-		nVal, err := strconv.Atoi(strings.TrimSpace(nStatsElements[i]))
-		if err != nil {
-			return err
-		}
-
-		// Store the sum back in eStatsElements
-		eStatsElements[i] = strconv.Itoa(eVal + nVal)
-	}
-
-	// Join eStatsElements with commas and convert back to byte slice
-	e.statsJsonByte = []byte("[" + strings.Join(eStatsElements, ", ") + "]")
-
+	e.statsArray.Add(&n.statsArray)
 	return nil
 }
 
@@ -368,29 +336,26 @@ endL:
 func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 	var stats Statistic
 
-	if s.statsJsonByte != nil {
-		goto endL
-	} else if s.ExecPlan == nil {
+	if s.ExecPlan == nil {
 		return statistic.DefaultStatsArrayJsonString
 	} else {
-		s.statsJsonByte, stats = s.ExecPlan.Stats(ctx)
+		s.statsArray, stats = s.ExecPlan.Stats(ctx)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
+		return s.statsArray.ToJsonString()
 	}
-endL:
-	return s.statsJsonByte
 }
 
 func GetLongQueryTime() time.Duration {
 	return time.Duration(GetTracerProvider().longQueryTime)
 }
 
-type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
+type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson statistic.StatsArray, stats Statistic)
 
 type SerializableExecPlan interface {
 	Marshal(context.Context) []byte
 	Free()
-	Stats(ctx context.Context) ([]byte, Statistic)
+	Stats(ctx context.Context) (statistic.StatsArray, Statistic)
 }
 
 func (s *StatementInfo) SetSerializableExecPlan(execPlan SerializableExecPlan) {
@@ -482,6 +447,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	// Todo: review how to aggregate the internal SQL statements logging
 	if s.User == "internal" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
+			go s.Free()
 			return nil
 		}
 	}

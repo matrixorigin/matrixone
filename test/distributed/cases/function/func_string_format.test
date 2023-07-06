@@ -283,3 +283,27 @@ select c1, format(c1,1), i, format(i,1) from t1 left join t2 on t1.c1 = t2.i ord
 select c1, format(c1,1), i, format(i,1) from t1 right join t2 on t1.c1 = t2.i order by c1 desc;
 drop table t1;
 drop table t2;
+
+SELECT FORMAT("12332.2", "2","ca_ES");
+SELECT FORMAT("12332.2", "2","de_AT");
+SELECT FORMAT("12332.2", "2","el_GR");
+SELECT FORMAT("12332.2", "2","eu_ES");
+SELECT FORMAT("12332.2", "2","fr_BE");
+SELECT FORMAT("12332.2", "2","fr_CA");
+SELECT FORMAT("12332.2", "2","fr_CH");
+SELECT FORMAT("12332.2", "2","fr_FR");
+SELECT FORMAT("12332.2", "2","fr_LU");
+SELECT FORMAT("12332.2", "2","gl_ES");
+SELECT FORMAT("12332.2", "2","hr_HR");
+SELECT FORMAT("12332.2", "2","it_IT");
+SELECT FORMAT("12332.2", "2","nl_BE");
+SELECT FORMAT("12332.2", "2","nl_NL");
+SELECT FORMAT("12332.2", "2","pl_PL");
+SELECT FORMAT("12332.2", "2","pt_BR");
+SELECT FORMAT("12332.2", "2","pt_PT");
+SELECT FORMAT("12332.2", "2","sl_SI");
+
+SELECT FORMAT("12332.2", "2","it_CH");
+SELECT FORMAT("12332.2", "2","rm_CH");
+
+SELECT FORMAT("12332.2", "2","ro_RO");
