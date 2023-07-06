@@ -152,7 +152,7 @@ insert into flush_logtail values(3, 3);
 insert into flush_logtail values(4, 4);
 insert into flush_logtail values(5, 5);
 select enable_fault_injection();
-select add_fault_point('logtail_max_size', ':::', 'echo', 0, 'flush_logtail');
+select mo_ctl('dn', 'addfaultpoint', 'write_batch_timeout.:::.echo.0.test');
 select * from flush_logtail;
 select disable_fault_injection();
 drop table if exists t1;
