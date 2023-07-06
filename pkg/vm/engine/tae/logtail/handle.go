@@ -687,7 +687,7 @@ func LoadCheckpointEntries(
 	locationsAndVersions := strings.Split(metLoc, ";")
 	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
 
-	readers := make([]*blockio.BlockReader, len(locationsAndVersions))
+	readers := make([]*blockio.BlockReader, len(locationsAndVersions)/2)
 	objectLocations := make([]objectio.Location, len(locationsAndVersions)/2)
 	versions := make([]uint32, len(locationsAndVersions)/2)
 	for i := 0; i < len(locationsAndVersions); i += 2 {
@@ -704,13 +704,13 @@ func LoadCheckpointEntries(
 		if err != nil {
 			return nil, nil, err
 		}
-		readers[i] = reader
+		readers[i/2] = reader
 		err = blockio.PrefetchMeta(fs, location)
 		if err != nil {
 			return nil, nil, err
 		}
-		objectLocations[i] = location
-		versions[i] = uint32(version)
+		objectLocations[i/2] = location
+		versions[i/2] = uint32(version)
 	}
 
 	for i := range objectLocations {

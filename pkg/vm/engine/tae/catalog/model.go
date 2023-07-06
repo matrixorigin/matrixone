@@ -101,16 +101,16 @@ func init() {
 	SystemTableSchema_V1 = NewEmptySchema(catalog.MO_TABLES + "_v1")
 	for i, colname := range catalog.MoTablesSchema_V1 {
 		if i == 0 {
-			if err = SystemTableSchema.AppendPKCol(colname, catalog.MoTablesTypes_V1[i], 0); err != nil {
+			if err = SystemTableSchema_V1.AppendPKCol(colname, catalog.MoTablesTypes_V1[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err = SystemTableSchema.AppendCol(colname, catalog.MoTablesTypes_V1[i]); err != nil {
+			if err = SystemTableSchema_V1.AppendCol(colname, catalog.MoTablesTypes_V1[i]); err != nil {
 				panic(err)
 			}
 		}
 	}
-	if err = SystemTableSchema.Finalize(true); err != nil {
+	if err = SystemTableSchema_V1.Finalize(true); err != nil {
 		panic(err)
 	}
 

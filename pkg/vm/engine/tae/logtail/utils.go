@@ -152,7 +152,10 @@ func init() {
 		BlkDNSchema,
 		BlkMetaSchema, // 23
 	}
+
 	checkpointDataSchemas_Curr = checkpointDataSchemas_V2
+	checkpointDataReferVersions = make(map[uint32][24]*checkpointDataItem)
+
 	for idx, schema := range checkpointDataSchemas_V1 {
 		checkpointDataRefer_V1[idx] = &checkpointDataItem{
 			schema,
@@ -377,11 +380,11 @@ func (data *CNCheckpointData) ReadFrom(
 		data.bats[idx] = bat
 	}
 	if version == CheckpointVersion1 {
-		bat := data.bats[tblInsBatch]
+		bat := data.bats[TBLInsertIDX]
 		if bat == nil {
 			return
 		}
-		versionVec := vector.MustFixedCol[uint32](bat.Vecs[pkgcatalog.MO_TABLES_CATALOG_VERSION_IDX+2]) // 2 for rowid and committs
+		versionVec := vector.MustFixedCol[uint32](bat.Vecs[pkgcatalog.MO_TABLES_VERSION_IDX+2]) // 2 for rowid and committs
 		length := len(versionVec)
 		vec := vector.NewVec(types.T_uint32.ToType())
 		for i := 0; i < length; i++ {

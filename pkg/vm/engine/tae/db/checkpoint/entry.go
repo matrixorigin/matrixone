@@ -47,6 +47,7 @@ func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
 		state:     ST_Pending,
 		entryType: typ,
 		lastPrint: time.Now(),
+		version:   logtail.CheckpointCurrentVersion,
 	}
 }
 

@@ -101,6 +101,7 @@ var (
 		CheckpointAttr_EndTS,
 		CheckpointAttr_MetaLocation,
 		CheckpointAttr_EntryType,
+		CheckpointAttr_Version,
 	}
 	CheckpointSchemaTypes = []types.Type{
 		types.New(types.T_TS, 0, 0),

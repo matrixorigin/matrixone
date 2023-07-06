@@ -860,7 +860,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			}
 			if e.HasOverlap(newStart, end) {
 				locs = append(locs, e.GetLocation().String())
-				locs = append(locs, strconv.Itoa(int(global.version)))
+				locs = append(locs, strconv.Itoa(int(e.version)))
 				checkpointed = e.GetEnd()
 				// checkpoints = append(checkpoints, e)
 			}
@@ -872,7 +872,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 				break
 			}
 			locs = append(locs, e.GetLocation().String())
-			locs = append(locs, strconv.Itoa(int(global.version)))
+			locs = append(locs, strconv.Itoa(int(e.version)))
 			checkpointed = e.GetEnd()
 			// checkpoints = append(checkpoints, e)
 			if ok = iter.Next(); !ok {
@@ -899,7 +899,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			return
 		}
 		locs = append(locs, e.GetLocation().String())
-		locs = append(locs, strconv.Itoa(int(global.version)))
+		locs = append(locs, strconv.Itoa(int(e.version)))
 		checkpointed = e.GetEnd()
 		// checkpoints = append(checkpoints, e)
 	}
