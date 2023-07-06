@@ -120,10 +120,11 @@ type Config struct {
 		// roll back the transaction.
 		ZombieTimeout toml.Duration `toml:"zombie-timeout"`
 
-		// If IncrementalDedup is true, it will enable the incremental dedup feature.
+		// If IncrementalDedup is 'true', it will enable the incremental dedup feature.
 		// If incremental dedup feature is disable,
+		// If empty, it will set 'false' when CN.Txn.Mode is optimistic,  set 'true' when CN.Txn.Mode is pessimistic
 		// IncrementalDedup will be treated as FullSkipWorkspaceDedup.
-		IncrementalDedup bool `toml:"incremental-dedup"`
+		IncrementalDedup string `toml:"incremental-dedup"`
 
 		// Storage txn storage config
 		Storage struct {
@@ -234,6 +235,20 @@ func (c *Config) Validate() error {
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
+	if c.Txn.IncrementalDedup == "" {
+		// todo : base CN.Txn.Mode to set defaule value of c.Txn.IncrementalDedup
+		// if cnCfg.Txn.Mode == txn.TxnMode_Pessimistic.String() {
+		// 	c.Txn.IncrementalDedup = "true"
+		// } else {
+		c.Txn.IncrementalDedup = "false"
+		// }
+	} else {
+		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
+		if c.Txn.IncrementalDedup != "true" && c.Txn.IncrementalDedup != "false" {
+			return moerr.NewBadDBNoCtx("not support txn incremental-dedup: " + c.Txn.IncrementalDedup)
+		}
+	}
+
 	c.RPC.Adjust()
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
