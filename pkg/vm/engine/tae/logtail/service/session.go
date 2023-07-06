@@ -290,6 +290,20 @@ func (ss *Session) PostClean() {
 
 	ss.cancelFunc()
 	ss.wg.Wait()
+
+	left := len(ss.sendChan)
+
+	// release all left responses in sendChan
+	if left > 0 {
+		i := 0
+		for resp := range ss.sendChan {
+			if i >= left {
+				break
+			}
+			i++
+			ss.responses.Release(resp.response)
+		}
+	}
 }
 
 // Register registers table for client.
