@@ -63,6 +63,7 @@ const (
 	PartitionStateHandleDel
 	PartitionStateHandleMetaInsert
 	SubscriptionPullLogTail
+	RPCStreamReceive
 	RegionTypeMax
 )
 
