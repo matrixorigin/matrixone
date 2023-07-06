@@ -447,48 +447,45 @@ func (tbl *txnTable) GetDirtyBlksIn(state *logtailreplay.PartitionState) []types
 }
 
 func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
-
-	for blk, bats := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-		if blk != bid {
-			continue
-		}
-		for _, bat := range bats {
-			vs := vector.MustStrCol(bat.GetVector(0))
-			for _, metalLoc := range vs {
-				location, err := blockio.EncodeLocationFromString(metalLoc)
-				if err != nil {
-					return err
-				}
-				rowIdBat, err := blockio.LoadColumns(
-					tbl.db.txn.proc.Ctx,
-					[]uint16{0},
-					nil,
-					tbl.db.txn.engine.fs,
-					location,
-					tbl.db.txn.proc.GetMPool())
-				if err != nil {
-					return err
-				}
-				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
-				for _, rowId := range rowIds {
-					_, offset := rowId.Decode()
-					*offsets = append(*offsets, int64(offset))
-				}
+	bats, ok := tbl.db.txn.blockId_dn_delete_metaLoc_batch[bid]
+	if !ok {
+		return nil
+	}
+	for _, bat := range bats {
+		vs := vector.MustStrCol(bat.GetVector(0))
+		for _, deltaLoc := range vs {
+			location, err := blockio.EncodeLocationFromString(deltaLoc)
+			if err != nil {
+				return err
+			}
+			rowIdBat, err := blockio.LoadColumns(
+				tbl.db.txn.proc.Ctx,
+				[]uint16{0},
+				nil,
+				tbl.db.txn.engine.fs,
+				location,
+				tbl.db.txn.proc.GetMPool())
+			if err != nil {
+				return err
+			}
+			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
+			for _, rowId := range rowIds {
+				_, offset := rowId.Decode()
+				*offsets = append(*offsets, int64(offset))
 			}
 		}
-
 	}
-	return
+	return nil
 }
 
-// LoadDeletesForBlockIn loads deletes for blocks in PartitionState.
+// LoadDeletesForBlockIn loads deletes for volatile blocks in PartitionState.
 func (tbl *txnTable) LoadDeletesForVolatileBlocksIn(
 	state *logtailreplay.PartitionState,
-	in bool,
 	deletesRowId map[types.Rowid]uint8) error {
 
 	for blk, bats := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-		if in != state.BlockVisible(
+		//if blk is in partitionState.blks, it means that blk is persisted.
+		if state.BlockVisible(
 			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
 			continue
 		}
@@ -1150,7 +1147,8 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.dnStores[0]); err != nil {
 			return err
 		}
-		tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId] = append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId], copBat)
+		tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId] =
+			append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
 		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
