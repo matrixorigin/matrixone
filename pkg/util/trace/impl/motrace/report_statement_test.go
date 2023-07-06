@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"testing"
 	"time"
 
@@ -183,27 +184,29 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
-var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
+var dummyStatsArray = *statistic.NewStatsArray().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4)
+
+var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult), []byte("[]"), Statistic{}
+		return []byte(dummyNoExecPlanJsonResult), statistic.DefaultStatsArray, Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), []byte("[]"), Statistic{}
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), statistic.DefaultStatsArray, Statistic{}
 	}
-	return json, []byte("[]"), Statistic{RowsRead: 1, BytesScan: 1}
+	return json, dummyStatsArray, Statistic{RowsRead: 1, BytesScan: 1}
 }
 
-var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
+var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult2), []byte("[]"), Statistic{}
+		return []byte(dummyNoExecPlanJsonResult2), statistic.DefaultStatsArray, Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), []byte("[]"), Statistic{}
+		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), statistic.DefaultStatsArray, Statistic{}
 	}
 	val := fmt.Sprintf(`{"func":"dummy2","result":%s}`, json)
-	return []byte(val), []byte("[]"), Statistic{}
+	return []byte(val), dummyStatsArray, Statistic{}
 }
 
 func TestStatementInfo_ExecPlan2Json(t *testing.T) {
@@ -216,9 +219,10 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 	dummyEPJson := `{"func":"dummy2","result":{"int":1,"key":"val"}}`
 
 	tests := []struct {
-		name string
-		args args
-		want string
+		name          string
+		args          args
+		want          string
+		wantStatsByte []byte
 	}{
 		{
 			name: "dummyDefault_ep_Serialize",
@@ -226,7 +230,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          dummyExecPlan,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyEPJson,
+			want:          dummyEPJson,
+			wantStatsByte: dummyStatsArray.ToJsonString(),
 		},
 		{
 			name: "nil_ep_Serialize",
@@ -234,7 +239,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          dummyExecPlan,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyEPJson,
+			want:          dummyEPJson,
+			wantStatsByte: dummyStatsArray.ToJsonString(),
 		},
 		{
 			name: "dummyDefault_nil_Serialize",
@@ -242,7 +248,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          nil,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyNoExecPlanJsonResult2,
+			want:          dummyNoExecPlanJsonResult2,
+			wantStatsByte: statistic.DefaultStatsArrayJsonString,
 		},
 		{
 			name: "nil_nil_Serialize",
@@ -250,7 +257,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				ExecPlan:          nil,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
-			want: dummyNoExecPlanJsonResult2,
+			want:          dummyNoExecPlanJsonResult2,
+			wantStatsByte: statistic.DefaultStatsArrayJsonString,
 		},
 	}
 
@@ -266,7 +274,7 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 			got := s.ExecPlan2Json(ctx)
 			stats := s.ExecPlan2Stats(ctx)
 			assert.Equalf(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
-			assert.Equalf(t, []byte("[]"), stats, "stats")
+			assert.Equalf(t, tt.wantStatsByte, stats, "stats")
 			mapper := new(map[string]any)
 			err := json.Unmarshal([]byte(got), mapper)
 			require.Nil(t, err, "jons.Unmarshal failed")
@@ -294,39 +302,35 @@ func (p *dummySerializableExecPlan) Marshal(ctx context.Context) []byte {
 }
 func (p *dummySerializableExecPlan) Free() {}
 
-func (p *dummySerializableExecPlan) Stats(ctx context.Context) ([]byte, Statistic) {
+func (p *dummySerializableExecPlan) Stats(ctx context.Context) (statistic.StatsArray, Statistic) {
 	_, statByte, stats := p.f(ctx, p.plan, p.uuid)
 	return statByte, stats
 }
 
 func TestMergeStats(t *testing.T) {
-	e := &StatementInfo{
-		statsJsonByte: []byte("[1, 80335, 1800, 1, 0]"),
-	}
+	e := &StatementInfo{}
+	e.statsArray.Init().WithTimeConsumed(80335).WithMemorySize(1800).WithS3IOInputCount(1).WithS3IOOutputCount(0)
 
-	n := &StatementInfo{
-		statsJsonByte: []byte("[1, 147960, 1800, 0, 0]"),
-	}
+	n := &StatementInfo{}
+	n.statsArray.Init().WithTimeConsumed(147960).WithMemorySize(1800).WithS3IOInputCount(0).WithS3IOOutputCount(0)
 
 	err := mergeStats(e, n)
 	if err != nil {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	if string(e.statsJsonByte) != "[1, 228295, 3600, 1, 0]" {
-		t.Errorf("Expected '[1, 228295, 3600, 0, 0]', got '%s'", string(e.statsJsonByte))
-	}
+	wantBytes := []byte("[1,228295,3600,1,0]")
+	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
-	n = &StatementInfo{
-		statsJsonByte: []byte("[1, 1, 1, 0, 0]"),
-	}
+	n = &StatementInfo{}
+	n.statsArray.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0)
 
 	err = mergeStats(e, n)
 	if err != nil {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	if string(e.statsJsonByte) != "[1, 228296, 3601, 1, 0]" {
-		t.Errorf("Expected '[1, 228296, 3601, 0, 0]', got '%s'", string(e.statsJsonByte))
-	}
+	wantBytes = []byte("[1,228296,3601,1,0]")
+	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
+
 }
