@@ -70,14 +70,13 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 
 	// handle HungThreshold
 	if threshold := span.SpanConfig.HungThreshold(); threshold > 0 {
+		originCtx, cancel := context.WithCancel(ctx)
+		ctx, _ = context.WithTimeout(originCtx, threshold)
+		span.ctx = ctx
 		go func() {
-			originCtx := ctx
-			ctx, cancel := context.WithTimeout(ctx, threshold)
-			span.ctx = ctx
 			select {
 			case <-originCtx.Done():
 			case <-ctx.Done():
-				span.EndTime = time.Now()
 				span.doProfile()
 				logutil.Warn("span trigger hung threshold",
 					trace.SpanField(span.SpanContext()),
@@ -202,6 +201,7 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 // If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the deadline.
 // If not set, check condition: duration > span.GetLongTimeThreshold()
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
+	var err error
 	s.EndTime = time.Now()
 	deadline, hasDeadline := s.ctx.Deadline()
 	s.Duration = s.EndTime.Sub(s.StartTime)
@@ -209,7 +209,7 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	if hasDeadline {
 		if s.EndTime.After(deadline) {
 			s.needRecord = true
-			s.ExtraFields = append(s.ExtraFields, zap.Error(s.ctx.Err()))
+			err = s.ctx.Err()
 		}
 	} else {
 		if s.Duration >= s.GetLongTimeThreshold() {
@@ -220,13 +220,17 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 		go freeMOSpan(s)
 		return
 	}
-	// do record
+	// apply End option
 	for _, opt := range options {
 		opt.ApplySpanEnd(&s.SpanConfig)
 	}
 	// do profile
 	if !s.NeedProfile() {
 		s.doProfile()
+	}
+	// record error info
+	if err != nil {
+		s.ExtraFields = append(s.ExtraFields, zap.Error(err))
 	}
 	// do Collect
 	for _, sp := range s.tracer.provider.spanProcessors {
@@ -235,8 +239,9 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 }
 
 func (s *MOSpan) doProfileRuntime(ctx context.Context, name string, debug int) {
+	now := time.Now()
 	factory := s.tracer.provider.writerFactory
-	filepath := profile.GetProfileName(name, s.SpanID.String(), s.EndTime)
+	filepath := profile.GetProfileName(name, s.SpanID.String(), now)
 	w := factory.GetWriter(ctx, filepath)
 	err := profile.ProfileRuntime(name, w, debug)
 	if err == nil {
