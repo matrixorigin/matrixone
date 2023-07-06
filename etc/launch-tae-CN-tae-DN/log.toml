@@ -20,16 +20,16 @@ data-dir = "mo-data/s3"
 memory-capacity = "512MB"
 disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
-disk-min-evict-interval = "7m"
-disk-evict-target = 0.8
+# disk-min-evict-interval = "7m"
+# disk-evict-target = 0.8
 
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
 
-[observability]
-statusPort = 7001
-enableTraceDebug = false
+# [observability]
+# statusPort = 7001
+# enableTraceDebug = false
 
 [hakeeper-client]
 service-addresses = [

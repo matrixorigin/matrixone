@@ -3,8 +3,6 @@ data-dir = "./mo-data"
 
 [log]
 level = "info"
-format = "console"
-max-size = 512
 
 [hakeeper-client]
 service-addresses = [
@@ -27,23 +25,23 @@ data-dir = "mo-data/s3"
 memory-capacity = "512MB"
 disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
-disk-min-evict-interval = "7m"
-disk-evict-target = 0.8
+# disk-min-evict-interval = "7m"
+# disk-evict-target = 0.8
 
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
 
-[observability]
-disableTrace = true
-disableMetric = true
+# [observability]
+# disableTrace = true
+# disableMetric = true
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 
-[cn.Engine]
-type = "distributed-tae"
+# [cn.Engine]
+# type = "distributed-tae"
 
-[cn.txn]
-enable-sacrificing-freshness = false
-enable-cn-based-consistency = false
+# [cn.txn]
+# enable-sacrificing-freshness = false
+# enable-cn-based-consistency = false
