@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -61,7 +62,7 @@ func TestLocalFS(t *testing.T) {
 			ctx := context.Background()
 			dir := t.TempDir()
 			fs, err := NewLocalFS(ctx, "local", dir, CacheConfig{
-				MemoryCapacity: 128 * 1024,
+				MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
 			}, nil)
 			assert.Nil(t, err)
 			return fs
@@ -95,8 +96,8 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 		"foo",
 		t.TempDir(),
 		CacheConfig{
-			DiskPath:                  t.TempDir(),
-			DiskCapacity:              dataLen * n / 32,
+			DiskPath:                  ptrTo(t.TempDir()),
+			DiskCapacity:              ptrTo[toml.ByteSize](dataLen * n / 32),
 			enableDiskCacheForLocalFS: true,
 		},
 		nil,
