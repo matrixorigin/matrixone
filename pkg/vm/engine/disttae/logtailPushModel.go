@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"sync"
 	"sync/atomic"
@@ -264,6 +265,51 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			}
 
 			ch := make(chan logTailSubscriberResponse, 1)
+			shouldReconnect := false
+			// method to consume and distribute a response from push-service.
+			consumeAndDistributeResponse := func() (doReconnect bool) {
+				resp := <-ch
+				if resp.err != nil {
+					// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
+					logutil.Errorf("[log-tail-push-client] receive an error from log tail client, err : '%s'.", resp.err)
+					return true
+				}
+
+				response := resp.response
+				// consume subscribe response
+				if sResponse := response.GetSubscribeResponse(); sResponse != nil {
+					if err := distributeSubscribeResponse(
+						ctx, e, sResponse, receiver); err != nil {
+						logutil.Errorf("[log-tail-push-client] distribute subscribe response failed, err : '%s'.", err)
+						return true
+					}
+					return false
+				}
+
+				// consume update response
+				if upResponse := response.GetUpdateResponse(); upResponse != nil {
+					if err := distributeUpdateResponse(
+						ctx, e, upResponse, receiver); err != nil {
+						logutil.Errorf("[log-tail-push-client] distribute update response failed, err : '%s'.", err)
+						return true
+					}
+					return false
+				}
+
+				// consume unsubscribe response
+				if unResponse := response.GetUnsubscribeResponse(); unResponse != nil {
+					if err := distributeUnSubscribeResponse(
+						ctx, e, unResponse, receiver); err != nil {
+						logutil.Errorf("[log-tail-push-client] distribute unsubscribe response failed, err : '%s'.", err)
+						return true
+					}
+					return false
+				}
+
+				// maybe we have received a response from log tail service, but it is an unexpected response.
+				// just ignore it.
+				return false
+			}
 
 			// A dead loop to receive log tail response from log tail service.
 			// if any error happened, we should do reconnection.
@@ -275,42 +321,11 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					client.subscriber.receivedResp = nil
 					cancel()
 
-					resp := <-ch
-					if resp.err != nil {
-						// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
-						logutil.Errorf("[log-tail-push-client] receive an error from log tail client, err : '%s'.", resp.err)
+					moprobe.WithRegion(ctx, moprobe.LogTailConsumeAndDistribute, func() {
+						shouldReconnect = consumeAndDistributeResponse()
+					})
+					if shouldReconnect {
 						goto cleanAndReconnect
-					}
-
-					response := resp.response
-					// consume subscribe response
-					if sResponse := response.GetSubscribeResponse(); sResponse != nil {
-						if err := distributeSubscribeResponse(
-							ctx, e, sResponse, receiver); err != nil {
-							logutil.Errorf("[log-tail-push-client] distribute subscribe response failed, err : '%s'.", err)
-							goto cleanAndReconnect
-						}
-						continue
-					}
-
-					// consume update response
-					if upResponse := response.GetUpdateResponse(); upResponse != nil {
-						if err := distributeUpdateResponse(
-							ctx, e, upResponse, receiver); err != nil {
-							logutil.Errorf("[log-tail-push-client] distribute update response failed, err : '%s'.", err)
-							goto cleanAndReconnect
-						}
-						continue
-					}
-
-					// consume unsubscribe response
-					if unResponse := response.GetUnsubscribeResponse(); unResponse != nil {
-						if err := distributeUnSubscribeResponse(
-							ctx, e, unResponse, receiver); err != nil {
-							logutil.Errorf("[log-tail-push-client] distribute unsubscribe response failed, err : '%s'.", err)
-							goto cleanAndReconnect
-						}
-						continue
 					}
 
 				case err := <-consumeErr:
@@ -351,7 +366,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			if !hasReceivedConnectionMsg {
 				<-connectMsg
 			}
-
+			shouldReconnect = false
 			e.setPushClientStatus(false)
 
 			if ctx.Err() != nil {

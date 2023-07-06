@@ -63,6 +63,7 @@ const (
 	PartitionStateHandleDel
 	PartitionStateHandleMetaInsert
 	SubscriptionPullLogTail
+	LogTailConsumeAndDistribute
 	RegionTypeMax
 )
 
@@ -72,6 +73,7 @@ var regionTypeStr = [RegionTypeMax]string{
 	"partiton state del",
 	"partiton state metainsert",
 	"subsciption pull logtail",
+	"logtail consume and distribute",
 }
 
 func WithRegion(ctx context.Context, rt RegionType, fn func()) {
