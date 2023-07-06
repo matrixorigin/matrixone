@@ -114,6 +114,9 @@ func checkIndexKeypartSupportability(context context.Context, keyParts []*tree.K
 		if key.Expr != nil {
 			return moerr.NewInternalError(context, "unsupported index which using expression as keypart")
 		}
+		if key.Direction != tree.DefaultDirection {
+			return moerr.NewInternalError(context, "the index keypart does not support sorting")
+		}
 	}
 	return nil
 }
