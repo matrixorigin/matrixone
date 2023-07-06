@@ -479,7 +479,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 
 	for i, rowID := range rowIDVector {
 		blockID := rowID.CloneBlockID()
-		trace.WithRegion(ctx, "handle a row", func() {
+		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaDelete, func() {
 
 			pivot := BlockEntry{
 				BlockInfo: catalog.BlockInfo{
