@@ -188,7 +188,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		updateColPosMap := make(map[string]int)
 		offset := len(tableDef.Cols)
 		updatePkCol := false
-		var pkNameMap map[string]struct{} = make(map[string]struct{})
+		var pkNameMap = make(map[string]struct{})
 		for _, pkName := range tableDef.Pkey.Names {
 			pkNameMap[pkName] = struct{}{}
 		}
