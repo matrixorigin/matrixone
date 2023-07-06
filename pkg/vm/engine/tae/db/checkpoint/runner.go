@@ -16,9 +16,9 @@ package checkpoint
 
 import (
 	"context"
-	"strconv"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
