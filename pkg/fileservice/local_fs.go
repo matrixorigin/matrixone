@@ -122,11 +122,11 @@ func NewLocalFS(
 }
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
-	config.SetDefaults()
+	config.setDefaults()
 
-	if config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
+	if *config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
-			WithLRU(int64(config.MemoryCapacity)),
+			WithLRU(int64(*config.MemoryCapacity)),
 			WithPerfCounterSets(l.perfCounterSets),
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -136,14 +136,14 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	}
 
 	if config.enableDiskCacheForLocalFS {
-		if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
+		if *config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
 			var err error
 			l.diskCache, err = NewDiskCache(
 				ctx,
-				config.DiskPath,
-				int64(config.DiskCapacity),
+				*config.DiskPath,
+				int64(*config.DiskCapacity),
 				config.DiskMinEvictInterval.Duration,
-				config.DiskEvictTarget,
+				*config.DiskEvictTarget,
 				l.perfCounterSets,
 			)
 			if err != nil {
