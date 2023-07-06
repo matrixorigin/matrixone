@@ -74,7 +74,12 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
 	t0 := time.Now()
-	for i := range colNames {
+	var isCheckpointVersion1 bool
+	// in version 1, checkpoint metadata doesn't contain 'version'.
+	if len(bats[0].Vecs) < len(colNames) {
+		isCheckpointVersion1 = true
+	}
+	for i := range bats[0].Vecs {
 		if len(bats) == 0 {
 			continue
 		}
@@ -108,12 +113,19 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		if isIncremental {
 			typ = ET_Incremental
 		}
+		var version uint32
+		if isCheckpointVersion1 {
+			version = logtail.CheckpointVersion1
+		} else {
+			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
+		}
 		checkpointEntry := &CheckpointEntry{
 			start:     start,
 			end:       end,
 			location:  metaloc,
 			state:     ST_Finished,
 			entryType: typ,
+			version:   version,
 		}
 		var err2 error
 		if prefetch {
@@ -168,7 +180,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
 		logutil.Infof("replay checkpoint %v", maxGlobal)
+		checkpointEntry := entries[globalIdx]
 		err = datas[globalIdx].ApplyReplayTo(r.catalog, dataFactory)
+		datas[globalIdx].CloseWhenLoadFromCache(checkpointEntry.version)
 		if err != nil {
 			return
 		}
@@ -194,6 +208,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 		logutil.Infof("replay checkpoint %v", checkpointEntry)
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
+		datas[i].CloseWhenLoadFromCache(checkpointEntry.version)
 		if err != nil {
 			return
 		}

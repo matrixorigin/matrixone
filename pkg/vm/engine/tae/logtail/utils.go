@@ -39,6 +39,13 @@ import (
 )
 
 const (
+	CheckpointVersion1 uint32 = 1
+	CheckpointVersion2 uint32 = 2
+
+	CheckpointCurrentVersion = CheckpointVersion2
+)
+
+const (
 	MetaIDX uint16 = iota
 
 	DBInsertIDX
@@ -84,12 +91,42 @@ type checkpointDataItem struct {
 	attrs  []string
 }
 
-var checkpointDataSchemas [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V1 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V2 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
-var checkpointDataRefer [MaxIDX]*checkpointDataItem
+var checkpointDataRefer_V1 [MaxIDX]*checkpointDataItem
+var checkpointDataRefer_V2 [MaxIDX]*checkpointDataItem
+var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
 
 func init() {
-	checkpointDataSchemas = [MaxIDX]*catalog.Schema{
+	checkpointDataSchemas_V1 = [MaxIDX]*catalog.Schema{
+		MetaSchema,
+		catalog.SystemDBSchema,
+		TxnNodeSchema,
+		DelSchema, // 3
+		DBDNSchema,
+		catalog.SystemTableSchema_V1,
+		TblDNSchema,
+		DelSchema, // 7
+		TblDNSchema,
+		catalog.SystemColumnSchema,
+		DelSchema,
+		SegSchema, // 11
+		SegDNSchema,
+		DelSchema,
+		SegDNSchema,
+		BlkMetaSchema, // 15
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 19
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 23
+	}
+	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
 		MetaSchema,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
@@ -115,13 +152,23 @@ func init() {
 		BlkDNSchema,
 		BlkMetaSchema, // 23
 	}
-	for idx, schema := range checkpointDataSchemas {
-		checkpointDataRefer[idx] = &checkpointDataItem{
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V2
+	for idx, schema := range checkpointDataSchemas_V1 {
+		checkpointDataRefer_V1[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
 			append(BaseAttr, schema.AllNames()...),
 		}
 	}
+	checkpointDataReferVersions[CheckpointVersion1] = checkpointDataRefer_V1
+	for idx, schema := range checkpointDataSchemas_V2 {
+		checkpointDataRefer_V2[idx] = &checkpointDataItem{
+			schema,
+			append(BaseTypes, schema.Types()...),
+			append(BaseAttr, schema.AllNames()...),
+		}
+	}
+	checkpointDataReferVersions[CheckpointVersion2] = checkpointDataRefer_V2
 }
 
 func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (*CheckpointData, error) {
@@ -177,7 +224,7 @@ func NewCheckpointData() *CheckpointData {
 	data := &CheckpointData{
 		meta: make(map[uint64]*CheckpointMeta),
 	}
-	for idx, schema := range checkpointDataSchemas {
+	for idx, schema := range checkpointDataSchemas_Curr {
 		data.bats[idx] = makeRespBatchFromSchema(schema)
 	}
 	return data
@@ -270,9 +317,10 @@ func NewCNCheckpointData() *CNCheckpointData {
 
 func (data *CNCheckpointData) PrefetchFrom(
 	ctx context.Context,
+	version uint32,
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
-	return prefetchCheckpointData(ctx, service, key)
+	return prefetchCheckpointData(ctx, version, service, key)
 }
 
 func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta) {
@@ -317,9 +365,10 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 func (data *CNCheckpointData) ReadFrom(
 	ctx context.Context,
 	reader *blockio.BlockReader,
+	version uint32,
 	m *mpool.MPool) (err error) {
 
-	for idx, item := range checkpointDataRefer {
+	for idx, item := range checkpointDataReferVersions[version] {
 		var bat *batch.Batch
 		bat, err = LoadCNBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader, m)
 		if err != nil {
@@ -327,9 +376,44 @@ func (data *CNCheckpointData) ReadFrom(
 		}
 		data.bats[idx] = bat
 	}
+	if version == CheckpointVersion1 {
+		bat := data.bats[tblInsBatch]
+		if bat == nil {
+			return
+		}
+		versionVec := vector.MustFixedCol[uint32](bat.Vecs[pkgcatalog.MO_TABLES_CATALOG_VERSION_IDX+2]) // 2 for rowid and committs
+		length := len(versionVec)
+		vec := vector.NewVec(types.T_uint32.ToType())
+		for i := 0; i < length; i++ {
+			err := vector.AppendFixed(vec, pkgcatalog.CatalogVersion_V1, false, m)
+			if err != nil {
+				return err
+			}
+		}
+		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_CatalogVersion)
+		bat.Vecs = append(bat.Vecs, vec)
+	}
 
 	return
 }
+
+func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() {
+	return func() {
+		switch version {
+		case CheckpointVersion1:
+			bat := data.bats[TBLInsertIDX]
+			if bat == nil {
+				return
+			}
+			if len(bat.Vecs) <= pkgcatalog.MO_TABLES_CATALOG_VERSION_IDX+2 {
+				return
+			}
+			vec := data.bats[TBLInsertIDX].Vecs[pkgcatalog.MO_TABLES_CATALOG_VERSION_IDX+2] // 2 for rowid and committs
+			vec.Free(m)
+		}
+	}
+}
+
 func (data *CNCheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
 	var insTaeBat, delTaeBat, cnInsTaeBat, segDelTaeBat *batch.Batch
 	switch tid {
@@ -605,13 +689,15 @@ func LoadCNBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames
 
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
+	version uint32,
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
-	return prefetchCheckpointData(ctx, service, key)
+	return prefetchCheckpointData(ctx, version, service, key)
 }
 
 func prefetchCheckpointData(
 	ctx context.Context,
+	version uint32,
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
 
@@ -619,7 +705,7 @@ func prefetchCheckpointData(
 	if err != nil {
 		return
 	}
-	for idx, item := range checkpointDataRefer {
+	for idx, item := range checkpointDataReferVersions[version] {
 		idxes := make([]uint16, len(item.attrs))
 		for i := range item.attrs {
 			idxes[i] = uint16(i)
@@ -633,16 +719,29 @@ func prefetchCheckpointData(
 // There need a global io pool
 func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
+	version uint32,
 	reader *blockio.BlockReader,
 	m *mpool.MPool) (err error) {
 
-	for idx, item := range checkpointDataRefer {
+	for idx, item := range checkpointDataReferVersions[version] {
 		var bat *containers.Batch
 		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader)
 		if err != nil {
 			return
 		}
 		data.bats[idx] = bat
+	}
+	if version == CheckpointVersion1 {
+		bat := data.bats[tblInsBatch]
+		if bat == nil {
+			return
+		}
+		length := bat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Length()
+		vec := containers.MakeVector(types.T_uint32.ToType())
+		for i := 0; i < length; i++ {
+			vec.Append(pkgcatalog.CatalogVersion_V1, false)
+		}
+		bat.AddVector(pkgcatalog.SystemRelAttr_CatalogVersion, vec)
 	}
 
 	return
@@ -656,6 +755,19 @@ func (data *CheckpointData) Close() {
 		}
 	}
 }
+
+func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
+	switch version {
+	case CheckpointVersion1:
+		bat := data.bats[TBLInsertIDX]
+		if bat == nil {
+			return
+		}
+		vec := data.bats[TBLInsertIDX].GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion)
+		vec.Close()
+	}
+}
+
 func (data *CheckpointData) GetDBBatchs() (
 	*containers.Batch,
 	*containers.Batch,

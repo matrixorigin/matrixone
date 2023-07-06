@@ -208,7 +208,6 @@ type BaseMVCCNode interface {
 	PrepareRollback() (err error)
 
 	WriteTo(w io.Writer) (n int64, err error)
-	ReadFrom(r io.Reader) (n int64, err error)
 }
 type AppendNode interface {
 	BaseMVCCNode

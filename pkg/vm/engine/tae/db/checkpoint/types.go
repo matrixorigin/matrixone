@@ -88,6 +88,7 @@ const (
 	CheckpointAttr_EndTS        = "end_ts"
 	CheckpointAttr_MetaLocation = "meta_location"
 	CheckpointAttr_EntryType    = "entry_type"
+	CheckpointAttr_Version      = "version"
 )
 
 var (
@@ -106,6 +107,7 @@ var (
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_bool, 0, 0), // true for incremental
+		types.New(types.T_uint32, 0, 0),
 	}
 )
 

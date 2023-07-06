@@ -37,6 +37,7 @@ type CheckpointEntry struct {
 	entryType  EntryType
 	location   objectio.Location
 	lastPrint  time.Time
+	version    uint32
 }
 
 func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
@@ -152,10 +153,10 @@ func (e *CheckpointEntry) Replay(
 	data := logtail.NewCheckpointData()
 	defer data.Close()
 	t0 := time.Now()
-	if err = data.PrefetchFrom(ctx, fs.Service, e.location); err != nil {
+	if err = data.PrefetchFrom(ctx, e.version, fs.Service, e.location); err != nil {
 		return
 	}
-	if err = data.ReadFrom(ctx, reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(ctx, e.version, reader, common.DefaultAllocator); err != nil {
 		return
 	}
 	readDuration = time.Since(t0)
@@ -172,6 +173,7 @@ func (e *CheckpointEntry) Prefetch(
 	data = logtail.NewCheckpointData()
 	if err = data.PrefetchFrom(
 		ctx,
+		e.version,
 		fs.Service,
 		e.location,
 	); err != nil {
@@ -192,6 +194,7 @@ func (e *CheckpointEntry) Read(
 	data = logtail.NewCheckpointData()
 	if err = data.ReadFrom(
 		ctx,
+		e.version,
 		reader,
 		common.DefaultAllocator,
 	); err != nil {
@@ -205,10 +208,10 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 		return
 	}
 	data := logtail.NewCNCheckpointData()
-	if err = data.PrefetchFrom(ctx, fs.Service, e.location); err != nil {
+	if err = data.PrefetchFrom(ctx, e.version, fs.Service, e.location); err != nil {
 		return
 	}
-	if err = data.ReadFrom(ctx, reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(ctx, reader, e.version, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, segDel, err = data.GetTableData(tid)
