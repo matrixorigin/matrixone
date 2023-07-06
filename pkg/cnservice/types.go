@@ -281,7 +281,8 @@ func (c *Config) Validate() error {
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 
-	if c.PrimaryKeyCheck {
+	// pessimistic mode implies primary key check
+	if c.Txn.Mode == txn.TxnMode_Pessimistic.String() || c.PrimaryKeyCheck {
 		plan.CNPrimaryCheck = true
 	} else {
 		plan.CNPrimaryCheck = false
