@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -22,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -173,6 +175,8 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			vector.AppendFixed(opBat.Vecs[i], info.IsHidden, false, mp)
 
 		case plan.MetadataScanInfo_META_LOC:
+			aa := objectio.Location(info.MetaLoc)
+			fmt.Printf("[metadatascan] metaloc name = %s, extend = %s\n", aa.Name().String(), aa.Extent().String())
 			vector.AppendBytes(opBat.Vecs[i], info.MetaLoc, false, mp)
 
 		case plan.MetadataScanInfo_DELTA_LOC:
@@ -225,8 +229,8 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			vector.AppendBytes(opBat.Vecs[i], info.Max, false, mp)
 		default:
 		}
-		opBat.Zs = append(opBat.Zs, 1)
 	}
+	opBat.Zs = append(opBat.Zs, 1)
 
 	return nil
 }
