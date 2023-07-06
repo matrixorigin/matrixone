@@ -189,8 +189,13 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		offset := len(tableDef.Cols)
 		updatePkCol := false
 		var pkNameMap = make(map[string]struct{})
-		for _, pkName := range tableDef.Pkey.Names {
-			pkNameMap[pkName] = struct{}{}
+		if tableDef.Pkey != nil {
+			for _, pkName := range tableDef.Pkey.Names {
+				pkNameMap[pkName] = struct{}{}
+			}
+		} else {
+			// we don't known if update pk. just set true and let check pk dup work
+			updatePkCol = true
 		}
 		for colName, updateKey := range updateKeys {
 			selectList = append(selectList, tree.SelectExpr{
