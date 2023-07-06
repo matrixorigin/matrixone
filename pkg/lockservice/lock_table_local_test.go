@@ -584,7 +584,7 @@ func TestMergeRangeWithConflict(t *testing.T) {
 		})
 }
 
-func TestLocalLockTableMulitiRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
+func TestLocalLockTableMultipleRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -728,6 +728,147 @@ func TestIssue9856(t *testing.T) {
 			}
 		},
 	)
+}
+
+func TestRangeLockConflict(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Second*1000)
+			defer cancel()
+
+			tableID := uint64(1)
+			txnID1 := []byte{1}
+			txnID2 := []byte{2}
+
+			cases := []struct {
+				rows        [][]byte
+				g           pb.Granularity
+				hasConflict bool
+				ranges      [][]byte
+			}{
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: false,
+					ranges:      [][]byte{{1}, {2}},
+				},
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: true,
+					ranges:      [][]byte{{1}, {3}},
+				},
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: true,
+					ranges:      [][]byte{{1}, {4}},
+				},
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: true,
+					ranges:      [][]byte{{3}, {4}},
+				},
+				{
+					rows:        [][]byte{{3}},
+					g:           pb.Granularity_Row,
+					hasConflict: false,
+					ranges:      [][]byte{{4}, {5}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: false,
+					ranges:      [][]byte{{1}, {2}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{1}, {3}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{1}, {4}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{3}, {4}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{3}, {5}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{3}, {6}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: true,
+					ranges:      [][]byte{{5}, {6}},
+				},
+				{
+					rows:        [][]byte{{3}, {5}},
+					g:           pb.Granularity_Range,
+					hasConflict: false,
+					ranges:      [][]byte{{6}, {7}},
+				},
+			}
+
+			for _, c := range cases {
+				mustAddTestLock(
+					t,
+					ctx,
+					l,
+					tableID,
+					txnID1,
+					c.rows,
+					c.g)
+
+				var wg sync.WaitGroup
+				wg.Add(1)
+				fn := func() {
+					defer func() {
+						require.NoError(t, l.Unlock(ctx, txnID2, timestamp.Timestamp{}))
+						wg.Done()
+					}()
+					mustAddTestLock(
+						t,
+						ctx,
+						l,
+						tableID,
+						txnID2,
+						c.ranges,
+						pb.Granularity_Range)
+				}
+
+				if !c.hasConflict {
+					fn()
+					require.NoError(t, l.Unlock(ctx, txnID1, timestamp.Timestamp{}))
+				} else {
+					go fn()
+					waitWaiters(t, l, tableID, c.rows[0], 1)
+					require.NoError(t, l.Unlock(ctx, txnID1, timestamp.Timestamp{}))
+				}
+
+				wg.Wait()
+			}
+		})
 }
 
 type target struct {

@@ -257,31 +257,31 @@ func TestDeadLockWithRange(t *testing.T) {
 			txn1 := []byte("txn1")
 			txn2 := []byte("txn2")
 			txn3 := []byte("txn3")
-			row1 := []byte{1, 2}
-			row2 := []byte{3, 4}
-			row3 := []byte{5, 6}
+			range1 := [][]byte{{1}, {2}}
+			range2 := [][]byte{{3}, {4}}
+			range3 := [][]byte{{5}, {6}}
 
-			mustAddTestLock(t, ctx, l, 1, txn1, [][]byte{row1}, pb.Granularity_Range)
-			mustAddTestLock(t, ctx, l, 1, txn2, [][]byte{row2}, pb.Granularity_Range)
-			mustAddTestLock(t, ctx, l, 1, txn3, [][]byte{row3}, pb.Granularity_Range)
+			mustAddTestLock(t, ctx, l, 1, txn1, range1, pb.Granularity_Range)
+			mustAddTestLock(t, ctx, l, 1, txn2, range2, pb.Granularity_Range)
+			mustAddTestLock(t, ctx, l, 1, txn3, range3, pb.Granularity_Range)
 
 			var wg sync.WaitGroup
 			wg.Add(3)
 			go func() {
 				defer wg.Done()
-				maybeAddTestLockWithDeadlock(t, ctx, l, 1, txn1, [][]byte{row2},
+				maybeAddTestLockWithDeadlock(t, ctx, l, 1, txn1, range2,
 					pb.Granularity_Range)
 				require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			}()
 			go func() {
 				defer wg.Done()
-				maybeAddTestLockWithDeadlock(t, ctx, l, 1, txn2, [][]byte{row3},
+				maybeAddTestLockWithDeadlock(t, ctx, l, 1, txn2, range3,
 					pb.Granularity_Range)
 				require.NoError(t, l.Unlock(ctx, txn2, timestamp.Timestamp{}))
 			}()
 			go func() {
 				defer wg.Done()
-				maybeAddTestLockWithDeadlock(t, ctx, l, 1, txn3, [][]byte{row1},
+				maybeAddTestLockWithDeadlock(t, ctx, l, 1, txn3, range1,
 					pb.Granularity_Range)
 				require.NoError(t, l.Unlock(ctx, txn3, timestamp.Timestamp{}))
 			}()
@@ -729,7 +729,7 @@ func maybeAddTestLockWithDeadlock(
 	granularity pb.Granularity) pb.Result {
 	t.Logf("%s try lock %+v", string(txnID), lock)
 	res, err := l.Lock(ctx, table, lock, txnID, pb.LockOptions{
-		Granularity: pb.Granularity_Row,
+		Granularity: granularity,
 		Mode:        pb.LockMode_Exclusive,
 		Policy:      pb.WaitPolicy_Wait,
 	})

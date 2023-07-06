@@ -225,7 +225,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	if err := txn.mergeTxnWorkspace(); err != nil {
 		return err
 	}
-	if err := txn.dumpBatch(false, 0); err != nil {
+	if err := txn.dumpBatch(0); err != nil {
 		return err
 	}
 	txn.Lock()

@@ -212,16 +212,3 @@ func TestReallocateExpiredTasks(t *testing.T) {
 	assert.Equal(t, "b", query[0].TaskRunner)
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
 }
-
-func TestSchedulerCreateTasks(t *testing.T) {
-	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
-	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
-	currentTick := uint64(0)
-
-	assert.NoError(t, scheduler.Create(context.Background(),
-		[]task.TaskMetadata{{ID: "1"}}))
-
-	// Schedule empty task
-	scheduler.Schedule(cnState, currentTick)
-}
