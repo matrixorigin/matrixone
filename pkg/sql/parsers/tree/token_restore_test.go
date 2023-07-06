@@ -28,17 +28,17 @@ func TestFmtCtx_WriteStringValue(t *testing.T) {
 	}{
 		{
 			name:   "test01",
-			fmtCtx: NewFmtCtx2(dialect.MYSQL, RestoreStringSingleQuotes|RestoreStringEscapeBackslash),
+			fmtCtx: NewFmtCtxWithFlag(dialect.MYSQL, RestoreStringSingleQuotes|RestoreStringEscapeBackslash),
 			args:   "123456789",
 		},
 		{
 			name:   "test02",
-			fmtCtx: NewFmtCtx2(dialect.MYSQL, RestoreStringDoubleQuotes|RestoreStringEscapeBackslash),
+			fmtCtx: NewFmtCtxWithFlag(dialect.MYSQL, RestoreStringDoubleQuotes|RestoreStringEscapeBackslash),
 			args:   "123456789",
 		},
 		{
 			name:   "test03",
-			fmtCtx: NewFmtCtx2(dialect.MYSQL, RestoreStringDoubleQuotes|RestoreStringEscapeBackslash),
+			fmtCtx: NewFmtCtxWithFlag(dialect.MYSQL, RestoreStringDoubleQuotes|RestoreStringEscapeBackslash),
 			args:   "12345\\6789",
 		},
 	}
@@ -60,17 +60,17 @@ func TestFmtCtx_WriteName(t *testing.T) {
 	}{
 		{
 			name:   "test01",
-			fmtCtx: NewFmtCtx2(dialect.MYSQL, RestoreNameBackQuotes),
+			fmtCtx: NewFmtCtxWithFlag(dialect.MYSQL, RestoreNameBackQuotes),
 			args:   "db1",
 		},
 		{
 			name:   "test02",
-			fmtCtx: NewFmtCtx2(dialect.MYSQL, RestoreNameBackQuotes),
+			fmtCtx: NewFmtCtxWithFlag(dialect.MYSQL, RestoreNameBackQuotes),
 			args:   "employees",
 		},
 		{
 			name:   "test03",
-			fmtCtx: NewFmtCtx2(dialect.MYSQL, RestoreNameBackQuotes),
+			fmtCtx: NewFmtCtxWithFlag(dialect.MYSQL, RestoreNameBackQuotes),
 			args:   "col1",
 		},
 	}

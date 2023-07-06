@@ -25,7 +25,7 @@ import (
 type FmtCtx struct {
 	*strings.Builder
 	dialectType dialect.DialectType
-	Flags       RestoreFlags
+	flags       RestoreFlags
 	// quoteString string
 	quoteString       bool
 	singleQuoteString bool

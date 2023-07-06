@@ -134,7 +134,7 @@ func buildPartitionExpr(ctx context.Context, tblInfo *plan.TableDef, partitionBi
 		return err
 	}
 	//TODO: format partition expression
-	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
+	fmtCtx := tree.NewFmtCtxWithFlag(dialect.MYSQL, tree.RestoreNameBackQuotes)
 	pExpr.Format(fmtCtx)
 	exprFmtStr := fmtCtx.ToString()
 
@@ -197,7 +197,7 @@ func buildPartitionColumns(ctx context.Context, partitionBinder *PartitionBinder
 	partitionColumns := make([]string, len(columnList))
 	partitionFmtColumns := make([]string, len(columnList))
 
-	fmtCtx := tree.NewFmtCtx2(dialect.MYSQL, tree.RestoreNameBackQuotes)
+	fmtCtx := tree.NewFmtCtxWithFlag(dialect.MYSQL, tree.RestoreNameBackQuotes)
 	// partition COLUMNS does not accept expressions, only names of columns.
 	for i, column := range columnList {
 		columnsExpr[i], err = partitionBinder.BindColRef(column, 0, true)
