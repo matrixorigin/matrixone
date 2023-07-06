@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,8 +39,9 @@ func TestLocalFSWriter(t *testing.T) {
 	t.Logf("whereami: %s, %s", selfDir, basedir)
 
 	ctx := context.Background()
+	memCacheCapacity := toml.ByteSize(mpool.MB)
 	fs, err := fileservice.NewLocalFS(ctx, "test", path.Join(basedir, "system"), fileservice.CacheConfig{
-		MemoryCapacity: mpool.MB,
+		MemoryCapacity: &memCacheCapacity,
 	}, nil)
 	require.Equal(t, nil, err)
 	// csv_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
