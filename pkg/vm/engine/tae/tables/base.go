@@ -211,17 +211,18 @@ func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catal
 		location)
 }
 
-func (blk *baseBlock) LoadPersistedDeletes(ctx context.Context) (bat *containers.Batch, err error) {
-	location := blk.meta.GetDeltaLoc()
+func (blk *baseBlock) loadPersistedDeletes(ctx context.Context) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, err error) {
+	location, deltalocCommitTS := blk.meta.GetDeltaLocAndCommitTS()
 	if location.IsEmpty() {
 		return
 	}
 	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
-	return LoadPersistedDeletes(
+	bat, persistedByCN, err = LoadPersistedDeletes(
 		ctx,
 		pkName,
 		blk.rt.Fs,
 		location)
+	return
 }
 
 func (blk *baseBlock) FillPersistedDeletes(
@@ -265,23 +266,37 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	loopOp func(int, *vector.Vector),
 	postOp func(*containers.Batch),
 ) (err error) {
-	deletes, err := blk.LoadPersistedDeletes(ctx)
+	// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
+	deletes, persistedByCN, deltalocCommitTS, err := blk.loadPersistedDeletes(ctx)
 	if deletes == nil || err != nil {
 		return
 	}
-	abortVec := deletes.Vecs[3].GetDownstreamVector()
-	commitTsVec := deletes.Vecs[1].GetDownstreamVector()
-	rowIdVec := deletes.Vecs[0].GetDownstreamVector()
-	for i := 0; i < deletes.Length(); i++ {
-		if skipAbort {
-			abort := vector.GetFixedAt[bool](abortVec, i)
-			if abort {
-				continue
-			}
+	if persistedByCN {
+		if deltalocCommitTS.Equal(txnif.UncommitTS) {
+			panic("todo")
 		}
-		commitTS := vector.GetFixedAt[types.TS](commitTsVec, i)
-		if commitTS.GreaterEq(start) && commitTS.LessEq(end) {
+		if deltalocCommitTS.Less(start) || deltalocCommitTS.Greater(end) {
+			return
+		}
+		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
+		for i := 0; i < deletes.Length(); i++ {
 			loopOp(i, rowIdVec)
+		}
+	} else {
+		abortVec := deletes.Vecs[3].GetDownstreamVector()
+		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
+		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
+		for i := 0; i < deletes.Length(); i++ {
+			if skipAbort {
+				abort := vector.GetFixedAt[bool](abortVec, i)
+				if abort {
+					continue
+				}
+			}
+			commitTS := vector.GetFixedAt[types.TS](commitTsVec, i)
+			if commitTS.GreaterEq(start) && commitTS.LessEq(end) {
+				loopOp(i, rowIdVec)
+			}
 		}
 	}
 	if postOp != nil {
@@ -327,13 +342,13 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 		}
 	}()
 
-	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
-		return
-	}
-
 	blk.RLock()
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
 	blk.RUnlock()
+
+	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
+		return
+	}
 	return
 }
 
