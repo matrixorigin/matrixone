@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(sels [][]int32, expr *plan.Expr, mp *StrHashMap, hasNull bool) *JoinMap {
+func NewJoinMap(sels [][]int32, expr *plan.Expr, mp *StrHashMap, hasNull bool, isDup bool) *JoinMap {
 	cnt := int64(1)
 	return &JoinMap{
 		cnt:     &cnt,
@@ -28,6 +28,8 @@ func NewJoinMap(sels [][]int32, expr *plan.Expr, mp *StrHashMap, hasNull bool) *
 		expr:    expr,
 		sels:    sels,
 		hasNull: hasNull,
+		dupCnt:  new(int64),
+		isDup:   isDup,
 	}
 }
 
@@ -45,6 +47,10 @@ func (jm *JoinMap) Expr() *plan.Expr {
 
 func (jm *JoinMap) HasNull() bool {
 	return jm.hasNull
+}
+
+func (jm *JoinMap) IsDup() bool {
+	return jm.isDup
 }
 
 func (jm *JoinMap) Dup() *JoinMap {
@@ -78,7 +84,6 @@ func (jm *JoinMap) IncRef(ref int64) {
 }
 
 func (jm *JoinMap) SetDupCount(ref int64) {
-	jm.dupCnt = new(int64)
 	atomic.AddInt64(jm.dupCnt, ref)
 }
 

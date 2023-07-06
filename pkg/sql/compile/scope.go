@@ -432,6 +432,13 @@ func (s *Scope) JoinRun(c *Compile) error {
 	for i := range chp {
 		chp[i].IsEnd = true
 	}
+
+	if mcpu == 1 { // no need to parallel
+		buildScope := c.newJoinBuildScope(s, nil)
+		s.PreScopes = append(s.PreScopes, buildScope)
+		return s.MergeRun(c)
+	}
+
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
