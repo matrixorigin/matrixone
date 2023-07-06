@@ -43,7 +43,6 @@ func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
 	return ctx
 }
 
-// ----------------------------------------------------------------------------------------
 type FmtCtxOption func(*FmtCtx)
 
 func (f FmtCtxOption) Apply(ctx *FmtCtx) {
@@ -60,8 +59,6 @@ func WithSingleQuoteString() FmtCtxOption {
 		ctx.singleQuoteString = true
 	})
 }
-
-//----------------------------------------------------------------------------------------
 
 // NodeFormatter for formatted output of the node.
 type NodeFormatter interface {
