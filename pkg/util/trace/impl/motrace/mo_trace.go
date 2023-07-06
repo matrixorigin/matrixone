@@ -48,6 +48,23 @@ type MOTracer struct {
 	provider *MOTracerProvider
 }
 
+// Start starts a Span and returns it along with a context containing it.
+//
+// The Span is created with the provided name and as a child of any existing
+// span context found in passed context. The created Span will be
+// configured appropriately by any SpanOption passed.
+//
+// Only timeout Span can be recorded, hold in SpanConfig.LongTimeThreshold.
+// There are 4 diff ways to setting threshold value:
+// 1. using default val, which was hold by MOTracerProvider.longSpanTime.
+// 2. using `WithLongTimeThreshold()` SpanOption, that will override the default val.
+// 3. passing the Deadline context, then it will check the Deadline at Span ended instead of checking Threshold.
+// 4. using `WithHungThreshold()` SpanOption, that will override the passed context with context.WithTimeout(ctx, hungThreshold)
+// and create a new work goroutine to check Deadline event.
+//
+// When Span pass timeout threshold or got the deadline event, not only the Span will be recorded,
+// but also trigger profile dump specify by `WithProfileGoroutine()`, `WithProfileHeap()`, `WithProfileThreadCreate()`,
+// `WithProfileAllocs()`, `WithProfileBlock()`, `WithProfileMutex()`, `WithProfileCpuSecs()`, `WithProfileTraceSecs()` SpanOption.
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	if !t.IsEnable() {
 		return ctx, trace.NoopSpan{}
@@ -93,11 +110,16 @@ var _ trace.Span = (*MOHungSpan)(nil)
 
 type MOHungSpan struct {
 	*MOSpan
-	quitCtx        context.Context
-	quitCancel     context.CancelFunc
+	// quitCtx is used to stop the work goroutine loop().
+	// Because of quitCtx and deadlineCtx are based on init span.ctx, both can be canceled outside span.
+	// So, quitCtx can help to detect this situation, like loop().
+	quitCtx context.Context
+	// quitCancel cancel quitCtx in End()
+	quitCancel context.CancelFunc
+	// deadlineCtx is used to check hung threshold in work goroutine loop().
 	deadlineCtx    context.Context
 	deadlineCancel context.CancelFunc
-	// mux control doProfile exec order
+	// mux control doProfile exec order, called in loop and End
 	mux sync.Mutex
 }
 
@@ -234,9 +256,9 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	}
 }
 
-// End record span which meets the following condition
-// If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the deadline.
-// If not set, check condition: duration > span.GetLongTimeThreshold()
+// End completes the Span. Span will be recorded if meets the following condition:
+// 1. If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the Deadline.
+// 2. If NOT set Deadline, then check condition: Span.Duration > span.GetLongTimeThreshold().
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	var err error
 	s.EndTime = time.Now()
@@ -262,7 +284,7 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 		opt.ApplySpanEnd(&s.SpanConfig)
 	}
 	// do profile
-	if !s.NeedProfile() {
+	if s.NeedProfile() {
 		s.doProfile()
 	}
 	// record error info

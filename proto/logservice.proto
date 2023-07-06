@@ -515,21 +515,22 @@ message CheckerState {
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
 message HAKeeperRSMState {
-  uint64 Tick                                = 1;
+  uint64 Index                               = 1;
+  uint64 Tick                                = 2;
   // NextID is a shared, global ID.
-  uint64 NextID                              = 2;
+  uint64 NextID                              = 3;
   // NextIDByKey is IDs isolated by keys.
-  map<string, uint64> NextIDByKey            = 3;
-  uint64 Term                                = 4;
-  HAKeeperState State                        = 5;
-  TaskSchedulerState TaskSchedulerState      = 6;
-  map<string, CommandBatch> ScheduleCommands = 7 [(gogoproto.nullable) = false];
-  map<string, uint64> LogShards = 8;
-  CNState CNState               = 9  [(gogoproto.nullable) = false];
-  DNState DNState               = 10 [(gogoproto.nullable) = false];
-  LogState LogState             = 11 [(gogoproto.nullable) = false];
-  ClusterInfo ClusterInfo       = 12 [(gogoproto.nullable) = false];
-  TaskTableUser TaskTableUser   = 13 [(gogoproto.nullable) = false];
+  map<string, uint64> NextIDByKey            = 4;
+  uint64 Term                                = 5;
+  HAKeeperState State                        = 6;
+  TaskSchedulerState TaskSchedulerState      = 7;
+  map<string, CommandBatch> ScheduleCommands = 8 [(gogoproto.nullable) = false];
+  map<string, uint64> LogShards = 9;
+  CNState CNState               = 10  [(gogoproto.nullable) = false];
+  DNState DNState               = 11 [(gogoproto.nullable) = false];
+  LogState LogState             = 12 [(gogoproto.nullable) = false];
+  ClusterInfo ClusterInfo       = 13 [(gogoproto.nullable) = false];
+  TaskTableUser TaskTableUser   = 14 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica

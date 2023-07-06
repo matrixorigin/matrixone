@@ -182,10 +182,8 @@ func buildDNConfig(
 
 	// logtail push service config for tae storage
 	cfg.LogtailServer.RpcMaxMessageSize = toml.ByteSize(opt.logtailPushServer.rpcMaxMessageSize)
-	cfg.LogtailServer.RpcPayloadCopyBufferSize = toml.ByteSize(opt.logtailPushServer.rpcPayloadCopyBufferSize)
 	cfg.LogtailServer.LogtailCollectInterval.Duration = opt.logtailPushServer.logtailCollectInterval
 	cfg.LogtailServer.LogtailResponseSendTimeout.Duration = opt.logtailPushServer.logtailResponseSendTimeout
-	cfg.LogtailServer.MaxLogtailFetchFailure = opt.logtailPushServer.maxLogtailFetchFailure
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.

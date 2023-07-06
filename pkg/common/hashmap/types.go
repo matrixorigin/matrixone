@@ -70,6 +70,8 @@ type JoinMap struct {
 	expr    *plan.Expr
 	mp      *StrHashMap
 	hasNull bool
+
+	isDup bool
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)

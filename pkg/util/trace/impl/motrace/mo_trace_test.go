@@ -255,7 +255,7 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, longTimeSpan.(*MOSpan).needRecord)
 	require.Equal(t, 2, len(longTimeSpan.(*MOSpan).ExtraFields))
-	require.Equal(t, true, longTimeSpan.(*MOSpan).doneProfile)
+	require.Equal(t, false, longTimeSpan.(*MOSpan).doneProfile)
 	require.Equal(t, extraFields, longTimeSpan.(*MOSpan).ExtraFields)
 
 	// span with deadline context
@@ -273,7 +273,7 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, deadlineSpan.(*MOSpan).needRecord)
 	require.Equal(t, 1, len(deadlineSpan.(*MOSpan).ExtraFields))
-	require.Equal(t, true, deadlineSpan.(*MOSpan).doneProfile)
+	require.Equal(t, false, deadlineSpan.(*MOSpan).doneProfile)
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan.(*MOSpan).ExtraFields)
 
 	// span with deadline context (plus calling cancel2() before func return)
@@ -292,7 +292,7 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, deadlineSpan2.(*MOSpan).needRecord)
 	require.Equal(t, 1, len(deadlineSpan2.(*MOSpan).ExtraFields))
-	require.Equal(t, true, deadlineSpan2.(*MOSpan).doneProfile)
+	require.Equal(t, false, deadlineSpan2.(*MOSpan).doneProfile)
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan2.(*MOSpan).ExtraFields)
 
 	// span with hung option, with Deadline situation
@@ -374,6 +374,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 	tests := []struct {
 		name   string
 		fields fields
+		want   bool
 	}{
 		{
 			name: "normal",
@@ -390,6 +391,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
+			want: true,
 		},
 		{
 			name: "heap",
@@ -398,6 +400,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
+			want: true,
 		},
 		{
 			name: "threadcreate",
@@ -406,6 +409,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
+			want: true,
 		},
 		{
 			name: "allocs",
@@ -414,6 +418,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
+			want: true,
 		},
 		{
 			name: "block",
@@ -422,6 +427,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
+			want: true,
 		},
 		{
 			name: "mutex",
@@ -430,6 +436,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
+			want: true,
 		},
 		{
 			name: "cpu",
@@ -438,6 +445,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
+			want: true,
 		},
 		{
 			name: "trace",
@@ -446,12 +454,14 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
+			want: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, s := tt.fields.tracer.Start(tt.fields.ctx, "test", tt.fields.opts...)
 			s.End()
+			require.Equal(t, tt.want, s.(*MOSpan).doneProfile)
 		})
 	}
 }

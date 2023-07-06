@@ -2258,6 +2258,12 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 	var err error
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+
+		// can or not execute in retricted status
+		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
+			return moerr.NewInternalError(requestCtx, "do not have privilege to execute the statement")
+		}
+
 		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 		if err != nil {
 			return err
@@ -2471,6 +2477,18 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var mrs *MysqlResultSet
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
+
+	// record goroutine info when ddl stmt run timeout
+	switch stmt.(type) {
+	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
+		_, span := trace.Start(requestCtx, "executeStmtHung",
+			trace.WithHungThreshold(time.Minute), // be careful with this options
+			trace.WithProfileGoroutine(),
+			trace.WithProfileTraceSecs(10*time.Second),
+		)
+		defer span.End()
+	default:
+	}
 
 	//execution succeeds during the transaction. commit the transaction
 	commitTxnFunc := func() error {
