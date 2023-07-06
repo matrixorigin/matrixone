@@ -48,7 +48,7 @@ listen-address = "0.0.0.0:17001"
 service-address = "dn:17001"
 
 [dn.Txn]
-incremental-dedup = false
+incremental-dedup = "false"
 
 [dn.Txn.Storage]
 backend = "TAE"
