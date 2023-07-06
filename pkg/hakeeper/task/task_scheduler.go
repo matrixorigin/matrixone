@@ -28,6 +28,7 @@ import (
 
 const (
 	taskSchedulerDefaultTimeout = 10 * time.Second
+	taskDefaultTimeout          = 30 * time.Minute
 )
 
 type scheduler struct {
@@ -141,7 +142,7 @@ func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (ordered
 		}
 	}
 	for _, t := range tasks {
-		if time.Since(time.UnixMilli(t.LastHeartbeat)) > taskSchedulerDefaultTimeout {
+		if heartbeatTimeout(t.LastHeartbeat) {
 			for _, e := range expired {
 				if t.ID == e.ID {
 					break
@@ -151,4 +152,8 @@ func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (ordered
 		}
 	}
 	return orderedMap, expired
+}
+
+func heartbeatTimeout(lastHeartbeat int64) bool {
+	return time.Since(time.UnixMilli(lastHeartbeat)) > taskDefaultTimeout
 }
