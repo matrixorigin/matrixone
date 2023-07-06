@@ -32,19 +32,23 @@ import (
 )
 
 type PartitionReader struct {
-	withFilterMixin
 	table    *txnTable
 	prepared bool
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
-	deletes map[types.Rowid]uint8
-	iter    logtailreplay.RowsIter
+	deletes  map[types.Rowid]uint8
+	iter     logtailreplay.RowsIter
+	seqnumMp map[string]int
+	typsMap  map[string]types.Type
 }
 
 var _ engine.Reader = new(PartitionReader)
 
 func (p *PartitionReader) Close() error {
+	//p.withFilterMixin.reset()
+	p.inserts = nil
+	p.deletes = nil
 	p.iter.Close()
 	return nil
 }
@@ -110,7 +114,7 @@ func (p *PartitionReader) Read(
 	if err := p.prepare(); err != nil {
 		return nil, err
 	}
-	p.tryUpdateColumns(colNames)
+	//p.tryUpdateColumns(colNames)
 	//read batch resides in memory from txn.writes.
 	if len(p.inserts) > 0 {
 		bat := p.inserts[0].GetSubBatch(colNames)
@@ -118,11 +122,11 @@ func (p *PartitionReader) Read(
 		p.inserts = p.inserts[1:]
 		b := batch.NewWithSize(len(colNames))
 		b.SetAttributes(colNames)
-		for i := range colNames {
+		for i, name := range colNames {
 			if vp == nil {
-				b.Vecs[i] = vector.NewVec(p.columns.colTypes[i])
+				b.Vecs[i] = vector.NewVec(p.typsMap[name])
 			} else {
-				b.Vecs[i] = vp.GetVector(p.columns.colTypes[i])
+				b.Vecs[i] = vp.GetVector(p.typsMap[name])
 			}
 		}
 		for i, vec := range b.Vecs {
@@ -137,7 +141,7 @@ func (p *PartitionReader) Read(
 				}
 			}
 		}
-		logutil.Debugf("read %v with %v", colNames, p.columns.seqnums)
+		logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
 		//		CORNER CASE:
 		//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
 		//		the bat.Length() is not always the right value for the result batch b.
@@ -155,11 +159,11 @@ func (p *PartitionReader) Read(
 		const maxRows = 8192
 		b := batch.NewWithSize(len(colNames))
 		b.SetAttributes(colNames)
-		for i := range colNames {
+		for i, name := range colNames {
 			if vp == nil {
-				b.Vecs[i] = vector.NewVec(p.columns.colTypes[i])
+				b.Vecs[i] = vector.NewVec(p.typsMap[name])
 			} else {
-				b.Vecs[i] = vp.GetVector(p.columns.colTypes[i])
+				b.Vecs[i] = vp.GetVector(p.typsMap[name])
 			}
 		}
 		rows := 0
@@ -168,7 +172,7 @@ func (p *PartitionReader) Read(
 			if name == catalog.Row_ID {
 				appendFuncs[i] = vector.GetUnionOneFunction(types.T_Rowid.ToType(), mp)
 			} else {
-				appendFuncs[i] = vector.GetUnionOneFunction(p.columns.colTypes[i], mp)
+				appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
 			}
 		}
 		//read rows from partitionState.rows.
@@ -187,7 +191,7 @@ func (p *PartitionReader) Read(
 						return nil, err
 					}
 				} else {
-					idx := 2 /*rowid and commits*/ + p.columns.seqnums[i]
+					idx := 2 /*rowid and commits*/ + p.seqnumMp[name]
 					if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 						entry.Batch.Attrs[idx] == "" /*drop column*/ {
 						if err := vector.AppendAny(
@@ -200,7 +204,7 @@ func (p *PartitionReader) Read(
 					} else {
 						appendFuncs[i](
 							b.Vecs[i],
-							entry.Batch.Vecs[2 /*rowid and commits*/ +p.columns.seqnums[i]],
+							entry.Batch.Vecs[2 /*rowid and commits*/ +p.seqnumMp[name]],
 							entry.Offset,
 						)
 					}

@@ -1474,8 +1474,7 @@ func (tbl *txnTable) newMergeReader(
 		num,
 		encodedPrimaryKey,
 		expr,
-		dirtyBlks,
-		tbl.writes)
+		dirtyBlks)
 	if err != nil {
 		return nil, err
 	}
@@ -1545,7 +1544,6 @@ func (tbl *txnTable) newReader(
 	encodedPrimaryKey []byte,
 	expr *plan.Expr,
 	dirtyBlks []*catalog.BlockInfo,
-	entries []Entry,
 ) ([]engine.Reader, error) {
 	txn := tbl.db.txn
 	ts := txn.meta.SnapshotTS
@@ -1555,6 +1553,22 @@ func (tbl *txnTable) newReader(
 		return nil, err
 	}
 	readers := make([]engine.Reader, readerNumber)
+
+	seqnumMp := make(map[string]int)
+	for _, coldef := range tbl.tableDef.Cols {
+		seqnumMp[coldef.Name] = int(coldef.Seqnum)
+	}
+
+	mp := make(map[string]types.Type)
+	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0)
+	//FIXME::why did get type from the engine.AttributeDef,instead of plan.TableDef.Cols
+	for _, def := range tbl.defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
+		mp[attr.Attr.Name] = attr.Attr.Type
+	}
 
 	var iter logtailreplay.RowsIter
 	if len(encodedPrimaryKey) > 0 {
@@ -1571,15 +1585,10 @@ func (tbl *txnTable) newReader(
 	}
 
 	partReader := &PartitionReader{
-		withFilterMixin: withFilterMixin{
-			ctx:      ctx,
-			fs:       fs,
-			ts:       ts,
-			proc:     tbl.proc,
-			tableDef: tbl.getTableDef(),
-		},
-		table: tbl,
-		iter:  iter,
+		table:    tbl,
+		iter:     iter,
+		seqnumMp: seqnumMp,
+		typsMap:  mp,
 	}
 	readers[0] = partReader
 
