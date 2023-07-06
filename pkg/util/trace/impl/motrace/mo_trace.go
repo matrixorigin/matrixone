@@ -70,21 +70,9 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 
 	// handle HungThreshold
 	if threshold := span.SpanConfig.HungThreshold(); threshold > 0 {
-		originCtx, cancel := context.WithCancel(ctx)
-		ctx, _ = context.WithTimeout(originCtx, threshold)
-		span.ctx = ctx
-		go func() {
-			select {
-			case <-originCtx.Done():
-			case <-ctx.Done():
-				span.doProfile()
-				logutil.Warn("span trigger hung threshold",
-					trace.SpanField(span.SpanContext()),
-					zap.String("span_name", span.Name),
-					zap.Duration("threshold", threshold))
-			}
-			cancel()
-		}()
+		s := newMOHungSpan(span)
+		go s.loop()
+		return trace.ContextWithSpan(ctx, s), s
 	}
 
 	return trace.ContextWithSpan(ctx, span), span
@@ -99,6 +87,47 @@ func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanSta
 
 func (t *MOTracer) IsEnable() bool {
 	return t.provider.IsEnable()
+}
+
+var _ trace.Span = (*MOHungSpan)(nil)
+
+type MOHungSpan struct {
+	*MOSpan
+	parentCtx    context.Context
+	parentCancel context.CancelFunc
+	ctx          context.Context
+	cancel       context.CancelFunc
+}
+
+func newMOHungSpan(span *MOSpan) *MOHungSpan {
+	originCtx, originCancel := context.WithCancel(span.ctx)
+	ctx, cancel := context.WithTimeout(originCtx, span.SpanConfig.HungThreshold())
+	span.ctx = ctx
+	return &MOHungSpan{
+		MOSpan:       span,
+		parentCtx:    originCtx,
+		parentCancel: originCancel,
+		ctx:          ctx,
+		cancel:       cancel,
+	}
+}
+
+func (s *MOHungSpan) loop() {
+	select {
+	case <-s.parentCtx.Done():
+	case <-s.ctx.Done():
+		s.doProfile()
+		logutil.Warn("span trigger hung threshold",
+			trace.SpanField(s.SpanContext()),
+			zap.String("span_name", s.Name),
+			zap.Duration("threshold", s.HungThreshold()))
+	}
+	s.cancel()
+}
+
+func (s *MOHungSpan) End(options ...trace.SpanEndOption) {
+	s.parentCancel()
+	s.MOSpan.End(options...)
 }
 
 var _ trace.Span = (*MOSpan)(nil)

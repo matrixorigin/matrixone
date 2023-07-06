@@ -307,10 +307,10 @@ func TestMOSpan_End(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}()
 	WG.Wait()
-	require.Equal(t, true, hungSpan.(*MOSpan).needRecord)
-	require.Equal(t, 1, len(hungSpan.(*MOSpan).ExtraFields))
-	require.Equal(t, true, hungSpan.(*MOSpan).doneProfile)
-	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, hungSpan.(*MOSpan).ExtraFields)
+	require.Equal(t, true, hungSpan.(*MOHungSpan).needRecord)
+	require.Equal(t, 1, len(hungSpan.(*MOHungSpan).ExtraFields))
+	require.Equal(t, true, hungSpan.(*MOHungSpan).doneProfile)
+	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, hungSpan.(*MOHungSpan).ExtraFields)
 
 }
 

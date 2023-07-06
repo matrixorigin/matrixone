@@ -178,9 +178,10 @@ type SpanConfig struct {
 
 	// LongTimeThreshold set by WithLongTimeThreshold
 	LongTimeThreshold time.Duration `json:"-"`
-	profileRuntime    uint64
-	profileCpuDur     time.Duration
-	profileTraceDur   time.Duration // WithProfileTraceSecs
+	// profileFlag mark what profile need to do
+	profileFlag     uint64
+	profileCpuDur   time.Duration // WithProfileCpuSecs
+	profileTraceDur time.Duration // WithProfileTraceSecs
 
 	// hungThreshold set by WithHungThreshold
 	// It will override Span ctx deadline setting, and start a goroutine to check ctx deadline
@@ -188,12 +189,14 @@ type SpanConfig struct {
 }
 
 const (
-	PROFILE_RUNTIME_GOROUTINE = 1 << iota
-	PROFILE_RUNTIME_THREADCREATE
-	PROFILE_RUNTIME_HEAP
-	PROFILE_RUNTIME_ALLOCS
-	PROFILE_RUNTIME_BLOCK
-	PROFILE_RUNTIME_MUTEX
+	ProfileFlagGoroutine = 1 << iota
+	ProfileFlagThreadcreate
+	ProfileFlagHeap
+	ProfileFlagAllocs
+	ProfileFlagBlock
+	ProfileFlagMutex
+	ProfileFlagCpu
+	ProfileFlagTrace
 )
 
 func (c *SpanConfig) Reset() {
@@ -216,33 +219,33 @@ func (c *SpanConfig) HungThreshold() time.Duration {
 
 // NeedProfile return true if set profileGoroutine, profileHeap, profileCpuDur
 func (c *SpanConfig) NeedProfile() bool {
-	return c.profileRuntime > 0 || c.profileCpuDur > 0 || c.profileTraceDur > 0
+	return c.profileFlag > 0
 }
 
 // ProfileGoroutine return the value set by WithProfileGoroutine
 func (c *SpanConfig) ProfileGoroutine() bool {
-	return c.profileRuntime&PROFILE_RUNTIME_GOROUTINE > 0
+	return c.profileFlag&ProfileFlagGoroutine > 0
 }
 
 // ProfileHeap return the value set by WithProfileHeap
 func (c *SpanConfig) ProfileHeap() bool {
-	return c.profileRuntime&PROFILE_RUNTIME_HEAP > 0
+	return c.profileFlag&ProfileFlagHeap > 0
 }
 
 func (c *SpanConfig) ProfileThreadCreate() bool {
-	return c.profileRuntime&PROFILE_RUNTIME_THREADCREATE > 0
+	return c.profileFlag&ProfileFlagThreadcreate > 0
 }
 
 func (c *SpanConfig) ProfileAllocs() bool {
-	return c.profileRuntime&PROFILE_RUNTIME_ALLOCS > 0
+	return c.profileFlag&ProfileFlagAllocs > 0
 }
 
 func (c *SpanConfig) ProfileBlock() bool {
-	return c.profileRuntime&PROFILE_RUNTIME_BLOCK > 0
+	return c.profileFlag&ProfileFlagBlock > 0
 }
 
 func (c *SpanConfig) ProfileMutex() bool {
-	return c.profileRuntime&PROFILE_RUNTIME_MUTEX > 0
+	return c.profileFlag&ProfileFlagMutex > 0
 }
 
 // ProfileCpuSecs return the value set by WithProfileCpuSecs
@@ -309,37 +312,37 @@ func WithHungThreshold(d time.Duration) SpanStartOption {
 
 func WithProfileGoroutine() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileRuntime |= PROFILE_RUNTIME_GOROUTINE
+		cfg.profileFlag |= ProfileFlagGoroutine
 	})
 }
 
 func WithProfileHeap() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileRuntime |= PROFILE_RUNTIME_HEAP
+		cfg.profileFlag |= ProfileFlagHeap
 	})
 }
 
 func WithProfileThreadCreate() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileRuntime |= PROFILE_RUNTIME_THREADCREATE
+		cfg.profileFlag |= ProfileFlagThreadcreate
 	})
 }
 
 func WithProfileAllocs() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileRuntime |= PROFILE_RUNTIME_ALLOCS
+		cfg.profileFlag |= ProfileFlagAllocs
 	})
 }
 
 func WithProfileBlock() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileRuntime |= PROFILE_RUNTIME_BLOCK
+		cfg.profileFlag |= ProfileFlagBlock
 	})
 }
 
 func WithProfileMutex() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileRuntime |= PROFILE_RUNTIME_MUTEX
+		cfg.profileFlag |= ProfileFlagMutex
 	})
 }
 
@@ -348,12 +351,14 @@ func WithProfileMutex() SpanStartOption {
 // Please carefully to set this value, it will trigger the sync ProfileCpu op
 func WithProfileCpuSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileFlag |= ProfileFlagCpu
 		cfg.profileCpuDur = d
 	})
 }
 
 func WithProfileTraceSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileFlag |= ProfileFlagTrace
 		cfg.profileTraceDur = d
 	})
 }
