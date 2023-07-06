@@ -482,10 +482,9 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 }
 
 // LoadDeletesForBlockIn loads deletes for blocks in PartitionState.
-func (tbl *txnTable) LoadDeletesForBlockIn(
+func (tbl *txnTable) LoadDeletesForVolatileBlocksIn(
 	state *logtailreplay.PartitionState,
 	in bool,
-	deleteBlockId map[types.Blockid][]int64,
 	deletesRowId map[types.Rowid]uint8) error {
 
 	for blk, bats := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
@@ -512,13 +511,8 @@ func (tbl *txnTable) LoadDeletesForBlockIn(
 				}
 				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 				for _, rowId := range rowIds {
-					if deleteBlockId != nil {
-						id, offset := rowId.Decode()
-						deleteBlockId[id] = append(deleteBlockId[id], int64(offset))
-					} else if deletesRowId != nil {
+					if deletesRowId != nil {
 						deletesRowId[rowId] = 0
-					} else {
-						panic("Load Block Deletes Error")
 					}
 				}
 				rowIdBat.Clean(tbl.db.txn.proc.GetMPool())
@@ -781,14 +775,11 @@ func (tbl *txnTable) rangesOnePart(
 					panic(fmt.Sprintf("blkid %s not found", blkid.String()))
 				}
 				blks = append(blks, pos.blkInfo)
-				//blkInfo := pos.blkInfo
-				//blkInfo.PartitionNum = -1
 				var offsets []int64
 				txn.deletedBlocks.getDeletedOffsetsByBlock(blkid, &offsets)
 				if len(offsets) != 0 {
 					dirtyBlks[*blkid] = struct{}{}
 				}
-				//*ranges = append(*ranges, catalog.EncodeBlockInfo(blkInfo))
 			}
 			continue
 		}
@@ -1563,68 +1554,7 @@ func (tbl *txnTable) newReader(
 	if err != nil {
 		return nil, err
 	}
-
-	//prepare inserts and deletes for partition reader.
-	//TODO:: put this logic into partitionReader.read.
-	var inserts []*batch.Batch
-	//var blkInfos []*catalog.BlockInfo
-	//blkDels := make(map[types.Blockid][]int64)
-	var deletes map[types.Rowid]uint8
-	if !txn.readOnly.Load() {
-		inserts = make([]*batch.Batch, 0, len(entries))
-		deletes = make(map[types.Rowid]uint8)
-		for _, entry := range entries {
-			if entry.typ == INSERT {
-				if entry.bat == nil || entry.bat.Length() == 0 {
-					continue
-				}
-				if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
-					continue
-				}
-				inserts = append(inserts, entry.bat)
-				continue
-			}
-			//entry.typ == DELETE
-			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				/*
-					CASE:
-					create table t1(a int);
-					begin;
-					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-					show tables; // t1 must be shown
-				*/
-				if entry.isGeneratedByTruncate() {
-					continue
-				}
-				//deletes in txn.Write maybe comes from PartitionState.Rows ,
-				// PartitionReader need to skip them.
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					deletes[v] = 0
-				}
-			}
-		}
-		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
-		// so, here only load deletes which don't belong to PartitionState.blks.
-		tbl.LoadDeletesForBlockIn(state, false, nil, deletes)
-	}
-
 	readers := make([]engine.Reader, readerNumber)
-
-	seqnumMp := make(map[string]int)
-	for _, coldef := range tbl.tableDef.Cols {
-		seqnumMp[coldef.Name] = int(coldef.Seqnum)
-	}
-
-	mp := make(map[string]types.Type)
-	mp[catalog.Row_ID] = types.New(types.T_Rowid, 0, 0)
-	for _, def := range tbl.defs {
-		attr, ok := def.(*engine.AttributeDef)
-		if !ok {
-			continue
-		}
-		mp[attr.Attr.Name] = attr.Attr.Type
-	}
 
 	var iter logtailreplay.RowsIter
 	if len(encodedPrimaryKey) > 0 {
@@ -1641,11 +1571,15 @@ func (tbl *txnTable) newReader(
 	}
 
 	partReader := &PartitionReader{
-		typsMap:  mp,
-		inserts:  inserts,
-		deletes:  deletes,
-		iter:     iter,
-		seqnumMp: seqnumMp,
+		withFilterMixin: withFilterMixin{
+			ctx:      ctx,
+			fs:       fs,
+			ts:       ts,
+			proc:     tbl.proc,
+			tableDef: tbl.getTableDef(),
+		},
+		table: tbl,
+		iter:  iter,
 	}
 	readers[0] = partReader
 
