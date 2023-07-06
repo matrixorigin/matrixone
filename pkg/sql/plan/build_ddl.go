@@ -1963,6 +1963,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			}
 		case *tree.TableOptionAutoIncrement:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Can't set AutoIncr column value.")
+		default:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
 		}
 	}
 
