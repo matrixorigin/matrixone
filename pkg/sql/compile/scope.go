@@ -422,8 +422,10 @@ func (s *Scope) PushdownRun() error {
 
 func (s *Scope) JoinRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
-	if mcpu < 1 {
-		mcpu = 1
+	if mcpu <= 1 { // no need to parallel
+		buildScope := c.newJoinBuildScope(s, nil)
+		s.PreScopes = append(s.PreScopes, buildScope)
+		return s.MergeRun(c)
 	}
 
 	isRight := s.isRight()
@@ -431,12 +433,6 @@ func (s *Scope) JoinRun(c *Compile) error {
 	chp := s.PreScopes
 	for i := range chp {
 		chp[i].IsEnd = true
-	}
-
-	if mcpu == 1 { // no need to parallel
-		buildScope := c.newJoinBuildScope(s, nil)
-		s.PreScopes = append(s.PreScopes, buildScope)
-		return s.MergeRun(c)
 	}
 
 	ss := make([]*Scope, mcpu)
