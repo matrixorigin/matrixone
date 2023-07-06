@@ -138,15 +138,12 @@ func NewS3FSOnMinio(
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
-	config.SetDefaults()
+	config.setDefaults()
 
 	// memory cache
-	if config.MemoryCapacity == 0 {
-		config.MemoryCapacity = 512 << 20
-	}
-	if config.MemoryCapacity > DisableCacheCapacity {
+	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			WithLRU(int64(config.MemoryCapacity)),
+			WithLRU(int64(*config.MemoryCapacity)),
 			WithPerfCounterSets(s.perfCounterSets),
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -156,17 +153,14 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	}
 
 	// disk cache
-	if config.DiskCapacity == 0 {
-		config.DiskCapacity = 8 << 30
-	}
-	if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
+	if *config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
 		var err error
 		s.diskCache, err = NewDiskCache(
 			ctx,
-			config.DiskPath,
-			int64(config.DiskCapacity),
+			*config.DiskPath,
+			int64(*config.DiskCapacity),
 			config.DiskMinEvictInterval.Duration,
-			config.DiskEvictTarget,
+			*config.DiskEvictTarget,
 			s.perfCounterSets,
 		)
 		if err != nil {
