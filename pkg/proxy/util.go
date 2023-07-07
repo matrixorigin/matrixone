@@ -18,24 +18,9 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"regexp"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-)
-
-var (
-	begin    = "[bB][eE][gG][iI][nN]"
-	commit   = "[cC][oO][mM][mM][iI][tT]"
-	rollback = "[rR][oO][lL][lL][bB][aA][cC][kK]"
-
-	beginRegex = regexp.MustCompile(fmt.Sprintf("^%s(%s)%s%s%s$",
-		spaceAtLeastZero, begin, spaceAtLeastZero, end, spaceAtLeastZero))
-	commitRegex = regexp.MustCompile(fmt.Sprintf("^%s(%s)%s%s%s$",
-		spaceAtLeastZero, commit, spaceAtLeastZero, end, spaceAtLeastZero))
-	rollbackRegex = regexp.MustCompile(fmt.Sprintf("^%s(%s)%s%s%s$",
-		spaceAtLeastZero, rollback, spaceAtLeastZero, end, spaceAtLeastZero))
 )
 
 // makeOKPacket returns an OK packet
@@ -50,6 +35,13 @@ func makeOKPacket() []byte {
 	return data
 }
 
+func isCmdQuery(p []byte) bool {
+	if len(p) > 4 && p[4] == byte(cmdQuery) {
+		return true
+	}
+	return false
+}
+
 // isOKPacket returns true if []byte is a MySQL OK packet.
 func isOKPacket(p []byte) bool {
 	if len(p) > 4 && p[4] == 0 {
@@ -60,7 +52,7 @@ func isOKPacket(p []byte) bool {
 
 // isOKPacket returns true if []byte is a MySQL EOF packet.
 func isEOFPacket(p []byte) bool {
-	if len(p) > 4 && p[0] == 0xFE {
+	if len(p) > 4 && p[4] == 0xFE {
 		return true
 	}
 	return false
@@ -126,21 +118,6 @@ func pickTunnels(tuns tunnelSet, n int) []*tunnel {
 		}
 	}
 	return ret
-}
-
-// isStmtBegin returns true iff it is begin statement.
-func isStmtBegin(c []byte) bool {
-	return beginRegex.Match(c)
-}
-
-// isStmtCommit returns true iff it is commit statement.
-func isStmtCommit(c []byte) bool {
-	return commitRegex.Match(c)
-}
-
-// isStmtRollback returns true iff it is rollback statement.
-func isStmtRollback(c []byte) bool {
-	return rollbackRegex.Match(c)
 }
 
 // sortMap sorts a complex map instance.

@@ -16,10 +16,8 @@ package proxy
 
 import (
 	"fmt"
-	"io"
 	"regexp"
 	"strconv"
-	"sync"
 )
 
 // eventType alias uint8, which indicates the type of event.
@@ -77,13 +75,13 @@ var (
 	end              = ";?"
 )
 
-// patterMap is a map eventType => pattern string
-var patternMap = map[eventType]string{
+// expMap is a map eventType => *regexp.Regexp
+var expMap = map[eventType]*regexp.Regexp{
 	// Sample: kill query 10
-	TypeKillQuery: fmt.Sprintf(`^%s(%s)%s(%s)%s(%s)%s%s%s$`,
+	TypeKillQuery: regexp.MustCompile(fmt.Sprintf(`^%s(%s)%s(%s)%s(%s)%s%s%s$`,
 		spaceAtLeastZero, kill, spaceAtLeastOne,
 		query, spaceAtLeastOne,
-		num, spaceAtLeastZero, end, spaceAtLeastZero),
+		num, spaceAtLeastZero, end, spaceAtLeastZero)),
 
 	// TypeSetVar matches set session variable:
 	//   - set session key=value;
@@ -94,7 +92,7 @@ var patternMap = map[eventType]string{
 	//   - set key=value;
 	// and set user variable:
 	//   - set @key=value;
-	TypeSetVar: fmt.Sprintf(`^%s(%s)%s(%s%s%s|%s%s%s|%s%s%s%s|%s%s%s%s|%s%s|%s|%s%s)%s(%s)%s(%s)%s%s%s$`,
+	TypeSetVar: regexp.MustCompile(fmt.Sprintf(`^%s(%s)%s(%s%s%s|%s%s%s|%s%s%s%s|%s%s%s%s|%s%s|%s|%s%s)%s(%s)%s(%s)%s%s%s$`,
 		spaceAtLeastZero, set, spaceAtLeastOne, // set
 		session, spaceAtLeastOne, varName, // session key
 		local, spaceAtLeastOne, varName, // local key
@@ -104,20 +102,20 @@ var patternMap = map[eventType]string{
 		varName,     // key
 		at, varName, // @key
 		spaceAtLeastZero, assign, spaceAtLeastZero, // = or :=
-		varValue, spaceAtLeastZero, end, spaceAtLeastZero), // value
+		varValue, spaceAtLeastZero, end, spaceAtLeastZero)), // value
 
 	// Sample: alter account [if exists] acc1 suspend
-	TypeSuspendAccount: fmt.Sprintf(`^%s(%s)%s(%s)%s(%s)?(%s)%s(%s)%s%s%s$`,
+	TypeSuspendAccount: regexp.MustCompile(fmt.Sprintf(`^%s(%s)%s(%s)%s(%s)?(%s)%s(%s)%s%s%s$`,
 		spaceAtLeastZero, alter, spaceAtLeastOne,
 		account, spaceAtLeastOne, ifExists,
 		varName, spaceAtLeastOne,
-		suspend, spaceAtLeastZero, end, spaceAtLeastZero),
+		suspend, spaceAtLeastZero, end, spaceAtLeastZero)),
 
 	// Sample: drop account [if exists] acc1
-	TypeDropAccount: fmt.Sprintf(`^%s(%s)%s(%s)%s(%s)?(%s)%s%s%s$`,
+	TypeDropAccount: regexp.MustCompile(fmt.Sprintf(`^%s(%s)%s(%s)%s(%s)?(%s)%s%s%s$`,
 		spaceAtLeastZero, drop, spaceAtLeastOne,
 		account, spaceAtLeastOne, ifExists,
-		varName, spaceAtLeastZero, end, spaceAtLeastZero),
+		varName, spaceAtLeastZero, end, spaceAtLeastZero)),
 }
 
 // IEvent is the event interface.
@@ -147,59 +145,38 @@ func sendResp(r []byte, c chan<- []byte) {
 	c <- r
 }
 
-// eventReq is used to make an event.
-type eventReq struct {
-	// msg is a MySQL packet bytes.
-	msg []byte
-	dst io.Writer
-}
-
-// eventReqPool is used to fetch event request from pool.
-var eventReqPool = sync.Pool{
-	New: func() interface{} {
-		return new(eventReq)
-	},
-}
-
 // makeEvent parses an event from message bytes. If we got no
 // supported event, just return nil. If the second return value
 // is true, means that the message has been consumed completely,
 // and do not need to send to dst anymore.
-func makeEvent(req *eventReq) (IEvent, bool) {
-	if req == nil || len(req.msg) < preRecvLen {
+func makeEvent(msg []byte) (IEvent, bool) {
+	if msg == nil || len(msg) < preRecvLen {
 		return nil, false
 	}
-	if req.msg[4] == byte(cmdQuery) {
-		stmt := getStatement(req.msg)
-		// Get the event type.
-		var typ eventType
-		var matched bool
-		for typ = range patternMap {
-			matched, _ = regexp.MatchString(patternMap[typ], stmt)
-			if matched {
-				break
+	if isCmdQuery(msg) {
+		stmt := getStatement(msg)
+		for typ, exp := range expMap {
+			if !exp.MatchString(stmt) {
+				continue
+			}
+			switch typ {
+			case TypeKillQuery:
+				return makeKillQueryEvent(stmt, exp), true
+			case TypeSetVar:
+				// This event should be sent to dst, so return false,
+				return makeSetVarEvent(stmt), false
+			case TypeSuspendAccount:
+				// The suspend statement could be handled directly, and whatever its
+				// result is, trigger kill connection operation.
+				return makeSuspendAccountEvent(stmt, exp), false
+			case TypeDropAccount:
+				return makeDropAccountEvent(stmt, exp), false
+			default:
+				return nil, false
 			}
 		}
-		if !matched {
-			return nil, false
-		}
-		switch typ {
-		case TypeKillQuery:
-			return makeKillQueryEvent(stmt, regexp.MustCompile(patternMap[typ])), true
-		case TypeSetVar:
-			// This event should be sent to dst, so return false,
-			return makeSetVarEvent(stmt), false
-		case TypeSuspendAccount:
-			// The suspend statement could be handled directly, and whatever its
-			// result is, trigger kill connection operation.
-			return makeSuspendAccountEvent(stmt, regexp.MustCompile(patternMap[typ])), false
-		case TypeDropAccount:
-			return makeDropAccountEvent(stmt, regexp.MustCompile(patternMap[typ])), false
-		default:
-			return nil, true
-		}
 	}
-	return nil, true
+	return nil, false
 }
 
 // killQueryEvent is the event that "kill query" statement is captured.

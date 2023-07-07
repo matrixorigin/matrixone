@@ -161,6 +161,20 @@ func (mr *MockComputationWrapperMockRecorder) GetProcess() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetProcess", reflect.TypeOf((*MockComputationWrapper)(nil).GetProcess))
 }
 
+// GetServerStatus mocks base method.
+func (m *MockComputationWrapper) GetServerStatus() uint16 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetServerStatus")
+	ret0, _ := ret[0].(uint16)
+	return ret0
+}
+
+// GetServerStatus indicates an expected call of GetServerStatus.
+func (mr *MockComputationWrapperMockRecorder) GetServerStatus() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetServerStatus", reflect.TypeOf((*MockComputationWrapper)(nil).GetServerStatus))
+}
+
 // GetUUID mocks base method.
 func (m *MockComputationWrapper) GetUUID() []byte {
 	m.ctrl.T.Helper()
