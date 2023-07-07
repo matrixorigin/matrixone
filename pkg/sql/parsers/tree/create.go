@@ -2461,6 +2461,7 @@ type AccountStatusOption int
 const (
 	AccountStatusOpen AccountStatusOption = iota
 	AccountStatusSuspend
+	AccountStatusRestricted
 )
 
 func (aso AccountStatusOption) String() string {
@@ -2469,6 +2470,8 @@ func (aso AccountStatusOption) String() string {
 		return "open"
 	case AccountStatusSuspend:
 		return "suspend"
+	case AccountStatusRestricted:
+		return "restricted"
 	default:
 		return "open"
 	}
@@ -2486,6 +2489,8 @@ func (node *AccountStatus) Format(ctx *FmtCtx) {
 			ctx.WriteString(" open")
 		case AccountStatusSuspend:
 			ctx.WriteString(" suspend")
+		case AccountStatusRestricted:
+			ctx.WriteString(" restricted")
 		}
 	}
 }

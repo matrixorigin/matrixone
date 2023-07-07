@@ -354,7 +354,7 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 			}
 
 			// drop session directly
-			if e.err != nil {
+			if e.err != nil && s.ssmgr.HasSession(e.session.stream) {
 				e.session.PostClean()
 				s.ssmgr.DeleteSession(e.session.stream)
 			}
@@ -466,25 +466,30 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					})
 				}
 
-				var refcount atomic.Int32
-				closeCB := func() {
-					if refcount.Add(-1) == 0 {
-						if e.closeCB != nil {
-							e.closeCB()
-						}
-					}
-				}
-
 				// publish incremental logtail for all subscribed tables
 				sessions := s.ssmgr.ListSession()
-				refcount.Add(int32(len(sessions)))
-				for _, session := range sessions {
-					if err := session.Publish(ctx, from, to, closeCB, wraps...); err != nil {
-						logger.Error("fail to publish incremental logtail", zap.Error(err),
-							zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
-						)
-						closeCB()
-						continue
+
+				if len(sessions) == 0 {
+					if e.closeCB != nil {
+						e.closeCB()
+					}
+				} else {
+					var refcount atomic.Int32
+					closeCB := func() {
+						if refcount.Add(-1) == 0 {
+							if e.closeCB != nil {
+								e.closeCB()
+							}
+						}
+					}
+					refcount.Add(int32(len(sessions)))
+					for _, session := range sessions {
+						if err := session.Publish(ctx, from, to, closeCB, wraps...); err != nil {
+							logger.Error("fail to publish incremental logtail", zap.Error(err),
+								zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
+							)
+							continue
+						}
 					}
 				}
 

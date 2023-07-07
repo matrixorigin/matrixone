@@ -230,9 +230,19 @@ func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
 func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
 	bat, ok := proc.valueScanBatch[key]
 	if ok {
-		delete(proc.valueScanBatch, key)
+		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
+		return bat
+		// delete(proc.valueScanBatch, key)
 	}
 	return bat
+}
+
+func (proc *Process) CleanValueScanBatchs() {
+	for k, bat := range proc.valueScanBatch {
+		bat.SetCnt(1)
+		bat.Clean(proc.Mp())
+		delete(proc.valueScanBatch, k)
+	}
 }
 
 func (proc *Process) GetValueScanBatchs() []*batch.Batch {

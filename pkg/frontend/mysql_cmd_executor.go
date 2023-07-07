@@ -3822,7 +3822,7 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 
 type jsonPlanHandler struct {
 	jsonBytes  []byte
-	statsBytes []byte
+	statsBytes statistic.StatsArray
 	stats      motrace.Statistic
 	buffer     *bytes.Buffer
 }
@@ -3839,7 +3839,7 @@ func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *
 	}
 }
 
-func (h *jsonPlanHandler) Stats(ctx context.Context) ([]byte, motrace.Statistic) {
+func (h *jsonPlanHandler) Stats(ctx context.Context) (statistic.StatsArray, motrace.Statistic) {
 	return h.statsBytes, h.stats
 }
 
@@ -3852,7 +3852,6 @@ func (h *jsonPlanHandler) Free() {
 		releaseMarshalPlanBufferPool(h.buffer)
 		h.buffer = nil
 		h.jsonBytes = nil
-		h.statsBytes = nil
 	}
 }
 
@@ -3941,19 +3940,18 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	return
 }
 
-func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte []byte, stats motrace.Statistic) {
+func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
 	if h.marshalPlan != nil && len(h.marshalPlan.Steps) > 0 {
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		global := h.marshalPlan.Steps[0].GraphData.Global
-		statsValues := getStatsFromGlobal(global, uint64(h.stmt.Duration))
-		statsByte = statsValues.ToJsonString()
+		statsByte = getStatsFromGlobal(global, uint64(h.stmt.Duration))
 	} else {
-		statsByte = statistic.DefaultStatsArrayJsonString
+		statsByte = statistic.DefaultStatsArray
 	}
 	return
 }
 
-func getStatsFromGlobal(global explain.Global, duration uint64) *statistic.StatsArray {
+func getStatsFromGlobal(global explain.Global, duration uint64) (s statistic.StatsArray) {
 	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
 
 	for _, stat := range global.Statistics.Time {
@@ -3978,9 +3976,10 @@ func getStatsFromGlobal(global explain.Global, duration uint64) *statistic.Stats
 		}
 	}
 
-	return statistic.NewStatsArray().
+	s.Init().
 		WithTimeConsumed(timeConsumed).
 		WithMemorySize(memorySize * duration).
 		WithS3IOInputCount(s3IOInputCount).
 		WithS3IOOutputCount(s3IOOutputCount)
+	return
 }

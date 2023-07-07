@@ -767,13 +767,15 @@ func makeInsertPlan(
 	{
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 		// Get table partition information
-		partitionIdx, paritionTableIds, paritionTableNames := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
+		paritionTableIds, paritionTableNames := getPartTableIdsAndNames(ctx, objRef, tableDef)
+		partitionIdx := -1
 		// append project node
 		projectProjection := getProjectionByLastNode(builder, lastNodeId)
 		if len(projectProjection) > len(tableDef.Cols) || tableDef.Partition != nil {
 			if len(projectProjection) > len(tableDef.Cols) {
 				projectProjection = projectProjection[:len(tableDef.Cols)]
 			}
+			partitionIdx = len(tableDef.Cols)
 			if tableDef.Partition != nil {
 				partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
 				projectProjection = append(projectProjection, partitionExpr)
@@ -1484,9 +1486,8 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 	return delNodeInfo
 }
 
-// Calculate the offset index of partition expression, and the sub tableIds of the partition table
-func getPartSubTableIdsAndPartIndex(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) (int, []uint64, []string) {
-	var partitionIdx int
+// Get sub tableIds and table names of the partition table
+func getPartTableIdsAndNames(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) ([]uint64, []string) {
 	var partTableIds []uint64
 	var partTableNames []string
 	if tableDef.Partition != nil {
@@ -1497,12 +1498,8 @@ func getPartSubTableIdsAndPartIndex(ctx CompilerContext, objRef *ObjectRef, tabl
 			partTableIds[i] = partTableDef.TblId
 			partTableNames[i] = partition.PartitionTableName
 		}
-		//Calculate Partition Expression Location
-		partitionIdx = len(tableDef.Cols)
-	} else {
-		partitionIdx = -1
 	}
-	return partitionIdx, partTableIds, partTableNames
+	return partTableIds, partTableNames
 }
 
 func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep int32) int32 {
@@ -1828,23 +1825,22 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 
 	// append hidden column to tableDef
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
 		tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
 	}
 	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-		//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
 		tableDef.Cols = append(tableDef.Cols, tableDef.ClusterBy.CompCbkeyCol)
 	}
 
 	// Get table partition information
-	partitionIdx, partTableIds, _ := getPartSubTableIdsAndPartIndex(builder.compCtx, objRef, tableDef)
+	partTableIds, _ := getPartTableIdsAndNames(builder.compCtx, objRef, tableDef)
 	// append project node
 	projectProjection := getProjectionByLastNode(builder, lastNodeId)
+	partitionIdx := -1
+
 	if tableDef.Partition != nil {
-		if tableDef.Partition != nil {
-			partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
-			projectProjection = append(projectProjection, partitionExpr)
-		}
+		partitionIdx = len(projectProjection)
+		partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
+		projectProjection = append(projectProjection, partitionExpr)
 
 		projectNode := &Node{
 			NodeType:    plan.Node_PROJECT,
@@ -2307,13 +2303,16 @@ func appendInsertNode(
 	addAffectedRows bool) int32 {
 
 	// Get table partition information
-	partitionIdx, paritionTableIds, paritionTableNames := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
+	paritionTableIds, paritionTableNames := getPartTableIdsAndNames(ctx, objRef, tableDef)
+	partitionIdx := -1
+
 	// append project node
 	projectProjection := getProjectionByLastNode(builder, lastNodeId)
 	if len(projectProjection) > len(tableDef.Cols) || tableDef.Partition != nil {
 		if len(projectProjection) > len(tableDef.Cols) {
 			projectProjection = projectProjection[:len(tableDef.Cols)]
 		}
+		partitionIdx = len(tableDef.Cols)
 		if tableDef.Partition != nil {
 			partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
 			projectProjection = append(projectProjection, partitionExpr)
