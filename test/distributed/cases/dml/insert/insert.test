@@ -228,18 +228,14 @@ create table t(a int primary key);
 insert into t select * from generate_series(1,200000) g;
 select count(*) from t;
 # abort,duplicate key
--- @bvt:issue#7682
+-- @pattern
 insert into t select * from t;
--- @bvt:issue
 # transaction test
 begin;
--- @bvt:issue#7682
 insert into t select * from t;
--- @bvt:issue
 select count(*) from t;
--- @bvt:issue#7682
+-- @pattern
 commit;
--- @bvt:issue
 select count(*) from t;
 # not-null test
 insert into t select null;
@@ -251,9 +247,7 @@ insert into temp select * from generate_series(1,200000) g;
 insert into t select c,c from temp;
 select count(*) from t;
 # abort,duplicate key
--- @bvt:issue#7682
 insert into t select * from t order by a, b;
--- @bvt:issue
 # transaction test
 begin;
 insert into t select * from t order by a, b;
