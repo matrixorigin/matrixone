@@ -25,6 +25,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -1023,10 +1024,12 @@ func (s *stream) done(
 	}
 
 	s.lastReceivedSequence = message.streamSequence
-	select {
-	case s.c <- response:
-	case <-ctx.Done():
-	}
+	moprobe.WithRegion(ctx, moprobe.RPCStreamReceive, func() {
+		select {
+		case s.c <- response:
+		case <-ctx.Done():
+		}
+	})
 }
 
 func (s *stream) cleanCLocked() {
