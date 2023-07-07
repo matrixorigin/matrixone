@@ -354,7 +354,7 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 			}
 
 			// drop session directly
-			if e.err != nil {
+			if e.err != nil && s.ssmgr.HasSession(e.session.stream) {
 				e.session.PostClean()
 				s.ssmgr.DeleteSession(e.session.stream)
 			}
