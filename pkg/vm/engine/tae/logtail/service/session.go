@@ -304,11 +304,11 @@ func (ss *Session) PostClean() {
 	if left > 0 {
 		i := 0
 		for resp := range ss.sendChan {
+			ss.responses.Release(resp.response)
+			i++
 			if i >= left {
 				break
 			}
-			i++
-			ss.responses.Release(resp.response)
 		}
 		ss.logger.Info("release left responses", zap.Int("left", left))
 	}
