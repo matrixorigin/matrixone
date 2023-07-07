@@ -455,3 +455,33 @@ func TestMOSpan_doProfile(t *testing.T) {
 		})
 	}
 }
+
+func TestMOHungSpan_loop(t *testing.T) {
+
+	defer func() {
+		err := recover()
+		require.Nilf(t, err, "error: %s", err)
+	}()
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	_, span := tracer.Start(ctx, "test_loop", trace.WithHungThreshold(time.Hour))
+
+	hungSpan := span.(*MOHungSpan)
+	quitCancel := hungSpan.quitCancel
+	var ctrlWG sync.WaitGroup
+	ctrlWG.Add(1)
+	hungSpan.quitCancel = context.CancelFunc(func() {
+		// do nothing
+	})
+	// should not panic
+	span.End()
+	hungSpan.MOSpan = nil
+	hungSpan.mux.Lock()
+	hungSpan.deadlineCancel()
+	quitCancel()
+	hungSpan.mux.Unlock()
+	time.Sleep(time.Second)
+}

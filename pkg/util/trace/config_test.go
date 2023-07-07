@@ -248,3 +248,54 @@ func TestSpanConfig_ProfileRuntime(t *testing.T) {
 		})
 	}
 }
+
+func TestSpanConfig_Reset(t *testing.T) {
+	type fields struct {
+		SpanContext       SpanContext
+		NewRoot           bool
+		Parent            Span
+		LongTimeThreshold time.Duration
+		profileFlag       uint64
+		profileCpuDur     time.Duration
+		profileTraceDur   time.Duration
+		hungThreshold     time.Duration
+	}
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			name: "reset",
+			fields: fields{
+				SpanContext: SpanContext{
+					TraceID: TraceID{},
+					SpanID:  SpanID{},
+					Kind:    1,
+				},
+				NewRoot:           false,
+				Parent:            NoopSpan{},
+				LongTimeThreshold: 1,
+				profileFlag:       2,
+				profileCpuDur:     3,
+				profileTraceDur:   4,
+				hungThreshold:     5,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &SpanConfig{
+				SpanContext:       tt.fields.SpanContext,
+				NewRoot:           tt.fields.NewRoot,
+				Parent:            tt.fields.Parent,
+				LongTimeThreshold: tt.fields.LongTimeThreshold,
+				profileFlag:       tt.fields.profileFlag,
+				profileCpuDur:     tt.fields.profileCpuDur,
+				profileTraceDur:   tt.fields.profileTraceDur,
+				hungThreshold:     tt.fields.hungThreshold,
+			}
+			c.Reset()
+			require.Equal(t, &SpanConfig{}, c)
+		})
+	}
+}

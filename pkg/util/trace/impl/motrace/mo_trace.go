@@ -24,12 +24,12 @@ package motrace
 import (
 	"context"
 	"encoding/hex"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -93,40 +93,49 @@ var _ trace.Span = (*MOHungSpan)(nil)
 
 type MOHungSpan struct {
 	*MOSpan
-	parentCtx    context.Context
-	parentCancel context.CancelFunc
-	ctx          context.Context
-	cancel       context.CancelFunc
+	quitCtx        context.Context
+	quitCancel     context.CancelFunc
+	deadlineCtx    context.Context
+	deadlineCancel context.CancelFunc
+	// mux control doProfile exec order
+	mux sync.Mutex
 }
 
 func newMOHungSpan(span *MOSpan) *MOHungSpan {
 	originCtx, originCancel := context.WithCancel(span.ctx)
-	ctx, cancel := context.WithTimeout(originCtx, span.SpanConfig.HungThreshold())
+	ctx, cancel := context.WithTimeout(span.ctx, span.SpanConfig.HungThreshold())
 	span.ctx = ctx
 	return &MOHungSpan{
-		MOSpan:       span,
-		parentCtx:    originCtx,
-		parentCancel: originCancel,
-		ctx:          ctx,
-		cancel:       cancel,
+		MOSpan:         span,
+		quitCtx:        originCtx,
+		quitCancel:     originCancel,
+		deadlineCtx:    ctx,
+		deadlineCancel: cancel,
 	}
 }
 
 func (s *MOHungSpan) loop() {
 	select {
-	case <-s.parentCtx.Done():
-	case <-s.ctx.Done():
+	case <-s.quitCtx.Done():
+	case <-s.deadlineCtx.Done():
+		s.mux.Lock()
+		defer s.mux.Unlock()
+		if e := s.quitCtx.Err(); e == context.Canceled {
+			break
+		}
 		s.doProfile()
 		logutil.Warn("span trigger hung threshold",
 			trace.SpanField(s.SpanContext()),
 			zap.String("span_name", s.Name),
 			zap.Duration("threshold", s.HungThreshold()))
 	}
-	s.cancel()
+	s.deadlineCancel()
 }
 
 func (s *MOHungSpan) End(options ...trace.SpanEndOption) {
-	s.parentCancel()
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.quitCancel()
 	s.MOSpan.End(options...)
 }
 
@@ -146,9 +155,8 @@ type MOSpan struct {
 	tracer     *MOTracer
 	ctx        context.Context
 	needRecord bool
-	// mux used in doProfile
-	mux         sync.Mutex
-	doneProfile bool // cooperate with mux
+
+	doneProfile bool
 }
 
 var spanPool = &sync.Pool{New: func() any {
@@ -285,8 +293,6 @@ func (s *MOSpan) doProfileRuntime(ctx context.Context, name string, debug int) {
 
 // doProfile is sync op.
 func (s *MOSpan) doProfile() {
-	s.mux.Lock()
-	defer s.mux.Unlock()
 	if s.doneProfile {
 		return
 	}

@@ -204,6 +204,7 @@ func (c *SpanConfig) Reset() {
 	c.NewRoot = false
 	c.Parent = nil
 	c.LongTimeThreshold = 0
+	c.profileFlag = 0
 	c.profileCpuDur = 0
 	c.profileTraceDur = 0
 	c.hungThreshold = 0
