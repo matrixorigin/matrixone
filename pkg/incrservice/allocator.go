@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -25,6 +26,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
 )
+
+var (
+	disableTrace atomic.Bool
+)
+
+func DisableTrace() {
+	disableTrace.Store(true)
+}
+
+func EnableTrace() {
+	disableTrace.Store(false)
+}
 
 type allocator struct {
 	logger  *log.MOLogger
@@ -140,29 +153,35 @@ func (a *allocator) doAllocate(act action) {
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
+	fn := func() {
+		from, to, err := a.store.Allocate(
+			ctx,
+			act.tableID,
+			act.col,
+			act.count,
+			act.txnOp)
+		if a.logger.Enabled(zap.DebugLevel) {
+			a.logger.Debug(
+				"allocate new range",
+				zap.String("key", act.col),
+				zap.Int("count", act.count),
+				zap.Uint64("value", from),
+				zap.Uint64("next", to),
+				zap.Error(err))
+		}
+
+		act.applyAllocate(from, to, err)
+	}
+
+	if disableTrace.Load() {
+		fn()
+		return
+	}
 
 	moprobe.WithRegion(
 		ctx,
 		moprobe.IncrCacheUpdate,
-		func() {
-			from, to, err := a.store.Allocate(
-				ctx,
-				act.tableID,
-				act.col,
-				act.count,
-				act.txnOp)
-			if a.logger.Enabled(zap.DebugLevel) {
-				a.logger.Debug(
-					"allocate new range",
-					zap.String("key", act.col),
-					zap.Int("count", act.count),
-					zap.Uint64("value", from),
-					zap.Uint64("next", to),
-					zap.Error(err))
-			}
-
-			act.applyAllocate(from, to, err)
-		})
+		fn)
 }
 
 func (a *allocator) doUpdate(act action) {

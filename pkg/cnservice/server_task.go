@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -255,6 +256,10 @@ func (s *service) registerExecutorsLocked() {
 	}
 	s.task.runner.RegisterExecutor(task.TaskCode_SystemInit,
 		func(ctx context.Context, t task.Task) error {
+			// avoid cycle dependency
+			incrservice.DisableTrace()
+			defer incrservice.EnableTrace()
+
 			if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCacheManager()); err != nil {
 				return err
 			}
