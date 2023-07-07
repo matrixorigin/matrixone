@@ -255,6 +255,7 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, longTimeSpan.(*MOSpan).needRecord)
 	require.Equal(t, 2, len(longTimeSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, true, longTimeSpan.(*MOSpan).doneProfile)
 	require.Equal(t, extraFields, longTimeSpan.(*MOSpan).ExtraFields)
 
 	// span with deadline context
@@ -272,6 +273,7 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, deadlineSpan.(*MOSpan).needRecord)
 	require.Equal(t, 1, len(deadlineSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, true, deadlineSpan.(*MOSpan).doneProfile)
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan.(*MOSpan).ExtraFields)
 
 	// span with deadline context (plus calling cancel2() before func return)
@@ -290,7 +292,26 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, deadlineSpan2.(*MOSpan).needRecord)
 	require.Equal(t, 1, len(deadlineSpan2.(*MOSpan).ExtraFields))
+	require.Equal(t, true, deadlineSpan2.(*MOSpan).doneProfile)
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan2.(*MOSpan).ExtraFields)
+
+	// span with deadline context (plus calling cancel2() before func return)
+	defer cancel()
+	var hungSpan trace.Span
+	WG.Add(1)
+	go func() {
+		_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Millisecond))
+		defer WG.Done()
+		defer hungSpan.End()
+
+		time.Sleep(10 * time.Millisecond)
+	}()
+	WG.Wait()
+	require.Equal(t, true, hungSpan.(*MOSpan).needRecord)
+	require.Equal(t, 1, len(hungSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, true, hungSpan.(*MOSpan).doneProfile)
+	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, hungSpan.(*MOSpan).ExtraFields)
+
 }
 
 type dummyFileWriterFactory struct{}

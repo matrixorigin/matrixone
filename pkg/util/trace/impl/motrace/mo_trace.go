@@ -24,6 +24,7 @@ package motrace
 import (
 	"context"
 	"encoding/hex"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"time"
 	"unsafe"
@@ -67,6 +68,26 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 		span.Parent = parent
 	}
 
+	// handle HungThreshold
+	if threshold := span.SpanConfig.HungThreshold(); threshold > 0 {
+		go func() {
+			originCtx := ctx
+			ctx, cancel := context.WithTimeout(ctx, threshold)
+			span.ctx = ctx
+			select {
+			case <-originCtx.Done():
+			case <-ctx.Done():
+				span.EndTime = time.Now()
+				span.doProfile()
+				logutil.Warn("span trigger hung threshold",
+					trace.SpanField(span.SpanContext()),
+					zap.String("span_name", span.Name),
+					zap.Duration("threshold", threshold))
+			}
+			cancel()
+		}()
+	}
+
 	return trace.ContextWithSpan(ctx, span), span
 }
 
@@ -94,9 +115,12 @@ type MOSpan struct {
 	// ExtraFields
 	ExtraFields []zap.Field `json:"extra"`
 
-	tracer     *MOTracer       `json:"-"`
-	ctx        context.Context `json:"-"`
-	needRecord bool            `json:"-"`
+	tracer     *MOTracer
+	ctx        context.Context
+	needRecord bool
+	// mux used in doProfile
+	mux         sync.Mutex
+	doneProfile bool // cooperate with mux
 }
 
 var spanPool = &sync.Pool{New: func() any {
@@ -130,6 +154,7 @@ func (s *MOSpan) Free() {
 	s.ExtraFields = nil
 	s.StartTime = table.ZeroTime
 	s.EndTime = table.ZeroTime
+	s.doneProfile = false
 	spanPool.Put(s)
 }
 
@@ -200,7 +225,9 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 		opt.ApplySpanEnd(&s.SpanConfig)
 	}
 	// do profile
-	s.doProfile()
+	if !s.NeedProfile() {
+		s.doProfile()
+	}
 	// do Collect
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)
@@ -224,6 +251,11 @@ func (s *MOSpan) doProfileRuntime(ctx context.Context, name string, debug int) {
 
 // doProfile is sync op.
 func (s *MOSpan) doProfile() {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if s.doneProfile {
+		return
+	}
 	factory := s.tracer.provider.writerFactory
 	ctx := DefaultContext()
 	// do profile goroutine txt
@@ -278,6 +310,7 @@ func (s *MOSpan) doProfile() {
 			s.AddExtraFields(zap.String(profile.TRACE, filepath))
 		}
 	}
+	s.doneProfile = true
 }
 
 var freeMOSpan = func(s *MOSpan) {
