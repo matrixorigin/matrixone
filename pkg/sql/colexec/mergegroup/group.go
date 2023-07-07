@@ -45,12 +45,24 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 	for {
 		switch ctr.state {
 		case Build:
-			if end, err := ctr.build(proc, anal, isFirst); err != nil {
-				return false, err
-			} else if end {
-				return true, nil
+			for {
+				bat, end, err := ctr.ReceiveFromAllRegs(anal)
+				if err != nil {
+					return true, nil
+				}
+
+				if end {
+					break
+				}
+
+				anal.Input(bat, isFirst)
+				if err = ctr.process(bat, proc); err != nil {
+					bat.Clean(proc.Mp())
+					return false, err
+				}
 			}
 			ctr.state = Eval
+
 		case Eval:
 			if ctr.bat != nil {
 				if ap.NeedEval {
@@ -70,34 +82,16 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 					for i := range ctr.bat.Zs { // reset zs
 						ctr.bat.Zs[i] = 1
 					}
+					ctr.bat.SetRowCount(len(ctr.bat.Zs))
 				}
 				anal.Output(ctr.bat, isLast)
 			}
 			ctr.state = End
+
 		case End:
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
-			ap.Free(proc, false)
 			return true, nil
-		}
-	}
-}
-
-func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
-	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
-			return true, nil
-		}
-
-		if end {
-			return false, nil
-		}
-
-		anal.Input(bat, isFirst)
-		if err = ctr.process(bat, proc); err != nil {
-			bat.Clean(proc.Mp())
-			return false, err
 		}
 	}
 }
@@ -130,7 +124,9 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 
 		switch {
 		case keyWidth == 0:
+			// no group by.
 			ctr.typ = H0
+
 		case keyWidth <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
@@ -143,6 +139,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 			}
 		}
 	}
+
 	switch ctr.typ {
 	case H0:
 		err = ctr.processH0(bat, proc)
@@ -151,10 +148,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 	default:
 		err = ctr.processHStr(bat, proc)
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
@@ -166,6 +160,9 @@ func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}
+	// TODO(cms):
+	ctr.bat.SetRowCount(1)
+
 	for i, agg := range ctr.bat.Aggs {
 		err := agg.Merge(bat.Aggs[i], 0, 0)
 		if err != nil {
@@ -242,10 +239,12 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			hashRows++
 			cnt++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
+			ctr.bat.SetRowCount(ctr.bat.RowCount() + 1)
 		}
 		ai := int64(v) - 1
 		ctr.bat.Zs[ai] += bat.Zs[i+k]
 	}
+
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {
 			if err := vec.UnionBatch(bat.Vecs[j], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {

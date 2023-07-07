@@ -92,7 +92,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 
 	// if operator has single column aggregation agg(expr)
 	// then create expression executor for the parameter expr.
-	if ctr.aggVecs != nil {
+	if ap.Aggs != nil {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 		for i, ag := range ap.Aggs {
 			ctr.aggVecs[i].executor, err = colexec.NewExpressionExecutor(proc, ag.E)
@@ -187,7 +187,7 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 		// the result of Agg can't be empty but 0 or NULL.
 		if !ctr.hasAggResult {
 			// very bad code.
-			if err := initCtrBatchForProcessWithOutGroup(ap, proc, ctr); err != nil {
+			if err := initCtrBatchForProcessWithoutGroup(ap, proc, ctr); err != nil {
 				return false, err
 			}
 		}
@@ -218,7 +218,7 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 	}
 
 	if ctr.bat == nil {
-		if err := initCtrBatchForProcessWithOutGroup(ap, proc, ctr); err != nil {
+		if err := initCtrBatchForProcessWithoutGroup(ap, proc, ctr); err != nil {
 			return false, err
 		}
 	}
@@ -229,7 +229,7 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 	return false, nil
 }
 
-func initCtrBatchForProcessWithOutGroup(ap *Argument, proc *process.Process, ctr *container) (err error) {
+func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr *container) (err error) {
 	ctr.bat = batch.NewWithSize(0)
 	ctr.bat.Zs = proc.Mp().GetSels()
 	ctr.bat.Zs = append(ctr.bat.Zs, 0)
