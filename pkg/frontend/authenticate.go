@@ -8340,6 +8340,9 @@ func addInitSystemVariablesSql(accountId int, accountName string, pu *config.Par
 	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
 		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", pu.SV.SaveQueryResult, true)
 		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
+	} else {
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", "off", true)
+		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
 	}
 
 	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", pu.SV.QueryResultMaxsize, true)
