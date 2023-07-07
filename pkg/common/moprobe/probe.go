@@ -64,6 +64,7 @@ const (
 	PartitionStateHandleMetaInsert
 	SubscriptionPullLogTail
 	RPCStreamReceive
+	IncrCacheUpdate
 	RegionTypeMax
 )
 
@@ -74,6 +75,7 @@ var regionTypeStr = [RegionTypeMax]string{
 	"partiton state metainsert",
 	"subsciption pull logtail",
 	"rpc stream receive",
+	"incr cache update",
 }
 
 func WithRegion(ctx context.Context, rt RegionType, fn func()) {

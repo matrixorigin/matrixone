@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -140,23 +141,28 @@ func (a *allocator) doAllocate(act action) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
-	from, to, err := a.store.Allocate(
+	moprobe.WithRegion(
 		ctx,
-		act.tableID,
-		act.col,
-		act.count,
-		act.txnOp)
-	if a.logger.Enabled(zap.DebugLevel) {
-		a.logger.Debug(
-			"allocate new range",
-			zap.String("key", act.col),
-			zap.Int("count", act.count),
-			zap.Uint64("value", from),
-			zap.Uint64("next", to),
-			zap.Error(err))
-	}
+		moprobe.IncrCacheUpdate,
+		func() {
+			from, to, err := a.store.Allocate(
+				ctx,
+				act.tableID,
+				act.col,
+				act.count,
+				act.txnOp)
+			if a.logger.Enabled(zap.DebugLevel) {
+				a.logger.Debug(
+					"allocate new range",
+					zap.String("key", act.col),
+					zap.Int("count", act.count),
+					zap.Uint64("value", from),
+					zap.Uint64("next", to),
+					zap.Error(err))
+			}
 
-	act.applyAllocate(from, to, err)
+			act.applyAllocate(from, to, err)
+		})
 }
 
 func (a *allocator) doUpdate(act action) {
