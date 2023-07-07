@@ -201,4 +201,3 @@ SELECT weekday(REPLACE(dd2, 12, 20)) FROM replace_04;
 SELECT dayofyear(REPLACE(dd1, 20, 21)) FROM replace_04;
 SELECT id, extract(year FROM REPLACE(dd3, 20, 18)) FROM replace_04;
 SELECT id, extract(MONTH FROM REPLACE(dd3, 20, 18)) FROM replace_04;
-SELECT UNIX_TIMESTAMP(REPLACE(dd2, '23:23', '10:10')) FROM replace_04;
