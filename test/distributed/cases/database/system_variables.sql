@@ -168,3 +168,8 @@ select @@sql_mode;
 set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
+
+--foreign_key_checks
+select @@foreign_key_checks;
+SET FOREIGN_KEY_CHECKS = 0;
+SET FOREIGN_KEY_CHECKS = default;
