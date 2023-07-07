@@ -79,60 +79,6 @@ func TestPickTunnels(t *testing.T) {
 	require.Equal(t, len(res), 2)
 }
 
-func TestIsStmtBegin(t *testing.T) {
-	stmt := []byte{'n', 'o', 't'}
-	r := isStmtBegin(stmt)
-	require.False(t, r)
-
-	stmt = []byte{'n', 'o', 't', 'n', 'o', 't', 'n', 'o', 't', 'n', 'o', 't'}
-	r = isStmtBegin(stmt)
-	require.False(t, r)
-
-	stmt = []byte{'b', 'e', 'g', 'i', 'n'}
-	r = isStmtBegin(stmt)
-	require.True(t, r)
-
-	stmt = []byte{'B', 'E', 'G', 'I', 'N'}
-	r = isStmtBegin(stmt)
-	require.True(t, r)
-}
-
-func TestIsStmtCommit(t *testing.T) {
-	stmt := []byte{'n', 'o', 't'}
-	r := isStmtCommit(stmt)
-	require.False(t, r)
-
-	stmt = []byte{'n', 'o', 't', 'n', 'o', 't', 'n', 'o', 't', 'n', 'o', 't'}
-	r = isStmtCommit(stmt)
-	require.False(t, r)
-
-	stmt = []byte{'c', 'o', 'm', 'm', 'i', 't'}
-	r = isStmtCommit(stmt)
-	require.True(t, r)
-
-	stmt = []byte{'C', 'O', 'M', 'M', 'I', 'T'}
-	r = isStmtCommit(stmt)
-	require.True(t, r)
-}
-
-func TestIsStmtRollback(t *testing.T) {
-	stmt := []byte{'n', 'o', 't'}
-	r := isStmtRollback(stmt)
-	require.False(t, r)
-
-	stmt = []byte{'n', 'o', 't', 'n', 'o', 't', 'n', 'o', 't', 'n', 'o', 't'}
-	r = isStmtRollback(stmt)
-	require.False(t, r)
-
-	stmt = []byte{'r', 'o', 'l', 'l', 'b', 'a', 'c', 'k'}
-	r = isStmtRollback(stmt)
-	require.True(t, r)
-
-	stmt = []byte{'R', 'O', 'L', 'L', 'B', 'A', 'C', 'K'}
-	r = isStmtRollback(stmt)
-	require.True(t, r)
-}
-
 func TestSortSlice(t *testing.T) {
 	var sorted = []any{"a", "b", "c", "d"}
 	var s1 = []any{"c", "b", "a", "d"}
@@ -153,4 +99,60 @@ func TestRawHash(t *testing.T) {
 		},
 	}
 	require.Equal(t, 32, len(rawHash(label)))
+}
+
+func TestIsCmdQuery(t *testing.T) {
+	var data []byte
+	ret := isCmdQuery(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 2, 0}
+	ret = isCmdQuery(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 3, 0}
+	ret = isCmdQuery(data)
+	require.True(t, ret)
+}
+
+func TestIsOKPacket(t *testing.T) {
+	var data []byte
+	ret := isOKPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 2, 0}
+	ret = isOKPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 0, 0}
+	ret = isOKPacket(data)
+	require.True(t, ret)
+}
+
+func TestIsEOFPacket(t *testing.T) {
+	var data []byte
+	ret := isEOFPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 2, 0}
+	ret = isEOFPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 0xFE, 0}
+	ret = isEOFPacket(data)
+	require.True(t, ret)
+}
+
+func TestIsErrPacket(t *testing.T) {
+	var data []byte
+	ret := isErrPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 2, 0}
+	ret = isErrPacket(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 0xFF, 0}
+	ret = isErrPacket(data)
+	require.True(t, ret)
 }
