@@ -182,16 +182,35 @@ func TestAggregator(t *testing.T) {
 	if len(results) != 4 {
 		t.Errorf("Expected 0 aggregated statements, got %d", len(results))
 	}
-	assert.Equal(t, 50*time.Millisecond, results[0].(*StatementInfo).Duration)
-	assert.Equal(t, 50*time.Millisecond, results[1].(*StatementInfo).Duration)
-	assert.Equal(t, 50*time.Millisecond, results[2].(*StatementInfo).Duration)
-	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
+	assert.Equal(t, aggrWindow, results[0].(*StatementInfo).Duration)
+	assert.Equal(t, aggrWindow, results[1].(*StatementInfo).Duration)
+	assert.Equal(t, aggrWindow, results[2].(*StatementInfo).Duration)
+	assert.Equal(t, aggrWindow, results[3].(*StatementInfo).Duration)
 	require.Equal(t, []byte(`[1,5,10,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 	require.Equal(t, []byte(`[1,5,10,15,20]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
 	require.Equal(t, []byte(`[1,5,10,15,20]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
 	require.Equal(t, []byte(`[1,5,10,15,20]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
+	item, _ := results[0].(*StatementInfo)
+	row := item.GetTable().GetRow(ctx)
+	results[0].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,100000000,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	results[1].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,100000000,15,20]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
+	results[2].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,100000000,15,20]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
+	results[3].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,100000000,15,20]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
 
 	aggregator.Close()
+
+	aggregator = NewAggregator(
+		ctx,
+		aggrWindow,
+		StatementInfoNew,
+		StatementInfoUpdate,
+		StatementInfoFilter,
+	)
+
 	// Update
 	for i := 0; i < 5; i++ {
 
@@ -204,7 +223,7 @@ func TestAggregator(t *testing.T) {
 			SessionID:     sessionId2,
 			Statement:     "Update 11", // make it longer than 200ms to pass filter
 			RequestAt:     fixedTime.Add(6 * time.Second),
-			Duration:      10 * time.Millisecond,
+			Duration:      time.Duration(10+i) * time.Millisecond,
 			TransactionID: _1TxnID,
 			StatementID:   _1TxnID,
 			Status:        StatementStatusFailed,
@@ -218,5 +237,7 @@ func TestAggregator(t *testing.T) {
 
 	assert.Equal(t, "Update 11", results[0].(*StatementInfo).StmtBuilder.String())
 	require.Equal(t, []byte(`[1,5,10,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	results[0].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,120000000,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 
 }

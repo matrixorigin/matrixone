@@ -336,11 +336,12 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 // mergeStats n (new one) into e (existing one)
 func mergeStats(e, n *StatementInfo) error {
 	e.statsArray.Add(&n.statsArray)
-	e.AggrMemoryByte.Add(
-		mustDecimal128(convertFloat64ToDecimal128(float64(e.statsArray.GetMemorySize())*float64(e.Duration))),
-		Decimal128Width,
+	val, _, err := e.AggrMemoryByte.Add(
+		mustDecimal128(convertFloat64ToDecimal128(float64(n.statsArray.GetMemorySize())*float64(n.Duration))),
+		Decimal128Scale,
 		Decimal128Scale,
 	)
+	e.AggrMemoryByte = mustDecimal128(val, err)
 	return nil
 }
 
