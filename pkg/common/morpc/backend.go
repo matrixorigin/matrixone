@@ -659,7 +659,9 @@ func (rb *remoteBackend) stopWriteLoop() {
 
 func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMessage, err error, cb func()) {
 	response := msg.Message
-	defer msg.Cancel()
+	if msg.Cancel != nil {
+		defer msg.Cancel()
+	}
 	if ce := rb.logger.Check(zap.DebugLevel, "read response"); ce != nil {
 		debugStr := ""
 		if response != nil {
@@ -1016,7 +1018,9 @@ func (s *stream) done(
 		s.cleanCLocked()
 	}
 	response := message.Message
-	defer message.Cancel()
+	if message.Cancel != nil {
+		defer message.Cancel()
+	}
 	if response != nil && !message.stream {
 		panic("BUG")
 	}
