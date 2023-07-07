@@ -654,7 +654,7 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 					}
 				}
 			}
-			return true, col
+			return col != nil, col
 		}
 	case *plan.Expr_Col:
 		return true, exprImpl.Col
