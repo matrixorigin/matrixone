@@ -58,6 +58,8 @@ type ComputationWrapper interface {
 	RecordExecPlan(ctx context.Context) error
 
 	GetLoadTag() bool
+
+	GetServerStatus() uint16
 }
 
 type ColumnInfo interface {
