@@ -91,6 +91,13 @@ func (sm *SessionManager) DeleteSession(stream morpcStream) {
 	delete(sm.clients, stream)
 }
 
+func (sm *SessionManager) HasSession(stream morpcStream) bool {
+	sm.RLock()
+	defer sm.RUnlock()
+	_, ok := sm.clients[stream]
+	return ok
+}
+
 // ListSession takes a snapshot of all sessions.
 func (sm *SessionManager) ListSession() []*Session {
 	sm.RLock()
@@ -290,6 +297,21 @@ func (ss *Session) PostClean() {
 
 	ss.cancelFunc()
 	ss.wg.Wait()
+
+	left := len(ss.sendChan)
+
+	// release all left responses in sendChan
+	if left > 0 {
+		i := 0
+		for resp := range ss.sendChan {
+			if i >= left {
+				break
+			}
+			i++
+			ss.responses.Release(resp.response)
+		}
+		ss.logger.Info("release left responses", zap.Int("left", left))
+	}
 }
 
 // Register registers table for client.
@@ -390,6 +412,8 @@ func (ss *Session) Publish(
 	if err == nil {
 		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
 		ss.exactFrom = to
+	} else {
+		ss.notifier.NotifySessionError(ss, err)
 	}
 	return err
 }
