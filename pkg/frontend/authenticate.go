@@ -8338,20 +8338,20 @@ func addInitSystemVariablesSql(accountId int, accountName string, pu *config.Par
 	var initMoMysqlCompatibilityMode string
 
 	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", pu.SV.SaveQueryResult, true)
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(pu.SV.SaveQueryResult), true)
 		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
 	} else {
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", "off", true)
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue("off"), true)
 		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
 	}
 
-	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", pu.SV.QueryResultMaxsize, true)
+	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(pu.SV.QueryResultMaxsize), true)
 	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
 
-	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", pu.SV.QueryResultTimeout, true)
+	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(pu.SV.QueryResultTimeout), true)
 	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
 
-	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", pu.SV.LowerCaseTableNames, true)
+	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(pu.SV.LowerCaseTableNames), true)
 	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
 
 	return returnSql
