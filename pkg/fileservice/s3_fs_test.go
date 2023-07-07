@@ -29,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -144,7 +145,7 @@ func TestS3FS(t *testing.T) {
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				CacheConfig{
-					MemoryCapacity: 128 * 1024,
+					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
 				},
 				nil,
 				false,
@@ -165,9 +166,9 @@ func TestS3FS(t *testing.T) {
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				CacheConfig{
-					MemoryCapacity: 1,
-					DiskCapacity:   128 * 1024,
-					DiskPath:       t.TempDir(),
+					MemoryCapacity: ptrTo[toml.ByteSize](1),
+					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
+					DiskPath:       ptrTo(t.TempDir()),
 				},
 				nil,
 				false,
@@ -423,7 +424,7 @@ func TestS3FSMinioServer(t *testing.T) {
 				"test",
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				CacheConfig{
-					DiskPath: cacheDir,
+					DiskPath: ptrTo(cacheDir),
 				},
 				nil,
 				true,
@@ -461,7 +462,7 @@ func BenchmarkS3FS(b *testing.B) {
 			config.Bucket,
 			time.Now().Format("2006-01-02.15:04:05.000000"),
 			CacheConfig{
-				DiskPath: cacheDir,
+				DiskPath: ptrTo(cacheDir),
 			},
 			nil,
 			true,

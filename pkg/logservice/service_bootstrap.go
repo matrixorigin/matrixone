@@ -20,7 +20,6 @@ import (
 
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"go.uber.org/zap"
 )
 
@@ -63,28 +62,5 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		s.runtime.SubLogger(runtime.SystemInit).Info("initial cluster info set")
 		break
 	}
-	for i := 0; i < checkBootstrapCycles; i++ {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-		if err := s.createInitTasks(ctx); err == nil {
-			break
-		}
-		time.Sleep(time.Second)
-	}
-	return nil
-}
-
-func (s *Service) createInitTasks(ctx context.Context) error {
-	if err := s.store.taskScheduler.Create(ctx, []task.TaskMetadata{{
-		ID:       task.TaskCode_SystemInit.String(),
-		Executor: task.TaskCode_SystemInit,
-	}}); err != nil {
-		s.runtime.SubLogger(runtime.SystemInit).Error("failed to create init tasks", zap.Error(err))
-		return err
-	}
-	s.runtime.SubLogger(runtime.SystemInit).Info("init tasks created")
 	return nil
 }

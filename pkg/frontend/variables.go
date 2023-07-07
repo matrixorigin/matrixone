@@ -1374,6 +1374,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("clear_privilege_cache"),
 		Default:           int64(0),
 	},
+	"foreign_key_checks": {
+		Name:              "foreign_key_checks",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("foreign_key_checks"),
+		Default:           int64(1),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
