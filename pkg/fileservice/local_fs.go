@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -193,7 +194,10 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -321,7 +325,10 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 		return nil
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -491,7 +498,10 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
@@ -552,7 +562,10 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
@@ -587,7 +600,10 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	for _, filePath := range filePaths {
 		if err := l.deleteSingle(ctx, filePath); err != nil {
@@ -735,7 +751,10 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	// write
 	for _, entry := range entries {
