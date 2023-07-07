@@ -34,7 +34,14 @@ type Aggregator struct {
 	FilterFunc  func(i Item) bool
 }
 
+type key int
+
+const (
+	DurationKey key = iota
+)
+
 func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc func(i Item, ctx context.Context) Item, updateFunc func(existing, new Item), filterFunc func(i Item) bool) *Aggregator {
+	ctx = context.WithValue(ctx, DurationKey, windowSize)
 	return &Aggregator{
 		ctx:         ctx,
 		Grouped:     make(map[interface{}]Item),

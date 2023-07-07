@@ -19,6 +19,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"go.uber.org/zap"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +44,21 @@ var NilSesID [16]byte
 
 var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 
+const Decimal128Width = 38
+const Decimal128Scale = 0
+
+func convertFloat64ToDecimal128(val float64) (types.Decimal128, error) {
+	return types.Decimal128FromFloat64(val, Decimal128Width, Decimal128Scale)
+}
+func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
+	if err != nil {
+		logutil.Panic("mustDecimal128", zap.Error(err))
+	}
+	return v
+}
+
 func StatementInfoNew(i Item, ctx context.Context) Item {
+	windowSize, _ := ctx.Value(DurationKey).(time.Duration)
 	if s, ok := i.(*StatementInfo); ok {
 		// process the execplan
 		s.ExecPlan2Stats(ctx)
@@ -60,6 +76,9 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.ResultCount = 0
 		s.AggrCount = 1
 		s.StmtBuilder.WriteString(s.Statement)
+		duration := s.Duration
+		s.Duration = windowSize
+		s.AggrMemoryByte = mustDecimal128(convertFloat64ToDecimal128(float64(s.statsArray.GetMemorySize()) * float64(duration)))
 		return s
 	}
 	return nil
@@ -70,7 +89,6 @@ func StatementInfoUpdate(existing, new Item) {
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
 	// update the stats
-	e.Duration += n.Duration
 	if GetTracerProvider().enableStmtMerge {
 		e.StmtBuilder.WriteString("; ")
 		e.StmtBuilder.WriteString(n.Statement)
@@ -147,6 +165,9 @@ type StatementInfo struct {
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
 	AggrCount int64 `json:"aggr_count"` // see EndStatement
+
+	// AggrMemoryByte
+	AggrMemoryByte types.Decimal128
 
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
@@ -290,6 +311,11 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(errorCol, table.StringField(fmt.Sprintf("%s", s.Error)))
 	}
 	execPlan := s.ExecPlan2Json(ctx)
+	if s.AggrCount > 0 {
+		s.AggrMemoryByte.Div128(mustDecimal128(convertFloat64ToDecimal128(float64(s.Duration))))
+		val := uint64(types.Decimal128ToFloat64(s.AggrMemoryByte, Decimal128Scale))
+		s.statsArray.WithMemorySize(val)
+	}
 	stats := s.ExecPlan2Stats(ctx)
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
@@ -307,8 +333,14 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
 }
 
+// mergeStats n (new one) into e (existing one)
 func mergeStats(e, n *StatementInfo) error {
 	e.statsArray.Add(&n.statsArray)
+	e.AggrMemoryByte.Add(
+		mustDecimal128(convertFloat64ToDecimal128(float64(e.statsArray.GetMemorySize())*float64(e.Duration))),
+		Decimal128Width,
+		Decimal128Scale,
+	)
 	return nil
 }
 

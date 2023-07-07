@@ -3926,14 +3926,14 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 	if h.marshalPlan != nil && len(h.marshalPlan.Steps) > 0 {
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		global := h.marshalPlan.Steps[0].GraphData.Global
-		statsByte = getStatsFromGlobal(global, uint64(h.stmt.Duration))
+		statsByte = addStatsFromGlobal(global)
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
 	return
 }
 
-func getStatsFromGlobal(global explain.Global, duration uint64) (s statistic.StatsArray) {
+func addStatsFromGlobal(global explain.Global) (dst statistic.StatsArray) {
 	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
 
 	for _, stat := range global.Statistics.Time {
@@ -3958,9 +3958,9 @@ func getStatsFromGlobal(global explain.Global, duration uint64) (s statistic.Sta
 		}
 	}
 
-	s.Init().
+	dst.Init().
 		WithTimeConsumed(timeConsumed).
-		WithMemorySize(memorySize * duration).
+		WithMemorySize(memorySize).
 		WithS3IOInputCount(s3IOInputCount).
 		WithS3IOOutputCount(s3IOOutputCount)
 	return
