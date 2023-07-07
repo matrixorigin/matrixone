@@ -112,7 +112,7 @@ func (pse *PrepareStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Sess
 			return retErr
 		}
 	} else {
-		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, pse.GetServerStatus(), int(COM_QUERY), "")
 		if err2 = ses.GetMysqlProtocol().SendResponse(ctx, resp); err2 != nil {
 			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
@@ -146,7 +146,7 @@ func (pse *PrepareStringExecutor) ResponseAfterExec(ctx context.Context, ses *Se
 			return retErr
 		}
 	} else {
-		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		resp := NewOkResponse(pse.GetAffectedRows(), 0, 0, pse.GetServerStatus(), int(COM_QUERY), "")
 		if err2 = ses.GetMysqlProtocol().SendResponse(ctx, resp); err2 != nil {
 			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, pse.GetAst(), fail, retErr)
@@ -175,7 +175,7 @@ func (de *DeallocateExecutor) ResponseAfterExec(ctx context.Context, ses *Sessio
 	var err2, retErr error
 	//we will not send response in COM_STMT_CLOSE command
 	if ses.GetCmd() != COM_STMT_CLOSE {
-		resp := NewOkResponse(de.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		resp := NewOkResponse(de.GetAffectedRows(), 0, 0, de.GetServerStatus(), int(COM_QUERY), "")
 		if err2 = ses.GetMysqlProtocol().SendResponse(ctx, resp); err2 != nil {
 			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(ctx, ses, de.GetAst(), fail, retErr)
@@ -455,7 +455,7 @@ type InsertExecutor struct {
 func (ie *InsertExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err, retErr error
 	if ie.GetStatus() == stmtExecSuccess {
-		resp := NewOkResponse(ie.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		resp := NewOkResponse(ie.GetAffectedRows(), 0, 0, ie.GetServerStatus(), int(COM_QUERY), "")
 		resp.lastInsertId = 1
 		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
 			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)

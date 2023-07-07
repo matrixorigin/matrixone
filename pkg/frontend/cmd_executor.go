@@ -379,7 +379,7 @@ func (bse *baseStmtExecutor) ResponseBeforeExec(ctx context.Context, ses *Sessio
 func (bse *baseStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err, retErr error
 	if bse.GetStatus() == stmtExecSuccess {
-		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, bse.GetServerStatus(), int(COM_QUERY), "")
 		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
 			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 			logStatementStatus(ctx, ses, bse.GetAst(), fail, retErr)
