@@ -518,6 +518,7 @@ func init() {
 		"admin_name":               ADMIN_NAME,
 		"random":                   RANDOM,
 		"suspend":                  SUSPEND,
+		"restricted":               RESTRICTED,
 		"attribute":                ATTRIBUTE,
 		"history":                  HISTORY,
 		"reuse":                    REUSE,
