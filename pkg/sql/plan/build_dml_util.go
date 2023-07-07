@@ -227,6 +227,15 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 }
 
+func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
+	for step, stepNodeId := range builder.qry.Steps {
+		if stepNodeId == nodeId {
+			return step
+		}
+	}
+	return -1
+}
+
 // buildDeletePlans  build preinsert plan.
 /*
 [o1]sink_scan -> join[u1] -> sink
@@ -243,36 +252,43 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 [o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
 */
 func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, lastNodeId int32) error {
-	if sinkNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
-		sinkNode := builder.qry.Nodes[sinkNodeId]
-		childNode := builder.qry.Nodes[sinkNode.Children[0]]
-
-		thisDelPlanSinkNode := builder.qry.Nodes[builder.qry.Steps[delCtx.sourceStep]]
-		thisDelPlanPreSinkNodeId := thisDelPlanSinkNode.Children[0]
-
-		if childNode.NodeType != plan.Node_UNION {
-			childProjectList := getProjectionByLastNode(builder, sinkNode.Children[0])
-			childNode = &plan.Node{
-				NodeType:    plan.Node_UNION,
-				Children:    []int32{sinkNode.Children[0], thisDelPlanPreSinkNodeId},
-				ProjectList: childProjectList,
+	if sinkOrUnionNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
+		sinkOrUnionNode := builder.qry.Nodes[sinkOrUnionNodeId]
+		if sinkOrUnionNode.NodeType == plan.Node_SINK {
+			step := getStepByNodeId(builder, sinkOrUnionNodeId)
+			if step == -1 || delCtx.sourceStep == -1 {
+				panic("steps should not be -1")
 			}
-			childNodeId := builder.appendNode(childNode, bindCtx)
-			sinkNode.Children = []int32{childNodeId}
 
-			thisDelPlanSinkNode.Children = []int32{}
-			builder.qry.Steps[delCtx.sourceStep] = childNodeId
+			oldDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, int32(step))
+			thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+			unionProjection := getProjectionByLastNode(builder, sinkOrUnionNodeId)
+			unionNode := &plan.Node{
+				NodeType:    plan.Node_UNION,
+				Children:    []int32{oldDelPlanSinkScanNodeId, thisDelPlanSinkScanNodeId},
+				ProjectList: unionProjection,
+			}
+			unionNodeId := builder.appendNode(unionNode, bindCtx)
+			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
+			endStep := builder.appendStep(newSinkNodeId)
+			for _, n := range builder.qry.Nodes {
+				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep == int32(step) {
+					n.SourceStep = endStep
+				}
+			}
+			builder.deleteNode[delCtx.tableDef.TblId] = unionNodeId
 		} else {
-			childNode.Children = append(childNode.Children, thisDelPlanPreSinkNodeId)
+			// todo : we need make union operator to support more than two children.
+			panic("unsuport more than two plans to delete one table")
+			// thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+			// sinkOrUnionNode.Children = append(sinkOrUnionNode.Children, thisDelPlanSinkScanNodeId)
 		}
-
 		return nil
 	} else {
 		if delCtx.sourceStep != -1 {
-			builder.deleteNode[delCtx.tableDef.TblId] = delCtx.sourceStep //取的应该是
+			builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
 		}
 	}
-
 	isUpdate := delCtx.updateColLength > 0
 
 	// delete unique table
