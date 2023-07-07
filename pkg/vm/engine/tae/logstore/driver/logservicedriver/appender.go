@@ -58,7 +58,9 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
 
 	var timeoutSpan trace.Span
-	ctx, timeoutSpan = trace.Start(ctx, "appender",
+	// Before issue#10467 is resolved, we skip this span,
+	// avoiding creating too many goroutines, which affects the performance.
+	ctx, timeoutSpan = trace.Debug(ctx, "appender",
 		trace.WithProfileGoroutine(),
 		trace.WithProfileHeap(),
 		trace.WithProfileCpuSecs(time.Second*10))
@@ -73,7 +75,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	if err != nil {
 		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
 			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
-			ctx, timeoutSpan = trace.Start(ctx, "appender retry",
+			ctx, timeoutSpan = trace.Debug(ctx, "appender retry",
 				trace.WithProfileGoroutine(),
 				trace.WithProfileHeap(),
 				trace.WithProfileCpuSecs(time.Second*10))

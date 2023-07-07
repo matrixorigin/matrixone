@@ -368,6 +368,30 @@ func TestBuildCreateTableError(t *testing.T) {
 			col3 INT NOT NULL,
 			col4 INT NOT NULL
 		);`,
+
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			UNIQUE KEY (col1 DESC)
+		);`,
+
+		`CREATE TABLE t2 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			UNIQUE KEY (col1 ASC)
+		);`,
+
+		`CREATE TABLE t3 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			UNIQUE KEY uk1 ((col1 + col3))
+		);`,
 	}
 	runTestShouldError(mock, t, sqlerrs)
 }
@@ -383,4 +407,16 @@ func TestBuildAlterTable(t *testing.T) {
 		//"alter table nation add FOREIGN KEY fk_t1(n_nationkey) REFERENCES nation2(n_nationkey)",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestBuildAlterTableError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// should pass
+	sqls := []string{
+		"ALTER TABLE emp ADD UNIQUE idx1 ((empno+1) DESC, ename);",
+		"ALTER TABLE emp ADD UNIQUE INDEX idx1 (empno ASC, ename);",
+		"ALTER TABLE emp ADD INDEX idx2 (ename, (sal*30) DESC);",
+		"ALTER TABLE emp ADD UNIQUE INDEX idx1 ((empno+20), (sal*30));",
+	}
+	runTestShouldError(mock, t, sqls)
 }
