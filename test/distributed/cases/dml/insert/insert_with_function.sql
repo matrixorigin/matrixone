@@ -91,7 +91,9 @@ INSERT INTO test1(num1, num2, num3) VALUES(12.21, 43.43, 999.899);
 INSERT INTO test1 VALUES(3.1415, 3.1415, 3.1415);
 SELECT * FROM test1;
 
+-- @bvt:issue#957
 DROP TABLE char_test;
 DROP TABLE date_test;
 DROP TABLE math_test;
 DROP TABLE test1;
+-- @bvt:issue
