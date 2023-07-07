@@ -19,6 +19,7 @@ create table atomic_table_10(c1 int,c2 varchar(25));
 insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
 start transaction ;
 truncate table atomic_table_10;
+use transaction_enhance;
 select * from atomic_table_10;
 c1    c2
 3    a
@@ -37,6 +38,7 @@ create table atomic_table_10(c1 int,c2 varchar(25));
 insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
 begin ;
 truncate table atomic_table_10;
+use transaction_enhance;
 insert into atomic_table_10 values (6,"a"),(7,"b"),(8,"c");
 select * from atomic_table_10;
 c1    c2
@@ -56,6 +58,8 @@ create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
+
+use transaction_enhance;
 insert into atomic_table_11 values (6,"a");
 select * from atomic_table_11;
 SQL parser error: table "atomic_table_11" does not exist
@@ -67,6 +71,7 @@ create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
+use transaction_enhance;
 insert into atomic_table_11 values (6,"a");
 select * from atomic_table_11;
 c1    c2
@@ -85,6 +90,7 @@ drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
+use transaction_enhance;
 drop table atomic_table_11;
 drop table atomic_table_11;
 commit;
@@ -95,6 +101,7 @@ insert into atomic_table_12 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table atomic_table_12 add index key1(c1);
 alter table atomic_table_12 alter index key1 visible;
+use transaction_enhance;
 show create table atomic_table_12;
 Table    Create Table
 atomic_table_12    CREATE TABLE `atomic_table_12` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL\n)
@@ -112,6 +119,7 @@ insert into atomic_table_12_1 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table atomic_table_12_1 add index key1(c1);
 alter table atomic_table_12_1 alter index key1 visible;
+use transaction_enhance;
 show create table atomic_table_12_1;
 Table    Create Table
 atomic_table_12_1    CREATE TABLE `atomic_table_12_1` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL\n)
@@ -121,7 +129,6 @@ Table    Create Table
 atomic_table_12_1    CREATE TABLE `atomic_table_12_1` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL\n)
 show index from atomic_table_12_1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-use transaction_enhance;
 drop table if exists atomic_table_12_2;
 drop table if exists atomic_table_13;
 create table atomic_table_12_2(c1 int primary key,c2 varchar(25));
@@ -130,6 +137,7 @@ create table atomic_table_13(c1 int primary key,c2 varchar(25));
 insert into atomic_table_13 values (3,"d"),(4,"e"),(5,"f");
 begin;
 alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references atomic_table_12_2(c1);
+use transaction_enhance;
 show create table atomic_table_12_2;
 Table    Create Table
 atomic_table_12_2    CREATE TABLE `atomic_table_12_2` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
@@ -156,6 +164,7 @@ insert into atomic_table_13 values (3,"d"),(4,"e"),(5,"f");
 alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references atomic_table_12_3(c1);
 begin;
 alter table atomic_table_13 drop foreign key ffa;
+use transaction_enhance;
 insert into atomic_table_13 values (8,"h");
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from atomic_table_13;
@@ -176,6 +185,7 @@ insert into atomic_table_13 values (3,"d"),(4,"e"),(5,"f");
 alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references atomic_table_12_4(c1);
 begin;
 alter table atomic_table_13 drop foreign key ffa;
+use transaction_enhance;
 insert into atomic_table_13 values (8,"h");
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from atomic_table_13;
@@ -194,6 +204,7 @@ insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
 alter table atomic_table_12_5 add index key1(c1);
 begin;
 alter table atomic_table_12_5 drop index key1;
+use transaction_enhance;
 show create table atomic_table_12_5;
 Table    Create Table
 atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`c1`)\n)
@@ -210,6 +221,7 @@ create table atomic_table_14(c1 int,c2 varchar(25));
 insert into atomic_table_14 values (3,"a"),(4,"b"),(5,"c");
 start transaction ;
 alter table atomic_table_14 add  index key1(c1);
+use transaction_enhance;
 drop table atomic_table_14;
 insert into atomic_table_14 values (6,"a"),(7,"b");
 select * from atomic_table_14;
@@ -222,6 +234,7 @@ create table atomic_table_15(c1 int,c2 varchar(25));
 begin;
 insert into atomic_table_15 values (6,"a"),(7,"b");
 truncate table atomic_table_15;
+use transaction_enhance;
 drop table atomic_table_15;
 select * from atomic_table_15;
 c1    c2
@@ -233,6 +246,7 @@ create table atomic_table_16(c1 int,c2 varchar(25));
 begin;
 insert into atomic_table_16 values (6,"a"),(7,"b");
 drop table atomic_table_16;
+use transaction_enhance;
 drop table atomic_table_16;
 commit;
 select * from atomic_table_16;
@@ -242,6 +256,7 @@ create table atomic_table_17(c1 int,c2 varchar(25));
 begin;
 insert into atomic_table_17 values (6,"a"),(7,"b");
 drop table atomic_table_17;
+use transaction_enhance;
 alter table atomic_table_17 add constraint unique key (c1);
 update atomic_table_17 set c1=8 where c2="b";
 commit;
@@ -259,6 +274,7 @@ commit;
 begin;
 create sequence seq_01 as int start 30;
 internal error: Only CREATE of DDL is supported in transactions
+use transaction_enhance;
 select nextval('seq_01');
 SQL parser error: table "seq_01" does not exist
 commit;
@@ -270,6 +286,7 @@ create account trans_acc1 admin_name "admin" identified by "111";
 begin;
 drop account trans_acc1;
 internal error: administrative command is unsupported in transactions
+use transaction_enhance;
 select count(*) from mo_catalog.mo_account where account_name='trans_acc1';
 count(*)
 1
@@ -283,6 +300,7 @@ insert into atomic_table_18 values (6,"a"),(7,"b");
 set autocommit=0;
 alter table atomic_table_18 add index key1(c1);
 alter table atomic_table_18 alter index key1 visible;
+use transaction_enhance;
 show create table atomic_table_18;
 Table    Create Table
 atomic_table_18    CREATE TABLE `atomic_table_18` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL\n)
@@ -293,6 +311,7 @@ atomic_table_18    CREATE TABLE `atomic_table_18` (\n`c1` INT DEFAULT NULL,\n`c2
 show index from atomic_table_18;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 truncate table atomic_table_18;
+use transaction_enhance;
 drop table atomic_table_18;
 select * from atomic_table_18;
 c1    c2
@@ -306,6 +325,8 @@ create table atomic_table_18(c1 int,c2 varchar(25));
 insert into atomic_table_18 values (6,"a"),(7,"b");
 set autocommit=0;
 drop table atomic_table_18;
+
+use transaction_enhance;
 drop table atomic_table_18;
 no such table transaction_enhance.atomic_table_18
 select * from atomic_table_18;

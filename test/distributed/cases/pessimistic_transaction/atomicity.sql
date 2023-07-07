@@ -89,8 +89,8 @@ start transaction;
 create table test_12(col1 int primary key,col2 varchar(25));
 insert into test_12 values(1,'a'),(2,'b');
 -- @session:id=2&user=sys:dump&password=111
-select * from test_12;
 use atomicity;
+select * from test_12;
 create table test_12(col1 int,col2 varchar(25));
 insert into test_12 values (90,'tt');
 -- @session

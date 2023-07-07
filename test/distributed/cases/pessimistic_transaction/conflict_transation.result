@@ -109,7 +109,7 @@ insert into ct_07 values (3,'90','2111-02-09',10.01);
 Duplicate entry '(3,2111-02-09)' for key '__mo_cpkey_col'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
-Duplicate entry '(4,2011-09-29)' for key '__mo_cpkey_col'
+Duplicate entry '(2,2011-09-29)' for key '__mo_cpkey_col'
 select * from ct_07;
 a    b    c    d
 1    901    2011-09-29    0.01

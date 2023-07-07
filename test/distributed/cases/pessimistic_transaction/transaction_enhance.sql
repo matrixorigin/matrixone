@@ -18,6 +18,7 @@ insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
 start transaction ;
 truncate table atomic_table_10;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 select * from atomic_table_10;
 -- @session
 select * from atomic_table_10;
@@ -31,6 +32,7 @@ begin ;
 truncate table atomic_table_10;
 -- @bvt:issue#8848
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 insert into atomic_table_10 values (6,"a"),(7,"b"),(8,"c");
 select * from atomic_table_10;
 -- @session
@@ -49,6 +51,7 @@ drop table atomic_table_11;
 
 -- @session:id=2&user=sys:dump&password=111
 -- @wait:0:commit
+use transaction_enhance;
 insert into atomic_table_11 values (6,"a");
 select * from atomic_table_11;
 -- @session
@@ -64,6 +67,7 @@ drop table atomic_table_11;
 
 -- @session:id=2&user=sys:dump&password=111
 -- @wait:0:rollback
+use transaction_enhance;
 insert into atomic_table_11 values (6,"a");
 select * from atomic_table_11;
 -- @session
@@ -75,6 +79,7 @@ create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 drop table atomic_table_11;
 -- @session
 drop table atomic_table_11;
@@ -88,6 +93,7 @@ begin;
 alter table atomic_table_12 add index key1(c1);
 alter table atomic_table_12 alter index key1 visible;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 show create table atomic_table_12;
 -- @session
 commit;
@@ -102,13 +108,13 @@ begin;
 alter table atomic_table_12_1 add index key1(c1);
 alter table atomic_table_12_1 alter index key1 visible;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 show create table atomic_table_12_1;
 -- @session
 rollback;
 show create table atomic_table_12_1;
 show index from atomic_table_12_1;
 
-use transaction_enhance;
 drop table if exists atomic_table_12_2;
 drop table if exists atomic_table_13;
 create table atomic_table_12_2(c1 int primary key,c2 varchar(25));
@@ -118,6 +124,7 @@ insert into atomic_table_13 values (3,"d"),(4,"e"),(5,"f");
 begin;
 alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references atomic_table_12_2(c1);
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 show create table atomic_table_12_2;
 insert into atomic_table_13 values (8,"h");
 select * from atomic_table_13;
@@ -136,6 +143,7 @@ alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references at
 begin;
 alter table atomic_table_13 drop foreign key ffa;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 insert into atomic_table_13 values (8,"h");
 select * from atomic_table_13;
 -- @session
@@ -152,6 +160,7 @@ alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references at
 begin;
 alter table atomic_table_13 drop foreign key ffa;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 insert into atomic_table_13 values (8,"h");
 select * from atomic_table_13;
 -- @session
@@ -166,6 +175,7 @@ alter table atomic_table_12_5 add index key1(c1);
 begin;
 alter table atomic_table_12_5 drop index key1;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 show create table atomic_table_12_5;
 select * from atomic_table_12_5;
 -- @session
@@ -179,6 +189,7 @@ insert into atomic_table_14 values (3,"a"),(4,"b"),(5,"c");
 start transaction ;
 alter table atomic_table_14 add  index key1(c1);
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 drop table atomic_table_14;
 -- @session
 insert into atomic_table_14 values (6,"a"),(7,"b");
@@ -193,6 +204,7 @@ insert into atomic_table_15 values (6,"a"),(7,"b");
 truncate table atomic_table_15;
 -- @session:id=2&user=sys:dump&password=111
 -- @wait:0:commit
+use transaction_enhance;
 drop table atomic_table_15;
 -- @session
 select * from atomic_table_15;
@@ -206,6 +218,7 @@ insert into atomic_table_16 values (6,"a"),(7,"b");
 drop table atomic_table_16;
 -- @session:id=2&user=sys:dump&password=111
 -- @wait:0:commit
+use transaction_enhance;
 drop table atomic_table_16;
 -- @session
 commit;
@@ -217,6 +230,7 @@ begin;
 insert into atomic_table_17 values (6,"a"),(7,"b");
 drop table atomic_table_17;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 alter table atomic_table_17 add constraint unique key (c1);
 update atomic_table_17 set c1=8 where c2="b";
 -- @session
@@ -235,6 +249,7 @@ commit;
 begin;
 create sequence seq_01 as int start 30;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 select nextval('seq_01');
 -- @session
 commit;
@@ -246,6 +261,7 @@ create account trans_acc1 admin_name "admin" identified by "111";
 begin;
 drop account trans_acc1;
 -- @session:id=2&user=trans_acc1:admin&password=111
+use transaction_enhance;
 select count(*) from mo_catalog.mo_account where account_name='trans_acc1';
 -- @session
 commit;
@@ -259,6 +275,7 @@ set autocommit=0;
 alter table atomic_table_18 add index key1(c1);
 alter table atomic_table_18 alter index key1 visible;
 -- @session:id=2&user=sys:dump&password=111
+use transaction_enhance;
 show create table atomic_table_18;
 -- @session
 rollback;
@@ -268,6 +285,7 @@ show index from atomic_table_18;
 truncate table atomic_table_18;
 -- @session:id=2&user=sys:dump&password=111
 -- @wait:0:commit
+use transaction_enhance;
 drop table atomic_table_18;
 -- @session
 select * from atomic_table_18;
@@ -282,6 +300,7 @@ set autocommit=0;
 drop table atomic_table_18;
 -- @session:id=2&user=sys:dump&password=111
 -- @wait:0:commit
+use transaction_enhance;
 drop table atomic_table_18;
 -- @session
 select * from atomic_table_18;

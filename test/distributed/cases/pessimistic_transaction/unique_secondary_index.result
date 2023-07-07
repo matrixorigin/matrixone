@@ -21,11 +21,11 @@ col2    col4
 13456789872    5678
     5678
 excel    4090
-中文    
-MMEabc$%^123    
+中文
+MMEabc$%^123
 select * from index_02 where col2="MMEabc$%^123";
 col1    col2    col3    col4
-5    MMEabc$%^123    0.2    
+5    MMEabc$%^123    0.2
 create table index_03 (col1 bigint auto_increment primary key,col2 int,col3 float,col4 int,unique key id1(col2),key id2(col4));
 insert into index_03(col2,col3,col4) values (10,20.23,4090),(10,100.00,5678);
 Duplicate entry '10' for key '__mo_index_idx_col'
@@ -59,7 +59,7 @@ select * from index_04 where col1 between 10 and 1000000;
 col1    col2    col3    col4
 create table index_05 (col1 smallint unique key,col2 int primary key,col3 float,col4 smallint,key id2(col4));
 insert into index_05 values (1,2,20.23,4090),(1,4,100.00,4091);
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '13456789872' for key '__mo_index_idx_col'
 insert into index_05 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
 select * from index_05;
 col1    col2    col3    col4
@@ -361,13 +361,13 @@ col2    col4
     5678
 13873458290    23
 13456799878    4090
-null    
+null
 excel    4090
-中文    
-MMEabc$%^123    
+中文
+MMEabc$%^123
 select * from create_index_02 where col2 like "MME%";
 col1    col2    col3    col4
-5    MMEabc$%^123    0.2    
+5    MMEabc$%^123    0.2
 drop index char_index on create_index_02;
 create table create_index_03 (col1 bigint auto_increment,col2 int,col3 float,col4 int);
 create unique index int_index on create_index_03(col2);
