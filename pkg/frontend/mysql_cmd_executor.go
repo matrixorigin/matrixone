@@ -2258,6 +2258,12 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 	var err error
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+
+		// can or not execute in retricted status
+		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
+			return moerr.NewInternalError(requestCtx, "do not have privilege to execute the statement")
+		}
+
 		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 		if err != nil {
 			return err
