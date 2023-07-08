@@ -309,6 +309,22 @@ func TestBuildCreateTable(t *testing.T) {
 					UNIQUE KEY (col1, col3)
 				);`,
 
+		`CREATE TABLE t1 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			UNIQUE KEY (col1 DESC)
+		);`,
+
+		`CREATE TABLE t2 (
+			col1 INT NOT NULL,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			UNIQUE KEY (col1 ASC)
+		);`,
+
 		"CREATE TABLE t2 (" +
 			"	`PRIMARY` INT NOT NULL, " +
 			"	col2 DATE NOT NULL, " +
@@ -369,22 +385,6 @@ func TestBuildCreateTableError(t *testing.T) {
 			col4 INT NOT NULL
 		);`,
 
-		`CREATE TABLE t1 (
-			col1 INT NOT NULL,
-			col2 DATE NOT NULL,
-			col3 INT NOT NULL,
-			col4 INT NOT NULL,
-			UNIQUE KEY (col1 DESC)
-		);`,
-
-		`CREATE TABLE t2 (
-			col1 INT NOT NULL,
-			col2 DATE NOT NULL,
-			col3 INT NOT NULL,
-			col4 INT NOT NULL,
-			UNIQUE KEY (col1 ASC)
-		);`,
-
 		`CREATE TABLE t3 (
 			col1 INT NOT NULL,
 			col2 DATE NOT NULL,
@@ -403,6 +403,8 @@ func TestBuildAlterTable(t *testing.T) {
 		"ALTER TABLE emp ADD UNIQUE idx1 (empno, ename);",
 		"ALTER TABLE emp ADD UNIQUE INDEX idx1 (empno, ename);",
 		"ALTER TABLE emp ADD INDEX idx1 (ename, sal);",
+		"ALTER TABLE emp ADD INDEX idx2 (ename, sal DESC);",
+		"ALTER TABLE emp ADD UNIQUE INDEX idx1 (empno ASC);",
 		//"alter table emp drop foreign key fk1",
 		//"alter table nation add FOREIGN KEY fk_t1(n_nationkey) REFERENCES nation2(n_nationkey)",
 	}
@@ -414,7 +416,6 @@ func TestBuildAlterTableError(t *testing.T) {
 	// should pass
 	sqls := []string{
 		"ALTER TABLE emp ADD UNIQUE idx1 ((empno+1) DESC, ename);",
-		"ALTER TABLE emp ADD UNIQUE INDEX idx1 (empno ASC, ename);",
 		"ALTER TABLE emp ADD INDEX idx2 (ename, (sal*30) DESC);",
 		"ALTER TABLE emp ADD UNIQUE INDEX idx1 ((empno+20), (sal*30));",
 	}
