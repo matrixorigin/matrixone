@@ -42,6 +42,8 @@ const (
 	defaultTruncateInterval    = 10 * time.Second
 	defaultMaxExportedSnapshot = 20
 	defaultMaxMessageSize      = 1024 * 1024 * 100
+	// The default value for HAKeeper truncate interval.
+	defaultHAKeeperTruncateInterval = 24 * time.Hour
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -107,8 +109,11 @@ type Config struct {
 	// cluster health checks.
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
 	// TruncateInterval is the interval of how often log service should
-	// process truncate.
+	// process truncate for regular shards.
 	TruncateInterval toml.Duration `toml:"truncate-interval"`
+	// HAKeeperTruncateInterval is the interval of how often log service should
+	// process truncate for HAKeeper shard.
+	HAKeeperTruncateInterval toml.Duration `toml:"hakeeper-truncate-interval"`
 
 	RPC struct {
 		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.
@@ -290,6 +295,9 @@ func (c *Config) Validate() error {
 	if c.TruncateInterval.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("TruncateInterval not set")
 	}
+	if c.HAKeeperTruncateInterval.Duration == 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperTruncateInterval not set")
+	}
 	if c.RPC.MaxMessageSize == 0 {
 		return moerr.NewBadConfigNoCtx("MaxMessageSize not set")
 	}
@@ -390,6 +398,9 @@ func (c *Config) Fill() {
 	}
 	if c.TruncateInterval.Duration == 0 {
 		c.TruncateInterval.Duration = defaultTruncateInterval
+	}
+	if c.HAKeeperTruncateInterval.Duration == 0 {
+		c.HAKeeperTruncateInterval.Duration = defaultHAKeeperTruncateInterval
 	}
 	if c.RPC.MaxMessageSize == 0 {
 		c.RPC.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
