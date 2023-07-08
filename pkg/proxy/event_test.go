@@ -33,19 +33,19 @@ func TestMakeEvent(t *testing.T) {
 	require.False(t, r)
 
 	t.Run("kill query", func(t *testing.T) {
-		e, r = makeEvent(&eventReq{msg: makeSimplePacket("kill quer8y 12")})
+		e, r = makeEvent(makeSimplePacket("kill quer8y 12"))
 		require.Nil(t, e)
 		require.False(t, r)
 
-		e, r = makeEvent(&eventReq{msg: makeSimplePacket("kill query 123")})
+		e, r = makeEvent(makeSimplePacket("kill query 123"))
 		require.NotNil(t, e)
 		require.True(t, r)
 
-		e, r = makeEvent(&eventReq{msg: makeSimplePacket("kiLL Query 12")})
+		e, r = makeEvent(makeSimplePacket("kiLL Query 12"))
 		require.NotNil(t, e)
 		require.True(t, r)
 
-		e, r = makeEvent(&eventReq{msg: makeSimplePacket("set ")})
+		e, r = makeEvent(makeSimplePacket("set "))
 		require.Nil(t, e)
 		require.False(t, r)
 	})
@@ -94,65 +94,41 @@ func TestMakeEvent(t *testing.T) {
 			"set @a:='1",
 		}
 		for _, stmt := range stmtsValid {
-			e, r = makeEvent(&eventReq{msg: makeSimplePacket(stmt)})
+			e, r = makeEvent(makeSimplePacket(stmt))
 			require.NotNil(t, e)
 			require.False(t, r)
 		}
 		for _, stmt := range stmtsInvalid {
-			e, r = makeEvent(&eventReq{msg: makeSimplePacket(stmt)})
+			e, r = makeEvent(makeSimplePacket(stmt))
 			require.Nil(t, e)
 			require.False(t, r)
 		}
 	})
 
 	t.Run("suspend account", func(t *testing.T) {
-		n1, _ := net.Pipe()
-		defer n1.Close()
-
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("alter account a1 suspend"),
-			dst: n1,
-		})
+		e, r = makeEvent(makeSimplePacket("alter account a1 suspend"))
 		require.NotNil(t, e)
 		require.False(t, r)
 
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("alter account if exists  a1 suspend"),
-			dst: n1,
-		})
+		e, r = makeEvent(makeSimplePacket("alter account if exists  a1 suspend"))
 		require.NotNil(t, e)
 		require.False(t, r)
 
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("alter1 account a1 suspend"),
-			dst: n1,
-		})
+		e, r = makeEvent(makeSimplePacket("alter1 account a1 suspend"))
 		require.Nil(t, e)
 		require.False(t, r)
 	})
 
 	t.Run("drop account", func(t *testing.T) {
-		n1, _ := net.Pipe()
-		defer n1.Close()
-
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("drop account a1"),
-			dst: n1,
-		})
+		e, r = makeEvent(makeSimplePacket("drop account a1"))
 		require.NotNil(t, e)
 		require.False(t, r)
 
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("drop account if exists a1"),
-			dst: n1,
-		})
+		e, r = makeEvent(makeSimplePacket("drop account if exists a1"))
 		require.NotNil(t, e)
 		require.False(t, r)
 
-		e, r = makeEvent(&eventReq{
-			msg: makeSimplePacket("dr1op account a1"),
-			dst: n1,
-		})
+		e, r = makeEvent(makeSimplePacket("dr1op account a1"))
 		require.Nil(t, e)
 		require.False(t, r)
 	})

@@ -138,15 +138,12 @@ func NewS3FSOnMinio(
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
-	config.SetDefaults()
+	config.setDefaults()
 
 	// memory cache
-	if config.MemoryCapacity == 0 {
-		config.MemoryCapacity = 512 << 20
-	}
-	if config.MemoryCapacity > DisableCacheCapacity {
+	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			WithLRU(int64(config.MemoryCapacity)),
+			WithLRU(int64(*config.MemoryCapacity)),
 			WithPerfCounterSets(s.perfCounterSets),
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -156,17 +153,14 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	}
 
 	// disk cache
-	if config.DiskCapacity == 0 {
-		config.DiskCapacity = 8 << 30
-	}
-	if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
+	if *config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
 		var err error
 		s.diskCache, err = NewDiskCache(
 			ctx,
-			config.DiskPath,
-			int64(config.DiskCapacity),
+			*config.DiskPath,
+			int64(*config.DiskCapacity),
 			config.DiskMinEvictInterval.Duration,
-			config.DiskEvictTarget,
+			*config.DiskEvictTarget,
 			s.perfCounterSets,
 		)
 		if err != nil {
@@ -946,22 +940,29 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	// static credential
 	if apiKey != "" && apiSecret != "" {
 		// static
-		credentialProvider = aws.NewCredentialsCache(
-			credentials.NewStaticCredentialsProvider(apiKey, apiSecret, ""),
-		)
+		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
 	}
 
 	// credentials for 3rd-party services
-	//TODO fix this
-	//if credentialProvider == nil && endpointURL != nil {
-	//	hostname := endpointURL.Hostname()
-	//	if strings.Contains(hostname, "aliyuncs.com") {
-	//		credentialProvider = newAliyunCredentialsProvider()
-	//	} else if strings.Contains(hostname, "myqcloud.com") ||
-	//		strings.Contains(hostname, "tencentcos.cn") {
-	//		credentialProvider = newTencentCloudCredentialsProvider()
-	//	}
-	//}
+	if credentialProvider == nil && endpointURL != nil {
+		hostname := endpointURL.Hostname()
+		if strings.Contains(hostname, "aliyuncs.com") {
+			credentialProvider = newAliyunCredentialsProvider()
+			_, err := credentialProvider.Retrieve(ctx)
+			if err != nil {
+				// bad config, fallback to aws default
+				credentialProvider = nil
+			}
+		} else if strings.Contains(hostname, "myqcloud.com") ||
+			strings.Contains(hostname, "tencentcos.cn") {
+			credentialProvider = newTencentCloudCredentialsProvider()
+			_, err := credentialProvider.Retrieve(ctx)
+			if err != nil {
+				// bad config, fallback to aws default
+				credentialProvider = nil
+			}
+		}
+	}
 
 	// role arn credential
 	if roleARN != "" {
@@ -978,22 +979,25 @@ func newS3FS(arguments []string) (*S3FS, error) {
 				options.Region = region
 			}
 		})
-		credentialProvider = aws.NewCredentialsCache(
-			stscreds.NewAssumeRoleProvider(
-				stsSvc,
-				roleARN,
-				func(opts *stscreds.AssumeRoleOptions) {
-					if externalID != "" {
-						opts.ExternalID = &externalID
-					}
-				},
-			),
+		credentialProvider = stscreds.NewAssumeRoleProvider(
+			stsSvc,
+			roleARN,
+			func(opts *stscreds.AssumeRoleOptions) {
+				if externalID != "" {
+					opts.ExternalID = &externalID
+				}
+			},
 		)
 		// validate
 		_, err = credentialProvider.Retrieve(ctx)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// credentials cache
+	if credentialProvider != nil {
+		credentialProvider = aws.NewCredentialsCache(credentialProvider)
 	}
 
 	// load configs

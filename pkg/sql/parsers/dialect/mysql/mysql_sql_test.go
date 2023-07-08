@@ -1882,6 +1882,10 @@ var (
 			input: "alter account if exists abc open",
 		},
 		{
+			input:  "alter account if exists abc restricted",
+			output: "alter account if exists abc restricted",
+		},
+		{
 			input:  "alter account if exists abc admin_name 'root' identified by '111' open",
 			output: "alter account if exists abc admin_name 'root' identified by '******' open",
 		},

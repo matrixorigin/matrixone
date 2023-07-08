@@ -30,6 +30,9 @@ import (
 const (
 	// The default transfer timeout is 10s.
 	defaultTransferTimeout = time.Second * 10
+
+	connClientName = "client"
+	connServerName = "server"
 )
 
 var (
@@ -104,8 +107,8 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 			return t.ctx.Err()
 		}
 		t.cc = cc
-		t.mu.clientConn = newMySQLConn("client", cc.RawConn(), 0, t.reqC, t.respC)
-		t.mu.serverConn = newMySQLConn("server", sc.RawConn(), 0, t.reqC, t.respC)
+		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC)
+		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC)
 
 		// Create the pipes from client to server and server to client.
 		t.mu.csp = newPipe("client->server", t.mu.clientConn, t.mu.serverConn)
@@ -212,7 +215,7 @@ func (t *tunnel) canStartTransfer() bool {
 	}
 
 	// We are now in a transaction.
-	if csp.mu.inTxn {
+	if scp.isInTxn() {
 		return false
 	}
 
@@ -322,10 +325,8 @@ type pipe struct {
 		inPreRecv bool
 		// paused indicates that the pipe is paused to do transfer.
 		paused bool
-
 		// Track last cmd time and whether we are in a transaction.
 		lastCmdTime time.Time
-		inTxn       bool
 	}
 
 	testHelper struct {
@@ -381,7 +382,7 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 		}(); terminate {
 			return true, nil
 		}
-		_, txn, re := p.src.preRecv()
+		_, re := p.src.preRecv()
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		p.mu.inPreRecv = false
@@ -399,11 +400,6 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 			return false, moerr.NewInternalErrorNoCtx("preRecv message: %s, name %s", re.Error(), p.name)
 		}
 		p.mu.lastCmdTime = time.Now()
-		if txn == txnBegin {
-			p.mu.inTxn = true
-		} else if txn == txnEnd {
-			p.mu.inTxn = false
-		}
 		return false, nil
 	}
 
@@ -479,4 +475,13 @@ func (p *pipe) pause(ctx context.Context) error {
 		p.mu.cond.Wait()
 	}
 	return nil
+}
+
+// isInTxn indicates whether the session is in transaction.
+// It should only be called by server side, but not client side.
+func (p *pipe) isInTxn() bool {
+	if p.src == nil {
+		return false
+	}
+	return p.src.isInTxn()
 }
