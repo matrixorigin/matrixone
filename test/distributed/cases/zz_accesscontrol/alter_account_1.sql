@@ -7,10 +7,6 @@ insert into t1 values(1);
 insert into t1 values(2);
 insert into t1 values(3);
 select * from t1;
-a
-1
-2
-3
 -- @session
 alter account abc restricted;
 -- @session:id=3&user=abc:admin&password=123456
