@@ -224,9 +224,11 @@ insert into flush_logtail values(5, 5);
 select enable_fault_injection();
 enable_fault_injection()
 true
-select mo_ctl('dn', 'addfaultpoint', 'write_batch_timeout.:::.echo.0.test');
-mo_ctl(dn, addfaultpoint, write_batch_timeout.:::.echo.0.test)
-true
+select mo_ctl('dn', 'AddFaultPoint', 'flush_table_error.:::.echo.0.flush_table_fault');
+mo_ctl(dn, AddFaultPoint, flush_table_error.:::.echo.0.flush_table_fault)
+{\n  "method": "AddFaultPoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'insert.flush_logtail');
+flush_table_fault
 select * from flush_logtail;
 a    b
 1    1
@@ -237,6 +239,9 @@ a    b
 select disable_fault_injection();
 disable_fault_injection()
 true
+select mo_ctl('dn', 'flush', 'insert.flush_logtail');
+mo_ctl(dn, flush, insert.flush_logtail)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 drop table if exists t1;
 create table t1 (a varchar(50));
 insert into t1 values("这是一个字节数超过五十的字符串，但是utf8没有超过");

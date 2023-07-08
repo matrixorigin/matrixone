@@ -1012,6 +1012,7 @@ func (h *Handle) HandleAddFaultPoint(
 	meta txn.TxnMeta,
 	req *db.FaultPoint,
 	resp *api.SyncLogTailResp) (func(), error) {
+	logutil.Infof("HandleAddFaultPoint req is %v", req)
 	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
 }
 
