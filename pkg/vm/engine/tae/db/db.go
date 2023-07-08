@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"io"
 	"sync/atomic"
 	"time"
@@ -140,6 +141,10 @@ func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (db *DB) AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string) error {
+	return fault.AddFaultPoint(ctx, name, freq, action, iarg, sarg)
 }
 
 func (db *DB) Close() error {
