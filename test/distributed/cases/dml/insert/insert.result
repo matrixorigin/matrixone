@@ -228,7 +228,7 @@ select mo_ctl('dn', 'AddFaultPoint', 'flush_table_error.:::.echo.0.flush_table_f
 mo_ctl(dn, AddFaultPoint, flush_table_error.:::.echo.0.flush_table_fault)
 {\n  "method": "AddFaultPoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'flush', 'insert.flush_logtail');
-flush_table_fault
+internal error: flush_table_fault
 select * from flush_logtail;
 a    b
 1    1
