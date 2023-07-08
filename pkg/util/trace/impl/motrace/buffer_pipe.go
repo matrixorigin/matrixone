@@ -156,13 +156,10 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 
 	for _, i := range in {
 		// Check if the item is a StatementInfo
-		if statementInfo, ok := i.(*StatementInfo); ok {
-			// If so, add it to the aggregator
-			var err error
-			if !GetTracerProvider().disableStmtAggregation {
-				_, err = aggregator.AddItem(statementInfo)
-			}
-			if GetTracerProvider().disableStmtAggregation || err != nil {
+		if statementInfo, ok := i.(*StatementInfo); ok && !GetTracerProvider().disableStmtAggregation {
+			// if stmt aggregate, then add it to the aggregator
+			_, err := aggregator.AddItem(statementInfo)
+			if err != nil {
 				item, ok := i.(table.RowField)
 				if !ok {
 					panic("not MalCsv, dont support output CSV")
