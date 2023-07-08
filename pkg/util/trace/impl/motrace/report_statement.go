@@ -82,6 +82,8 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		duration := s.Duration
 		s.Duration = windowSize
 		s.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(s.statsArray.GetMemorySize() * float64(duration)))
+		s.RequestAt = s.ResponseAt.Truncate(windowSize)
+		s.ResponseAt = s.RequestAt.Add(windowSize)
 		return s
 	}
 	return nil
@@ -98,7 +100,6 @@ func StatementInfoUpdate(existing, new Item) {
 	}
 	e.AggrCount += 1
 	// reponseAt is the last response time
-	e.ResponseAt = n.ResponseAt
 	n.ExecPlan2Stats(context.Background())
 	if err := mergeStats(e, n); err != nil {
 		// handle error
@@ -124,16 +125,12 @@ func StatementInfoFilter(i Item) bool {
 	case "internal_sql", "external_sql", "non_cloud_user":
 		// Check StatementType
 		switch statementInfo.StatementType {
-		case "Insert", "Update", "Delete", "Execute", "Commit":
-			return true
-		case "Select":
-			// For 'select', also check if Duration is longer than 200 milliseconds
+		case "Insert", "Update", "Delete", "Execute", "Commit", "Select":
 			if statementInfo.Duration < GetTracerProvider().selectAggrThreshold {
 				return true
 			}
 		}
 	}
-
 	// If no conditions matched, return false
 	return false
 }
@@ -203,6 +200,7 @@ type Key struct {
 	StatementType string
 	Window        time.Time
 	Status        StatementInfoStatus
+	SqlSourceType string
 }
 
 var stmtPool = sync.Pool{
@@ -221,7 +219,7 @@ type Statistic struct {
 }
 
 func (s *StatementInfo) Key(duration time.Duration) interface{} {
-	return Key{SessionID: s.SessionID, StatementType: s.StatementType, Window: s.RequestAt.Truncate(duration), Status: s.Status}
+	return Key{SessionID: s.SessionID, StatementType: s.StatementType, Window: s.ResponseAt.Truncate(duration), Status: s.Status, SqlSourceType: s.SqlSourceType}
 }
 
 func (s *StatementInfo) GetName() string {

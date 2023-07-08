@@ -68,8 +68,9 @@ func (a *Aggregator) AddItem(i Item) (Item, error) {
 
 	group, exists := a.Grouped[i.Key(a.WindowSize)]
 	if !exists {
+		orignal_key := i.Key(a.WindowSize)
 		group = a.NewItemFunc(i, a.ctx)
-		a.Grouped[i.Key(a.WindowSize)] = group
+		a.Grouped[orignal_key] = group
 	} else {
 		a.UpdateFunc(group, i)
 	}
