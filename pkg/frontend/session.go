@@ -1326,6 +1326,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
 	}
 
+	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
+		ses.getRoutine().setResricted(true)
+	} else {
+		ses.getRoutine().setResricted(false)
+	}
+
 	tenant.SetTenantID(uint32(tenantID))
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
