@@ -1,6 +1,12 @@
-SELECT repeat('abc', -1), repeat('abc', 0), repeat('abc', 1), repeat('abc', 2), repeat('abc', 3);
-repeat('abc', -1)   repeat('abc', 0)    repeat('abc', 1)    repeat('abc', 2)    repeat('abc', 3)
-        abc    abcabc    abcabcabc
+SELECT repeat('abc', -1);
+repeat('abc', -1)
+
+SELECT repeat('abc', 0);
+repeat('abc', 0)
+
+SELECT repeat('abc', 1), repeat('abc', 2), repeat('abc', 3);
+repeat('abc', 1)    repeat('abc', 2)    repeat('abc', 3)
+abc    abcabc    abcabcabc
 SELECT repeat('abc', null);
 repeat('abc', null)
 NULL
