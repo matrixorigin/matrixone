@@ -29,6 +29,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -67,6 +68,13 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 		span.Parent = parent
 	}
 
+	// handle HungThreshold
+	if threshold := span.SpanConfig.HungThreshold(); threshold > 0 {
+		s := newMOHungSpan(span)
+		go s.loop()
+		return trace.ContextWithSpan(ctx, s), s
+	}
+
 	return trace.ContextWithSpan(ctx, span), span
 }
 
@@ -79,6 +87,56 @@ func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanSta
 
 func (t *MOTracer) IsEnable() bool {
 	return t.provider.IsEnable()
+}
+
+var _ trace.Span = (*MOHungSpan)(nil)
+
+type MOHungSpan struct {
+	*MOSpan
+	quitCtx        context.Context
+	quitCancel     context.CancelFunc
+	deadlineCtx    context.Context
+	deadlineCancel context.CancelFunc
+	// mux control doProfile exec order
+	mux sync.Mutex
+}
+
+func newMOHungSpan(span *MOSpan) *MOHungSpan {
+	originCtx, originCancel := context.WithCancel(span.ctx)
+	ctx, cancel := context.WithTimeout(span.ctx, span.SpanConfig.HungThreshold())
+	span.ctx = ctx
+	return &MOHungSpan{
+		MOSpan:         span,
+		quitCtx:        originCtx,
+		quitCancel:     originCancel,
+		deadlineCtx:    ctx,
+		deadlineCancel: cancel,
+	}
+}
+
+func (s *MOHungSpan) loop() {
+	select {
+	case <-s.quitCtx.Done():
+	case <-s.deadlineCtx.Done():
+		s.mux.Lock()
+		defer s.mux.Unlock()
+		if e := s.quitCtx.Err(); e == context.Canceled {
+			break
+		}
+		s.doProfile()
+		logutil.Warn("span trigger hung threshold",
+			trace.SpanField(s.SpanContext()),
+			zap.String("span_name", s.Name),
+			zap.Duration("threshold", s.HungThreshold()))
+	}
+	s.deadlineCancel()
+}
+
+func (s *MOHungSpan) End(options ...trace.SpanEndOption) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.quitCancel()
+	s.MOSpan.End(options...)
 }
 
 var _ trace.Span = (*MOSpan)(nil)
@@ -94,9 +152,11 @@ type MOSpan struct {
 	// ExtraFields
 	ExtraFields []zap.Field `json:"extra"`
 
-	tracer     *MOTracer       `json:"-"`
-	ctx        context.Context `json:"-"`
-	needRecord bool            `json:"-"`
+	tracer     *MOTracer
+	ctx        context.Context
+	needRecord bool
+
+	doneProfile bool
 }
 
 var spanPool = &sync.Pool{New: func() any {
@@ -130,6 +190,7 @@ func (s *MOSpan) Free() {
 	s.ExtraFields = nil
 	s.StartTime = table.ZeroTime
 	s.EndTime = table.ZeroTime
+	s.doneProfile = false
 	spanPool.Put(s)
 }
 
@@ -177,6 +238,7 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 // If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the deadline.
 // If not set, check condition: duration > span.GetLongTimeThreshold()
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
+	var err error
 	s.EndTime = time.Now()
 	deadline, hasDeadline := s.ctx.Deadline()
 	s.Duration = s.EndTime.Sub(s.StartTime)
@@ -184,7 +246,7 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	if hasDeadline {
 		if s.EndTime.After(deadline) {
 			s.needRecord = true
-			s.ExtraFields = append(s.ExtraFields, zap.Error(s.ctx.Err()))
+			err = s.ctx.Err()
 		}
 	} else {
 		if s.Duration >= s.GetLongTimeThreshold() {
@@ -195,49 +257,70 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 		go freeMOSpan(s)
 		return
 	}
-	// do record
+	// apply End option
 	for _, opt := range options {
 		opt.ApplySpanEnd(&s.SpanConfig)
 	}
 	// do profile
-	s.doProfile()
+	if !s.NeedProfile() {
+		s.doProfile()
+	}
+	// record error info
+	if err != nil {
+		s.ExtraFields = append(s.ExtraFields, zap.Error(err))
+	}
 	// do Collect
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)
 	}
 }
 
+func (s *MOSpan) doProfileRuntime(ctx context.Context, name string, debug int) {
+	now := time.Now()
+	factory := s.tracer.provider.writerFactory
+	filepath := profile.GetProfileName(name, s.SpanID.String(), now)
+	w := factory.GetWriter(ctx, filepath)
+	err := profile.ProfileRuntime(name, w, debug)
+	if err == nil {
+		err = w.Close()
+	}
+	if err != nil {
+		s.AddExtraFields(zap.String(name, err.Error()))
+	} else {
+		s.AddExtraFields(zap.String(name, filepath))
+	}
+}
+
 // doProfile is sync op.
 func (s *MOSpan) doProfile() {
+	if s.doneProfile {
+		return
+	}
 	factory := s.tracer.provider.writerFactory
 	ctx := DefaultContext()
 	// do profile goroutine txt
 	if s.ProfileGoroutine() {
-		filepath := profile.GetProfileName(profile.GOROUTINE, s.SpanID.String(), s.EndTime)
-		w := factory.GetWriter(ctx, filepath)
-		err := profile.ProfileGoroutine(w, 2)
-		if err == nil {
-			err = w.Close()
-		}
-		if err != nil {
-			s.AddExtraFields(zap.String(profile.GOROUTINE, err.Error()))
-		} else {
-			s.AddExtraFields(zap.String(profile.GOROUTINE, filepath))
-		}
+		s.doProfileRuntime(ctx, profile.GOROUTINE, 2)
 	}
 	// do profile heap pprof
 	if s.ProfileHeap() {
-		filepath := profile.GetProfileName(profile.HEAP, s.SpanID.String(), s.EndTime)
-		w := factory.GetWriter(ctx, filepath)
-		err := profile.ProfileHeap(w, 0)
-		if err == nil {
-			err = w.Close()
-		}
-		if err != nil {
-			s.AddExtraFields(zap.String(profile.HEAP, err.Error()))
-		} else {
-			s.AddExtraFields(zap.String(profile.HEAP, filepath))
-		}
+		s.doProfileRuntime(ctx, profile.HEAP, 0)
+	}
+	// do profile allocs
+	if s.ProfileAllocs() {
+		s.doProfileRuntime(ctx, profile.ALLOCS, 0)
+	}
+	// do profile threadcreate
+	if s.ProfileThreadCreate() {
+		s.doProfileRuntime(ctx, profile.THREADCREATE, 0)
+	}
+	// do profile block
+	if s.ProfileBlock() {
+		s.doProfileRuntime(ctx, profile.BLOCK, 0)
+	}
+	// do profile mutex
+	if s.ProfileMutex() {
+		s.doProfileRuntime(ctx, profile.MUTEX, 0)
 	}
 	// profile cpu should be the last one op, caused by it will sustain few seconds
 	if s.ProfileCpuSecs() > 0 {
@@ -253,6 +336,21 @@ func (s *MOSpan) doProfile() {
 			s.AddExtraFields(zap.String(profile.CPU, filepath))
 		}
 	}
+	// profile trace is a sync-op, it will sustain few seconds
+	if s.ProfileTraceSecs() > 0 {
+		filepath := profile.GetProfileName(profile.TRACE, s.SpanID.String(), s.EndTime)
+		w := factory.GetWriter(ctx, filepath)
+		err := profile.ProfileTrace(w, s.ProfileTraceSecs())
+		if err == nil {
+			err = w.Close()
+		}
+		if err != nil {
+			s.AddExtraFields(zap.String(profile.TRACE, err.Error()))
+		} else {
+			s.AddExtraFields(zap.String(profile.TRACE, filepath))
+		}
+	}
+	s.doneProfile = true
 }
 
 var freeMOSpan = func(s *MOSpan) {

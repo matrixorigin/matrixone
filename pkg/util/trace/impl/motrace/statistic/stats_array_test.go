@@ -21,11 +21,11 @@ import (
 
 func TestNewStatsArray(t *testing.T) {
 	type field struct {
-		version      uint64
-		timeConsumed uint64
-		memory       uint64
-		s3in         uint64
-		s3out        uint64
+		version      float64
+		timeConsumed float64
+		memory       float64
+		s3in         float64
+		s3out        float64
 	}
 	tests := []struct {
 		name       string
@@ -41,7 +41,7 @@ func TestNewStatsArray(t *testing.T) {
 				s3in:         4,
 				s3out:        5,
 			},
-			wantString: []byte(`[1,2,3,4,5]`),
+			wantString: []byte(`[1,2,3.000,4,5]`),
 		},
 		{
 			name: "random",
@@ -52,7 +52,51 @@ func TestNewStatsArray(t *testing.T) {
 				s3in:         78,
 				s3out:        3494,
 			},
-			wantString: []byte(`[123,65,6,78,3494]`),
+			wantString: []byte(`[123,65,6.000,78,3494]`),
+		},
+		{
+			name: "random_with_0",
+			field: field{
+				version:      123,
+				timeConsumed: 65,
+				memory:       0,
+				s3in:         7834,
+				s3out:        0,
+			},
+			wantString: []byte(`[123,65,0,7834,0]`),
+		},
+		{
+			name: "scale_3",
+			field: field{
+				version:      123,
+				timeConsumed: 65,
+				memory:       0.001,
+				s3in:         7834,
+				s3out:        0,
+			},
+			wantString: []byte(`[123,65,0.001,7834,0]`),
+		},
+		{
+			name: "scale_0.00049",
+			field: field{
+				version:      123,
+				timeConsumed: 65,
+				memory:       0.0001,
+				s3in:         7834,
+				s3out:        0,
+			},
+			wantString: []byte(`[123,65,0.000,7834,0]`),
+		},
+		{
+			name: "scale_0.0005",
+			field: field{
+				version:      123,
+				timeConsumed: 65,
+				memory:       0.0005,
+				s3in:         7834,
+				s3out:        0,
+			},
+			wantString: []byte(`[123,65,0.001,7834,0]`),
 		},
 	}
 	for _, tt := range tests {
@@ -76,11 +120,11 @@ func TestNewStatsArray(t *testing.T) {
 
 func TestStatsArray_Add(t *testing.T) {
 	type field struct {
-		version      uint64
-		timeConsumed uint64
-		memory       uint64
-		s3in         uint64
-		s3out        uint64
+		version      float64
+		timeConsumed float64
+		memory       float64
+		s3in         float64
+		s3out        float64
 	}
 	tests := []struct {
 		name       string
@@ -96,7 +140,7 @@ func TestStatsArray_Add(t *testing.T) {
 				s3in:         4,
 				s3out:        5,
 			},
-			wantString: []byte(`[1,3,5,7,9]`),
+			wantString: []byte(`[1,3,5.000,7,9]`),
 		},
 		{
 			name: "random",
@@ -107,7 +151,7 @@ func TestStatsArray_Add(t *testing.T) {
 				s3in:         78,
 				s3out:        3494,
 			},
-			wantString: []byte(`[1,66,8,81,3498]`),
+			wantString: []byte(`[1,66,8.000,81,3498]`),
 		},
 	}
 
