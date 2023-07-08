@@ -16,6 +16,8 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 
@@ -100,11 +102,13 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	LoopAnti:    loopanti.String,
 	LoopMark:    loopmark.String,
 
-	MergeTop:    mergetop.String,
-	MergeLimit:  mergelimit.String,
-	MergeOrder:  mergeorder.String,
-	MergeGroup:  mergegroup.String,
-	MergeOffset: mergeoffset.String,
+	MergeTop:       mergetop.String,
+	MergeLimit:     mergelimit.String,
+	MergeOrder:     mergeorder.String,
+	MergeGroup:     mergegroup.String,
+	MergeOffset:    mergeoffset.String,
+	MergeRecursive: mergerecursive.String,
+	MergeCTE:       mergecte.String,
 
 	Deletion:        deletion.String,
 	Insert:          insert.String,
@@ -158,11 +162,13 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	LoopAnti:    loopanti.Prepare,
 	LoopMark:    loopmark.Prepare,
 
-	MergeTop:    mergetop.Prepare,
-	MergeLimit:  mergelimit.Prepare,
-	MergeOrder:  mergeorder.Prepare,
-	MergeGroup:  mergegroup.Prepare,
-	MergeOffset: mergeoffset.Prepare,
+	MergeTop:       mergetop.Prepare,
+	MergeLimit:     mergelimit.Prepare,
+	MergeOrder:     mergeorder.Prepare,
+	MergeGroup:     mergegroup.Prepare,
+	MergeOffset:    mergeoffset.Prepare,
+	MergeRecursive: mergerecursive.Prepare,
+	MergeCTE:       mergecte.Prepare,
 
 	Deletion:        deletion.Prepare,
 	Insert:          insert.Prepare,
@@ -216,11 +222,13 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecSt
 	LoopAnti:    loopanti.Call,
 	LoopMark:    loopmark.Call,
 
-	MergeTop:    mergetop.Call,
-	MergeLimit:  mergelimit.Call,
-	MergeOrder:  mergeorder.Call,
-	MergeGroup:  mergegroup.Call,
-	MergeOffset: mergeoffset.Call,
+	MergeTop:       mergetop.Call,
+	MergeLimit:     mergelimit.Call,
+	MergeOrder:     mergeorder.Call,
+	MergeGroup:     mergegroup.Call,
+	MergeOffset:    mergeoffset.Call,
+	MergeRecursive: mergerecursive.Call,
+	MergeCTE:       mergecte.Call,
 
 	Deletion: deletion.Call,
 	Insert:   insert.Call,
