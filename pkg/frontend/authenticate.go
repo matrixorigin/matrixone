@@ -734,6 +734,12 @@ var (
 		"mo_mysql_compatibility_mode": 0,
 		catalog.MOAutoIncrTable:       0,
 	}
+	configInitVariables = map[string]int8{
+		"save_query_result":      0,
+		"query_result_maxsize":   0,
+		"query_result_timeout":   0,
+		"lower_case_table_names": 0,
+	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
 		"mo_database":                 0,
@@ -6832,7 +6838,12 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
-		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
+		if _, ok := configInitVariables[variable.Name]; ok {
+			addsqls := addInitSystemVariablesSql(sysAccountID, sysAccountName, pu)
+			for _, sql := range addsqls {
+				addSqlIntoSet(sql)
+			}
+		} else {
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
@@ -7013,7 +7024,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if err != nil {
 			return err
 		}
-		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant)
+		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, ses.pu)
 		if err != nil {
 			return err
 		}
@@ -7129,7 +7140,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	return newTenant, newTenantCtx, err
 }
 
-func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo) error {
+func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
 	var err error
 	var initDataSqls []string
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
@@ -7215,7 +7226,12 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
-		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
+		if _, ok := configInitVariables[variable.Name]; ok {
+			addsqls := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), pu)
+			for _, sql := range addsqls {
+				addSqlIntoSet(sql)
+			}
+		} else {
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, newTenant.GetTenantID(), newTenant.GetTenant(), variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
@@ -8341,4 +8357,28 @@ func doCheckRole(ctx context.Context, ses *Session) error {
 func isSuperUser(username string) bool {
 	u := strings.ToLower(username)
 	return u == dumpName || u == rootName
+}
+
+func addInitSystemVariablesSql(accountId int, accountName string, pu *config.ParameterUnit) []string {
+	returnSql := make([]string, 0)
+	var initMoMysqlCompatibilityMode string
+
+	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(pu.SV.SaveQueryResult), true)
+		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
+	} else {
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue("off"), true)
+		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
+	}
+
+	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(pu.SV.QueryResultMaxsize), true)
+	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
+
+	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(pu.SV.QueryResultTimeout), true)
+	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
+
+	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(pu.SV.LowerCaseTableNames), true)
+	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
+
+	return returnSql
 }

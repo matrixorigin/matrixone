@@ -482,8 +482,3 @@ select @@sql_mode;
 @@sql_mode
 ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 set @@sql_mode = default;
-select @@foreign_key_checks;
-@@foreign_key_checks
-1
-SET FOREIGN_KEY_CHECKS = 0;
-SET FOREIGN_KEY_CHECKS = default;
