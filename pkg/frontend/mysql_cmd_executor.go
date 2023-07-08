@@ -3846,6 +3846,7 @@ type marshalPlanHandler struct {
 func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
+	stmt.MarkResponseAt()
 	if plan == nil || plan.GetQuery() == nil {
 		return &marshalPlanHandler{
 			marshalPlan: nil,
@@ -3925,41 +3926,41 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 	if h.marshalPlan != nil && len(h.marshalPlan.Steps) > 0 {
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		global := h.marshalPlan.Steps[0].GraphData.Global
-		statsByte = getStatsFromGlobal(global, uint64(h.stmt.Duration))
+		statsByte = addStatsFromGlobal(global)
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
 	return
 }
 
-func getStatsFromGlobal(global explain.Global, duration uint64) (s statistic.StatsArray) {
-	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
+func addStatsFromGlobal(global explain.Global) (dst statistic.StatsArray) {
+	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount float64
 
 	for _, stat := range global.Statistics.Time {
 		if stat.Name == "Time Consumed" {
-			timeConsumed = uint64(stat.Value)
+			timeConsumed = float64(stat.Value)
 			break
 		}
 	}
 
 	for _, stat := range global.Statistics.Memory {
 		if stat.Name == "Memory Size" {
-			memorySize = uint64(stat.Value)
+			memorySize = float64(stat.Value)
 			break
 		}
 	}
 
 	for _, stat := range global.Statistics.IO {
 		if stat.Name == "S3 IO Input Count" {
-			s3IOInputCount = uint64(stat.Value)
+			s3IOInputCount = float64(stat.Value)
 		} else if stat.Name == "S3 IO Output Count" {
-			s3IOOutputCount = uint64(stat.Value)
+			s3IOOutputCount = float64(stat.Value)
 		}
 	}
 
-	s.Init().
+	dst.Init().
 		WithTimeConsumed(timeConsumed).
-		WithMemorySize(memorySize * duration).
+		WithMemorySize(memorySize).
 		WithS3IOInputCount(s3IOInputCount).
 		WithS3IOOutputCount(s3IOOutputCount)
 	return
