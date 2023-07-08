@@ -262,14 +262,14 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 		defaultOpts []BufferOption
 		ch          chan string
 	}
-	type args struct {
+	type fields struct {
 		batch string
 	}
 
 	tests := []struct {
 		name   string
 		fields fields
-		args   args
+		fields   fields
 		want   func(batch any)
 	}{
 		{
@@ -278,7 +278,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 				defaultOpts: []BufferOption{BufferWithSizeThreshold(GB)},
 				ch:          make(chan string, 10),
 			},
-			args: args{
+			fields: fields{
 				batch: "batch",
 			},
 			want: func(batch any) {},
@@ -292,10 +292,10 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 			}
 
 			got := t.NewItemBatchHandler(context.TODO())
-			go got(tt.args.batch)
+			go got(tt.fields.batch)
 			batch, ok := <-tt.fields.ch
 			if ok {
-				require.Equal(t1, tt.args.batch, batch)
+				require.Equal(t1, tt.fields.batch, batch)
 			} else {
 				t1.Log("exec sql Done.")
 			}

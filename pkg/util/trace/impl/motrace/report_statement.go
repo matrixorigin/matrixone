@@ -47,6 +47,9 @@ var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 const Decimal128Width = 38
 const Decimal128Scale = 0
 
+func convertFloat64ToDecimal128WithScale(val float64, scale int32) (types.Decimal128, error) {
+	return types.Decimal128FromFloat64(val, Decimal128Width, scale)
+}
 func convertFloat64ToDecimal128(val float64) (types.Decimal128, error) {
 	return types.Decimal128FromFloat64(val, Decimal128Width, Decimal128Scale)
 }
@@ -78,7 +81,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.StmtBuilder.WriteString(s.Statement)
 		duration := s.Duration
 		s.Duration = windowSize
-		s.AggrMemoryByte = mustDecimal128(convertFloat64ToDecimal128(float64(s.statsArray.GetMemorySize()) * float64(duration)))
+		s.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(s.statsArray.GetMemorySize() * float64(duration)))
 		return s
 	}
 	return nil
@@ -166,8 +169,8 @@ type StatementInfo struct {
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
 	AggrCount int64 `json:"aggr_count"` // see EndStatement
 
-	// AggrMemoryByte
-	AggrMemoryByte types.Decimal128
+	// AggrMemoryTime
+	AggrMemoryTime types.Decimal128
 
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
@@ -312,9 +315,8 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	}
 	execPlan := s.ExecPlan2Json(ctx)
 	if s.AggrCount > 0 {
-		s.AggrMemoryByte.Div128(mustDecimal128(convertFloat64ToDecimal128(float64(s.Duration))))
-		val := uint64(types.Decimal128ToFloat64(s.AggrMemoryByte, Decimal128Scale))
-		s.statsArray.WithMemorySize(val)
+		float64Val := calculateAggrMemoryBytes(s.AggrMemoryTime, float64(s.Duration))
+		s.statsArray.WithMemorySize(float64Val)
 	}
 	stats := s.ExecPlan2Stats(ctx)
 	if GetTracerProvider().disableSqlWriter {
@@ -333,15 +335,24 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
 }
 
+// calculateAggrMemoryBytes return scale = statistic.Decimal128ToFloat64Scale float64 val
+func calculateAggrMemoryBytes(dividend types.Decimal128, divisor float64) float64 {
+	scale := int32(statistic.Decimal128ToFloat64Scale)
+	divisorD := mustDecimal128(types.Decimal128FromFloat64(divisor, Decimal128Width, scale))
+	val, valScale, err := dividend.Div(divisorD, 0, scale)
+	val = mustDecimal128(val, err)
+	return types.Decimal128ToFloat64(val, valScale)
+}
+
 // mergeStats n (new one) into e (existing one)
 func mergeStats(e, n *StatementInfo) error {
 	e.statsArray.Add(&n.statsArray)
-	val, _, err := e.AggrMemoryByte.Add(
-		mustDecimal128(convertFloat64ToDecimal128(float64(n.statsArray.GetMemorySize())*float64(n.Duration))),
+	val, _, err := e.AggrMemoryTime.Add(
+		mustDecimal128(convertFloat64ToDecimal128(n.statsArray.GetMemorySize()*float64(n.Duration))),
 		Decimal128Scale,
 		Decimal128Scale,
 	)
-	e.AggrMemoryByte = mustDecimal128(val, err)
+	e.AggrMemoryTime = mustDecimal128(val, err)
 	return nil
 }
 

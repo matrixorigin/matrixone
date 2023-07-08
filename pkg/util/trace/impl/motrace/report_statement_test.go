@@ -334,3 +334,41 @@ func TestMergeStats(t *testing.T) {
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 }
+
+func TestCalculateAggrMemoryBytes(t *testing.T) {
+	type fields struct {
+		dividend float64
+		divisor  float64
+	}
+
+	tests := []struct {
+		name   string
+		fields fields
+		want   float64
+	}{
+		{
+			name: "normal",
+			fields: fields{
+				dividend: 1.0,
+				divisor:  3.0,
+			},
+			want: 0.333333,
+		},
+		{
+			name: "1/8",
+			fields: fields{
+				dividend: 1.0,
+				divisor:  8.0,
+			},
+			want: 0.125,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			val1 := mustDecimal128(convertFloat64ToDecimal128(tt.fields.dividend))
+			gotVal := calculateAggrMemoryBytes(val1, tt.fields.divisor)
+			require.Equal(t, tt.want, gotVal)
+		})
+	}
+}
