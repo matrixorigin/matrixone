@@ -115,7 +115,7 @@ func (m *InspectDN) UnmarshalBinary(data []byte) error {
 }
 
 const (
-	EnableFaultInjection = "enable_fault_injection"
+	EnableFaultInjection  = "enable_fault_injection"
 	DisableFaultInjection = "disable_fault_injection"
 )
 
