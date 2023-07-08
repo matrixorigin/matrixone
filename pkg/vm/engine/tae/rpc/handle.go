@@ -1013,7 +1013,6 @@ func (h *Handle) HandleAddFaultPoint(
 	meta txn.TxnMeta,
 	req *db.FaultPoint,
 	resp *api.SyncLogTailResp) (func(), error) {
-	logutil.Infof("HandleAddFaultPoint req is %v", req)
 	if req.Name == db.EnableFaultInjection {
 		fault.Enable()
 		return nil, nil
