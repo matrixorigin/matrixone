@@ -178,38 +178,85 @@ type SpanConfig struct {
 
 	// LongTimeThreshold set by WithLongTimeThreshold
 	LongTimeThreshold time.Duration `json:"-"`
-	profileGoroutine  bool
-	profileHeap       bool
-	profileCpuDur     time.Duration
+	// profileFlag mark what profile need to do
+	profileFlag     uint64
+	profileCpuDur   time.Duration // WithProfileCpuSecs
+	profileTraceDur time.Duration // WithProfileTraceSecs
+
+	// hungThreshold set by WithHungThreshold
+	// It will override Span ctx deadline setting, and start a goroutine to check ctx deadline
+	hungThreshold time.Duration
 }
+
+const (
+	ProfileFlagGoroutine = 1 << iota
+	ProfileFlagThreadcreate
+	ProfileFlagHeap
+	ProfileFlagAllocs
+	ProfileFlagBlock
+	ProfileFlagMutex
+	ProfileFlagCpu
+	ProfileFlagTrace
+)
 
 func (c *SpanConfig) Reset() {
 	c.SpanContext.Reset()
 	c.NewRoot = false
 	c.Parent = nil
 	c.LongTimeThreshold = 0
-	c.profileGoroutine = false
-	c.profileHeap = false
+	c.profileFlag = 0
 	c.profileCpuDur = 0
+	c.profileTraceDur = 0
+	c.hungThreshold = 0
 }
 
 func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
 	return c.LongTimeThreshold
 }
 
+func (c *SpanConfig) HungThreshold() time.Duration {
+	return c.hungThreshold
+}
+
+// NeedProfile return true if set profileGoroutine, profileHeap, profileCpuDur
+func (c *SpanConfig) NeedProfile() bool {
+	return c.profileFlag > 0
+}
+
 // ProfileGoroutine return the value set by WithProfileGoroutine
 func (c *SpanConfig) ProfileGoroutine() bool {
-	return c.profileGoroutine
+	return c.profileFlag&ProfileFlagGoroutine > 0
 }
 
 // ProfileHeap return the value set by WithProfileHeap
 func (c *SpanConfig) ProfileHeap() bool {
-	return c.profileHeap
+	return c.profileFlag&ProfileFlagHeap > 0
+}
+
+func (c *SpanConfig) ProfileThreadCreate() bool {
+	return c.profileFlag&ProfileFlagThreadcreate > 0
+}
+
+func (c *SpanConfig) ProfileAllocs() bool {
+	return c.profileFlag&ProfileFlagAllocs > 0
+}
+
+func (c *SpanConfig) ProfileBlock() bool {
+	return c.profileFlag&ProfileFlagBlock > 0
+}
+
+func (c *SpanConfig) ProfileMutex() bool {
+	return c.profileFlag&ProfileFlagMutex > 0
 }
 
 // ProfileCpuSecs return the value set by WithProfileCpuSecs
 func (c *SpanConfig) ProfileCpuSecs() time.Duration {
 	return c.profileCpuDur
+}
+
+// ProfileTraceSecs return the value set by WithProfileTraceSecs
+func (c *SpanConfig) ProfileTraceSecs() time.Duration {
+	return c.profileTraceDur
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
@@ -256,15 +303,47 @@ func WithLongTimeThreshold(d time.Duration) SpanStartOption {
 	})
 }
 
+// WithHungThreshold please be careful to using this option.
+// it may start new goroutine to check hung deadline.
+func WithHungThreshold(d time.Duration) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.hungThreshold = d
+	})
+}
+
 func WithProfileGoroutine() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileGoroutine = true
+		cfg.profileFlag |= ProfileFlagGoroutine
 	})
 }
 
 func WithProfileHeap() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.profileHeap = true
+		cfg.profileFlag |= ProfileFlagHeap
+	})
+}
+
+func WithProfileThreadCreate() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileFlag |= ProfileFlagThreadcreate
+	})
+}
+
+func WithProfileAllocs() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileFlag |= ProfileFlagAllocs
+	})
+}
+
+func WithProfileBlock() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileFlag |= ProfileFlagBlock
+	})
+}
+
+func WithProfileMutex() SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileFlag |= ProfileFlagMutex
 	})
 }
 
@@ -273,7 +352,15 @@ func WithProfileHeap() SpanStartOption {
 // Please carefully to set this value, it will trigger the sync ProfileCpu op
 func WithProfileCpuSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileFlag |= ProfileFlagCpu
 		cfg.profileCpuDur = d
+	})
+}
+
+func WithProfileTraceSecs(d time.Duration) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileFlag |= ProfileFlagTrace
+		cfg.profileTraceDur = d
 	})
 }
 

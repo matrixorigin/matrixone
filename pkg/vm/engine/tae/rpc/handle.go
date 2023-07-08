@@ -879,7 +879,7 @@ func (h *Handle) HandleWrite(
 		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %s txn: %s",
 				req.Type, req.TableID,
-				req.TableName, common.PrintMoBatch(req.Batch, 3),
+				req.TableName, common.MoBatchToString(req.Batch, 3),
 				txn.String(),
 			)
 		}
