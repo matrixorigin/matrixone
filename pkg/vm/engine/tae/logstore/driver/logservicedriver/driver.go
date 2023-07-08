@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/panjf2000/ants/v2"
 )
 
 const (
@@ -61,6 +62,8 @@ type LogServiceDriver struct {
 	postAppendQueue chan any
 	postAppendLoop  *sm.Loop
 
+	appendPool *ants.Pool
+
 	truncateQueue sm.Queue
 
 	flushtimes  int
@@ -77,6 +80,8 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
 		retryDuration:         cfg.RetryTimeout,
 	}
+	pool, _ := ants.NewPool(1024)
+
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientPoolMaxSize, cfg.ClientPoolMaxSize, clientpoolConfig),
 		config:          cfg,
@@ -86,6 +91,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		appendQueue:     make(chan any, 10000),
 		appendedQueue:   make(chan any, 10000),
 		postAppendQueue: make(chan any, 10000),
+		appendPool:      pool,
 	}
 	d.closeCtx, d.closeCancel = context.WithCancel(context.Background())
 	d.preAppendLoop = sm.NewSafeQueue(10000, 10000, d.onPreAppend)
@@ -110,6 +116,7 @@ func (d *LogServiceDriver) Close() error {
 	close(d.appendQueue)
 	close(d.appendedQueue)
 	close(d.postAppendQueue)
+	d.appendPool.Release()
 	return nil
 }
 
