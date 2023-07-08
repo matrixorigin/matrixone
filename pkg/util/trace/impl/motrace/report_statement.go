@@ -47,9 +47,6 @@ var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 const Decimal128Width = 38
 const Decimal128Scale = 0
 
-func convertFloat64ToDecimal128WithScale(val float64, scale int32) (types.Decimal128, error) {
-	return types.Decimal128FromFloat64(val, Decimal128Width, scale)
-}
 func convertFloat64ToDecimal128(val float64) (types.Decimal128, error) {
 	return types.Decimal128FromFloat64(val, Decimal128Width, Decimal128Scale)
 }

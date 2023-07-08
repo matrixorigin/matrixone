@@ -248,7 +248,7 @@ func TestAggregator(t *testing.T) {
 			Statement:     "Update 11",
 			ResponseAt:    fixedTime.Add(6 * time.Second),
 			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
-			Duration:      10 * time.Millisecond,
+			Duration:      time.Duration(10+i) * time.Millisecond,
 			TransactionID: _1TxnID,
 			StatementID:   _1TxnID,
 			Status:        StatementStatusFailed,
