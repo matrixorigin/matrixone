@@ -156,7 +156,7 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 
 	for _, i := range in {
 		// Check if the item is a StatementInfo
-		if statementInfo, ok := i.(*StatementInfo); ok && !GetTracerProvider().disableStmtAggregation {
+		if statementInfo, ok := i.(*StatementInfo); ok && aggregator != nil {
 			// if stmt aggregate, then add it to the aggregator
 			_, err := aggregator.AddItem(statementInfo)
 			if err != nil {
