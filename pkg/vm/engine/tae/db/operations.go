@@ -114,6 +114,11 @@ func (m *InspectDN) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+const (
+	EnableFaultInjection = "enable_fault_injection"
+	DisableFaultInjection = "disable_fault_injection"
+)
+
 type FaultPoint struct {
 	Name   string
 	Freq   string

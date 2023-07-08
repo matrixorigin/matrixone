@@ -221,9 +221,9 @@ insert into flush_logtail values(2, 2);
 insert into flush_logtail values(3, 3);
 insert into flush_logtail values(4, 4);
 insert into flush_logtail values(5, 5);
-select enable_fault_injection();
-enable_fault_injection()
-true
+select mo_ctl('dn', 'AddFaultPoint', 'enable_fault_injection');
+mo_ctl(dn, AddFaultPoint, enable_fault_injection)
+{\n  "method": "AddFaultPoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'AddFaultPoint', 'flush_table_error.:::.echo.0.flush_table_fault');
 mo_ctl(dn, AddFaultPoint, flush_table_error.:::.echo.0.flush_table_fault)
 {\n  "method": "AddFaultPoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
@@ -236,9 +236,9 @@ a    b
 3    3
 4    4
 5    5
-select disable_fault_injection();
-disable_fault_injection()
-true
+select mo_ctl('dn', 'AddFaultPoint', 'disable_fault_injection');
+mo_ctl(dn, AddFaultPoint, disable_fault_injection)
+{\n  "method": "AddFaultPoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'flush', 'insert.flush_logtail');
 mo_ctl(dn, flush, insert.flush_logtail)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n

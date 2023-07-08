@@ -34,6 +34,15 @@ func handleAddFaultPoint() handleFunc {
 		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			// parameter like "name.freq.action.iarg.sarg"
 			parameters := strings.Split(parameter, ".")
+			if len(parameters) == 1 {
+				payload, err := types.Encode(&db.FaultPoint{
+					Name: parameters[0],
+				})
+				if err != nil {
+					return nil, moerr.NewInternalError(proc.Ctx, "payload encode err")
+				}
+				return payload, nil
+			}
 			if len(parameters) != 5 {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleAddFaultPoint: invalid argument!")
 			}

@@ -151,13 +151,15 @@ insert into flush_logtail values(2, 2);
 insert into flush_logtail values(3, 3);
 insert into flush_logtail values(4, 4);
 insert into flush_logtail values(5, 5);
-select enable_fault_injection();
+-- @separator:table
+select mo_ctl('dn', 'AddFaultPoint', 'enable_fault_injection');
 -- @separator:table
 select mo_ctl('dn', 'AddFaultPoint', 'flush_table_error.:::.echo.0.flush_table_fault');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'insert.flush_logtail');
 select * from flush_logtail;
-select disable_fault_injection();
+-- @separator:table
+select mo_ctl('dn', 'AddFaultPoint', 'disable_fault_injection');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'insert.flush_logtail');
 drop table if exists t1;

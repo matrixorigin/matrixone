@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"os"
 	"sync"
 	"syscall"
@@ -1013,6 +1014,13 @@ func (h *Handle) HandleAddFaultPoint(
 	req *db.FaultPoint,
 	resp *api.SyncLogTailResp) (func(), error) {
 	logutil.Infof("HandleAddFaultPoint req is %v", req)
+	if req.Name == db.EnableFaultInjection {
+		fault.Enable()
+		return nil, nil
+	} else if req.Name == db.DisableFaultInjection {
+		fault.Disable()
+		return nil, nil
+	}
 	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
 }
 
