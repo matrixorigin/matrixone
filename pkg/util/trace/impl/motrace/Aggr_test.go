@@ -263,7 +263,7 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, "Update 11", results[0].(*StatementInfo).StmtBuilder.String())
 	// should have two results since they have different sqlSourceType
 	assert.Equal(t, "Update 11", results[1].(*StatementInfo).StmtBuilder.String())
-	assert.Equal(t, 50*time.Millisecond, results[1].(*StatementInfo).Duration)
+	assert.Equal(t, aggrWindow, results[1].(*StatementInfo).Duration)
 	// RequestAt should be starting of the window
 	assert.Equal(t, fixedTime.Add(4*time.Second), results[0].(*StatementInfo).RequestAt)
 	// ResponseAt should be end of the window
