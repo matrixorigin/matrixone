@@ -1095,7 +1095,7 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 			return def.UpdateSessVar(ses, ses.GetSysVars(), def.GetName(), cv)
 		}
 	} else {
-		return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
+		return nil
 	}
 	return nil
 }

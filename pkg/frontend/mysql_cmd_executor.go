@@ -2938,6 +2938,18 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.SetTransaction:
 		selfHandle = true
 		//TODO: handle set transaction
+	case *tree.LockTableStmt:
+		selfHandle = true
+		err = proto.sendEOFOrOkPacket(0, 0)
+		if err != nil {
+			return err
+		}
+	case *tree.UnLockTableStmt:
+		selfHandle = true
+		err = proto.sendEOFOrOkPacket(0, 0)
+		if err != nil {
+			return err
+		}
 	}
 
 	if selfHandle {
@@ -3387,6 +3399,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 			}
 		}
 
+		proc.Sql = input.sql
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant)
 		if err != nil {
 			return err

@@ -388,6 +388,15 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		// 	*tree.TableOptionIndexDirectory, *tree.TableOptionStorageMedia, *tree.TableOptionStatsSamplePages,
 		// 	*tree.TableOptionUnion, *tree.TableOptionEncryption:
 		// 	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		case *tree.TableOptionAutoIncrement, *tree.TableOptionAUTOEXTEND_SIZE, *tree.TableOptionAvgRowLength,
+			*tree.TableOptionCharset, *tree.TableOptionChecksum, *tree.TableOptionCollate, *tree.TableOptionCompression,
+			*tree.TableOptionConnection, *tree.TableOptionDataDirectory, *tree.TableOptionIndexDirectory,
+			*tree.TableOptionDelayKeyWrite, *tree.TableOptionEncryption, *tree.TableOptionEngine, *tree.TableOptionEngineAttr,
+			*tree.TableOptionKeyBlockSize, *tree.TableOptionMaxRows, *tree.TableOptionMinRows, *tree.TableOptionPackKeys,
+			*tree.TableOptionPassword, *tree.TableOptionRowFormat, *tree.TableOptionStartTrans, *tree.TableOptionSecondaryEngineAttr,
+			*tree.TableOptionStatsAutoRecalc, *tree.TableOptionStatsPersistent, *tree.TableOptionStatsSamplePages,
+			*tree.TableOptionTablespace, *tree.TableOptionUnion:
+
 		default:
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		}
@@ -701,7 +710,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		case *tree.CheckIndex, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
-			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			//return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		default:
 			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		}

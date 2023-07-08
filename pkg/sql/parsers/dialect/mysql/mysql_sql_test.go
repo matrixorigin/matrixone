@@ -2271,6 +2271,10 @@ var (
 			input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
 			output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
 		},
+		{
+			input:  "create table t1(a int) STORAGE DISK;",
+			output: "create table t1(a int) STORAGE DISK;",
+		},
 	}
 )
 

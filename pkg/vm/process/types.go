@@ -186,6 +186,8 @@ type Process struct {
 
 	LoadTag bool
 
+	Sql string
+
 	LastInsertID *uint64
 
 	LoadLocalReader *io.PipeReader
