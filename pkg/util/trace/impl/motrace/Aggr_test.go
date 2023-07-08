@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAggregator(t *testing.T) {
@@ -91,7 +92,7 @@ func TestAggregator(t *testing.T) {
 	}
 
 	// Aggregate some Select
-	fixedTime := time.Date(2023, time.June, 10, 12, 0, 0, 0, time.UTC)
+	fixedTime := time.Date(2023, time.June, 10, 12, 0, 1, 0, time.UTC)
 	for i := 0; i < 5; i++ {
 		_, err = aggregator.AddItem(&StatementInfo{
 			Account:       "MO",
@@ -100,8 +101,9 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Select",
 			SqlSourceType: "external_sql",
 			SessionID:     sessionId,
-			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
-			RequestAt:     fixedTime,
+			Statement:     "SELECT 11",
+			ResponseAt:    fixedTime,
+			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
 			TransactionID: _1TxnID,
 			StatementID:   _1TxnID,
@@ -120,8 +122,9 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Select",
 			SqlSourceType: "internal_sql",
 			SessionID:     sessionId2,
-			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
-			RequestAt:     fixedTime,
+			Statement:     "SELECT 11",
+			ResponseAt:    fixedTime,
+			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
 			TransactionID: _1TxnID,
 			StatementID:   _1TxnID,
@@ -140,8 +143,9 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Select",
 			SqlSourceType: "internal_sql",
 			SessionID:     sessionId2,
-			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
-			RequestAt:     fixedTime.Add(6 * time.Second),
+			Statement:     "SELECT 11",
+			ResponseAt:    fixedTime.Add(6 * time.Second),
+			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
 			TransactionID: _1TxnID,
 			StatementID:   _1TxnID,
@@ -162,7 +166,8 @@ func TestAggregator(t *testing.T) {
 			SqlSourceType: "external_sql",
 			SessionID:     sessionId2,
 			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
-			RequestAt:     fixedTime.Add(6 * time.Second),
+			ResponseAt:    fixedTime.Add(6 * time.Second),
+			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
 			TransactionID: _1TxnID,
 			StatementID:   _1TxnID,
@@ -179,14 +184,37 @@ func TestAggregator(t *testing.T) {
 
 	// Test expected behavior
 	if len(results) != 4 {
-		t.Errorf("Expected 0 aggregated statements, got %d", len(results))
+		t.Errorf("Expected 4 aggregated statements, got %d", len(results))
 	}
-	assert.Equal(t, 50*time.Millisecond, results[0].(*StatementInfo).Duration)
-	assert.Equal(t, 50*time.Millisecond, results[1].(*StatementInfo).Duration)
-	assert.Equal(t, 50*time.Millisecond, results[2].(*StatementInfo).Duration)
-	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
+	assert.Equal(t, aggrWindow, results[0].(*StatementInfo).Duration)
+	assert.Equal(t, aggrWindow, results[1].(*StatementInfo).Duration)
+	assert.Equal(t, aggrWindow, results[2].(*StatementInfo).Duration)
+	assert.Equal(t, aggrWindow, results[3].(*StatementInfo).Duration)
+	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
+	item, _ := results[0].(*StatementInfo)
+	row := item.GetTable().GetRow(ctx)
+	results[0].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,0.020,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	results[1].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,0.020,15,20]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
+	results[2].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,0.020,15,20]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
+	results[3].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,0.020,15,20]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
 
 	aggregator.Close()
+
+	aggregator = NewAggregator(
+		ctx,
+		aggrWindow,
+		StatementInfoNew,
+		StatementInfoUpdate,
+		StatementInfoFilter,
+	)
+
 	// Update
 	for i := 0; i < 5; i++ {
 
@@ -197,9 +225,30 @@ func TestAggregator(t *testing.T) {
 			StatementType: "Update",
 			SqlSourceType: "external_sql",
 			SessionID:     sessionId2,
-			Statement:     "Update 11", // make it longer than 200ms to pass filter
-			RequestAt:     fixedTime.Add(6 * time.Second),
-			Duration:      10 * time.Millisecond,
+			Statement:     "Update 11",
+			ResponseAt:    fixedTime.Add(6 * time.Second),
+			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
+			Duration:      time.Duration(10+i) * time.Millisecond,
+			TransactionID: _1TxnID,
+			StatementID:   _1TxnID,
+			Status:        StatementStatusFailed,
+			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error when adding item: %v", err)
+		}
+
+		_, err = aggregator.AddItem(&StatementInfo{
+			Account:       "MO",
+			User:          "moroot",
+			Database:      "system",
+			StatementType: "Update",
+			SqlSourceType: "internal_sql",
+			SessionID:     sessionId2,
+			Statement:     "Update 11",
+			ResponseAt:    fixedTime.Add(6 * time.Second),
+			RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
+			Duration:      time.Duration(10+i) * time.Millisecond,
 			TransactionID: _1TxnID,
 			StatementID:   _1TxnID,
 			Status:        StatementStatusFailed,
@@ -212,5 +261,35 @@ func TestAggregator(t *testing.T) {
 	results = aggregator.GetResults()
 
 	assert.Equal(t, "Update 11", results[0].(*StatementInfo).StmtBuilder.String())
+	// should have two results since they have different sqlSourceType
+	assert.Equal(t, "Update 11", results[1].(*StatementInfo).StmtBuilder.String())
+	assert.Equal(t, aggrWindow, results[1].(*StatementInfo).Duration)
+	// RequestAt should be starting of the window
+	assert.Equal(t, fixedTime.Add(4*time.Second), results[0].(*StatementInfo).RequestAt)
+	// ResponseAt should be end of the window
+	assert.Equal(t, fixedTime.Add(9*time.Second), results[0].(*StatementInfo).ResponseAt)
+	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	results[0].(*StatementInfo).FillRow(ctx, row)
+	require.Equal(t, []byte(`[1,5,0.024,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+
+	_, err = aggregator.AddItem(&StatementInfo{
+		Account:       "MO",
+		User:          "moroot",
+		Database:      "system",
+		StatementType: "Update",
+		SqlSourceType: "external_sql",
+		SessionID:     sessionId2,
+		Statement:     "Update 11",
+		ResponseAt:    fixedTime.Add(6 * time.Second),
+		RequestAt:     fixedTime.Add(6 * time.Second).Add(-10 * time.Millisecond),
+		Duration:      203 * time.Millisecond,
+		TransactionID: _1TxnID,
+		StatementID:   _1TxnID,
+		Status:        StatementStatusFailed,
+		ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+	})
+	if err != ErrFilteredOut {
+		t.Fatalf("Expecting filter out error due to Duration longer than 200ms: %v", err)
+	}
 
 }
