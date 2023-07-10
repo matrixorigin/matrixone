@@ -2392,19 +2392,35 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
 	}
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
+	regTransplant(s, rs, 1, 0)
+
 	rs.appendInstruction(vm.Instruction{
 		Op:      vm.HashBuild,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     constructHashBuild(c, s.Instructions[0], c.proc),
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, ss != nil),
 	})
-	rs.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatchLocal(true, false, extraRegisters(ss, 1)),
-	})
+
+	if ss == nil { // unparallel, send the hashtable to s directly
+		s.Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
+			Ctx: s.Proc.Ctx,
+			Ch:  make(chan *batch.Batch, 1),
+		}
+		rs.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: s.Proc.Reg.MergeReceivers[1],
+			},
+		})
+	} else {
+		rs.appendInstruction(vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: constructDispatchLocal(true, false, extraRegisters(ss, 1)),
+		})
+	}
 	rs.IsEnd = true
-	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
-	regTransplant(s, rs, 1, 0)
+
 	return rs
 }
 
