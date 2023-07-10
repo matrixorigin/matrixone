@@ -1536,13 +1536,10 @@ func getPkPos(tableDef *TableDef, ignoreFakePK bool) (int, *Type) {
 		return -1, nil
 	}
 	pkName := tableDef.Pkey.PkeyColName
-	// if pkName == catalog.CPrimaryKeyColName {
-	// 	return len(tableDef.Cols) - 1, makeHiddenColTyp()
-	// }
 	for i, col := range tableDef.Cols {
 		if col.Name == pkName {
 			if ignoreFakePK && col.Name == catalog.FakePrimaryKeyColName {
-				continue
+				return -1, nil
 			}
 			return i, col.Typ
 		}
@@ -1920,7 +1917,7 @@ func appendPreInsertUkPlan(
 		builder,
 		bindCtx,
 		lastNodeId,
-		tableDef,
+		uniqueTableDef,
 		false,
 		-1,
 		nil,
