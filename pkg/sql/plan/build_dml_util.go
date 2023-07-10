@@ -229,26 +229,68 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 }
 
+func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
+	for step, stepNodeId := range builder.qry.Steps {
+		if stepNodeId == nodeId {
+			return step
+		}
+	}
+	return -1
+}
+
 // buildDeletePlans  build preinsert plan.
 /*
-   [o1]sink_scan -> project -> [agg] -> [filter] -> sink
-        [o1]sink_scan -> join[u1] -> sink
-            [u1]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u1
-			[u1]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u1
-        [o1]sink_scan -> join[u2] -> sink
-            [u2]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u2
-			[u2]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u2
-        [o1]sink_scan -> predelete[get partition] -> lock -> delete -> [mergedelete]
+[o1]sink_scan -> join[u1] -> sink
+	[u1]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u1
+	[u1]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u1
+[o1]sink_scan -> join[u2] -> sink
+	[u2]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u2
+	[u2]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u2
+[o1]sink_scan -> predelete[get partition] -> lock -> delete -> [mergedelete]
 
-		[o1]sink_scan -> join[f1 semi join c1 on c1.fid=f1.id, get f1.id] -> filter(assert(isempty(id)))   // if have refChild table with no action
-		[o1sink_scan -> join[f1 inner join c2 on f1.id = c2.fid, 取c2.*, null] -> sink ...(like update)   // if have refChild table with set null
-		[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*] -> sink ...(like delete)   // delete stmt: if have refChild table with cascade
-		[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
-
-   [o2]sink_scan -> project -> [agg] -> [filter] -> sink
-        ...
+[o1]sink_scan -> join[f1 semi join c1 on c1.fid=f1.id, get f1.id] -> filter(assert(isempty(id)))   // if have refChild table with no action
+[o1]sink_scan -> join[f1 inner join c2 on f1.id = c2.fid, 取c2.*, null] -> sink ...(like update)   // if have refChild table with set null
+[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*] -> sink ...(like delete)   // delete stmt: if have refChild table with cascade
+[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
 */
 func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, lastNodeId int32) error {
+	if sinkOrUnionNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
+		sinkOrUnionNode := builder.qry.Nodes[sinkOrUnionNodeId]
+		if sinkOrUnionNode.NodeType == plan.Node_SINK {
+			step := getStepByNodeId(builder, sinkOrUnionNodeId)
+			if step == -1 || delCtx.sourceStep == -1 {
+				panic("steps should not be -1")
+			}
+
+			oldDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, int32(step))
+			thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+			unionProjection := getProjectionByLastNode(builder, sinkOrUnionNodeId)
+			unionNode := &plan.Node{
+				NodeType:    plan.Node_UNION,
+				Children:    []int32{oldDelPlanSinkScanNodeId, thisDelPlanSinkScanNodeId},
+				ProjectList: unionProjection,
+			}
+			unionNodeId := builder.appendNode(unionNode, bindCtx)
+			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
+			endStep := builder.appendStep(newSinkNodeId)
+			for i, n := range builder.qry.Nodes {
+				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
+					n.SourceStep = endStep
+				}
+			}
+			builder.deleteNode[delCtx.tableDef.TblId] = unionNodeId
+		} else {
+			// todo : we need make union operator to support more than two children.
+			panic("unsuport more than two plans to delete one table")
+			// thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+			// sinkOrUnionNode.Children = append(sinkOrUnionNode.Children, thisDelPlanSinkScanNodeId)
+		}
+		return nil
+	} else {
+		if delCtx.sourceStep != -1 {
+			builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
+		}
+	}
 	isUpdate := delCtx.updateColLength > 0
 
 	// delete unique table
