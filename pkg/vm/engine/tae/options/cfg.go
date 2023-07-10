@@ -21,12 +21,10 @@ import (
 )
 
 const (
-	defaultRpcMaxMessageSize        = 16 * mpool.KB
-	defaultRpcPayloadCopyBufferSize = 16 * mpool.KB
-	defaultRpcEnableChecksum        = true
-	defaultLogtailCollectInterval   = 50 * time.Millisecond
-	defaultResponseSendTimeout      = 10 * time.Second
-	defaultMaxLogtailFetchFailure   = 5
+	defaultRpcMaxMessageSize      = 16 * mpool.KB
+	defaultRpcEnableChecksum      = true
+	defaultLogtailCollectInterval = 50 * time.Millisecond
+	defaultResponseSendTimeout    = 10 * time.Second
 )
 
 type CacheCfg struct {
