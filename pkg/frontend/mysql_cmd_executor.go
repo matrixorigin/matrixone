@@ -522,7 +522,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr, cwIndex, cw
 	mrs.AddRow(row)
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, mrs)
-	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.GetRequestContext(), resp); err != nil {
 		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed.")
@@ -625,7 +625,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 		mysql CMD_FIELD_LIST response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = proto.sendEOFOrOkPacket(0, 0)
+	err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
 	if err != nil {
 		return err
 	}
@@ -817,7 +817,7 @@ func (mce *MysqlCmdExecutor) handleShowErrors(cwIndex, cwsLen int) error {
 	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
@@ -961,7 +961,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables, proc *p
 		return err
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
@@ -1069,7 +1069,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 
 	//	mysql COM_QUERY response: End after the column has been sent.
 	//	send EOF packet
-	err = protocol.SendEOFPacketIf(0, 0)
+	err = protocol.SendEOFPacketIf(0, ses.GetServerStatus())
 	if err != nil {
 		return err
 	}
@@ -1079,7 +1079,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 		return err
 	}
 
-	err = protocol.sendEOFOrOkPacket(0, 0)
+	err = protocol.sendEOFOrOkPacket(0, ses.GetServerStatus())
 	if err != nil {
 		return err
 	}
@@ -1270,7 +1270,7 @@ func (mce *MysqlCmdExecutor) handleCallProcedure(ctx context.Context, call *tree
 		return err
 	}
 
-	resp := NewGeneralOkResponse(COM_QUERY)
+	resp := NewGeneralOkResponse(COM_QUERY, mce.ses.GetServerStatus())
 
 	if len(results) == 0 {
 		if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
@@ -1279,7 +1279,7 @@ func (mce *MysqlCmdExecutor) handleCallProcedure(ctx context.Context, call *tree
 	} else {
 		for i, result := range results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			resp = SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i, len(results))
+			resp = mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i, len(results))
 			if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 				return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
 			}
@@ -1335,7 +1335,7 @@ func (mce *MysqlCmdExecutor) handleKill(ctx context.Context, k *tree.Kill) error
 	if err != nil {
 		return err
 	}
-	resp := NewGeneralOkResponse(COM_QUERY)
+	resp := NewGeneralOkResponse(COM_QUERY, mce.ses.GetServerStatus())
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 	}
@@ -1352,7 +1352,7 @@ func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.Sh
 		return err
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
@@ -1369,7 +1369,7 @@ func (mce *MysqlCmdExecutor) handleShowSubscriptions(ctx context.Context, ss *tr
 		return err
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
@@ -1455,7 +1455,7 @@ func (mce *MysqlCmdExecutor) handleShowBackendServers(ctx context.Context, cwInd
 	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed, error: %v ", err)
 	}
@@ -2258,6 +2258,12 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 	var err error
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+
+		// can or not execute in retricted status
+		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
+			return moerr.NewInternalError(requestCtx, "do not have privilege to execute the statement")
+		}
+
 		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 		if err != nil {
 			return err
@@ -3030,7 +3036,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			mysql COM_QUERY response: End after the column has been sent.
 			send EOF packet
 		*/
-		err = proto.SendEOFPacketIf(0, 0)
+		err = proto.SendEOFPacketIf(0, ses.GetServerStatus())
 		if err != nil {
 			return err
 		}
@@ -3083,7 +3089,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			mysql COM_QUERY response: End after the data row has been sent.
 			After all row data has been sent, it sends the EOF or OK packet.
 		*/
-		err = proto.sendEOFOrOkPacket(0, 0)
+		err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
 		if err != nil {
 			return err
 		}
@@ -3201,7 +3207,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			mysql COM_QUERY response: End after the column has been sent.
 			send EOF packet
 		*/
-		err = proto.SendEOFPacketIf(0, 0)
+		err = proto.SendEOFPacketIf(0, ses.GetServerStatus())
 		if err != nil {
 			return err
 		}
@@ -3247,7 +3253,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				mysql COM_QUERY response: End after the data row has been sent.
 				After all row data has been sent, it sends the EOF or OK packet.
 			*/
-			err = proto.sendEOFOrOkPacket(0, 0)
+			err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
 			if err != nil {
 				return err
 			}
@@ -3504,26 +3510,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 }
 
 func (mce *MysqlCmdExecutor) setResponse(cwIndex, cwsLen int, rspLen uint64) *Response {
-
-	//if the stmt has next stmt, should set the server status equals to 10
-	if cwIndex < cwsLen-1 {
-		return NewOkResponse(rspLen, 0, 0, SERVER_MORE_RESULTS_EXISTS, int(COM_QUERY), "")
-	} else {
-		return NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
-	}
-
-}
-
-func SetNewResponse(category int, status uint16, cmd int, d interface{}, cwIndex, cwsLen int) *Response {
-
-	//if the stmt has next stmt, should set the server status equals to 10
-	var resp *Response
-	if cwIndex < cwsLen-1 {
-		resp = NewResponse(category, SERVER_MORE_RESULTS_EXISTS, cmd, d)
-	} else {
-		resp = NewResponse(category, 0, cmd, d)
-	}
-	return resp
+	return mce.ses.SetNewResponse(OkResponse, rspLen, int(COM_QUERY), "", cwIndex, cwsLen)
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
@@ -3533,9 +3520,9 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 			moe, ok := e.(*moerr.Error)
 			if !ok {
 				err = moerr.ConvertPanicError(requestCtx, e)
-				resp = NewGeneralErrorResponse(COM_QUERY, err)
+				resp = NewGeneralErrorResponse(COM_QUERY, mce.ses.GetServerStatus(), err)
 			} else {
-				resp = NewGeneralErrorResponse(COM_QUERY, moe)
+				resp = NewGeneralErrorResponse(COM_QUERY, mce.ses.GetServerStatus(), moe)
 			}
 		}
 	}()
@@ -3559,7 +3546,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
 		err = doComQuery(requestCtx, &UserInput{sql: query})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_QUERY, err)
+			resp = NewGeneralErrorResponse(COM_QUERY, mce.ses.GetServerStatus(), err)
 		}
 		return resp, nil
 	case COM_INIT_DB:
@@ -3568,7 +3555,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		query := "use `" + dbname + "`"
 		err = doComQuery(requestCtx, &UserInput{sql: query})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
+			resp = NewGeneralErrorResponse(COM_INIT_DB, mce.ses.GetServerStatus(), err)
 		}
 
 		return resp, nil
@@ -3578,12 +3565,12 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		query := makeCmdFieldListSql(payload)
 		err = doComQuery(requestCtx, &UserInput{sql: query})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
+			resp = NewGeneralErrorResponse(COM_FIELD_LIST, mce.ses.GetServerStatus(), err)
 		}
 
 		return resp, nil
 	case COM_PING:
-		resp = NewGeneralOkResponse(COM_PING)
+		resp = NewGeneralOkResponse(COM_PING, mce.ses.GetServerStatus())
 
 		return resp, nil
 
@@ -3600,7 +3587,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 
 		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
+			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, mce.ses.GetServerStatus(), err)
 		}
 		return resp, nil
 
@@ -3610,11 +3597,11 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = mce.parseStmtExecute(requestCtx, data)
 		if err != nil {
-			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
+			return NewGeneralErrorResponse(COM_STMT_EXECUTE, mce.ses.GetServerStatus(), err), nil
 		}
 		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, err)
+			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, mce.ses.GetServerStatus(), err)
 		}
 		if prepareStmt.params != nil {
 			prepareStmt.params.GetNulls().Reset()
@@ -3629,7 +3616,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		data := req.GetData().([]byte)
 		err = mce.parseStmtSendLongData(requestCtx, data)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, err)
+			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, mce.ses.GetServerStatus(), err)
 			return resp, nil
 		}
 		return nil, nil
@@ -3645,7 +3632,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 
 		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, err)
+			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, mce.ses.GetServerStatus(), err)
 		}
 		return resp, nil
 
@@ -3659,12 +3646,12 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_RESET, err)
+			resp = NewGeneralErrorResponse(COM_STMT_RESET, mce.ses.GetServerStatus(), err)
 		}
 		return resp, nil
 
 	default:
-		resp = NewGeneralErrorResponse(req.GetCmd(), moerr.NewInternalError(requestCtx, "unsupported command. 0x%x", req.GetCmd()))
+		resp = NewGeneralErrorResponse(req.GetCmd(), mce.ses.GetServerStatus(), moerr.NewInternalError(requestCtx, "unsupported command. 0x%x", req.GetCmd()))
 	}
 	return resp, nil
 }
@@ -3865,6 +3852,7 @@ type marshalPlanHandler struct {
 func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
+	stmt.MarkResponseAt()
 	if plan == nil || plan.GetQuery() == nil {
 		return &marshalPlanHandler{
 			marshalPlan: nil,
@@ -3944,41 +3932,41 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 	if h.marshalPlan != nil && len(h.marshalPlan.Steps) > 0 {
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		global := h.marshalPlan.Steps[0].GraphData.Global
-		statsByte = getStatsFromGlobal(global, uint64(h.stmt.Duration))
+		statsByte = addStatsFromGlobal(global)
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
 	return
 }
 
-func getStatsFromGlobal(global explain.Global, duration uint64) (s statistic.StatsArray) {
-	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
+func addStatsFromGlobal(global explain.Global) (dst statistic.StatsArray) {
+	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount float64
 
 	for _, stat := range global.Statistics.Time {
 		if stat.Name == "Time Consumed" {
-			timeConsumed = uint64(stat.Value)
+			timeConsumed = float64(stat.Value)
 			break
 		}
 	}
 
 	for _, stat := range global.Statistics.Memory {
 		if stat.Name == "Memory Size" {
-			memorySize = uint64(stat.Value)
+			memorySize = float64(stat.Value)
 			break
 		}
 	}
 
 	for _, stat := range global.Statistics.IO {
 		if stat.Name == "S3 IO Input Count" {
-			s3IOInputCount = uint64(stat.Value)
+			s3IOInputCount = float64(stat.Value)
 		} else if stat.Name == "S3 IO Output Count" {
-			s3IOOutputCount = uint64(stat.Value)
+			s3IOOutputCount = float64(stat.Value)
 		}
 	}
 
-	s.Init().
+	dst.Init().
 		WithTimeConsumed(timeConsumed).
-		WithMemorySize(memorySize * duration).
+		WithMemorySize(memorySize).
 		WithS3IOInputCount(s3IOInputCount).
 		WithS3IOOutputCount(s3IOOutputCount)
 	return

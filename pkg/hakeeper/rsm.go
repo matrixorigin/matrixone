@@ -57,6 +57,7 @@ const (
 	headerSize                    = pb.HeaderSize
 )
 
+type IndexQuery struct{}
 type StateQuery struct{}
 type ScheduleCommandQuery struct{ UUID string }
 type ClusterDetailsQuery struct{ Cfg Config }
@@ -513,6 +514,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	// TODO: we need to make sure InitialClusterRequestCmd is the
 	// first user cmd added to the Raft log
 	cmd := e.Cmd
+	s.state.Index = e.Index
 	switch parseCmdTag(cmd) {
 	case pb.DNHeartbeatUpdate:
 		return s.handleDNHeartbeat(cmd), nil
@@ -641,6 +643,8 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		return s.handleScheduleCommandQuery(q.UUID), nil
 	} else if q, ok := query.(*ClusterDetailsQuery); ok {
 		return s.handleClusterDetailsQuery(q.Cfg), nil
+	} else if _, ok := query.(*IndexQuery); ok {
+		return s.state.Index, nil
 	}
 	panic("unknown query type")
 }

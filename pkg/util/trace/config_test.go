@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 var _1TraceID TraceID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
@@ -132,6 +133,169 @@ func TestSpanContext_IsEmpty(t *testing.T) {
 				SpanID:  tt.fields.SpanID,
 			}
 			assert.Equalf(t, tt.want, c.IsEmpty(), "IsEmpty()")
+		})
+	}
+}
+
+func TestSpanConfig_ProfileRuntime(t *testing.T) {
+	type fields struct {
+		goroutine    bool
+		heap         bool
+		alloc        bool
+		threadCreate bool
+		block        bool
+		mutex        bool
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		prepare func(*SpanConfig)
+		need    bool
+	}{
+		{
+			name:   "goroutinue",
+			fields: fields{goroutine: true, heap: false, alloc: false, threadCreate: false, block: false, mutex: false},
+			need:   true,
+		},
+		{
+			name:   "heap",
+			fields: fields{goroutine: false, heap: true, alloc: false, threadCreate: false, block: false, mutex: false},
+			need:   true,
+		},
+		{
+			name:   "alloc",
+			fields: fields{goroutine: false, heap: false, alloc: true, threadCreate: false, block: false, mutex: false},
+			need:   true,
+		},
+		{
+			name:   "threadcreate",
+			fields: fields{goroutine: false, heap: false, alloc: false, threadCreate: true, block: false, mutex: false},
+			need:   true,
+		},
+		{
+			name:   "block",
+			fields: fields{goroutine: false, heap: false, alloc: false, threadCreate: false, block: true, mutex: false},
+			need:   true,
+		},
+		{
+			name:   "mutex",
+			fields: fields{goroutine: false, heap: false, alloc: false, threadCreate: false, block: false, mutex: true},
+			need:   true,
+		},
+		{
+			name:   "cpu",
+			fields: fields{goroutine: false, heap: false, alloc: false, threadCreate: false, block: false, mutex: false},
+			prepare: func(c *SpanConfig) {
+				WithProfileCpuSecs(time.Millisecond).ApplySpanStart(c)
+			},
+			need: true,
+		},
+		{
+			name:   "trace",
+			fields: fields{goroutine: false, heap: false, alloc: false, threadCreate: false, block: false, mutex: false},
+			prepare: func(c *SpanConfig) {
+				WithProfileTraceSecs(time.Millisecond).ApplySpanStart(c)
+			},
+			need: true,
+		},
+		{
+			name:   "trace_cpu",
+			fields: fields{goroutine: false, heap: false, alloc: false, threadCreate: false, block: false, mutex: false},
+			prepare: func(c *SpanConfig) {
+				WithProfileTraceSecs(time.Millisecond).ApplySpanStart(c)
+				WithProfileCpuSecs(time.Millisecond).ApplySpanStart(c)
+			},
+			need: true,
+		},
+		{
+			name:    "no_need",
+			fields:  fields{goroutine: false, heap: false, alloc: false, threadCreate: false, block: false, mutex: false},
+			prepare: nil,
+			need:    false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &SpanConfig{}
+			if tt.fields.goroutine {
+				WithProfileGoroutine().ApplySpanStart(c)
+			}
+			if tt.fields.heap {
+				WithProfileHeap().ApplySpanStart(c)
+			}
+			if tt.fields.alloc {
+				WithProfileAllocs().ApplySpanStart(c)
+			}
+			if tt.fields.threadCreate {
+				WithProfileThreadCreate().ApplySpanStart(c)
+			}
+			if tt.fields.block {
+				WithProfileBlock().ApplySpanStart(c)
+			}
+			if tt.fields.mutex {
+				WithProfileMutex().ApplySpanStart(c)
+			}
+			if tt.prepare != nil {
+				tt.prepare(c)
+			}
+			assert.Equal(t, tt.fields.goroutine, c.ProfileGoroutine())
+			assert.Equal(t, tt.fields.heap, c.ProfileHeap())
+			assert.Equal(t, tt.fields.alloc, c.ProfileAllocs())
+			assert.Equal(t, tt.fields.threadCreate, c.ProfileThreadCreate())
+			assert.Equal(t, tt.fields.block, c.ProfileBlock())
+			assert.Equal(t, tt.fields.mutex, c.ProfileMutex())
+			assert.Equal(t, tt.need, c.NeedProfile())
+		})
+	}
+}
+
+func TestSpanConfig_Reset(t *testing.T) {
+	type fields struct {
+		SpanContext       SpanContext
+		NewRoot           bool
+		Parent            Span
+		LongTimeThreshold time.Duration
+		profileFlag       uint64
+		profileCpuDur     time.Duration
+		profileTraceDur   time.Duration
+		hungThreshold     time.Duration
+	}
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			name: "reset",
+			fields: fields{
+				SpanContext: SpanContext{
+					TraceID: TraceID{},
+					SpanID:  SpanID{},
+					Kind:    1,
+				},
+				NewRoot:           false,
+				Parent:            NoopSpan{},
+				LongTimeThreshold: 1,
+				profileFlag:       2,
+				profileCpuDur:     3,
+				profileTraceDur:   4,
+				hungThreshold:     5,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &SpanConfig{
+				SpanContext:       tt.fields.SpanContext,
+				NewRoot:           tt.fields.NewRoot,
+				Parent:            tt.fields.Parent,
+				LongTimeThreshold: tt.fields.LongTimeThreshold,
+				profileFlag:       tt.fields.profileFlag,
+				profileCpuDur:     tt.fields.profileCpuDur,
+				profileTraceDur:   tt.fields.profileTraceDur,
+				hungThreshold:     tt.fields.hungThreshold,
+			}
+			c.Reset()
+			require.Equal(t, &SpanConfig{}, c)
 		})
 	}
 }

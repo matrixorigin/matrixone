@@ -1483,6 +1483,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	case COM_PING:
 		resp = NewResponse(
 			OkResponse,
+			0, 0, 0,
 			0,
 			int(COM_PING),
 			nil,
@@ -2058,6 +2059,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		proto.SetSession(&Session{})
 
 		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
 		stmts, err := mysql.Parse(ctx, st.Sql, 1)

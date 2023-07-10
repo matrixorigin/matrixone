@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -53,7 +54,7 @@ var (
 
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
 	defaultRpcPayloadCopyBufferSize   = 1024 * mpool.KB
-	defaultLogtailCollectInterval     = 50 * time.Millisecond
+	defaultLogtailCollectInterval     = 2 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
 	defaultMaxLogtailFetchFailure     = 5
 
@@ -119,6 +120,9 @@ type Config struct {
 		// than the specified time, it will be considered a zombie transaction and the backend will
 		// roll back the transaction.
 		ZombieTimeout toml.Duration `toml:"zombie-timeout"`
+
+		// Mode. [Optimistic|Pessimistic], default Optimistic.
+		Mode string `toml:"mode"`
 
 		// If IncrementalDedup is 'true', it will enable the incremental dedup feature.
 		// If incremental dedup feature is disable,
@@ -235,13 +239,21 @@ func (c *Config) Validate() error {
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
+
+	if c.Txn.Mode == "" {
+		c.Txn.Mode = txn.TxnMode_Optimistic.String()
+	} else {
+		if !txn.ValidTxnMode(c.Txn.Mode) {
+			return moerr.NewInternalError(context.Background(), "invalid txn mode %s", c.Txn.Mode)
+		}
+	}
+
 	if c.Txn.IncrementalDedup == "" {
-		// todo : base CN.Txn.Mode to set defaule value of c.Txn.IncrementalDedup
-		// if cnCfg.Txn.Mode == txn.TxnMode_Pessimistic.String() {
-		// 	c.Txn.IncrementalDedup = "true"
-		// } else {
-		c.Txn.IncrementalDedup = "false"
-		// }
+		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+			c.Txn.IncrementalDedup = "true"
+		} else {
+			c.Txn.IncrementalDedup = "false"
+		}
 	} else {
 		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
 		if c.Txn.IncrementalDedup != "true" && c.Txn.IncrementalDedup != "false" {
