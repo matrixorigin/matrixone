@@ -15,7 +15,6 @@
 package table_function
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -164,6 +162,8 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 				return err
 			}
 			vector.AppendFixed(opBat.Vecs[i], bid, false, mp)
+		case plan.MetadataScanInfo_OBJECT_NAME:
+			vector.AppendBytes(opBat.Vecs[i], []byte(info.ObjectName), false, mp)
 
 		case plan.MetadataScanInfo_ENTRY_STATE:
 			vector.AppendFixed(opBat.Vecs[i], info.EntryState, false, mp)
@@ -175,8 +175,6 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			vector.AppendFixed(opBat.Vecs[i], info.IsHidden, false, mp)
 
 		case plan.MetadataScanInfo_META_LOC:
-			aa := objectio.Location(info.MetaLoc)
-			fmt.Printf("[metadatascan] metaloc name = %s, extend = %s\n", aa.Name().String(), aa.Extent().String())
 			vector.AppendBytes(opBat.Vecs[i], info.MetaLoc, false, mp)
 
 		case plan.MetadataScanInfo_DELTA_LOC:
