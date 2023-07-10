@@ -378,6 +378,11 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 
 	moCatalog = "mo_catalog"
+
+	SaveQueryResult     = "save_query_result"
+	QueryResultMaxsize  = "query_result_maxsize"
+	QueryResultTimeout  = "query_result_timeout"
+	LowerCaseTableNames = "lower_case_table_names"
 )
 
 type objectType int
@@ -6869,9 +6874,9 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if _, ok := configInitVariables[variable.Name]; ok {
-			addsqls := addInitSystemVariablesSql(sysAccountID, sysAccountName, pu)
-			for _, sql := range addsqls {
-				addSqlIntoSet(sql)
+			addsql := addInitSystemVariablesSql(sysAccountID, sysAccountName, variable.Name, pu)
+			if len(addsql) != 0 {
+				addSqlIntoSet(addsql)
 			}
 		} else {
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
@@ -7251,9 +7256,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if _, ok := configInitVariables[variable.Name]; ok {
-			addsqls := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), pu)
-			for _, sql := range addsqls {
-				addSqlIntoSet(sql)
+			addsql := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), variable.Name, pu)
+			if len(addsql) != 0 {
+				addSqlIntoSet(addsql)
 			}
 		} else {
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, newTenant.GetTenantID(), newTenant.GetTenant(), variable.Name, getVariableValue(variable.Default), true)
@@ -8383,26 +8388,27 @@ func isSuperUser(username string) bool {
 	return u == dumpName || u == rootName
 }
 
-func addInitSystemVariablesSql(accountId int, accountName string, pu *config.ParameterUnit) []string {
-	returnSql := make([]string, 0)
+func addInitSystemVariablesSql(accountId int, accountName, variable_name string, pu *config.ParameterUnit) string {
 	var initMoMysqlCompatibilityMode string
 
-	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(pu.SV.SaveQueryResult), true)
-		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
-	} else {
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue("off"), true)
-		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
+	switch variable_name {
+	case SaveQueryResult:
+		if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
+			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(pu.SV.SaveQueryResult), true)
+
+		} else {
+			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue("off"), true)
+		}
+
+	case QueryResultMaxsize:
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(pu.SV.QueryResultMaxsize), true)
+
+	case QueryResultTimeout:
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(pu.SV.QueryResultTimeout), true)
+
+	case LowerCaseTableNames:
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(pu.SV.LowerCaseTableNames), true)
 	}
 
-	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(pu.SV.QueryResultMaxsize), true)
-	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
-
-	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(pu.SV.QueryResultTimeout), true)
-	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
-
-	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(pu.SV.LowerCaseTableNames), true)
-	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
-
-	return returnSql
+	return initMoMysqlCompatibilityMode
 }

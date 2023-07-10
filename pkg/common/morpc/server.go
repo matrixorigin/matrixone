@@ -476,6 +476,7 @@ func (cs *clientSession) Close() error {
 		c.cache.Close()
 	}
 	cs.mu.caches = nil
+	cs.cancelWrite()
 	return cs.conn.Close()
 }
 
