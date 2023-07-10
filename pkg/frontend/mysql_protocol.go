@@ -467,7 +467,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numParams > 0 {
-		if err := mp.SendEOFPacketIf(0, 0); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -487,7 +487,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numColumns > 0 {
-		if err := mp.SendEOFPacketIf(0, 0); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -869,6 +869,10 @@ func (mp *MysqlProtocolImpl) readIntLenEnc(data []byte, pos int) (uint64, int, b
 	}
 	// 0-250
 	return uint64(data[pos]), pos + 1, true
+}
+
+func (mp *MysqlProtocolImpl) ReadIntLenEnc(data []byte, pos int) (uint64, int, bool) {
+	return mp.readIntLenEnc(data, pos)
 }
 
 // write an int with length encoded into the buffer at the position

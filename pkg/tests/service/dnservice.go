@@ -17,10 +17,11 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/google/uuid"
 

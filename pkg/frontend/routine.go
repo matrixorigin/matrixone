@@ -58,6 +58,16 @@ type Routine struct {
 
 	// the id of goroutine that executes the request
 	goroutineID uint64
+
+	restricted atomic.Bool
+}
+
+func (rt *Routine) setResricted(val bool) {
+	rt.restricted.Store(val)
+}
+
+func (rt *Routine) isRestricted() bool {
+	return rt.restricted.Load()
 }
 
 func (rt *Routine) increaseCount(counter func()) {

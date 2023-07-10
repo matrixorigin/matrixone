@@ -4790,10 +4790,10 @@ func TestReadCheckpoint(t *testing.T) {
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			if ins != nil {
-				t.Log(common.PrintApiBatch(ins, 3))
+				t.Log(common.ApiBatchToString(ins, 3))
 			}
 			if del != nil {
-				t.Log(common.PrintApiBatch(del, 3))
+				t.Log(common.ApiBatchToString(del, 3))
 			}
 		}
 	}
@@ -4805,10 +4805,10 @@ func TestReadCheckpoint(t *testing.T) {
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			if ins != nil {
-				t.Log(common.PrintApiBatch(ins, 3))
+				t.Log(common.ApiBatchToString(ins, 3))
 			}
 			if del != nil {
-				t.Log(common.PrintApiBatch(del, 3))
+				t.Log(common.ApiBatchToString(del, 3))
 			}
 		}
 	}

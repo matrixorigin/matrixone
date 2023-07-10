@@ -443,9 +443,3 @@ id    extract(month, replace(dd3, 20, 18))
 2    12
 3    12
 4    null
-SELECT UNIX_TIMESTAMP(REPLACE(dd2, '23:23', '10:10')) FROM replace_04;
-unix_timestamp(replace(dd2, 23:23, 10:10))
-1577909532.000000
-1610388623.000000
-1010772623.000000
-884373056.000000

@@ -15,15 +15,10 @@
 package logservice
 
 import (
-	"context"
-	"time"
-
 	"github.com/lni/dragonboat/v4"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type WrappedService struct {
@@ -69,26 +64,6 @@ func (w *WrappedService) SetInitialClusterInfo(
 	return w.svc.store.setInitialClusterInfo(
 		logShardNum, dnShardNum, logReplicaNum,
 	)
-}
-
-func (w *WrappedService) CreateInitTasks() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	ctx, span := trace.Start(ctx, "CreateInitTasks")
-	defer span.End()
-
-	for i := 0; i < checkBootstrapCycles; i++ {
-		select {
-		case <-ctx.Done():
-			return moerr.NewInternalError(ctx, "failed to create init tasks")
-		default:
-		}
-		if err := w.svc.createInitTasks(ctx); err == nil {
-			break
-		}
-		time.Sleep(time.Second)
-	}
-	return nil
 }
 
 func (w *WrappedService) GetTaskService() (taskservice.TaskService, bool) {

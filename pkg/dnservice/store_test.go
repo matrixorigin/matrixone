@@ -16,13 +16,14 @@ package dnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"math"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"

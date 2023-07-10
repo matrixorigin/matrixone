@@ -16,6 +16,8 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -406,6 +408,10 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 	})
 }
 func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
+	iarg, sarg, flush := fault.TriggerFault("flush_table_error")
+	if flush && (iarg == 0 || rand.Int63n(iarg) == 0) {
+		return moerr.NewInternalError(ctx, sarg)
+	}
 	makeCtx := func() *DirtyCtx {
 		tree := r.source.ScanInRangePruned(types.TS{}, ts)
 		tree.GetTree().Compact()

@@ -770,8 +770,6 @@ func (vt VisibleType) ToString() string {
 	}
 }
 
-func (vt *VisibleType) Format(ctx *FmtCtx) {}
-
 type IndexOption struct {
 	NodeFormatter
 	KeyBlockSize             uint64
@@ -1133,7 +1131,7 @@ type TableOptionEngineAttr struct {
 }
 
 func (node *TableOptionEngineAttr) Format(ctx *FmtCtx) {
-	ctx.WriteString("engine_attribute = ")
+	ctx.WriteString("ENGINE_ATTRIBUTE = ")
 	ctx.WriteString(node.Engine)
 }
 
@@ -1149,7 +1147,7 @@ type TableOptionInsertMethod struct {
 }
 
 func (node *TableOptionInsertMethod) Format(ctx *FmtCtx) {
-	ctx.WriteString("engine_attribute = ")
+	ctx.WriteString("INSERT_METHOD = ")
 	ctx.WriteString(node.Method)
 }
 
@@ -1219,7 +1217,7 @@ type TableOptionAUTOEXTEND_SIZE struct {
 }
 
 func (node *TableOptionAUTOEXTEND_SIZE) Format(ctx *FmtCtx) {
-	ctx.WriteString("autoextend_size = ")
+	ctx.WriteString("AUTOEXTEND_SIZE = ")
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
@@ -1466,14 +1464,14 @@ func NewTTableOptionStartTrans(v bool) *TableOptionStartTrans {
 	}
 }
 
-
 type TableOptionSecondaryEngineAttr struct {
 	tableOptionImpl
 	Attr string
 }
 
 func (node *TableOptionSecondaryEngineAttr) Format(ctx *FmtCtx) {
-	ctx.WriteString("START TRANSACTION")
+	ctx.WriteString("SECONDARY_ENGINE_ATTRIBUTE = ")
+	ctx.WriteString(node.Attr)
 }
 
 func NewTTableOptionSecondaryEngineAttr(v string) *TableOptionSecondaryEngineAttr {
@@ -2544,6 +2542,7 @@ type AccountStatusOption int
 const (
 	AccountStatusOpen AccountStatusOption = iota
 	AccountStatusSuspend
+	AccountStatusRestricted
 )
 
 func (aso AccountStatusOption) String() string {
@@ -2552,6 +2551,8 @@ func (aso AccountStatusOption) String() string {
 		return "open"
 	case AccountStatusSuspend:
 		return "suspend"
+	case AccountStatusRestricted:
+		return "restricted"
 	default:
 		return "open"
 	}
@@ -2569,6 +2570,8 @@ func (node *AccountStatus) Format(ctx *FmtCtx) {
 			ctx.WriteString(" open")
 		case AccountStatusSuspend:
 			ctx.WriteString(" suspend")
+		case AccountStatusRestricted:
+			ctx.WriteString(" restricted")
 		}
 	}
 }

@@ -340,7 +340,7 @@ import (
 %token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY AUTOEXTEND_SIZE
 
 // Account
-%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
+%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY RESTRICTED
 
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD
@@ -5101,22 +5101,29 @@ account_identified:
 account_status_option:
     {
         $$ = tree.AccountStatus{
-        Exist: false,
-    }
+            Exist: false,
+        }
     }
 |   OPEN
     {
-    $$ = tree.AccountStatus{
-        Exist: true,
-        Option: tree.AccountStatusOpen,
-    }
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusOpen,
+        }
     }
 |   SUSPEND
     {
-    $$ = tree.AccountStatus{
-        Exist: true,
-        Option: tree.AccountStatusSuspend,
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusSuspend,
+        }
     }
+|   RESTRICTED
+    {
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusRestricted,
+        }
     }
 
 account_comment_opt:
@@ -6295,7 +6302,7 @@ table_option:
     }
 |   INSERT_METHOD equal_opt insert_method_options
     {
-        $$ = tree.NewTableOptionEngineAttr($3)
+        $$ = tree.NewTableOptionInsertMethod($3)
     }
 |   KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
@@ -8782,7 +8789,7 @@ decimal_type:
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         return 1
         }
-        if $2.DisplayWith > 128 || $2.DisplayWith < 0 {
+        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
             yylex.Error("For decimal(M), M must between 0 and 38.")
                 return 1
         } else if $2.DisplayWith <= 16 {
@@ -8811,18 +8818,42 @@ decimal_type:
                 }
         }
     }
-// |   DECIMAL decimal_length_opt
-//     {
-//         $$ = tree.TYPE_DOUBLE
-//         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Scale = $2.Scale
-//     }
-// |   NUMERIC decimal_length_opt
-//     {
-//         $$ = tree.TYPE_DOUBLE
-//         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Scale = $2.Scale
-//     }
+|   NUMERIC decimal_length_opt
+    {
+        locale := ""
+        if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
+        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+        return 1
+        }
+        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
+            yylex.Error("For decimal(M), M must between 0 and 38.")
+                return 1
+        } else if $2.DisplayWith <= 16 {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  64,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+        }
+        } else {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  128,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+                }
+        }
+    }
 |   REAL float_length_opt
     {
         locale := ""
