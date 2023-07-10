@@ -53,13 +53,6 @@ func WithServerMaxMessageSize(maxMessageSize int64) ServerOption {
 	}
 }
 
-// WithServerPayloadCopyBufferSize sets payload copy buffer size
-func WithServerPayloadCopyBufferSize(size int64) ServerOption {
-	return func(s *LogtailServer) {
-		s.cfg.RpcPayloadCopyBufferSize = size
-	}
-}
-
 // WithServerEnableChecksum enables checksum
 func WithServerEnableChecksum(enable bool) ServerOption {
 	return func(s *LogtailServer) {
@@ -78,13 +71,6 @@ func WithServerCollectInterval(interval time.Duration) ServerOption {
 func WithServerSendTimeout(timeout time.Duration) ServerOption {
 	return func(s *LogtailServer) {
 		s.cfg.ResponseSendTimeout = timeout
-	}
-}
-
-// FIXME: is MaxLogtailFetchFailure necessary?
-func WithServerMaxLogtailFetchFailure(max int) ServerOption {
-	return func(s *LogtailServer) {
-		s.cfg.MaxLogtailFetchFailure = max
 	}
 }
 
