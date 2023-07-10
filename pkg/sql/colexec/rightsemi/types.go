@@ -61,6 +61,8 @@ type container struct {
 	mp *hashmap.JoinMap
 
 	matched *bitmap.Bitmap
+
+	handledLast bool
 }
 
 type Argument struct {
@@ -82,6 +84,18 @@ type Argument struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
+		if !ctr.handledLast {
+			if arg.NumCPU > 0 {
+				if arg.IsMerger {
+					for i := uint64(1); i < arg.NumCPU; i++ {
+						<-arg.Channel
+					}
+				} else {
+					arg.Channel <- ctr.matched
+				}
+			}
+			ctr.handledLast = true
+		}
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanEvalVectors()
