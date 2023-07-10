@@ -46,7 +46,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	}
 	if !updatePlanCtxs[0].checkInsertPkDup {
 		pkFilterExpr := getPkFilterExpr(builder, tblInfo.tableDefs[0])
-		updatePlanCtxs[0].pkFilterExpr = pkFilterExpr
+		updatePlanCtxs[0].pkFilterExpr = []*Expr{pkFilterExpr}
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 

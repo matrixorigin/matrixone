@@ -52,7 +52,7 @@ func getDmlPlanCtx() *dmlPlanCtx {
 	ctx.isFkRecursionCall = false
 	ctx.lockTable = false
 	ctx.checkInsertPkDup = false
-	ctx.pkFilterExpr = nil
+	ctx.pkFilterExpr = ctx.pkFilterExpr[:0]
 	ctx.updatePkCol = true
 	return ctx
 }
@@ -97,7 +97,7 @@ type dmlPlanCtx struct {
 	lockTable         bool //we need lock table in stmt: delete from tbl
 	checkInsertPkDup  bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
 	updatePkCol       bool //if update stmt will update the primary key or one of pks
-	pkFilterExpr      *Expr
+	pkFilterExpr      []*Expr
 }
 
 // information of deleteNode, which is about the deleted table
@@ -119,7 +119,7 @@ type deleteNodeInfo struct {
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
-	checkInsertPkDup bool, pkFilterExpr *Expr) error {
+	checkInsertPkDup bool, pkFilterExpr []*Expr) error {
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
@@ -735,7 +735,7 @@ func makeInsertPlan(
 	isFkRecursionCall bool,
 	checkInsertPkDup bool,
 	updatePkCol bool,
-	pkFilterExpr *Expr,
+	pkFilterExpr []*Expr,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -939,8 +939,10 @@ func makeInsertPlan(
 
 				colPos := make(map[int32]int32)
 				colPos[int32(pkPos)] = 0
-				if pkFilterExpr != nil {
-					getColPos(pkFilterExpr, colPos)
+				if len(pkFilterExpr) > 0 {
+					for _, e := range pkFilterExpr {
+						getColPos(e, colPos)
+					}
 				}
 				var newCols []*ColDef
 				rowIdIdx := len(scanTableDef.Cols) - 1
@@ -996,14 +998,20 @@ func makeInsertPlan(
 						},
 					},
 				}
-				if pkFilterExpr != nil {
-					resetColPos(pkFilterExpr, colPos)
-					filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{scanPkExpr, pkFilterExpr})
-					if err != nil {
-						return err
+				if len(pkFilterExpr) > 0 {
+					for _, e := range pkFilterExpr {
+						resetColPos(e, colPos)
 					}
-					scanNode.FilterList = []*Expr{filterExpr}
-					scanNode.BlockFilterList = []*Expr{DeepCopyExpr(filterExpr)}
+					blockFilters := make([]*Expr, len(pkFilterExpr))
+					for i, e := range pkFilterExpr {
+						blockFilters[i] = DeepCopyExpr(e)
+					}
+					// filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{scanPkExpr, pkFilterExpr})
+					// if err != nil {
+					// 	return err
+					// }
+					scanNode.FilterList = pkFilterExpr
+					scanNode.BlockFilterList = blockFilters
 				}
 				rightId := builder.appendNode(scanNode, bindCtx)
 
@@ -1208,103 +1216,123 @@ func makeInsertPlan(
 			}
 
 			if !isUpdate && !builder.qry.LoadTag { // insert stmt but not load
-				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				scanTableDef := DeepCopyTableDef(tableDef)
-				scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
-				scanNode := &plan.Node{
-					NodeType: plan.Node_TABLE_SCAN,
-					Stats:    &plan.Stats{},
-					ObjRef:   objRef,
-					TableDef: scanTableDef,
-					ProjectList: []*Expr{{
+				if !checkInsertPkDup && pkFilterExpr != nil {
+					scanTableDef := DeepCopyTableDef(tableDef)
+					// scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
+					scanNode := &plan.Node{
+						NodeType: plan.Node_TABLE_SCAN,
+						Stats:    &plan.Stats{},
+						ObjRef:   objRef,
+						TableDef: scanTableDef,
+						ProjectList: []*Expr{{
+							Typ: pkTyp,
+							Expr: &plan.Expr_Col{
+								Col: &ColRef{
+									ColPos: int32(pkPos),
+									Name:   tableDef.Pkey.PkeyColName,
+								},
+							},
+						}},
+					}
+
+					// filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					// 	Typ: pkTyp,
+					// 	Expr: &plan.Expr_Col{
+					// 		Col: &ColRef{
+					// 			Name: tableDef.Pkey.PkeyColName,
+					// 		},
+					// 	},
+					// }, pkFilterExpr})
+					// if err != nil {
+					// 	return err
+					// }
+					scanNode.FilterList = pkFilterExpr
+					scanNode.BlockFilterList = pkFilterExpr
+					lastNodeId = builder.appendNode(scanNode, bindCtx)
+				} else {
+					lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+					scanTableDef := DeepCopyTableDef(tableDef)
+					scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
+					scanNode := &plan.Node{
+						NodeType: plan.Node_TABLE_SCAN,
+						Stats:    &plan.Stats{},
+						ObjRef:   objRef,
+						TableDef: scanTableDef,
+						ProjectList: []*Expr{{
+							Typ: pkTyp,
+							Expr: &plan.Expr_Col{
+								Col: &ColRef{
+									ColPos: 0,
+									Name:   tableDef.Pkey.PkeyColName,
+								},
+							},
+						}},
+						RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
+							{
+								Tag: rfTag,
+								Expr: &plan.Expr{
+									Typ: DeepCopyType(pkTyp),
+									Expr: &plan.Expr_Col{
+										Col: &plan.ColRef{
+											RelPos: 0,
+											ColPos: 0,
+											Name:   tableDef.Pkey.PkeyColName,
+										},
+									},
+								},
+							},
+						},
+					}
+					rightId := builder.appendNode(scanNode, bindCtx)
+
+					leftExpr := &Expr{
 						Typ: pkTyp,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
-								ColPos: 0,
+								RelPos: 1,
+								ColPos: int32(pkPos),
 								Name:   tableDef.Pkey.PkeyColName,
 							},
 						},
-					}},
-					RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
-						{
-							Tag: rfTag,
-							Expr: &plan.Expr{
-								Typ: DeepCopyType(pkTyp),
-								Expr: &plan.Expr_Col{
-									Col: &plan.ColRef{
-										RelPos: 0,
-										ColPos: 0,
-										Name:   tableDef.Pkey.PkeyColName,
-									},
-								},
-							},
-						},
-					},
-				}
-				if !checkInsertPkDup && pkFilterExpr != nil {
-					filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					}
+					rightExpr := &Expr{
 						Typ: pkTyp,
 						Expr: &plan.Expr_Col{
-							Col: &ColRef{
+							Col: &plan.ColRef{
 								Name: tableDef.Pkey.PkeyColName,
 							},
 						},
-					}, pkFilterExpr})
+					}
+					condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{rightExpr, leftExpr})
 					if err != nil {
 						return err
 					}
-					scanNode.FilterList = []*Expr{filterExpr}
-					scanNode.BlockFilterList = []*Expr{DeepCopyExpr(filterExpr)}
-				}
-				rightId := builder.appendNode(scanNode, bindCtx)
 
-				leftExpr := &Expr{
-					Typ: pkTyp,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							RelPos: 1,
-							ColPos: int32(pkPos),
-							Name:   tableDef.Pkey.PkeyColName,
-						},
-					},
-				}
-				rightExpr := &Expr{
-					Typ: pkTyp,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							Name: tableDef.Pkey.PkeyColName,
-						},
-					},
-				}
-				condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{rightExpr, leftExpr})
-				if err != nil {
-					return err
-				}
-
-				joinNode := &plan.Node{
-					NodeType: plan.Node_JOIN,
-					Children: []int32{rightId, lastNodeId},
-					//Children: []int32{lastNodeId, rightId},
-					JoinType:    plan.Node_SEMI,
-					OnList:      []*Expr{condExpr},
-					BuildOnLeft: true,
-					ProjectList: []*Expr{leftExpr},
-					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
-						{
-							Tag: rfTag,
-							Expr: &plan.Expr{
-								Typ: DeepCopyType(pkTyp),
-								Expr: &plan.Expr_Col{
-									Col: &plan.ColRef{
-										RelPos: 0,
-										ColPos: 0,
+					joinNode := &plan.Node{
+						NodeType: plan.Node_JOIN,
+						Children: []int32{rightId, lastNodeId},
+						//Children: []int32{lastNodeId, rightId},
+						JoinType:    plan.Node_SEMI,
+						OnList:      []*Expr{condExpr},
+						BuildOnLeft: true,
+						ProjectList: []*Expr{leftExpr},
+						RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
+							{
+								Tag: rfTag,
+								Expr: &plan.Expr{
+									Typ: DeepCopyType(pkTyp),
+									Expr: &plan.Expr_Col{
+										Col: &plan.ColRef{
+											RelPos: 0,
+											ColPos: 0,
+										},
 									},
 								},
 							},
 						},
-					},
+					}
+					lastNodeId = builder.appendNode(joinNode, bindCtx)
 				}
-				lastNodeId = builder.appendNode(joinNode, bindCtx)
 
 				colExpr := &Expr{
 					Typ: pkTyp,
