@@ -22,6 +22,7 @@ import (
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -241,6 +242,11 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
+	t0 := time.Now()
+	defer func() {
+		partitionStateProfileHandler.AddSample(time.Since(t0))
+	}()
+
 	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	batch, err := batch.ProtoBatchToBatch(input)
@@ -294,7 +300,6 @@ func (p *PartitionState) HandleRowsInsert(
 		})
 	}
 
-	partitionStateProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.InsertEntries.Add(1)
@@ -308,6 +313,11 @@ func (p *PartitionState) HandleRowsInsert(
 func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
+
+	t0 := time.Now()
+	defer func() {
+		partitionStateProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	timeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
@@ -351,7 +361,6 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 		})
 	}
 
-	partitionStateProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.DeleteEntries.Add(1)
@@ -361,6 +370,11 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Batch) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataInsert")
 	defer task.End()
+
+	t0 := time.Now()
+	defer func() {
+		partitionStateProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	createTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
@@ -467,7 +481,6 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 		})
 	}
 
-	partitionStateProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.MetadataInsertEntries.Add(1)
@@ -479,6 +492,11 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Batch) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataDelete")
 	defer task.End()
+
+	t0 := time.Now()
+	defer func() {
+		partitionStateProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
@@ -503,7 +521,6 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 		})
 	}
 
-	partitionStateProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.MetadataDeleteEntries.Add(1)

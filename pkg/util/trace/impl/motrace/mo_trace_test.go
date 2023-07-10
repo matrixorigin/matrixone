@@ -255,6 +255,7 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, longTimeSpan.(*MOSpan).needRecord)
 	require.Equal(t, 2, len(longTimeSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, true, longTimeSpan.(*MOSpan).doneProfile)
 	require.Equal(t, extraFields, longTimeSpan.(*MOSpan).ExtraFields)
 
 	// span with deadline context
@@ -272,6 +273,7 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, deadlineSpan.(*MOSpan).needRecord)
 	require.Equal(t, 1, len(deadlineSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, true, deadlineSpan.(*MOSpan).doneProfile)
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan.(*MOSpan).ExtraFields)
 
 	// span with deadline context (plus calling cancel2() before func return)
@@ -290,7 +292,48 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, deadlineSpan2.(*MOSpan).needRecord)
 	require.Equal(t, 1, len(deadlineSpan2.(*MOSpan).ExtraFields))
+	require.Equal(t, true, deadlineSpan2.(*MOSpan).doneProfile)
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan2.(*MOSpan).ExtraFields)
+
+	// span with hung option, with Deadline situation
+	caseHungOptionWithDeadline := func() {
+		defer cancel()
+		var hungSpan trace.Span
+		WG.Add(1)
+		go func() {
+			_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Millisecond))
+			defer WG.Done()
+			defer hungSpan.End()
+
+			time.Sleep(10 * time.Millisecond)
+		}()
+		WG.Wait()
+		require.Equal(t, true, hungSpan.(*MOHungSpan).needRecord)
+		require.Equal(t, 1, len(hungSpan.(*MOHungSpan).ExtraFields))
+		require.Equal(t, true, hungSpan.(*MOHungSpan).doneProfile)
+		require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, hungSpan.(*MOHungSpan).ExtraFields)
+	}
+	caseHungOptionWithDeadline()
+
+	// span with hung option, with NO Deadline situation
+	caseHungOptionWithoutDeadline := func() {
+		defer cancel()
+		var hungSpan trace.Span
+		WG.Add(1)
+		go func() {
+			_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Minute))
+			defer WG.Done()
+			defer hungSpan.End()
+
+			time.Sleep(10 * time.Millisecond)
+		}()
+		WG.Wait()
+		require.Equal(t, false, hungSpan.(*MOHungSpan).needRecord)
+		require.Equal(t, 0, len(hungSpan.(*MOHungSpan).ExtraFields))
+		require.Equal(t, false, hungSpan.(*MOHungSpan).doneProfile)
+	}
+	caseHungOptionWithoutDeadline()
+
 }
 
 type dummyFileWriterFactory struct{}
@@ -357,9 +400,49 @@ func TestMOSpan_doProfile(t *testing.T) {
 			},
 		},
 		{
+			name: "threadcreate",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileThreadCreate()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "allocs",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileAllocs()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "block",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileBlock()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "mutex",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileMutex()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
 			name: "cpu",
 			fields: fields{
 				opts:   []trace.SpanStartOption{trace.WithProfileCpuSecs(time.Second)},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "trace",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileTraceSecs(time.Second)},
 				ctx:    ctx,
 				tracer: tracer,
 			},
@@ -371,4 +454,34 @@ func TestMOSpan_doProfile(t *testing.T) {
 			s.End()
 		})
 	}
+}
+
+func TestMOHungSpan_loop(t *testing.T) {
+
+	defer func() {
+		err := recover()
+		require.Nilf(t, err, "error: %s", err)
+	}()
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	_, span := tracer.Start(ctx, "test_loop", trace.WithHungThreshold(time.Hour))
+
+	hungSpan := span.(*MOHungSpan)
+	quitCancel := hungSpan.quitCancel
+	var ctrlWG sync.WaitGroup
+	ctrlWG.Add(1)
+	hungSpan.quitCancel = context.CancelFunc(func() {
+		// do nothing
+	})
+	// should not panic
+	span.End()
+	hungSpan.MOSpan = nil
+	hungSpan.mux.Lock()
+	hungSpan.deadlineCancel()
+	quitCancel()
+	hungSpan.mux.Unlock()
+	time.Sleep(time.Second)
 }
