@@ -51,6 +51,8 @@ enum CmdMethod {
     SyncCommit      = 9;
     // GetCommit get latest commit timestamp of cn.
     GetCommit       = 10;
+    // AddFaultPoint add a fault point
+    AddFaultPoint   = 11;
 }
 
 // DNPingRequest ping request
