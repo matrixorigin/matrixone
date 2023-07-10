@@ -84,11 +84,14 @@ func (l *store) truncationWorker(ctx context.Context) {
 		l.runtime.Logger().Info("truncation worker stopped")
 	}()
 
-	if l.cfg.TruncateInterval.Duration == 0 {
+	if l.cfg.TruncateInterval.Duration == 0 || l.cfg.HAKeeperTruncateInterval.Duration == 0 {
 		panic("TruncateInterval is 0")
 	}
 	ticker := time.NewTicker(l.cfg.TruncateInterval.Duration)
 	defer ticker.Stop()
+
+	haTicker := time.NewTicker(l.cfg.HAKeeperTruncateInterval.Duration)
+	defer haTicker.Stop()
 
 	for {
 		select {
@@ -98,10 +101,9 @@ func (l *store) truncationWorker(ctx context.Context) {
 			if err := l.processTruncateLog(ctx); err != nil {
 				l.runtime.Logger().Error("truncate failed", zap.Error(err))
 			}
-			select {
-			case <-ctx.Done():
-				return
-			default:
+		case <-haTicker.C:
+			if err := l.processHAKeeperTruncation(ctx); err != nil {
+				l.runtime.Logger().Error("HAKeeper truncate failed", zap.Error(err))
 			}
 		}
 	}
@@ -250,6 +252,31 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 				zap.Error(err))
 			return err
 		}
+	}
+	return nil
+}
+
+// processHAKeeperTruncation processes the truncation for HAKeeper shard.
+// It is different from the other shards. For HAKeeper shard, we just send
+// snapshot request to dragonboat directly and nothing else needs to do.
+func (l *store) processHAKeeperTruncation(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	v, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.IndexQuery{})
+	if err != nil {
+		return err
+	}
+	lsn := v.(uint64)
+	if lsn > 1 {
+		opts := dragonboat.SnapshotOption{
+			OverrideCompactionOverhead: true,
+			CompactionIndex:            lsn - 1,
+		}
+		if _, err := l.nh.SyncRequestSnapshot(ctx, hakeeper.DefaultHAKeeperShardID, opts); err != nil {
+			l.runtime.Logger().Error("SyncRequestSnapshot failed", zap.Error(err))
+			return err
+		}
+		l.runtime.Logger().Info("HAKeeper shard truncated", zap.Uint64("LSN", lsn))
 	}
 	return nil
 }
