@@ -2478,6 +2478,18 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
 
+	// record goroutine info when ddl stmt run timeout
+	switch stmt.(type) {
+	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
+		_, span := trace.Start(requestCtx, "executeStmtHung",
+			trace.WithHungThreshold(time.Minute), // be careful with this options
+			trace.WithProfileGoroutine(),
+			trace.WithProfileTraceSecs(10*time.Second),
+		)
+		defer span.End()
+	default:
+	}
+
 	//execution succeeds during the transaction. commit the transaction
 	commitTxnFunc := func() error {
 		//load data handle txn failure internally
