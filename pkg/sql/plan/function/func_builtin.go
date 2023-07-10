@@ -844,8 +844,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 	}
 
-	vec := result.GetResultVector()
-	vec.SetLength(0)
+	rs := vector.MustFunctionResult[int64](result)
 
 	keys := make([][]byte, hashmap.UnitLimit)
 	states := make([][3]uint64, hashmap.UnitLimit)
@@ -854,12 +853,14 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		for j := 0; j < n; j++ {
+			keys[j] = keys[j][:0]
+		}
 		encodeHashKeys(keys, parameters, i, n)
+
 		hashtable.BytesBatchGenHashStates(&keys[0], &states[0], n)
 		for j := 0; j < n; j++ {
-			if err := vector.AppendFixed(vec, int64(states[j][0]), false, proc.Mp()); err != nil {
-				return err
-			}
+			rs.AppendMustValue(int64(states[j][0]))
 		}
 	}
 	return nil
