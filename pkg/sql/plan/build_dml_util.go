@@ -273,8 +273,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			unionNodeId := builder.appendNode(unionNode, bindCtx)
 			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
 			endStep := builder.appendStep(newSinkNodeId)
-			for _, n := range builder.qry.Nodes {
-				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep == int32(step) {
+			for i, n := range builder.qry.Nodes {
+				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
 					n.SourceStep = endStep
 				}
 			}

@@ -102,7 +102,8 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.proc = proc
 	c.stmt = stmt
 	c.addr = addr
-	c.stepRegs = make(map[int32][]*process.WaitRegister)
+	c.nodeRegs = make(map[int32]*process.WaitRegister)
+	c.stepRegs = make(map[int32][]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
 	return c
@@ -125,6 +126,9 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
+	for k := range c.nodeRegs {
+		delete(c.nodeRegs, k)
+	}
 	for k := range c.stepRegs {
 		delete(c.stepRegs, k)
 	}
@@ -608,6 +612,14 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 
 	c.initAnalyze(qry)
 
+	//deal with sink scan first.
+	for i := len(qry.Steps) - 1; i >= 0; i-- {
+		err := c.compileSinkScan(qry, qry.Steps[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	steps := make([]*Scope, 0, len(qry.Steps))
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
 		scopes, err := c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
@@ -621,6 +633,34 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		steps = append(steps, scope)
 	}
 	return steps, err
+}
+
+func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
+	n := qry.Nodes[nodeId]
+	for _, childId := range n.Children {
+		err := c.compileSinkScan(qry, childId)
+		if err != nil {
+			return err
+		}
+	}
+
+	if n.NodeType == plan.Node_SINK_SCAN {
+		var wr *process.WaitRegister
+		if c.anal.qry.LoadTag {
+			wr = &process.WaitRegister{
+				Ctx: c.ctx,
+				Ch:  make(chan *batch.Batch, ncpu),
+			}
+		} else {
+			wr = &process.WaitRegister{
+				Ctx: c.ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+
+		}
+		c.appendStepRegs(n.SourceStep, nodeId, wr)
+	}
+	return nil
 }
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
@@ -1089,14 +1129,16 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
 			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 		}
-		if c.anal.qry.LoadTag {
-			rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, ncpu) // reset the channel buffer of sink for load
+		receiver, ok := c.getNodeReg(curNodeIdx)
+		if !ok {
+			return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
 		}
-		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
+		receiver.Ctx = rs.Proc.Ctx
+		rs.Proc.Reg.MergeReceivers[0] = receiver
 		return []*Scope{rs}, nil
 	case plan.Node_SINK:
-		receivers, ok := c.getStepRegs(step)
-		if !ok {
+		receivers := c.getStepRegs(step, ns)
+		if len(receivers) == 0 {
 			return nil, moerr.NewInternalError(c.ctx, "no data receiver for sink node")
 		}
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -1115,18 +1157,34 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	}
 }
 
-func (c *Compile) appendStepRegs(step int32, reg *process.WaitRegister) {
-	if _, ok := c.stepRegs[step]; !ok {
-		c.stepRegs[step] = make([]*process.WaitRegister, 0, 1)
+func (c *Compile) appendStepRegs(step int32, nodeId int32, reg *process.WaitRegister) {
+	if _, ok := c.nodeRegs[nodeId]; !ok {
+		c.nodeRegs[nodeId] = reg
 	}
-	c.stepRegs[step] = append(c.stepRegs[step], reg)
+	if _, ok := c.stepRegs[step]; !ok {
+		c.stepRegs[step] = []int32{nodeId}
+	} else {
+		c.stepRegs[step] = append(c.stepRegs[step], nodeId)
+	}
 }
 
-func (c *Compile) getStepRegs(step int32) ([]*process.WaitRegister, bool) {
-	if channels, ok := c.stepRegs[step]; !ok {
+func (c *Compile) getNodeReg(nodeId int32) (*process.WaitRegister, bool) {
+	if channels, ok := c.nodeRegs[nodeId]; !ok {
 		return nil, false
 	} else {
 		return channels, true
+	}
+}
+
+func (c *Compile) getStepRegs(step int32, ns []*plan.Node) []*process.WaitRegister {
+	if _, ok := c.stepRegs[step]; !ok {
+		return nil
+	} else {
+		var wrs []*process.WaitRegister
+		for _, nodeId := range c.stepRegs[step] {
+			wrs = append(wrs, c.nodeRegs[nodeId])
+		}
+		return wrs
 	}
 }
 
