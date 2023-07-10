@@ -1358,27 +1358,17 @@ func makeOneDeletePlan(
 	lastNodeId int32,
 	delNodeInfo *deleteNodeInfo,
 ) (int32, error) {
-	// append lock
-	lockTarget := &plan.LockTarget{
-		TableId:            delNodeInfo.tableDef.TblId,
-		PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
-		PrimaryColTyp:      delNodeInfo.pkTyp,
-		RefreshTsIdxInBat:  -1, //unsupport now
-		FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
-		LockTable:          delNodeInfo.lockTable,
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		delNodeInfo.tableDef,
+		delNodeInfo.lockTable,
+		delNodeInfo.partitionIdx,
+		delNodeInfo.partTableIDs,
+	); ok {
+		lastNodeId = lockNodeId
 	}
-
-	if delNodeInfo.tableDef.Partition != nil {
-		lockTarget.IsPartitionTable = true
-		lockTarget.PartitionTableIds = delNodeInfo.partTableIDs
-	}
-
-	lockNode := &Node{
-		NodeType:    plan.Node_LOCK_OP,
-		Children:    []int32{lastNodeId},
-		LockTargets: []*plan.LockTarget{lockTarget},
-	}
-	lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 	// append delete node
 	deleteNode := &Node{
@@ -1829,27 +1819,17 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 	}
 
-	// todo: append lock
-	pkPos, pkTyp := getPkPos(tableDef, false)
-	lockTarget := &plan.LockTarget{
-		TableId:            tableDef.TblId,
-		PrimaryColIdxInBat: int32(pkPos),
-		PrimaryColTyp:      pkTyp,
-		RefreshTsIdxInBat:  -1, //unsupport now
-		FilterColIdxInBat:  int32(partitionIdx),
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		tableDef,
+		false,
+		partitionIdx,
+		partTableIds,
+	); ok {
+		lastNodeId = lockNodeId
 	}
-
-	if tableDef.Partition != nil {
-		lockTarget.IsPartitionTable = true
-		lockTarget.PartitionTableIds = partTableIds
-	}
-
-	lockNode := &Node{
-		NodeType:    plan.Node_LOCK_OP,
-		Children:    []int32{lastNodeId},
-		LockTargets: []*plan.LockTarget{lockTarget},
-	}
-	lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 	return lastNodeId
 }
@@ -1936,20 +1916,17 @@ func appendPreInsertUkPlan(
 	}
 	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
 
-	pkPos, pkTyp := getPkPos(uniqueTableDef, false)
-	lockTarget := &plan.LockTarget{
-		TableId:            uniqueTableDef.TblId,
-		PrimaryColIdxInBat: int32(pkPos),
-		PrimaryColTyp:      pkTyp,
-		RefreshTsIdxInBat:  -1, //unsupport now
-		FilterColIdxInBat:  -1,
+	if lockNodeId, ok := appendLockNode(
+		builder,
+		bindCtx,
+		lastNodeId,
+		tableDef,
+		false,
+		-1,
+		nil,
+	); ok {
+		lastNodeId = lockNodeId
 	}
-	lockNode := &Node{
-		NodeType:    plan.Node_LOCK_OP,
-		Children:    []int32{lastNodeId},
-		LockTargets: []*plan.LockTarget{lockTarget},
-	}
-	lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
@@ -2329,4 +2306,43 @@ func appendInsertNode(
 	}
 	lastNodeId = builder.appendNode(insertNode, bindCtx)
 	return lastNodeId
+}
+
+func appendLockNode(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	lastNodeId int32,
+	tableDef *TableDef,
+	lockTable bool,
+	partitionIdx int,
+	partTableIDs []uint64,
+) (int32, bool) {
+	// if do not lock table without pk. you can change to:
+	// pkPos, pkTyp := getPkPos(tableDef, true)
+	pkPos, pkTyp := getPkPos(tableDef, false)
+	if pkPos == -1 {
+		return 0, false
+	}
+
+	lockTarget := &plan.LockTarget{
+		TableId:            tableDef.TblId,
+		PrimaryColIdxInBat: int32(pkPos),
+		PrimaryColTyp:      pkTyp,
+		RefreshTsIdxInBat:  -1, //unsupport now
+		LockTable:          lockTable,
+	}
+
+	if tableDef.Partition != nil {
+		lockTarget.IsPartitionTable = true
+		lockTarget.FilterColIdxInBat = int32(partitionIdx)
+		lockTarget.PartitionTableIds = partTableIDs
+	}
+
+	lockNode := &Node{
+		NodeType:    plan.Node_LOCK_OP,
+		Children:    []int32{lastNodeId},
+		LockTargets: []*plan.LockTarget{lockTarget},
+	}
+	lastNodeId = builder.appendNode(lockNode, bindCtx)
+	return lastNodeId, true
 }
