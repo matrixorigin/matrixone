@@ -199,8 +199,6 @@ func startLogtailServer(
 		WithServerSendTimeout(5*time.Second),
 		WithServerEnableChecksum(true),
 		WithServerMaxMessageSize(32+7),
-		WithServerPayloadCopyBufferSize(16*mpool.KB),
-		WithServerMaxLogtailFetchFailure(5),
 	)
 	require.NoError(t, err)
 

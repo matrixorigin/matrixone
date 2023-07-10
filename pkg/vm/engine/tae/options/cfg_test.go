@@ -25,8 +25,6 @@ func TestLogtailServerCfg(t *testing.T) {
 	validated.Validate()
 	defaults := NewDefaultLogtailServerCfg()
 	require.Equal(t, defaults.RpcMaxMessageSize, validated.RpcMaxMessageSize)
-	require.Equal(t, defaults.RpcPayloadCopyBufferSize, validated.RpcPayloadCopyBufferSize)
 	require.Equal(t, defaults.LogtailCollectInterval, validated.LogtailCollectInterval)
 	require.Equal(t, defaults.ResponseSendTimeout, validated.ResponseSendTimeout)
-	require.Equal(t, defaults.MaxLogtailFetchFailure, validated.MaxLogtailFetchFailure)
 }
