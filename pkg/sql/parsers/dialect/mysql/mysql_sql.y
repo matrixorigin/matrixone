@@ -340,7 +340,7 @@ import (
 %token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY
 
 // Account
-%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
+%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY RESTRICTED
 
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD
@@ -5097,22 +5097,29 @@ account_identified:
 account_status_option:
     {
         $$ = tree.AccountStatus{
-        Exist: false,
-    }
+            Exist: false,
+        }
     }
 |   OPEN
     {
-    $$ = tree.AccountStatus{
-        Exist: true,
-        Option: tree.AccountStatusOpen,
-    }
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusOpen,
+        }
     }
 |   SUSPEND
     {
-    $$ = tree.AccountStatus{
-        Exist: true,
-        Option: tree.AccountStatusSuspend,
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusSuspend,
+        }
     }
+|   RESTRICTED
+    {
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusRestricted,
+        }
     }
 
 account_comment_opt:

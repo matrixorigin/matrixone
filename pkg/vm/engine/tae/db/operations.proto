@@ -71,3 +71,12 @@ message CatalogResp {
     string Item                 = 1;
     repeated CatalogResp Sub    = 2;
 }
+
+message FaultPoint {
+    option (gogoproto.typedecl) = false;
+    string Name                 = 1;
+    string Freq                 = 2;
+    string Action               = 3;
+    int64 Iarg                  = 4;
+    string Sarg                 = 5;
+}

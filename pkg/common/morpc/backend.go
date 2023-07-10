@@ -25,6 +25,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -658,6 +659,9 @@ func (rb *remoteBackend) stopWriteLoop() {
 
 func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMessage, err error, cb func()) {
 	response := msg.Message
+	if msg.Cancel != nil {
+		defer msg.Cancel()
+	}
 	if ce := rb.logger.Check(zap.DebugLevel, "read response"); ce != nil {
 		debugStr := ""
 		if response != nil {
@@ -1014,6 +1018,9 @@ func (s *stream) done(
 		s.cleanCLocked()
 	}
 	response := message.Message
+	if message.Cancel != nil {
+		defer message.Cancel()
+	}
 	if response != nil && !message.stream {
 		panic("BUG")
 	}
@@ -1023,10 +1030,12 @@ func (s *stream) done(
 	}
 
 	s.lastReceivedSequence = message.streamSequence
-	select {
-	case s.c <- response:
-	case <-ctx.Done():
-	}
+	moprobe.WithRegion(ctx, moprobe.RPCStreamReceive, func() {
+		select {
+		case s.c <- response:
+		case <-ctx.Done():
+		}
+	})
 }
 
 func (s *stream) cleanCLocked() {

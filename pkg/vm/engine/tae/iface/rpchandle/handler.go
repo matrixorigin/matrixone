@@ -90,4 +90,11 @@ type Handler interface {
 		req *db.InspectDN,
 		resp *db.InspectResp,
 	) (func(), error)
+
+	HandleAddFaultPoint(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.FaultPoint,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 }

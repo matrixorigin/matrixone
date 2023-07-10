@@ -8,7 +8,7 @@ create database if not exists ssb;
 use ssb;
 /* cloud_user */drop table if exists __mo_t1;
 /* cloud_nonuser */ create table __mo_t1(a int);
-insert into __mo_t1 values(1);
+/* cloud_user */insert into __mo_t1 values(1);
 /* cloud_user */select * from __mo_t1;
 /* cloud_nonuser */ use system;/* cloud_user */show tables;
 -- @session

@@ -187,11 +187,24 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		// add update expr to project list
 		updateColPosMap := make(map[string]int)
 		offset := len(tableDef.Cols)
+		updatePkCol := false
+		var pkNameMap = make(map[string]struct{})
+		if tableDef.Pkey != nil {
+			for _, pkName := range tableDef.Pkey.Names {
+				pkNameMap[pkName] = struct{}{}
+			}
+		} else {
+			// we don't known if update pk. just set true and let check pk dup work
+			updatePkCol = true
+		}
 		for colName, updateKey := range updateKeys {
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateKey,
 			})
 			updateColPosMap[colName] = offset
+			if _, ok := pkNameMap[colName]; ok {
+				updatePkCol = true
+			}
 			offset++
 		}
 
@@ -206,6 +219,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 		upPlanCtx.checkInsertPkDup = checkInsertPkDup
+		upPlanCtx.updatePkCol = updatePkCol
 
 		for idx, col := range tableDef.Cols {
 			// row_id、compPrimaryKey、clusterByKey will not inserted from old data
@@ -257,15 +271,17 @@ func getPkFilterExpr(builder *QueryBuilder, tableDef *TableDef) *Expr {
 			continue
 		}
 
-		pkName := fmt.Sprintf("%s.%s", tableDef.Name, tableDef.Pkey.PkeyColName)
+		basePkName := tableDef.Pkey.PkeyColName
+		tblAndPkName := fmt.Sprintf("%s.%s", tableDef.Name, tableDef.Pkey.PkeyColName)
 		if e, ok := node.FilterList[0].Expr.(*plan.Expr_F); ok && e.F.Func.ObjName == "=" {
-			if pkExpr, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok && pkExpr.Col.Name == pkName {
+			if pkExpr, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
 				return DeepCopyExpr(e.F.Args[1])
 			}
 
-			if pkExpr, ok := e.F.Args[1].Expr.(*plan.Expr_Col); ok && pkExpr.Col.Name == pkName {
+			if pkExpr, ok := e.F.Args[1].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
 				return DeepCopyExpr(e.F.Args[0])
 			}
+
 		}
 	}
 	return nil

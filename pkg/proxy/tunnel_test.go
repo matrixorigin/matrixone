@@ -110,9 +110,9 @@ func TestTunnelClientToServer(t *testing.T) {
 
 	sendEventCh <- struct{}{}
 	barrierStart <- struct{}{}
-	csp.mu.Lock()
-	require.Equal(t, false, csp.mu.inTxn)
-	csp.mu.Unlock()
+	scp.mu.Lock()
+	require.Equal(t, false, scp.isInTxn())
+	scp.mu.Unlock()
 	barrierEnd <- struct{}{}
 
 	ret := make([]byte, 30)
@@ -127,9 +127,9 @@ func TestTunnelClientToServer(t *testing.T) {
 
 	sendEventCh <- struct{}{}
 	barrierStart <- struct{}{}
-	csp.mu.Lock()
-	require.Equal(t, true, csp.mu.inTxn)
-	csp.mu.Unlock()
+	scp.mu.Lock()
+	require.Equal(t, false, scp.isInTxn())
+	scp.mu.Unlock()
 	barrierEnd <- struct{}{}
 
 	ret = make([]byte, 30)
@@ -144,10 +144,10 @@ func TestTunnelClientToServer(t *testing.T) {
 
 	sendEventCh <- struct{}{}
 	barrierStart <- struct{}{}
-	csp.mu.Lock()
+	scp.mu.Lock()
 	// in txn
-	require.Equal(t, true, csp.mu.inTxn)
-	csp.mu.Unlock()
+	require.Equal(t, false, scp.isInTxn())
+	scp.mu.Unlock()
 	barrierEnd <- struct{}{}
 
 	ret = make([]byte, 30)
@@ -162,10 +162,10 @@ func TestTunnelClientToServer(t *testing.T) {
 
 	sendEventCh <- struct{}{}
 	barrierStart <- struct{}{}
-	csp.mu.Lock()
+	scp.mu.Lock()
 	// out of txn
-	require.Equal(t, false, csp.mu.inTxn)
-	csp.mu.Unlock()
+	require.Equal(t, false, scp.isInTxn())
+	scp.mu.Unlock()
 	barrierEnd <- struct{}{}
 
 	ret = make([]byte, 30)
@@ -579,8 +579,9 @@ func TestCanStartTransfer(t *testing.T) {
 
 	t.Run("inTxn", func(t *testing.T) {
 		tu := &tunnel{}
-		tu.mu.csp = &pipe{}
-		tu.mu.csp.mu.inTxn = true
+		tu.mu.scp = &pipe{}
+		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil)
+		tu.mu.scp.src.mu.inTxn = true
 		can := tu.canStartTransfer()
 		require.False(t, can)
 	})
@@ -589,6 +590,7 @@ func TestCanStartTransfer(t *testing.T) {
 		tu := &tunnel{}
 		tu.mu.csp = &pipe{}
 		tu.mu.scp = &pipe{}
+		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil)
 		tu.mu.started = true
 		csp, scp := tu.getPipes()
 		now := time.Now()

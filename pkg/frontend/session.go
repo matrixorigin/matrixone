@@ -48,7 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const MaxPrepareNumberInOneSession = 64
+var MaxPrepareNumberInOneSession int = 1024
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -1326,6 +1326,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
 	}
 
+	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
+		ses.getRoutine().setResricted(true)
+	} else {
+		ses.getRoutine().setResricted(false)
+	}
+
 	tenant.SetTenantID(uint32(tenantID))
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
@@ -1943,6 +1949,18 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	}
 
 	return nil, moerr.NewInternalError(ctx, "can not resolve global system variable %s", varName)
+}
+
+func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d interface{}, cwIndex, cwsLen int) *Response {
+	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
+	var resp *Response
+	if cwIndex < cwsLen-1 {
+		resp = NewResponse(category, affectedRows, 0, 0,
+			ses.GetServerStatus()|SERVER_MORE_RESULTS_EXISTS, cmd, d)
+	} else {
+		resp = NewResponse(category, affectedRows, 0, 0, ses.GetServerStatus(), cmd, d)
+	}
+	return resp
 }
 
 func checkPlanIsInsertValues(proc *process.Process,

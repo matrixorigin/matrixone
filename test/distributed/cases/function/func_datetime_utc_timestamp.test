@@ -22,8 +22,9 @@ drop table t1;
 
 #SELECT,  算术运算，嵌套
 
-
+-- @bvt:issue#10473
 select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_timestamp()),unix_timestamp()-unix_timestamp(utc_timestamp());
+-- @bvt:issue
 
 #0.5 not supported
 #select utc_timestamp()-curdate()*1000000-curtime();
