@@ -767,9 +767,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	filter, err := ConstantFold(bat, filter, proc)
+	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false)
 	if err != nil {
 		return false
 	}
@@ -968,7 +966,7 @@ func GetColumnsByExpr(
 
 func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := ConstantFold(bat, expr, proc)
+		e, err := ConstantFold(bat, expr, proc, false)
 		if err != nil {
 			return false, err
 		}
@@ -1081,10 +1079,9 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	if proc == nil {
 		return nil
 	}
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+
 	for i := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
+		tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(exprList[i]), proc, false)
 		exprList[i] = tmpexpr
 	}
 	return colexec.RewriteFilterExprList(exprList)
@@ -1101,14 +1098,14 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 	}
 }
 
-func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
 		exprList := exprImpl.List
 		for i, exprElem := range exprList.List {
 			_, ok2 := exprElem.Expr.(*plan.Expr_F)
 			if ok2 {
-				foldExpr, err := ConstantFold(bat, exprElem, proc)
+				foldExpr, err := ConstantFold(bat, exprElem, proc, varAndParamIsConst)
 				if err != nil {
 					return e, nil
 				}
@@ -1121,7 +1118,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	var err error
 	if elist, ok := e.Expr.(*plan.Expr_List); ok {
 		for i, expr := range elist.List.List {
-			if elist.List.List[i], err = ConstantFold(bat, expr, proc); err != nil {
+			if elist.List.List[i], err = ConstantFold(bat, expr, proc, varAndParamIsConst); err != nil {
 				return nil, err
 			}
 		}
@@ -1138,15 +1135,15 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if err != nil {
 		return nil, err
 	}
-	if f.CannotFold() { // function cannot be fold
+	if ef.F.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc); err != nil {
+		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst); err != nil {
 			return nil, err
 		}
 	}
-	if !rule.IsConstant(e) {
+	if !rule.IsConstant(e, varAndParamIsConst) {
 		return e, nil
 	}
 

@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,6 +37,11 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+
+	ap.E, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(ap.E), proc, true)
+	if err != nil {
+		return
+	}
 
 	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
 	ap.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)

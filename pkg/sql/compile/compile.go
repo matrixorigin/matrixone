@@ -1440,6 +1440,14 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		partitionRelNames = append(partitionRelNames, n.TableDef.Partition.PartitionTableNames...)
 	}
 
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
+	if filterExpr != nil {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
+		if err != nil {
+			panic("err happen when eval filter expr in compile table scan")
+		}
+	}
+
 	s = &Scope{
 		Magic:    Remote,
 		NodeInfo: node,
@@ -1451,7 +1459,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			PartitionRelationNames: partitionRelNames,
 			SchemaName:             n.ObjRef.SchemaName,
 			AccountId:              n.ObjRef.GetPubInfo(),
-			Expr:                   colexec.RewriteFilterExprList(n.FilterList),
+			Expr:                   filterExpr,
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
@@ -2472,7 +2480,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
+	blockFilter := make([]*plan2.Expr, len(n.BlockFilterList))
+	for i, e := range n.BlockFilterList {
+		e, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(e), c.proc, true)
+		if err != nil {
+			return nil, err
+		}
+		blockFilter[i] = e
+	}
+
+	ranges, err = rel.Ranges(ctx, blockFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -2488,7 +2505,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+			subranges, err := subrelation.Ranges(ctx, blockFilter)
 			if err != nil {
 				return nil, err
 			}

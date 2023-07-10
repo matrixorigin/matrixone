@@ -666,7 +666,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		fixColumnName(node.TableDef, node.FilterList[i])
-		foldedExpr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
+		foldedExpr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess(), false)
 		if foldedExpr != nil {
 			node.FilterList[i] = foldedExpr
 		}

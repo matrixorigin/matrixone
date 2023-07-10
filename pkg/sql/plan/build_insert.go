@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -201,53 +202,74 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		if !ok {
 			continue
 		}
-		for _, rowsetExpr := range cols.Data {
-			if rowsetExpr.RowPos == int32(pkColIdx) {
-				if !rule.IsConstant(rowsetExpr.Expr) {
+		if len(cols.Data) == 1 {
+			rowExpr := DeepCopyExpr(cols.Data[0].Expr)
+			if !rule.IsConstant(rowExpr, false) {
+				e, err := forceCastExpr(builder.GetContext(), rowExpr, tableDef.Cols[idx].Typ)
+				if err != nil {
 					return nil
 				}
-
 				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-					Typ: rowsetExpr.Expr.Typ,
+					Typ: rowExpr.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: int32(pkColIdx),
 						},
 					},
-				}, DeepCopyExpr(rowsetExpr.Expr)})
+				}, e})
+				if err != nil {
+					return nil
+				}
+				pkValueExprs[pkColIdx] = expr
+				// return nil
+			} else {
+				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					Typ: rowExpr.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkColIdx),
+						},
+					},
+				}, rowExpr})
+				if err != nil {
+					return nil
+				}
+				pkValueExprs[pkColIdx] = expr
+			}
+		}
+	}
+	proc := ctx.GetProcess()
+	var bat *batch.Batch
+	if builder.isPrepareStatement {
+		bat = proc.GetPrepareBatch()
+	} else {
+		bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
+	}
+	if bat != nil {
+		for insertRowIdx, pkColIdx := range pkPosInValues {
+			if pkValueExprs[pkColIdx] == nil {
+				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true)
+				typ := makePlan2Type(bat.Vecs[insertRowIdx].GetType())
+
+				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					Typ: typ,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkColIdx),
+						},
+					},
+				}, &plan.Expr{
+					Typ: typ,
+					Expr: &plan.Expr_C{
+						C: constExpr,
+					},
+				}})
 				if err != nil {
 					return nil
 				}
 
 				pkValueExprs[pkColIdx] = expr
 			}
-		}
-	}
-	proc := ctx.GetProcess()
-	bat := proc.GetValueScanBatch(uuid.UUID(node.Uuid))
-	for insertRowIdx, pkColIdx := range pkPosInValues {
-		if pkValueExprs[pkColIdx] == nil {
-			constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true)
-			typ := makePlan2Type(bat.Vecs[insertRowIdx].GetType())
-
-			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-				Typ: typ,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						ColPos: int32(pkColIdx),
-					},
-				},
-			}, &plan.Expr{
-				Typ: typ,
-				Expr: &plan.Expr_C{
-					C: constExpr,
-				},
-			}})
-			if err != nil {
-				return nil
-			}
-
-			pkValueExprs[pkColIdx] = expr
 		}
 	}
 	return pkValueExprs

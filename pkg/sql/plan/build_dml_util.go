@@ -1219,6 +1219,17 @@ func makeInsertPlan(
 				if !checkInsertPkDup && pkFilterExpr != nil {
 					scanTableDef := DeepCopyTableDef(tableDef)
 					// scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
+					pkNameMap := make(map[string]int)
+					for i, n := range tableDef.Pkey.Names {
+						pkNameMap[n] = i
+					}
+					newCols := make([]*ColDef, len(scanTableDef.Pkey.Names))
+					for _, def := range scanTableDef.Cols {
+						if i, ok := pkNameMap[def.Name]; ok {
+							newCols[i] = def
+						}
+					}
+					scanTableDef.Cols = newCols
 					scanNode := &plan.Node{
 						NodeType: plan.Node_TABLE_SCAN,
 						Stats:    &plan.Stats{},
@@ -1234,18 +1245,6 @@ func makeInsertPlan(
 							},
 						}},
 					}
-
-					// filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-					// 	Typ: pkTyp,
-					// 	Expr: &plan.Expr_Col{
-					// 		Col: &ColRef{
-					// 			Name: tableDef.Pkey.PkeyColName,
-					// 		},
-					// 	},
-					// }, pkFilterExpr})
-					// if err != nil {
-					// 	return err
-					// }
 					scanNode.FilterList = pkFilterExpr
 					scanNode.BlockFilterList = pkFilterExpr
 					lastNodeId = builder.appendNode(scanNode, bindCtx)
