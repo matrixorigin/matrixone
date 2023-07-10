@@ -1803,5 +1803,5 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	if err != nil {
 		return false, err
 	}
-	return part.PrimaryKeysMayBeModified(tbl.tableId, from, to, keysVector, packer), nil
+	return part.PrimaryKeysMayBeModified(from, to, keysVector, packer), nil
 }
