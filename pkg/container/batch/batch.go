@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -353,4 +354,24 @@ func (bat *Batch) AntiShrink(sels []int64) {
 	}
 	bat.Zs = bat.Zs[:length-len(sels)]
 	bat.rowCount -= len(sels)
+}
+
+func (bat *Batch) FixedForRemoveZs() {
+	bat.rowCount = len(bat.Zs)
+}
+
+func (bat *Batch) CheckForRemoveZs(operator string) {
+	if bat.rowCount != len(bat.Zs) {
+		logutil.Errorf("%s output batch with different row count and zs", operator)
+		return
+	}
+
+	// should all 1
+	for _, z := range bat.Zs {
+		if z != 1 {
+			logutil.Errorf("%s output batch with non-1 zs", operator)
+			break
+		}
+	}
+	return
 }

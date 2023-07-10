@@ -57,6 +57,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
+
+	bat.FixedForRemoveZs()
+
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
@@ -78,8 +81,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Alloc(int64(newAlloc))
 
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.SetRowCount(bat.RowCount())
+
 	proc.PutBatch(bat)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
+
+	if rbat != nil {
+		rbat.CheckForRemoveZs("projection")
+	}
+
 	return false, nil
 }
