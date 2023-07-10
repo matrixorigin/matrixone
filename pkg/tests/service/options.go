@@ -65,10 +65,8 @@ const (
 
 	// default logtail push server configuration
 	defaultRpcMaxMessageSize          = 16 * mpool.KB
-	defaultRpcPayloadCopyBufferSize   = 16 * mpool.KB
 	defaultLogtailCollectInterval     = 50 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
-	defaultMaxLogtailFetchFailure     = 5
 )
 
 // Options are params for creating test cluster.

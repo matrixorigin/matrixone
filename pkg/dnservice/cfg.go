@@ -53,10 +53,8 @@ var (
 	defaultLogBackend          = string(options.LogstoreLogservice)
 
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
-	defaultRpcPayloadCopyBufferSize   = 1024 * mpool.KB
 	defaultLogtailCollectInterval     = 2 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
-	defaultMaxLogtailFetchFailure     = 5
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
