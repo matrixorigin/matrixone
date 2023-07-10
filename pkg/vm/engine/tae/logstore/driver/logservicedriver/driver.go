@@ -80,7 +80,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
 		retryDuration:         cfg.RetryTimeout,
 	}
-	pool, _ := ants.NewPool(1024)
+	pool, _ := ants.NewPool(50)
 
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientPoolMaxSize, cfg.ClientPoolMaxSize, clientpoolConfig),
