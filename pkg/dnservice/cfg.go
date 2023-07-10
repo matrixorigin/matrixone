@@ -54,7 +54,7 @@ var (
 
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
 	defaultRpcPayloadCopyBufferSize   = 1024 * mpool.KB
-	defaultLogtailCollectInterval     = 50 * time.Millisecond
+	defaultLogtailCollectInterval     = 2 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
 	defaultMaxLogtailFetchFailure     = 5
 
