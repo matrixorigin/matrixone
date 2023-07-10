@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
 // LabelHash defines hash value, which is hashed from labelInfo.
@@ -98,7 +99,7 @@ func (l *labelInfo) tenantLabel() map[string]string {
 
 // isSuperTenant returns true if the tenant is sys or empty.
 func (l *labelInfo) isSuperTenant() bool {
-	if l.Tenant == "" || strings.ToLower(string(l.Tenant)) == superTenant {
+	if l.Tenant == "" || strings.ToLower(string(l.Tenant)) == frontend.GetDefaultTenant() {
 		return true
 	}
 	return false
@@ -124,4 +125,21 @@ func (l *labelInfo) getHash() (LabelHash, error) {
 	s := sortMap(targetMap)
 	s = sortSimpleMap(s)
 	return LabelHash(rawHash(s)), nil
+}
+
+// merge merges the incoming label info into the original one.
+// If a key has already exists, then ignore it.
+func (l *labelInfo) merge(info map[string]string) {
+	if l == nil || info == nil {
+		return
+	}
+	if l.Labels == nil {
+		l.Labels = make(map[string]string)
+	}
+	for k, v := range info {
+		if _, ok := l.Labels[k]; ok {
+			continue
+		}
+		l.Labels[k] = v
+	}
 }
