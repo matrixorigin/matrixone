@@ -517,6 +517,7 @@ var functionIdRegister = map[string]int32{
 	"regexp_like":                    REGEXP_LIKE,
 	"regexp_replace":                 REGEXP_REPLACE,
 	"regexp_substr":                  REGEXP_SUBSTR,
+	"repeat":                         REPEAT,
 	"mo_memory_usage":                MO_MEMORY_USAGE,
 	"mo_enable_memory_usage_detail":  MO_ENABLE_MEMORY_USAGE_DETAIL,
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
