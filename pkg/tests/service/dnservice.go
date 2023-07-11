@@ -171,7 +171,6 @@ func buildDNConfig(
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.dn
 	cfg.Txn.Storage.Backend = opt.storage.dnStorage
-	cfg.Txn.Storage.LogBackend = "logservice"
 
 	// FIXME: disable tae flush
 	cfg.Ckp.MinCount = 2000000
