@@ -3925,16 +3925,12 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
 		encoder := json.NewEncoder(h.buffer)
 		encoder.SetEscapeHTML(false)
-		if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
-			err = encoder.Encode(h.marshalPlan)
-			if err != nil {
-				moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
-				jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
-			} else {
-				jsonBytesLen = h.buffer.Len()
-			}
+		err = encoder.Encode(h.marshalPlan)
+		if err != nil {
+			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
+			jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
 		} else {
-			jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
+			jsonBytesLen = h.buffer.Len()
 		}
 		// BG: bytes.Buffer maintain buf []byte.
 		// if buf[off:] not enough but len(buf) is enough place, then it will reset off = 0.
@@ -3942,6 +3938,8 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		if jsonBytesLen > 0 {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
+	} else if h.query != nil {
+		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
 	} else {
 		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
