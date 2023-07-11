@@ -285,6 +285,7 @@ func (th *TxnHandler) CommitTxn() error {
 	if txnOp != nil {
 		err = txnOp.Commit(ctx2)
 		if err != nil {
+			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()
 			logErrorf(sessionInfo, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
