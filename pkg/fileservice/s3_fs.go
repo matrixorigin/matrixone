@@ -33,11 +33,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -913,9 +910,6 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		}
 	}
 
-	// credential provider
-	var credentialProvider aws.CredentialsProvider
-
 	// options for loading configs
 	loadConfigOptions := []func(*config.LoadOptions) error{
 		config.WithLogger(logutil.GetS3Logger()),
@@ -937,68 +931,15 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		)
 	}
 
-	// static credential
-	if apiKey != "" && apiSecret != "" {
-		// static
-		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
-	}
-
-	// credentials for 3rd-party services
-	if credentialProvider == nil && endpointURL != nil {
-		hostname := endpointURL.Hostname()
-		if strings.Contains(hostname, "aliyuncs.com") {
-			credentialProvider = newAliyunCredentialsProvider()
-			_, err := credentialProvider.Retrieve(ctx)
-			if err != nil {
-				// bad config, fallback to aws default
-				credentialProvider = nil
-			}
-		} else if strings.Contains(hostname, "myqcloud.com") ||
-			strings.Contains(hostname, "tencentcos.cn") {
-			credentialProvider = newTencentCloudCredentialsProvider()
-			_, err := credentialProvider.Retrieve(ctx)
-			if err != nil {
-				// bad config, fallback to aws default
-				credentialProvider = nil
-			}
-		}
-	}
-
-	// role arn credential
-	if roleARN != "" {
-		// role arn
-		awsConfig, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
-		if err != nil {
-			return nil, err
-		}
-
-		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
-			if region == "" {
-				options.Region = "ap-northeast-1"
-			} else {
-				options.Region = region
-			}
-		})
-		credentialProvider = stscreds.NewAssumeRoleProvider(
-			stsSvc,
-			roleARN,
-			func(opts *stscreds.AssumeRoleOptions) {
-				if externalID != "" {
-					opts.ExternalID = &externalID
-				}
-			},
-		)
-		// validate
-		_, err = credentialProvider.Retrieve(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// credentials cache
-	if credentialProvider != nil {
-		credentialProvider = aws.NewCredentialsCache(credentialProvider)
-	}
+	credentialProvider := getCredentialsProvider(
+		ctx,
+		endpoint,
+		region,
+		apiKey,
+		apiSecret,
+		roleARN,
+		externalID,
+	)
 
 	// load configs
 	if credentialProvider != nil {

@@ -96,7 +96,7 @@ func StatementInfoUpdate(existing, new Item) {
 		e.StmtBuilder.WriteString(n.Statement)
 	}
 	e.AggrCount += 1
-	// reponseAt is the last response time
+	// responseAt is the last response time
 	n.ExecPlan2Stats(context.Background())
 	if err := mergeStats(e, n); err != nil {
 		// handle error
@@ -122,8 +122,8 @@ func StatementInfoFilter(i Item) bool {
 	case "internal_sql", "external_sql", "non_cloud_user":
 		// Check StatementType
 		switch statementInfo.StatementType {
-		case "Insert", "Update", "Delete", "Execute", "Commit", "Select":
-			if statementInfo.Duration < GetTracerProvider().selectAggrThreshold {
+		case "Insert", "Update", "Delete", "Execute", "Select":
+			if statementInfo.Duration <= GetTracerProvider().selectAggrThreshold {
 				return true
 			}
 		}

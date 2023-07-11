@@ -201,7 +201,8 @@ type Compile struct {
 
 	s3CounterSet perfcounter.CounterSet
 
-	stepRegs map[int32][]*process.WaitRegister
+	nodeRegs map[int32]*process.WaitRegister
+	stepRegs map[int32][]int32
 
 	runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
 

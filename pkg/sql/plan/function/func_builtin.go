@@ -562,9 +562,9 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func doLpad(src string, tgtLen int64, pad string) (string, bool) {
-	const MaxTgtLen = int64(16 * 1024 * 1024)
+const MaxTgtLen = int64(16 * 1024 * 1024)
 
+func doLpad(src string, tgtLen int64, pad string) (string, bool) {
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
@@ -584,8 +584,6 @@ func doLpad(src string, tgtLen int64, pad string) (string, bool) {
 }
 
 func doRpad(src string, tgtLen int64, pad string) (string, bool) {
-	const MaxTgtLen = int64(16 * 1024 * 1024)
-
 	srcRune, padRune := []rune(src), []rune(pad)
 	srcLen, padLen := len(srcRune), len(padRune)
 
@@ -602,6 +600,49 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 		p, m := r/padLen, r%padLen
 		return src + strings.Repeat(pad, p) + string(padRune[:m]), false
 	}
+}
+
+func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	// repeat the string n times.
+	repeatNTimes := func(base string, n int64) (r string, null bool) {
+		if n <= 0 {
+			return "", false
+		}
+
+		// return null if result is too long.
+		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
+		// and there is no documentation about the limit of the result length.
+		sourceLen := int64(len(base))
+		if sourceLen*n > MaxTgtLen {
+			return "", true
+		}
+		return strings.Repeat(base, int(n)), false
+	}
+
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	var err error
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			err = rs.AppendMustNullForBytesResult()
+		} else {
+			r, null := repeatNTimes(functionUtil.QuickBytesToStr(v1), v2)
+			if null {
+				err = rs.AppendMustNullForBytesResult()
+			} else {
+				err = rs.AppendBytes([]byte(r), false)
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -845,8 +886,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 	}
 
-	vec := result.GetResultVector()
-	vec.SetLength(0)
+	rs := vector.MustFunctionResult[int64](result)
 
 	keys := make([][]byte, hashmap.UnitLimit)
 	states := make([][3]uint64, hashmap.UnitLimit)
@@ -855,12 +895,14 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
+		for j := 0; j < n; j++ {
+			keys[j] = keys[j][:0]
+		}
 		encodeHashKeys(keys, parameters, i, n)
+
 		hashtable.BytesBatchGenHashStates(&keys[0], &states[0], n)
 		for j := 0; j < n; j++ {
-			if err := vector.AppendFixed(vec, int64(states[j][0]), false, proc.Mp()); err != nil {
-				return err
-			}
+			rs.AppendMustValue(int64(states[j][0]))
 		}
 	}
 	return nil

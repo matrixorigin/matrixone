@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 // The global variable is used to serialize plan and avoid objects being repeatedly created
@@ -510,6 +511,27 @@ const S3IOByte = "S3 IO Byte"
 const S3IOInputCount = "S3 IO Input Count"
 const S3IOOutputCount = "S3 IO Output Count"
 const Network = "Network"
+
+func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
+	s.Reset()
+	if options.Analyze && node.AnalyzeInfo != nil {
+		analyzeInfo := node.AnalyzeInfo
+		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
+			WithMemorySize(float64(analyzeInfo.MemorySize)).
+			WithS3IOInputCount(float64(analyzeInfo.S3IOInputCount)).
+			WithS3IOOutputCount(float64(analyzeInfo.S3IOOutputCount))
+	}
+	return
+}
+
+// GetInputRowsAndInputSize return plan.Node AnalyzeInfo InputRows and InputSize.
+// migrate ExplainData.StatisticsRead to here
+func GetInputRowsAndInputSize(ctx context.Context, node *plan.Node, options *ExplainOptions) (rows int64, size int64) {
+	if options.Analyze && node.AnalyzeInfo != nil {
+		return node.AnalyzeInfo.InputRows, node.AnalyzeInfo.InputSize
+	}
+	return
+}
 
 func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) Statistics {
 	statistics := NewStatistics()
