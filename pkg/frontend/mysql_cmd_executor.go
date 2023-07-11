@@ -3855,6 +3855,7 @@ func (h *jsonPlanHandler) Free() {
 }
 
 type marshalPlanHandler struct {
+	query       *plan.Query
 	marshalPlan *explain.ExplainData
 	stmt        *motrace.StatementInfo
 	uuid        uuid.UUID
@@ -3864,21 +3865,28 @@ type marshalPlanHandler struct {
 func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
+	query := plan.GetQuery()
 	stmt.MarkResponseAt()
-	if plan == nil || plan.GetQuery() == nil {
+	if plan == nil {
 		return &marshalPlanHandler{
+			query:       nil,
 			marshalPlan: nil,
 			stmt:        stmt,
 			uuid:        uuid,
 			buffer:      getMarshalPlanBufferPool(),
 		}
 	}
-	return &marshalPlanHandler{
-		marshalPlan: explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, plan.GetQuery()),
-		stmt:        stmt,
-		uuid:        uuid,
-		buffer:      getMarshalPlanBufferPool(),
+	h := &marshalPlanHandler{
+		query:  query,
+		stmt:   stmt,
+		uuid:   uuid,
+		buffer: getMarshalPlanBufferPool(),
 	}
+	// check longQueryTime
+	if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
+		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
+	}
+	return h
 }
 
 func (h *marshalPlanHandler) Free() {
@@ -3917,16 +3925,12 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
 		encoder := json.NewEncoder(h.buffer)
 		encoder.SetEscapeHTML(false)
-		if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
-			err = encoder.Encode(h.marshalPlan)
-			if err != nil {
-				moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
-				jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
-			} else {
-				jsonBytesLen = h.buffer.Len()
-			}
+		err = encoder.Encode(h.marshalPlan)
+		if err != nil {
+			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
+			jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
 		} else {
-			jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
+			jsonBytesLen = h.buffer.Len()
 		}
 		// BG: bytes.Buffer maintain buf []byte.
 		// if buf[off:] not enough but len(buf) is enough place, then it will reset off = 0.
@@ -3934,6 +3938,8 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		if jsonBytesLen > 0 {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
+	} else if h.query != nil {
+		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
 	} else {
 		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
@@ -3941,45 +3947,22 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 }
 
 func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
-	if h.marshalPlan != nil && len(h.marshalPlan.Steps) > 0 {
-		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
-		global := h.marshalPlan.Steps[0].GraphData.Global
-		statsByte = addStatsFromGlobal(global)
+	if h.query != nil {
+		options := &explain.MarshalPlanOptions
+		statsByte.Reset()
+		for _, node := range h.query.Nodes {
+			// part 1: for statistic.StatsArray
+			s := explain.GetStatistic4Trace(ctx, node, options)
+			statsByte.Add(&s)
+			// part 2: for motrace.Statistic
+			if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
+				rows, bytes := explain.GetInputRowsAndInputSize(ctx, node, options)
+				stats.RowsRead += rows
+				stats.BytesScan += bytes
+			}
+		}
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
-	return
-}
-
-func addStatsFromGlobal(global explain.Global) (dst statistic.StatsArray) {
-	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount float64
-
-	for _, stat := range global.Statistics.Time {
-		if stat.Name == "Time Consumed" {
-			timeConsumed = float64(stat.Value)
-			break
-		}
-	}
-
-	for _, stat := range global.Statistics.Memory {
-		if stat.Name == "Memory Size" {
-			memorySize = float64(stat.Value)
-			break
-		}
-	}
-
-	for _, stat := range global.Statistics.IO {
-		if stat.Name == "S3 IO Input Count" {
-			s3IOInputCount = float64(stat.Value)
-		} else if stat.Name == "S3 IO Output Count" {
-			s3IOOutputCount = float64(stat.Value)
-		}
-	}
-
-	dst.Init().
-		WithTimeConsumed(timeConsumed).
-		WithMemorySize(memorySize).
-		WithS3IOInputCount(s3IOInputCount).
-		WithS3IOOutputCount(s3IOOutputCount)
 	return
 }
