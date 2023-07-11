@@ -946,32 +946,39 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	// credentials for 3rd-party services
 	if credentialProvider == nil && endpointURL != nil {
 		hostname := endpointURL.Hostname()
+
 		if strings.Contains(hostname, "aliyuncs.com") {
-			credentialProvider = newAliyunCredentialsProvider()
+			credentialProvider = newAliyunCredentialsProvider(roleARN, externalID)
 			_, err := credentialProvider.Retrieve(ctx)
 			if err != nil {
 				// bad config, fallback to aws default
 				credentialProvider = nil
+				logutil.Info("skipping bad aliyun credential provider",
+					zap.Any("error", err),
+				)
 			}
+
 		} else if strings.Contains(hostname, "myqcloud.com") ||
 			strings.Contains(hostname, "tencentcos.cn") {
-			credentialProvider = newTencentCloudCredentialsProvider()
+			credentialProvider = newTencentCloudCredentialsProvider(roleARN, externalID)
 			_, err := credentialProvider.Retrieve(ctx)
 			if err != nil {
 				// bad config, fallback to aws default
 				credentialProvider = nil
+				logutil.Info("skipping bad qcloud credential provider",
+					zap.Any("error", err),
+				)
 			}
 		}
+
 	}
 
 	// role arn credential
-	if roleARN != "" {
-		// role arn
+	if credentialProvider == nil && roleARN != "" {
 		awsConfig, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
 		if err != nil {
 			return nil, err
 		}
-
 		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
 			if region == "" {
 				options.Region = "ap-northeast-1"
@@ -991,7 +998,10 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		// validate
 		_, err = credentialProvider.Retrieve(ctx)
 		if err != nil {
-			return nil, err
+			credentialProvider = nil
+			logutil.Info("skipping bad role arn credentials provider",
+				zap.Any("error", err),
+			)
 		}
 	}
 
