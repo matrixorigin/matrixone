@@ -195,12 +195,16 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 			anal.Alloc(int64(ctr.bat.Size()))
 			anal.Output(ctr.bat, isLast)
 		}
+
+		ctr.bat.CheckForRemoveZs("group")
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
 		return true, nil
 	}
 
-	if bat.Length() == 0 {
+	bat.FixedForRemoveZs()
+
+	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
@@ -266,16 +270,18 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				for i := range ctr.bat.Zs { // reset zs
 					ctr.bat.Zs[i] = 1
 				}
-				ctr.bat.SetRowCount(len(ctr.bat.Zs))
 			}
 			anal.Output(ctr.bat, isLast)
 		}
+
+		ctr.bat.CheckForRemoveZs("group")
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
 		return true, nil
 	}
 
-	if bat.Length() == 0 {
+	bat.FixedForRemoveZs()
+	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
@@ -483,6 +489,8 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 		ai := int64(v) - 1
 		ctr.bat.Zs[ai] += bat.Zs[i+k]
 	}
+	ctr.bat.SetRowCount(ctr.bat.RowCount() + cnt)
+
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {
 			if err := vec.UnionBatch(ctr.groupVecs[j].vec, int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {

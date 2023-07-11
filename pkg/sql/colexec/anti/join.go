@@ -70,11 +70,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				ctr.state = End
 				continue
 			}
-			if bat.Length() == 0 {
+
+			bat.FixedForRemoveZs()
+
+			if bat.IsEmpty() {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
+
+			if ctr.bat == nil || ctr.bat.IsEmpty() {
 				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
@@ -95,6 +99,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	}
 
 	if bat != nil {
+		bat.FixedForRemoveZs()
+
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
 		ctr.hasNull = ctr.mp.HasNull()
@@ -126,9 +132,11 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			}
 			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
+		rbat.SetRowCount(rbat.RowCount() + n)
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
+	rbat.CheckForRemoveZs("anti")
 	return nil
 }
 
@@ -168,6 +176,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
 		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+
+		rowCountIncrease := 0
 		for k := 0; k < n; k++ {
 			if ctr.inBuckets[k] == 0 || zvals[k] == 0 {
 				continue
@@ -207,8 +217,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 				eligible = append(eligible, int32(i+k))
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				rowCountIncrease++
 			}
 		}
+		rbat.SetRowCount(rbat.RowCount() + rowCountIncrease)
+
 		for j, pos := range ap.Result {
 			if err := rbat.Vecs[j].Union(bat.Vecs[pos], eligible, proc.Mp()); err != nil {
 				rbat.Clean(proc.Mp())
@@ -219,6 +232,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
+	rbat.CheckForRemoveZs("anti")
 	return nil
 }
 
