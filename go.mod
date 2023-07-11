@@ -51,6 +51,7 @@ require (
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.673
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/pretty v1.2.1
+	github.com/yireyun/go-queue v0.0.0-20220725040158-a4dd64810e1e
 	go.uber.org/multierr v1.11.0
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.24.0
