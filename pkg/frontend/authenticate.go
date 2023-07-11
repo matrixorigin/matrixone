@@ -1126,6 +1126,8 @@ const (
 
 	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
 
+	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s";`
+
 	checkDatabaseTableFormat = `select t.rel_id from mo_catalog.mo_database d, mo_catalog.mo_tables t
 										where d.dat_id = t.reldatabase_id
 											and d.datname = "%s"
@@ -1708,6 +1710,14 @@ func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) 
 		return "", err
 	}
 	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
+}
+
+func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkDatabaseWithOwnerFormat, dbName), nil
 }
 
 func getSqlForCheckDatabaseTable(ctx context.Context, dbName, tableName string) (string, error) {
@@ -7844,10 +7854,14 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	var sql string
 	var erArray []ExecResult
 	var accountName string
+	var databaseOwner int64
+	var currentRole uint32
 
 	dbName := ad.DbName
 	updateConfig := ad.UpdateConfig
-	accountName = ses.GetTenantInfo().GetTenant()
+	tenantInfo := ses.GetTenantInfo()
+	accountName = tenantInfo.GetTenant()
+	currentRole = tenantInfo.GetDefaultRoleID()
 
 	updateConfigForDatabase := func() error {
 		bh := ses.GetBackgroundExec(ctx)
@@ -7861,8 +7875,8 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 			return err
 		}
 
-		// step1:check database exists or not
-		sql, err = getSqlForCheckDatabase(ctx, dbName)
+		// step1:check database exists or not and get database owner
+		sql, err = getSqlForCheckDatabaseWithOwner(ctx, dbName)
 		if err != nil {
 			return err
 		}
@@ -7880,6 +7894,16 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 
 		if !execResultArrayHasData(erArray) {
 			return moerr.NewInternalError(ctx, "there is no database %s to change config", dbName)
+		} else {
+			databaseOwner, err = erArray[0].GetInt64(ctx, 0, 1)
+			if err != nil {
+				return err
+			}
+
+			// alter database config privileges check
+			if databaseOwner != int64(currentRole) {
+				return moerr.NewInternalError(ctx, "do not have privileges to alter database config")
+			}
 		}
 
 		// step2: update the mo_mysql_compatibility_mode of that database
@@ -7911,10 +7935,16 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	return err
 }
 
-func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDataBaseConfig) (err error) {
+func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDataBaseConfig) error {
 	var sql string
 	var newCtx context.Context
 	var isExist bool
+	var err error
+
+	// alter account config privileges check
+	if !ses.GetTenantInfo().IsMoAdminRole() {
+		return moerr.NewInternalError(ctx, "do not have privileges to alter account config")
+	}
 
 	accountName := stmt.AccountName
 	update_config := stmt.UpdateConfig
@@ -7970,11 +8000,12 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	return err
 }
 
-func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, stmt tree.Statement) (err error) {
+func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var sql string
 	var accountId uint32
 	var accountName string
 	var dbName string
+	var err error
 	variableName := "version_compatibility"
 	variableValue := "0.7"
 
@@ -8028,9 +8059,10 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 
 }
 
-func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) (err error) {
+func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var datname string
 	var sql string
+	var err error
 
 	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
 		datname = string(deleteDatabaseStmt.Name)
