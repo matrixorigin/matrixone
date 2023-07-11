@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 )
 
+// Start a span entity
 func Start(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span) {
 	return DefaultTracer().Start(ctx, spanName, opts...)
 }
