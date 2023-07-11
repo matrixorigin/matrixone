@@ -143,6 +143,15 @@ type TxnUnsafe interface {
 	UnsafeGetRelation(dbId, tableId uint64) (h handle.Relation, err error)
 }
 
+type PackedTxn interface {
+	GetMemo() *TxnMemo
+	GetStartTS() types.TS
+	GetPrepareTS() types.TS
+	GetCommitTS() types.TS
+	GetLSN() uint64
+	GetTxnState(waitIfcommitting bool) TxnState
+}
+
 type AsyncTxn interface {
 	TxnUnsafe
 	TxnTest
@@ -152,6 +161,7 @@ type AsyncTxn interface {
 	TxnReader
 	TxnWriter
 	TxnChanger
+	GetPackedTxn() PackedTxn
 }
 
 type DeleteChain interface {

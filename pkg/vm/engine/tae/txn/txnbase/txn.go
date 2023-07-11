@@ -129,6 +129,9 @@ func NewPersistedTxn(
 		ApplyCommitFn:     applyCommitFn,
 	}
 }
+func (txn *Txn) GetPackedTxn() txnif.PackedTxn {
+	return txn
+}
 func (txn *Txn) GetLsn() uint64              { return txn.LSN }
 func (txn *Txn) IsReplay() bool              { return txn.isReplay }
 func (txn *Txn) GetContext() context.Context { return txn.Store.GetContext() }

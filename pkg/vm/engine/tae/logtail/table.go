@@ -24,11 +24,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 )
 
 type RowT = *txnRow
 type BlockT = *txnBlock
+
+type smallTxn struct {
+	memo      *txnif.TxnMemo
+	startTS   types.TS
+	prepareTS types.TS
+	state     txnif.TxnState
+	lsn       uint64
+}
+
+func (txn *smallTxn) GetMemo() *txnif.TxnMemo {
+	return txn.memo
+}
+
+func (txn *smallTxn) GetTxnState(_ bool) txnif.TxnState {
+	return txn.state
+}
+
+func (txn *smallTxn) GetStartTS() types.TS {
+	return txn.startTS
+}
+
+func (txn *smallTxn) GetPrepareTS() types.TS {
+	return txn.prepareTS
+}
+
+func (txn *smallTxn) GetCommitTS() types.TS {
+	return txn.prepareTS
+}
+
+func (txn *smallTxn) GetLSN() uint64 {
+	return txn.lsn
+}
 
 type summary struct {
 	hasCatalogChanges bool
@@ -38,7 +71,56 @@ type summary struct {
 }
 
 type txnRow struct {
-	txnif.AsyncTxn
+	source atomic.Pointer[txnbase.Txn]
+	packed atomic.Pointer[smallTxn]
+}
+
+func (row *txnRow) GetLSN() uint64 {
+	if txn := row.source.Load(); txn != nil {
+		return txn.GetLSN()
+	}
+	txn := row.packed.Load()
+	return txn.GetLSN()
+}
+
+func (row *txnRow) GetMemo() *txnif.TxnMemo {
+	if txn := row.source.Load(); txn != nil {
+		return txn.GetMemo()
+	}
+	txn := row.packed.Load()
+	return txn.GetMemo()
+}
+
+func (row *txnRow) GetTxnState(waitIfcommitting bool) txnif.TxnState {
+	if txn := row.source.Load(); txn != nil {
+		return txn.GetTxnState(waitIfcommitting)
+	}
+	txn := row.packed.Load()
+	return txn.GetTxnState(waitIfcommitting)
+}
+
+func (row *txnRow) GetStartTS() types.TS {
+	if txn := row.source.Load(); txn != nil {
+		return txn.GetStartTS()
+	}
+	txn := row.packed.Load()
+	return txn.GetStartTS()
+}
+
+func (row *txnRow) GetPrepareTS() types.TS {
+	if txn := row.source.Load(); txn != nil {
+		return txn.GetPrepareTS()
+	}
+	txn := row.packed.Load()
+	return txn.GetPrepareTS()
+}
+
+func (row *txnRow) GetCommitTS() types.TS {
+	if txn := row.source.Load(); txn != nil {
+		return txn.GetCommitTS()
+	}
+	txn := row.packed.Load()
+	return txn.GetCommitTS()
 }
 
 func (row *txnRow) Length() int             { return 1 }
@@ -164,9 +246,8 @@ func NewTxnTable(blockSize int, nowClock func() types.TS) *TxnTable {
 }
 
 func (table *TxnTable) AddTxn(txn txnif.AsyncTxn) (err error) {
-	row := &txnRow{
-		AsyncTxn: txn,
-	}
+	row := &txnRow{}
+	row.source.Store(txn.GetPackedTxn().(*txnbase.Txn))
 	err = table.Append(row)
 	return
 }
