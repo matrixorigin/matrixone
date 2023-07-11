@@ -114,7 +114,7 @@ func TestAppend2(t *testing.T) {
 	// defer hb.Stop()
 
 	schema := catalog.MockSchemaAll(13, 3)
-	schema.BlockMaxRows = 400
+	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 10
 	createRelation(t, db, "db", schema, true)
 
