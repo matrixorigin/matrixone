@@ -52,13 +52,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
+	bat.FixedForRemoveZs()
+
 	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
-
-	bat.FixedForRemoveZs()
 
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)

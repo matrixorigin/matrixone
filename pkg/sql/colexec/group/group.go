@@ -196,6 +196,11 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 			anal.Output(ctr.bat, isLast)
 		}
 
+		// todo(cms): i reset zs here.
+		for i := range ctr.bat.Zs {
+			ctr.bat.Zs[i] = 1
+		}
+
 		ctr.bat.CheckForRemoveZs("group")
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil

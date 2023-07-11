@@ -185,6 +185,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if vals[k] == 0 {
 				eligible = append(eligible, int32(i+k))
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				rowCountIncrease++
 				continue
 			}
 			if ap.Cond != nil {

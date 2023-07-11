@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"runtime/debug"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -359,25 +360,32 @@ func (bat *Batch) AntiShrink(sels []int64) {
 func (bat *Batch) IsEmpty() bool {
 	b1, b2 := bat.rowCount == 0, len(bat.Zs) == 0
 	if b2 != b1 {
-		logutil.Errorf("[cms] batch row count and zs are inconsistent, zs empty: %b, row count empty: %b", b2, b1)
+		logutil.Errorf("[cms] batch row count and zs are inconsistent, zs empty: %b, row count empty: %b, stack is \n%s", b2, b1, string(debug.Stack()))
 	}
 	return b2
 }
 
 func (bat *Batch) FixedForRemoveZs() {
+	if bat == nil {
+		return
+	}
 	bat.rowCount = len(bat.Zs)
 }
 
 func (bat *Batch) CheckForRemoveZs(operator string) {
+	if bat == nil {
+		return
+	}
 	if bat.rowCount != len(bat.Zs) {
-		logutil.Errorf("[cms] %s output batch with different row count and zs", operator)
+		logutil.Errorf("[cms] %s output batch with different row count and zs, row is %d, zs is %d",
+			operator, bat.rowCount, len(bat.Zs))
 		return
 	}
 
 	// should all 1
 	for _, z := range bat.Zs {
 		if z != 1 {
-			logutil.Errorf("[cms] %s output batch with non-1 zs", operator)
+			logutil.Errorf("[cms] %s output batch with non-1 zs, stack is \n%s", operator, string(debug.Stack()))
 			break
 		}
 	}
