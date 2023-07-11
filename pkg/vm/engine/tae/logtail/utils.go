@@ -735,7 +735,7 @@ func (data *CheckpointData) ReadFrom(
 		data.bats[idx] = bat
 	}
 	if version == CheckpointVersion1 {
-		bat := data.bats[tblInsBatch]
+		bat := data.bats[TBLInsertIDX]
 		if bat == nil {
 			return
 		}
