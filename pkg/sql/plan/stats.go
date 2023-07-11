@@ -415,12 +415,15 @@ func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryB
 	}
 }
 
-func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool) {
+func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool) (err error) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive {
 		if len(node.Children) > 0 {
 			for _, child := range node.Children {
-				ReCalcNodeStats(child, builder, recursive, leafNode)
+				err = ReCalcNodeStats(child, builder, recursive, leafNode)
+				if err != nil {
+					return
+				}
 			}
 		}
 	}
@@ -619,7 +622,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if len(node.BindingTags) > 0 {
 				builder.tag2Table[node.BindingTags[0]] = node.TableDef
 			}
-			node.Stats = calcScanStats(node, builder)
+			node.Stats, err = calcScanStats(node, builder)
+			if err != nil {
+				return err
+			}
 		}
 
 	case plan.Node_FILTER:
@@ -641,19 +647,20 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats = DefaultStats()
 		}
 	}
+	return nil
 }
 
-func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
+func calcScanStats(node *plan.Node, builder *QueryBuilder) (*plan.Stats, error) {
 	if !needStats(node.TableDef) {
-		return DefaultStats()
+		return DefaultStats(), nil
 	}
 	if !builder.compCtx.Stats(node.ObjRef) {
-		return DefaultStats()
+		return DefaultStats(), nil
 	}
 	//get statsInfoMap from statscache
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
-		return DefaultStats()
+		return DefaultStats(), nil
 	}
 	s := sc.GetStatsInfoMap(node.TableDef.TblId)
 
@@ -666,7 +673,10 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		fixColumnName(node.TableDef, node.FilterList[i])
-		foldedExpr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
+		foldedExpr, err := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
+		if err != nil {
+			return nil, err
+		}
 		if foldedExpr != nil {
 			node.FilterList[i] = foldedExpr
 		}
@@ -680,12 +690,15 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	node.BlockFilterList = blockExprList
-	expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
+	expr, err := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
+	if err != nil {
+		return nil, err
+	}
 	stats.Selectivity = estimateExprSelectivity(expr, builder)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
-	return stats
+	return stats, nil
 }
 
 func needStats(tableDef *TableDef) bool {

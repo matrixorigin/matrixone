@@ -1003,24 +1003,42 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
 
-		ReCalcNodeStats(rootID, builder, true, true)
+		err := ReCalcNodeStats(rootID, builder, true, true)
+		if err != nil {
+			return nil, err
+		}
 		rootID = builder.aggPushDown(rootID)
-		ReCalcNodeStats(rootID, builder, true, false)
+		err = ReCalcNodeStats(rootID, builder, true, false)
+		if err != nil {
+			return nil, err
+		}
 		rootID = builder.determineJoinOrder(rootID)
 		rootID = builder.removeRedundantJoinCond(rootID)
-		ReCalcNodeStats(rootID, builder, true, false)
+		err = ReCalcNodeStats(rootID, builder, true, false)
+		if err != nil {
+			return nil, err
+		}
 		rootID = builder.aggPullup(rootID, rootID)
-		ReCalcNodeStats(rootID, builder, true, false)
+		err = ReCalcNodeStats(rootID, builder, true, false)
+		if err != nil {
+			return nil, err
+		}
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		builder.optimizeDistinctAgg(rootID)
-		ReCalcNodeStats(rootID, builder, true, false)
+		err = ReCalcNodeStats(rootID, builder, true, false)
+		if err != nil {
+			return nil, err
+		}
 		builder.applySwapRuleByStats(rootID, true)
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
-		ReCalcNodeStats(rootID, builder, true, false)
+		err = ReCalcNodeStats(rootID, builder, true, false)
+		if err != nil {
+			return nil, err
+		}
 
 		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
@@ -1033,7 +1051,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			colRefCnt[[2]int32{resultTag, int32(i)}] = 1
 		}
 
-		_, err := builder.remapAllColRefs(rootID, colRefCnt)
+		_, err = builder.remapAllColRefs(rootID, colRefCnt)
 		if err != nil {
 			return nil, err
 		}
