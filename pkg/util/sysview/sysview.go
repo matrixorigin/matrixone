@@ -264,7 +264,8 @@ var (
 			"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
 			"if(true, NULL, '') AS SQL_PATH," +
 			"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
-			"FROM mo_catalog.mo_database;",
+			"FROM mo_catalog.mo_database" +
+			"where account_id = CURRENT_ACCOUNT_ID();",
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
 			"DEFAULT_COLLATE_NAME varchar(64)," +
