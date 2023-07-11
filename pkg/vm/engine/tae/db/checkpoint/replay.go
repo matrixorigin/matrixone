@@ -93,17 +93,11 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	}
 	readDuration += time.Since(t0)
 	datas := make([]*logtail.CheckpointData, bat.Length())
-	defer func() {
-		for _, data := range datas {
-			if data != nil {
-				data.Close()
-			}
-		}
-	}()
 
 	entries := make([]*CheckpointEntry, bat.Length())
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
+	closecbs := make([]func(), 0)
 	readfn := func(i int, prefetch bool) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
@@ -140,9 +134,15 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 				emptyFileMu.Unlock()
 			} else {
 				entries[i] = checkpointEntry
+				closecbs = append(closecbs, func() { datas[i].CloseWhenLoadFromCache(checkpointEntry.version) })
 			}
 		}
 	}
+	defer func() {
+		for _, cb := range closecbs {
+			cb()
+		}
+	}()
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
 		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
@@ -180,9 +180,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
 		logutil.Infof("replay checkpoint %v", maxGlobal)
-		checkpointEntry := entries[globalIdx]
 		err = datas[globalIdx].ApplyReplayTo(r.catalog, dataFactory)
-		datas[globalIdx].CloseWhenLoadFromCache(checkpointEntry.version)
 		if err != nil {
 			return
 		}
@@ -208,7 +206,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 		logutil.Infof("replay checkpoint %v", checkpointEntry)
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
-		datas[i].CloseWhenLoadFromCache(checkpointEntry.version)
 		if err != nil {
 			return
 		}
