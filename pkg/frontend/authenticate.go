@@ -7850,12 +7850,13 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	return err
 }
 
-func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) (err error) {
+func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
 	var sql string
 	var erArray []ExecResult
 	var accountName string
 	var databaseOwner int64
 	var currentRole uint32
+	var err error
 
 	dbName := ad.DbName
 	updateConfig := ad.UpdateConfig
@@ -8353,9 +8354,10 @@ func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[strin
 	return sysVars, nil
 }
 
-func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
+func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) error {
 	var sql string
 	var accountId uint32
+	var err error
 	tenantInfo := ses.GetTenantInfo()
 
 	varName = strings.ToLower(varName)
