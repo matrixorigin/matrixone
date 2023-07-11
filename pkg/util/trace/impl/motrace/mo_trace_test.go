@@ -466,7 +466,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 	}
 }
 
-func TestMOHungSpan_loop(t *testing.T) {
+func TestMOHungSpan_End_doProfile(t *testing.T) {
 
 	defer func() {
 		err := recover()
@@ -477,21 +477,21 @@ func TestMOHungSpan_loop(t *testing.T) {
 	tracer := p.Tracer("test").(*MOTracer)
 	ctx := context.TODO()
 
-	_, span := tracer.Start(ctx, "test_loop", trace.WithHungThreshold(time.Hour))
+	_, span := tracer.Start(ctx, "test_loop", trace.WithHungThreshold(time.Second))
 
 	hungSpan := span.(*MOHungSpan)
-	quitCancel := hungSpan.quitCancel
+	stop := hungSpan.quitCancel
 	var ctrlWG sync.WaitGroup
 	ctrlWG.Add(1)
-	hungSpan.quitCancel = context.CancelFunc(func() {
+	hungSpan.stop = func() {
 		// do nothing
-	})
+	}
 	// should not panic
 	span.End()
-	hungSpan.MOSpan = nil
 	hungSpan.mux.Lock()
-	hungSpan.deadlineCancel()
-	quitCancel()
-	hungSpan.mux.Unlock()
+	hungSpan.MOSpan = nil
 	time.Sleep(time.Second)
+	stop()
+	hungSpan.mux.Unlock()
+	time.Sleep(time.Millisecond)
 }
