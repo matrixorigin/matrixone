@@ -1377,6 +1377,59 @@ func (mce *MysqlCmdExecutor) handleShowSubscriptions(ctx context.Context, ss *tr
 	return err
 }
 
+func (mce *MysqlCmdExecutor) doShowProcessList(ses *Session) error {
+	// Construct the columns.
+	col1 := new(MysqlColumn)
+	col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col1.SetName("Id")
+
+	col2 := new(MysqlColumn)
+	col2.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col2.SetName("AccountId")
+
+	col3 := new(MysqlColumn)
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col3.SetName("User")
+
+	col4 := new(MysqlColumn)
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col4.SetName("Host")
+
+	col5 := new(MysqlColumn)
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col5.SetName("db")
+
+	col6 := new(MysqlColumn)
+	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col6.SetName("Command")
+
+	col7 := new(MysqlColumn)
+	col7.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col7.SetName("Time")
+
+	col8 := new(MysqlColumn)
+	col8.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col8.SetName("State")
+
+	col9 := new(MysqlColumn)
+	col9.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col9.SetName("info")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+	mrs.AddColumn(col8)
+	mrs.AddColumn(col9)
+
+	return nil
+
+}
+
 func doShowBackendServers(ses *Session) error {
 	// Construct the columns.
 	col1 := new(MysqlColumn)
@@ -1458,6 +1511,20 @@ func (mce *MysqlCmdExecutor) handleShowBackendServers(ctx context.Context, cwInd
 	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed, error: %v ", err)
+	}
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleShowProcessList(ctx context.Context, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 	}
 	return err
 }
@@ -2941,6 +3008,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleShowBackendServers(requestCtx, i, len(cws)); err != nil {
 			return err
 		}
+	case *tree.ShowProcessList:
+		selfHandle = true
+
 	case *tree.SetTransaction:
 		selfHandle = true
 		//TODO: handle set transaction
@@ -3303,6 +3373,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
 	ses.CopySeqToProc(proc)
+	ses.SetProcessInfo(ses.GetSql(), time.Now(), '0')
 	if ses.GetTenantInfo() != nil {
 		proc.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
 		proc.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()

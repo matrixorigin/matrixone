@@ -612,3 +612,15 @@ func ConstructTLSConfig(ctx context.Context, caFile, certFile, keyFile string) (
 		ClientAuth:   clientAuthPolicy,
 	}, nil
 }
+
+func (rm *RoutineManager) getConnectionProcessList() map[uint32]*ProcessInfo {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	connProc := make(map[uint32]*ProcessInfo)
+	for _, routine := range rm.clients {
+		if procInfo := routine.getSession().GetProcessInfo(); procInfo != nil {
+			connProc[procInfo.ID] = procInfo
+		}
+	}
+	return connProc
+}

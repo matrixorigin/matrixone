@@ -18,12 +18,12 @@ import "time"
 
 // ProcessInfo is a struct used for show processlist statement.
 type ProcessInfo struct {
-	ID        uint64
-	AccountID uint64
+	ID        uint32
+	AccountID uint32
 	User      string
 	Host      string
 	DB        string
-	Command   string
+	Command   byte
 	Time      time.Time
 	State     uint16
 	Info      string

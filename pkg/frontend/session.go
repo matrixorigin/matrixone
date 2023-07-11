@@ -1986,6 +1986,32 @@ func checkPlanIsInsertValues(proc *process.Process,
 	return false, nil
 }
 
-func (s *Session) SetProcessInfo(sql string, t time.Time, command byte) {
+func (s *Session) GetProcessInfo() *ProcessInfo {
+	var pi *ProcessInfo
+	tmp := s.processInfo.Load()
+	if tmp != nil {
+		pi = tmp.(*ProcessInfo)
+	}
+	return pi
+}
 
+func (s *Session) SetProcessInfo(sql string, t time.Time, command byte) {
+	processInfo := &ProcessInfo{
+		ID:        s.GetConnectionID(),
+		AccountID: s.accountId,
+		User:      s.GetUserName(),
+		Host:      s.GetParameterUnit().SV.Host,
+		DB:        s.GetDatabaseName(),
+		Command:   command,
+		Time:      t,
+		State:     s.GetServerStatus(),
+		Info:      sql,
+	}
+	oldProcessInfo := s.GetProcessInfo()
+
+	if oldProcessInfo != nil && oldProcessInfo.Info == processInfo.Info && oldProcessInfo.Command == processInfo.Command {
+		processInfo.Time = oldProcessInfo.Time
+	}
+
+	s.processInfo.Store(processInfo)
 }
