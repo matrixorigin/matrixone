@@ -385,7 +385,7 @@ func (bat *Batch) CheckForRemoveZs(operator string) {
 	// should all 1
 	for _, z := range bat.Zs {
 		if z != 1 {
-			logutil.Errorf("[cms] %s output batch with non-1 zs, stack is \n%s", operator, string(debug.Stack()))
+			logutil.Errorf("[cms] %s output batch with non-1 zs, zs = %d, stack is \n%s", operator, z, string(debug.Stack()))
 			break
 		}
 	}
