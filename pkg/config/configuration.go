@@ -602,13 +602,14 @@ type ObservabilityParameters struct {
 	// If disabled, the logs will be written to files stored in s3
 	DisableSqlWriter bool `toml:"disableSqlWriter"`
 
-	// If disabled, the statements will not be aggregated
+	// DisableStmtAggregation ctrl statement aggregation. If disabled, the statements will not be aggregated.
+	// If false, LongQueryTime is NO less than SelectAggrThreshold
 	DisableStmtAggregation bool `toml:"disableStmtAggregation"`
 
 	// Seconds to aggregate the statements
 	AggregationWindow toml.Duration `toml:"aggregationWindow"`
 
-	// Duration to filter statements for aggregation
+	// SelectAggrThreshold Duration to filter statements for aggregation
 	SelectAggrThreshold toml.Duration `toml:"selectAggrThreshold"`
 
 	// Disable merge statements
@@ -684,6 +685,14 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.SelectAggrThreshold.Duration <= 0 {
 		op.SelectAggrThreshold.Duration = defaultSelectThreshold
+	}
+
+	// this loop must after SelectAggrThreshold and DisableStmtAggregation
+	if !op.DisableStmtAggregation {
+		val := float64(op.SelectAggrThreshold.Duration) / float64(time.Second)
+		if op.LongQueryTime <= val {
+			op.LongQueryTime = val
+		}
 	}
 }
 

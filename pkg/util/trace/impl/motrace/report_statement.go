@@ -123,7 +123,7 @@ func StatementInfoFilter(i Item) bool {
 		// Check StatementType
 		switch statementInfo.StatementType {
 		case "Insert", "Update", "Delete", "Execute", "Commit", "Select":
-			if statementInfo.Duration < GetTracerProvider().selectAggrThreshold {
+			if statementInfo.Duration <= GetTracerProvider().selectAggrThreshold {
 				return true
 			}
 		}
