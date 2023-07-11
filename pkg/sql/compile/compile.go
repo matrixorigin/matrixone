@@ -2480,16 +2480,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	blockFilter := make([]*plan2.Expr, len(n.BlockFilterList))
-	for i, e := range n.BlockFilterList {
-		e, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(e), c.proc, true)
-		if err != nil {
-			return nil, err
-		}
-		blockFilter[i] = e
-	}
-
-	ranges, err = rel.Ranges(ctx, blockFilter)
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
 	if err != nil {
 		return nil, err
 	}
@@ -2505,7 +2496,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, blockFilter)
+			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
 			if err != nil {
 				return nil, err
 			}
