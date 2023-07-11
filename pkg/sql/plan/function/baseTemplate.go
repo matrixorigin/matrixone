@@ -35,6 +35,7 @@ type templateTr1 interface {
 // For sca.
 var _ = opBinaryFixedStrToFixedWithErrorCheck[bool, bool]
 var _ = opNoneParamToBytesWithErrorCheck
+var _ = opBinaryStrFixedToStrWithErrorCheck[bool]
 
 // I hope it can generate all functions according to some easy parameters.
 // not yet ok. and may change soon. plz use it carefully if you really need it.
@@ -911,12 +912,13 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 				rowCount := uint64(length)
+				rv1 := functionUtil.QuickBytesToStr(v1)
 				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
 						continue
 					}
-					r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
+					r, err := resultFn(rv1, v2)
 					if err != nil {
 						return err
 					}
@@ -1000,6 +1002,150 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 			return err
 		}
 		rss[i] = r
+	}
+	return nil
+}
+
+func opBinaryStrFixedToStrWithErrorCheck[
+	T2 types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v1 string, v2 T2) (string, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	rsVec := rs.GetResultVector()
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 && c2 {
+		v1, null1 := p1.GetStrValue(0)
+		v2, null2 := p2.GetValue(0)
+		ifNull := null1 || null2
+		if ifNull {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
+			if err != nil {
+				return err
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p2.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+				rowCount := uint64(length)
+				rv1 := functionUtil.QuickBytesToStr(v1)
+				for i := uint64(0); i < rowCount; i++ {
+					v2, null2 := p2.GetValue(i)
+					if null2 {
+						continue
+					}
+					r, err := resultFn(rv1, v2)
+					if err != nil {
+						return err
+					}
+					if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+						return err
+					}
+				}
+			} else {
+				rv1 := functionUtil.QuickBytesToStr(v1)
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					v2, _ := p2.GetValue(i)
+					r, err := resultFn(rv1, v2)
+					if err != nil {
+						return err
+					}
+					if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					v1, null1 := p1.GetStrValue(i)
+					if null1 {
+						continue
+					}
+					r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
+					if err != nil {
+						return err
+					}
+					if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+						return err
+					}
+				}
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					v1, _ := p1.GetStrValue(i)
+					r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
+					if err != nil {
+						return err
+					}
+					if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			v1, null1 := p1.GetStrValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 {
+				continue
+			}
+			r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		v2, _ := p2.GetValue(i)
+		r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
