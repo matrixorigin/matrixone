@@ -3950,9 +3950,8 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		statsByte.Reset()
-		for _, rootNodeId := range h.query.Steps {
+		for _, node := range h.query.Nodes {
 			// part 1: for statistic.StatsArray
-			node := h.query.Nodes[rootNodeId]
 			s := explain.GetStatistic4Trace(ctx, node, options)
 			statsByte.Add(&s)
 			// part 2: for motrace.Statistic
