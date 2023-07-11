@@ -53,6 +53,7 @@ func getDmlPlanCtx() *dmlPlanCtx {
 	ctx.lockTable = false
 	ctx.checkInsertPkDup = false
 	ctx.pkFilterExpr = nil
+	ctx.updatePkCol = true
 	return ctx
 }
 
@@ -95,6 +96,7 @@ type dmlPlanCtx struct {
 	isFkRecursionCall bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
 	lockTable         bool //we need lock table in stmt: delete from tbl
 	checkInsertPkDup  bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
+	updatePkCol       bool //if update stmt will update the primary key or one of pks
 	pkFilterExpr      *Expr
 }
 
@@ -133,7 +135,7 @@ func buildInsertPlans(
 
 		// make insert plans
 		insertBindCtx := NewBindContext(builder, nil)
-		err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, pkFilterExpr)
+		err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr)
 		return err
 	}
 }
@@ -221,32 +223,74 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		// build insert plan.
 		insertBindCtx := NewBindContext(builder, nil)
 		err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-			sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.pkFilterExpr)
+			sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExpr)
 
 		return err
 	}
 }
 
+func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
+	for step, stepNodeId := range builder.qry.Steps {
+		if stepNodeId == nodeId {
+			return step
+		}
+	}
+	return -1
+}
+
 // buildDeletePlans  build preinsert plan.
 /*
-   [o1]sink_scan -> project -> [agg] -> [filter] -> sink
-        [o1]sink_scan -> join[u1] -> sink
-            [u1]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u1
-			[u1]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u1
-        [o1]sink_scan -> join[u2] -> sink
-            [u2]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u2
-			[u2]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u2
-        [o1]sink_scan -> predelete[get partition] -> lock -> delete -> [mergedelete]
+[o1]sink_scan -> join[u1] -> sink
+	[u1]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u1
+	[u1]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u1
+[o1]sink_scan -> join[u2] -> sink
+	[u2]sink_scan -> lock -> delete -> [mergedelete] ...  // if it's delete stmt. do delete u2
+	[u2]sink_scan -> preinsert_uk -> sink ...  // if it's update stmt. do update u2
+[o1]sink_scan -> predelete[get partition] -> lock -> delete -> [mergedelete]
 
-		[o1]sink_scan -> join[f1 semi join c1 on c1.fid=f1.id, get f1.id] -> filter(assert(isempty(id)))   // if have refChild table with no action
-		[o1sink_scan -> join[f1 inner join c2 on f1.id = c2.fid, 取c2.*, null] -> sink ...(like update)   // if have refChild table with set null
-		[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*] -> sink ...(like delete)   // delete stmt: if have refChild table with cascade
-		[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
-
-   [o2]sink_scan -> project -> [agg] -> [filter] -> sink
-        ...
+[o1]sink_scan -> join[f1 semi join c1 on c1.fid=f1.id, get f1.id] -> filter(assert(isempty(id)))   // if have refChild table with no action
+[o1]sink_scan -> join[f1 inner join c2 on f1.id = c2.fid, 取c2.*, null] -> sink ...(like update)   // if have refChild table with set null
+[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*] -> sink ...(like delete)   // delete stmt: if have refChild table with cascade
+[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
 */
 func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, lastNodeId int32) error {
+	if sinkOrUnionNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
+		sinkOrUnionNode := builder.qry.Nodes[sinkOrUnionNodeId]
+		if sinkOrUnionNode.NodeType == plan.Node_SINK {
+			step := getStepByNodeId(builder, sinkOrUnionNodeId)
+			if step == -1 || delCtx.sourceStep == -1 {
+				panic("steps should not be -1")
+			}
+
+			oldDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, int32(step))
+			thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+			unionProjection := getProjectionByLastNode(builder, sinkOrUnionNodeId)
+			unionNode := &plan.Node{
+				NodeType:    plan.Node_UNION,
+				Children:    []int32{oldDelPlanSinkScanNodeId, thisDelPlanSinkScanNodeId},
+				ProjectList: unionProjection,
+			}
+			unionNodeId := builder.appendNode(unionNode, bindCtx)
+			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
+			endStep := builder.appendStep(newSinkNodeId)
+			for i, n := range builder.qry.Nodes {
+				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
+					n.SourceStep = endStep
+				}
+			}
+			builder.deleteNode[delCtx.tableDef.TblId] = unionNodeId
+		} else {
+			// todo : we need make union operator to support more than two children.
+			panic("unsuport more than two plans to delete one table")
+			// thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+			// sinkOrUnionNode.Children = append(sinkOrUnionNode.Children, thisDelPlanSinkScanNodeId)
+		}
+		return nil
+	} else {
+		if delCtx.sourceStep != -1 {
+			builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
+		}
+	}
 	isUpdate := delCtx.updateColLength > 0
 
 	// delete unique table
@@ -326,7 +370,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols[:j], insertUniqueTableDef.Cols[j+1:]...)
 							}
 						}
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, true, nil)
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, true, true, nil)
 						if err != nil {
 							return err
 						}
@@ -732,6 +776,7 @@ func makeInsertPlan(
 	addAffectedRows bool,
 	isFkRecursionCall bool,
 	checkInsertPkDup bool,
+	updatePkCol bool,
 	pkFilterExpr *Expr,
 ) error {
 	var lastNodeId int32
@@ -808,7 +853,7 @@ func makeInsertPlan(
 					return err
 				}
 
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, nil)
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, true, nil)
 				if err != nil {
 					return err
 				}
@@ -923,14 +968,13 @@ func makeInsertPlan(
 	}
 
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if checkInsertPkDup && CNPrimaryCheck {
+	if CNPrimaryCheck {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
-			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			isUpdate := updateColLength > 0
-
 			rfTag := builder.genNewTag()
 
-			if isUpdate {
+			if isUpdate && updatePkCol { // update stmt && pk included in update cols
+				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 				rowIdDef := MakeRowIdColDef()
 				tableDef.Cols = append(tableDef.Cols, rowIdDef)
 				scanTableDef := DeepCopyTableDef(tableDef)
@@ -1203,7 +1247,10 @@ func makeInsertPlan(
 					IsEnd:      true,
 				}, bindCtx)
 				builder.appendStep(lastNodeId)
-			} else {
+			}
+
+			if !isUpdate && !builder.qry.LoadTag { // insert stmt but not load
+				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 				scanTableDef := DeepCopyTableDef(tableDef)
 				scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
 				scanNode := &plan.Node{

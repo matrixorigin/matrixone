@@ -128,7 +128,7 @@ jobs:
           workflow-this: Command to Rerun Workflows
 
   nightly-check:
-    if: github.event_name == 'schedule'
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: arm64-runner
     steps:
       - uses: actions/checkout@v3
@@ -162,7 +162,6 @@ jobs:
         with:
           java-version: '8'
           distribution: 'adopt'
-          architecture: x64
       - name: Start Unit Test
         timeout-minutes: 120
         run: |
@@ -186,7 +185,6 @@ jobs:
       - name: Start BVT Test
         if: ${{ always() && !cancelled() }}
         id: bvt_on_pr_version
-        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases 2>&1
@@ -276,6 +274,7 @@ jobs:
             ${{ github.workspace }}/matrixone
           retention-days: 7
       - name: WeChat Work notification
+        if: ${{ always() && !cancelled() }}
         id: notification
         uses: chf007/action-wechat-work@master
         env:
@@ -285,6 +284,7 @@ jobs:
           mentioned_list: '["@all"]'
           content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nBVT Coverage Summary:<font color=\"warning\">${{ env.BVT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
       - name: WeChat Work notification
+        if: ${{ always() && !cancelled() }}
         id: detail-notification
         uses: chf007/action-wechat-work@master
         env:
