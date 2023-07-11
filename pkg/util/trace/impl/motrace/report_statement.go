@@ -119,7 +119,7 @@ func StatementInfoFilter(i Item) bool {
 
 	// Check SqlSourceType
 	switch statementInfo.SqlSourceType {
-	case "internal_sql", "external_sql", "non_cloud_user":
+	case "internal_sql", "external_sql", "cloud_nonuser_sql":
 		// Check StatementType
 		switch statementInfo.StatementType {
 		case "Insert", "Update", "Delete", "Execute", "Select":
