@@ -96,7 +96,7 @@ func StatementInfoUpdate(existing, new Item) {
 		e.StmtBuilder.WriteString(n.Statement)
 	}
 	e.AggrCount += 1
-	// reponseAt is the last response time
+	// responseAt is the last response time
 	n.ExecPlan2Stats(context.Background())
 	if err := mergeStats(e, n); err != nil {
 		// handle error

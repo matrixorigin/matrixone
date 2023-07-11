@@ -297,6 +297,7 @@ func WithKind(kind SpanKind) spanOptionFunc {
 	})
 }
 
+// WithLongTimeThreshold set timeout threshold. Span.End will check the Span duration value.
 func WithLongTimeThreshold(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.LongTimeThreshold = d
@@ -304,52 +305,64 @@ func WithLongTimeThreshold(d time.Duration) SpanStartOption {
 }
 
 // WithHungThreshold please be careful to using this option.
-// it may start new goroutine to check hung deadline.
+// It will create a new goroutine to check hung deadline while calling Tracer.Start().
 func WithHungThreshold(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.hungThreshold = d
 	})
 }
 
+// WithProfileGoroutine requests dump pprof/mutex. It will trigger profile.ProfileGoroutine() in Span.End().
+// More details in MOSpan.doProfile.
 func WithProfileGoroutine() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagGoroutine
 	})
 }
 
+// WithProfileHeap requests dump pprof/heap. It will trigger profile.ProfileHeap() in Span.End().
+// More details in MOSpan.doProfile.
 func WithProfileHeap() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagHeap
 	})
 }
 
+// WithProfileThreadCreate requests dump pprof/threadcreate. It will trigger profile.ProfileThreadcreate() in Span.End().
+// More details in MOSpan.doProfile.
 func WithProfileThreadCreate() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagThreadcreate
 	})
 }
 
+// WithProfileAllocs requests dump pprof/allocs. It will trigger profile.ProfileAllocs() in Span.End().
+// more details in MOSpan.doProfile.
 func WithProfileAllocs() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagAllocs
 	})
 }
 
+// WithProfileBlock  requests dump pprof/block. It will trigger profile.ProfileBlock() in Span.End().
+// More details in MOSpan.doProfile.
 func WithProfileBlock() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagBlock
 	})
 }
 
+// WithProfileMutex  requests dump pprof/mutex. It will trigger profile.ProfileMutex() in Span.End().
+// More details in MOSpan.doProfile.
 func WithProfileMutex() SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagMutex
 	})
 }
 
-// WithProfileCpuSecs give duration while do pprof
-// more details in MOSpan.doProfile.
-// Please carefully to set this value, it will trigger the sync ProfileCpu op
+// WithProfileCpuSecs requests dump pprof/cpu, and specify the time to profile.
+// Please carefully to set this value, it is a sync profile.ProfileCPU() op.
+// More details in MOSpan.doProfile.
 func WithProfileCpuSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagCpu
@@ -357,6 +370,9 @@ func WithProfileCpuSecs(d time.Duration) SpanStartOption {
 	})
 }
 
+// WithProfileTraceSecs requests dump pprof/trace, and specify the time to profile.
+// Please carefully to use, it is a sync profile.ProfileTrace() op
+// More details in MOSpan.doProfile.
 func WithProfileTraceSecs(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.profileFlag |= ProfileFlagTrace
