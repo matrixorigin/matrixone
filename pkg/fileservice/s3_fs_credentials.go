@@ -22,43 +22,95 @@ import (
 	tencentcommon "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 )
 
-func init() {
-	_ = newAliyunCredentialsProvider
-	_ = newTencentCloudCredentialsProvider
-}
+func newAliyunCredentialsProvider(
+	roleARN string,
+	externalID string,
+) aws.CredentialsProvider {
 
-func newAliyunCredentialsProvider() aws.CredentialsProvider {
 	return aws.CredentialsProviderFunc(
 		func(_ context.Context) (cs aws.Credentials, err error) {
+
 			aliCredential, err := alicredentials.NewCredential(nil)
 			if err != nil {
 				return
 			}
+
 			accessKeyID, err := aliCredential.GetAccessKeyId()
 			if err != nil {
 				return
 			}
 			cs.AccessKeyID = *accessKeyID
+
 			secretAccessKey, err := aliCredential.GetAccessKeySecret()
 			if err != nil {
 				return
 			}
 			cs.SecretAccessKey = *secretAccessKey
+
+			if roleARN != "" {
+				config := new(alicredentials.Config)
+				config.SetType("ram_role_arn")
+				config.SetAccessKeyId(*accessKeyID)
+				config.SetAccessKeySecret(*secretAccessKey)
+				config.SetRoleArn(roleARN)
+				config.SetRoleSessionName(externalID)
+				var cred alicredentials.Credential
+				cred, err = alicredentials.NewCredential(config)
+				if err != nil {
+					return
+				}
+				var accessKeyID *string
+				accessKeyID, err = cred.GetAccessKeyId()
+				if err != nil {
+					return
+				}
+				cs.AccessKeyID = *accessKeyID
+				var secretAccessKey *string
+				secretAccessKey, err = cred.GetAccessKeySecret()
+				if err != nil {
+					return
+				}
+				cs.SecretAccessKey = *secretAccessKey
+			}
+
 			return
 		},
 	)
 }
 
-func newTencentCloudCredentialsProvider() aws.CredentialsProvider {
+func newTencentCloudCredentialsProvider(
+	roleARN string,
+	externalID string,
+) aws.CredentialsProvider {
+
 	return aws.CredentialsProviderFunc(
 		func(_ context.Context) (cs aws.Credentials, err error) {
+
 			provider := tencentcommon.DefaultProviderChain()
+
 			credentials, err := provider.GetCredential()
 			if err != nil {
 				return
 			}
+
 			cs.AccessKeyID = credentials.GetSecretId()
 			cs.SecretAccessKey = credentials.GetSecretKey()
+
+			if roleARN != "" {
+				roleARNProvider := tencentcommon.DefaultRoleArnProvider(
+					credentials.GetSecretId(),
+					credentials.GetSecretKey(),
+					roleARN,
+				)
+				var cred tencentcommon.CredentialIface
+				cred, err = roleARNProvider.GetCredential()
+				if err != nil {
+					return
+				}
+				cs.AccessKeyID = cred.GetSecretId()
+				cs.SecretAccessKey = cred.GetSecretKey()
+			}
+
 			return
 		},
 	)
