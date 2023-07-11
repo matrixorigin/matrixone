@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -126,6 +127,31 @@ func (row *txnRow) GetCommitTS() types.TS {
 func (row *txnRow) Length() int             { return 1 }
 func (row *txnRow) Window(_, _ int) *txnRow { return nil }
 
+func (row *txnRow) IsCompacted() bool {
+	return row.packed.Load() != nil
+}
+
+func (row *txnRow) TryCompact() (compacted, changed bool) {
+	if txn := row.source.Load(); txn == nil {
+		return true, false
+	} else {
+		state := txn.GetTxnState(false)
+		if state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked {
+			packed := &smallTxn{
+				memo:      txn.GetMemo(),
+				startTS:   txn.GetStartTS(),
+				prepareTS: txn.GetPrepareTS(),
+				state:     state,
+				lsn:       txn.GetLSN(),
+			}
+			row.packed.Store(packed)
+			row.source.Store(nil)
+			return true, true
+		}
+	}
+	return false, false
+}
+
 type txnBlock struct {
 	sync.RWMutex
 	bornTS  types.TS
@@ -137,6 +163,28 @@ func (blk *txnBlock) Length() int {
 	blk.RLock()
 	defer blk.RUnlock()
 	return len(blk.rows)
+}
+
+func (blk *txnBlock) TryCompact() (all bool, changed bool) {
+	blk.RLock()
+	defer blk.RUnlock()
+	if len(blk.rows) < cap(blk.rows) {
+		return false, false
+	}
+	if blk.rows[len(blk.rows)-1].IsCompacted() {
+		return true, false
+	}
+	all = true
+	for _, row := range blk.rows {
+		if compacted, _ := row.TryCompact(); !compacted {
+			all = false
+			break
+		}
+	}
+	if all {
+		changed = true
+	}
+	return
 }
 
 func (blk *txnBlock) IsAppendable() bool {
@@ -243,6 +291,21 @@ func NewTxnTable(blockSize int, nowClock func() types.TS) *TxnTable {
 			(*txnBlock).Less,
 		),
 	}
+}
+
+func (table *TxnTable) TryCompact(from types.TS, rt *dbutils.Runtime) (to types.TS) {
+	snapshot := table.Snapshot()
+	snapshot.Ascend(
+		&txnBlock{bornTS: from},
+		func(blk BlockT) bool {
+			allCompacted, changed := blk.TryCompact()
+			if changed {
+				rt.Logtail.CompactStats.Add(1)
+			}
+			to = blk.bornTS
+			return allCompacted
+		})
+	return
 }
 
 func (table *TxnTable) AddTxn(txn txnif.AsyncTxn) (err error) {
