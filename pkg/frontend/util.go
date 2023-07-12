@@ -531,8 +531,10 @@ func logInfof(info string, msg string, fields ...interface{}) {
 }
 
 func logDebugf(info string, msg string, fields ...interface{}) {
-	fields = append(fields, info)
-	logutil.Debugf(msg+" %s", fields...)
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		fields = append(fields, info)
+		logutil.Debugf(msg+" %s", fields...)
+	}
 }
 
 func logErrorf(info string, msg string, fields ...interface{}) {

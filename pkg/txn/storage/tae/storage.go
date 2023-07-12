@@ -52,7 +52,6 @@ func NewTAEStorage(
 	ckpCfg *options.CheckpointCfg,
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
-	logStore options.LogstoreType,
 	incrementalDedup bool,
 	maxMessageSize uint64,
 ) (*taeStorage, error) {
@@ -62,7 +61,7 @@ func NewTAEStorage(
 		Lc:               logservicedriver.LogServiceClientFactory(factory),
 		Shard:            shard,
 		CheckpointCfg:    ckpCfg,
-		LogStoreT:        logStore,
+		LogStoreT:        options.LogstoreLogservice,
 		IncrementalDedup: incrementalDedup,
 		Ctx:              ctx,
 		MaxMessageSize:   maxMessageSize,
