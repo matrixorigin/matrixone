@@ -16,9 +16,11 @@ package dbutils
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -93,6 +95,10 @@ type Runtime struct {
 	Scheduler     tasks.TaskScheduler
 
 	Options *options.Options
+
+	Logtail struct {
+		CompactStats stats.Counter
+	}
 }
 
 func NewRuntime(opts ...RuntimeOption) *Runtime {
@@ -122,4 +128,12 @@ func (r *Runtime) PrintVectorPoolUsage() {
 	w.WriteByte('\n')
 	w.WriteString(r.VectorPool.Small.String())
 	logutil.Info(w.String())
+}
+
+func (r *Runtime) ExportLogtailStats() string {
+	return fmt.Sprintf(
+		"LogtailStats: Compact[%d|%d]",
+		r.Logtail.CompactStats.SwapW(0),
+		r.Logtail.CompactStats.Load(),
+	)
 }
