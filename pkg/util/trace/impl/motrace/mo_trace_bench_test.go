@@ -4,25 +4,34 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
-
-	queue "github.com/yireyun/go-queue"
 )
 
-// BenchmarkMOSpan_Free
-// BenchmarkMOSpan_Free/empty
-// BenchmarkMOSpan_Free/empty-10         	  111921	     10699 ns/op
-// BenchmarkMOSpan_Free/just_apply
-// BenchmarkMOSpan_Free/just_apply-10    	    6447	    173771 ns/op
-// BenchmarkMOSpan_Free/goroutine
-// BenchmarkMOSpan_Free/goroutine-10     	    2029	    606984 ns/op
-// BenchmarkMOSpan_Free/sync
-// BenchmarkMOSpan_Free/sync-10          	   10000	    115171 ns/op
-// BenchmarkMOSpan_Free/channel
-// BenchmarkMOSpan_Free/channel-10       	    4363	    278533 ns/op
-// BenchmarkMOSpan_Free/lock_free_queue
-// BenchmarkMOSpan_Free/lock_free_queue-10      1045	   1155037 ns/op
-func BenchmarkMOSpan_Free(b *testing.B) {
+// BenchmarkMOSpan_1kFree
+// BenchmarkMOSpan_1kFree/empty
+// BenchmarkMOSpan_1kFree/empty-10         	  111921	     10699 ns/op
+// BenchmarkMOSpan_1kFree/just_apply
+// BenchmarkMOSpan_1kFree/just_apply-10    	    6447	    173771 ns/op
+// BenchmarkMOSpan_1kFree/goroutine
+// BenchmarkMOSpan_1kFree/goroutine-10     	    2029	    606984 ns/op
+// BenchmarkMOSpan_1kFree/sync
+// BenchmarkMOSpan_1kFree/sync-10          	   10000	    115171 ns/op
+// BenchmarkMOSpan_1kFree/channel
+// BenchmarkMOSpan_1kFree/channel-10       	    4363	    278533 ns/op
+// BenchmarkMOSpan_1kFree/lock_free_queue
+// BenchmarkMOSpan_1kFree/lock_free_queue-10      1045	   1155037 ns/op
+//
+// with 100 goroutine
+// BenchmarkMOSpan_1kFree/empty_multi
+// BenchmarkMOSpan_1kFree/empty_multi-10   	     224	   5092005 ns/op
+// BenchmarkMOSpan_1kFree/just_apply_multi
+// BenchmarkMOSpan_1kFree/just_apply_multi-10         	      69	  16713981 ns/op
+// BenchmarkMOSpan_1kFree/goroutine_multi
+// BenchmarkMOSpan_1kFree/goroutine_multi-10          	      33	  35532263 ns/op
+// BenchmarkMOSpan_1kFree/sync_multi
+// BenchmarkMOSpan_1kFree/sync_multi-10               	      74	  15893255 ns/op
+// BenchmarkMOSpan_1kFree/channel_multi
+// BenchmarkMOSpan_1kFree/channel_multi-10            	      39	  40667865 ns/op
+func BenchmarkMOSpan_1kFree(b *testing.B) {
 
 	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
 	tracer := p.Tracer("test").(*MOTracer)
@@ -100,7 +109,7 @@ func BenchmarkMOSpan_Free(b *testing.B) {
 				}
 			},
 		},
-		{
+		/*{
 			name: "lock_free_queue",
 			prepare: func(wg *sync.WaitGroup, eventCnt int) any {
 				q := queue.NewQueue(uint32(eventCnt))
@@ -131,7 +140,7 @@ func BenchmarkMOSpan_Free(b *testing.B) {
 					q.Put(span)
 				}
 			},
-		},
+		},*/
 	}
 
 	var wg sync.WaitGroup
@@ -152,6 +161,113 @@ func BenchmarkMOSpan_Free(b *testing.B) {
 				wg.Add(eventCnt)
 				go bm.op(&wg, eventCnt, param)
 				wg.Wait()
+			}
+		})
+	}
+	for _, bm := range benchmarks {
+
+		worker := 100
+		totalEvent := eventCnt * worker
+		b.Run(bm.name+"_multi", func(b *testing.B) {
+			prepare := func(wg *sync.WaitGroup, eventCnt int) any {
+				return nil
+			}
+			if bm.prepare != nil {
+				prepare = bm.prepare
+			}
+			param := prepare(&wg, totalEvent)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				wg.Add(totalEvent)
+				for j := 0; j < worker; j++ {
+					go bm.op(&wg, eventCnt, param)
+				}
+				wg.Wait()
+			}
+		})
+	}
+}
+
+// BenchmarkMOSpan_ApplyOneAndFree/empty
+// BenchmarkMOSpan_ApplyOneAndFree/empty-10         	 4520266	       290.6 ns/op
+// BenchmarkMOSpan_ApplyOneAndFree/apply
+// BenchmarkMOSpan_ApplyOneAndFree/apply-10         	 3541989	       346.5 ns/op
+// BenchmarkMOSpan_ApplyOneAndFree/applyNewAndFree
+// BenchmarkMOSpan_ApplyOneAndFree/applyNewAndFree-10         	 3931137	       354.3 ns/op
+// BenchmarkMOSpan_ApplyOneAndFree/prepare1000ApplyAndFree
+// BenchmarkMOSpan_ApplyOneAndFree/prepare1000ApplyAndFree-10 	 3546651	       339.8 ns/op
+// BenchmarkMOSpan_ApplyOneAndFree/apply_after
+// BenchmarkMOSpan_ApplyOneAndFree/apply_after-10             	 3559951	       370.3 ns/op
+func BenchmarkMOSpan_ApplyOneAndFree(b *testing.B) {
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	benchmarks := []struct {
+		name    string
+		prepare func(wg *sync.WaitGroup, eventCnt int) any
+		op      func(wg *sync.WaitGroup, eventCnt int, param any)
+	}{
+		{
+			name: "empty",
+			op: func(wg *sync.WaitGroup, eventCnt int, param any) {
+			},
+		},
+		{
+			name: "apply",
+			op: func(wg *sync.WaitGroup, eventCnt int, param any) {
+				tracer.Start(ctx, "span")
+			},
+		},
+		{
+			name: "applyNewAndFree",
+			op: func(wg *sync.WaitGroup, eventCnt int, param any) {
+				for i := 0; i < eventCnt; i++ {
+					_, span := tracer.Start(ctx, "span")
+					span.(*MOSpan).Free()
+				}
+			},
+		},
+		{
+			name: "prepare1000ApplyAndFree",
+			prepare: func(wg *sync.WaitGroup, eventCnt int) any {
+				eventCnt = 1_000 // reset cnt
+				for i := 0; i < eventCnt; i++ {
+					_, span := tracer.Start(ctx, "span")
+					span.(*MOSpan).Free()
+				}
+				return nil
+			},
+			op: func(wg *sync.WaitGroup, eventCnt int, param any) {
+				_, span := tracer.Start(ctx, "span")
+				defer span.(*MOSpan).Free()
+			},
+		},
+		{
+			name: "apply_after",
+			op: func(wg *sync.WaitGroup, eventCnt int, param any) {
+				tracer.Start(ctx, "span")
+			},
+		},
+	}
+
+	var wg sync.WaitGroup
+
+	eventCnt := 1
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			prepare := func(wg *sync.WaitGroup, eventCnt int) any {
+				return nil
+			}
+			if bm.prepare != nil {
+				prepare = bm.prepare
+			}
+			param := prepare(&wg, eventCnt)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				go bm.op(&wg, eventCnt, param)
 			}
 		})
 	}

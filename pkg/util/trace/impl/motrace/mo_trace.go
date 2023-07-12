@@ -270,7 +270,7 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 		}
 	}
 	if !s.needRecord {
-		go freeMOSpan(s)
+		freeMOSpan(s)
 		return
 	}
 	// apply End option
