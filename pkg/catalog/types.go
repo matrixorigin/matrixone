@@ -102,23 +102,24 @@ const (
 	SystemDBAttr_Type        = "dat_type"
 
 	// 'mo_tables' table
-	SystemRelAttr_ID          = "rel_id"
-	SystemRelAttr_Name        = "relname"
-	SystemRelAttr_DBName      = "reldatabase"
-	SystemRelAttr_DBID        = "reldatabase_id"
-	SystemRelAttr_Persistence = "relpersistence"
-	SystemRelAttr_Kind        = "relkind"
-	SystemRelAttr_Comment     = "rel_comment"
-	SystemRelAttr_CreateSQL   = "rel_createsql"
-	SystemRelAttr_CreateAt    = "created_time"
-	SystemRelAttr_Creator     = "creator"
-	SystemRelAttr_Owner       = "owner"
-	SystemRelAttr_AccID       = "account_id"
-	SystemRelAttr_Partitioned = "partitioned"
-	SystemRelAttr_Partition   = "partition_info"
-	SystemRelAttr_ViewDef     = "viewdef"
-	SystemRelAttr_Constraint  = "constraint"
-	SystemRelAttr_Version     = "rel_version"
+	SystemRelAttr_ID             = "rel_id"
+	SystemRelAttr_Name           = "relname"
+	SystemRelAttr_DBName         = "reldatabase"
+	SystemRelAttr_DBID           = "reldatabase_id"
+	SystemRelAttr_Persistence    = "relpersistence"
+	SystemRelAttr_Kind           = "relkind"
+	SystemRelAttr_Comment        = "rel_comment"
+	SystemRelAttr_CreateSQL      = "rel_createsql"
+	SystemRelAttr_CreateAt       = "created_time"
+	SystemRelAttr_Creator        = "creator"
+	SystemRelAttr_Owner          = "owner"
+	SystemRelAttr_AccID          = "account_id"
+	SystemRelAttr_Partitioned    = "partitioned"
+	SystemRelAttr_Partition      = "partition_info"
+	SystemRelAttr_ViewDef        = "viewdef"
+	SystemRelAttr_Constraint     = "constraint"
+	SystemRelAttr_Version        = "rel_version"
+	SystemRelAttr_CatalogVersion = "catalog_version"
 
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
@@ -212,23 +213,24 @@ const (
 	MO_DATABASE_ACCOUNT_ID_IDX       = 7
 	MO_DATABASE_DAT_TYPE_IDX         = 8
 
-	MO_TABLES_REL_ID_IDX         = 0
-	MO_TABLES_REL_NAME_IDX       = 1
-	MO_TABLES_RELDATABASE_IDX    = 2
-	MO_TABLES_RELDATABASE_ID_IDX = 3
-	MO_TABLES_RELPERSISTENCE_IDX = 4
-	MO_TABLES_RELKIND_IDX        = 5
-	MO_TABLES_REL_COMMENT_IDX    = 6
-	MO_TABLES_REL_CREATESQL_IDX  = 7
-	MO_TABLES_CREATED_TIME_IDX   = 8
-	MO_TABLES_CREATOR_IDX        = 9
-	MO_TABLES_OWNER_IDX          = 10
-	MO_TABLES_ACCOUNT_ID_IDX     = 11
-	MO_TABLES_PARTITIONED_IDX    = 12
-	MO_TABLES_PARTITION_INFO_IDX = 13
-	MO_TABLES_VIEWDEF_IDX        = 14
-	MO_TABLES_CONSTRAINT_IDX     = 15
-	MO_TABLES_VERSION_IDX        = 16
+	MO_TABLES_REL_ID_IDX          = 0
+	MO_TABLES_REL_NAME_IDX        = 1
+	MO_TABLES_RELDATABASE_IDX     = 2
+	MO_TABLES_RELDATABASE_ID_IDX  = 3
+	MO_TABLES_RELPERSISTENCE_IDX  = 4
+	MO_TABLES_RELKIND_IDX         = 5
+	MO_TABLES_REL_COMMENT_IDX     = 6
+	MO_TABLES_REL_CREATESQL_IDX   = 7
+	MO_TABLES_CREATED_TIME_IDX    = 8
+	MO_TABLES_CREATOR_IDX         = 9
+	MO_TABLES_OWNER_IDX           = 10
+	MO_TABLES_ACCOUNT_ID_IDX      = 11
+	MO_TABLES_PARTITIONED_IDX     = 12
+	MO_TABLES_PARTITION_INFO_IDX  = 13
+	MO_TABLES_VIEWDEF_IDX         = 14
+	MO_TABLES_CONSTRAINT_IDX      = 15
+	MO_TABLES_VERSION_IDX         = 16
+	MO_TABLES_CATALOG_VERSION_IDX = 17
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -438,6 +440,26 @@ var (
 		SystemRelAttr_ViewDef,
 		SystemRelAttr_Constraint,
 		SystemRelAttr_Version,
+		SystemRelAttr_CatalogVersion,
+	}
+	MoTablesSchema_V1 = []string{
+		SystemRelAttr_ID,
+		SystemRelAttr_Name,
+		SystemRelAttr_DBName,
+		SystemRelAttr_DBID,
+		SystemRelAttr_Persistence,
+		SystemRelAttr_Kind,
+		SystemRelAttr_Comment,
+		SystemRelAttr_CreateSQL,
+		SystemRelAttr_CreateAt,
+		SystemRelAttr_Creator,
+		SystemRelAttr_Owner,
+		SystemRelAttr_AccID,
+		SystemRelAttr_Partitioned,
+		SystemRelAttr_Partition,
+		SystemRelAttr_ViewDef,
+		SystemRelAttr_Constraint,
+		SystemRelAttr_Version,
 	}
 	MoColumnsSchema = []string{
 		SystemColAttr_UniqName,
@@ -485,6 +507,26 @@ var (
 		types.New(types.T_varchar, 32, 0),   // dat_type
 	}
 	MoTablesTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),     // rel_id
+		types.New(types.T_varchar, 5000, 0), // relname
+		types.New(types.T_varchar, 5000, 0), // reldatabase
+		types.New(types.T_uint64, 0, 0),     // reldatabase_id
+		types.New(types.T_varchar, 5000, 0), // relpersistence
+		types.New(types.T_varchar, 5000, 0), // relkind
+		types.New(types.T_varchar, 5000, 0), // rel_comment
+		types.New(types.T_text, 0, 0),       // rel_createsql
+		types.New(types.T_timestamp, 0, 0),  // created_time
+		types.New(types.T_uint32, 0, 0),     // creator
+		types.New(types.T_uint32, 0, 0),     // owner
+		types.New(types.T_uint32, 0, 0),     // account_id
+		types.New(types.T_int8, 0, 0),       // partitioned
+		types.New(types.T_blob, 0, 0),       // partition_info
+		types.New(types.T_varchar, 5000, 0), // viewdef
+		types.New(types.T_varchar, 5000, 0), // constraint
+		types.New(types.T_uint32, 0, 0),     // schema_version
+		types.New(types.T_uint32, 0, 0),     // schema_catalog_version
+	}
+	MoTablesTypes_V1 = []types.Type{
 		types.New(types.T_uint64, 0, 0),     // rel_id
 		types.New(types.T_varchar, 5000, 0), // relname
 		types.New(types.T_varchar, 5000, 0), // reldatabase

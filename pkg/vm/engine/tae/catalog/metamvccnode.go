@@ -77,7 +77,7 @@ func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (e *MetadataMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	var sn int64
 	if e.MetaLoc, sn, err = objectio.ReadBytes(r); err != nil {
 		return
