@@ -47,9 +47,6 @@ func (c *clientConn) handleHandshakeResp() error {
 	// Parse the login information and returns whether ssl is needed.
 	// Also, we can get connection attributes from client if it sets
 	// some.
-	//
-	// TODO(volgariver6): currently, only connectionAttributes in JDBC URI
-	// is supported.
 	ssl, err := c.mysqlProto.HandleHandshake(c.ctx, pack.Payload)
 	if err != nil {
 		return err
@@ -66,7 +63,9 @@ func (c *clientConn) handleHandshakeResp() error {
 		return err
 	}
 
-	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, c.mysqlProto.GetConnectAttrs())
+	li := &c.clientInfo.labelInfo
+	li.merge(c.mysqlProto.GetConnectAttrs())
+	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
 	return nil
 }
 

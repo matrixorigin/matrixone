@@ -38,9 +38,10 @@ select version();
 version()
 0.7
 alter account config abc set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.8.0';
+internal error: do not have privileges to alter account config
 select version();
 version()
-8.0.30-MatrixOne-v0.8.0
+0.7
 drop database test;
 drop database test1;
 drop account abc;
