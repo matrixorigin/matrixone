@@ -593,7 +593,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		ctx,
 		part,
 		tbl.getTableDef(),
-		exprs,
+		newExprs,
 		tbl.blockInfos,
 		&ranges,
 		tbl.proc,

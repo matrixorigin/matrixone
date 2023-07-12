@@ -204,38 +204,22 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		}
 		if len(cols.Data) == 1 {
 			rowExpr := DeepCopyExpr(cols.Data[0].Expr)
-			if !rule.IsConstant(rowExpr, false) {
-				e, err := forceCastExpr(builder.GetContext(), rowExpr, tableDef.Cols[idx].Typ)
-				if err != nil {
-					return nil
-				}
-				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-					Typ: rowExpr.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: int32(pkColIdx),
-						},
-					},
-				}, e})
-				if err != nil {
-					return nil
-				}
-				pkValueExprs[pkColIdx] = expr
-				// return nil
-			} else {
-				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-					Typ: rowExpr.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: int32(pkColIdx),
-						},
-					},
-				}, rowExpr})
-				if err != nil {
-					return nil
-				}
-				pkValueExprs[pkColIdx] = expr
+			e, err := forceCastExpr(builder.GetContext(), rowExpr, tableDef.Cols[idx].Typ)
+			if err != nil {
+				return nil
 			}
+			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+				Typ: tableDef.Cols[idx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						ColPos: int32(pkColIdx),
+					},
+				},
+			}, e})
+			if err != nil {
+				return nil
+			}
+			pkValueExprs[pkColIdx] = expr
 		}
 	}
 	proc := ctx.GetProcess()

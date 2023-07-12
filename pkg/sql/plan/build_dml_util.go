@@ -1048,10 +1048,6 @@ func makeInsertPlan(
 					for i, e := range pkFilterExpr {
 						blockFilters[i] = DeepCopyExpr(e)
 					}
-					// filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{scanPkExpr, pkFilterExpr})
-					// if err != nil {
-					// 	return err
-					// }
 					scanNode.FilterList = pkFilterExpr
 					scanNode.BlockFilterList = blockFilters
 				}
@@ -1271,6 +1267,14 @@ func makeInsertPlan(
 							newCols[i] = def
 						}
 					}
+					if len(newCols) > 1 {
+						for _, col := range scanTableDef.Cols {
+							if col.Name == scanTableDef.Pkey.PkeyColName {
+								newCols = append(newCols, col)
+								break
+							}
+						}
+					}
 					scanTableDef.Cols = newCols
 					scanNode := &plan.Node{
 						NodeType: plan.Node_TABLE_SCAN,
@@ -1281,15 +1285,19 @@ func makeInsertPlan(
 							Typ: pkTyp,
 							Expr: &plan.Expr_Col{
 								Col: &ColRef{
-									ColPos: int32(pkPos),
+									ColPos: int32(len(newCols) - 1),
 									Name:   tableDef.Pkey.PkeyColName,
 								},
 							},
 						}},
 					}
 					scanNode.FilterList = pkFilterExpr
-					scanNode.BlockFilterList = pkFilterExpr
+					blockFilterList := make([]*Expr, len(pkFilterExpr))
+					for i, e := range pkFilterExpr {
+						blockFilterList[i] = DeepCopyExpr(e)
+					}
 					lastNodeId = builder.appendNode(scanNode, bindCtx)
+					scanNode.BlockFilterList = blockFilterList
 				} else {
 					lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 					scanTableDef := DeepCopyTableDef(tableDef)
