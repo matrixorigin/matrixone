@@ -402,9 +402,9 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
-	logDebugf(cwft.ses.GetDebugString(), "compile.Run begin")
+	logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run begin")
 	defer func() {
-		logDebugf(cwft.ses.GetDebugString(), "compile.Run end")
+		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
 	err := cwft.compile.Run(ts)
 	return err
