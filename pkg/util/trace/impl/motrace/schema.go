@@ -129,12 +129,23 @@ var (
 	stackCol        = table.StringWithScale("stack", 2048, "stack info")
 	traceIDCol      = table.UuidStringColumn("trace_id", "trace uniq id")
 	spanIDCol       = table.SpanIDStringColumn("span_id", "span uniq id")
+	sessionIDCol    = table.SpanIDStringColumn("session_id", "session id")
+	statementIDCol  = table.SpanIDStringColumn("statement_id", "statement id")
 	spanKindCol     = table.StringColumn("span_kind", "span kind, enum: internal, statement, remote")
 	parentSpanIDCol = table.SpanIDStringColumn("parent_span_id", "parent span uniq id")
 	spanNameCol     = table.StringColumn("span_name", "span name, for example: step name of execution plan, function name in code, ...")
 	startTimeCol    = table.DatetimeColumn("start_time", "start time")
 	endTimeCol      = table.DatetimeColumn("end_time", "end time")
 	resourceCol     = table.TextDefaultColumn("resource", `{}`, "static resource information")
+
+	UpgradeColumns = map[string]map[string][]table.Column{
+		"1.0": {
+			"ADD": {
+				statementIDCol,
+				sessionIDCol,
+			},
+		},
+	}
 
 	SingleRowLogTable = &table.Table{
 		Account:  table.AccountSys,
@@ -162,7 +173,10 @@ var (
 			durationCol,
 			resourceCol,
 			spanKindCol,
+			statementIDCol,
+			sessionIDCol,
 		},
+		UpgradeColumns:   UpgradeColumns,
 		PrimaryKeyColumn: nil,
 		ClusterBy:        []table.Column{timestampCol, rawItemCol},
 		Engine:           table.NormalTableEngine,

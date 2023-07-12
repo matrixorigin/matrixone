@@ -20,16 +20,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"math"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 const ExternalFilePath = "__mo_filepath"
@@ -255,6 +256,7 @@ type Table struct {
 	Database         string
 	Table            string
 	Columns          []Column
+	UpgradeColumns   map[string]map[string][]Column
 	PrimaryKeyColumn []Column
 	ClusterBy        []Column
 	Engine           string
@@ -301,6 +303,33 @@ type TableOptions interface {
 	// GetCreateOptions return option for `create {option}table`, which should end with ' '
 	GetCreateOptions() string
 	GetTableOptions(PathBuilder) string
+}
+
+func (tbl *Table) ToUpgradeSql(ctx context.Context) string {
+	if tbl.UpgradeColumns == nil || len(tbl.UpgradeColumns) == 0 {
+		return ""
+	}
+
+	var columnDefinitions []string
+
+	// Generate ADD COLUMN statements for each upgrade column
+	for _, actions := range tbl.UpgradeColumns {
+		for action, cols := range actions {
+			for _, col := range cols {
+				colDef := fmt.Sprintf("%s COLUMN %s", action, col.ToCreateSql(ctx))
+				columnDefinitions = append(columnDefinitions, colDef)
+			}
+		}
+	}
+
+	// Concatenate all column definitions with commas
+	columnDefinitionsStr := strings.Join(columnDefinitions, ", ")
+
+	// Start alter command
+	sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` %s", tbl.Database, tbl.Table, columnDefinitionsStr)
+
+	// Return SQL command
+	return sql
 }
 
 func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {

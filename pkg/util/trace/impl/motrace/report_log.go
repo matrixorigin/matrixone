@@ -103,6 +103,9 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(messageCol, table.StringField(m.Message))
 	row.SetColumnVal(extraCol, table.StringField(m.Extra))
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
+	row.SetColumnVal(statementIDCol, table.StringField(""))
+	row.SetColumnVal(sessionIDCol, table.StringField(""))
+
 }
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
