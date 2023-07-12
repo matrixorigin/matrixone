@@ -78,9 +78,9 @@ create table test_12(col1 int primary key,col2 varchar(25));
 create unique index id_01 on test_12(col2);
 select * from test_12;
 show create table test_12;
--- @session:id=2&user=sys:dump&password=111
+-- @session:id=1{
 show create table test_12;
--- @session
+-- @session}
 rollback ;
 show create table test_12;
 select * from test_12;
@@ -88,12 +88,12 @@ select * from test_12;
 start transaction;
 create table test_12(col1 int primary key,col2 varchar(25));
 insert into test_12 values(1,'a'),(2,'b');
--- @session:id=2&user=sys:dump&password=111
+-- @session:id=1{
 use atomicity;
 select * from test_12;
 create table test_12(col1 int,col2 varchar(25));
 insert into test_12 values (90,'tt');
--- @session
+-- @session}
 select * from test_12;
 show create table test_12;
 commit;
@@ -124,9 +124,10 @@ create database s_db_1;
 start transaction ;
 use s_db_1;
 create table test_13(col1 int primary key,col2 varchar(25));
--- @session:id=2&user=sys:dump&password=111
+-- @session:id=1{
+
 create database s_db_1;
--- @session
+-- @session}
 commit;
 drop database s_db_1;
 
@@ -135,9 +136,10 @@ use atomicity;
 create table test_14(col1 int primary key,col2 varchar(25), unique key col2(col2));
 insert into test_14 values(1,'a'),(2,'b');
 create view test_view_1 as select * from test_14;
--- @session:id=2&user=sys:dump&password=111
+-- @session:id=1{
+use atomicity;
 select * from test_view_1;
--- @session
+-- @session}
 show create table test_14;
 select  * from test_view_1;
 rollback ;
@@ -149,9 +151,10 @@ start transaction ;
 use atomicity;
 create temporary table test_15(col1 int,col2 float);
 insert into test_15 values(1,20.98),(2,30.34);
--- @session:id=2&user=sys:dump&password=111
+-- @session:id=1{
+use atomicity;
 select * from test_15;
--- @session
+-- @session}
 select * from test_15;
 rollback ;
 select * from test_15;
@@ -172,10 +175,10 @@ create external table test_ex_table_1(num_col1 tinyint,num_col2 smallint,num_col
 select num_col1 ,num_col2 from test_ex_table_1;
 create table test_16(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19));
 insert into test_16 select * from test_ex_table_1;
--- @session:id=2&user=sys:dump&password=111
+-- @session:id=1{
+use atomicity;
 select num_col1 ,num_col2 from test_ex_table_1;
--- @session
+-- @session}
 commit;
 select num_col1 ,num_col2 from test_ex_table_1;
 select num_col1 ,num_col2 from test_16;
-

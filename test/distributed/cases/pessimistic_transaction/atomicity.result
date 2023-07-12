@@ -102,9 +102,9 @@ SQL parser error: table "test_12" does not exist
 start transaction;
 create table test_12(col1 int primary key,col2 varchar(25));
 insert into test_12 values(1,'a'),(2,'b');
+use atomicity;
 select * from test_12;
 SQL parser error: table "test_12" does not exist
-use atomicity;
 create table test_12(col1 int,col2 varchar(25));
 insert into test_12 values (90,'tt');
 select * from test_12;
@@ -167,6 +167,7 @@ use atomicity;
 create table test_14(col1 int primary key,col2 varchar(25), unique key col2(col2));
 insert into test_14 values(1,'a'),(2,'b');
 create view test_view_1 as select * from test_14;
+use atomicity;
 select * from test_view_1;
 SQL parser error: table "test_view_1" does not exist
 show create table test_14;
@@ -187,6 +188,7 @@ start transaction ;
 use atomicity;
 create temporary table test_15(col1 int,col2 float);
 insert into test_15 values(1,20.98),(2,30.34);
+use atomicity;
 select * from test_15;
 SQL parser error: table "test_15" does not exist
 select * from test_15;
@@ -223,6 +225,7 @@ num_col1    num_col2
 null    null
 create table test_16(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19));
 insert into test_16 select * from test_ex_table_1;
+use atomicity;
 select num_col1 ,num_col2 from test_ex_table_1;
 SQL parser error: table "test_ex_table_1" does not exist
 commit;

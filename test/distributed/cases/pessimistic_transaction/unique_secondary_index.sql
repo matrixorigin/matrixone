@@ -375,7 +375,7 @@ grant create table on database *  to unique_priv_1;
 grant all on table *.* to unique_priv_1;
 grant unique_priv_1 to user_1;
 -- @session
--- @session:id=2&user=unique_test_account:user_1:unique_priv_1&password=123456
+-- @session:id=1{
 create database testdb;
 use testdb;
 create table create_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
@@ -384,7 +384,7 @@ insert into create_index_01 values (1,'13456789872',20.23,'5678'),(2,'1387345829
 select col2,col4 from create_index_01;
 drop index varchar_index on create_index_01;
 drop database testdb;
--- @session
+-- @session}
 drop account if exists unique_test_account;
 
 --transaction conflict

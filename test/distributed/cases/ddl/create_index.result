@@ -50,7 +50,7 @@ col1    col2    col3    col4
 insert into t3 values(4,"Dora", 28,'zbcvdf');
 Duplicate entry '4' for key 'col1'
 insert into t3 values(5,"Dora", 29,'zbcvdf');
-Duplicate entry '4601446f72610020c1e80000' for key '__mo_index_idx_col'
+Duplicate entry '(Dora,29)' for key '__mo_index_idx_col'
 drop table t3;
 create table t4(a int, b int, key(c));
 invalid input: column 'c' is not exist

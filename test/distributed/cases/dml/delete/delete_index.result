@@ -322,7 +322,7 @@ insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
 insert into t1 values(NULL, 5, 5);
-Duplicate entry '3a15053a1505' for key '__mo_index_idx_col'
+Duplicate entry '(5,5)' for key '__mo_index_idx_col'
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int, unique key(a));
@@ -484,7 +484,7 @@ insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
 insert into t1 values(NULL, 5, 5);
-Duplicate entry '3a15053a1505' for key '__mo_index_idx_col'
+Duplicate entry '(5,5)' for key '__mo_index_idx_col'
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int, unique key(a, b), unique key(c));
