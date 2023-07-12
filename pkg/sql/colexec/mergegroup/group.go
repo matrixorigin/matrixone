@@ -55,6 +55,8 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 					break
 				}
 
+				bat.FixedForRemoveZs()
+
 				anal.Input(bat, isFirst)
 				if err = ctr.process(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
@@ -79,16 +81,23 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 						}
 					}
 					ctr.bat.Aggs = nil
+					// todo(cms): i comment thest codes.
 					for i := range ctr.bat.Zs { // reset zs
 						ctr.bat.Zs[i] = 1
 					}
-					ctr.bat.SetRowCount(len(ctr.bat.Zs))
+				}
+
+				// todo(cms): set all 1 here.
+				for i := range ctr.bat.Zs { // reset zs
+					ctr.bat.Zs[i] = 1
 				}
 				anal.Output(ctr.bat, isLast)
 			}
 			ctr.state = End
 
 		case End:
+			ctr.bat.CheckForRemoveZs("merge group")
+
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
 			return true, nil
@@ -239,11 +248,11 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			hashRows++
 			cnt++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
-			ctr.bat.SetRowCount(ctr.bat.RowCount() + 1)
 		}
 		ai := int64(v) - 1
 		ctr.bat.Zs[ai] += bat.Zs[i+k]
 	}
+	ctr.bat.SetRowCount(ctr.bat.RowCount() + cnt)
 
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {

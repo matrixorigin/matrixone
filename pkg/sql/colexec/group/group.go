@@ -277,12 +277,12 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				//	ctr.bat.Zs[i] = 1
 				//}
 			}
-			anal.Output(ctr.bat, isLast)
-		}
+			// todo(cms): set all zs to 1 here because next operator `merge group` never use zs really.
+			for i := range ctr.bat.Zs { // reset zs
+				ctr.bat.Zs[i] = 1
+			}
 
-		// todo(cms): set all zs to 1 here because next operator `merge group` never use zs really.
-		for i := range ctr.bat.Zs { // reset zs
-			ctr.bat.Zs[i] = 1
+			anal.Output(ctr.bat, isLast)
 		}
 
 		ctr.bat.CheckForRemoveZs("group")

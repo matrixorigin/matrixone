@@ -377,8 +377,8 @@ func (bat *Batch) CheckForRemoveZs(operator string) {
 		return
 	}
 	if bat.rowCount != len(bat.Zs) {
-		logutil.Errorf("[cms] %s output batch with different row count and zs, row is %d, zs is %d",
-			operator, bat.rowCount, len(bat.Zs))
+		logutil.Errorf("[cms] %s output batch with different row count and zs, row is %d, zs is %d, stack is \n%s",
+			operator, bat.rowCount, len(bat.Zs), string(debug.Stack()))
 		return
 	}
 
