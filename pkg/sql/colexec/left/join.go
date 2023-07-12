@@ -71,6 +71,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
+			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -103,6 +104,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
+	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
@@ -130,7 +132,9 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
 	anal.Output(rbat, isLast)
+	rbat.CheckForRemoveZs("left")
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -169,6 +173,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
 		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		rowCount := 0
 		for k := 0; k < n; k++ {
 			if ctr.inBuckets[k] == 0 {
 				continue
@@ -191,6 +196,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						}
 					}
 				}
+				rowCount++
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
@@ -234,6 +240,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						}
 					}
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
+					rowCount++
 				}
 			} else {
 				matched = true
@@ -253,6 +260,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 				}
+				rowCount += len(sels)
 			}
 
 			if !matched {
@@ -270,11 +278,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 				}
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				rowCount++
 				continue
 			}
 		}
+
+		rbat.SetRowCount(rbat.RowCount() + rowCount)
 	}
 	anal.Output(rbat, isLast)
+	rbat.CheckForRemoveZs("left")
 	proc.SetInputBatch(rbat)
 	return nil
 }

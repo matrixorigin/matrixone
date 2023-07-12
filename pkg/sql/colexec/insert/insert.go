@@ -65,6 +65,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	}
 
 	bat := proc.InputBatch()
+	bat.FixedForRemoveZs()
 	if bat == nil {
 		// scenario 1 for cn write s3, more in the comment of S3Writer
 		if ap.ToWriteS3 {
@@ -147,6 +148,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			insertBat.SetVector(int32(i), vec)
 		}
 		insertBat.Zs = append(insertBat.Zs, bat.Zs...)
+		insertBat.SetRowCount(insertBat.RowCount() + bat.RowCount())
 
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
 			insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
@@ -197,8 +199,10 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 			return
 		}
 		res.Zs = append(res.Zs, w.GetMetaLocBat().Zs...)
+		res.SetRowCount(res.RowCount() + w.GetMetaLocBat().RowCount())
 		w.ResetMetaLocBat(proc)
 	}
+	res.CheckForRemoveZs("insert")
 	proc.SetInputBatch(res)
 	return
 }

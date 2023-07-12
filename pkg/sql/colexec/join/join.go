@@ -72,6 +72,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
+			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -102,6 +103,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 		return err
 	}
 
+	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
@@ -153,6 +155,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			sels := mSels[vals[k]-1]
 			if ap.Cond != nil {
+				rowCount := 0
 				for _, sel := range sels {
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
@@ -188,7 +191,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						}
 					}
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
+					rowCount++
 				}
+				rbat.SetRowCount(rbat.Length() + rowCount)
 			} else {
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
@@ -206,11 +211,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 				}
+				rbat.SetRowCount(rbat.Length() + len(sels))
 			}
 		}
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
+	rbat.CheckForRemoveZs("join")
 	return nil
 }
 

@@ -100,6 +100,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 		bat := <-proc.Reg.MergeReceivers[1].Ch
 		analyzer.WaitStop(start)
 
+		bat.FixedForRemoveZs()
 		if bat == nil {
 			break
 		}
@@ -153,6 +154,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		bat := <-proc.Reg.MergeReceivers[0].Ch
 		analyzer.WaitStop(start)
 
+		bat.FixedForRemoveZs()
 		if bat == nil {
 			return true, nil
 		}
@@ -213,6 +215,8 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 					cnt++
 
 				}
+				outputBat.SetRowCount(outputBat.RowCount() + cnt)
+
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
 						if err := outputBat.Vecs[colNum].UnionBatch(bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
@@ -226,6 +230,8 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		}
 		analyzer.Alloc(int64(outputBat.Size()))
 		analyzer.Output(outputBat, isLast)
+
+		outputBat.CheckForRemoveZs("intersect all")
 		proc.SetInputBatch(outputBat)
 		bat.Clean(proc.Mp())
 		return false, nil

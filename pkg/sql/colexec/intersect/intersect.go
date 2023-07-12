@@ -87,6 +87,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 			return err
 		}
 
+		btc.FixedForRemoveZs()
 		// last batch of block
 		if btc == nil {
 			break
@@ -140,6 +141,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 			return false, err
 		}
 
+		btc.FixedForRemoveZs()
 		// last batch of block
 		if btc == nil {
 			return true, nil
@@ -199,6 +201,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 				c.btc.Zs = append(c.btc.Zs, 1)
 				insertcnt++
 			}
+			c.btc.SetRowCount(c.btc.Length() + insertcnt)
 
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
@@ -213,6 +216,8 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		btc.Clean(proc.Mp())
 		analyze.Alloc(int64(c.btc.Size()))
 		analyze.Output(c.btc, isLast)
+
+		c.btc.CheckForRemoveZs("intersect")
 		proc.SetInputBatch(c.btc)
 		return false, nil
 	}
