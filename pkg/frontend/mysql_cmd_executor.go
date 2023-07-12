@@ -213,7 +213,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
-	if sqlType != internalSql {
+	if sqlType != InternalSql {
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
 
@@ -258,7 +258,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
-	if sqlType != internalSql {
+	if sqlType != InternalSql {
 		ses.tStmt = stm
 	}
 	if !stm.IsZeroTxnID() {
@@ -282,7 +282,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	if len(sqlTypes) > 0 {
 		sqlType = sqlTypes[0]
 	} else {
-		sqlType = externSql
+		sqlType = ExternSql
 	}
 	if len(envStmt) > 0 {
 		for i, sql := range envStmt {

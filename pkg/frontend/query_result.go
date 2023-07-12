@@ -48,7 +48,7 @@ func openSaveQueryResult(ses *Session) bool {
 	if ses.ast == nil || ses.tStmt == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType == internalSql {
+	if ses.tStmt.SqlSourceType == InternalSql {
 		return false
 	}
 	val, err := ses.GetGlobalVar("save_query_result")
