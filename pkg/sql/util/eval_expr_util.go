@@ -185,6 +185,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAt(vec, row, v)
+	case types.T_date:
+		v, err := types.ParseDateCast(val)
+		if err != nil {
+			return err
+		}
+		return vector.SetFixedAt(vec, row, v)
 	default:
 		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
 	}
