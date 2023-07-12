@@ -340,7 +340,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	paritions := bat.GetVector(catalog.MO_TABLES_PARTITION_INFO_IDX + MO_OFF)
 	constraints := bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF)
 	versions := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_VERSION_IDX + MO_OFF))
-
+	catalogVersions := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_CATALOG_VERSION_IDX + MO_OFF))
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
@@ -356,6 +356,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.Partition = paritions.GetStringAt(i)
 		item.CreateSql = createSqls.GetStringAt(i)
 		item.Version = versions[i]
+		item.CatalogVersion = catalogVersions[i]
 		item.PrimaryIdx = -1
 		item.PrimarySeqnum = -1
 		item.ClusterByIdx = -1
