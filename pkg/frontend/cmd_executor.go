@@ -108,7 +108,7 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 		}
 		source := strings.TrimSpace(sql[p1+2 : p2])
 		if source == cloudUserTag {
-			ui.sqlSourceType = append(ui.sqlSourceType, cloudUserSql)
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
 		} else if source == cloudNoUserTag {
 			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudNoUserSql)
 		} else {
