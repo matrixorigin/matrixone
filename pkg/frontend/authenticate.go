@@ -737,6 +737,7 @@ var (
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
+		"mo_stages":                   0,
 		catalog.MOAutoIncrTable:       0,
 	}
 	configInitVariables = map[string]int8{
@@ -762,6 +763,7 @@ var (
 		catalog.MOAutoIncrTable:       0,
 		"mo_indexes":                  0,
 		"mo_pubs":                     0,
+		"mo_stages":                   0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -912,6 +914,15 @@ var (
 				database_collation varchar(64),
 				primary key(proc_id)
 			);`,
+		`create table mo_stages(
+				stage_id int unsigned auto_increment,
+				stage_name varchar(64),
+				url text,
+				stage_status varchar(64),
+				created_time timestamp,
+				comment text,
+				primary key(stage_id)
+			);`,
 	}
 
 	//drop tables for the tenant
@@ -924,6 +935,7 @@ var (
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
 		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
+		`drop table if exists mo_catalog.mo_stages;`,
 	}
 	dropMoPubsSql     = `drop table if exists mo_catalog.mo_pubs;`
 	deleteMoPubsSql   = `delete from mo_catalog.mo_pubs;`
