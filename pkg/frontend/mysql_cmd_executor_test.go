@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -1064,7 +1065,7 @@ func Test_getSqlType(t *testing.T) {
 		ses := &Session{}
 		ui := &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, InternalSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.InternalSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1074,12 +1075,12 @@ func Test_getSqlType(t *testing.T) {
 		SetSpecialUser(user, nil)
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, InternalSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.InternalSql)
 
 		tenant.User = "dump"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, ExternSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.ExternSql)
 
 		sql = "/* cloud_user */ use db"
 		ui = &UserInput{sql: sql}
@@ -1089,12 +1090,12 @@ func Test_getSqlType(t *testing.T) {
 		sql = "/* cloud_nonuser */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, CloudNoUserSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.CloudNoUserSql)
 
 		sql = "/* json */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, ExternSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.ExternSql)
 	})
 }
 
@@ -1322,7 +1323,7 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	si := motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
-	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{ExternSql, ExternSql}, moerr.NewInternalErrorNoCtx("test"))
+	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
 	si = motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
