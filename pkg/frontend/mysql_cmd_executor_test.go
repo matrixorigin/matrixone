@@ -1256,7 +1256,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 		err = mce.handleShowBackendServers(ctx, 0, 1)
 		require.NoError(t, err)
 		rs := ses.GetMysqlResultSet()
-		require.Equal(t, uint64(3), rs.GetColumnCount())
+		require.Equal(t, uint64(4), rs.GetColumnCount())
 		require.Equal(t, uint64(2), rs.GetRowCount())
 	})
 
@@ -1297,7 +1297,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 		err = mce.handleShowBackendServers(ctx, 0, 1)
 		require.NoError(t, err)
 		rs := ses.GetMysqlResultSet()
-		require.Equal(t, uint64(3), rs.GetColumnCount())
+		require.Equal(t, uint64(4), rs.GetColumnCount())
 		require.Equal(t, uint64(1), rs.GetRowCount())
 
 		row, err := rs.GetRow(ctx, 0)
