@@ -19,8 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const shuffleBatchSize = 1024 * 2
-
 type Argument struct {
 	ctr           *container
 	ShuffleColIdx int32

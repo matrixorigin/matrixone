@@ -207,12 +207,15 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 }
 
 func findBatchToSend(ap *Argument) int {
+	maxSize := 0
+	maxIndex := -1
 	for i := range ap.ctr.shuffledBats {
-		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > shuffleBatchSize {
-			return i
+		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > maxSize {
+			maxSize = ap.ctr.shuffledBats[i].Length()
+			maxIndex = i
 		}
 	}
-	return -1
+	return maxIndex
 }
 
 func sendOneBatch(ap *Argument, proc *process.Process) {
