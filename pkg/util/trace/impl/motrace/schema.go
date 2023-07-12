@@ -287,6 +287,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 		if err := mustExec(tbl.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
+		mustExec(tbl.ToUpgradeSql(ctx))
 	}
 	for _, v := range views {
 		if err := mustExec(v.ToCreateSql(ctx, true)); err != nil {
