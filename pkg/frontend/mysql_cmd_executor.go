@@ -1192,19 +1192,11 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 
 // handleAlterDatabaseConfig alter a database's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
-	err := doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
 // handleAlterAccountConfig alter a account's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, ses *Session, st *tree.AlterDataBaseConfig) error {
-	err := doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
 	return doAlterAccountConfig(ctx, mce.GetSession(), st)
 }
 

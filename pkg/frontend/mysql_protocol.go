@@ -1224,7 +1224,7 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
 		tipsFormat := "Access denied for user %s. %s"
-		msg := fmt.Sprintf(tipsFormat, mp.username, err.Error())
+		msg := fmt.Sprintf(tipsFormat, getUserPart(mp.username), err.Error())
 		err2 := mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], msg)
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)
