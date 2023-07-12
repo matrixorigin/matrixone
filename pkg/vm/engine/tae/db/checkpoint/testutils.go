@@ -151,7 +151,9 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 	r.storage.entries.Set(entry)
 	now := time.Now()
 	r.storage.Unlock()
-	r.doIncrementalCheckpoint(entry)
+	if err := r.doIncrementalCheckpoint(entry); err != nil {
+		return err
+	}
 	if err := r.saveCheckpoint(entry.start, entry.end); err != nil {
 		return err
 	}

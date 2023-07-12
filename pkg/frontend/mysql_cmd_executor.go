@@ -3876,9 +3876,8 @@ type marshalPlanHandler struct {
 func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
-	query := plan.GetQuery()
 	stmt.MarkResponseAt()
-	if plan == nil {
+	if plan == nil || plan.GetQuery() == nil {
 		return &marshalPlanHandler{
 			query:       nil,
 			marshalPlan: nil,
@@ -3887,6 +3886,7 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 			buffer:      getMarshalPlanBufferPool(),
 		}
 	}
+	query := plan.GetQuery()
 	h := &marshalPlanHandler{
 		query:  query,
 		stmt:   stmt,
