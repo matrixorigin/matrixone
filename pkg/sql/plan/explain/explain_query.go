@@ -245,6 +245,8 @@ func PreOrderPlan(ctx context.Context, node *plan.Node, Nodes []*plan.Node, grap
 }
 
 // StatisticsRead statistics read rows, size in ExplainData
+//
+// Deprecated: please use explain.GetInputRowsAndInputSize instead.
 func (d *ExplainData) StatisticsRead() (rows int64, size int64) {
 	for _, step := range d.Steps {
 		for _, node := range step.GraphData.Nodes {

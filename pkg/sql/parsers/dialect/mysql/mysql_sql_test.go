@@ -2275,6 +2275,42 @@ var (
 			input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
 			output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
 		},
+		{
+			input:  "create table t1(a int) STORAGE DISK;",
+			output: "create table t1 (a int) tablespace =  STORAGE DISK",
+		}, {
+			input:  "create table t1 (a int) STORAGE DISK;",
+			output: "create table t1 (a int) tablespace =  STORAGE DISK",
+		}, {
+			input: "create table t1 (a numeric(10, 2))",
+		}, {
+			input: "create table t1 (a mediumint)",
+		}, {
+			input:  "drop schema if exists ssb",
+			output: "drop database if exists ssb",
+		}, {
+			input:  "drop table if exists ssb RESTRICT",
+			output: "drop table if exists ssb",
+		}, {
+			input:  "drop table if exists ssb CASCADE",
+			output: "drop table if exists ssb",
+		}, {
+			input: "create table t1 (a int) AUTOEXTEND_SIZE = 10",
+		}, {
+			input:  "create table t1 (a int) ENGINE_ATTRIBUTE = 'abc'",
+			output: "create table t1 (a int) ENGINE_ATTRIBUTE = abc",
+		}, {
+			input: "create table t1 (a int) INSERT_METHOD = NO",
+		}, {
+			input: "create table t1 (a int) INSERT_METHOD = FIRST",
+		}, {
+			input: "create table t1 (a int) INSERT_METHOD = LAST",
+		}, {
+			input: "create table t1 (a int) START TRANSACTION",
+		}, {
+			input:  "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = 'abc'",
+			output: "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = abc",
+		},
 	}
 )
 
