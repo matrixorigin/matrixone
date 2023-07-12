@@ -45,6 +45,7 @@ func TestHashPartition(t *testing.T) {
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1) PARTITIONS 4;",
 		//"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col2) PARTITIONS 4;",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));",
+		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3) + col1 % (7*24));",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;",
 		"create table t2 (a date, b datetime) partition by hash (EXTRACT(YEAR_MONTH FROM a)) partitions 7",
 		"create table t3 (a int, b int) partition by hash(ceiling(a-b)) partitions 10",

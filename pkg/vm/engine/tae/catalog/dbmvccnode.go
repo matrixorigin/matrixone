@@ -44,7 +44,7 @@ func (e *EmptyMVCCNode) Update(vun *EmptyMVCCNode) {}
 
 func (e *EmptyMVCCNode) WriteTo(w io.Writer) (n int64, err error) { return }
 
-func (e *EmptyMVCCNode) ReadFrom(r io.Reader) (n int64, err error) { return }
+func (e *EmptyMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) { return }
 
 type DBNode struct {
 	acInfo    accessInfo
