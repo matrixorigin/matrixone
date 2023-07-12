@@ -1026,9 +1026,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
-		if err != nil {
-			return nil, err
-		}
 
 		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
