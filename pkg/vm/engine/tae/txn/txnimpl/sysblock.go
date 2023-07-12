@@ -283,6 +283,8 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 		colData.Append(schema.Constraint, false)
 	case pkgcatalog.SystemRelAttr_Version:
 		colData.Append(schema.Version, false)
+	case pkgcatalog.SystemRelAttr_CatalogVersion:
+		colData.Append(schema.CatalogVersion, false)
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
