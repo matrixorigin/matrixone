@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -31,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -902,6 +902,184 @@ func TestServiceHandleCNUpdateLabel(t *testing.T) {
 		labels3, ok6 := info.Labels["role"]
 		assert.True(t, ok6)
 		assert.Equal(t, labels3.Labels, []string{"1", "2"})
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleCNUpdateWorkState(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		uuid := "uuid1"
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method: pb.UPDATE_CN_WORK_STATE,
+			CNWorkState: &pb.CNWorkState{
+				UUID:  uuid,
+				State: metadata.WorkState_Working,
+			},
+		}
+		resp := s.handleUpdateCNWorkState(ctx0, req)
+		assert.Equal(t, uint32(20101), resp.ErrorCode)
+		assert.Equal(t, fmt.Sprintf("internal error: CN [%s] does not exist", uuid), resp.ErrorMessage)
+
+		ctx1, cancel1 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel1()
+		req = pb.Request{
+			Method: pb.CN_HEARTBEAT,
+			CNHeartbeat: &pb.CNStoreHeartbeat{
+				UUID: uuid,
+			},
+		}
+		resp = s.handleCNHeartbeat(ctx1, req)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel2()
+		req = pb.Request{
+			Method: pb.UPDATE_CN_WORK_STATE,
+			CNWorkState: &pb.CNWorkState{
+				UUID:  uuid,
+				State: metadata.WorkState_Working,
+			},
+		}
+		resp = s.handleUpdateCNWorkState(ctx2, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		info, ok1 := resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+
+		ctx4, cancel4 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel4()
+		req = pb.Request{
+			Method: pb.UPDATE_CN_WORK_STATE,
+			CNWorkState: &pb.CNWorkState{
+				UUID:  uuid,
+				State: metadata.WorkState_Unknown,
+			},
+		}
+		resp = s.handleUpdateCNWorkState(ctx4, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx5, cancel5 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel5()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx5, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		info, ok1 = resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleCNPatchStore(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		uuid := "uuid1"
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method: pb.PATCH_CN_STORE,
+			CNStateLabel: &pb.CNStateLabel{
+				UUID:  uuid,
+				State: metadata.WorkState_Working,
+				Labels: map[string]metadata.LabelList{
+					"account": {Labels: []string{"a", "b"}},
+					"role":    {Labels: []string{"1", "2"}},
+				},
+			},
+		}
+		resp := s.handlePatchCNStore(ctx0, req)
+		assert.Equal(t, uint32(20101), resp.ErrorCode)
+		assert.Equal(t, fmt.Sprintf("internal error: CN [%s] does not exist", uuid), resp.ErrorMessage)
+
+		ctx1, cancel1 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel1()
+		req = pb.Request{
+			Method: pb.CN_HEARTBEAT,
+			CNHeartbeat: &pb.CNStoreHeartbeat{
+				UUID: uuid,
+			},
+		}
+		resp = s.handleCNHeartbeat(ctx1, req)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel2()
+		req = pb.Request{
+			Method: pb.PATCH_CN_STORE,
+			CNStateLabel: &pb.CNStateLabel{
+				UUID:  uuid,
+				State: metadata.WorkState_Working,
+				Labels: map[string]metadata.LabelList{
+					"account": {Labels: []string{"a", "b"}},
+					"role":    {Labels: []string{"1", "2"}},
+				},
+			},
+		}
+		resp = s.handlePatchCNStore(ctx2, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		info, ok1 := resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+		labels1, ok2 := info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 := info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+
+		ctx4, cancel4 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel4()
+		req = pb.Request{
+			Method: pb.PATCH_CN_STORE,
+			CNStateLabel: &pb.CNStateLabel{
+				UUID:  uuid,
+				State: metadata.WorkState_Draining,
+			},
+		}
+		resp = s.handlePatchCNStore(ctx4, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx5, cancel5 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel5()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx5, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		info, ok1 = resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 = info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
 	}
 	runServiceTest(t, true, true, fn)
 }
