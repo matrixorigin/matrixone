@@ -215,7 +215,7 @@ func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen i
 
 	columnStr := strings.Join(columnNames, ",")
 
-	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s`(%s) VALUES ", tbl.Database, tbl.Table, columnStr)
+	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) VALUES ", tbl.Database, tbl.Table, columnStr)
 
 	oneRowBuf := oneRowBufPool.Get().(*bytes.Buffer)
 	for i := 0; i < columns; i++ {
