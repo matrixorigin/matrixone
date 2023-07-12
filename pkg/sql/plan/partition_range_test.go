@@ -16,6 +16,31 @@ package plan
 
 import "testing"
 
+func TestCreateRangePartitionTable(t *testing.T) {
+	sql := `CREATE TABLE employees (
+				id INT NOT NULL,
+				fname VARCHAR(30),
+				lname VARCHAR(30),
+				hired DATE NOT NULL DEFAULT '1970-01-01',
+				separated DATE NOT NULL DEFAULT '9999-12-31',
+				job_code INT NOT NULL,
+				store_id INT NOT NULL
+			)
+			PARTITION BY RANGE (store_id) (
+				PARTITION p0 VALUES LESS THAN (6),
+				PARTITION p1 VALUES LESS THAN (11),
+				PARTITION p2 VALUES LESS THAN (16),
+				PARTITION p3 VALUES LESS THAN (21)
+			);`
+
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	outPutPlan(logicPlan, true, t)
+}
+
 // -----------------------Range Partition-------------------------------------
 func TestRangePartition(t *testing.T) {
 	sqls := []string{
@@ -174,6 +199,51 @@ func TestRangePartition(t *testing.T) {
 			PARTITION p4 VALUES LESS THAN MAXVALUE
 		);`,
 
+		`CREATE TABLE titles (
+				emp_no      INT             NOT NULL,
+				title       VARCHAR(50)     NOT NULL,
+				from_date   DATE            NOT NULL,
+				to_date     DATE,
+				PRIMARY KEY (emp_no,title, from_date)
+			)
+			PARTITION BY RANGE (to_days(from_date))
+			(
+				partition p01 values less than (to_days('1985-12-31')),
+				partition p02 values less than (to_days('1986-12-31')),
+				partition p03 values less than (to_days('1987-12-31')),
+				partition p04 values less than (to_days('1988-12-31')),
+				partition p05 values less than (to_days('1989-12-31')),
+				partition p06 values less than (to_days('1990-12-31')),
+				partition p07 values less than (to_days('1991-12-31')),
+				partition p08 values less than (to_days('1992-12-31')),
+				partition p09 values less than (to_days('1993-12-31')),
+				partition p10 values less than (to_days('1994-12-31')),
+				partition p11 values less than (to_days('1995-12-31')),
+				partition p12 values less than (to_days('1996-12-31'))
+			);`,
+
+		`CREATE TABLE tange_test  (
+			  id int NULL,
+			  name varchar(255) NULL,
+			  date datetime NULL 
+			)
+			PARTITION BY RANGE (year(date)) (
+			PARTITION p0 VALUES LESS THAN (2000),
+			PARTITION p1 VALUES LESS THAN (2001), 
+			PARTITION p2 VALUES LESS THAN (2002),
+			PARTITION p3 VALUES LESS THAN (2003), 
+			PARTITION p4 VALUES LESS THAN MAXVALUE
+			);`,
+		`create table t1 (
+				t_name varchar(255) NOT NULL,
+				t_date datetime NOT NULL
+			)
+			partition by range (year(t_date)*100+month(t_date)) (
+			partition p201201 values less than (201202),
+			partition p201202 values less than (201203),
+			partition p201203 values less than (201204)
+			);`,
+
 		//`CREATE TABLE quarterly_report_status (
 		//	report_id INT NOT NULL,
 		//	report_status VARCHAR(20) NOT NULL,
@@ -290,6 +360,60 @@ func TestRangePartitionError(t *testing.T) {
 			PARTITION p3 VALUES LESS THAN (1990),
 			PARTITION p4 VALUES LESS THAN MAXVALUE
 		);`,
+		`CREATE TABLE employees (
+				id INT NOT NULL,
+				fname VARCHAR(30),
+				lname VARCHAR(30),
+				hired DATE NOT NULL DEFAULT '1970-01-01',
+				separated DATE NOT NULL DEFAULT '9999-12-31',
+				job_code INT NOT NULL,
+				store_id INT NOT NULL
+			)
+			PARTITION BY RANGE (store_id) (
+				PARTITION p0 VALUES LESS THAN (6),
+				PARTITION p1 VALUES LESS THAN (11),
+				PARTITION p2 VALUES LESS THAN MAXVALUE,
+				PARTITION p3 VALUES LESS THAN (21)
+			);`,
+		`CREATE TABLE employees (
+				id INT NOT NULL,
+				fname VARCHAR(30),
+				lname VARCHAR(30),
+				hired DATE NOT NULL DEFAULT '1970-01-01',
+				separated DATE NOT NULL DEFAULT '9999-12-31',
+				job_code INT NOT NULL,
+				store_id INT NOT NULL
+			)
+			PARTITION BY RANGE (store_id) (
+				PARTITION p0 VALUES LESS THAN (6),
+				PARTITION p1 VALUES LESS THAN (11),
+				PARTITION p2 VALUES LESS THAN (10),
+				PARTITION p3 VALUES LESS THAN (21)
+			);`,
+		`CREATE TABLE employees (
+				id INT NOT NULL,
+				fname VARCHAR(30),
+				lname VARCHAR(30),
+				hired DATE NOT NULL DEFAULT '1970-01-01',
+				separated DATE NOT NULL DEFAULT '9999-12-31',
+				job_code INT NOT NULL,
+				store_id INT NOT NULL
+			)
+			PARTITION BY RANGE (store_id) (
+				PARTITION p0 VALUES LESS THAN (6),
+				PARTITION p1 VALUES LESS THAN (11),
+				PARTITION p2 VALUES LESS THAN (11),
+				PARTITION p3 VALUES LESS THAN (21)
+			);`,
+		`create table t1 (
+				t_name varchar(255) NOT NULL,
+				t_date datetime NOT NULL
+			)
+			partition by range (year(t_date)*100+month(t_date)) (
+			partition p201201 values less than (201202),
+			partition p201202 values less than (201203),
+			partition p201203 values less than (201202)
+			);`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -387,6 +511,43 @@ func TestRangeColumnsPartition(t *testing.T) {
 				PARTITION p3 VALUES LESS THAN('19:30:45'),
 				PARTITION p4 VALUES LESS THAN(MAXVALUE)
 			);`,
+
+		`CREATE TABLE members (
+				firstname VARCHAR(25) NOT NULL,
+				lastname VARCHAR(25) NOT NULL,
+				username VARCHAR(16) NOT NULL,
+				email VARCHAR(35),
+				joined DATE NOT NULL
+			)
+			PARTITION BY RANGE COLUMNS(joined) (
+				PARTITION p0 VALUES LESS THAN ('1960-01-01'),
+				PARTITION p1 VALUES LESS THAN ('1970-01-01'),
+				PARTITION p2 VALUES LESS THAN ('1980-01-01'),
+				PARTITION p3 VALUES LESS THAN ('1990-01-01'),
+				PARTITION p4 VALUES LESS THAN MAXVALUE
+			);`,
+		`CREATE TABLE rc (
+				a INT NOT NULL,
+				b INT NOT NULL
+			)
+			PARTITION BY RANGE COLUMNS(a,b) (
+				PARTITION p0 VALUES LESS THAN (10,MAXVALUE),
+				PARTITION p1 VALUES LESS THAN (20,10),
+				PARTITION p2 VALUES LESS THAN (50,MAXVALUE),
+				PARTITION p3 VALUES LESS THAN (65,MAXVALUE),
+				PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE)
+			);`,
+		`CREATE TABLE rc (
+				a INT NOT NULL,
+				b INT NOT NULL
+			)
+			PARTITION BY RANGE COLUMNS(a,b) (
+				PARTITION p0 VALUES LESS THAN (10,5),
+				PARTITION p1 VALUES LESS THAN (20,10),
+				PARTITION p2 VALUES LESS THAN (50,40),
+				PARTITION p3 VALUES LESS THAN (50,MAXVALUE),
+				PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE)
+			);`,
 	}
 	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {
@@ -466,6 +627,31 @@ func TestRangeColumnsPartitionError(t *testing.T) {
 				PARTITION p2 VALUES LESS THAN('2000-01-01'),
 				PARTITION p3 VALUES LESS THAN('2005-01-01'),
 				PARTITION p4 VALUES LESS THAN(MAXVALUE)
+			);`,
+		`CREATE TABLE members (
+				firstname VARCHAR(25) NOT NULL,
+				lastname VARCHAR(25) NOT NULL,
+				username VARCHAR(16) NOT NULL,
+				email VARCHAR(35),
+				joined DATE NOT NULL
+			)
+			PARTITION BY RANGE COLUMNS(joined) (
+				PARTITION p0 VALUES LESS THAN ('1960-01-01'),
+				PARTITION p1 VALUES LESS THAN ('2070-01-01'),
+				PARTITION p2 VALUES LESS THAN ('1980-01-01'),
+				PARTITION p3 VALUES LESS THAN ('1990-01-01'),
+				PARTITION p4 VALUES LESS THAN MAXVALUE
+			);`,
+		`CREATE TABLE rc (
+				a INT NOT NULL,
+				b INT NOT NULL
+			)
+			PARTITION BY RANGE COLUMNS(a,b) (
+				PARTITION p0 VALUES LESS THAN (10,5),
+				PARTITION p1 VALUES LESS THAN (20,10),
+				PARTITION p2 VALUES LESS THAN (50,MAXVALUE),
+				PARTITION p3 VALUES LESS THAN (50,MAXVALUE),
+				PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE)
 			);`,
 	}
 
