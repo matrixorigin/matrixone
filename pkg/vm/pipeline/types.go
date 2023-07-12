@@ -95,14 +95,6 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 			bat.Clean(proc.Mp())
 		}
 		proc.SetInputBatch(nil)
-
-		bats := proc.InputBatches()
-		for _, b := range bats {
-			if b != nil {
-				b.Clean(proc.Mp())
-			}
-		}
-		proc.SetInputBatches(nil)
 	}
 	// clean operator hold memory.
 	for i := range p.instructions {

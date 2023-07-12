@@ -70,9 +70,6 @@ type Register struct {
 	Ss [][]int64
 	// InputBatch, stores the result of the previous operator.
 	InputBatch *batch.Batch
-	// some operator need to split batch into batches and send them to next operator
-	// for now, only shuffle will use this
-	InputBatches []*batch.Batch
 	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
 	MergeReceivers []*WaitRegister
