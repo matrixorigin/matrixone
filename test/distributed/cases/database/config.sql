@@ -31,3 +31,21 @@ drop database test;
 drop database test1;
 -- @session
 drop account abc;
+
+-- @bvt:issue#9696
+show variables like 'sql_mode';
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=5&user=abc:admin&password=123456
+show variables like 'sql_mode';
+-- @session
+set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+show variables like 'sql_mdoe';
+-- @session:id=6&user=abc:admin&password=123456
+show variables like 'sql_mode';
+set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE";
+show variables like 'sql_mode';
+-- @session
+show variables like 'sql_mode';
+set global sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+drop account abc;
+-- @bvt:issue
