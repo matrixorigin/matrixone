@@ -1556,6 +1556,20 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
+func getTableComment(tableDef *plan.TableDef) string {
+	var comment string
+	for _, def := range tableDef.Defs {
+		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+			for _, kv := range proDef.Properties.Properties {
+				if kv.Key == catalog.SystemRelAttr_Comment {
+					comment = kv.Value
+				}
+			}
+		}
+	}
+	return comment
+}
+
 func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
 	alterTable := &plan.AlterTable{
@@ -1583,6 +1597,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
 
+	comment := getTableComment(tableDef)
 	colMap := make(map[string]*ColDef)
 	for _, col := range tableDef.Cols {
 		colMap[col.Name] = col
@@ -1753,6 +1768,14 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 						},
 					},
 				}
+			case *tree.CheckIndex:
+				alterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AlterComment{
+						AlterComment: &plan.AlterTableComment{
+							NewComment: comment,
+						},
+					},
+				}
 			default:
 				return nil, moerr.NewInternalError(ctx.GetContext(), "unsupported alter option: %T", def)
 			}
@@ -1789,6 +1812,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for field '%s' is too long", alterTable.TableDef.Name)
 			}
+			comment = opt.Comment
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterComment{
 					AlterComment: &plan.AlterTableComment{
@@ -1908,7 +1932,16 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			}
 		case *tree.TableOptionAutoIncrement:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Can't set AutoIncr column value.")
+		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterComment{
+					AlterComment: &plan.AlterTableComment{
+						NewComment: comment,
+					},
+				},
+			}
 		default:
+			fmt.Printf("wangjian sql2a is %T\n", option)
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
 		}
 	}

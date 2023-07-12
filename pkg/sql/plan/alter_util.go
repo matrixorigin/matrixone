@@ -59,10 +59,10 @@ func checkAlterColumnWithPartitionKeys(colName string, tblInfo *TableDef, ctx Co
 }
 
 func checkDropColumnWithCluster(colName string, tblInfo *TableDef, ctx CompilerContext) error {
-	if tblInfo.ClusterBy != nil {
-		// We do not support drop column that dependent foreign keys constraints
-		return moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for cluster table now")
-	}
+	// if tblInfo.ClusterBy != nil {
+	// 	// We do not support drop column that dependent foreign keys constraints
+	// 	return moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for cluster table now")
+	// }
 	return nil
 }
 

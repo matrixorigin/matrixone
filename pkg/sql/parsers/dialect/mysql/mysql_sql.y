@@ -240,7 +240,7 @@ import (
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER INSTANT INPLACE COPY DISABLE ENABLE
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
@@ -350,7 +350,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
 
 // MODump
 %token <str> MODUMP
@@ -518,7 +518,7 @@ import (
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list
-%type <str> charset_name storage_opt collate_name column_format storage_media
+%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -2589,7 +2589,7 @@ alter_table_stmt:
     }
 
 alter_option_list:
-alter_option
+    alter_option
     {
         $$ = []tree.AlterTableOption{$1}
     }
@@ -2599,30 +2599,30 @@ alter_option
     }
 
 alter_option:
-ADD table_elem_2
+    ADD table_elem_2
     {
         opt := &tree.AlterOptionAdd{
             Def:  $2,
         }
         $$ = tree.AlterTableOption(opt)
     }
-| DROP alter_table_drop
+|   DROP alter_table_drop
     {
         $$ = tree.AlterTableOption($2)
     }
-| ALTER alter_table_alter
+|   ALTER alter_table_alter
     {
     	$$ = tree.AlterTableOption($2)
     }
-| table_option
+|   table_option
     {
         $$ = tree.AlterTableOption($1)
     }
-| RENAME TO alter_table_rename
+|   RENAME TO alter_table_rename
     {
         $$ = tree.AlterTableOption($3)
     }
-| ADD column_def pos_info
+|   ADD column_def pos_info
     {
         $$ = tree.AlterTableOption(
             &tree.AlterAddCol{
@@ -2631,7 +2631,7 @@ ADD table_elem_2
             },
         )
     }
-| ADD COLUMN column_def pos_info
+|   ADD COLUMN column_def pos_info
     {
         $$ = tree.AlterTableOption(
             &tree.AlterAddCol{
@@ -2640,6 +2640,50 @@ ADD table_elem_2
             },
         )
     }
+|   ALGORITHM equal_opt algorithm_type
+    {
+        $$ = &tree.AlterOptionAlterCheck{
+            Type: $1,
+        }
+    }
+|   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
+    {
+        $$ = tree.NewTableOptionCharset($4)
+    }
+|   CONVERT TO CHARACTER SET charset_name
+    {
+        $$ = tree.NewTableOptionCharset($5)
+    }
+|   CONVERT TO CHARACTER SET charset_name COLLATE equal_opt charset_name
+    {
+        $$ = tree.NewTableOptionCharset($5)
+    }
+|   able_type KEYS
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+|   space_type TABLESPACE
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+|   FORCE
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+
+algorithm_type:
+    DEFAULT
+|   INSTANT
+|   INPLACE
+|   COPY
+
+able_type:
+    DISABLE
+|   ENABLE
+
+space_type:
+    DISCARD
+|   IMPORT
 
 pos_info:
     {
@@ -2714,13 +2758,27 @@ alter_table_drop:
     }
 
 alter_table_alter:
-   INDEX ident visibility
-   {
-	$$ = &tree.AlterOptionAlterIndex{
+    INDEX ident visibility
+    {
+        $$ = &tree.AlterOptionAlterIndex{
             Visibility:  $3,
             Name: tree.Identifier($2.Compare()),
         }
-   }
+    }
+|   CHECK ident enforce
+    {
+        $$ = &tree.AlterOptionAlterCheck{
+            Type: $1,
+            Enforce: $3,
+        }
+    }
+|   CONSTRAINT ident enforce
+    {
+        $$ = &tree.AlterOptionAlterCheck{
+            Type: $1,
+            Enforce: $3,
+        }
+    }
 
 visibility:
     VISIBLE
