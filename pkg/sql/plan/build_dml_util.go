@@ -52,7 +52,7 @@ func getDmlPlanCtx() *dmlPlanCtx {
 	ctx.isFkRecursionCall = false
 	ctx.lockTable = false
 	ctx.checkInsertPkDup = false
-	ctx.pkFilterExpr = ctx.pkFilterExpr[:0]
+	ctx.pkFilterExprs = ctx.pkFilterExprs[:0]
 	ctx.updatePkCol = true
 	return ctx
 }
@@ -97,7 +97,7 @@ type dmlPlanCtx struct {
 	lockTable         bool //we need lock table in stmt: delete from tbl
 	checkInsertPkDup  bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
 	updatePkCol       bool //if update stmt will update the primary key or one of pks
-	pkFilterExpr      []*Expr
+	pkFilterExprs     []*Expr
 }
 
 // information of deleteNode, which is about the deleted table
@@ -223,7 +223,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		// build insert plan.
 		insertBindCtx := NewBindContext(builder, nil)
 		err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-			sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExpr)
+			sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs)
 
 		return err
 	}
@@ -777,7 +777,7 @@ func makeInsertPlan(
 	isFkRecursionCall bool,
 	checkInsertPkDup bool,
 	updatePkCol bool,
-	pkFilterExpr []*Expr,
+	pkFilterExprs []*Expr,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -981,11 +981,11 @@ func makeInsertPlan(
 
 				colPos := make(map[int32]int32)
 				colPos[int32(pkPos)] = 0
-				if len(pkFilterExpr) > 0 {
-					for _, e := range pkFilterExpr {
-						getColPos(e, colPos)
-					}
-				}
+				// if len(pkFilterExprs) > 0 {
+				// 	for _, e := range pkFilterExprs {
+				// 		getColPos(e, colPos)
+				// 	}
+				// }
 				var newCols []*ColDef
 				rowIdIdx := len(scanTableDef.Cols) - 1
 				for idx, col := range scanTableDef.Cols {
@@ -1040,18 +1040,18 @@ func makeInsertPlan(
 						},
 					},
 				}
-				if len(pkFilterExpr) > 0 {
-					for _, e := range pkFilterExpr {
-						resetColPos(e, colPos)
-					}
-					blockFilters := make([]*Expr, len(pkFilterExpr))
-					for i, e := range pkFilterExpr {
-						blockFilters[i] = DeepCopyExpr(e)
-					}
-					scanNode.FilterList = pkFilterExpr
-					scanNode.BlockFilterList = blockFilters
-				}
 				rightId := builder.appendNode(scanNode, bindCtx)
+				// if len(pkFilterExprs) > 0 {
+				// 	for _, e := range pkFilterExprs {
+				// 		resetColPos(e, colPos)
+				// 	}
+				// 	blockFilters := make([]*Expr, len(pkFilterExprs))
+				// 	for i, e := range pkFilterExprs {
+				// 		blockFilters[i] = DeepCopyExpr(e)
+				// 	}
+				// 	scanNode.FilterList = pkFilterExprs
+				// 	scanNode.BlockFilterList = blockFilters
+				// }
 
 				pkColExpr := &Expr{
 					Typ: pkTyp,
@@ -1254,7 +1254,7 @@ func makeInsertPlan(
 			}
 
 			if !isUpdate && !builder.qry.LoadTag { // insert stmt but not load
-				if !checkInsertPkDup && pkFilterExpr != nil {
+				if !checkInsertPkDup && pkFilterExprs != nil {
 					scanTableDef := DeepCopyTableDef(tableDef)
 					// scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
 					pkNameMap := make(map[string]int)
@@ -1291,12 +1291,13 @@ func makeInsertPlan(
 							},
 						}},
 					}
-					scanNode.FilterList = pkFilterExpr
-					blockFilterList := make([]*Expr, len(pkFilterExpr))
-					for i, e := range pkFilterExpr {
+					lastNodeId = builder.appendNode(scanNode, bindCtx)
+
+					scanNode.FilterList = pkFilterExprs
+					blockFilterList := make([]*Expr, len(pkFilterExprs))
+					for i, e := range pkFilterExprs {
 						blockFilterList[i] = DeepCopyExpr(e)
 					}
-					lastNodeId = builder.appendNode(scanNode, bindCtx)
 					scanNode.BlockFilterList = blockFilterList
 				} else {
 					lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
@@ -2327,27 +2328,27 @@ func makePreUpdateDeletePlan(
 	return lastNodeId, nil
 }
 
-func getColPos(expr *Expr, colPos map[int32]int32) {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		colPos[e.Col.ColPos] = 0
-	case *plan.Expr_F:
-		for _, arg := range e.F.Args {
-			getColPos(arg, colPos)
-		}
-	}
-}
+// func getColPos(expr *Expr, colPos map[int32]int32) {
+// 	switch e := expr.Expr.(type) {
+// 	case *plan.Expr_Col:
+// 		colPos[e.Col.ColPos] = 0
+// 	case *plan.Expr_F:
+// 		for _, arg := range e.F.Args {
+// 			getColPos(arg, colPos)
+// 		}
+// 	}
+// }
 
-func resetColPos(expr *Expr, colPos map[int32]int32) {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		e.Col.ColPos = colPos[e.Col.ColPos]
-	case *plan.Expr_F:
-		for _, arg := range e.F.Args {
-			resetColPos(arg, colPos)
-		}
-	}
-}
+// func resetColPos(expr *Expr, colPos map[int32]int32) {
+// 	switch e := expr.Expr.(type) {
+// 	case *plan.Expr_Col:
+// 		e.Col.ColPos = colPos[e.Col.ColPos]
+// 	case *plan.Expr_F:
+// 		for _, arg := range e.F.Args {
+// 			resetColPos(arg, colPos)
+// 		}
+// 	}
+// }
 
 func appendInsertNode(
 	ctx CompilerContext,
