@@ -86,10 +86,10 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	return false, nil
 }
 
-func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch) error {
+func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	for i, reg := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
-		if bat.ShuffleIDX == batIndex {
+		if regIndex == batIndex {
 			if bat != nil && bat.Length() != 0 {
 				select {
 				case <-reg.Ctx.Done():
@@ -101,7 +101,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch) error
 	}
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := uint32(ap.ctr.remoteToIdx[r.uuid])
-		if bat.ShuffleIDX == batIndex {
+		if regIndex == batIndex {
 			if bat != nil && bat.Length() != 0 {
 				encodeData, errEncode := types.Encode(bat)
 				if errEncode != nil {
@@ -116,6 +116,39 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch) error
 	return nil
 }
 
+func sendBatsToIndex(ap *Argument, proc *process.Process, bat *batch.Batch) error {
+	if len(bat.ShuffleIDX) == 1 {
+		return sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX[0]))
+	} else {
+		defer proc.PutBatch(bat)
+
+		start := 0
+		lenVecs := len(bat.Vecs)
+		for i, end := range bat.ShuffleIDX {
+			if start == end {
+				continue
+			}
+			newBat := batch.NewWithSize(lenVecs)
+			newBat.Zs = proc.Mp().GetSels()
+			for j := range bat.Vecs {
+				newBat.Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
+			}
+
+			for i := range bat.Vecs {
+				if err := newBat.Vecs[i].UnionBatch(bat.Vecs[i], int64(start), end-start, nil, proc.Mp()); err != nil {
+					return err
+				}
+			}
+			newBat.Zs = append(newBat.Zs, bat.Zs[start:end]...)
+			if err := sendBatToIndex(ap, proc, newBat, uint32(i)); err != nil {
+				return err
+			}
+			start = end
+		}
+		return nil
+	}
+}
+
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
 func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
@@ -127,7 +160,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 			return true, nil
 		}
 	}
-	return false, sendBatToIndex(ap, proc, bat)
+	return false, sendBatsToIndex(ap, proc, bat)
 }
 
 // send to all receiver (include LocalReceiver and RemoteReceiver)
