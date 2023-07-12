@@ -1085,7 +1085,7 @@ func Test_getSqlType(t *testing.T) {
 		sql = "/* cloud_user */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, cloudUserSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.CloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
 		ui = &UserInput{sql: sql}

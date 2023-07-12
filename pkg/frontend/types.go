@@ -108,7 +108,6 @@ Disguise the COMMAND CMD_FIELD_LIST as sql query.
 const (
 	cmdFieldListSql    = "__++__internal_cmd_field_list"
 	cmdFieldListSqlLen = len(cmdFieldListSql)
-	cloudUserSql       = "cloud_user_sql"
 	cloudUserTag       = "cloud_user"
 	cloudNoUserTag     = "cloud_nonuser"
 )
