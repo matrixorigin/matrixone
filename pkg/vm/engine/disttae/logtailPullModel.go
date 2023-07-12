@@ -93,22 +93,33 @@ func consumeLogTailOfPull(
 ) (err error) {
 	logutil.Debugf("consumeLogTailOfPull table %d %s", tbl.tableId, tbl.tableName)
 	var entries []*api.Entry
+	var closeCBs []func()
 
-	if entries, err = logtail.LoadCheckpointEntries(
+	if entries, closeCBs, err = logtail.LoadCheckpointEntries(
 		ctx,
 		logTail.CkpLocation,
 		tbl.tableId,
 		tbl.tableName,
 		tbl.db.databaseId,
 		tbl.db.databaseName,
+		engine.mp,
 		engine.fs); err != nil {
+		for _, cb := range closeCBs {
+			cb()
+		}
 		return
 	}
 	for _, e := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, e); err != nil {
+			for _, cb := range closeCBs {
+				cb()
+			}
 			return
 		}
+	}
+	for _, cb := range closeCBs {
+		cb()
 	}
 
 	for i := 0; i < len(logTail.Commands); i++ {

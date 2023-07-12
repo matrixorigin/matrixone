@@ -38,9 +38,56 @@ select version();
 version()
 0.7
 alter account config abc set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.8.0';
+internal error: do not have privileges to alter account config
 select version();
 version()
-8.0.30-MatrixOne-v0.8.0
+0.7
 drop database test;
 drop database test1;
+drop account abc;
+show global variables like 'sql_mode';
+Variable_name    Value
+sql_mode    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+show global variables like 'sql_mode';
+Variable_name    Value
+sql_mode    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+show global variables like 'sql_mode';
+Variable_name    Value
+sql_mode    NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+show global variables like 'sql_mode';
+Variable_name    Value
+sql_mode    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE";
+show global variables like 'sql_mode';
+Variable_name    Value
+sql_mode    NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE
+show global variables like 'sql_mode';
+Variable_name    Value
+sql_mode    NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+set global sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+drop account abc;
+SELECT @@GLOBAL.sql_mode;
+@@sql_mode
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+SELECT @@GLOBAL.sql_mode;
+@@sql_mode
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+set global sql_mode = "STRICT_TRANS_TABLES";
+SELECT @@GLOBAL.sql_mode;
+@@sql_mode
+STRICT_TRANS_TABLES
+SELECT @@GLOBAL.sql_mode;
+@@sql_mode
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE";
+SELECT @@GLOBAL.sql_mode;
+@@sql_mode
+NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE
+SELECT @@GLOBAL.sql_mode;
+@@sql_mode
+STRICT_TRANS_TABLES
+set global sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 drop account abc;

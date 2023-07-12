@@ -60,9 +60,9 @@ func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (e *TableMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	e.Schema = NewEmptySchema("")
-	if n, err = e.Schema.ReadFrom(r); err != nil {
+	if n, err = e.Schema.ReadFromWithVersion(r, ver); err != nil {
 		return
 	}
 	return
