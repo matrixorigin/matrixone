@@ -34,11 +34,12 @@ const (
 
 	IOET_WALTxnCommand_Database_V1 uint16 = 1
 	IOET_WALTxnCommand_Table_V1    uint16 = 1
+	IOET_WALTxnCommand_Table_V2    uint16 = 2
 	IOET_WALTxnCommand_Segment_V1  uint16 = 1
 	IOET_WALTxnCommand_Block_V1    uint16 = 1
 
 	IOET_WALTxnCommand_Database_CurrVer = IOET_WALTxnCommand_Database_V1
-	IOET_WALTxnCommand_Table_CurrVer    = IOET_WALTxnCommand_Table_V1
+	IOET_WALTxnCommand_Table_CurrVer    = IOET_WALTxnCommand_Table_V2
 	IOET_WALTxnCommand_Segment_CurrVer  = IOET_WALTxnCommand_Segment_V1
 	IOET_WALTxnCommand_Block_CurrVer    = IOET_WALTxnCommand_Block_V1
 )
@@ -63,7 +64,8 @@ func init() {
 		func(b []byte) (any, error) {
 			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Database,
 				NewEmptyMVCCNodeFactory(NewEmptyEmptyMVCCNode),
-				func() *DBNode { return &DBNode{} })
+				func() *DBNode { return &DBNode{} },
+				IOET_WALTxnCommand_Database_V1)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},
@@ -76,7 +78,22 @@ func init() {
 		func(b []byte) (any, error) {
 			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Table,
 				NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
-				func() *TableNode { return &TableNode{} })
+				func() *TableNode { return &TableNode{} },
+				IOET_WALTxnCommand_Table_V1)
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Table,
+			Version: IOET_WALTxnCommand_Table_V2,
+		}, nil,
+		func(b []byte) (any, error) {
+			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Table,
+				NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
+				func() *TableNode { return &TableNode{} },
+				IOET_WALTxnCommand_Table_V2)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},
@@ -89,7 +106,8 @@ func init() {
 		func(b []byte) (any, error) {
 			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Segment,
 				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
-				func() *SegmentNode { return &SegmentNode{} })
+				func() *SegmentNode { return &SegmentNode{} },
+				IOET_WALTxnCommand_Segment_V1)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},
@@ -102,7 +120,8 @@ func init() {
 		func(b []byte) (any, error) {
 			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Block,
 				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
-				func() *BlockNode { return &BlockNode{} })
+				func() *BlockNode { return &BlockNode{} },
+				IOET_WALTxnCommand_Block_V1)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},
@@ -117,17 +136,19 @@ type Node interface {
 type EntryCommand[T BaseNode[T], N Node] struct {
 	*txnbase.BaseCustomizedCmd
 	cmdType  uint16
+	version  uint16
 	ID       *common.ID
 	mvccNode *MVCCNode[T]
 	node     N
 }
 
-func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType uint16, mvccNodeFactory func() *MVCCNode[T], nodeFactory func() N) *EntryCommand[T, N] {
+func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType uint16, mvccNodeFactory func() *MVCCNode[T], nodeFactory func() N, ver uint16) *EntryCommand[T, N] {
 	impl := &EntryCommand[T, N]{
 		cmdType:  cmdType,
 		ID:       &common.ID{},
 		mvccNode: mvccNodeFactory(),
 		node:     nodeFactory(),
+		version:  ver,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, impl)
 	return impl
@@ -296,7 +317,7 @@ func (cmd *EntryCommand[T, N]) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(sn2)
 	var sn int64
-	if sn, err = cmd.mvccNode.ReadFrom(r); err != nil {
+	if sn, err = cmd.mvccNode.ReadFromWithVersion(r, cmd.version); err != nil {
 		return
 	}
 	n += sn

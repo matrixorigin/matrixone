@@ -360,7 +360,12 @@ func (c *Compile) Run(_ uint64) error {
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 				return err
 			}
-			return cc.runOnce()
+			if err := cc.runOnce(); err != nil {
+				return err
+			}
+			// set affectedRows to old compile to return
+			c.setAffectedRows(cc.GetAffectedRows())
+			return nil
 		}
 		return err
 	}
