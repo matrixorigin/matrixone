@@ -1077,20 +1077,11 @@ func GetSortOrder(tableDef *plan.TableDef, colName string) int {
 }
 
 // handle the filter list for Stats. rewrite and constFold
-func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, error) {
+func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
 	if proc == nil {
-		return nil, nil
+		return nil
 	}
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	for i := range exprList {
-		tmpexpr, err := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
-		if err != nil {
-			return nil, err
-		}
-		exprList[i] = tmpexpr
-	}
-	return colexec.RewriteFilterExprList(exprList), nil
+	return colexec.RewriteFilterExprList(exprList)
 }
 
 func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {

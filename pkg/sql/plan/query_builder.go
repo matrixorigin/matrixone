@@ -997,45 +997,35 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootID := range builder.qry.Steps {
 		rootID, _ = builder.pushdownFilters(rootID, nil, false)
+		err := foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
+		if err != nil {
+			return nil, err
+		}
+
 		colRefCnt := make(map[[2]int32]int)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
 
-		err := ReCalcNodeStats(rootID, builder, true, true)
-		if err != nil {
-			return nil, err
-		}
+		ReCalcNodeStats(rootID, builder, true, true)
 		rootID = builder.aggPushDown(rootID)
-		err = ReCalcNodeStats(rootID, builder, true, false)
-		if err != nil {
-			return nil, err
-		}
+		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
 		rootID = builder.removeRedundantJoinCond(rootID)
-		err = ReCalcNodeStats(rootID, builder, true, false)
-		if err != nil {
-			return nil, err
-		}
+		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.aggPullup(rootID, rootID)
-		err = ReCalcNodeStats(rootID, builder, true, false)
-		if err != nil {
-			return nil, err
-		}
+		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		builder.optimizeDistinctAgg(rootID)
-		err = ReCalcNodeStats(rootID, builder, true, false)
-		if err != nil {
-			return nil, err
-		}
+		ReCalcNodeStats(rootID, builder, true, false)
 		builder.applySwapRuleByStats(rootID, true)
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
-		err = ReCalcNodeStats(rootID, builder, true, false)
+		ReCalcNodeStats(rootID, builder, true, false)
 		if err != nil {
 			return nil, err
 		}

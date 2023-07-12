@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const BlockNumForceOneCN = 200
@@ -415,15 +416,12 @@ func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryB
 	}
 }
 
-func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool) (err error) {
+func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive {
 		if len(node.Children) > 0 {
 			for _, child := range node.Children {
-				err = ReCalcNodeStats(child, builder, recursive, leafNode)
-				if err != nil {
-					return
-				}
+				ReCalcNodeStats(child, builder, recursive, leafNode)
 			}
 		}
 	}
@@ -622,10 +620,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if len(node.BindingTags) > 0 {
 				builder.tag2Table[node.BindingTags[0]] = node.TableDef
 			}
-			node.Stats, err = calcScanStats(node, builder)
-			if err != nil {
-				return err
-			}
+			node.Stats = calcScanStats(node, builder)
 		}
 
 	case plan.Node_FILTER:
@@ -647,20 +642,39 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats = DefaultStats()
 		}
 	}
+}
+
+func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error {
+	node := qry.Nodes[nodeId]
+	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
+		for i, e := range node.FilterList {
+			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc)
+			if err != nil {
+				return err
+			}
+			node.FilterList[i] = foldedExpr
+		}
+	}
+	for _, childId := range node.Children {
+		err := foldTableScanFilters(proc, qry, childId)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func calcScanStats(node *plan.Node, builder *QueryBuilder) (*plan.Stats, error) {
+func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if !needStats(node.TableDef) {
-		return DefaultStats(), nil
+		return DefaultStats()
 	}
 	if !builder.compCtx.Stats(node.ObjRef) {
-		return DefaultStats(), nil
+		return DefaultStats()
 	}
 	//get statsInfoMap from statscache
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
-		return DefaultStats(), nil
+		return DefaultStats()
 	}
 	s := sc.GetStatsInfoMap(node.TableDef.TblId)
 
@@ -668,18 +682,9 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) (*plan.Stats, error) 
 	stats.TableCnt = s.TableCnt
 	var blockSel float64 = 1
 
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		fixColumnName(node.TableDef, node.FilterList[i])
-		foldedExpr, err := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
-		if err != nil {
-			return nil, err
-		}
-		if foldedExpr != nil {
-			node.FilterList[i] = foldedExpr
-		}
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
 		if currentBlockSel < blockSelectivityThreshHold {
@@ -690,15 +695,12 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) (*plan.Stats, error) 
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	node.BlockFilterList = blockExprList
-	expr, err := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
-	if err != nil {
-		return nil, err
-	}
+	expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
 	stats.Selectivity = estimateExprSelectivity(expr, builder)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
-	return stats, nil
+	return stats
 }
 
 func needStats(tableDef *TableDef) bool {
