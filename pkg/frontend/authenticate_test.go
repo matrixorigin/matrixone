@@ -8533,3 +8533,12 @@ func TestDoCheckRole(t *testing.T) {
 	err = doCheckRole(ctx, ses)
 	require.Error(t, err)
 }
+
+func TestGetUserPart(t *testing.T) {
+	user1 := "user1"
+	require.Equal(t, "user1", getUserPart(user1))
+	user1 = "user1?"
+	require.Equal(t, "user1", getUserPart(user1))
+	user1 = "user1?a:b"
+	require.Equal(t, "user1", getUserPart(user1))
+}

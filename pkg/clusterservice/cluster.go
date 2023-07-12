@@ -250,6 +250,7 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		SQLAddress:             cn.SQLAddress,
 		LockServiceAddress:     cn.LockServiceAddress,
 		CtlAddress:             cn.CtlAddress,
+		WorkState:              cn.WorkState,
 		Labels:                 cn.Labels,
 	}
 }
