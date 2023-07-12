@@ -61,6 +61,22 @@ func TestRangePartition(t *testing.T) {
 			);`,
 
 		`CREATE TABLE t1 (
+				id INT NOT NULL,
+				fname VARCHAR(30),
+				lname VARCHAR(30),
+				hired DATE NOT NULL DEFAULT '1970-01-01',
+				separated DATE NOT NULL DEFAULT '9999-12-31',
+				job_code INT,
+				store_id INT
+			)
+			PARTITION BY RANGE ( YEAR(separated) + job_code % (7*24)) (
+				PARTITION p0 VALUES LESS THAN (1991),
+				PARTITION p1 VALUES LESS THAN (1996),
+				PARTITION p2 VALUES LESS THAN (2001),
+				PARTITION p3 VALUES LESS THAN MAXVALUE
+			);`,
+
+		`CREATE TABLE t1 (
 				year_col  INT,
 				some_data INT
 			)
