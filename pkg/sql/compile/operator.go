@@ -1280,7 +1280,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *hashbuild.Argument {
+func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, isDup bool) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 
@@ -1291,6 +1291,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			IsDup:       isDup,
 		}
 
 	case vm.Mark:
@@ -1299,6 +1300,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			IsDup:       isDup,
 		}
 
 	case vm.Join:
@@ -1307,6 +1309,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			IsDup:       isDup,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1329,6 +1332,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			IsDup:       isDup,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1353,6 +1357,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			NeedHashMap: true,
 			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
+			IsDup:       isDup,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1377,6 +1382,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			NeedHashMap: true,
 			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
+			IsDup:       isDup,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1401,6 +1407,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			NeedHashMap: true,
 			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
+			IsDup:       isDup,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1423,6 +1430,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			IsDup:       isDup,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1445,6 +1453,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			IsDup:       isDup,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1466,6 +1475,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
+			IsDup:       isDup,
 		}
 
 	case vm.LoopAnti:
@@ -1473,6 +1483,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
+			IsDup:       isDup,
 		}
 
 	case vm.LoopJoin:
@@ -1480,6 +1491,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
+			IsDup:       isDup,
 		}
 
 	case vm.LoopLeft:
@@ -1487,6 +1499,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
+			IsDup:       isDup,
 		}
 
 	case vm.LoopSemi:
@@ -1494,6 +1507,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
+			IsDup:       isDup,
 		}
 
 	case vm.LoopSingle:
@@ -1501,6 +1515,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
+			IsDup:       isDup,
 		}
 
 	case vm.LoopMark:
@@ -1508,6 +1523,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
+			IsDup:       isDup,
 		}
 
 	default:

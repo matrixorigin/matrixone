@@ -425,6 +425,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailreplay.BlockEntry) error {
 	// It is better to use the Marshal() method
 	info.BlockId = blk.BlockID[:]
+	info.ObjectName = blk.MetaLocation().Name().String()
 	info.MetaLoc = blk.MetaLoc[:]
 	info.DelLoc = blk.DeltaLoc[:]
 	info.SegId = blk.SegmentID[:]
@@ -1803,5 +1804,5 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	if err != nil {
 		return false, err
 	}
-	return part.PrimaryKeysMayBeModified(tbl.tableId, from, to, keysVector, packer), nil
+	return part.PrimaryKeysMayBeModified(from, to, keysVector, packer), nil
 }

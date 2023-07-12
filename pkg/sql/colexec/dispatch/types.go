@@ -93,26 +93,28 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr.isRemote {
-		if !arg.ctr.prepared {
-			arg.waitRemoteRegsReady(proc)
-		}
-		for _, r := range arg.ctr.remoteReceivers {
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
-			_ = cancel
-			message := cnclient.AcquireMessage()
-			{
-				message.Id = r.msgId
-				message.Cmd = pipeline.BatchMessage
-				message.Sid = pipeline.MessageEnd
-				message.Uuid = r.uuid[:]
+	if arg.ctr != nil {
+		if arg.ctr.isRemote {
+			if !arg.ctr.prepared {
+				arg.waitRemoteRegsReady(proc)
 			}
-			if pipelineFailed {
-				err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
-				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+			for _, r := range arg.ctr.remoteReceivers {
+				timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
+				_ = cancel
+				message := cnclient.AcquireMessage()
+				{
+					message.Id = r.msgId
+					message.Cmd = pipeline.BatchMessage
+					message.Sid = pipeline.MessageEnd
+					message.Uuid = r.uuid[:]
+				}
+				if pipelineFailed {
+					err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
+					message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+				}
+				r.cs.Write(timeoutCtx, message)
+				close(r.doneCh)
 			}
-			r.cs.Write(timeoutCtx, message)
-			close(r.doneCh)
 		}
 	}
 

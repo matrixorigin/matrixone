@@ -654,7 +654,7 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 					}
 				}
 			}
-			return true, col
+			return col != nil, col
 		}
 	case *plan.Expr_Col:
 		return true, exprImpl.Col
@@ -1080,12 +1080,6 @@ func GetSortOrder(tableDef *plan.TableDef, colName string) int {
 func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
 	if proc == nil {
 		return nil
-	}
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	for i := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
-		exprList[i] = tmpexpr
 	}
 	return colexec.RewriteFilterExprList(exprList)
 }

@@ -201,11 +201,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		logutil.Debugf("---->ParallelRun---> %s", DebugShowScopes([]*Scope{s}))
-	}
-	//fmt.Printf("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
-
 	var rds []engine.Reader
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -422,8 +417,10 @@ func (s *Scope) PushdownRun() error {
 
 func (s *Scope) JoinRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
-	if mcpu < 1 {
-		mcpu = 1
+	if mcpu <= 1 { // no need to parallel
+		buildScope := c.newJoinBuildScope(s, nil)
+		s.PreScopes = append(s.PreScopes, buildScope)
+		return s.MergeRun(c)
 	}
 
 	isRight := s.isRight()
@@ -432,6 +429,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	for i := range chp {
 		chp[i].IsEnd = true
 	}
+
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -680,105 +678,6 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 		s.Instructions = append(s.Instructions, in)
 	}
 }
-
-/*
-func dupScopeList(ss []*Scope) []*Scope {
-	rs := make([]*Scope, len(ss))
-	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
-	var err error
-	for i := range ss {
-		rs[i], err = copyScope(ss[i], regMap)
-		if err != nil {
-			return nil
-		}
-	}
-
-	for i := range ss {
-		err = fillInstructionsByCopyScope(rs[i], ss[i], regMap)
-		if err != nil {
-			return nil
-		}
-	}
-	return rs
-}
-
-func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRegister) (*Scope, error) {
-	var err error
-	newScope := &Scope{
-		Magic:        srcScope.Magic,
-		IsJoin:       srcScope.IsJoin,
-		IsEnd:        srcScope.IsEnd,
-		IsRemote:     srcScope.IsRemote,
-		Plan:         srcScope.Plan,
-		PreScopes:    make([]*Scope, len(srcScope.PreScopes)),
-		Instructions: make([]vm.Instruction, len(srcScope.Instructions)),
-		NodeInfo: engine.Node{
-			Rel:  srcScope.NodeInfo.Rel,
-			Mcpu: srcScope.NodeInfo.Mcpu,
-			Id:   srcScope.NodeInfo.Id,
-			Addr: srcScope.NodeInfo.Addr,
-			Data: make([][]byte, len(srcScope.NodeInfo.Data)),
-		},
-		RemoteReceivRegInfos: srcScope.RemoteReceivRegInfos,
-	}
-
-	// copy node.Data
-	copy(newScope.NodeInfo.Data, srcScope.NodeInfo.Data)
-
-	if srcScope.DataSource != nil {
-		newScope.DataSource = &Source{
-			PushdownId:   srcScope.DataSource.PushdownId,
-			PushdownAddr: srcScope.DataSource.PushdownAddr,
-			SchemaName:   srcScope.DataSource.SchemaName,
-			RelationName: srcScope.DataSource.RelationName,
-			Attributes:   srcScope.DataSource.Attributes,
-			Timestamp: timestamp.Timestamp{
-				PhysicalTime: srcScope.DataSource.Timestamp.PhysicalTime,
-				LogicalTime:  srcScope.DataSource.Timestamp.LogicalTime,
-				NodeID:       srcScope.DataSource.Timestamp.NodeID,
-			},
-			// read only.
-			Expr:     srcScope.DataSource.Expr,
-			TableDef: srcScope.DataSource.TableDef,
-		}
-
-		// IF const run.
-		if srcScope.DataSource.Bat != nil {
-			newScope.DataSource.Bat, _ = constructValueScanBatch(context.TODO(), nil, nil)
-		}
-	}
-
-	newScope.Proc = process.NewFromProc(srcScope.Proc, srcScope.Proc.Ctx, len(srcScope.Proc.Reg.MergeReceivers))
-	for i := range srcScope.Proc.Reg.MergeReceivers {
-		regMap[srcScope.Proc.Reg.MergeReceivers[i]] = newScope.Proc.Reg.MergeReceivers[i]
-	}
-
-	//copy preScopes.
-	for i := range srcScope.PreScopes {
-		newScope.PreScopes[i], err = copyScope(srcScope.PreScopes[i], regMap)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return newScope, nil
-}
-
-func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
-	regMap map[*process.WaitRegister]*process.WaitRegister) error {
-	var err error
-
-	for i := range srcScope.PreScopes {
-		if err = fillInstructionsByCopyScope(targetScope.PreScopes[i], srcScope.PreScopes[i], regMap); err != nil {
-			return err
-		}
-	}
-
-	for i := range srcScope.Instructions {
-		targetScope.Instructions[i] = dupInstruction(&srcScope.Instructions[i], regMap)
-	}
-	return nil
-}
-*/
 
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for i := range s.RemoteReceivRegInfos {

@@ -19,8 +19,10 @@ show variables like 'init%';
 show variables like 'init_connect';
 
 -- interactive_timeout
+-- @bvt:issue#10473
 show variables like 'interactive%';
 show variables like 'interactive_timeout';
+-- @bvt:issue
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 set interactive_timeout = 30000+100;
