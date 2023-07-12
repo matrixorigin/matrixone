@@ -32,6 +32,39 @@ drop database test1;
 -- @session
 drop account abc;
 
+show global variables like 'sql_mode';
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=5&user=abc:admin&password=123456
+show global variables like 'sql_mode';
+-- @session
+set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+show global variables like 'sql_mode';
+-- @session:id=6&user=abc:admin&password=123456
+show global variables like 'sql_mode';
+set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE";
+show global variables like 'sql_mode';
+-- @session
+show global variables like 'sql_mode';
+set global sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+drop account abc;
+
+SELECT @@GLOBAL.sql_mode;
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=7&user=abc:admin&password=123456
+SELECT @@GLOBAL.sql_mode;
+-- @session
+set global sql_mode = "STRICT_TRANS_TABLES";
+SELECT @@GLOBAL.sql_mode;
+-- @session:id=8&user=abc:admin&password=123456
+SELECT @@GLOBAL.sql_mode;
+set global sql_mode = "NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE";
+SELECT @@GLOBAL.sql_mode;
+-- @session
+SELECT @@GLOBAL.sql_mode;
+set global sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+drop account abc;
+
+
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
 -- @session:id=3&user=default_1:admin&password=111111
 create role role1;

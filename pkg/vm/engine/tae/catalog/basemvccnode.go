@@ -118,7 +118,7 @@ type BaseNode[T any] interface {
 	String() string
 	Update(vun T)
 	WriteTo(w io.Writer) (n int64, err error)
-	ReadFrom(r io.Reader) (n int64, err error)
+	ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error)
 }
 
 type MVCCNode[T BaseNode[T]] struct {
@@ -227,7 +227,7 @@ func (e *MVCCNode[T]) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (e *MVCCNode[T]) ReadFrom(r io.Reader) (n int64, err error) {
+func (e *MVCCNode[T]) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	var sn int64
 	sn, err = e.EntryMVCCNode.ReadFrom(r)
 	if err != nil {
@@ -239,7 +239,7 @@ func (e *MVCCNode[T]) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
-	sn, err = e.BaseNode.ReadFrom(r)
+	sn, err = e.BaseNode.ReadFromWithVersion(r, ver)
 	if err != nil {
 		return
 	}

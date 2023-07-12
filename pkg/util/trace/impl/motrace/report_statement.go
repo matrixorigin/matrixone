@@ -122,8 +122,8 @@ func StatementInfoFilter(i Item) bool {
 	case "internal_sql", "external_sql", "non_cloud_user":
 		// Check StatementType
 		switch statementInfo.StatementType {
-		case "Insert", "Update", "Delete", "Execute", "Commit", "Select":
-			if statementInfo.Duration < GetTracerProvider().selectAggrThreshold {
+		case "Insert", "Update", "Delete", "Execute", "Select":
+			if statementInfo.Duration <= GetTracerProvider().selectAggrThreshold {
 				return true
 			}
 		}

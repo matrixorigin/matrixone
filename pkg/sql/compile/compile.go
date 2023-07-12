@@ -2461,6 +2461,7 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	for i := range anals {
 		//anals[i] = new(process.AnalyzeInfo)
 		anals[i] = analPool.Get().(*process.AnalyzeInfo)
+		anals[i].Reset()
 	}
 	c.anal = &anaylze{
 		qry:       qry,

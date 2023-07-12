@@ -376,6 +376,7 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 			t.Errorf("explain Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err
 		}
+		t.Logf("\n" + buffer.ToString())
 	}
 	return nil
 }

@@ -40,6 +40,8 @@ func init() {
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_BLOCK_ID:
 			tp = types.New(types.T_Blockid, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_OBJECT_NAME:
+			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_ENTRY_STATE:
 			tp = types.New(types.T_bool, 0, 0)
 		case plan.MetadataScanInfo_SORTED:
