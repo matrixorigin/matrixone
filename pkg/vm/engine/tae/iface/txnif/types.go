@@ -48,6 +48,7 @@ type Txn2PC interface {
 }
 
 type TxnReader interface {
+	GetBase() BaseTxn
 	RLock()
 	RUnlock()
 	IsReplay() bool
@@ -141,6 +142,15 @@ type TxnTest interface {
 type TxnUnsafe interface {
 	UnsafeGetDatabase(id uint64) (h handle.Database, err error)
 	UnsafeGetRelation(dbId, tableId uint64) (h handle.Relation, err error)
+}
+
+type BaseTxn interface {
+	GetMemo() *TxnMemo
+	GetStartTS() types.TS
+	GetPrepareTS() types.TS
+	GetCommitTS() types.TS
+	GetLSN() uint64
+	GetTxnState(waitIfcommitting bool) TxnState
 }
 
 type AsyncTxn interface {
