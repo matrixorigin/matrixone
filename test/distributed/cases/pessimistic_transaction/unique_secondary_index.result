@@ -68,7 +68,7 @@ col1    col2    col3    col4
 null    3    0.01    null
 create table index_06 (col1 tinyint,col2 int primary key,col3 float,col4 tinyint,unique key id1(col1),key id2(col4));
 insert into index_06 values (1,2,20.23,56),(1,4,100.00,90);
-Duplicate entry '13456789872' for key '__mo_index_idx_col'
+(Duplicate entry) '^(\d{11})|(\d{1})$' (for key '__mo_index_idx_col')
 insert into index_06 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from index_06;
 col1    col2    col3    col4
@@ -640,7 +640,7 @@ create unique index varchar_index on trans_index_01(col2) comment 'create varcha
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
 use unique_secondary_index;
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23');
-Duplicate entry '13456789872' for key 'col1'
+Duplicate entry '^(\d{11})|(\d{1})$' for key 'col1'
 commit;
 select * from trans_index_01;
 col1    col2    col3    col4
