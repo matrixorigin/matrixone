@@ -33,7 +33,6 @@ type Argument struct {
 type container struct {
 	sels         [][]int32
 	shuffledBats []*batch.Batch
-	batsCount    int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

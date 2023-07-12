@@ -38,7 +38,7 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	bats := proc.InputBatches()
 	if len(bats) > 0 {
 		for _, bat := range bats {
-			if bat.Length() == 0 {
+			if bat == nil || bat.Length() == 0 {
 				continue
 			}
 			select {
