@@ -40,6 +40,7 @@ disableMetric = true
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+primary-key-check = true
 
 [cn.Engine]
 type = "distributed-tae"
@@ -47,3 +48,5 @@ type = "distributed-tae"
 [cn.txn]
 enable-sacrificing-freshness = false
 enable-cn-based-consistency = false
+isolation = "RC"
+mode = "pessimistic"
