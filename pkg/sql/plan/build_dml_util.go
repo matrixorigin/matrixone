@@ -1291,13 +1291,13 @@ func makeInsertPlan(
 							},
 						}},
 					}
-					lastNodeId = builder.appendNode(scanNode, bindCtx)
 
 					scanNode.FilterList = pkFilterExprs
 					blockFilterList := make([]*Expr, len(pkFilterExprs))
 					for i, e := range pkFilterExprs {
 						blockFilterList[i] = DeepCopyExpr(e)
 					}
+					lastNodeId = builder.appendNode(scanNode, bindCtx)
 					scanNode.BlockFilterList = blockFilterList
 				} else {
 					lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
