@@ -1381,12 +1381,17 @@ func doShowBackendServers(ses *Session) error {
 
 	col3 := new(MysqlColumn)
 	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col3.SetName("Labels")
+	col3.SetName("Work State")
+
+	col4 := new(MysqlColumn)
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col4.SetName("Labels")
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
 	mrs.AddColumn(col2)
 	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
 
 	var filterLabels = func(labels map[string]string) map[string]string {
 		var reservedLabels = map[string]struct{}{
@@ -1403,14 +1408,15 @@ func doShowBackendServers(ses *Session) error {
 	}
 
 	var appendFn = func(s *metadata.CNService) {
-		row := make([]interface{}, 3)
+		row := make([]interface{}, 4)
 		row[0] = s.ServiceID
 		row[1] = s.SQLAddress
+		row[2] = s.WorkState.String()
 		var labelStr string
 		for key, value := range s.Labels {
 			labelStr += fmt.Sprintf("%s:%s;", key, strings.Join(value.Labels, ","))
 		}
-		row[2] = labelStr
+		row[3] = labelStr
 		mrs.AddRow(row)
 	}
 

@@ -257,6 +257,7 @@ a new format:
 2. tenant#user
 */
 func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
+	userInput = getUserPart(userInput)
 	if strings.IndexByte(userInput, ':') != -1 {
 		return splitUserInput(ctx, userInput, ':')
 	} else if strings.IndexByte(userInput, '#') != -1 {
@@ -266,6 +267,16 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 		return splitUserInput(ctx, newUserInput, ':')
 	}
 	return splitUserInput(ctx, userInput, ':')
+}
+
+// getUserPart gets the username part from the full string.
+// The full string could contain CN label information which
+// is used by proxy module.
+func getUserPart(user string) string {
+	if pos := strings.IndexByte(user, '?'); pos != -1 {
+		return user[:pos]
+	}
+	return user
 }
 
 // initUser for initialization or something special
