@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 var (
@@ -50,7 +49,6 @@ var (
 	defaultIncrementalInterval = time.Minute
 	defaultGlobalMinCount      = int64(60)
 	defaultMinCount            = int64(100)
-	defaultLogBackend          = string(options.LogstoreLogservice)
 
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
 	defaultLogtailCollectInterval     = 2 * time.Millisecond
@@ -132,8 +130,6 @@ type Config struct {
 			dataDir string `toml:"-"`
 			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
 			Backend StorageType `toml:"backend"`
-			// LogBackend the backend used to store logs
-			LogBackend string `toml:"log-backend"`
 		}
 	}
 
@@ -174,9 +170,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
-	}
-	if c.Txn.Storage.LogBackend == "" {
-		c.Txn.Storage.LogBackend = defaultLogBackend
 	}
 	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
 		return moerr.NewInternalError(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
