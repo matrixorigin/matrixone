@@ -228,35 +228,60 @@ func testStartNClients(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CN
 }
 
 func TestAccountParser(t *testing.T) {
-	a := clientInfo{}
-	err := a.parse("t1:u1")
-	require.NoError(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), "t1")
-	require.Equal(t, a.username, "u1")
-
-	a = clientInfo{}
-	err = a.parse("t1#u1")
-	require.NoError(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), "t1")
-	require.Equal(t, a.username, "u1")
-
-	a = clientInfo{}
-	err = a.parse(":u1")
-	require.NoError(t, err)
-	require.Equal(t, superTenant, string(a.labelInfo.Tenant))
-	require.Equal(t, a.username, "u1")
-
-	a = clientInfo{}
-	err = a.parse("a1:")
-	require.Error(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), "")
-	require.Equal(t, a.username, "")
-
-	a = clientInfo{}
-	err = a.parse("u1")
-	require.NoError(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), superTenant)
-	require.Equal(t, a.username, "u1")
+	cases := []struct {
+		str      string
+		tenant   string
+		username string
+		hasErr   bool
+	}{
+		{
+			str:      "t1:u1",
+			tenant:   "t1",
+			username: "u1",
+			hasErr:   false,
+		},
+		{
+			str:      "t1#u1",
+			tenant:   "t1",
+			username: "u1",
+			hasErr:   false,
+		},
+		{
+			str:      ":u1",
+			tenant:   "",
+			username: "",
+			hasErr:   true,
+		},
+		{
+			str:      "a:",
+			tenant:   "",
+			username: "",
+			hasErr:   true,
+		},
+		{
+			str:      "u1",
+			tenant:   frontend.GetDefaultTenant(),
+			username: "u1",
+			hasErr:   false,
+		},
+		{
+			str:      "t1:u1?a:1",
+			tenant:   "t1",
+			username: "u1",
+			hasErr:   false,
+		},
+	}
+	for _, item := range cases {
+		a := clientInfo{}
+		err := a.parse(item.str)
+		if item.hasErr {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+		require.Equal(t, string(a.labelInfo.Tenant), item.tenant)
+		require.Equal(t, a.username, item.username)
+	}
 }
 
 func createNewClientConn(t *testing.T) (ClientConn, func()) {

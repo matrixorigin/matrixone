@@ -36,6 +36,7 @@ func TestCkpCheck(t *testing.T) {
 			end:      types.BuildTS(int64(i+9), 0),
 			state:    ST_Finished,
 			location: objectio.Location(fmt.Sprintf("loc-%d", i)),
+			version:  1,
 		})
 	}
 
@@ -44,6 +45,7 @@ func TestCkpCheck(t *testing.T) {
 		end:      types.BuildTS(int64(109), 0),
 		state:    ST_Running,
 		location: objectio.Location("loc-100"),
+		version:  1,
 	})
 
 	ctx := context.Background()
@@ -51,12 +53,12 @@ func TestCkpCheck(t *testing.T) {
 	loc, e, err := r.CollectCheckpointsInRange(ctx, types.BuildTS(4, 0), types.BuildTS(5, 0))
 	assert.NoError(t, err)
 	assert.True(t, e.Equal(types.BuildTS(9, 0)))
-	assert.Equal(t, "loc-0", loc)
+	assert.Equal(t, "loc-0;1", loc)
 
 	loc, e, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(12, 0), types.BuildTS(25, 0))
 	assert.NoError(t, err)
 	assert.True(t, e.Equal(types.BuildTS(29, 0)))
-	assert.Equal(t, "loc-10;loc-20", loc)
+	assert.Equal(t, "loc-10;1;loc-20;1", loc)
 }
 
 func TestGetCheckpoints1(t *testing.T) {
@@ -79,6 +81,7 @@ func TestGetCheckpoints1(t *testing.T) {
 			end:      timestamps[i+1],
 			state:    ST_Finished,
 			location: objectio.Location(fmt.Sprintf("ckp%d", i)),
+			version:  1,
 		}
 		if i == 4 {
 			entry.state = ST_Pending
@@ -92,7 +95,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "ckp0", location)
+	assert.Equal(t, "ckp0;1", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(10, 0)))
 
 	// [45,50]
@@ -108,7 +111,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "ckp3", location)
+	assert.Equal(t, "ckp3;1", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [25,45]
@@ -116,7 +119,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "ckp2;ckp3", location)
+	assert.Equal(t, "ckp2;1;ckp3;1", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [22,25]
@@ -124,7 +127,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "ckp2", location)
+	assert.Equal(t, "ckp2;1", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(30, 0)))
 
 	// [22,35]
@@ -132,7 +135,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "ckp2;ckp3", location)
+	assert.Equal(t, "ckp2;1;ckp3;1", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 }
 func TestGetCheckpoints2(t *testing.T) {
@@ -161,6 +164,7 @@ func TestGetCheckpoints2(t *testing.T) {
 				end:      timestamps[i].Next(),
 				state:    ST_Finished,
 				location: objectio.Location(fmt.Sprintf("global%d", i)),
+				version:  100,
 			}
 			r.storage.globals.Set(entry)
 		}
@@ -173,6 +177,7 @@ func TestGetCheckpoints2(t *testing.T) {
 			end:      timestamps[i+1],
 			state:    ST_Finished,
 			location: objectio.Location(fmt.Sprintf("ckp%d", i)),
+			version:  uint32(i),
 		}
 		if i == 4 {
 			entry.state = ST_Pending
@@ -186,7 +191,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "global3", location)
+	assert.Equal(t, "global3;100", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(30, 1)))
 
 	// [45,50]
@@ -202,7 +207,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "ckp3", location)
+	assert.Equal(t, "ckp3;3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [25,45]
@@ -210,7 +215,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "global3;ckp3", location)
+	assert.Equal(t, "global3;100;ckp3;3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [22,25]
@@ -218,7 +223,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "global3", location)
+	assert.Equal(t, "global3;100", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(30, 1)))
 
 	// [22,35]
@@ -226,7 +231,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "global3;ckp3", location)
+	assert.Equal(t, "global3;100;ckp3;3", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
 
 	// [22,29]
@@ -234,7 +239,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(location)
 	t.Log(checkpointed.ToString())
-	assert.Equal(t, "global3", location)
+	assert.Equal(t, "global3;100", location)
 	assert.True(t, checkpointed.Equal(types.BuildTS(30, 1)))
 }
 func TestICKPSeekLT(t *testing.T) {
@@ -257,6 +262,7 @@ func TestICKPSeekLT(t *testing.T) {
 			end:      timestamps[i+1],
 			state:    ST_Finished,
 			location: objectio.Location(fmt.Sprintf("ckp%d", i)),
+			version:  uint32(i),
 		}
 		if i == 4 {
 			entry.state = ST_Pending
