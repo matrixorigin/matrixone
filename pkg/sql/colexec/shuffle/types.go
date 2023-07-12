@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const shuffleBatchSize = 1024 * 8 //8k
+const shuffleBatchSize = 1024 * 2
 
 type Argument struct {
 	ctr           *container
