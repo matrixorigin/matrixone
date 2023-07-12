@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -206,7 +207,16 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 }
 
 func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen int) *prepareSQLs {
-	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
+	columnNames := make([]string, len(tbl.Columns))
+
+	for i, column := range tbl.Columns {
+		columnNames[i] = fmt.Sprintf("`%s`", column.Name)
+	}
+
+	columnStr := strings.Join(columnNames, ",")
+
+	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s`(%s) VALUES ", tbl.Database, tbl.Table, columnStr)
+
 	oneRowBuf := oneRowBufPool.Get().(*bytes.Buffer)
 	for i := 0; i < columns; i++ {
 		if i == 0 {
