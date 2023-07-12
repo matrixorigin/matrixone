@@ -264,6 +264,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	bat.Zs = nil
 	bat.Vecs = nil
 	bat.Attrs = nil
+	bat.SetRowCount(0)
 }
 
 func (proc *Process) FreeVectors() {

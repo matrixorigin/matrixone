@@ -142,12 +142,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 
 	count := bat.Length()
 	itr := ctr.mp.Map().NewIterator()
+	rowCount := 0
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
+
 		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
 		for k := 0; k < n; k++ {
 			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
@@ -155,7 +157,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			sels := mSels[vals[k]-1]
 			if ap.Cond != nil {
-				rowCount := 0
 				for _, sel := range sels {
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
@@ -193,7 +194,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 					rowCount++
 				}
-				rbat.SetRowCount(rbat.Length() + rowCount)
 			} else {
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
@@ -211,10 +211,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 				}
-				rbat.SetRowCount(rbat.Length() + len(sels))
+				rowCount += len(sels)
 			}
 		}
 	}
+
+	rbat.SetRowCount(rbat.RowCount() + rowCount)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	rbat.CheckForRemoveZs("join")

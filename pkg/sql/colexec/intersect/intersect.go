@@ -201,7 +201,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 				c.btc.Zs = append(c.btc.Zs, 1)
 				insertcnt++
 			}
-			c.btc.SetRowCount(c.btc.Length() + insertcnt)
+			c.btc.SetRowCount(c.btc.RowCount() + insertcnt)
 
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
