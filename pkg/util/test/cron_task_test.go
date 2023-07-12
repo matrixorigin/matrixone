@@ -113,5 +113,13 @@ func TestGetTenantInfo(t *testing.T) {
 	ctx := context.TODO()
 	tenant, err := frontend.GetTenantInfo(ctx, "sys:internal:moadmin")
 	require.Nil(t, err)
+	require.Equal(t, "sys", tenant.GetTenant())
+	require.Equal(t, "internal", tenant.GetUser())
+	require.Equal(t, "moadmin", tenant.GetDefaultRole())
+
+	tenant, err = frontend.GetTenantInfo(ctx, "sys:internal:moadmin?k:v")
+	require.Nil(t, err)
+	require.Equal(t, "sys", tenant.GetTenant())
+	require.Equal(t, "internal", tenant.GetUser())
 	require.Equal(t, "moadmin", tenant.GetDefaultRole())
 }

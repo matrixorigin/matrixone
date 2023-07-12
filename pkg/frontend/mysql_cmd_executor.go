@@ -1192,19 +1192,11 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 
 // handleAlterDatabaseConfig alter a database's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
-	err := doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
 // handleAlterAccountConfig alter a account's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, ses *Session, st *tree.AlterDataBaseConfig) error {
-	err := doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
 	return doAlterAccountConfig(ctx, mce.GetSession(), st)
 }
 
@@ -1389,12 +1381,17 @@ func doShowBackendServers(ses *Session) error {
 
 	col3 := new(MysqlColumn)
 	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col3.SetName("Labels")
+	col3.SetName("Work State")
+
+	col4 := new(MysqlColumn)
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col4.SetName("Labels")
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
 	mrs.AddColumn(col2)
 	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
 
 	var filterLabels = func(labels map[string]string) map[string]string {
 		var reservedLabels = map[string]struct{}{
@@ -1411,14 +1408,15 @@ func doShowBackendServers(ses *Session) error {
 	}
 
 	var appendFn = func(s *metadata.CNService) {
-		row := make([]interface{}, 3)
+		row := make([]interface{}, 4)
 		row[0] = s.ServiceID
 		row[1] = s.SQLAddress
+		row[2] = s.WorkState.String()
 		var labelStr string
 		for key, value := range s.Labels {
 			labelStr += fmt.Sprintf("%s:%s;", key, strings.Join(value.Labels, ","))
 		}
-		row[2] = labelStr
+		row[3] = labelStr
 		mrs.AddRow(row)
 	}
 
@@ -2517,7 +2515,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
-				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
+				*tree.LockTableStmt, *tree.UnLockTableStmt:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -2956,6 +2955,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.SetTransaction:
 		selfHandle = true
 		//TODO: handle set transaction
+	case *tree.LockTableStmt:
+		selfHandle = true
+	case *tree.UnLockTableStmt:
+		selfHandle = true
 	}
 
 	if selfHandle {
@@ -3855,6 +3858,7 @@ func (h *jsonPlanHandler) Free() {
 }
 
 type marshalPlanHandler struct {
+	query       *plan.Query
 	marshalPlan *explain.ExplainData
 	stmt        *motrace.StatementInfo
 	uuid        uuid.UUID
@@ -3867,18 +3871,25 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	stmt.MarkResponseAt()
 	if plan == nil || plan.GetQuery() == nil {
 		return &marshalPlanHandler{
+			query:       nil,
 			marshalPlan: nil,
 			stmt:        stmt,
 			uuid:        uuid,
 			buffer:      getMarshalPlanBufferPool(),
 		}
 	}
-	return &marshalPlanHandler{
-		marshalPlan: explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, plan.GetQuery()),
-		stmt:        stmt,
-		uuid:        uuid,
-		buffer:      getMarshalPlanBufferPool(),
+	query := plan.GetQuery()
+	h := &marshalPlanHandler{
+		query:  query,
+		stmt:   stmt,
+		uuid:   uuid,
+		buffer: getMarshalPlanBufferPool(),
 	}
+	// check longQueryTime
+	if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
+		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
+	}
+	return h
 }
 
 func (h *marshalPlanHandler) Free() {
@@ -3917,16 +3928,12 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
 		encoder := json.NewEncoder(h.buffer)
 		encoder.SetEscapeHTML(false)
-		if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
-			err = encoder.Encode(h.marshalPlan)
-			if err != nil {
-				moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
-				jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
-			} else {
-				jsonBytesLen = h.buffer.Len()
-			}
+		err = encoder.Encode(h.marshalPlan)
+		if err != nil {
+			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
+			jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
 		} else {
-			jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
+			jsonBytesLen = h.buffer.Len()
 		}
 		// BG: bytes.Buffer maintain buf []byte.
 		// if buf[off:] not enough but len(buf) is enough place, then it will reset off = 0.
@@ -3934,6 +3941,8 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		if jsonBytesLen > 0 {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
+	} else if h.query != nil {
+		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
 	} else {
 		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
@@ -3941,45 +3950,22 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 }
 
 func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
-	if h.marshalPlan != nil && len(h.marshalPlan.Steps) > 0 {
-		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
-		global := h.marshalPlan.Steps[0].GraphData.Global
-		statsByte = addStatsFromGlobal(global)
+	if h.query != nil {
+		options := &explain.MarshalPlanOptions
+		statsByte.Reset()
+		for _, node := range h.query.Nodes {
+			// part 1: for statistic.StatsArray
+			s := explain.GetStatistic4Trace(ctx, node, options)
+			statsByte.Add(&s)
+			// part 2: for motrace.Statistic
+			if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
+				rows, bytes := explain.GetInputRowsAndInputSize(ctx, node, options)
+				stats.RowsRead += rows
+				stats.BytesScan += bytes
+			}
+		}
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
-	return
-}
-
-func addStatsFromGlobal(global explain.Global) (dst statistic.StatsArray) {
-	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount float64
-
-	for _, stat := range global.Statistics.Time {
-		if stat.Name == "Time Consumed" {
-			timeConsumed = float64(stat.Value)
-			break
-		}
-	}
-
-	for _, stat := range global.Statistics.Memory {
-		if stat.Name == "Memory Size" {
-			memorySize = float64(stat.Value)
-			break
-		}
-	}
-
-	for _, stat := range global.Statistics.IO {
-		if stat.Name == "S3 IO Input Count" {
-			s3IOInputCount = float64(stat.Value)
-		} else if stat.Name == "S3 IO Output Count" {
-			s3IOOutputCount = float64(stat.Value)
-		}
-	}
-
-	dst.Init().
-		WithTimeConsumed(timeConsumed).
-		WithMemorySize(memorySize).
-		WithS3IOInputCount(s3IOInputCount).
-		WithS3IOOutputCount(s3IOOutputCount)
 	return
 }

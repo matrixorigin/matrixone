@@ -425,6 +425,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailreplay.BlockEntry) error {
 	// It is better to use the Marshal() method
 	info.BlockId = blk.BlockID[:]
+	info.ObjectName = blk.MetaLocation().Name().String()
 	info.MetaLoc = blk.MetaLoc[:]
 	info.DelLoc = blk.DeltaLoc[:]
 	info.SegId = blk.SegmentID[:]
