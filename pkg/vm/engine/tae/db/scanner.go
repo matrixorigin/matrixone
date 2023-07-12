@@ -61,6 +61,10 @@ func (scanner *dbScanner) OnExec() {
 	scanner.tablemask.Clear()
 	scanner.segmask.Clear()
 	dbutils.PrintMemStats()
+
+	// compact logtail table
+	scanner.db.LogtailMgr.TryCompactTable()
+
 	for _, op := range scanner.ops {
 		err := op.PreExecute()
 		if err != nil {
