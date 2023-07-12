@@ -1877,6 +1877,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		lastNodeId,
 		tableDef,
 		false,
+		false,
 		partitionIdx,
 		partTableIds,
 	); ok {
@@ -1973,6 +1974,7 @@ func appendPreInsertUkPlan(
 		bindCtx,
 		lastNodeId,
 		uniqueTableDef,
+		false,
 		false,
 		-1,
 		nil,
@@ -2366,6 +2368,7 @@ func appendLockNode(
 	lastNodeId int32,
 	tableDef *TableDef,
 	lockTable bool,
+	block bool,
 	partitionIdx int,
 	partTableIDs []uint64,
 ) (int32, bool) {
@@ -2376,12 +2379,17 @@ func appendLockNode(
 		return -1, false
 	}
 
+	if builder.qry.LoadTag && !lockTable {
+		return -1, false
+	}
+
 	lockTarget := &plan.LockTarget{
 		TableId:            tableDef.TblId,
 		PrimaryColIdxInBat: int32(pkPos),
 		PrimaryColTyp:      pkTyp,
 		RefreshTsIdxInBat:  -1, //unsupport now
 		LockTable:          lockTable,
+		Block:              block,
 	}
 
 	if !lockTable && tableDef.Partition != nil {

@@ -102,11 +102,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
 	//append lock node
+	builder.qry.LoadTag = true
 	if lockNodeId, ok := appendLockNode(
 		builder,
 		bindCtx,
 		lastNodeId,
 		tableDef,
+		true,
 		true,
 		-1,
 		nil,
@@ -123,7 +125,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	query := builder.qry
 	query.StmtType = plan.Query_INSERT
-	query.LoadTag = true
 
 	pn := &Plan{
 		Plan: &plan.Plan_Query{
