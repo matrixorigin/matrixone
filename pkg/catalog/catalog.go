@@ -28,6 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+const (
+	CatalogVersion_V1 uint32 = 1
+
+	CatalogVersion_Curr uint32 = CatalogVersion_V1
+)
+
 func init() {
 	MoDatabaseTableDefs = make([]engine.TableDef, len(MoDatabaseSchema))
 	for i, name := range MoDatabaseSchema {

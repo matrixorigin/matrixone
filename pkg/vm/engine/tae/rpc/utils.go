@@ -26,6 +26,7 @@ import (
 
 func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
 	schema = catalog.NewEmptySchema(name)
+	schema.CatalogVersion = pkgcatalog.CatalogVersion_Curr
 	var pkeyColName string
 	for _, def := range defs {
 		switch defVal := def.(type) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -830,6 +831,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 	newStart := start
 	if global != nil && global.HasOverlap(start, end) {
 		locs = append(locs, global.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(global.version)))
 		newStart = global.end.Next()
 		checkpointed = global.GetEnd()
 	}
@@ -864,6 +866,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			}
 			if e.HasOverlap(newStart, end) {
 				locs = append(locs, e.GetLocation().String())
+				locs = append(locs, strconv.Itoa(int(e.version)))
 				checkpointed = e.GetEnd()
 				// checkpoints = append(checkpoints, e)
 			}
@@ -875,6 +878,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 				break
 			}
 			locs = append(locs, e.GetLocation().String())
+			locs = append(locs, strconv.Itoa(int(e.version)))
 			checkpointed = e.GetEnd()
 			// checkpoints = append(checkpoints, e)
 			if ok = iter.Next(); !ok {
@@ -901,6 +905,7 @@ func (r *runner) CollectCheckpointsInRange(ctx context.Context, start, end types
 			return
 		}
 		locs = append(locs, e.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(e.version)))
 		checkpointed = e.GetEnd()
 		// checkpoints = append(checkpoints, e)
 	}

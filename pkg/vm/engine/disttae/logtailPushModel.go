@@ -1025,13 +1025,19 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	tableName string,
 ) (err error) {
 	var entries []*api.Entry
-	if entries, err = taeLogtail.LoadCheckpointEntries(
+	var closeCBs []func()
+	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
 		ctx,
 		lt.CkpLocation,
 		tableId, tableName,
-		databaseId, "", engine.fs); err != nil {
+		databaseId, "", engine.mp, engine.fs); err != nil {
 		return
 	}
+	defer func() {
+		for _, cb := range closeCBs {
+			cb()
+		}
+	}()
 	for _, entry := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, entry); err != nil {
