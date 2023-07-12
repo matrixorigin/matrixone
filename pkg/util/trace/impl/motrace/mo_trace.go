@@ -117,6 +117,7 @@ type MOHungSpan struct {
 	quitCancel context.CancelFunc
 	trigger    *time.Timer
 	stop       func()
+	stopped    bool
 	// mux control doProfile exec order, called in loop and End
 	mux sync.Mutex
 }
@@ -132,7 +133,7 @@ func newMOHungSpan(span *MOSpan) *MOHungSpan {
 	s.trigger = time.AfterFunc(s.HungThreshold(), func() {
 		s.mux.Lock()
 		defer s.mux.Unlock()
-		if e := s.quitCtx.Err(); e == context.Canceled {
+		if e := s.quitCtx.Err(); e == context.Canceled || s.stopped {
 			return
 		}
 		s.doProfile()
@@ -144,6 +145,7 @@ func newMOHungSpan(span *MOSpan) *MOHungSpan {
 	s.stop = func() {
 		s.trigger.Stop()
 		s.quitCancel()
+		s.stopped = true
 	}
 	return s
 }

@@ -35,7 +35,8 @@ import (
 // BenchmarkMOHungSpan_TriggerOrChannel/channel_100worker-10         	       5	 216839308 ns/op
 func BenchmarkMOHungSpan_TriggerOrChannel(b *testing.B) {
 
-	ctx := context.TODO()
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
 
 	benchmarks := []struct {
 		name string
@@ -66,14 +67,12 @@ func BenchmarkMOHungSpan_TriggerOrChannel(b *testing.B) {
 			name: "channel",
 			op: func(wg *sync.WaitGroup, eventCnt int) {
 				for i := 0; i < eventCnt; i++ {
-					ctx, cancel := context.WithTimeout(ctx, time.Hour)
+					ctx1, cancel1 := context.WithTimeout(ctx, time.Hour)
 					go func() {
-						select {
-						case <-ctx.Done():
-							wg.Done()
-						}
+						<-ctx1.Done()
+						wg.Done()
 					}()
-					cancel()
+					cancel1()
 				}
 			},
 		},
@@ -104,10 +103,8 @@ func BenchmarkMOHungSpan_TriggerOrChannel(b *testing.B) {
 					for i := 0; i < cnt; i++ {
 						ctx, cancel := context.WithTimeout(ctx, time.Hour)
 						go func() {
-							select {
-							case <-ctx.Done():
-								wg.Done()
-							}
+							<-ctx.Done()
+							wg.Done()
 						}()
 						cancel()
 					}

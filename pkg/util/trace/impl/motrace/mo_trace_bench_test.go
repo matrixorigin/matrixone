@@ -49,7 +49,8 @@ func BenchmarkMOSpan_1kFree(b *testing.B) {
 
 	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
 	tracer := p.Tracer("test").(*MOTracer)
-	ctx := context.TODO()
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
 
 	type mospanChan struct {
 		ch chan *MOSpan
@@ -104,8 +105,11 @@ func BenchmarkMOSpan_1kFree(b *testing.B) {
 			prepare: func(wg *sync.WaitGroup, eventCnt int) any {
 				c := &mospanChan{make(chan *MOSpan, eventCnt)}
 				go func() {
+				loop:
 					for {
 						select {
+						case <-ctx.Done():
+							break loop
 						case s := <-c.ch:
 							s.Free()
 							wg.Done()
@@ -216,7 +220,8 @@ func BenchmarkMOSpan_ApplyOneAndFree(b *testing.B) {
 
 	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
 	tracer := p.Tracer("test").(*MOTracer)
-	ctx := context.TODO()
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
 
 	benchmarks := []struct {
 		name    string
@@ -245,8 +250,8 @@ func BenchmarkMOSpan_ApplyOneAndFree(b *testing.B) {
 		},
 		{
 			name: "prepare1000ApplyAndFree",
-			prepare: func(wg *sync.WaitGroup, eventCnt int) any {
-				eventCnt = 1_000 // reset cnt
+			prepare: func(wg *sync.WaitGroup, _ int) any {
+				eventCnt := 1_000 // reset cnt
 				for i := 0; i < eventCnt; i++ {
 					_, span := tracer.Start(ctx, "span")
 					span.(*MOSpan).Free()
