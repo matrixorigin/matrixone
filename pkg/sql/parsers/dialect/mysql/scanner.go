@@ -43,11 +43,11 @@ type Scanner struct {
 	MysqlSpecialComment *Scanner
 
 	CommentFlag bool
-	Pos    int
-	Line   int
-	Col    int
-	PrePos int
-	buf    string
+	Pos         int
+	Line        int
+	Col         int
+	PrePos      int
+	buf         string
 
 	strBuilder *bytes.Buffer
 }
@@ -217,7 +217,7 @@ func (s *Scanner) Scan() (int, string) {
 func (s *Scanner) readVersion() bool {
 	if s.Pos < len(s.buf) {
 		if isDigit(s.cur()) {
-			if s.Pos + 4 < len(s.buf) {
+			if s.Pos+4 < len(s.buf) {
 				for i := 0; i < 5; i++ {
 					if !isDigit(s.cur()) {
 						return false

@@ -131,7 +131,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 	if bat != nil {
 		var err error
-		joinMap := bat.AuxData.(*hashmap.JoinMap)
 		ctr.evalNullSels(bat)
 		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)
 		if err != nil {
@@ -142,7 +141,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		ctr.rewriteCond = colexec.RewriteFilterExprList(ap.OnList)
 		ctr.bat = bat
-		ctr.mp = joinMap.Dup()
+		ctr.mp = bat.DupJmAuxData()
 		//ctr.bat = bat
 		//ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 		//anal.Alloc(ctr.mp.Map().Size())
