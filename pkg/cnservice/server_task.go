@@ -122,6 +122,24 @@ func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
 	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
 }
 
+func (s *service) upgradeSystemTable() {
+	pu := config.NewParameterUnit(
+		&s.cfg.Frontend,
+		nil,
+		nil,
+		nil)
+	pu.StorageEngine = s.storeEngine
+	pu.TxnClient = s._txnClient
+	s.cfg.Frontend.SetDefaultValues()
+	pu.FileService = s.fileService
+	pu.LockService = s.lockService
+	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+	ieFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
+	}
+	motrace.UpgradeSchemaByInnerExecutor(moServerCtx, ieFactory)
+}
 func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()

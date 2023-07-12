@@ -259,6 +259,36 @@ const (
 var tables = []*table.Table{SingleStatementTable, SingleRowLogTable}
 var views = []*table.View{logView, errorView, spanView}
 
+func UpgradeSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
+	exec := ieFactory()
+	if exec == nil {
+		return nil
+	}
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
+	mustExec := func(sql string) error {
+		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
+			return moerr.NewInternalError(ctx, "[Trace] init table error: %v, sql: %s", err, sql)
+		}
+		return nil
+	}
+
+	if err := mustExec(sqlCreateDBConst); err != nil {
+		return err
+	}
+	var createCost time.Duration
+	defer func() {
+		logutil.Debugf("[Trace] upgrade tables: create cost %d ms",
+			createCost.Milliseconds())
+	}()
+	instant := time.Now()
+
+	for _, tbl := range tables {
+		mustExec(tbl.ToUpgradeSql(ctx))
+	}
+	createCost = time.Since(instant)
+	return nil
+}
+
 // InitSchemaByInnerExecutor init schema, which can access db by io.InternalExecutor on any Node.
 func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
 	exec := ieFactory()
