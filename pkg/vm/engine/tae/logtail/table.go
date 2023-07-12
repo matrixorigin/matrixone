@@ -310,7 +310,7 @@ func (table *TxnTable) TryCompact(from types.TS, rt *dbutils.Runtime) (to types.
 
 func (table *TxnTable) AddTxn(txn txnif.AsyncTxn) (err error) {
 	row := &txnRow{}
-	row.source.Store(txn.GetPackedTxn().(*txnbase.Txn))
+	row.source.Store(txn.GetBase().(*txnbase.Txn))
 	err = table.Append(row)
 	return
 }

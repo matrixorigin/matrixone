@@ -48,6 +48,7 @@ type Txn2PC interface {
 }
 
 type TxnReader interface {
+	GetBase() BaseTxn
 	RLock()
 	RUnlock()
 	IsReplay() bool
@@ -143,7 +144,7 @@ type TxnUnsafe interface {
 	UnsafeGetRelation(dbId, tableId uint64) (h handle.Relation, err error)
 }
 
-type PackedTxn interface {
+type BaseTxn interface {
 	GetMemo() *TxnMemo
 	GetStartTS() types.TS
 	GetPrepareTS() types.TS
@@ -161,7 +162,6 @@ type AsyncTxn interface {
 	TxnReader
 	TxnWriter
 	TxnChanger
-	GetPackedTxn() PackedTxn
 }
 
 type DeleteChain interface {

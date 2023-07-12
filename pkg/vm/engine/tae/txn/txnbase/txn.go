@@ -129,7 +129,7 @@ func NewPersistedTxn(
 		ApplyCommitFn:     applyCommitFn,
 	}
 }
-func (txn *Txn) GetPackedTxn() txnif.PackedTxn {
+func (txn *Txn) GetBase() txnif.BaseTxn {
 	return txn
 }
 func (txn *Txn) GetLsn() uint64              { return txn.LSN }
