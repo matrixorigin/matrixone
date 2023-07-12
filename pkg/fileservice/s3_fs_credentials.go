@@ -16,11 +16,120 @@ package fileservice
 
 import (
 	"context"
+	"strings"
 
 	alicredentials "github.com/aliyun/credentials-go/credentials"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	tencentcommon "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
+	"go.uber.org/zap"
 )
+
+func getCredentialsProvider(
+	ctx context.Context,
+	endpoint string,
+	region string,
+	apiKey string,
+	apiSecret string,
+	roleARN string,
+	externalID string,
+) (
+	ret aws.CredentialsProvider,
+) {
+
+	// cache
+	defer func() {
+		if ret == nil {
+			return
+		}
+		ret = aws.NewCredentialsCache(ret)
+	}()
+
+	// aliyun
+	if strings.Contains(endpoint, "aliyuncs.com") {
+		provider := newAliyunCredentialsProvider(roleARN, externalID)
+		_, err := provider.Retrieve(ctx)
+		if err == nil {
+			return provider
+		}
+		logutil.Info("skipping bad aliyun credential provider",
+			zap.Any("error", err),
+		)
+	}
+
+	// qcloud
+	if strings.Contains(endpoint, "myqcloud.com") ||
+		strings.Contains(endpoint, "tencentcos.cn") {
+		provider := newTencentCloudCredentialsProvider(roleARN, externalID)
+		_, err := provider.Retrieve(ctx)
+		if err == nil {
+			return provider
+		}
+		logutil.Info("skipping bad qcloud credential provider",
+			zap.Any("error", err),
+		)
+	}
+
+	// aws role arn
+	if roleARN != "" {
+		if provider := func() aws.CredentialsProvider {
+			loadConfigOptions := []func(*config.LoadOptions) error{
+				config.WithLogger(logutil.GetS3Logger()),
+				config.WithClientLogMode(
+					aws.LogSigning |
+						aws.LogRetries |
+						aws.LogRequest |
+						aws.LogResponse |
+						aws.LogDeprecatedUsage |
+						aws.LogRequestEventMessage |
+						aws.LogResponseEventMessage,
+				),
+			}
+			awsConfig, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
+			if err != nil {
+				return nil
+			}
+			stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
+				if region == "" {
+					options.Region = "ap-northeast-1"
+				} else {
+					options.Region = region
+				}
+			})
+			provider := stscreds.NewAssumeRoleProvider(
+				stsSvc,
+				roleARN,
+				func(opts *stscreds.AssumeRoleOptions) {
+					if externalID != "" {
+						opts.ExternalID = &externalID
+					}
+				},
+			)
+			_, err = provider.Retrieve(ctx)
+			if err == nil {
+				return provider
+			}
+			logutil.Info("skipping bad role arn credentials provider",
+				zap.Any("error", err),
+			)
+			return nil
+		}(); provider != nil {
+			return provider
+		}
+	}
+
+	// static credential
+	if apiKey != "" && apiSecret != "" {
+		// static
+		return credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
+	}
+
+	return
+}
 
 func newAliyunCredentialsProvider(
 	roleARN string,

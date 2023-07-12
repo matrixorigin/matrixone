@@ -1111,6 +1111,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				})
 			}
 		}
+		ss = c.compileProjection(n, ss)
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
@@ -2460,6 +2461,7 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	for i := range anals {
 		//anals[i] = new(process.AnalyzeInfo)
 		anals[i] = analPool.Get().(*process.AnalyzeInfo)
+		anals[i].Reset()
 	}
 	c.anal = &anaylze{
 		qry:       qry,

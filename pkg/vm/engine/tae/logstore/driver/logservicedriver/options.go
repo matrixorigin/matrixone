@@ -49,14 +49,14 @@ type LogServiceClientFactory logservice.ClientFactory
 
 func NewDefaultConfig(clientFactory LogServiceClientFactory) *Config {
 	return &Config{
-		ClientPoolMaxSize:     100,
-		ClientPoolInitSize:    100,
+		ClientPoolMaxSize:     10,
+		ClientPoolInitSize:    10,
 		GetClientRetryTimeOut: time.Second * 3,
 
 		RecordSize:        int(mpool.KB * 16),
 		ReadCacheSize:     100,
 		ReadMaxSize:       mpool.KB * 20,
-		AppenderMaxCount:  100,
+		AppenderMaxCount:  10,
 		NewRecordSize:     int(mpool.KB * 20),
 		NewClientDuration: time.Second * 3,
 		// AppendFrequency:      time.Millisecond * 5,
