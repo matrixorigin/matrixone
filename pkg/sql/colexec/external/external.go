@@ -151,6 +151,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		param.Fileparam.End = true
 		return false, err
 	}
+
+	bat.CheckForRemoveZs("external")
 	proc.SetInputBatch(bat)
 	if bat != nil {
 		anal.Output(bat, isLast)
@@ -226,6 +228,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	for k := 0; k < len(fileList); k++ {
 		bat.Zs[k] = 1
 	}
+	bat.SetRowCount(len(fileList))
 	return bat
 }
 
@@ -490,6 +493,7 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			vec.SetLength(n)
 		}
 	}
+	bat.SetRowCount(n)
 	bat.SetZs(n, proc.GetMPool())
 	return bat, nil
 }
@@ -644,6 +648,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	}
 
 	n := bat.Vecs[0].Length()
+	bat.SetRowCount(n)
 	bat.SetZs(n, proc.GetMPool())
 	return bat, nil
 }

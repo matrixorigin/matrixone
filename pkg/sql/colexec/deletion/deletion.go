@@ -67,6 +67,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	p := arg.(*Argument)
 	bat := proc.InputBatch()
 
+	bat.FixedForRemoveZs()
+
 	// last batch of block
 	if bat == nil {
 		if p.RemoteDelete {
@@ -89,6 +91,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				for blkid, bat := range blockId_rowIdBatch {
 					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
 					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
+					bat.SetRowCount(bat.GetVector(0).Length())
 					bytes, err := bat.MarshalBinary()
 					if err != nil {
 						return true, err
@@ -104,6 +107,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
 					//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
 					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
+					bat.SetRowCount(bat.GetVector(0).Length())
 					bytes, err := bat.MarshalBinary()
 					if err != nil {
 						return true, err
@@ -115,7 +119,10 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			}
 
 			resBat.SetZs(resBat.Vecs[0].Length(), proc.GetMPool())
+			resBat.SetRowCount(resBat.Vecs[0].Length())
 			resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))
+
+			resBat.CheckForRemoveZs("deletion")
 			proc.SetInputBatch(resBat)
 		} else {
 			// ToDo: need ouyuaning to make sure there are only one table
