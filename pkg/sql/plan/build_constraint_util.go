@@ -414,7 +414,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					}
 				}
 			} else {
-				var pkNameMap map[string]int = make(map[string]int)
+				pkNameMap := make(map[string]int)
 				for pkIdx, pkName := range tableDef.Pkey.Names {
 					pkNameMap[pkName] = pkIdx
 				}

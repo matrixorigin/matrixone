@@ -196,7 +196,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 	node := builder.qry.Nodes[0]
 
-	var pkValueExprs []*Expr = make([]*Expr, len(pkPosInValues))
+	pkValueExprs := make([]*Expr, len(pkPosInValues))
 	for idx, cols := range node.RowsetData.Cols {
 		pkColIdx, ok := pkPosInValues[idx]
 		if !ok {
