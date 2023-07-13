@@ -1941,7 +1941,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				},
 			}
 		default:
-			fmt.Printf("wangjian sql2a is %T\n", option)
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
 		}
 	}

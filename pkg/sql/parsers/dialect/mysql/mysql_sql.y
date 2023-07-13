@@ -240,7 +240,8 @@ import (
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER INSTANT INPLACE COPY DISABLE ENABLE
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER 
+%token <str> INSTANT INPLACE COPY DISABLE ENABLE UNDEFINED MERGE TEMPTABLE DEFINER INVOKER SQL SECURITY CASCADED
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
@@ -343,7 +344,7 @@ import (
 %token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY RESTRICTED
 
 // User
-%token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD
+%token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD SHARED EXCLUSIVE
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
 
 // Explain
@@ -384,7 +385,7 @@ import (
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Match
-%token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION
+%token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
@@ -473,7 +474,7 @@ import (
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement>  create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
-%type <str> comment_opt
+%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subcription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
 
@@ -518,7 +519,7 @@ import (
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list
-%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type
+%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -2618,7 +2619,7 @@ alter_option:
     {
         $$ = tree.AlterTableOption($1)
     }
-|   RENAME TO alter_table_rename
+|   RENAME rename_type alter_table_rename
     {
         $$ = tree.AlterTableOption($3)
     }
@@ -2670,6 +2671,21 @@ alter_option:
     {
         $$ = tree.NewTableOptionCharset($1)
     }
+|   LOCK equal_opt lock_type
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+|   with_type VALIDATION
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+
+rename_type:
+    {
+        $$ = ""
+    }
+|   TO
+|   AS
 
 algorithm_type:
     DEFAULT
@@ -2684,6 +2700,16 @@ able_type:
 space_type:
     DISCARD
 |   IMPORT
+
+lock_type:
+    DEFAULT
+|   NONE
+|   SHARED
+|   EXCLUSIVE
+
+with_type:
+    WITHOUT
+|   WITH   
 
 pos_info:
     {
@@ -5086,7 +5112,16 @@ func_return:
     }
 
 create_view_stmt:
-    CREATE VIEW not_exists_opt table_name column_list_opt AS select_stmt
+    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+    {
+        $$ = &tree.CreateView{
+            Name: $5,
+            ColNames: $6,
+            AsSource: $8,
+            IfNotExists: $4,
+        }
+    }
+|   CREATE VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
         $$ = &tree.CreateView{
             Name: $4,
@@ -5107,6 +5142,59 @@ create_account_stmt:
             Comment:$7,
     	}
     }
+
+view_list_opt:
+    view_opt
+    {
+        $$ = $1
+    }
+|   view_list_opt view_opt
+    {
+        $$ = $$ + $2
+    }
+
+view_opt:
+    OR REPLACE
+    {
+        $$ = "OR REPLACE"
+    }
+|   ALGORITHM '=' algorithm_type_2
+    {
+        $$ = "ALGORITHM = " + $3
+    }
+|   DEFINER '=' user_name
+    {
+        $$ = "DEFINER = "
+    }
+|   SQL SECURITY security_opt
+    {
+        $$ = "SQL SECURITY " + $3
+    }
+
+view_tail:
+    {
+        $$ = ""
+    }
+|   WITH check_type CHECK OPTION
+    {
+        $$ = "WITH " + $2 + " CHECK OPTION"
+    }
+
+algorithm_type_2:
+    UNDEFINED
+|   MERGE
+|   TEMPTABLE
+
+security_opt:
+    DEFINER
+|   INVOKER
+
+check_type:
+    {
+        $$ = ""
+    }
+|   CASCADED
+|   LOCAL
 
 account_name:
     ident
