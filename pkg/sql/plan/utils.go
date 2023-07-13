@@ -1653,33 +1653,33 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 	}
 }
 
-func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
-	switch t := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range t.F.Args {
-			SubstitueParam(arg, proc)
-		}
-	case *plan.Expr_P:
-		vec, _ := proc.GetPrepareParamsAt(int(t.P.Pos))
-		c := rule.GetConstantValue(vec, false)
-		ec := &plan.Expr_C{
-			C: c,
-		}
-		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-		expr.Expr = ec
-	case *plan.Expr_V:
-		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
-		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
-		vec, _ := util.GenVectorByVarValue(proc, typ, val)
-		c := rule.GetConstantValue(vec, false)
-		ec := &plan.Expr_C{
-			C: c,
-		}
-		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-		expr.Expr = ec
-	}
-	return expr
-}
+// func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
+// 	switch t := expr.Expr.(type) {
+// 	case *plan.Expr_F:
+// 		for _, arg := range t.F.Args {
+// 			SubstitueParam(arg, proc)
+// 		}
+// 	case *plan.Expr_P:
+// 		vec, _ := proc.GetPrepareParamsAt(int(t.P.Pos))
+// 		c := rule.GetConstantValue(vec, false)
+// 		ec := &plan.Expr_C{
+// 			C: c,
+// 		}
+// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+// 		expr.Expr = ec
+// 	case *plan.Expr_V:
+// 		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
+// 		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+// 		vec, _ := util.GenVectorByVarValue(proc, typ, val)
+// 		c := rule.GetConstantValue(vec, false)
+// 		ec := &plan.Expr_C{
+// 			C: c,
+// 		}
+// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+// 		expr.Expr = ec
+// 	}
+// 	return expr
+// }
 
 func FormatExpr(expr *plan.Expr) string {
 	var w bytes.Buffer

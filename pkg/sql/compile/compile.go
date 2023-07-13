@@ -1555,12 +1555,13 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Restrict,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructRestrict(n),
+			Arg:     constructRestrict(n, filterExpr),
 		})
 	}
 	c.anal.isFirst = false
