@@ -171,7 +171,6 @@ set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
 
--- @bvt:issue#10581
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create database test_for_navicat;
 -- @session:id=2&user=acc_idx:root&password=123456
@@ -180,4 +179,3 @@ create database test_for_navicat;
 SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA where SCHEMA_NAME = 'test_for_navicat';
 drop database test_for_navicat;
 drop account acc_idx;
--- @bvt:issue
