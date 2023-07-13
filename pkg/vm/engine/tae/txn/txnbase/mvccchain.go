@@ -277,38 +277,6 @@ func (be *MVCCChain[T]) WriteAllTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (be *MVCCChain[T]) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
-	var n2 int64
-	un := be.newnodefn()
-	n2, err = un.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	be.Insert(un)
-	n += n2
-	return
-}
-
-func (be *MVCCChain[T]) ReadAllFrom(r io.Reader) (n int64, err error) {
-	var depth uint64
-	var sn int
-	if sn, err = r.Read(types.EncodeUint64(&depth)); err != nil {
-		return
-	}
-	n += int64(sn)
-	for i := 0; i < int(depth); i++ {
-		var n2 int64
-		un := be.newnodefn()
-		n2, err = un.ReadFrom(r)
-		if err != nil {
-			return
-		}
-		be.MVCC.Insert(un)
-		n += n2
-	}
-	return
-}
-
 func (be *MVCCChain[T]) IsEmpty() bool {
 	head := be.MVCC.GetHead()
 	return head == nil

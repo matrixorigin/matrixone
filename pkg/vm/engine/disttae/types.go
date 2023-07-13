@@ -279,6 +279,10 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		txn.writes = txn.writes[:end]
 		txn.statements = txn.statements[:txn.statementID]
 	}
+	// rollback current statement's writes info
+	for b := range txn.batchSelectList {
+		delete(txn.batchSelectList, b)
+	}
 	return nil
 }
 func (txn *Transaction) resetSnapshot() error {
