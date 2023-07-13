@@ -143,7 +143,7 @@ jobs:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN BVT TEST
     runs-on: arm64-runner
-    timeout-minutes: 180
+    timeout-minutes: 60
     needs: [setup_mo_test_env,docker_image_build]
     steps:
       - name: Clone mo-tester Repo
@@ -194,7 +194,7 @@ jobs:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN SSB AND TPCH TEST
     runs-on: arm64-runner
-    timeout-minutes: 180
+    timeout-minutes: 150
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
@@ -249,7 +249,7 @@ jobs:
 
       - name: Start Load SSB 10G Data And Test
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 100
+        timeout-minutes: 60
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -266,6 +266,7 @@ jobs:
       # start tpch test
       - name: Load TPCH 10G Test Data
         if: ${{ always() && !cancelled() }}
+        timeout-minutes: 30
         id: load_tpch_data
         run: |
           set -uo pipefail
@@ -278,7 +279,7 @@ jobs:
 
       - name: Start TPCH 10G Test
         if: ${{ always() && !cancelled() && steps.load_tpch_data.conclusion == 'success' }}
-        timeout-minutes: 150
+        timeout-minutes: 60
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -380,7 +381,7 @@ jobs:
       # start sysbench test
       - name: Start OLTP Insert Test With 100 Threads
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 100
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -403,7 +404,7 @@ jobs:
 
       - name: Start OLTP Delete Test With 100 Threads
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 100
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -422,7 +423,7 @@ jobs:
           
       - name: Start OLTP Update Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
-        timeout-minutes: 100
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -441,7 +442,7 @@ jobs:
 
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
-        timeout-minutes: 100
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -546,6 +547,7 @@ jobs:
      # start tpcc test
       - name: Load TPCC 10 Warehouse Data
         if: ${{ always() && !cancelled() }}
+        timeout-minutes: 30
         id: load_tpcc_data
         run: |
           set -uo pipefail
@@ -558,7 +560,7 @@ jobs:
 
       - name: Start TPCC 10 Warehouses 10 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 100
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -582,7 +584,7 @@ jobs:
           
       - name: Start TPCC 10 Warehouses 50 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 100
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -604,7 +606,7 @@ jobs:
           
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 100
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
