@@ -379,7 +379,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			})
 		case *tree.TableOptionAutoIncrement:
 			for _, def := range createTable.TableDef.Cols {
-				if def.Typ.AutoIncr == true {
+				if def.Typ.AutoIncr {
 					if opt.Value != 0 {
 						def.Typ.Offset = opt.Value - 1
 					}
