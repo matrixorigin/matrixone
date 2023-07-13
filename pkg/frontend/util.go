@@ -507,7 +507,9 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 	statementId := ""
 	if ses != nil {
 		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
-		statementId = string(ses.tStmt.StatementID[:])
+		if ses.tStmt != nil {
+			statementId = string(ses.tStmt.StatementID[:])
+		}
 	}
 	fields = append(fields, zap.String("session_id", sessionId))
 	fields = append(fields, zap.String("statement_id", statementId))
@@ -523,7 +525,9 @@ func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
 	statementId := ""
 	if ses != nil {
 		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
-		statementId = string(ses.tStmt.StatementID[:])
+		if ses.tStmt != nil {
+			statementId = string(ses.tStmt.StatementID[:])
+		}
 	}
 	fields = append(fields, zap.String("session_id", sessionId))
 	fields = append(fields, zap.String("statement_id", statementId))
@@ -539,7 +543,9 @@ func logError(ses *Session, info string, msg string, fields ...zap.Field) {
 	statementId := ""
 	if ses != nil {
 		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
-		statementId = string(ses.tStmt.StatementID[:])
+		if ses.tStmt != nil {
+			statementId = string(ses.tStmt.StatementID[:])
+		}
 	}
 	fields = append(fields, zap.String("session_id", sessionId))
 	fields = append(fields, zap.String("statement_id", statementId))
