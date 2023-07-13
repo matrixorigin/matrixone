@@ -257,13 +257,13 @@ func (proc *Process) GetValueScanBatchs() []*batch.Batch {
 	return bats
 }
 
-func (proc *Process) GetPrepareParamsAt(i int) (*vector.Vector, error) {
+func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	if i < 0 || i >= proc.prepareParams.Length() {
 		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
 	val := proc.prepareParams.GetRawBytesAt(i)
-	vec := vector.NewConstBytes(*proc.prepareParams.GetType(), val, 1, proc.Mp())
-	return vec, nil
+	// vec := vector.NewConstBytes(*proc.prepareParams.GetType(), val, 1, proc.Mp())
+	return val, nil
 }
 
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {

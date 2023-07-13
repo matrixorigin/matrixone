@@ -24,12 +24,12 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 message Type {
-	int32 id            = 1;
-	bool notNullable	= 2;
-	bool auto_incr      = 3;
-	int32 width			= 4;
-	int32 scale 		= 5;
-	string table 		= 6;
+	int32 id         = 1;
+	bool notNullable = 2;
+	bool auto_incr   = 3;
+	int32 width      = 4;
+	int32 scale      = 5;
+	string table     = 6;
 };
 
 // Const: if a const value can be reprensented by int64 or
@@ -423,6 +423,8 @@ message TableDef {
 	bool isLocked = 27;
 	TableLockType tableLockType = 28;
 	bool is_temporary = 29;
+
+	uint64 auto_incr_offset = 30;
 }
 
 message TableFunction{
