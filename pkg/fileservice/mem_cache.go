@@ -16,8 +16,8 @@ package fileservice
 
 import (
 	"context"
-	"time"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/clockobjcache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
