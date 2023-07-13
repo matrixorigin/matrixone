@@ -2310,6 +2310,18 @@ var (
 		}, {
 			input:  "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = 'abc'",
 			output: "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = abc",
+		}, {
+			input:  "create table /*! if not exists */ t1 (a int)",
+			output: "create table if not exists t1 (a int)",
+		}, {
+			input:  "create table /*!50100 if not exists */ t1 (a int)",
+			output: "create table if not exists t1 (a int)",
+		}, {
+			input:  "create table /*!50100 if not exists */ t1 (a int) /*!AUTOEXTEND_SIZE = 10*/",
+			output: "create table if not exists t1 (a int) AUTOEXTEND_SIZE = 10",
+		}, {
+			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
+			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
 		},
 	}
 )
