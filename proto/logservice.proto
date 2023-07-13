@@ -44,7 +44,8 @@ message CNStore {
   metadata.CNRole Role               = 6;
   uint64          Tick               = 7;
   NodeState       State              = 8;
-  map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
+  metadata.WorkState WorkState           = 9;
+  map<string, metadata.LabelList> Labels = 10 [(gogoproto.nullable) = false];
 }
 
 message DNStore {
@@ -76,15 +77,15 @@ message LogShardInfo {
   // ShardID is the ID of a Log shard.
   uint64 ShardID               = 1;
   // Replicas is a map of ReplicaID to LogStore UUID, it describe the member
-  // replicas of the shard at the given Epoch. 
+  // replicas of the shard at the given Epoch.
   map<uint64, string> Replicas = 2;
   // Epoch is the epoch value of the Shard, member replicas of the Shard can
-  // change across epochs. 
+  // change across epochs.
   uint64 Epoch                 = 3;
   // LeaderID is the ReplicaID of the leader replica at the given term. When
   // LeaderID is 0, it means there is no leader or the leader is unknown.
   uint64 LeaderID              = 4;
-  // Term is the Raft term value. 
+  // Term is the Raft term value.
   uint64 Term                  = 5;
 
   // TODO: per shard stats like CPU/memory/network usage can be added here
@@ -127,16 +128,16 @@ message LogStoreHeartbeat {
   // Replicas is a list of LogReplicaInfo instances collected on the specified
   // LogStore. Details in Shards are based on the local knowledge of each
   // replica running on the current LogStore, it may not be accurate or
-  // update to date due to various reasons. 
+  // update to date due to various reasons.
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
   // TaskServiceCreated task service is created at the current log node
   bool            TaskServiceCreated    = 6;
 };
 
-// DNShardInfo contains information of a launched DN shard. 
+// DNShardInfo contains information of a launched DN shard.
 message DNShardInfo {
   // ShardID uniquely identifies a DN shard. Each DN shard manages a Primary
-  // Key range or hashed Primary Key value range. 
+  // Key range or hashed Primary Key value range.
   uint64 ShardID                 = 1;
   // ReplicaID uniquely identifies a DN shard instance. After repairing a
   // failed DN shard, a new DN shard instance is created with a new ReplicaID
@@ -149,10 +150,10 @@ message DNShardInfo {
 // DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
 message DNStoreHeartbeat {
   // UUID is the uuid of the DN Store.
-  string UUID                 = 1; 
+  string UUID                 = 1;
   string ServiceAddress       = 2;
   // Shards is a list of DNShardInfo instances collected on the specified
-  // DN store. 
+  // DN store.
   repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
   bool            TaskServiceCreated = 4;
 
@@ -188,6 +189,8 @@ enum MethodType {
   CN_ALLOCATE_ID = 13;
   GET_CLUSTER_STATE = 14;
   UPDATE_CN_LABEL = 15;
+  UPDATE_CN_WORK_STATE = 16;
+  PATCH_CN_STORE = 17;
 };
 
 enum RecordType {
@@ -232,6 +235,22 @@ message CNStoreLabel {
   map<string, metadata.LabelList> Labels = 3 [(gogoproto.nullable) = false];
 }
 
+message CNWorkState {
+  // UUID is the uuid of the CN store.
+  string UUID     = 1;
+  // State is the CN work state.
+  metadata.WorkState State = 2;
+}
+
+message CNStateLabel {
+  // UUID is the uuid of the CN store.
+  string UUID     = 1;
+  // State is the CN work state.
+  metadata.WorkState State = 2;
+  // Labels is the labels of the CN store.
+  map<string, metadata.LabelList> Labels = 3 [(gogoproto.nullable) = false];
+}
+
 message Request {
   uint64 RequestID               = 1;
   MethodType Method              = 2;
@@ -242,6 +261,8 @@ message Request {
   TsoRequest TsoRequest          = 7;
   CNAllocateID CNAllocateID      = 8;
   CNStoreLabel CNStoreLabel      = 9;
+  CNWorkState CNWorkState        = 10;
+  CNStateLabel CNStateLabel      = 11;
 };
 
 message LogResponse {
@@ -293,6 +314,8 @@ enum HAKeeperUpdateType {
   SetTaskSchedulerStateUpdate  = 8;
   SetTaskTableUserUpdate       = 9;
   UpdateCNLabel = 10;
+  UpdateCNWorkState = 11;
+  PatchCNStore = 12;
 }
 
 // HAKeeperState state transition diagram
@@ -425,7 +448,8 @@ message CNStoreInfo {
   string          CtlAddress         = 5;
   metadata.CNRole Role               = 6;
   bool            TaskServiceCreated = 7;
-  map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
+  metadata.WorkState WorkState       = 8;
+  map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -515,21 +539,22 @@ message CheckerState {
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
 message HAKeeperRSMState {
-  uint64 Tick                                = 1;
+  uint64 Index                               = 1;
+  uint64 Tick                                = 2;
   // NextID is a shared, global ID.
-  uint64 NextID                              = 2;
+  uint64 NextID                              = 3;
   // NextIDByKey is IDs isolated by keys.
-  map<string, uint64> NextIDByKey            = 3;
-  uint64 Term                                = 4;
-  HAKeeperState State                        = 5;
-  TaskSchedulerState TaskSchedulerState      = 6;
-  map<string, CommandBatch> ScheduleCommands = 7 [(gogoproto.nullable) = false];
-  map<string, uint64> LogShards = 8;
-  CNState CNState               = 9  [(gogoproto.nullable) = false];
-  DNState DNState               = 10 [(gogoproto.nullable) = false];
-  LogState LogState             = 11 [(gogoproto.nullable) = false];
-  ClusterInfo ClusterInfo       = 12 [(gogoproto.nullable) = false];
-  TaskTableUser TaskTableUser   = 13 [(gogoproto.nullable) = false];
+  map<string, uint64> NextIDByKey            = 4;
+  uint64 Term                                = 5;
+  HAKeeperState State                        = 6;
+  TaskSchedulerState TaskSchedulerState      = 7;
+  map<string, CommandBatch> ScheduleCommands = 8 [(gogoproto.nullable) = false];
+  map<string, uint64> LogShards = 9;
+  CNState CNState               = 10  [(gogoproto.nullable) = false];
+  DNState DNState               = 11 [(gogoproto.nullable) = false];
+  LogState LogState             = 12 [(gogoproto.nullable) = false];
+  ClusterInfo ClusterInfo       = 13 [(gogoproto.nullable) = false];
+  TaskTableUser TaskTableUser   = 14 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica

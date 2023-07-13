@@ -70,9 +70,11 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
 	if isUpdate {
 		insertUniqueBat = batch.NewWithSize(3)
+		insertUniqueBat.Zs = proc.GetMPool().GetSels()
 		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
 	} else {
 		insertUniqueBat = batch.NewWithSize(2)
+		insertUniqueBat.Zs = proc.GetMPool().GetSels()
 		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 

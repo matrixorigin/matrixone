@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -273,14 +275,17 @@ func (th *TxnHandler) CommitTxn() error {
 		}
 	}()
 
-	txnId := txnOp.Txn().DebugString()
-	logDebugf(sessionInfo, "CommitTxn txnId:%s", txnId)
-	defer func() {
-		logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
-	}()
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		txnId := txnOp.Txn().DebugString()
+		logDebugf(sessionInfo, "CommitTxn txnId:%s", txnId)
+		defer func() {
+			logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
+		}()
+	}
 	if txnOp != nil {
 		err = txnOp.Commit(ctx2)
 		if err != nil {
+			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()
 			logErrorf(sessionInfo, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}
@@ -325,15 +330,17 @@ func (th *TxnHandler) RollbackTxn() error {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 		}
 	}()
-
-	txnId := txnOp.Txn().DebugString()
-	logDebugf(sessionInfo, "RollbackTxn txnId:%s", txnId)
-	defer func() {
-		logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
-	}()
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		txnId := txnOp.Txn().DebugString()
+		logDebugf(sessionInfo, "RollbackTxn txnId:%s", txnId)
+		defer func() {
+			logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
+		}()
+	}
 	if txnOp != nil {
 		err = txnOp.Rollback(ctx2)
 		if err != nil {
+			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()
 			logErrorf(sessionInfo, "RollbackTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
 		}

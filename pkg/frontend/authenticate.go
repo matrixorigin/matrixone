@@ -257,6 +257,7 @@ a new format:
 2. tenant#user
 */
 func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
+	userInput = getUserPart(userInput)
 	if strings.IndexByte(userInput, ':') != -1 {
 		return splitUserInput(ctx, userInput, ':')
 	} else if strings.IndexByte(userInput, '#') != -1 {
@@ -266,6 +267,16 @@ func GetTenantInfo(ctx context.Context, userInput string) (*TenantInfo, error) {
 		return splitUserInput(ctx, newUserInput, ':')
 	}
 	return splitUserInput(ctx, userInput, ':')
+}
+
+// getUserPart gets the username part from the full string.
+// The full string could contain CN label information which
+// is used by proxy module.
+func getUserPart(user string) string {
+	if pos := strings.IndexByte(user, '?'); pos != -1 {
+		return user[:pos]
+	}
+	return user
 }
 
 // initUser for initialization or something special
@@ -378,6 +389,11 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 
 	moCatalog = "mo_catalog"
+
+	SaveQueryResult     = "save_query_result"
+	QueryResultMaxsize  = "query_result_maxsize"
+	QueryResultTimeout  = "query_result_timeout"
+	LowerCaseTableNames = "lower_case_table_names"
 )
 
 type objectType int
@@ -1121,6 +1137,8 @@ const (
 
 	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
 
+	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s";`
+
 	checkDatabaseTableFormat = `select t.rel_id from mo_catalog.mo_database d, mo_catalog.mo_tables t
 										where d.dat_id = t.reldatabase_id
 											and d.datname = "%s"
@@ -1705,6 +1723,14 @@ func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) 
 	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
 }
 
+func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkDatabaseWithOwnerFormat, dbName), nil
+}
+
 func getSqlForCheckDatabaseTable(ctx context.Context, dbName, tableName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName, tableName)
 	if err != nil {
@@ -1875,6 +1901,8 @@ type privilege struct {
 	isClusterTable bool
 	//operation on cluster table,
 	clusterTableOperation clusterTableOperationType
+	//can execute in restricted status
+	canExecInRestricted bool
 }
 
 func (p *privilege) objectType() objectType {
@@ -2589,12 +2617,14 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 	}
 	return err
 }
+
 func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (err error) {
 	var sql string
 	var erArray []ExecResult
 	var targetAccountId uint64
 	var version uint64
 	var accountExist bool
+	var accountStatus string
 	account := ses.GetTenantInfo()
 	if !(account.IsSysTenant() && account.IsMoAdminRole()) {
 		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to alter the account",
@@ -2682,6 +2712,12 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 				if err != nil {
 					return err
 				}
+
+				accountStatus, err = erArray[0].GetString(ctx, 0, 2)
+				if err != nil {
+					return err
+				}
+
 				version, err = erArray[0].GetUint64(ctx, i, 3)
 				if err != nil {
 					return err
@@ -2772,6 +2808,16 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					if err != nil {
 						return err
 					}
+				} else if aa.StatusOption.Option == tree.AccountStatusRestricted {
+					sql, err = getSqlForUpdateStatusOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name)
+					if err != nil {
+						return err
+					}
+					bh.ClearExecResultSet()
+					err = bh.Exec(ctx, sql)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -2787,6 +2833,24 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 	if accountExist {
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
 			ses.getRoutineManager().accountRoutine.enKillQueue(int64(targetAccountId), version)
+		}
+
+		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusRestricted {
+			accountId2RoutineMap := ses.getRoutineManager().accountRoutine.deepCopyRoutineMap()
+			if rtMap, ok := accountId2RoutineMap[int64(targetAccountId)]; ok {
+				for rt := range rtMap {
+					rt.setResricted(true)
+				}
+			}
+		}
+
+		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusOpen && accountStatus == tree.AccountStatusRestricted.String() {
+			accountId2RoutineMap := ses.getRoutineManager().accountRoutine.deepCopyRoutineMap()
+			if rtMap, ok := accountId2RoutineMap[int64(targetAccountId)]; ok {
+				for rt := range rtMap {
+					rt.setResricted(false)
+				}
+			}
 		}
 	}
 
@@ -4796,6 +4860,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	kind := privilegeKindGeneral
 	special := specialTagNone
 	objType := objectTypeAccount
+	canExecInRestricted := false
 	var extraEntries []privilegeEntry
 	writeDatabaseAndTableDirectly := false
 	var clusterTable bool
@@ -4882,13 +4947,16 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		dbName = string(st.Name)
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+		canExecInRestricted = true
 	case *tree.ShowSequences:
 		typs = append(typs, PrivilegeTypeAccountAll, PrivilegeTypeDatabaseOwnership)
+		canExecInRestricted = true
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase, *tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		canExecInRestricted = true
 	case *tree.CreateTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -4971,7 +5039,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
-	case *tree.Select, *tree.Do:
+	case *tree.Select:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		canExecInRestricted = true
+	case *tree.Do:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Insert:
@@ -4997,6 +5069,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		canExecInRestricted = true
 	case *tree.CreateIndex, *tree.DropIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -5010,6 +5083,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowBackendServers:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+		canExecInRestricted = true
 	case *tree.ShowAccounts:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
@@ -5078,7 +5152,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		special:                       special,
 		writeDatabaseAndTableDirectly: writeDatabaseAndTableDirectly,
 		isClusterTable:                clusterTable,
-		clusterTableOperation:         clusterTableOperation}
+		clusterTableOperation:         clusterTableOperation,
+		canExecInRestricted:           canExecInRestricted,
+	}
 }
 
 // privilege will be done on the table
@@ -6819,9 +6895,9 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if _, ok := configInitVariables[variable.Name]; ok {
-			addsqls := addInitSystemVariablesSql(sysAccountID, sysAccountName, pu)
-			for _, sql := range addsqls {
-				addSqlIntoSet(sql)
+			addsql := addInitSystemVariablesSql(sysAccountID, sysAccountName, variable.Name, pu)
+			if len(addsql) != 0 {
+				addSqlIntoSet(addsql)
 			}
 		} else {
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
@@ -7201,9 +7277,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if _, ok := configInitVariables[variable.Name]; ok {
-			addsqls := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), pu)
-			for _, sql := range addsqls {
-				addSqlIntoSet(sql)
+			addsql := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), variable.Name, pu)
+			if len(addsql) != 0 {
+				addSqlIntoSet(addsql)
 			}
 		} else {
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, newTenant.GetTenantID(), newTenant.GetTenant(), variable.Name, getVariableValue(variable.Default), true)
@@ -7785,14 +7861,19 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	return err
 }
 
-func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) (err error) {
+func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
 	var sql string
 	var erArray []ExecResult
 	var accountName string
+	var databaseOwner int64
+	var currentRole uint32
+	var err error
 
 	dbName := ad.DbName
 	updateConfig := ad.UpdateConfig
-	accountName = ses.GetTenantInfo().GetTenant()
+	tenantInfo := ses.GetTenantInfo()
+	accountName = tenantInfo.GetTenant()
+	currentRole = tenantInfo.GetDefaultRoleID()
 
 	updateConfigForDatabase := func() error {
 		bh := ses.GetBackgroundExec(ctx)
@@ -7806,8 +7887,8 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 			return err
 		}
 
-		// step1:check database exists or not
-		sql, err = getSqlForCheckDatabase(ctx, dbName)
+		// step1:check database exists or not and get database owner
+		sql, err = getSqlForCheckDatabaseWithOwner(ctx, dbName)
 		if err != nil {
 			return err
 		}
@@ -7825,6 +7906,16 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 
 		if !execResultArrayHasData(erArray) {
 			return moerr.NewInternalError(ctx, "there is no database %s to change config", dbName)
+		} else {
+			databaseOwner, err = erArray[0].GetInt64(ctx, 0, 1)
+			if err != nil {
+				return err
+			}
+
+			// alter database config privileges check
+			if databaseOwner != int64(currentRole) {
+				return moerr.NewInternalError(ctx, "do not have privileges to alter database config")
+			}
 		}
 
 		// step2: update the mo_mysql_compatibility_mode of that database
@@ -7856,10 +7947,16 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	return err
 }
 
-func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDataBaseConfig) (err error) {
+func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDataBaseConfig) error {
 	var sql string
 	var newCtx context.Context
 	var isExist bool
+	var err error
+
+	// alter account config privileges check
+	if !ses.GetTenantInfo().IsMoAdminRole() {
+		return moerr.NewInternalError(ctx, "do not have privileges to alter account config")
+	}
 
 	accountName := stmt.AccountName
 	update_config := stmt.UpdateConfig
@@ -7915,11 +8012,12 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	return err
 }
 
-func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, stmt tree.Statement) (err error) {
+func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var sql string
 	var accountId uint32
 	var accountName string
 	var dbName string
+	var err error
 	variableName := "version_compatibility"
 	variableValue := "0.7"
 
@@ -7973,9 +8071,10 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 
 }
 
-func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) (err error) {
+func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var datname string
 	var sql string
+	var err error
 
 	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
 		datname = string(deleteDatabaseStmt.Name)
@@ -8266,9 +8365,10 @@ func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[strin
 	return sysVars, nil
 }
 
-func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
+func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) error {
 	var sql string
 	var accountId uint32
+	var err error
 	tenantInfo := ses.GetTenantInfo()
 
 	varName = strings.ToLower(varName)
@@ -8333,26 +8433,27 @@ func isSuperUser(username string) bool {
 	return u == dumpName || u == rootName
 }
 
-func addInitSystemVariablesSql(accountId int, accountName string, pu *config.ParameterUnit) []string {
-	returnSql := make([]string, 0)
+func addInitSystemVariablesSql(accountId int, accountName, variable_name string, pu *config.ParameterUnit) string {
 	var initMoMysqlCompatibilityMode string
 
-	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(pu.SV.SaveQueryResult), true)
-		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
-	} else {
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue("off"), true)
-		returnSql = append(returnSql, initMoMysqlCompatibilityMode)
+	switch variable_name {
+	case SaveQueryResult:
+		if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
+			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(pu.SV.SaveQueryResult), true)
+
+		} else {
+			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue("off"), true)
+		}
+
+	case QueryResultMaxsize:
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(pu.SV.QueryResultMaxsize), true)
+
+	case QueryResultTimeout:
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(pu.SV.QueryResultTimeout), true)
+
+	case LowerCaseTableNames:
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(pu.SV.LowerCaseTableNames), true)
 	}
 
-	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(pu.SV.QueryResultMaxsize), true)
-	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
-
-	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(pu.SV.QueryResultTimeout), true)
-	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
-
-	initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(pu.SV.LowerCaseTableNames), true)
-	returnSql = append(returnSql, initMoMysqlCompatibilityMode)
-
-	return returnSql
+	return initMoMysqlCompatibilityMode
 }
