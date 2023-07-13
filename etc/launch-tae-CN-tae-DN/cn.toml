@@ -47,4 +47,3 @@ type = "distributed-tae"
 [cn.txn]
 enable-sacrificing-freshness = false
 enable-cn-based-consistency = false
-
