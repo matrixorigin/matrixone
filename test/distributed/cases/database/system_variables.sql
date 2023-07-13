@@ -19,8 +19,10 @@ show variables like 'init%';
 show variables like 'init_connect';
 
 -- interactive_timeout
+-- @bvt:issue#10473
 show variables like 'interactive%';
 show variables like 'interactive_timeout';
+-- @bvt:issue
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 set interactive_timeout = 30000+100;
@@ -168,3 +170,12 @@ select @@sql_mode;
 set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
+
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+create database test_for_navicat;
+-- @session:id=2&user=acc_idx:root&password=123456
+create database test_for_navicat;
+-- @session
+SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA where SCHEMA_NAME = 'test_for_navicat';
+drop database test_for_navicat;
+drop account acc_idx;

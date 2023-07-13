@@ -267,7 +267,7 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	if b.ctx == nil {
-		return nil, moerr.NewInvalidInput(b.GetContext(), "ambigous column reference '%v'", astExpr.Parts[0])
+		return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", astExpr.Parts[0])
 	}
 
 	col := astExpr.Parts[0]
@@ -1026,7 +1026,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		if err == nil && proc != nil {
 			bat := batch.NewWithSize(0)
 			bat.Zs = []int64{1}
-			tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(retExpr), proc)
+			tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(retExpr), proc, false)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}

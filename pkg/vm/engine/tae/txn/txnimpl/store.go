@@ -16,13 +16,13 @@ package txnimpl
 
 import (
 	"context"
-	"runtime/trace"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -618,7 +618,7 @@ func (store *txnStore) WaitPrepared(ctx context.Context) (err error) {
 			return
 		}
 	}
-	trace.WithRegion(ctx, "Wait for WAL to be flushed", func() {
+	moprobe.WithRegion(ctx, moprobe.TxnStoreWaitWALFlush, func() {
 		for _, e := range store.logs {
 			if err = e.WaitDone(); err != nil {
 				break

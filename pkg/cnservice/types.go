@@ -263,8 +263,9 @@ func (c *Config) Validate() error {
 	if !txn.ValidTxnMode(c.Txn.Mode) {
 		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
 	}
+
 	if c.Txn.Isolation == "" {
-		if c.Txn.Mode == txn.TxnMode_Pessimistic.String() {
+		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
 			c.Txn.Isolation = txn.TxnIsolation_RC.String()
 		} else {
 			c.Txn.Isolation = txn.TxnIsolation_SI.String()
@@ -281,7 +282,8 @@ func (c *Config) Validate() error {
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 
-	if c.PrimaryKeyCheck {
+	// pessimistic mode implies primary key check
+	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
 		plan.CNPrimaryCheck = true
 	} else {
 		plan.CNPrimaryCheck = false

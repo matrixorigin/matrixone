@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"os"
 	"sync"
 	"syscall"
@@ -880,7 +881,7 @@ func (h *Handle) HandleWrite(
 		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %s txn: %s",
 				req.Type, req.TableID,
-				req.TableName, common.PrintMoBatch(req.Batch, 3),
+				req.TableName, common.MoBatchToString(req.Batch, 3),
 				txn.String(),
 			)
 		}
@@ -1034,6 +1035,21 @@ func (h *Handle) HandleAlterTable(
 	}
 
 	return tbl.AlterTable(ctx, req)
+}
+
+func (h *Handle) HandleAddFaultPoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.FaultPoint,
+	resp *api.SyncLogTailResp) (func(), error) {
+	if req.Name == db.EnableFaultInjection {
+		fault.Enable()
+		return nil, nil
+	} else if req.Name == db.DisableFaultInjection {
+		fault.Disable()
+		return nil, nil
+	}
+	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
 }
 
 func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {

@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,6 +92,8 @@ type TxnManager struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
+
+	prevPrepareTS types.TS // for debug
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -331,6 +334,12 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 	defer mgr.Unlock()
 
 	ts = mgr.TsAlloc.Alloc()
+	if !mgr.prevPrepareTS.IsEmpty() {
+		if ts.Less(mgr.prevPrepareTS) {
+			panic(fmt.Sprintf("timestamp rollback current %v, previous %v", ts.ToString(), mgr.prevPrepareTS.ToString()))
+		}
+	}
+	mgr.prevPrepareTS = ts
 
 	op.Txn.Lock()
 	defer op.Txn.Unlock()

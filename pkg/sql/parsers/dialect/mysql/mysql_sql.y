@@ -305,7 +305,7 @@ import (
 %token <str> STATUS VARIABLES ROLE PROXY AVG_ROW_LENGTH STORAGE DISK MEMORY
 %token <str> CHECKSUM COMPRESSION DATA DIRECTORY DELAY_KEY_WRITE ENCRYPTION ENGINE
 %token <str> MAX_ROWS MIN_ROWS PACK_KEYS ROW_FORMAT STATS_AUTO_RECALC STATS_PERSISTENT STATS_SAMPLE_PAGES
-%token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
+%token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM ENGINE_ATTRIBUTE SECONDARY_ENGINE_ATTRIBUTE INSERT_METHOD
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
@@ -337,10 +337,10 @@ import (
 %token <str> SLAVE CLIENT USAGE RELOAD FILE TEMPORARY ROUTINE EVENT SHUTDOWN
 
 // Type Modifiers
-%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY
+%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY AUTOEXTEND_SIZE
 
 // Account
-%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
+%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY RESTRICTED
 
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD
@@ -637,7 +637,7 @@ import (
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt parallel_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt
+%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword separator_opt
 %type <insert> insert_data
@@ -663,7 +663,7 @@ import (
 %type <updateExpr> load_set_item
 %type <updateExprs> load_set_list load_set_spec_opt
 %type <strs> index_name_and_type_opt index_name_list
-%type <str> index_name index_type key_or_index_opt key_or_index
+%type <str> index_name index_type key_or_index_opt key_or_index insert_method_options
 // type <str> mo_keywords
 %type <properties> properties_list
 %type <property> property_elem
@@ -2729,7 +2729,7 @@ visibility:
     }
 |   INVISIBLE
     {
-   	$$ = tree.VISIBLE_TYPE_INVISIBLE
+   	    $$ = tree.VISIBLE_TYPE_INVISIBLE
     }
 
 
@@ -3461,9 +3461,9 @@ drop_index_stmt:
     }
 
 drop_table_stmt:
-    DROP TABLE exists_opt table_name_list
+    DROP TABLE temporary_opt exists_opt table_name_list drop_table_opt
     {
-        $$ = &tree.DropTable{IfExists: $3, Names: $4}
+        $$ = &tree.DropTable{IfExists: $4, Names: $5}
     }
 
 drop_view_stmt:
@@ -3474,6 +3474,10 @@ drop_view_stmt:
 
 drop_database_stmt:
     DROP DATABASE exists_opt ident
+    {
+        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
+    }
+|   DROP SCHEMA exists_opt ident
     {
         $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
     }
@@ -5097,22 +5101,29 @@ account_identified:
 account_status_option:
     {
         $$ = tree.AccountStatus{
-        Exist: false,
-    }
+            Exist: false,
+        }
     }
 |   OPEN
     {
-    $$ = tree.AccountStatus{
-        Exist: true,
-        Option: tree.AccountStatusOpen,
-    }
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusOpen,
+        }
     }
 |   SUSPEND
     {
-    $$ = tree.AccountStatus{
-        Exist: true,
-        Option: tree.AccountStatusSuspend,
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusSuspend,
+        }
     }
+|   RESTRICTED
+    {
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusRestricted,
+        }
     }
 
 account_comment_opt:
@@ -5597,7 +5608,7 @@ using_opt:
     {
         $$ = tree.INDEX_TYPE_RTREE
     }
-|    USING BSI
+|   USING BSI
     {
         $$ = tree.INDEX_TYPE_BSI
     }
@@ -5933,6 +5944,19 @@ temporary_opt:
         $$ = true
     }
 
+drop_table_opt:
+    {
+        $$ = true
+    }
+|   RESTRICT
+    {
+        $$ = true
+    }
+|   CASCADE
+    {
+        $$ = true
+    }
+
 partition_by_opt:
     {
         $$ = nil
@@ -6215,7 +6239,11 @@ table_option_list:
     }
 
 table_option:
-    AUTO_INCREMENT equal_opt INTEGRAL
+    AUTOEXTEND_SIZE equal_opt INTEGRAL
+    {
+        $$ = tree.NewTableOptionAUTOEXTEND_SIZE(uint64($3.(int64)))
+    }
+|   AUTO_INCREMENT equal_opt INTEGRAL
     {
         $$ = tree.NewTableOptionAutoIncrement(uint64($3.(int64)))
     }
@@ -6268,6 +6296,14 @@ table_option:
     {
         $$ = tree.NewTableOptionEngine($3)
     }
+|   ENGINE_ATTRIBUTE equal_opt STRING
+    {
+        $$ = tree.NewTableOptionEngineAttr($3)
+    }
+|   INSERT_METHOD equal_opt insert_method_options
+    {
+        $$ = tree.NewTableOptionInsertMethod($3)
+    }
 |   KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
         $$ = tree.NewTableOptionKeyBlockSize(uint64($3.(int64)))
@@ -6296,6 +6332,14 @@ table_option:
     {
         $$ = tree.NewTableOptionRowFormat($3)
     }
+|   START TRANSACTION
+    {
+        $$ = tree.NewTTableOptionStartTrans(true)
+    }
+|   SECONDARY_ENGINE_ATTRIBUTE equal_opt STRING
+    {
+        $$ = tree.NewTTableOptionSecondaryEngineAttr($3)
+    }
 |   STATS_AUTO_RECALC equal_opt INTEGRAL
     {
         $$ = &tree.TableOptionStatsAutoRecalc{Value: uint64($3.(int64))}
@@ -6320,19 +6364,22 @@ table_option:
     {
         $$ = &tree.TableOptionStatsSamplePages{Default: true}
     }
-|   TABLESPACE equal_opt ident storage_opt
+|   TABLESPACE equal_opt ident
     {
-        $$= tree.NewTableOptionTablespace($3.Compare(), $4)
+        $$= tree.NewTableOptionTablespace($3.Compare(), "")
+    }
+|   storage_opt
+    {
+        $$= tree.NewTableOptionTablespace("", $1)
     }
 |   UNION equal_opt '(' table_name_list ')'
     {
         $$= tree.NewTableOptionUnion($4)
     }
-|    PROPERTIES '(' properties_list ')'
+|   PROPERTIES '(' properties_list ')'
     {
         $$ = &tree.TableOptionProperties{Preperties: $3}
     }
-// |   INSERT_METHOD equal_opt insert_method_options
 
 properties_list:
     property_elem
@@ -6351,10 +6398,7 @@ property_elem:
     }
 
 storage_opt:
-    {
-        $$ = ""
-    }
-|   STORAGE DISK
+    STORAGE DISK
     {
         $$ = " " + $1 + " " + $2
     }
@@ -6439,7 +6483,7 @@ table_elem_list:
     }
 
 table_elem:
-column_def
+    column_def
     {
         $$ = tree.TableDef($1)
     }
@@ -6472,7 +6516,16 @@ index_def:
             IndexOption: $7,
         }
     }
-|    key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
+|   FULLTEXT key_or_index_opt index_name '(' index_column_list ')' USING index_type index_option_list
+    {
+        $$ = &tree.FullTextIndex{
+            KeyParts: $5,
+            Name: $3,
+            Empty: true,
+            IndexOption: $9,
+        }
+    }
+|   key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
         keyTyp := tree.INDEX_TYPE_INVALID
         if $3[1] != "" {
@@ -6495,6 +6548,29 @@ index_def:
             IndexOption: $7,
         }
     }
+|   key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' USING index_type index_option_list
+    {
+        keyTyp := tree.INDEX_TYPE_INVALID
+        if $3[1] != "" {
+               t := strings.ToLower($3[1])
+            switch t {
+            case "zonemap":
+                keyTyp = tree.INDEX_TYPE_ZONEMAP
+            case "bsi":
+                keyTyp = tree.INDEX_TYPE_BSI
+            default:
+                yylex.Error("Invail the type of index")
+                return 1
+            }
+        }
+        $$ = &tree.Index{
+            IfNotExists: $2,
+            KeyParts: $5,
+            Name: $3[0],
+            KeyType: keyTyp,
+            IndexOption: $9,
+        }
+    }
 
 constaint_def:
     constraint_keyword constraint_elem
@@ -6511,7 +6587,7 @@ constaint_def:
         }
         $$ = $2
     }
-|    constraint_elem
+|   constraint_elem
     {
         $$ = $1
     }
@@ -6519,14 +6595,23 @@ constaint_def:
 constraint_elem:
     PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
-         $$ = &tree.PrimaryKeyIndex{
+        $$ = &tree.PrimaryKeyIndex{
             KeyParts: $5,
             Name: $3[0],
             Empty: $3[1] == "",
             IndexOption: $7,
         }
     }
-|    UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
+|   PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' USING index_type index_option_list
+    {
+        $$ = &tree.PrimaryKeyIndex{
+            KeyParts: $5,
+            Name: $3[0],
+            Empty: $3[1] == "",
+            IndexOption: $9,
+        }
+    }
+|   UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
         $$ = &tree.UniqueIndex{
             KeyParts: $5,
@@ -6535,7 +6620,16 @@ constraint_elem:
             IndexOption: $7,
         }
     }
-|    FOREIGN KEY not_exists_opt index_name '(' index_column_list ')' references_def
+|   UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' USING index_type index_option_list
+    {
+        $$ = &tree.UniqueIndex{
+            KeyParts: $5,
+            Name: $3[0],
+            Empty: $3[1] == "",
+            IndexOption: $9,
+        }
+    }
+|   FOREIGN KEY not_exists_opt index_name '(' index_column_list ')' references_def
     {
         $$ = &tree.ForeignKey{
             IfNotExists: $3,
@@ -6545,7 +6639,7 @@ constraint_elem:
             Empty: true,
         }
     }
-|    CHECK '(' expression ')' enforce_opt
+|   CHECK '(' expression ')' enforce_opt
     {
         $$ = &tree.CheckIndex{
             Expr: $3,
@@ -6563,14 +6657,14 @@ key_or_index_opt:
     {
         $$ = ""
     }
-|    key_or_index
+|   key_or_index
     {
         $$ = $1
     }
 
 key_or_index:
     KEY
-|    INDEX
+|   INDEX
 
 index_name_and_type_opt:
     index_name
@@ -6579,13 +6673,13 @@ index_name_and_type_opt:
         $$[0] = $1
         $$[1] = ""
     }
-|    index_name USING index_type
+|   index_name USING index_type
     {
         $$ = make([]string, 2)
         $$[0] = $1
         $$[1] = $3
     }
-|    ident TYPE index_type
+|   ident TYPE index_type
     {
         $$ = make([]string, 2)
         $$[0] = $1.Compare()
@@ -6594,10 +6688,15 @@ index_name_and_type_opt:
 
 index_type:
     BTREE
-|    HASH
-|    RTREE
-|    ZONEMAP
-|    BSI
+|   HASH
+|   RTREE
+|   ZONEMAP
+|   BSI
+
+insert_method_options:
+    NO
+|   FIRST
+|   LAST
 
 index_name:
     {
@@ -6713,6 +6812,14 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeColumnFormat($2)
     }
+|   SECONDARY_ENGINE_ATTRIBUTE '=' STRING
+    {
+        $$ = nil
+    }
+|   ENGINE_ATTRIBUTE '=' STRING
+    {
+        $$ = nil
+    }
 |   STORAGE storage_media
     {
         $$ = tree.NewAttributeStorage($2)
@@ -6748,7 +6855,19 @@ column_attribute_elem:
     }
 |   LOW_CARDINALITY
     {
-	$$ = tree.NewAttributeLowCardinality()
+	    $$ = tree.NewAttributeLowCardinality()
+    }
+|   VISIBLE
+    {
+        $$ = tree.NewAttributeVisable(true)
+    }
+|   INVISIBLE
+    {
+        $$ = tree.NewAttributeVisable(false)
+    }
+|   default_opt CHARACTER SET equal_opt ident
+    {
+        $$ = nil
     }
 
 enforce:
@@ -8699,18 +8818,42 @@ decimal_type:
                 }
         }
     }
-// |   DECIMAL decimal_length_opt
-//     {
-//         $$ = tree.TYPE_DOUBLE
-//         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Scale = $2.Scale
-//     }
-// |   NUMERIC decimal_length_opt
-//     {
-//         $$ = tree.TYPE_DOUBLE
-//         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Scale = $2.Scale
-//     }
+|   NUMERIC decimal_length_opt
+    {
+        locale := ""
+        if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
+        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+        return 1
+        }
+        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
+            yylex.Error("For decimal(M), M must between 0 and 38.")
+                return 1
+        } else if $2.DisplayWith <= 16 {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  64,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+        }
+        } else {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  128,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+                }
+        }
+    }
 |   REAL float_length_opt
     {
         locale := ""
@@ -9410,6 +9553,9 @@ non_reserved_keyword:
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
+|   SECONDARY_ENGINE_ATTRIBUTE
+|   ENGINE_ATTRIBUTE
+|   INSERT_METHOD
 |   CASCADE
 |   DATA
 |	DAY

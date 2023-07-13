@@ -86,7 +86,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		case Eval:
 			if ctr.bat != nil && ctr.bat.Length() != 0 {
 				if ap.NeedHashMap {
-					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
+					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ap.IsDup)
 				}
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil

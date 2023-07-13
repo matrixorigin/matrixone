@@ -467,7 +467,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numParams > 0 {
-		if err := mp.SendEOFPacketIf(0, 0); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -487,7 +487,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numColumns > 0 {
-		if err := mp.SendEOFPacketIf(0, 0); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -871,6 +871,10 @@ func (mp *MysqlProtocolImpl) readIntLenEnc(data []byte, pos int) (uint64, int, b
 	return uint64(data[pos]), pos + 1, true
 }
 
+func (mp *MysqlProtocolImpl) ReadIntLenEnc(data []byte, pos int) (uint64, int, bool) {
+	return mp.readIntLenEnc(data, pos)
+}
+
 // write an int with length encoded into the buffer at the position
 // return position + the count of bytes for length encoded (1 or 3 or 4 or 9)
 func (mp *MysqlProtocolImpl) writeIntLenEnc(data []byte, pos int, value uint64) int {
@@ -1220,7 +1224,7 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
 		tipsFormat := "Access denied for user %s. %s"
-		msg := fmt.Sprintf(tipsFormat, mp.username, err.Error())
+		msg := fmt.Sprintf(tipsFormat, getUserPart(mp.username), err.Error())
 		err2 := mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], msg)
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)

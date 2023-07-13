@@ -267,6 +267,43 @@ func Test_BuiltIn_Lpad(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_Repeat(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			info: "test repeat('ab', num) with num = -1, 0, 1, 3, null, 1000000000000",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestConstInput(types.T_varchar.ToType(),
+					[]string{"ab"}, nil),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-1, 0, 1, 3, 0, 1000000000000}, []bool{false, false, false, false, true, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "", "ab", "ababab", "", ""}, []bool{false, false, false, false, true, true}),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test repeat(null, num) with num = -1, 0, 1, 3, null, 1000000000000",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", "", "", "", "", ""}, []bool{true, true, true, true, true, true}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-1, 0, 1, 3, 0, 1000000000000}, []bool{false, false, false, false, true, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "", "", "", "", ""}, []bool{true, true, true, true, true, true}),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
 func Test_BuiltIn_Serial(t *testing.T) {
 	proc := testutil.NewProcess()
 
