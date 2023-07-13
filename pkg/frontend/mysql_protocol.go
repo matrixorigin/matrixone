@@ -199,7 +199,10 @@ var _ MysqlProtocol = &MysqlProtocolImpl{}
 func (ses *Session) GetMysqlProtocol() MysqlProtocol {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.protocol.(MysqlProtocol)
+	if ses.protocol != nil {
+		return ses.protocol.(MysqlProtocol)
+	}
+	return nil
 }
 
 type debugStats struct {
