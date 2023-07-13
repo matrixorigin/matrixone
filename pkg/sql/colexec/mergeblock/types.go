@@ -92,6 +92,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	}
 	for _, bat := range arg.container.mp {
 		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())
+		bat.SetRowCount(bat.Vecs[0].Length())
 	}
 	return nil
 }

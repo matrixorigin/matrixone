@@ -47,6 +47,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if err != nil {
 			return true, nil
 		}
+		bat.FixedForRemoveZs()
 		if end {
 			proc.SetInputBatch(nil)
 			return true, nil
@@ -61,6 +62,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if newSeen < ap.Limit {
 			ap.ctr.seen = newSeen
 			anal.Output(bat, isLast)
+
+			bat.CheckForRemoveZs("merge limit")
 			proc.SetInputBatch(bat)
 			return false, nil
 		} else {
@@ -68,6 +71,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			batch.SetLength(bat, bat.Length()-num)
 			ap.ctr.seen = newSeen
 			anal.Output(bat, isLast)
+
+			bat.CheckForRemoveZs("merge limit")
 			proc.SetInputBatch(bat)
 			return false, nil
 		}

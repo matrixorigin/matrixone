@@ -164,7 +164,9 @@ func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err err
 		}
 	}
 	bat.SetZs(wholeLength, mp)
+	bat.SetRowCount(wholeLength)
 
+	bat.CheckForRemoveZs("merge order")
 	proc.SetInputBatch(bat)
 	return sendOver, nil
 }
@@ -294,6 +296,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 			// If only one batch, no need to sort. just send it.
 			if len(ctr.batchList) == 1 {
+				ctr.batchList[0].CheckForRemoveZs("merge order")
+
 				proc.SetInputBatch(ctr.batchList[0])
 				ctr.batchList[0] = nil
 				return true, nil

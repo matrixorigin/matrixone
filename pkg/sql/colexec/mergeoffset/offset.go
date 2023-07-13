@@ -46,6 +46,8 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 		if err != nil {
 			return true, nil
 		}
+
+		bat.FixedForRemoveZs()
 		if end {
 			proc.SetInputBatch(nil)
 			return true, nil
@@ -65,6 +67,8 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 			bat.Shrink(sels)
 			proc.Mp().PutSels(sels)
 			anal.Output(bat, isLast)
+
+			bat.CheckForRemoveZs("merge offset")
 			proc.SetInputBatch(bat)
 			return false, nil
 		}

@@ -99,6 +99,8 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 
 		pointer := value.UnsafePointer()
 		bat := (*batch.Batch)(pointer)
+
+		bat.FixedForRemoveZs()
 		if bat == nil {
 			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
 			r.aliveMergeReceiver--

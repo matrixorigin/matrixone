@@ -97,6 +97,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
+			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -129,6 +130,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
+	bat.FixedForRemoveZs()
 	if bat != nil {
 		var err error
 		joinMap := bat.AuxData.(*hashmap.JoinMap)
@@ -143,9 +145,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		ctr.rewriteCond = colexec.RewriteFilterExprList(ap.OnList)
 		ctr.bat = bat
 		ctr.mp = joinMap.Dup()
-		//ctr.bat = bat
-		//ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
-		//anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }
@@ -169,7 +168,10 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
 	anal.Output(rbat, isLast)
+
+	rbat.CheckForRemoveZs("mark")
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -261,8 +263,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
-	//rbat.ExpandNulls()
+	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
 	anal.Output(rbat, isLast)
+
+	rbat.CheckForRemoveZs("mark")
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -421,5 +425,6 @@ func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) (*
 	}
 
 	bat.Zs = append(bat.Zs, originBatch.Zs...)
+	bat.SetRowCount(bat.RowCount() + originBatch.RowCount())
 	return bat, nil
 }
