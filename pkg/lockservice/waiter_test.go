@@ -152,7 +152,10 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	defer w1.close("s1", notifyValue{})
 	w2 := acquireWaiter("s1", []byte("w2"))
 	w3 := acquireWaiter("s1", []byte("w3"))
-	defer w3.close("s1", notifyValue{})
+	defer func() {
+		w3.wait(context.Background(), "s1")
+		w3.close("s1", notifyValue{})
+	}()
 
 	w1.setStatus("", blocking)
 	w2.setStatus("", blocking)
@@ -168,6 +171,7 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	v := w.close("s1", notifyValue{})
 	assert.Equal(t, w2, v)
 
+	w2.wait(context.Background(), "s1")
 	v = w2.close("s1", notifyValue{})
 	assert.Equal(t, w3, v)
 }
