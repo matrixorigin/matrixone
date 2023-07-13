@@ -809,7 +809,7 @@ create table t1(a int auto_increment primary key) auto_increment = 10;
 insert into t1 values();
 select last_insert_id();
 last_insert_id()
-11
+10
 insert into t1 values(101);
 insert into t1 values();
 select last_insert_id();
@@ -820,9 +820,9 @@ create table t1(a int auto_increment primary key) auto_increment = 100;
 insert into t1 values();
 select last_insert_id();
 last_insert_id()
-101
+100
 insert into t1 values(7);
 insert into t1 values();
 select last_insert_id();
 last_insert_id()
-102
+101
