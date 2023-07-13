@@ -907,3 +907,32 @@ func TestHandlePatchCNStore(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, labels.Labels, []string{"1", "2"})
 }
+
+func TestHandleDeleteCNStore(t *testing.T) {
+	uuid := "uuid1"
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+
+	cmd := GetTickCmd()
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	hb := pb.CNStoreHeartbeat{
+		UUID: uuid,
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	cmd = GetCNStoreHeartbeatCmd(data)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s := tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+
+	cnStore := pb.DeleteCNStore{
+		StoreID: uuid,
+	}
+	cmd = GetDeleteCNStoreCmd(cnStore)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s = tsm1.state.CNState
+	assert.Equal(t, 0, len(s.Stores))
+}
