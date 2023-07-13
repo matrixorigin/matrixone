@@ -7521,3 +7521,18 @@ func TestReplayDeletes(t *testing.T) {
 	segString2 := seg.Repr()
 	assert.Equal(t, segString1, segString2)
 }
+
+// test compact
+func TestApplyDeltalocation1(t *testing.T) {
+
+}
+
+// test dedup
+func TestApplyDeltalocation2(t *testing.T) {
+
+}
+
+// test logtail
+func TestApplyDeltalocation3(t *testing.T) {
+
+}
