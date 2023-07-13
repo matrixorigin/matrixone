@@ -191,6 +191,7 @@ enum MethodType {
   UPDATE_CN_LABEL = 15;
   UPDATE_CN_WORK_STATE = 16;
   PATCH_CN_STORE = 17;
+  DELETE_CN_STORE = 18;
 };
 
 enum RecordType {
@@ -263,6 +264,7 @@ message Request {
   CNStoreLabel CNStoreLabel      = 9;
   CNWorkState CNWorkState        = 10;
   CNStateLabel CNStateLabel      = 11;
+  DeleteCNStore DeleteCNStore    = 12;
 };
 
 message LogResponse {
@@ -316,6 +318,7 @@ enum HAKeeperUpdateType {
   UpdateCNLabel = 10;
   UpdateCNWorkState = 11;
   PatchCNStore = 12;
+  RemoveCNStore = 13;
 }
 
 // HAKeeperState state transition diagram
