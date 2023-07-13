@@ -29,7 +29,6 @@ import (
 
 const (
 	tenantLabelKey        = "account"
-	superTenant           = "sys"
 	defaultConnectTimeout = 3 * time.Second
 )
 

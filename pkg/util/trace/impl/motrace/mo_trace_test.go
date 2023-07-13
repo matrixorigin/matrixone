@@ -466,7 +466,7 @@ func TestMOSpan_doProfile(t *testing.T) {
 	}
 }
 
-func TestMOHungSpan_loop(t *testing.T) {
+func TestMOHungSpan_EndBeforeDeadline_doProfile(t *testing.T) {
 
 	defer func() {
 		err := recover()
@@ -477,21 +477,35 @@ func TestMOHungSpan_loop(t *testing.T) {
 	tracer := p.Tracer("test").(*MOTracer)
 	ctx := context.TODO()
 
-	_, span := tracer.Start(ctx, "test_loop", trace.WithHungThreshold(time.Hour))
-
-	hungSpan := span.(*MOHungSpan)
-	quitCancel := hungSpan.quitCancel
 	var ctrlWG sync.WaitGroup
 	ctrlWG.Add(1)
-	hungSpan.quitCancel = context.CancelFunc(func() {
-		// do nothing
-	})
-	// should not panic
-	span.End()
-	hungSpan.MOSpan = nil
+
+	_, span := tracer.Start(ctx, "test_loop", trace.WithHungThreshold(100*time.Millisecond))
+	hungSpan := span.(*MOHungSpan)
+
 	hungSpan.mux.Lock()
-	hungSpan.deadlineCancel()
-	quitCancel()
+	// simulate the act of span.End()
+	// TIPs: remove trigger.Stop()
+	hungSpan.quitCancel()
+	hungSpan.stopped = true
+	hungSpan.MOSpan = nil
+	time.Sleep(300 * time.Millisecond)
+	t.Logf("hungSpan.quitCtx.Err: %s", hungSpan.quitCtx.Err())
+	// END > simulate
 	hungSpan.mux.Unlock()
+
+	// wait for goroutine to finish
+	// should not panic
 	time.Sleep(time.Second)
+}
+
+func TestContextDeadlineAndCancel(t *testing.T) {
+	quitCtx, quitCancel := context.WithCancel(context.TODO())
+	deadlineCtx, deadlineCancel := context.WithTimeout(quitCtx, time.Millisecond)
+	defer deadlineCancel()
+
+	time.Sleep(2 * time.Millisecond)
+	t.Logf("deadlineCtx.Err: %s", deadlineCtx.Err())
+	quitCancel()
+	require.Equal(t, context.DeadlineExceeded, deadlineCtx.Err())
 }

@@ -16,6 +16,36 @@ package plan
 
 import "testing"
 
+func TestCreateListPartitionTable(t *testing.T) {
+	sql := `CREATE TABLE w_videos_partition (
+			  id bigint(20) NOT NULL AUTO_INCREMENT,
+			  create_time char(12) NOT NULL DEFAULT '' COMMENT '创建时间戳',
+			  created_at datetime NOT NULL COMMENT '创建时间',
+			  updated_at datetime DEFAULT NULL COMMENT '更新时间',
+			  content text,
+			  event_start char(12) NOT NULL DEFAULT '' COMMENT '事件开始时间戳',
+			  event_end char(12) NOT NULL DEFAULT '' COMMENT '事件结束时间戳',
+			  msg_id varchar(32) NOT NULL DEFAULT '',
+			  event_id varchar(32) NOT NULL DEFAULT '',
+			  accept tinyint(4) NOT NULL DEFAULT '0',
+			  PRIMARY KEY (id,created_at)
+			)
+			PARTITION BY LIST ((TO_DAYS(created_at)*24 + HOUR(created_at)) % (7*24))( 
+			 PARTITION hour0 VALUES IN (0),
+			 PARTITION hour1 VALUES IN (1),
+			 PARTITION hour2 VALUES IN (2),
+			 PARTITION hour3 VALUES IN (3),
+			 PARTITION hour4 VALUES IN (4)
+			);`
+
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	outPutPlan(logicPlan, true, t)
+}
+
 // -----------------------List Partition--------------------------------------
 func TestListPartition(t *testing.T) {
 	sqls := []string{
@@ -67,6 +97,27 @@ func TestListPartition(t *testing.T) {
 			PARTITION p2 VALUES IN( 3,4 ),
 			PARTITION p3 VALUES IN( 5,6 )
 		);`,
+
+		`CREATE TABLE w_videos_partition (
+			  id bigint(20) NOT NULL AUTO_INCREMENT,
+			  create_time char(12) NOT NULL DEFAULT '' COMMENT '创建时间戳',
+			  created_at datetime NOT NULL COMMENT '创建时间',
+			  updated_at datetime DEFAULT NULL COMMENT '更新时间',
+			  content text,
+			  event_start char(12) NOT NULL DEFAULT '' COMMENT '事件开始时间戳',
+			  event_end char(12) NOT NULL DEFAULT '' COMMENT '事件结束时间戳',
+			  msg_id varchar(32) NOT NULL DEFAULT '',
+			  event_id varchar(32) NOT NULL DEFAULT '',
+			  accept tinyint(4) NOT NULL DEFAULT '0',
+			  PRIMARY KEY (id,created_at)
+			)
+			PARTITION BY LIST ((TO_DAYS(created_at)*24 + HOUR(created_at)) % (7*24))( 
+			 PARTITION hour0 VALUES IN (0),
+			 PARTITION hour1 VALUES IN (1),
+			 PARTITION hour2 VALUES IN (2),
+			 PARTITION hour3 VALUES IN (3),
+			 PARTITION hour4 VALUES IN (4)
+			);`,
 	}
 
 	mock := NewMockOptimizer(false)
