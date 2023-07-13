@@ -273,7 +273,7 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	}
 	if persistedByCN {
 		if deltalocCommitTS.Equal(txnif.UncommitTS) {
-			panic("todo")
+			return
 		}
 		if deltalocCommitTS.Less(start) || deltalocCommitTS.Greater(end) {
 			return
