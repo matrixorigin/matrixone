@@ -156,6 +156,8 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				return false, err
 			}
 			for i, partitionBat := range insertBatches {
+				partitionBat.FixedForRemoveZs()
+
 				err := ap.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
 				if err != nil {
 					partitionBat.Clean(proc.Mp())
@@ -195,13 +197,13 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 	for _, w := range s3Writers {
 		//deep copy.
 		bat := w.GetMetaLocBat()
+		bat.FixedForRemoveZs()
 		res, err = res.Append(proc.Ctx, proc.GetMPool(), bat)
 		if err != nil {
 			return
 		}
 		res.Zs = append(res.Zs, bat.Zs...)
-		bat.FixedForRemoveZs()
-		res.SetRowCount(bat.RowCount())
+		res.SetRowCount(res.RowCount() + bat.RowCount())
 		w.ResetMetaLocBat(proc)
 	}
 	res.CheckForRemoveZs("insert")
