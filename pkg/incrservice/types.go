@@ -140,7 +140,7 @@ func GetAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
 				ColName:  col.Name,
 				TableID:  def.TblId,
 				Step:     1,
-				Offset:   col.Typ.Offset,
+				Offset:   def.AutoIncrOffset,
 				ColIndex: i,
 			})
 		}

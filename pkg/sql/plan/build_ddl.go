@@ -378,12 +378,8 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 				},
 			})
 		case *tree.TableOptionAutoIncrement:
-			for _, def := range createTable.TableDef.Cols {
-				if def.Typ.AutoIncr {
-					if opt.Value != 0 {
-						def.Typ.Offset = opt.Value - 1
-					}
-				}
+			if opt.Value != 0 {
+				createTable.TableDef.AutoIncrOffset = opt.Value - 1
 			}
 
 		// these table options is not support in plan
