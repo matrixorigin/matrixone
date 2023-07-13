@@ -89,5 +89,9 @@ Common labels need to pass to MO server with JDBC connection:
 jdbc:mysql://localhost:6009/db123?serverTimezone=UTC&connectionAttributes=key1:value1
 
 The labels on CN server need to be set through mo_ctl in local env or yaml file in cloud env.
+
+Common labels also is supported by mysql client:
+
+mysql -h127.0.0.1 -udump?k1:v1,k2:v2 -P6009 -p111
 */
 package proxy

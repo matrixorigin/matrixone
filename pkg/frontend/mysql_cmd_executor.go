@@ -1192,19 +1192,11 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 
 // handleAlterDatabaseConfig alter a database's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
-	err := doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
 // handleAlterAccountConfig alter a account's mysql_compatibility_mode
 func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, ses *Session, st *tree.AlterDataBaseConfig) error {
-	err := doCheckRole(ctx, ses)
-	if err != nil {
-		return err
-	}
 	return doAlterAccountConfig(ctx, mce.GetSession(), st)
 }
 
@@ -1389,12 +1381,17 @@ func doShowBackendServers(ses *Session) error {
 
 	col3 := new(MysqlColumn)
 	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col3.SetName("Labels")
+	col3.SetName("Work State")
+
+	col4 := new(MysqlColumn)
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col4.SetName("Labels")
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
 	mrs.AddColumn(col2)
 	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
 
 	var filterLabels = func(labels map[string]string) map[string]string {
 		var reservedLabels = map[string]struct{}{
@@ -1411,14 +1408,15 @@ func doShowBackendServers(ses *Session) error {
 	}
 
 	var appendFn = func(s *metadata.CNService) {
-		row := make([]interface{}, 3)
+		row := make([]interface{}, 4)
 		row[0] = s.ServiceID
 		row[1] = s.SQLAddress
+		row[2] = s.WorkState.String()
 		var labelStr string
 		for key, value := range s.Labels {
 			labelStr += fmt.Sprintf("%s:%s;", key, strings.Join(value.Labels, ","))
 		}
-		row[2] = labelStr
+		row[3] = labelStr
 		mrs.AddRow(row)
 	}
 
@@ -2517,7 +2515,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
-				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
+				*tree.LockTableStmt, *tree.UnLockTableStmt:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -2956,6 +2955,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.SetTransaction:
 		selfHandle = true
 		//TODO: handle set transaction
+	case *tree.LockTableStmt:
+		selfHandle = true
+	case *tree.UnLockTableStmt:
+		selfHandle = true
 	}
 
 	if selfHandle {
@@ -3865,9 +3868,8 @@ type marshalPlanHandler struct {
 func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
-	query := plan.GetQuery()
 	stmt.MarkResponseAt()
-	if plan == nil {
+	if plan == nil || plan.GetQuery() == nil {
 		return &marshalPlanHandler{
 			query:       nil,
 			marshalPlan: nil,
@@ -3876,6 +3878,7 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 			buffer:      getMarshalPlanBufferPool(),
 		}
 	}
+	query := plan.GetQuery()
 	h := &marshalPlanHandler{
 		query:  query,
 		stmt:   stmt,
