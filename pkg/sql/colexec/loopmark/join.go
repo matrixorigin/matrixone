@@ -68,6 +68,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
+			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -97,6 +98,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
+	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 	}
@@ -121,7 +123,10 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
 	anal.Output(rbat, isLast)
+
+	rbat.CheckForRemoveZs("loop mark")
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -192,7 +197,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
+
 	anal.Output(rbat, isLast)
+	rbat.CheckForRemoveZs("loop mark")
 	proc.SetInputBatch(rbat)
 	return nil
 }

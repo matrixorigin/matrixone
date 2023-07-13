@@ -34,6 +34,8 @@ func Prepare(_ *process.Process, _ any) error {
 // Call returning only the first n tuples from its input
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	bat := proc.InputBatch()
+	bat.FixedForRemoveZs()
+
 	if bat == nil {
 		return true, nil
 	}
@@ -58,6 +60,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		batch.SetLength(bat, int(ap.Limit-ap.Seen))
 		ap.Seen = newSeen
 		anal.Output(bat, isLast)
+
+		bat.CheckForRemoveZs("limit")
 		proc.SetInputBatch(bat)
 		return true, nil
 	}

@@ -66,6 +66,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
+			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -95,6 +96,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
+	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 	}
@@ -118,7 +120,10 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
 	anal.Output(rbat, isLast)
+
+	rbat.CheckForRemoveZs("loop left")
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -134,7 +139,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = proc.GetVector(ap.Typs[rp.Pos])
 		}
 	}
+
 	count := bat.Length()
+	rowCountIncrese := 0
 	if ctr.expr == nil {
 		for i := 0; i < count; i++ {
 			for k, rp := range ap.Result {
@@ -151,6 +158,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 			rbat.Zs = append(rbat.Zs, ctr.bat.Zs...)
+			rowCountIncrese += ctr.bat.RowCount()
 		}
 	} else {
 		if ctr.joinBat == nil {
@@ -168,7 +176,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				rbat.Clean(proc.Mp())
 				return err
 			}
-			defer vec.Free(proc.Mp())
 
 			rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 			if vec.IsConst() {
@@ -189,6 +196,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						}
 					}
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs...)
+					rowCountIncrese += ctr.bat.RowCount()
 				}
 			} else {
 				l := vec.Length()
@@ -210,6 +218,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							}
 						}
 						rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+						rowCountIncrese++
 					}
 				}
 			}
@@ -228,10 +237,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 				}
 				rbat.Zs = append(rbat.Zs, bat.Zs[i])
+				rowCountIncrese++
 			}
 		}
 	}
+	rbat.SetRowCount(rbat.RowCount() + rowCountIncrese)
+
 	anal.Output(rbat, isLast)
+	rbat.CheckForRemoveZs("loop left")
 	proc.SetInputBatch(rbat)
 	return nil
 }

@@ -62,6 +62,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
+			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -90,6 +91,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
+	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 	}
@@ -109,7 +111,10 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
 	anal.Output(rbat, isLast)
+
+	rbat.CheckForRemoveZs("loop anti")
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -125,6 +130,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	if ctr.joinBat == nil {
 		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
 	}
+
+	rowCountIncrease := 0
 	for i := 0; i < count; i++ {
 		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
 			ctr.bat.Length(), ctr.cfs); err != nil {
@@ -155,9 +162,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 			rbat.Zs = append(rbat.Zs, bat.Zs[i])
+			rowCountIncrease++
 		}
 	}
+	rbat.SetRowCount(rbat.RowCount() + rowCountIncrease)
 	anal.Output(rbat, isLast)
+
+	rbat.CheckForRemoveZs("loop anti")
 	proc.SetInputBatch(rbat)
 	return nil
 }
