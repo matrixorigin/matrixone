@@ -361,7 +361,6 @@ func (m *MemoryFS) Replace(ctx context.Context, vector IOVector) error {
 	return m.write(ctx, vector)
 }
 
-// mark MemoryFS as ETL-compatible to use it as ETL fs in testing
-var _ ETLFileService = new(MemoryFS)
+var _ RawFileService = new(MemoryFS)
 
-func (m *MemoryFS) ETLCompatible() {}
+func (m *MemoryFS) IsRawFS() {}

@@ -1333,7 +1333,7 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		fs, err := fileservice.NewFileServices(
 			defines.LocalFileServiceName,
 			fileservices.getDNLocalFileService(i),
-			fileservices.getS3FileService(),
+			fileservices.getSharedileService(),
 		)
 		if err != nil {
 			panic(err)
@@ -1393,8 +1393,8 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		fs, err := fileservice.NewFileServices(
 			defines.LocalFileServiceName,
 			fileservices.getCNLocalFileService(i),
-			fileservices.getS3FileService(),
-			fileservices.getETLFileService(),
+			fileservices.getSharedileService(),
+			fileservices.getPublicFileService(),
 		)
 		if err != nil {
 			panic(err)

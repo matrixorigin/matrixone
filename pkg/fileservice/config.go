@@ -24,18 +24,19 @@ import (
 )
 
 const (
-	memFileServiceBackend     = "MEM"
-	diskFileServiceBackend    = "DISK"
-	diskETLFileServiceBackend = "DISK-ETL"
-	s3FileServiceBackend      = "S3"
-	minioFileServiceBackend   = "MINIO"
+	MemFileServiceBackend     = "MEM"
+	DiskFileServiceBackend    = "DISK"
+	DiskETLFileServiceBackend = "DISK-ETL"
+	DiskRawFileServiceBackend = "DISK-RAW"
+	S3FileServiceBackend      = "S3"
+	MinioFileServiceBackend   = "MINIO"
 )
 
 // Config fileService config
 type Config struct {
 	// Name name of fileservice, describe what an instance of fileservice is used for
 	Name string `toml:"name"`
-	// Backend fileservice backend. [MEM|DISK|DISK-ETL|S3|MINIO]
+	// Backend fileservice backend. [MEM|DISK|DISK-RAW|S3|MINIO]
 	Backend string `toml:"backend"`
 	// S3 used to create fileservice using s3 as the backend
 	S3 S3Config `toml:"s3"`
@@ -54,15 +55,15 @@ func NewFileService(ctx context.Context, cfg Config, perfCounterSets []*perfcoun
 		panic("empty name")
 	}
 	switch strings.ToUpper(cfg.Backend) {
-	case memFileServiceBackend:
+	case MemFileServiceBackend:
 		return newMemFileService(cfg, perfCounterSets)
-	case diskFileServiceBackend:
+	case DiskFileServiceBackend:
 		return newDiskFileService(ctx, cfg, perfCounterSets)
-	case diskETLFileServiceBackend:
-		return newDiskETLFileService(cfg, perfCounterSets)
-	case minioFileServiceBackend:
+	case DiskETLFileServiceBackend, DiskRawFileServiceBackend:
+		return newDiskRawFileService(cfg, perfCounterSets)
+	case MinioFileServiceBackend:
 		return newMinioFileService(ctx, cfg, perfCounterSets)
-	case s3FileServiceBackend:
+	case S3FileServiceBackend:
 		return newS3FileService(ctx, cfg, perfCounterSets)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("file service backend %s not implemented", cfg.Backend)
@@ -98,8 +99,8 @@ func newDiskFileService(ctx context.Context, cfg Config, perfCounters []*perfcou
 	return fs, nil
 }
 
-func newDiskETLFileService(cfg Config, _ []*perfcounter.CounterSet) (FileService, error) {
-	fs, err := NewLocalETLFS(
+func newDiskRawFileService(cfg Config, _ []*perfcounter.CounterSet) (FileService, error) {
+	fs, err := NewLocalRawFS(
 		cfg.Name,
 		cfg.DataDir,
 	)

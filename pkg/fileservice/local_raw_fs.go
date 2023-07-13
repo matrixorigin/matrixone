@@ -28,8 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// LocalETLFS is a FileService implementation backed by local file system and suitable for ETL operations
-type LocalETLFS struct {
+// LocalRawFS is a FileService implementation backed by local file system and suitable for Raw operations
+type LocalRawFS struct {
 	name     string
 	rootPath string
 
@@ -39,28 +39,28 @@ type LocalETLFS struct {
 	createTempDirOnce sync.Once
 }
 
-var _ FileService = new(LocalETLFS)
+var _ FileService = new(LocalRawFS)
 
-func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
-	return &LocalETLFS{
+func NewLocalRawFS(name string, rootPath string) (*LocalRawFS, error) {
+	return &LocalRawFS{
 		name:     name,
 		rootPath: rootPath,
 		dirFiles: make(map[string]*os.File),
 	}, nil
 }
 
-func (l *LocalETLFS) Name() string {
+func (l *LocalRawFS) Name() string {
 	return l.name
 }
 
-func (l *LocalETLFS) ensureTempDir() (err error) {
+func (l *LocalRawFS) ensureTempDir() (err error) {
 	l.createTempDirOnce.Do(func() {
 		err = os.MkdirAll(filepath.Join(l.rootPath, ".tmp"), 0755)
 	})
 	return
 }
 
-func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
+func (l *LocalRawFS) Write(ctx context.Context, vector IOVector) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -83,7 +83,7 @@ func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 	return l.write(ctx, vector)
 }
 
-func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
+func (l *LocalRawFS) write(ctx context.Context, vector IOVector) error {
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
@@ -155,7 +155,7 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	return nil
 }
 
-func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
+func (l *LocalRawFS) Read(ctx context.Context, vector *IOVector) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -330,11 +330,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 }
 
-func (l *LocalETLFS) Preload(ctx context.Context, filePath string) error {
+func (l *LocalRawFS) Preload(ctx context.Context, filePath string) error {
 	return nil
 }
 
-func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+func (l *LocalRawFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -366,7 +366,7 @@ func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, 
 	}, nil
 }
 
-func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
+func (l *LocalRawFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -421,7 +421,7 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, 
 	return
 }
 
-func (l *LocalETLFS) Delete(ctx context.Context, filePaths ...string) error {
+func (l *LocalRawFS) Delete(ctx context.Context, filePaths ...string) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -436,7 +436,7 @@ func (l *LocalETLFS) Delete(ctx context.Context, filePaths ...string) error {
 	return nil
 }
 
-func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
+func (l *LocalRawFS) deleteSingle(ctx context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return err
@@ -465,7 +465,7 @@ func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
 	return nil
 }
 
-func (l *LocalETLFS) ensureDir(nativePath string) error {
+func (l *LocalRawFS) ensureDir(nativePath string) error {
 	nativePath = filepath.Clean(nativePath)
 	if nativePath == "" {
 		return nil
@@ -509,14 +509,14 @@ func (l *LocalETLFS) ensureDir(nativePath string) error {
 	return nil
 }
 
-func (l *LocalETLFS) toOSPath(filePath string) string {
+func (l *LocalRawFS) toOSPath(filePath string) string {
 	if os.PathSeparator == '/' {
 		return filePath
 	}
 	return strings.ReplaceAll(filePath, "/", osPathSeparatorStr)
 }
 
-func (l *LocalETLFS) syncDir(nativePath string) error {
+func (l *LocalRawFS) syncDir(nativePath string) error {
 	l.Lock()
 	f, ok := l.dirFiles[nativePath]
 	if !ok {
@@ -535,17 +535,17 @@ func (l *LocalETLFS) syncDir(nativePath string) error {
 	return nil
 }
 
-func (l *LocalETLFS) toNativeFilePath(filePath string) string {
+func (l *LocalRawFS) toNativeFilePath(filePath string) string {
 	return filepath.Join(l.rootPath, l.toOSPath(filePath))
 }
 
-var _ ETLFileService = new(LocalETLFS)
+var _ RawFileService = new(LocalRawFS)
 
-func (l *LocalETLFS) ETLCompatible() {}
+func (l *LocalRawFS) IsRawFS() {}
 
-var _ MutableFileService = new(LocalETLFS)
+var _ MutableFileService = new(LocalRawFS)
 
-func (l *LocalETLFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
+func (l *LocalRawFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
@@ -555,20 +555,20 @@ func (l *LocalETLFS) NewMutator(ctx context.Context, filePath string) (Mutator, 
 	if os.IsNotExist(err) {
 		return nil, moerr.NewFileNotFoundNoCtx(path.File)
 	}
-	return &LocalETLFSMutator{
+	return &LocalRawFSMutator{
 		osFile: f,
 	}, nil
 }
 
-type LocalETLFSMutator struct {
+type LocalRawFSMutator struct {
 	osFile *os.File
 }
 
-func (l *LocalETLFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
+func (l *LocalRawFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
 	return l.mutate(ctx, 0, entries...)
 }
 
-func (l *LocalETLFSMutator) Append(ctx context.Context, entries ...IOEntry) error {
+func (l *LocalRawFSMutator) Append(ctx context.Context, entries ...IOEntry) error {
 	offset, err := l.osFile.Seek(0, io.SeekEnd)
 	if err != nil {
 		return err
@@ -576,7 +576,7 @@ func (l *LocalETLFSMutator) Append(ctx context.Context, entries ...IOEntry) erro
 	return l.mutate(ctx, offset, entries...)
 }
 
-func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entries ...IOEntry) error {
+func (l *LocalRawFSMutator) mutate(ctx context.Context, baseOffset int64, entries ...IOEntry) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -619,7 +619,7 @@ func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entrie
 	return nil
 }
 
-func (l *LocalETLFSMutator) Close() error {
+func (l *LocalRawFSMutator) Close() error {
 	// sync
 	if err := l.osFile.Sync(); err != nil {
 		return err

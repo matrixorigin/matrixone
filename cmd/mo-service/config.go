@@ -152,7 +152,7 @@ func (c *Config) validate() error {
 	}
 	for idx := range c.FileServices {
 		switch c.FileServices[idx].Name {
-		case defines.LocalFileServiceName, defines.ETLFileServiceName:
+		case defines.LocalFileServiceName, defines.PublicFileServiceName:
 			if c.FileServices[idx].DataDir == "" {
 				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
 			}
@@ -186,6 +186,9 @@ func (c *Config) createFileService(ctx context.Context, defaultName string, perf
 		// for old config compatibility
 		if strings.EqualFold(config.Name, "s3") {
 			config.Name = defines.SharedFileServiceName
+		}
+		if strings.EqualFold(config.Name, "etl") {
+			config.Name = defines.PublicFileServiceName
 		}
 
 		counterSet := new(perfcounter.CounterSet)
@@ -241,9 +244,9 @@ func (c *Config) createFileService(ctx context.Context, defaultName string, perf
 		return nil, err
 	}
 
-	// ensure etl exists, for trace & metric
+	// ensure public exists
 	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
-		_, err = fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
+		_, err = fileservice.Get[fileservice.FileService](fs, defines.PublicFileServiceName)
 		if err != nil {
 			return nil, moerr.ConvertPanicError(context.Background(), err)
 		}

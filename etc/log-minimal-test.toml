@@ -28,7 +28,7 @@ service-addresses = [
 ]
 
 [[fileservice]]
-name = "local"
+name = "LOCAL"
 backend = "DISK"
 data-dir = "store"
 
@@ -38,7 +38,7 @@ backend = "DISK"
 data-dir = "store"
 
 [[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
+name = "PUBLIC"
+backend = "DISK-RAW"
 data-dir = "store"
 

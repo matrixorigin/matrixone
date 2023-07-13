@@ -27,6 +27,6 @@ name = 'S3'
 backend = 'MEM'
 
 [[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
+name = "PUBLIC"
+backend = "DISK-RAW"
 data-dir = "store"

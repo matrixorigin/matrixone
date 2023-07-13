@@ -447,7 +447,7 @@ func testFileService(
 		assert.Equal(t, entries[3].Size, int64(0))
 		assert.Equal(t, entries[10].IsDir, false)
 		assert.Equal(t, entries[10].Name, "7")
-		if _, ok := fs.(ETLFileService); ok {
+		if _, ok := fs.(RawFileService); ok {
 			assert.Equal(t, entries[10].Size, int64(7))
 		}
 

@@ -27,8 +27,8 @@ disk-min-evict-interval = "7m"
 disk-evict-target = 0.8
 
 [[fileservice]]
+name = "PUBLIC"
 backend = "MINIO"
-name = "ETL"
 
 [fileservice.s3]
 bucket = "mo-test"

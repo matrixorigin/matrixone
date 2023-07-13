@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -275,7 +276,7 @@ func TestTaeReadFile(t *testing.T) {
 	ctx := context.TODO()
 	fs := testutil.NewFS()
 
-	entrys, err := fs.List(context.TODO(), "etl:/")
+	entrys, err := fs.List(context.TODO(), fileservice.JoinPath(defines.PublicFileServiceName, "/"))
 	require.Nil(t, err)
 	if len(entrys) == 0 {
 		t.Skip()
@@ -331,7 +332,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 	fs := testutil.NewFS()
 
 	folder := "/sys/logs/2023/01/11/rawlog"
-	entrys, err := fs.List(context.TODO(), "etl:"+folder)
+	entrys, err := fs.List(context.TODO(), fileservice.JoinPath(defines.PublicFileServiceName, folder))
 	require.Nil(t, err)
 	if len(entrys) == 0 {
 		t.Skip()

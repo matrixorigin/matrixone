@@ -1396,7 +1396,7 @@ func InitS3Param(param *tree.ExternParam) error {
 	return nil
 }
 
-func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.ETLFileService, readPath string, err error) {
+func GetRawWithType(param *tree.ExternParam, prefix string) (res fileservice.RawFileService, readPath string, err error) {
 	if param.ScanType == tree.S3 {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
@@ -1412,9 +1412,9 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 			return nil, "", err
 		}
 		w.Flush()
-		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+		return fileservice.GetRaw(nil, fileservice.JoinPath(buf.String(), prefix))
 	}
-	return fileservice.GetForETL(param.FileService, prefix)
+	return fileservice.GetRaw(param.FileService, prefix)
 }
 
 // ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
@@ -1440,7 +1440,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 		length := l.Len()
 		for j := 0; j < length; j++ {
 			prefix := l.Front().Value.(string)
-			fs, readPath, err := GetForETLWithType(param, prefix)
+			fs, readPath, err := GetRawWithType(param, prefix)
 			if err != nil {
 				return nil, nil, err
 			}

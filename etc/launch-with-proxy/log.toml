@@ -22,8 +22,8 @@ disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
 
 [[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
+name = "PUBLIC"
+backend = "DISK-RAW"
 
 [observability]
 statusPort = 7001

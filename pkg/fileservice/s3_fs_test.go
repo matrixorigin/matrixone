@@ -202,7 +202,7 @@ func TestDynamicS3(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetRaw(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
@@ -235,7 +235,7 @@ func TestDynamicS3NoKey(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetRaw(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
@@ -268,7 +268,7 @@ func TestDynamicS3Opts(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetRaw(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
@@ -301,7 +301,7 @@ func TestDynamicS3OptsRoleARN(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetRaw(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
@@ -335,7 +335,7 @@ func TestDynamicS3OptsNoRegion(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetRaw(nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))

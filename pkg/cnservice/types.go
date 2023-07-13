@@ -334,7 +334,7 @@ type service struct {
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
 	metadataFS             fileservice.ReplaceableFileService
-	etlFS                  fileservice.FileService
+	publicFS               fileservice.FileService
 	fileService            fileservice.FileService
 	pu                     *config.ParameterUnit
 	moCluster              clusterservice.MOCluster

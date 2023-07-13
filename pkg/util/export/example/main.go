@@ -60,7 +60,7 @@ func main() {
 		DisableStore: true,
 	})
 
-	fs, err := fileservice.NewLocalETLFS(defines.ETLFileServiceName, "mo-data/etl")
+	fs, err := fileservice.NewLocalRawFS(defines.PublicFileServiceName, "mo-data/etl")
 	if err != nil {
 		logutil.Infof("failed open fileservice: %v", err)
 		return
@@ -119,7 +119,7 @@ func main() {
 	cancel()
 }
 
-func mergeAll(ctx context.Context, fs *fileservice.LocalETLFS) {
+func mergeAll(ctx context.Context, fs *fileservice.LocalRawFS) {
 	ctx, span := trace.Start(ctx, "mergeTable")
 	defer span.End()
 	var err error
@@ -139,7 +139,7 @@ func mergeAll(ctx context.Context, fs *fileservice.LocalETLFS) {
 
 }
 
-func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Table) {
+func mergeTable(ctx context.Context, fs *fileservice.LocalRawFS, table *table.Table) {
 	var err error
 	ctx, span := trace.Start(ctx, "mergeTable")
 	defer span.End()

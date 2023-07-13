@@ -31,9 +31,9 @@ backend = "DISK"
 data-dir = "data dir"
 
 [[fileservice]]
-name = "ETL"
-# val in [DISK-ETL, S3]. if backend = S3, this config should be mirror of above fileservice(S3) config
-backend = "DISK-ETL"
+name = "PUBLIC"
+# val in [DISK-RAW, S3]. if backend = S3, this config should be mirror of above fileservice(S3) config
+backend = "DISK-RAW"
 data-dir = "data dir"
 
 [dn]

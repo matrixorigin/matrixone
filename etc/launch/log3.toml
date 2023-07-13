@@ -44,8 +44,8 @@ name = "SHARED"
 backend = "MEM"
 
 [[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
+name = "PUBLIC"
+backend = "DISK-RAW"
 data-dir = "mo-data/local/etl"
 
 [hakeeper-client]

@@ -49,9 +49,9 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	return
 }
 
-// GetForETL get or creates a FileService instance for ETL operations
-// if service part of path is empty, a LocalETLFS will be created
-// if service part of path is not empty, a ETLFileService typed instance will be extracted from fs argument
+// GetRaw get or creates a RawFileService instance
+// if service part of path is empty, a LocalRawFS will be created
+// if service part of path is not empty, a RawFileService typed instance will be extracted from fs argument
 // if service part of path is argumented, a FileService instance will be created dynamically with those arguments
 // supported dynamic file service:
 // s3,<endpoint>,<region>,<bucket>,<key>,<secret>,<prefix>
@@ -60,16 +60,16 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 // s3-opts,endpoint=<endpoint>,region=<region>,bucket=<bucket>,key=<key>,secret=<secret>,prefix=<prefix>,role-arn=<role arn>,external-id=<external id>
 //
 //	key value pairs can be in any order
-func GetForETL(fs FileService, path string) (res ETLFileService, readPath string, err error) {
+func GetRaw(fs FileService, path string) (res RawFileService, readPath string, err error) {
 	fsPath, err := ParsePath(path)
 	if err != nil {
 		return nil, "", err
 	}
 
 	if fsPath.Service == "" {
-		// no service, create local ETL fs
+		// no service, create local raw fs
 		dir, file := filepath.Split(path)
-		res, err = NewLocalETLFS("etl", dir)
+		res, err = NewLocalRawFS("raw+"+path, dir)
 		if err != nil {
 			return nil, "", err
 		}
@@ -174,8 +174,8 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 		readPath = fsPath.File
 
 	} else {
-		// get etl fs
-		res, err = Get[ETLFileService](fs, fsPath.Service)
+		// get a raw fs
+		res, err = Get[RawFileService](fs, fsPath.Service)
 		if err != nil {
 			return nil, "", err
 		}

@@ -41,9 +41,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
+func newLocalRawFS(t *testing.T, fsName string) fileservice.FileService {
 	dir := t.TempDir()
-	fs, err := fileservice.NewLocalETLFS(fsName, dir)
+	fs, err := fileservice.NewLocalRawFS(fsName, dir)
 	assert.Nil(t, err)
 	return fs
 }
@@ -61,7 +61,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 		assert.Nil(t, err)
 	}
 	//file service
-	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
+	pu.FileService = newLocalRawFS(t, defines.SharedFileServiceName)
 
 	//io session
 	ioses := mock_frontend.NewMockIOSession(ctrl)

@@ -279,7 +279,7 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 	if param.Extern.Local {
 		return io.NopCloser(proc.LoadLocalReader), nil
 	}
-	fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+	fs, readPath, err := plan2.GetRawWithType(param.Extern, param.Fileparam.Filepath)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +315,7 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64) ([]int64, error) {
 	arr := make([]int64, 0)
 
-	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
+	fs, readPath, err := plan2.GetRawWithType(param, param.Filepath)
 	if err != nil {
 		return nil, err
 	}

@@ -65,8 +65,8 @@ func NewService(
 	if err != nil {
 		return nil, err
 	}
-	// get etl fs
-	etlFS, err := fileservice.Get[fileservice.FileService](fileService, defines.ETLFileServiceName)
+	// get public fs
+	publicFS, err := fileservice.Get[fileservice.FileService](fileService, defines.PublicFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func NewService(
 		},
 		cfg:         cfg,
 		metadataFS:  metadataFS,
-		etlFS:       etlFS,
+		publicFS:    publicFS,
 		fileService: fileService,
 	}
 	for _, opt := range options {

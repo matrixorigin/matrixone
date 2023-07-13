@@ -37,8 +37,8 @@ type fileServices struct {
 
 	dnLocalFSs []fileservice.FileService
 	cnLocalFSs []fileservice.FileService
-	s3FS       fileservice.FileService
-	etlFS      fileservice.FileService
+	sharedFS   fileservice.FileService
+	publicFS   fileservice.FileService
 }
 
 // newFileServices constructs an instance of fileServices.
@@ -75,8 +75,8 @@ func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
 		cnServiceNum: cnServiceNum,
 		dnLocalFSs:   dnLocals,
 		cnLocalFSs:   cnLocals,
-		s3FS:         factory(c.opt.rootDataDir, defines.SharedFileServiceName),
-		etlFS:        factory(c.opt.rootDataDir, defines.ETLFileServiceName),
+		sharedFS:     factory(c.opt.rootDataDir, defines.SharedFileServiceName),
+		publicFS:     factory(c.opt.rootDataDir, defines.PublicFileServiceName),
 	}
 }
 
@@ -111,18 +111,18 @@ func (f *fileServices) getCNLocalFileService(index int) fileservice.FileService 
 	return f.cnLocalFSs[index]
 }
 
-// getS3FileService gets S3 FileService for all DN services.
-func (f *fileServices) getS3FileService() fileservice.FileService {
+// getSharedileService gets Shared FileService for all DN services.
+func (f *fileServices) getSharedileService() fileservice.FileService {
 	f.RLock()
 	defer f.RUnlock()
 	f.assertFileServiceLocked()
-	return f.s3FS
+	return f.sharedFS
 }
 
-// getETLFileService gets ETL FileService for all DN services.
-func (f *fileServices) getETLFileService() fileservice.FileService {
+// getPublicFileService gets Public FileService for all DN services.
+func (f *fileServices) getPublicFileService() fileservice.FileService {
 	f.RLock()
 	defer f.RUnlock()
 	f.assertFileServiceLocked()
-	return f.etlFS
+	return f.publicFS
 }

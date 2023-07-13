@@ -80,19 +80,19 @@ func TestFileServiceFactory(t *testing.T) {
 	c := &Config{}
 	c.FileServices = append(c.FileServices, fileservice.Config{
 		Name:    "a",
-		Backend: "MEM",
+		Backend: fileservice.MemFileServiceBackend,
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
 		Name:    defines.LocalFileServiceName,
-		Backend: "MEM",
+		Backend: fileservice.MemFileServiceBackend,
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
 		Name:    defines.SharedFileServiceName,
-		Backend: "MEM",
+		Backend: fileservice.MemFileServiceBackend,
 	})
 	c.FileServices = append(c.FileServices, fileservice.Config{
-		Name:    defines.ETLFileServiceName,
-		Backend: "DISK-ETL",
+		Name:    defines.PublicFileServiceName,
+		Backend: fileservice.DiskRawFileServiceBackend,
 	})
 
 	fs, err := c.createFileService(ctx, "A", globalCounterSet, 0, "")

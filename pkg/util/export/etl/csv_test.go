@@ -91,9 +91,9 @@ func TestLocalFSWriter(t *testing.T) {
 	t.Logf("write span file error: %v", err)
 }
 
-func TestLocalETLFSWriter(t *testing.T) {
+func TestLocalRawFSWriter(t *testing.T) {
 	basedir := t.TempDir()
-	fs, err := fileservice.NewLocalETLFS("etl", basedir)
+	fs, err := fileservice.NewLocalRawFS("test", basedir)
 	require.Equal(t, nil, err)
 
 	// file result: (without checksum)

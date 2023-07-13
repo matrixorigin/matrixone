@@ -24,8 +24,8 @@ disk-min-evict-interval = "7m"
 disk-evict-target = 0.8
 
 [[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
+name = "PUBLIC"
+backend = "DISK-RAW"
 
 [observability]
 statusPort = 7001

@@ -14,11 +14,11 @@
 
 package fileservice
 
-// ETLFileService is an extension to the FileService
-type ETLFileService interface {
+// RawFileService is an extension to the FileService
+type RawFileService interface {
 	FileService
 
-	// ETLCompatible marks the implementation to be compatible to ETL operations
-	// implementations must save file contents as-is
-	ETLCompatible()
+	// IsRawFS hints that this implementation does not change file contents
+	// raw fs may be access by programs other than the file service
+	IsRawFS()
 }

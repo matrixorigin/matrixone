@@ -825,9 +825,9 @@ func (s *S3FS) mapError(err error, path string) error {
 	return err
 }
 
-var _ ETLFileService = new(S3FS)
+var _ RawFileService = new(S3FS)
 
-func (*S3FS) ETLCompatible() {}
+func (*S3FS) IsRawFS() {}
 
 var _ CachingFileService = new(S3FS)
 

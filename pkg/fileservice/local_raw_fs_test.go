@@ -23,12 +23,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestLocalETLFS(t *testing.T) {
+func TestLocalRawFS(t *testing.T) {
 
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func(name string) FileService {
 			dir := t.TempDir()
-			fs, err := NewLocalETLFS(name, dir)
+			fs, err := NewLocalRawFS(name, dir)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -37,7 +37,7 @@ func TestLocalETLFS(t *testing.T) {
 	t.Run("mutable file service", func(t *testing.T) {
 		testMutableFileService(t, func() MutableFileService {
 			dir := t.TempDir()
-			fs, err := NewLocalETLFS("etl", dir)
+			fs, err := NewLocalRawFS("raw", dir)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -63,7 +63,7 @@ func TestLocalETLFS(t *testing.T) {
 		assert.Nil(t, err)
 
 		filePathInB := filepath.Join(bPath, "foo")
-		fs, readPath, err := GetForETL(nil, filePathInB)
+		fs, readPath, err := GetRaw(nil, filePathInB)
 		assert.Nil(t, err)
 
 		ctx := context.Background()
@@ -105,7 +105,7 @@ func TestLocalETLFS(t *testing.T) {
 		)
 		assert.Nil(t, err)
 
-		fs, err := NewLocalETLFS("foo", dir)
+		fs, err := NewLocalRawFS("foo", dir)
 		assert.Nil(t, err)
 
 		ctx := context.Background()

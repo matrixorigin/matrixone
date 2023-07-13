@@ -28,8 +28,8 @@ disk-min-evict-interval = "7m"
 disk-evict-target = 0.8
 
 [[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
+name = "PUBLIC"
+backend = "DISK-RAW"
 
 [dn]
 uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
