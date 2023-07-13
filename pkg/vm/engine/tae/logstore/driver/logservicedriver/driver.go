@@ -18,15 +18,17 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/panjf2000/ants/v2"
 )
 
 const (
-	ReplayReadSize = common.M * 64
-	MaxReadSize    = common.M * 64
+	ReplayReadSize = mpool.MB * 64
+	MaxReadSize    = mpool.MB * 64
 )
 
 func RetryWithTimeout(timeoutDuration time.Duration, fn func() (shouldReturn bool)) error {
@@ -60,6 +62,8 @@ type LogServiceDriver struct {
 	postAppendQueue chan any
 	postAppendLoop  *sm.Loop
 
+	appendPool *ants.Pool
+
 	truncateQueue sm.Queue
 
 	flushtimes  int
@@ -76,6 +80,8 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
 		retryDuration:         cfg.RetryTimeout,
 	}
+	pool, _ := ants.NewPool(10)
+
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientPoolMaxSize, cfg.ClientPoolMaxSize, clientpoolConfig),
 		config:          cfg,
@@ -85,6 +91,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		appendQueue:     make(chan any, 10000),
 		appendedQueue:   make(chan any, 10000),
 		postAppendQueue: make(chan any, 10000),
+		appendPool:      pool,
 	}
 	d.closeCtx, d.closeCancel = context.WithCancel(context.Background())
 	d.preAppendLoop = sm.NewSafeQueue(10000, 10000, d.onPreAppend)
@@ -109,6 +116,7 @@ func (d *LogServiceDriver) Close() error {
 	close(d.appendQueue)
 	close(d.appendedQueue)
 	close(d.postAppendQueue)
+	d.appendPool.Release()
 	return nil
 }
 
@@ -123,7 +131,11 @@ func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
 		common.OperandField("wal"),
 		common.AnyField("backend", "logservice"),
 		common.AnyField("apply cost", r.applyDuration),
-		common.AnyField("read cost", d.readDuration))
+		common.AnyField("read cost", d.readDuration),
+		common.AnyField("read count", r.readCount),
+		common.AnyField("internal count", r.internalCount),
+		common.AnyField("apply count", r.applyCount),
+	)
 
 	return nil
 }

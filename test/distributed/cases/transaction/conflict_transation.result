@@ -83,6 +83,7 @@ Duplicate entry '487' for key '__mo_index_idx_col'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into ct_06 values (897,'number',908,'run tools'),(898,'string',908,'ffff'),(899,'string',918,'while'),(900,'string',948,'word file'),(901,'string',902,'oooo'),(902,'string',87,'dddd'),(903,'string',87,'eeee');
 Duplicate entry '908' for key '__mo_index_idx_col'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from ct_06;
 a    b    c    d
 commit;
@@ -106,7 +107,7 @@ insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31)
 begin;
 insert into ct_07 values (3,'90','2111-02-09',10.01);
 insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
-Duplicate entry '3a150441170b34c8' for key '__mo_cpkey_col'
+Duplicate entry '(4,2011-09-29)' for key '__mo_cpkey_col'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from ct_07;
 a    b    c    d

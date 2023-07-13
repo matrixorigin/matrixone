@@ -32,7 +32,7 @@ const (
 const (
 	// statementInfoTbl is an EXTERNAL table
 	statementInfoTbl = "statement_info"
-	rawLogTbl        = "rawlog"
+	RawLogTbl        = "rawlog"
 
 	// spanInfoTbl is a view
 	spanInfoTbl  = "span_info"
@@ -59,17 +59,18 @@ var (
 	durationCol  = table.UInt64Column("duration", "exec time, unit: ns")
 	statusCol    = table.StringColumn("status", "sql statement running status, enum: Running, Success, Failed")
 	errorCol     = table.TextColumn("error", "error message")
-	execPlanCol  = table.JsonColumn("exec_plan", "statement execution plan")
+	execPlanCol  = table.TextDefaultColumn("exec_plan", `{}`, "statement execution plan")
 	rowsReadCol  = table.Int64Column("rows_read", "rows read total")
 	bytesScanCol = table.Int64Column("bytes_scan", "bytes scan total")
-	statsCol     = table.JsonColumn("stats", "global stats info in exec_plan")
+	statsCol     = table.TextDefaultColumn("stats", `[]`, "global stats info in exec_plan")
 	stmtTypeCol  = table.StringColumn("statement_type", "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]")
 	queryTypeCol = table.StringColumn("query_type", "query type, val in [DQL, DDL, DML, DCL, TCL]")
 	sqlTypeCol   = table.TextColumn("sql_source_type", "sql statement source type")
+	aggrCntCol   = table.Int64Column("aggr_count", "the number of statements aggregated")
 	resultCntCol = table.Int64Column("result_count", "the number of rows of sql execution results")
 
 	SingleStatementTable = &table.Table{
-		Account:  table.AccountAll,
+		Account:  table.AccountSys,
 		Database: StatsDatabase,
 		Table:    statementInfoTbl,
 		Columns: []table.Column{
@@ -99,15 +100,22 @@ var (
 			queryTypeCol,
 			roleIdCol,
 			sqlTypeCol,
+			aggrCntCol,
 			resultCntCol,
 		},
-		PrimaryKeyColumn: []table.Column{stmtIDCol},
-		Engine:           table.ExternalTableEngine,
-		Comment:          "record each statement and stats info",
-		PathBuilder:      table.NewAccountDatePathBuilder(),
-		AccountColumn:    &accountCol,
+		PrimaryKeyColumn: nil,
+		ClusterBy:        []table.Column{reqAtCol, accountCol},
+		// Engine
+		Engine:        table.NormalTableEngine,
+		Comment:       "record each statement and stats info",
+		PathBuilder:   table.NewAccountDatePathBuilder(),
+		AccountColumn: &accountCol,
+		// TimestampColumn
+		TimestampColumn: &respAtCol,
 		// SupportUserAccess
 		SupportUserAccess: true,
+		// SupportConstAccess
+		SupportConstAccess: true,
 	}
 
 	rawItemCol      = table.StringColumn("raw_item", "raw log item")
@@ -116,7 +124,7 @@ var (
 	levelCol        = table.StringColumn("level", "log level, enum: debug, info, warn, error, panic, fatal")
 	callerCol       = table.StringColumn("caller", "where it log, like: package/file.go:123")
 	messageCol      = table.TextColumn("message", "log message")
-	extraCol        = table.JsonColumn("extra", "log dynamic fields")
+	extraCol        = table.TextDefaultColumn("extra", `{}`, "log dynamic fields")
 	errCodeCol      = table.StringDefaultColumn("err_code", `0`, "error code info")
 	stackCol        = table.StringWithScale("stack", 2048, "stack info")
 	traceIDCol      = table.UuidStringColumn("trace_id", "trace uniq id")
@@ -126,12 +134,12 @@ var (
 	spanNameCol     = table.StringColumn("span_name", "span name, for example: step name of execution plan, function name in code, ...")
 	startTimeCol    = table.DatetimeColumn("start_time", "start time")
 	endTimeCol      = table.DatetimeColumn("end_time", "end time")
-	resourceCol     = table.JsonColumn("resource", "static resource information")
+	resourceCol     = table.TextDefaultColumn("resource", `{}`, "static resource information")
 
 	SingleRowLogTable = &table.Table{
-		Account:  table.AccountAll,
+		Account:  table.AccountSys,
 		Database: StatsDatabase,
-		Table:    rawLogTbl,
+		Table:    RawLogTbl,
 		Columns: []table.Column{
 			rawItemCol,
 			nodeUUIDCol,
@@ -156,12 +164,17 @@ var (
 			spanKindCol,
 		},
 		PrimaryKeyColumn: nil,
-		Engine:           table.ExternalTableEngine,
+		ClusterBy:        []table.Column{timestampCol, rawItemCol},
+		Engine:           table.NormalTableEngine,
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      table.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
+		// TimestampColumn
+		TimestampColumn: &timestampCol,
 		// SupportUserAccess
 		SupportUserAccess: false,
+		// SupportConstAccess
+		SupportConstAccess: true,
 	}
 
 	logView = &table.View{
@@ -219,6 +232,7 @@ var (
 			endTimeCol,
 			durationCol,
 			resourceCol,
+			extraCol,
 		},
 		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: spanInfoTbl},
 	}
@@ -268,6 +282,10 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 
 	createCost = time.Since(instant)
 	return nil
+}
+
+func GetAllTables() []*table.Table {
+	return tables
 }
 
 // GetSchemaForAccount return account's table, and view's schema

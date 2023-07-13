@@ -19,8 +19,8 @@ import (
 	"strconv"
 
 	"github.com/FastFilter/xorfilter"
-	"github.com/RoaringBitmap/roaring"
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/samber/lo"
@@ -41,7 +41,7 @@ func NewEmptyBinaryFuseFilter() StaticFilter {
 
 type StaticFilter interface {
 	MayContainsKey(key []byte) (bool, error)
-	MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error)
+	MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error)
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
 	String() string
@@ -86,7 +86,7 @@ func NewBinaryFuseFilterByVectors(datas []containers.Vector) (StaticFilter, erro
 	}
 	var err error
 	for _, data := range datas {
-		if err = containers.ForeachWindowBytes(data, 0, data.Length(), op, nil); err != nil {
+		if err = containers.ForeachWindowBytes(data.GetDownstreamVector(), 0, data.Length(), op, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -98,20 +98,23 @@ func (filter *binaryFuseFilter) MayContainsKey(key []byte) (bool, error) {
 	return filter.Contains(hash), nil
 }
 
-func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *roaring.Bitmap, error) {
-	positive := roaring.NewBitmap()
+func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error) {
+	var positive *nulls.Bitmap
 
 	row := uint32(0)
 	op := func(v []byte, _ bool, _ int) error {
 		hash := hashV1(v)
 		if filter.Contains(hash) {
-			positive.Add(row)
+			if positive == nil {
+				positive = nulls.NewWithSize(int(row) + 1)
+			}
+			positive.Add(uint64(row))
 		}
 		row++
 		return nil
 	}
 
-	if err := containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
+	if err := containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil); err != nil {
 		return false, nil, err
 	}
 	return !positive.IsEmpty(), positive, nil

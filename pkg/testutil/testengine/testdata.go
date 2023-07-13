@@ -37,9 +37,10 @@ func CreateR(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "orderid",
-					Type: types.New(types.T_varchar, 10, 0),
+					Alg:     compress.Lz4,
+					Name:    "orderid",
+					Type:    types.New(types.T_varchar, 10, 0),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -58,7 +59,7 @@ func CreateR(db engine.Database) {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation(ctx, "r")
+	r, err := db.Relation(ctx, "r", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -174,7 +175,7 @@ func CreateS(db engine.Database) {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation(ctx, "s")
+	r, err := db.Relation(ctx, "s", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -185,7 +186,7 @@ func CreateS(db engine.Database) {
 				vec := vector.NewVec(types.T_varchar.ToType())
 				vs := make([][]byte, 10)
 				for i := 0; i < 10; i++ {
-					vs[i] = []byte(fmt.Sprintf("%v", i*2))
+					vs[i] = []byte(fmt.Sprintf("%v", 30+i))
 				}
 				if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
 					log.Fatal(err)
@@ -225,7 +226,7 @@ func CreateS(db engine.Database) {
 			vec := vector.NewVec(types.T_varchar.ToType())
 			vs := make([][]byte, 10)
 			for i := 10; i < 20; i++ {
-				vs[i-10] = []byte(fmt.Sprintf("%v", i*2))
+				vs[i-10] = []byte(fmt.Sprintf("%v", 40+i))
 			}
 			if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
 				log.Fatal(err)
@@ -315,7 +316,7 @@ func CreateT1(db engine.Database) {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation(ctx, "t1")
+	r, err := db.Relation(ctx, "t1", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -781,9 +782,10 @@ func CreateCompressFileTable(db engine.Database) {
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "b",
-					Type: types.T_int32.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "b",
+					Type:    types.T_int32.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{

@@ -151,10 +151,17 @@ insert into flush_logtail values(2, 2);
 insert into flush_logtail values(3, 3);
 insert into flush_logtail values(4, 4);
 insert into flush_logtail values(5, 5);
-select enable_fault_injection();
-select add_fault_point('logtail_max_size', ':::', 'echo', 0, 'flush_logtail');
+-- @separator:table
+select mo_ctl('dn', 'AddFaultPoint', 'enable_fault_injection');
+-- @separator:table
+select mo_ctl('dn', 'AddFaultPoint', 'flush_table_error.:::.echo.0.flush_table_fault');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'insert.flush_logtail');
 select * from flush_logtail;
-select disable_fault_injection();
+-- @separator:table
+select mo_ctl('dn', 'AddFaultPoint', 'disable_fault_injection');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'insert.flush_logtail');
 drop table if exists t1;
 create table t1 (a varchar(50));
 insert into t1 values("这是一个字节数超过五十的字符串，但是utf8没有超过");
@@ -202,7 +209,6 @@ insert into t select * from t;
 select count(*) from t;
 insert into t select * from t;
 select count(*) from t;
--- @bvt:issue#9105
 insert into t select * from t;
 select count(*) from t;
 insert into t select * from t;
@@ -223,39 +229,32 @@ insert into t select * from t;
 select count(*) from t;
 commit;
 select count(*) from t;
--- @bvt:issue
 drop table t;
 # 2.primary key test
 create table t(a int primary key);
 insert into t select * from generate_series(1,200000) g;
 select count(*) from t;
 # abort,duplicate key
--- @bvt:issue#7682
+-- @pattern
 insert into t select * from t;
--- @bvt:issue
 # transaction test
 begin;
--- @bvt:issue#7682
 insert into t select * from t;
--- @bvt:issue
 select count(*) from t;
--- @bvt:issue#7682
+-- @pattern
 commit;
--- @bvt:issue
 select count(*) from t;
 # not-null test
 insert into t select null;
 drop table t;
 # 3.compiste primary key test
-create table t(a int,b int,primary key(a,b));
+create table t(a int,b int);
 create table temp(c int);
 insert into temp select * from generate_series(1,200000) g;
 insert into t select c,c from temp;
 select count(*) from t;
 # abort,duplicate key
--- @bvt:issue#7682
 insert into t select * from t order by a, b;
--- @bvt:issue
 # transaction test
 begin;
 insert into t select * from t order by a, b;
@@ -267,7 +266,7 @@ insert into t select null,null;
 drop table t;
 drop table temp;
 # 4.unique key test
-create table t(a int unique);
+create table t(a int);
 insert into t select * from generate_series(1,200000) g;
 select count(*) from t;
 # abort,duplicate key

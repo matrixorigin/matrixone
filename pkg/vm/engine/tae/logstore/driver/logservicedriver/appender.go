@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -55,6 +56,16 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	record.ResizePayload(size)
 	defer logSlowAppend()()
 	ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+
+	var timeoutSpan trace.Span
+	// Before issue#10467 is resolved, we skip this span,
+	// avoiding creating too many goroutines, which affects the performance.
+	ctx, timeoutSpan = trace.Debug(ctx, "appender",
+		trace.WithProfileGoroutine(),
+		trace.WithProfileHeap(),
+		trace.WithProfileCpuSecs(time.Second*10))
+	defer timeoutSpan.End()
+
 	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
 	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {
@@ -64,6 +75,11 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	if err != nil {
 		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
 			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
+			ctx, timeoutSpan = trace.Debug(ctx, "appender retry",
+				trace.WithProfileGoroutine(),
+				trace.WithProfileHeap(),
+				trace.WithProfileCpuSecs(time.Second*10))
+			defer timeoutSpan.End()
 			lsn, err = a.client.c.Append(ctx, record)
 			cancel()
 			if err != nil {
@@ -74,8 +90,8 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	}
 	logutil.Debugf("Log Service Driver: append end %p", a.client.record.Data)
 	if err != nil {
-		logutil.Debugf("size is %d", size)
-		panic(err)
+		logutil.Infof("size is %d", size)
+		logutil.Panic(err.Error())
 	}
 	a.logserviceLsn = lsn
 	a.wg.Done()

@@ -136,12 +136,10 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.DNShard, facto
 	}
 	logtailServerAddr := s.cfg.LogtailServer.ListenAddress
 	logtailServerCfg := &options.LogtailServerCfg{
-		RpcMaxMessageSize:        int64(s.cfg.LogtailServer.RpcMaxMessageSize),
-		RpcPayloadCopyBufferSize: int64(s.cfg.LogtailServer.RpcPayloadCopyBufferSize),
-		RpcEnableChecksum:        s.cfg.LogtailServer.RpcEnableChecksum,
-		LogtailCollectInterval:   s.cfg.LogtailServer.LogtailCollectInterval.Duration,
-		ResponseSendTimeout:      s.cfg.LogtailServer.LogtailResponseSendTimeout.Duration,
-		MaxLogtailFetchFailure:   s.cfg.LogtailServer.MaxLogtailFetchFailure,
+		RpcMaxMessageSize:      int64(s.cfg.LogtailServer.RpcMaxMessageSize),
+		RpcEnableChecksum:      s.cfg.LogtailServer.RpcEnableChecksum,
+		LogtailCollectInterval: s.cfg.LogtailServer.LogtailCollectInterval.Duration,
+		ResponseSendTimeout:    s.cfg.LogtailServer.LogtailResponseSendTimeout.Duration,
 	}
 
 	// use s3 as main fs
@@ -160,7 +158,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.DNShard, facto
 		ckpcfg,
 		logtailServerAddr,
 		logtailServerCfg,
-		options.LogstoreType(s.cfg.Txn.Storage.LogBackend),
-		s.cfg.Txn.IncrementalDedup,
+		s.cfg.Txn.IncrementalDedup == "true",
+		uint64(s.cfg.RPC.MaxMessageSize),
 	)
 }

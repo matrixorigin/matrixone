@@ -18,9 +18,11 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,9 +30,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
+
+const (
+	VectorLimit = 32
 )
 
 // Analyze analyzes information for operator
@@ -151,9 +158,12 @@ type Process struct {
 	Reg Register
 	Lim Limitation
 
-	vp           *vectorPool
-	mp           *mpool.MPool
-	prepareBatch *batch.Batch
+	vp              *vectorPool
+	mp              *mpool.MPool
+	prepareBatch    *batch.Batch
+	prepareExprList any
+
+	valueScanBatch map[[16]byte]*batch.Batch
 
 	// unix timestamp
 	UnixTime int64
@@ -172,6 +182,7 @@ type Process struct {
 
 	FileService fileservice.FileService
 	LockService lockservice.LockService
+	IncrService incrservice.AutoIncrementService
 
 	LoadTag bool
 
@@ -182,6 +193,9 @@ type Process struct {
 	DispatchNotifyCh chan WrapCs
 
 	Aicm *defines.AutoIncrCacheManager
+
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	prepareParams       *vector.Vector
 }
 
 type vectorPool struct {
@@ -190,6 +204,7 @@ type vectorPool struct {
 }
 
 type sqlHelper interface {
+	GetCompilerContext() any
 	ExecSql(string) ([]interface{}, error)
 }
 
@@ -208,15 +223,71 @@ func (proc *Process) InitSeq() {
 	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
 }
 
+func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
+	proc.valueScanBatch[key] = batch
+}
+
+func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
+	bat, ok := proc.valueScanBatch[key]
+	if ok {
+		bat.SetCnt(1000) // make sure this batch wouldn't be cleaned
+		return bat
+		// delete(proc.valueScanBatch, key)
+	}
+	return bat
+}
+
+func (proc *Process) CleanValueScanBatchs() {
+	for k, bat := range proc.valueScanBatch {
+		bat.SetCnt(1)
+		bat.Clean(proc.Mp())
+		delete(proc.valueScanBatch, k)
+	}
+}
+
+func (proc *Process) GetValueScanBatchs() []*batch.Batch {
+	var bats []*batch.Batch
+
+	for k, bat := range proc.valueScanBatch {
+		if bat != nil {
+			bats = append(bats, bat)
+		}
+		delete(proc.valueScanBatch, k)
+	}
+	return bats
+}
+
+func (proc *Process) GetPrepareParamsAt(i int) (*vector.Vector, error) {
+	if i < 0 || i >= proc.prepareParams.Length() {
+		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
+	}
+	val := proc.prepareParams.GetRawBytesAt(i)
+	vec := vector.NewConstBytes(*proc.prepareParams.GetType(), val, 1, proc.Mp())
+	return vec, nil
+}
+
+func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
+	proc.resolveVariableFunc = f
+}
+
+func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	return proc.resolveVariableFunc
+}
+
 func (proc *Process) SetLastInsertID(num uint64) {
 	if proc.LastInsertID != nil {
-		*proc.LastInsertID = num
+		atomic.StoreUint64(proc.LastInsertID, num)
 	}
+}
+
+func (proc *Process) GetSessionInfo() *SessionInfo {
+	return &proc.SessionInfo
 }
 
 func (proc *Process) GetLastInsertID() uint64 {
 	if proc.LastInsertID != nil {
-		return *proc.LastInsertID
+		num := atomic.LoadUint64(proc.LastInsertID)
+		return num
 	}
 	return 0
 }
@@ -268,4 +339,22 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
+}
+
+func (a *AnalyzeInfo) Reset() {
+	a.NodeId = 0
+	a.InputRows = 0
+	a.OutputRows = 0
+	a.TimeConsumed = 0
+	a.WaitTimeConsumed = 0
+	a.InputSize = 0
+	a.OutputSize = 0
+	a.MemorySize = 0
+	a.DiskIO = 0
+	a.S3IOByte = 0
+	a.S3IOInputCount = 0
+	a.S3IOOutputCount = 0
+	a.NetworkIO = 0
+	a.ScanTime = 0
+	a.InsertTime = 0
 }

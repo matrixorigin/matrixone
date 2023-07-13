@@ -19,13 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,20 +30,32 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.state = Process
-	if ap.IsRemote {
-		s3Writers, err := colexec.AllocS3Writers(ap.InsertCtx.TableDef)
-		if err != nil {
-			return err
+	if ap.ToWriteS3 {
+		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+			// If the target is partition table, just only apply writers for all partitioned sub tables
+			s3Writers, err := colexec.AllocPartitionS3Writer(proc, ap.InsertCtx.TableDef)
+			if err != nil {
+				return err
+			}
+			ap.ctr.partitionS3Writers = s3Writers
+		} else {
+			// If the target is not partition table, you only need to operate the main table
+			s3Writer, err := colexec.AllocS3Writer(proc, ap.InsertCtx.TableDef)
+			if err != nil {
+				return err
+			}
+			ap.ctr.s3Writer = s3Writer
 		}
-		ap.ctr.s3Writers = s3Writers
 	}
 	return nil
 }
 
+// first parameter: true represents whether the current pipeline has ended
+// first parameter: false
 func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	defer analyze(proc, idx)()
 	ap := arg.(*Argument)
@@ -55,76 +63,141 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	s3Writers := ap.ctr.s3Writers
+
 	bat := proc.InputBatch()
 	if bat == nil {
-		if ap.IsRemote {
-			// handle the last Batch that batchSize less than DefaultBlockMaxRows
-			// for more info, refer to the comments about reSizeBatch
-			for _, s3Writer := range s3Writers {
+		// scenario 1 for cn write s3, more in the comment of S3Writer
+		if ap.ToWriteS3 {
+			// If the target is partition table
+			if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+				for _, writer := range ap.ctr.partitionS3Writers {
+					if err := writer.WriteS3CacheBatch(proc); err != nil {
+						ap.ctr.state = End
+						return false, err
+					}
+				}
+
+				if err := collectAndOutput(proc, ap.ctr.partitionS3Writers); err != nil {
+					ap.ctr.state = End
+					return false, err
+				}
+			} else {
+				// Normal non partition table
+				s3Writer := ap.ctr.s3Writer
+				// handle the last Batch that batchSize less than DefaultBlockMaxRows
+				// for more info, refer to the comments about reSizeBatch
 				if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
 					ap.ctr.state = End
 					return false, err
 				}
-			}
-			if err := collectAndOutput(proc, s3Writers); err != nil {
-				ap.ctr.state = End
-				return false, err
+				err := s3Writer.Output(proc)
+				if err != nil {
+					return false, err
+				}
 			}
 		}
 		return true, nil
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
 	defer proc.PutBatch(bat)
-	proc.SetInputBatch(&batch.Batch{})
 	insertCtx := ap.InsertCtx
-	//write origin table
-	if ap.IsRemote {
-		// write to s3.
-		if err := s3Writers[0].WriteS3Batch(bat, proc); err != nil {
-			ap.ctr.state = End
-			return false, err
+
+	// scenario 1 for cn write s3, more in the comment of S3Writer
+	if ap.ToWriteS3 {
+		// If the target is partition table
+		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+			insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
+			if err != nil {
+				return false, err
+			}
+
+			// write partition data to s3.
+			for pidx, writer := range ap.ctr.partitionS3Writers {
+				if err = writer.WriteS3Batch(proc, insertBatches[pidx]); err != nil {
+					ap.ctr.state = End
+					insertBatches[pidx].Clean(proc.Mp())
+					return false, err
+				}
+				insertBatches[pidx].Clean(proc.Mp())
+			}
+		} else {
+			// Normal non partition table
+			s3Writer := ap.ctr.s3Writer
+			// write to s3.
+			bat.Attrs = append(bat.Attrs[:0], ap.InsertCtx.Attrs...)
+			if err := s3Writer.WriteS3Batch(proc, bat); err != nil {
+				ap.ctr.state = End
+				return false, err
+			}
 		}
+		proc.SetInputBatch(batch.EmptyBatch)
+
 	} else {
-		// write origin table, bat will be deeply copied into txn's workspace.
-		if err := insertCtx.Rels[0].Write(proc.Ctx, bat); err != nil {
-			ap.ctr.state = End
-			return false, err
+		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
+		insertBat.Attrs = ap.InsertCtx.Attrs
+		for i := range insertBat.Attrs {
+			vec := proc.GetVector(*bat.Vecs[i].GetType())
+			if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+				return false, err
+			}
+			insertBat.SetVector(int32(i), vec)
 		}
+		insertBat.Zs = append(insertBat.Zs, bat.Zs...)
+
+		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+			insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
+			if err != nil {
+				return false, err
+			}
+			for i, partitionBat := range insertBatches {
+				err := ap.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
+				if err != nil {
+					partitionBat.Clean(proc.Mp())
+					return false, err
+				}
+				partitionBat.Clean(proc.Mp())
+			}
+		} else {
+			// insert into table, insertBat will be deeply copied into txn's workspace.
+			err := insertCtx.Rel.Write(proc.Ctx, insertBat)
+			if err != nil {
+				proc.SetInputBatch(nil)
+				insertBat.Clean(proc.GetMPool())
+				return false, err
+			}
+		}
+
+		// `insertBat` does not include partition expression columns
+		proc.SetInputBatch(nil)
+		insertBat.Clean(proc.GetMPool())
 	}
 
-	// write unique key table
-	nameToPos, pkPos := getUniqueKeyInfo(insertCtx.TableDef)
-	var uniqIndexs []engine.Relation
-	if len(insertCtx.Rels) > 1 {
-		uniqIndexs = insertCtx.Rels[1:]
+	if ap.InsertCtx.AddAffectedRows {
+		affectedRows := uint64(bat.Vecs[0].Length())
+		atomic.AddUint64(&ap.affectedRows, affectedRows)
 	}
-	err := colexec.WriteUniqueTable(
-		s3Writers, proc, bat, insertCtx.TableDef,
-		nameToPos, pkPos, uniqIndexs)
-	if err != nil {
-		return false, err
-	}
-	affectedRows := uint64(bat.Vecs[0].Length())
-	atomic.AddUint64(&ap.Affected, affectedRows)
 	return false, nil
 }
 
+// Collect all partition subtables' s3writers  metaLoc information and output it
 func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
 	res := batch.NewWithSize(len(attrs))
 	res.SetAttributes(attrs)
-	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	res.Vecs[0] = proc.GetVector(types.T_int16.ToType())
+	res.Vecs[1] = proc.GetVector(types.T_text.ToType())
 	for _, w := range s3Writers {
 		//deep copy.
 		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
 		if err != nil {
 			return
 		}
+		res.Zs = append(res.Zs, w.GetMetaLocBat().Zs...)
+		w.ResetMetaLocBat(proc)
 	}
 	proc.SetInputBatch(res)
 	return
@@ -138,29 +211,4 @@ func analyze(proc *process.Process, idx int) func() {
 		anal.Stop()
 		anal.AddInsertTime(t)
 	}
-}
-
-func getUniqueKeyInfo(tableDef *pb.TableDef) (map[string]int, int) {
-	nameToPos := make(map[string]int)
-	pkPos := -1
-	pos := 0
-	hasCompositePKey := false
-	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-		hasCompositePKey = true
-	}
-	for j, col := range tableDef.Cols {
-		// Check whether the composite primary key column is included
-		if !hasCompositePKey && col.Name != catalog.Row_ID && col.Primary {
-			pkPos = j
-		}
-		if col.Name != catalog.Row_ID {
-			nameToPos[col.Name] = pos
-			pos++
-		}
-	}
-	// Check whether the composite primary key column is included
-	if hasCompositePKey {
-		pkPos = pos
-	}
-	return nameToPos, pkPos
 }

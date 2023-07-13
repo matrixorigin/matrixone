@@ -91,6 +91,13 @@ func (sm *SessionManager) DeleteSession(stream morpcStream) {
 	delete(sm.clients, stream)
 }
 
+func (sm *SessionManager) HasSession(stream morpcStream) bool {
+	sm.RLock()
+	defer sm.RUnlock()
+	_, ok := sm.clients[stream]
+	return ok
+}
+
 // ListSession takes a snapshot of all sessions.
 func (sm *SessionManager) ListSession() []*Session {
 	sm.RLock()
@@ -154,7 +161,6 @@ func (s *morpcStream) write(
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 
 		if err := s.cs.Write(ctx, seg); err != nil {
-			s.segments.Release(seg)
 			return err
 		}
 	}
@@ -224,11 +230,18 @@ func NewSession(
 	sender := func() {
 		defer ss.wg.Done()
 
+		var cnt int64
+		timer := time.NewTimer(100 * time.Second)
+
 		for {
 			select {
 			case <-ss.sessionCtx.Done():
 				ss.logger.Error("stop session sender", zap.Error(ss.sessionCtx.Err()))
 				return
+
+			case <-timer.C:
+				ss.logger.Info("send logtail channel blocked", zap.Int64("sendRound", cnt))
+				timer.Reset(10 * time.Second)
 
 			case msg, ok := <-ss.sendChan:
 				if !ok {
@@ -242,7 +255,11 @@ func NewSession(
 					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
 					defer cancel()
 
+					now := time.Now()
 					err := ss.stream.write(ctx, msg.response)
+					if sendCost := time.Since(now); sendCost > 10*time.Second {
+						ss.logger.Info("send logtail too much", zap.Int64("sendRound", cnt), zap.Duration("duration", sendCost))
+					}
 					if err != nil {
 						ss.logger.Error("fail to send logtail response",
 							zap.Error(err),
@@ -257,6 +274,8 @@ func NewSession(
 					ss.notifier.NotifySessionError(ss, err)
 					return
 				}
+				cnt++
+				timer.Reset(10 * time.Second)
 			}
 		}
 	}
@@ -278,6 +297,21 @@ func (ss *Session) PostClean() {
 
 	ss.cancelFunc()
 	ss.wg.Wait()
+
+	left := len(ss.sendChan)
+
+	// release all left responses in sendChan
+	if left > 0 {
+		i := 0
+		for resp := range ss.sendChan {
+			ss.responses.Release(resp.response)
+			i++
+			if i >= left {
+				break
+			}
+		}
+		ss.logger.Info("release left responses", zap.Int("left", left))
+	}
 }
 
 // Register registers table for client.
@@ -326,12 +360,12 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 
-	qualified := make([]logtail.TableLogtail, 0, len(ss.tables))
+	qualified := make([]logtail.TableLogtail, 0, 4)
 	for _, t := range tails {
 		if state, ok := ss.tables[t.id]; ok && state == TableSubscribed {
 			qualified = append(qualified, t.tail)
 		} else {
-			ss.logger.Info("table not subscribed, filter out",
+			ss.logger.Debug("table not subscribed, filter out",
 				zap.String("id", string(t.id)),
 				zap.String("checkpoint", t.tail.CkpLocation),
 			)
@@ -342,10 +376,13 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 
 // Publish publishes incremental logtail.
 func (ss *Session) Publish(
-	ctx context.Context, from, to timestamp.Timestamp, wraps ...wrapLogtail,
+	ctx context.Context, from, to timestamp.Timestamp, closeCB func(), wraps ...wrapLogtail,
 ) error {
 	// no need to send incremental logtail if no table subscribed
 	if atomic.LoadInt32(&ss.active) <= 0 {
+		if closeCB != nil {
+			closeCB()
+		}
 		return nil
 	}
 
@@ -361,6 +398,9 @@ func (ss *Session) Publish(
 		case <-ss.heartbeatTimer.C:
 			break
 		default:
+			if closeCB != nil {
+				closeCB()
+			}
 			return nil
 		}
 	}
@@ -368,10 +408,12 @@ func (ss *Session) Publish(
 	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
 	defer cancel()
 
-	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, qualified...)
+	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, closeCB, qualified...)
 	if err == nil {
 		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
 		ss.exactFrom = to
+	} else {
+		ss.notifier.NotifySessionError(ss, err)
 	}
 	return err
 }
@@ -402,11 +444,12 @@ func (ss *Session) SendErrorResponse(
 
 // SendSubscriptionResponse sends subscription response.
 func (ss *Session) SendSubscriptionResponse(
-	sendCtx context.Context, tail logtail.TableLogtail,
+	sendCtx context.Context, tail logtail.TableLogtail, closeCB func(),
 ) error {
 	ss.logger.Info("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
 
 	resp := ss.responses.Acquire()
+	resp.closeCB = closeCB
 	resp.Response = newSubscritpionResponse(tail)
 	err := ss.SendResponse(sendCtx, resp)
 	if err == nil {
@@ -432,11 +475,12 @@ func (ss *Session) SendUnsubscriptionResponse(
 
 // SendUpdateResponse sends publishment response.
 func (ss *Session) SendUpdateResponse(
-	sendCtx context.Context, from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
+	sendCtx context.Context, from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail,
 ) error {
 	ss.logger.Debug("send incremental logtail", zap.Any("From", from.String()), zap.String("To", to.String()), zap.Int("tables", len(tails)))
 
 	resp := ss.responses.Acquire()
+	resp.closeCB = closeCB
 	resp.Response = newUpdateResponse(from, to, tails...)
 	return ss.SendResponse(sendCtx, resp)
 }

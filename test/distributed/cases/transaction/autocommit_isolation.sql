@@ -77,7 +77,7 @@ select * from test_11;
 
 -- -------------------------------------------------------
 drop table if exists test_11;
-
+-- @bvt:issue#6949
 set @@autocommit=0;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -97,6 +97,7 @@ select * from test_11;
 -- @session:id=1{
 select * from test_11;
 -- @session}
+-- @bvt:issue
 
 -- -------------------------------------------------------
 drop table if exists test_11;

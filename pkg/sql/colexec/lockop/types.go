@@ -15,43 +15,53 @@
 package lockop
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // FetchLockRowsFunc fetch lock rows from vector.
 type FetchLockRowsFunc func(
 	// primary data vector
 	vec *vector.Vector,
-	// hodler to encode primary key to lock row
+	// holder to encode primary key to lock row
 	parker *types.Packer,
 	// primary key type
 	tp types.Type,
 	// global config: max lock rows bytes per lock
 	max int,
 	// is lock table lock
-	lockTabel bool,
+	lockTable bool,
 	// used to filter rows
 	filter RowsFilter,
 	// used by filter rows func
-	filterCols []int) ([][]byte, lock.Granularity)
+	filterCols []int32) ([][]byte, lock.Granularity)
 
 // LockOptions lock operation options
 type LockOptions struct {
-	maxBytesPerLock int
-	mode            lock.LockMode
-	lockTable       bool
-	parker          *types.Packer
-	fetchFunc       FetchLockRowsFunc
-	filter          RowsFilter
-	filterCols      []int
+	maxCountPerLock          int
+	mode                     lock.LockMode
+	lockTable                bool
+	parker                   *types.Packer
+	fetchFunc                FetchLockRowsFunc
+	filter                   RowsFilter
+	filterCols               []int32
+	hasNewVersionInRangeFunc hasNewVersionInRangeFunc
 }
 
 // Argument lock op argument.
 type Argument struct {
-	parker  *types.Packer
+	engine  engine.Engine
 	targets []lockTarget
+	block   bool
+
+	// state used for save lock op temp state.
+	rt *state
 }
 
 type lockTarget struct {
@@ -59,10 +69,35 @@ type lockTarget struct {
 	primaryColumnIndexInBatch    int32
 	refreshTimestampIndexInBatch int32
 	primaryColumnType            types.Type
-	fetcher                      FetchLockRowsFunc
 	filter                       RowsFilter
 	filterColIndexInBatch        int32
+	lockTable                    bool
 }
 
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.
-type RowsFilter func(row int, fliterCols []int) bool
+type RowsFilter func(row int, filterCols []int32) bool
+
+type hasNewVersionInRangeFunc func(
+	proc *process.Process,
+	tableID uint64,
+	eng engine.Engine,
+	vec *vector.Vector,
+	from, to timestamp.Timestamp) (bool, error)
+
+type state struct {
+	colexec.ReceiverOperator
+
+	parker               *types.Packer
+	retryError           error
+	step                 int
+	fetchers             []FetchLockRowsFunc
+	cachedBatches        []*batch.Batch
+	batchFetchFunc       func(process.Analyze) (*batch.Batch, bool, error)
+	hasNewVersionInRange hasNewVersionInRangeFunc
+}
+
+const (
+	stepLock = iota
+	stepDownstream
+	stepEnd
+)

@@ -26,13 +26,19 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+var exportMux sync.Mutex
+
 func Test_initExport(t *testing.T) {
+	exportMux.Lock()
+	defer exportMux.Unlock()
+
 	type args struct {
 		enableTracer bool
 		config       *tracerProviderConfig

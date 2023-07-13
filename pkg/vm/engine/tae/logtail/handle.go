@@ -71,13 +71,17 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -119,7 +123,7 @@ func HandleSyncLogTailReq(
 	mgr *Manager,
 	c *catalog.Catalog,
 	req api.SyncLogTailReq,
-	canRetry bool) (resp api.SyncLogTailResp, err error) {
+	canRetry bool) (resp api.SyncLogTailResp, closeCB func(), err error) {
 	now := time.Now()
 	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
@@ -151,7 +155,7 @@ func HandleSyncLogTailReq(
 	if checkpointed.GreaterEq(end) {
 		return api.SyncLogTailResp{
 			CkpLocation: ckpLoc,
-		}, err
+		}, nil, err
 	} else if ckpLoc != "" {
 		start = checkpointed.Next()
 	}
@@ -161,15 +165,15 @@ func HandleSyncLogTailReq(
 	var visitor RespBuilder
 
 	if scope == ScopeUserTables {
-		visitor = NewTableLogtailRespBuilder(ckpLoc, start, end, tableEntry)
+		visitor = NewTableLogtailRespBuilder(ctx, ckpLoc, start, end, tableEntry)
 	} else {
-		visitor = NewCatalogLogtailRespBuilder(scope, ckpLoc, start, end)
+		visitor = NewCatalogLogtailRespBuilder(ctx, scope, ckpLoc, start, end)
 	}
-	defer visitor.Close()
+	closeCB = visitor.Close
 
 	operator := mgr.GetTableOperator(start, end, c, did, tid, scope, visitor)
 	if err := operator.Run(); err != nil {
-		return api.SyncLogTailResp{}, err
+		return api.SyncLogTailResp{}, visitor.Close, err
 	}
 	resp, err = visitor.BuildResp()
 
@@ -178,9 +182,9 @@ func HandleSyncLogTailReq(
 		if (forceFlush && name == tableEntry.GetLastestSchema().Name) || resp.ProtoSize() > Size90M {
 			_ = ckpClient.FlushTable(ctx, did, tid, end)
 			// try again after flushing
-			newResp, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
+			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
 			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
-			return newResp, err
+			return newResp, closeCB, err
 		}
 	}
 	return
@@ -195,6 +199,7 @@ type RespBuilder interface {
 // CatalogLogtailRespBuilder knows how to make api-entry from db and table entry.
 // impl catalog.Processor interface, driven by BoundTableOperator
 type CatalogLogtailRespBuilder struct {
+	ctx context.Context
 	*catalog.LoopProcessor
 	scope      Scope
 	start, end types.TS
@@ -203,8 +208,9 @@ type CatalogLogtailRespBuilder struct {
 	delBatch   *containers.Batch
 }
 
-func NewCatalogLogtailRespBuilder(scope Scope, ckp string, start, end types.TS) *CatalogLogtailRespBuilder {
+func NewCatalogLogtailRespBuilder(ctx context.Context, scope Scope, ckp string, start, end types.TS) *CatalogLogtailRespBuilder {
 	b := &CatalogLogtailRespBuilder{
+		ctx:           ctx,
 		LoopProcessor: new(catalog.LoopProcessor),
 		scope:         scope,
 		start:         start,
@@ -343,6 +349,10 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			Bat:          bat,
 		}
 		entries = append(entries, insEntry)
+		perfcounter.Update(b.ctx, func(counter *perfcounter.CounterSet) {
+			counter.TAE.LogTail.Entries.Add(int64(b.insBatch.Length()))
+			counter.TAE.LogTail.InsertEntries.Add(int64(b.insBatch.Length()))
+		})
 	}
 	if b.delBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.delBatch)
@@ -360,6 +370,10 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			Bat:          bat,
 		}
 		entries = append(entries, delEntry)
+		perfcounter.Update(b.ctx, func(counter *perfcounter.CounterSet) {
+			counter.TAE.LogTail.Entries.Add(int64(b.delBatch.Length()))
+			counter.TAE.LogTail.DeleteEntries.Add(int64(b.delBatch.Length()))
+		})
 	}
 	return api.SyncLogTailResp{
 		CkpLocation: b.checkpoint,
@@ -389,6 +403,7 @@ func catalogEntry2Batch[
 // CatalogLogtailRespBuilder knows how to make api-entry from block entry.
 // impl catalog.Processor interface, driven by BoundTableOperator
 type TableLogtailRespBuilder struct {
+	ctx context.Context
 	*catalog.LoopProcessor
 	start, end      types.TS
 	did, tid        uint64
@@ -401,8 +416,9 @@ type TableLogtailRespBuilder struct {
 	dataDelBatch    *containers.Batch
 }
 
-func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.TableEntry) *TableLogtailRespBuilder {
+func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end types.TS, tbl *catalog.TableEntry) *TableLogtailRespBuilder {
 	b := &TableLogtailRespBuilder{
+		ctx:           ctx,
 		LoopProcessor: new(catalog.LoopProcessor),
 		start:         start,
 		end:           end,
@@ -538,7 +554,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 }
 
 // visitBlkData collects logtail in memory
-func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error) {
+func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.BlockEntry) (err error) {
 	block := e.GetBlockData()
 	insBatch, err := block.CollectAppendInRange(b.start, b.end, false)
 	if err != nil {
@@ -555,7 +571,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 			// insBatch is freed, don't use anymore
 		}
 	}
-	delBatch, err := block.CollectDeleteInRange(b.start, b.end, false)
+	delBatch, err := block.CollectDeleteInRange(ctx, b.start, b.end, false)
 	if err != nil {
 		return
 	}
@@ -572,7 +588,7 @@ func (b *TableLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) error {
 		// data has been flushed, no need to collect data
 		return nil
 	}
-	return b.visitBlkData(entry)
+	return b.visitBlkData(b.ctx, entry)
 }
 
 type TableRespKind int
@@ -598,15 +614,15 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		switch kind {
 		case TableRespKind_Data:
 			tableName = b.tname
-			logutil.Infof("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
+			logutil.Debugf("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
 				DebugBatchToString("data", batch, false, zap.InfoLevel))
 		case TableRespKind_Blk:
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
-			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
 		case TableRespKind_Seg:
 			tableName = fmt.Sprintf("_%d_seg", b.tid)
-			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("segmeta", batch, false, zap.InfoLevel))
 		}
 
@@ -659,74 +675,68 @@ func LoadCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	fs fileservice.FileService) ([]*api.Entry, error) {
+	mp *mpool.MPool,
+	fs fileservice.FileService) ([]*api.Entry, []func(), error) {
 	if metLoc == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	now := time.Now()
 	defer func() {
-		logutil.Infof("LoadCheckpointEntries latency: %v", time.Since(now))
+		logutil.Debugf("LoadCheckpointEntries latency: %v", time.Since(now))
 	}()
-	locations := strings.Split(metLoc, ";")
-	datas := make([]*CheckpointData, len(locations))
+	locationsAndVersions := strings.Split(metLoc, ";")
+	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
 
-	readers := make([]*blockio.BlockReader, len(locations))
-	objectLocations := make([]objectio.Location, len(locations))
-	for i, key := range locations {
+	readers := make([]*blockio.BlockReader, len(locationsAndVersions)/2)
+	objectLocations := make([]objectio.Location, len(locationsAndVersions)/2)
+	versions := make([]uint32, len(locationsAndVersions)/2)
+	for i := 0; i < len(locationsAndVersions); i += 2 {
+		key := locationsAndVersions[i]
+		version, err := strconv.ParseUint(locationsAndVersions[i+1], 10, 32)
+		if err != nil {
+			return nil, nil, err
+		}
 		location, err := blockio.EncodeLocationFromString(key)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		reader, err := blockio.NewObjectReader(fs, location)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		readers[i] = reader
+		readers[i/2] = reader
 		err = blockio.PrefetchMeta(fs, location)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		objectLocations[i] = location
+		objectLocations[i/2] = location
+		versions[i/2] = uint32(version)
 	}
 
-	for i := range locations {
-		pref, err := blockio.BuildPrefetchParams(fs, objectLocations[i])
+	for i := range objectLocations {
+		data := NewCNCheckpointData()
+		err := data.PrefetchFrom(ctx, versions[i], fs, objectLocations[i])
 		if err != nil {
-			return nil, err
-		}
-		for idx, item := range checkpointDataRefer {
-			idxes := make([]uint16, len(item.attrs))
-			for col := range item.attrs {
-				idxes[col] = uint16(col)
-			}
-			pref.AddBlock(idxes, []uint16{uint16(idx)})
-		}
-		err = blockio.PrefetchWithMerged(pref)
-		if err != nil {
-			return nil, err
-		}
-
-	}
-
-	for i := range locations {
-		data := NewCheckpointData()
-		for idx, item := range checkpointDataRefer {
-			var bat *containers.Batch
-			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), readers[i])
-			if err != nil {
-				return nil, err
-			}
-			data.bats[idx] = bat
+			return nil, nil, err
 		}
 		datas[i] = data
 	}
 
+	closeCBs := make([]func(), 0)
+	for i, data := range datas {
+		err := data.ReadFrom(ctx, readers[i], versions[i], mp)
+		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
+		if err != nil {
+			return nil, closeCBs, err
+		}
+	}
+
 	entries := make([]*api.Entry, 0)
-	for i := range locations {
+	for i := range objectLocations {
 		data := datas[i]
 		ins, del, cnIns, segDel, err := data.GetTableData(tableID)
 		if err != nil {
-			return nil, err
+			return nil, closeCBs, err
 		}
 		if tableName != pkgcatalog.MO_DATABASE &&
 			tableName != pkgcatalog.MO_COLUMNS &&
@@ -778,5 +788,5 @@ func LoadCheckpointEntries(
 			entries = append(entries, entry)
 		}
 	}
-	return entries, nil
+	return entries, closeCBs, nil
 }

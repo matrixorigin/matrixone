@@ -30,10 +30,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -46,9 +48,9 @@ import (
 var (
 	defaultListenAddress    = "127.0.0.1:6002"
 	defaultCtlListenAddress = "127.0.0.1:19958"
-	// TODO(fagongzi): make rc and pessimistic as default
-	defaultTxnIsolation = txn.TxnIsolation_SI
-	defaultTxnMode      = txn.TxnMode_Optimistic
+	// defaultTxnIsolation     = txn.TxnIsolation_SI
+	defaultTxnMode             = txn.TxnMode_Optimistic
+	maxForMaxPreparedStmtCount = 1000000
 )
 
 type Service interface {
@@ -157,7 +159,8 @@ type Config struct {
 
 	// Txn txn config
 	Txn struct {
-		// Isolation txn isolation. SI or RC, default is SI
+		// Isolation txn isolation. SI or RC
+		// when Isolation is not set. we will set SI when Mode is optimistic, RC when Mode is pessimistic
 		Isolation string `toml:"isolation"`
 		// Mode txn mode. optimistic or pessimistic, default is optimistic
 		Mode string `toml:"mode"`
@@ -176,10 +179,23 @@ type Config struct {
 		// feature was turned off in 0.8 and is not supported for now. The replacement solution is
 		// to return a retry error and let the whole computation re-execute.
 		EnableRefreshExpression bool `toml:"enable-refresh-expression"`
+		// EnableLeakCheck enable txn leak check
+		EnableLeakCheck bool `toml:"enable-leak-check"`
+		// MaxActiveAges a txn max active duration
+		MaxActiveAges toml.Duration `toml:"max-active-ages"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
 	Ctl ctlservice.Config `toml:"ctl"`
+
+	// AutoIncrement auto increment config
+	AutoIncrement incrservice.Config `toml:"auto-increment"`
+
+	// PrimaryKeyCheck
+	PrimaryKeyCheck bool `toml:"primary-key-check"`
+
+	// MaxPreparedStmtCount
+	MaxPreparedStmtCount int `toml:"max_prepared_stmt_count"`
 }
 
 func (c *Config) Validate() error {
@@ -240,21 +256,48 @@ func (c *Config) Validate() error {
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
-	if c.Txn.Isolation == "" {
-		c.Txn.Isolation = defaultTxnIsolation.String()
-	}
-	if !txn.ValidTxnIsolation(c.Txn.Isolation) {
-		return moerr.NewBadDBNoCtx("not support txn isolation: " + c.Txn.Isolation)
-	}
+
 	if c.Txn.Mode == "" {
 		c.Txn.Mode = defaultTxnMode.String()
 	}
 	if !txn.ValidTxnMode(c.Txn.Mode) {
 		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
 	}
+
+	if c.Txn.Isolation == "" {
+		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+			c.Txn.Isolation = txn.TxnIsolation_RC.String()
+		} else {
+			c.Txn.Isolation = txn.TxnIsolation_SI.String()
+		}
+	}
+	if !txn.ValidTxnIsolation(c.Txn.Isolation) {
+		return moerr.NewBadDBNoCtx("not support txn isolation: " + c.Txn.Isolation)
+	}
+
+	if c.Txn.MaxActiveAges.Duration == 0 {
+		c.Txn.MaxActiveAges.Duration = time.Minute * 2
+	}
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
+
+	// pessimistic mode implies primary key check
+	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
+		plan.CNPrimaryCheck = true
+	} else {
+		plan.CNPrimaryCheck = false
+	}
+
+	if c.MaxPreparedStmtCount > 0 {
+		if c.MaxPreparedStmtCount > maxForMaxPreparedStmtCount {
+			frontend.MaxPrepareNumberInOneSession = maxForMaxPreparedStmtCount
+		} else {
+			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
+		}
+	} else {
+		frontend.MaxPrepareNumberInOneSession = 1024
+	}
 	return nil
 }
 

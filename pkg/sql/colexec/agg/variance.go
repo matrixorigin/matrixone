@@ -94,45 +94,45 @@ func (variance *Variance[T1]) Grows(count int) {
 	}
 }
 
-func (variance *Variance[T1]) Eval(vs []float64) []float64 {
+func (variance *Variance[T1]) Eval(vs []float64, err error) ([]float64, error) {
 	for i, v := range vs {
 		avg := (variance.Sum[i]) / (variance.Counts[i])
 		vs[i] = (v)/(variance.Counts[i]) - math.Pow(avg, 2)
 	}
-	return vs
+	return vs, nil
 }
 
-func (variance *Variance[T1]) Merge(groupIndex1, groupIndex2 int64, x, y float64, IsEmpty1 bool, IsEmpty2 bool, agg any) (float64, bool) {
+func (variance *Variance[T1]) Merge(groupIndex1, groupIndex2 int64, x, y float64, IsEmpty1 bool, IsEmpty2 bool, agg any) (float64, bool, error) {
 	variance2 := agg.(*Variance[T1])
 	if IsEmpty1 && !IsEmpty2 {
 		variance.Sum[groupIndex1] = variance2.Sum[groupIndex2]
 		variance.Counts[groupIndex1] = variance2.Counts[groupIndex2]
-		return y, false
+		return y, false, nil
 	} else if IsEmpty2 && !IsEmpty1 {
-		return x, false
+		return x, false, nil
 	} else if IsEmpty1 && IsEmpty2 {
-		return x, true
+		return x, true, nil
 	} else {
 		variance.Counts[groupIndex1] += variance2.Counts[groupIndex2]
 		variance.Sum[groupIndex1] += variance2.Sum[groupIndex2]
-		return x + y, false
+		return x + y, false, nil
 	}
 }
 
-func (variance *Variance[T1]) Fill(groupIndex int64, v1 T1, v2 float64, z int64, IsEmpty bool, hasNull bool) (float64, bool) {
+func (variance *Variance[T1]) Fill(groupIndex int64, v1 T1, v2 float64, z int64, IsEmpty bool, hasNull bool) (float64, bool, error) {
 	if hasNull {
-		return v2, IsEmpty
+		return v2, IsEmpty, nil
 	} else if IsEmpty {
 		f1 := float64(v1)
 		variance.Sum[groupIndex] = f1 * float64(z)
 		variance.Counts[groupIndex] += float64(z)
-		return math.Pow(f1, 2) * float64(z), false
+		return math.Pow(f1, 2) * float64(z), false, nil
 	}
 	f1 := float64(v1)
 	f2 := v2
 	variance.Sum[groupIndex] += f1 * float64(z)
 	variance.Counts[groupIndex] += float64(z)
-	return f2 + math.Pow(f1, 2)*float64(z), false
+	return f2 + math.Pow(f1, 2)*float64(z), false, nil
 }
 
 func (variance *Variance[T1]) MarshalBinary() ([]byte, error) {
@@ -182,37 +182,53 @@ func (v *VD64) Grows(cnt int) {
 	}
 }
 
-func (v *VD64) Eval(vs []types.Decimal128) []types.Decimal128 {
+func (v *VD64) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
 	for i, k := range vs {
 		if v.Counts[i] == 1 {
 			vs[i] = types.Decimal128{B0_63: 0, B64_127: 0}
 			continue
 		}
-		a, _, _ := v.Sum[i].Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.Typ.Scale, 0)
-		a2, _, _ := a.Mul(a, v.ScaleDiv, v.ScaleDiv)
-		d, _, _ := k.Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.ScaleMul, 0)
-		vs[i], _, _ = d.Sub(a2, v.ScaleMulDiv, v.ScaleDivMul)
+		if err != nil {
+			return nil, err
+		}
+		a, _, err := v.Sum[i].Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.Typ.Scale, 0)
+		if err != nil {
+			return nil, err
+		}
+		a2, _, err1 := a.Mul(a, v.ScaleDiv, v.ScaleDiv)
+		if err1 != nil {
+			return nil, err1
+		}
+		d, _, err2 := k.Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.ScaleMul, 0)
+		if err2 != nil {
+			return nil, err2
+		}
+		vs[i], _, err = d.Sub(a2, v.ScaleMulDiv, v.ScaleDivMul)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return vs
+	return vs, nil
 }
 
-func (v *VD64) Merge(xIndex, yIndex int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, agg any) (types.Decimal128, bool) {
+func (v *VD64) Merge(xIndex, yIndex int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, agg any) (types.Decimal128, bool, error) {
 	if !yEmpty {
 		vd := agg.(*VD64)
 		v.Counts[xIndex] += vd.Counts[yIndex]
 		v.Sum[xIndex], _ = v.Sum[xIndex].Add128(vd.Sum[yIndex])
 		if !xEmpty {
-			x, _ = x.Add128(y)
-			return x, false
+			var err error
+			x, err = x.Add128(y)
+			return x, false, err
 		}
-		return y, false
+		return y, false, nil
 	}
-	return x, xEmpty
+	return x, xEmpty, nil
 }
 
-func (v *VD64) Fill(i int64, v1 types.Decimal64, v2 types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
+func (v *VD64) Fill(i int64, v1 types.Decimal64, v2 types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
 	if isNull {
-		return v2, isEmpty
+		return v2, isEmpty, nil
 	}
 	x := types.Decimal128{B0_63: uint64(v1), B64_127: 0}
 	if v1>>63 != 0 {
@@ -220,15 +236,24 @@ func (v *VD64) Fill(i int64, v1 types.Decimal64, v2 types.Decimal128, z int64, i
 	}
 	v.Counts[i] += z
 	if isEmpty {
-		v.Sum[i], _, _ = x.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
-		x, _, _ = v.Sum[i].Mul(x, v.Typ.Scale, v.Typ.Scale)
-		return x, false
+		var err error
+		v.Sum[i], _, err = x.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
+		if err == nil {
+			x, _, err = v.Sum[i].Mul(x, v.Typ.Scale, v.Typ.Scale)
+		}
+		return x, false, err
 	}
-	y, _, _ := x.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
-	v.Sum[i], _ = v.Sum[i].Add128(y)
-	y, _, _ = y.Mul(x, v.Typ.Scale, v.Typ.Scale)
-	v2, _ = v2.Add128(y)
-	return v2, false
+	y, _, err := x.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
+	if err == nil {
+		v.Sum[i], err = v.Sum[i].Add128(y)
+	}
+	if err == nil {
+		y, _, err = y.Mul(x, v.Typ.Scale, v.Typ.Scale)
+	}
+	if err == nil {
+		v2, err = v2.Add128(y)
+	}
+	return v2, false, err
 }
 
 func (v *VD64) MarshalBinary() ([]byte, error) {
@@ -278,49 +303,74 @@ func (v *VD128) Grows(cnt int) {
 	}
 }
 
-func (v *VD128) Eval(vs []types.Decimal128) []types.Decimal128 {
+func (v *VD128) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
 	for i, k := range vs {
 		if v.Counts[i] == 1 {
 			vs[i] = types.Decimal128{B0_63: 0, B64_127: 0}
 			continue
 		}
-		a, _, _ := v.Sum[i].Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.Typ.Scale, 0)
-		a2, _, _ := a.Mul(a, v.ScaleDiv, v.ScaleDiv)
-		d, _, _ := k.Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.ScaleMul, 0)
-		vs[i], _, _ = d.Sub(a2, v.ScaleMulDiv, v.ScaleDivMul)
+		if err != nil {
+			return nil, err
+		}
+		a, _, err := v.Sum[i].Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.Typ.Scale, 0)
+		if err != nil {
+			return nil, err
+		}
+		a2, _, err1 := a.Mul(a, v.ScaleDiv, v.ScaleDiv)
+		if err1 != nil {
+			return nil, err1
+		}
+		d, _, err2 := k.Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.ScaleMul, 0)
+		if err2 != nil {
+			return nil, err2
+		}
+		vs[i], _, err2 = d.Sub(a2, v.ScaleMulDiv, v.ScaleDivMul)
+		if err2 != nil {
+			return nil, err2
+		}
 	}
-	return vs
+	return vs, nil
 }
 
-func (v *VD128) Merge(xIndex, yIndex int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, agg any) (types.Decimal128, bool) {
+func (v *VD128) Merge(xIndex, yIndex int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, agg any) (types.Decimal128, bool, error) {
 	if !yEmpty {
 		vd := agg.(*VD128)
 		v.Counts[xIndex] += vd.Counts[yIndex]
 		v.Sum[xIndex], _ = v.Sum[xIndex].Add128(vd.Sum[yIndex])
 		if !xEmpty {
-			x, _ = x.Add128(y)
-			return x, false
+			var err error
+			x, err = x.Add128(y)
+			return x, false, err
 		}
-		return y, false
+		return y, false, nil
 	}
-	return x, xEmpty
+	return x, xEmpty, nil
 }
 
-func (v *VD128) Fill(i int64, v1 types.Decimal128, v2 types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
+func (v *VD128) Fill(i int64, v1 types.Decimal128, v2 types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
 	if isNull {
-		return v2, isEmpty
+		return v2, isEmpty, nil
 	}
 	v.Counts[i] += z
 	if isEmpty {
-		v.Sum[i], _, _ = v1.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
-		v1, _, _ = v.Sum[i].Mul(v1, v.Typ.Scale, v.Typ.Scale)
-		return v1, false
+		var err error
+		v.Sum[i], _, err = v1.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
+		if err == nil {
+			v1, _, err = v.Sum[i].Mul(v1, v.Typ.Scale, v.Typ.Scale)
+		}
+		return v1, false, err
 	}
-	y, _, _ := v1.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
-	v.Sum[i], _ = v.Sum[i].Add128(y)
-	y, _, _ = y.Mul(v1, v.Typ.Scale, v.Typ.Scale)
-	v2, _ = v2.Add128(y)
-	return v2, false
+	y, _, err := v1.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
+	if err == nil {
+		v.Sum[i], err = v.Sum[i].Add128(y)
+	}
+	if err == nil {
+		y, _, err = y.Mul(v1, v.Typ.Scale, v.Typ.Scale)
+	}
+	if err == nil {
+		v2, err = v2.Add128(y)
+	}
+	return v2, false, err
 }
 
 func (v *VD128) MarshalBinary() ([]byte, error) {

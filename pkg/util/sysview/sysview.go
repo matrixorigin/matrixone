@@ -187,7 +187,7 @@ var (
 			"att_comment as COLUMN_COMMENT,"+
 			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 			"if(true, NULL, 0) as SRS_ID "+
-			"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.AutoIncrTableName, catalog.PrefixPriColName+"%", catalog.Row_ID),
+			"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
 		//"CREATE TABLE IF NOT EXISTS COLUMNS(" +
 		//	"TABLE_CATALOG varchar(64)," +
 		//	"TABLE_SCHEMA varchar(64)," +
@@ -296,33 +296,34 @@ var (
 			"DATABASE_COLLATION varchar(64)" +
 			");",
 
-		"CREATE VIEW IF NOT EXISTS TABLES AS " +
-			"SELECT 'def' AS TABLE_CATALOG," +
-			"reldatabase AS TABLE_SCHEMA," +
-			"relname AS TABLE_NAME," +
-			"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' " +
-			"when relkind = 'v'  then 'VIEW' " +
-			"when relkind = 'e' then 'EXTERNAL TABLE' " +
-			"when relkind = 'r' then 'BASE TABLE' " +
-			"else 'INTERNAL TABLE' end) AS TABLE_TYPE," +
-			"if(relkind = 'r','Tae',NULL) AS ENGINE," +
-			"if(relkind = 'v',NULL,10) AS VERSION," +
-			"'Compressed' AS ROW_FORMAT," +
-			"if(relkind = 'v', NULL, 0) AS TABLE_ROWS," +
-			"if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH," +
-			"if(relkind = 'v', NULL, 0) AS DATA_LENGTH," +
-			"if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH," +
-			"if(relkind = 'v', NULL, 0) AS INDEX_LENGTH," +
-			"if(relkind = 'v', NULL, 0) AS DATA_FREE," +
-			"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`," +
-			"created_time AS CREATE_TIME," +
-			"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME," +
-			"if(relkind = 'v', NULL, created_time) AS CHECK_TIME," +
-			"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION," +
-			"if(relkind = 'v', NULL, 0) AS CHECKSUM," +
-			"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS," +
-			"cast(rel_comment as text) AS TABLE_COMMENT " +
-			"FROM mo_catalog.mo_tables;",
+		fmt.Sprintf("CREATE VIEW IF NOT EXISTS TABLES AS "+
+			"SELECT 'def' AS TABLE_CATALOG,"+
+			"reldatabase AS TABLE_SCHEMA,"+
+			"relname AS TABLE_NAME,"+
+			"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' "+
+			"when relkind = 'v'  then 'VIEW' "+
+			"when relkind = 'e' then 'EXTERNAL TABLE' "+
+			"when relkind = 'r' then 'BASE TABLE' "+
+			"else 'INTERNAL TABLE' end) AS TABLE_TYPE,"+
+			"if(relkind = 'r','Tae',NULL) AS ENGINE,"+
+			"if(relkind = 'v',NULL,10) AS VERSION,"+
+			"'Compressed' AS ROW_FORMAT,"+
+			"if(relkind = 'v', NULL, 0) AS TABLE_ROWS,"+
+			"if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH,"+
+			"if(relkind = 'v', NULL, 0) AS DATA_LENGTH,"+
+			"if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH,"+
+			"if(relkind = 'v', NULL, 0) AS INDEX_LENGTH,"+
+			"if(relkind = 'v', NULL, 0) AS DATA_FREE,"+
+			"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,"+
+			"created_time AS CREATE_TIME,"+
+			"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,"+
+			"if(relkind = 'v', NULL, created_time) AS CHECK_TIME,"+
+			"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION,"+
+			"if(relkind = 'v', NULL, 0) AS CHECKSUM,"+
+			"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
+			"cast(rel_comment as text) AS TABLE_COMMENT "+
+			"FROM mo_catalog.mo_tables tbl "+
+			"WHERE tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
 
 		//"CREATE VIEW IF NOT EXISTS TABLES AS " +
 		//	"SELECT 'def' AS TABLE_CATALOG," +

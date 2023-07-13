@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -84,7 +85,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	Stats(ctx context.Context, statsInfoMap any) bool
+	Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool
 	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }
@@ -515,7 +516,9 @@ func (def *IndexDef) ToPBVersion() ConstraintPB {
 type Relation interface {
 	Statistics
 
-	Ranges(context.Context, ...*plan.Expr) ([][]byte, error)
+	Ranges(context.Context, []*plan.Expr) ([][]byte, error)
+
+	ApplyRuntimeFilters(context.Context, [][]byte, []*plan.Expr, []*pipeline.RuntimeFilter) ([][]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -536,7 +539,14 @@ type Relation interface {
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
+	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
+
 	GetTableID(context.Context) uint64
+
+	// GetTableName returns the name of the table.
+	GetTableName() string
+
+	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
@@ -548,7 +558,9 @@ type Relation interface {
 
 	GetEngineType() EngineType
 
-	GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error)
+	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
+
+	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 }
 
 type Reader interface {
@@ -558,7 +570,7 @@ type Reader interface {
 
 type Database interface {
 	Relations(context.Context) ([]string, error)
-	Relation(context.Context, string) (Relation, error)
+	Relation(context.Context, string, any) (Relation, error)
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
@@ -571,8 +583,6 @@ type Database interface {
 type Engine interface {
 	// transaction interface
 	New(ctx context.Context, op client.TxnOperator) error
-	Commit(ctx context.Context, op client.TxnOperator) error
-	Rollback(ctx context.Context, op client.TxnOperator) error
 
 	// Delete deletes a database
 	Delete(ctx context.Context, databaseName string, op client.TxnOperator) error
@@ -588,7 +598,7 @@ type Engine interface {
 
 	// Nodes returns all nodes for worker jobs. isInternal, tenant, cnLabel are
 	// used to filter CN servers.
-	Nodes(isInternal bool, tenant string, cnLabel map[string]string) (cnNodes Nodes, err error)
+	Nodes(isInternal bool, tenant string, username string, cnLabel map[string]string) (cnNodes Nodes, err error)
 
 	// Hints returns hints of engine features
 	// return value should not be cached
@@ -596,7 +606,7 @@ type Engine interface {
 	Hints() Hints
 
 	NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
-		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]Reader, error)
+		expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef, proc any) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)

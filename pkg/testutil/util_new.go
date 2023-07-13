@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"context"
+	"encoding/binary"
 	"math/rand"
 	"strconv"
 	"time"
@@ -23,11 +24,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -37,7 +40,21 @@ func NewProcess() *process.Process {
 	return NewProcessWithMPool(mp)
 }
 
+func SetupAutoIncrService() {
+	rt := runtime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+		runtime.SetupProcessLevelRuntime(rt)
+	}
+	rt.SetGlobalVariables(
+		runtime.AutoIncrmentService,
+		incrservice.NewIncrService(
+			incrservice.NewMemStore(),
+			incrservice.Config{}))
+}
+
 func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
+	SetupAutoIncrService()
 	proc := process.New(
 		context.Background(),
 		mp,
@@ -275,10 +292,12 @@ func NewRowidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.Ro
 		return vec
 	}
 	for i := 0; i < n; i++ {
-		var rowId [2]int64
-
-		rowId[1] = int64(i)
-		if err := vector.AppendFixed(vec, *(*types.Rowid)(unsafe.Pointer(&rowId[0])), false, m); err != nil {
+		var rowId types.Rowid
+		binary.LittleEndian.PutUint64(
+			unsafe.Slice(&rowId[types.RowidSize/2], 8),
+			uint64(i),
+		)
+		if err := vector.AppendFixed(vec, rowId, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -298,10 +317,12 @@ func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.
 		return vec
 	}
 	for i := 0; i < n; i++ {
-		var blockId [2]int64
-
-		blockId[1] = int64(i)
-		if err := vector.AppendFixed(vec, *(*types.Blockid)(unsafe.Pointer(&blockId[0])), false, m); err != nil {
+		var blockId types.Blockid
+		binary.LittleEndian.PutUint64(
+			unsafe.Slice(&blockId[types.BlockidSize/2], 8),
+			uint64(i),
+		)
+		if err := vector.AppendFixed(vec, blockId, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

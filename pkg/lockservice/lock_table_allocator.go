@@ -338,16 +338,18 @@ func (l *lockTableAllocator) initHandler() {
 func (l *lockTableAllocator) handleGetBind(
 	ctx context.Context,
 	req *pb.Request,
-	resp *pb.Response) error {
+	resp *pb.Response,
+	cs morpc.ClientSession) {
 	resp.GetBind.LockTable = l.Get(req.GetBind.ServiceID,
 		req.GetBind.Table)
-	return nil
+	writeResponse(ctx, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleKeepLockTableBind(
 	ctx context.Context,
 	req *pb.Request,
-	resp *pb.Response) error {
+	resp *pb.Response,
+	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
-	return nil
+	writeResponse(ctx, resp, nil, cs)
 }

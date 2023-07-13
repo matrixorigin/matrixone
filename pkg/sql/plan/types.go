@@ -153,9 +153,16 @@ type QueryBuilder struct {
 	ctxByNode    []*BindContext
 	nameByColRef map[[2]int32]string
 
+	tag2Table map[int32]*TableDef
+
 	nextTag int32
 
-	mysqlCompatible bool
+	isPrepareStatement bool
+	mysqlCompatible    bool
+	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
+	isForUpdate        bool // if it's a query plan for update
+
+	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 }
 
 type CTERef struct {
@@ -177,14 +184,17 @@ type BindContext struct {
 	aggregateTag int32
 	projectTag   int32
 	resultTag    int32
+	windowTag    int32
 
 	groups     []*plan.Expr
 	aggregates []*plan.Expr
 	projects   []*plan.Expr
 	results    []*plan.Expr
+	windows    []*plan.Expr
 
 	groupByAst     map[string]int32
 	aggregateByAst map[string]int32
+	windowByAst    map[string]int32
 	projectByExpr  map[string]int32
 
 	aliasMap map[string]int32

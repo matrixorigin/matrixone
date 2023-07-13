@@ -323,15 +323,19 @@ func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	return types.New(oid, expr.Typ.Width, expr.Typ.Scale)
 }
 
+func makeHiddenColTyp() *Type {
+	return &Type{
+		Id:    int32(types.T_varchar),
+		Width: types.MaxVarcharLen,
+	}
+}
+
 // used for Compound primary key column name && clusterby column name
 func MakeHiddenColDefByName(name string) *ColDef {
 	return &ColDef{
 		Name:   name,
 		Hidden: true,
-		Typ: &Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		},
+		Typ:    makeHiddenColTyp(),
 		Default: &plan.Default{
 			NullAbility:  false,
 			Expr:         nil,
@@ -353,4 +357,25 @@ func MakeRowIdColDef() *ColDef {
 			OriginString: "",
 		},
 	}
+}
+
+func isSameColumnType(t1 *Type, t2 *Type) bool {
+	if t1.Id != t2.Id {
+		return false
+	}
+	if t1.Width == t2.Width && t1.Scale == t2.Scale {
+		return true
+	}
+	return true
+}
+
+// GetColDefFromTable Find the target column definition from the predefined
+// table columns and return its deep copy
+func GetColDefFromTable(Cols []*ColDef, hidenColName string) *ColDef {
+	for _, coldef := range Cols {
+		if coldef.Name == hidenColName {
+			return DeepCopyColDef(coldef)
+		}
+	}
+	panic("Unable to find target column from predefined table columns")
 }

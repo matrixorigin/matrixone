@@ -51,6 +51,7 @@ func (v *Varlena) OffsetLen() (uint32, uint32) {
 	s := v.U32Slice()
 	return s[1], s[2]
 }
+
 func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 	s := v.U32Slice()
 	s[0] = VarlenaBigHdr
@@ -58,6 +59,8 @@ func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 	s[2] = vlen
 }
 
+// do not use this function, will be deleted in the future
+// use BuildVarlenaFromValena or BuildVarlenaFromByteSlice instead
 func BuildVarlena(bs []byte, area []byte, m *mpool.MPool) (Varlena, []byte, error) {
 	var err error
 	var v Varlena

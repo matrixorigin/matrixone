@@ -54,7 +54,13 @@ func (interpreter *Interpreter) GetResult() []ExecResult {
 	return interpreter.result
 }
 
-func (interpreter *Interpreter) GetString(input tree.Expr) string {
+func (interpreter *Interpreter) GetExprString(input tree.Expr) string {
+	interpreter.fmtctx.Reset()
+	input.Format(interpreter.fmtctx)
+	return interpreter.fmtctx.String()
+}
+
+func (interpreter *Interpreter) GetStatementString(input tree.Statement) string {
 	interpreter.fmtctx.Reset()
 	input.Format(interpreter.fmtctx)
 	return interpreter.fmtctx.String()
@@ -120,7 +126,7 @@ func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interf
 	if err != nil {
 		return nil, err
 	}
-	retStmt, err := parsers.ParseOne(interpreter.ctx, dialect.MYSQL, "select "+interpreter.GetString(newExpr), 1)
+	retStmt, err := parsers.ParseOne(interpreter.ctx, dialect.MYSQL, "select "+interpreter.GetExprString(newExpr), 1)
 	if err != nil {
 		return nil, err
 	}
@@ -221,21 +227,23 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 	return 0, nil
 }
 
-func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) error {
-	var tmpErr error
+func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (err error) {
 	curScope := make(map[string]interface{})
 	interpreter.bh.ClearExecResultSet()
 
 	// use current database as default
-	err := interpreter.bh.Exec(interpreter.ctx, "use "+dbName)
+	err = interpreter.bh.Exec(interpreter.ctx, "use "+dbName)
 	if err != nil {
 		return err
 	}
 
 	// make sure the entire sp is in a single transaction
 	err = interpreter.bh.Exec(interpreter.ctx, "begin;")
+	defer func() {
+		err = finishTxn(interpreter.ctx, interpreter.bh, err)
+	}()
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	// save parameters as local variables
@@ -251,8 +259,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 				_, value, _ := interpreter.ses.GetUserDefinedVar(varParam.Name)
 				if value == nil {
 					// raise an error as INOUT / IN type param has to have a value
-					err = moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or IN has to have a specified value.", k))
-					goto handleFailed
+					return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or IN has to have a specified value.", k))
 				}
 				// save param to local var scope
 				(*interpreter.varScope)[len(*interpreter.varScope)-1][strings.ToLower(k)] = value
@@ -260,13 +267,12 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 		} else {
 			// if param type is INOUT or OUT and the param is not provided with variable expr, raise an error
 			if interpreter.argsAttr[k] == tree.TYPE_INOUT || interpreter.argsAttr[k] == tree.TYPE_OUT {
-				err = moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or OUT has to be passed in using @.", k))
-				goto handleFailed
+				return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or OUT has to be passed in using @.", k))
 			}
 			// evaluate the param
 			value, err = interpreter.GetSimpleExprValueWithSpVar(v)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 			// save param to local var scope
 			(*interpreter.varScope)[len(*interpreter.varScope)-1][strings.ToLower(k)] = value
@@ -276,13 +282,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 	_, err = interpreter.interpret(stmt)
 
 	if err != nil {
-		goto handleFailed
-	}
-
-	// commit the first part sp
-	err = interpreter.bh.Exec(interpreter.ctx, "commit;")
-	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	// // commit the param flush part of sp
@@ -302,14 +302,6 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 	// }
 
 	return nil
-
-handleFailed:
-	// rollback on error
-	tmpErr = interpreter.bh.Exec(interpreter.ctx, "rollback;")
-	if tmpErr != nil {
-		return tmpErr
-	}
-	return err
 }
 
 func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error) {
@@ -342,7 +334,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 				}
 			}
 			// then evaluate condition
-			condStr := interpreter.GetString(st.Cond)
+			condStr := interpreter.GetExprString(st.Cond)
 			condVal, err := interpreter.EvalCond(condStr)
 			if err != nil {
 				return SpNotOk, err
@@ -354,7 +346,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 	case *tree.WhileStmt:
 		for {
 			// first evaluate
-			condStr := interpreter.GetString(st.Cond)
+			condStr := interpreter.GetExprString(st.Cond)
 			condVal, err := interpreter.EvalCond(condStr)
 			if err != nil {
 				return SpNotOk, err
@@ -396,7 +388,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		return SpLeaveLoop, nil
 	case *tree.ElseIfStmt:
 		// evaluate condition
-		condStr := interpreter.GetString(st.Cond)
+		condStr := interpreter.GetExprString(st.Cond)
 		condVal, err := interpreter.EvalCond(condStr)
 		if err != nil {
 			return SpNotOk, err
@@ -418,7 +410,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		}
 	case *tree.IfStmt:
 		// evaluate condition
-		condStr := interpreter.GetString(st.Cond)
+		condStr := interpreter.GetExprString(st.Cond)
 		condVal, err := interpreter.EvalCond(condStr)
 		if err != nil {
 			return SpNotOk, err
@@ -482,7 +474,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 				Left:  st.Expr,
 				Right: whenStmt.Cond,
 			}
-			condVal, err := interpreter.EvalCond(interpreter.GetString(equalityExpr))
+			condVal, err := interpreter.EvalCond(interpreter.GetExprString(equalityExpr))
 			if err != nil {
 				return SpNotOk, nil
 			}
@@ -523,8 +515,8 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 			name := assign.Name
 
 			// if this is a system set, ignore if it's not a INOUT/OUT arg
-			if strings.Contains(interpreter.GetString(st), "@") {
-				str := interpreter.GetString(st)
+			if strings.Contains(interpreter.GetExprString(st), "@") {
+				str := interpreter.GetExprString(st)
 				interpreter.bh.ClearExecResultSet()
 				// system setvar execution
 				err := interpreter.bh.Exec(interpreter.ctx, str)
@@ -548,7 +540,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 			}
 		}
 	default: // normal sql. Since we don't support SELECT INTO for now, we don't have to worry about updating variables
-		str := interpreter.GetString(st)
+		str := interpreter.GetStatementString(st)
 		interpreter.bh.ClearExecResultSet()
 		// For sp variable replacement
 		interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)

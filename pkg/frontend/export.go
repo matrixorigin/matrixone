@@ -378,6 +378,7 @@ func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
 	for k := 0; k < bat.Vecs[0].Length(); k++ {
 		bat2.Zs[k] = 1
 	}
+	bat2.Cnt = 1
 	return bat2
 }
 

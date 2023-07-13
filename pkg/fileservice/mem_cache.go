@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"time"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/clockobjcache"
@@ -142,15 +143,15 @@ func (m *MemCache) Read(
 			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].done = true
 			numHit++
-			m.cacheHit()
+			m.cacheHit(time.Nanosecond)
 		}
 	}
 
 	return
 }
 
-func (m *MemCache) cacheHit() {
-	FSProfileHandler.AddSample()
+func (m *MemCache) cacheHit(duration time.Duration) {
+	FSProfileHandler.AddSample(duration)
 }
 
 func (m *MemCache) Update(

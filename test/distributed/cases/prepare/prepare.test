@@ -36,7 +36,7 @@ deallocate prepare stmt1;
 
 drop table t1;
 
-create table t1(a timestamp);
+create table t1(a timestamp(6));
 prepare stmt1 from "insert into t1 values (current_timestamp())";
 execute stmt1;
 execute stmt1;

@@ -41,14 +41,28 @@ var (
 			},
 		},
 	}
+
+	showPublicationOutputColumns = [2]Column{
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "Name",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "Database",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+	}
 )
 
 func getSqlForShowSubscriptions(_ context.Context, accId uint32) (string, error) {
 	return fmt.Sprintf(getSubscriptionInfoFormat, accId), nil
 }
 
-func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscriptions) error {
-	var err error
+func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscriptions) (err error) {
 	var rs = &MysqlResultSet{}
 	var erArray []ExecResult
 	var lower interface{}
@@ -60,27 +74,30 @@ func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscri
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	sql, err = getSqlForShowSubscriptions(ctx, ses.GetTenantInfo().TenantID)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	rs.AddColumn(showSubscriptionOutputColumns[0])
 	rs.AddColumn(showSubscriptionOutputColumns[1])
 	lower, err = ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	lowerInt64 = lower.(int64)
 	if execResultArrayHasData(erArray) {
@@ -88,16 +105,16 @@ func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscri
 			row := make([]interface{}, 2)
 			row[0], err = erArray[0].GetString(ctx, i, 0)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 			createSql, err = erArray[0].GetString(ctx, i, 1)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 
 			ast, err = mysql.Parse(ctx, createSql, lowerInt64)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 			fromAccount := string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)
 			row[1] = fromAccount
@@ -105,16 +122,5 @@ func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscri
 		}
 	}
 	ses.SetMysqlResultSet(rs)
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
 	return nil
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return rbErr
-	}
-	return err
 }

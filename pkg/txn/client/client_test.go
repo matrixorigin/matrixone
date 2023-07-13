@@ -16,8 +16,7 @@ package client
 
 import (
 	"context"
-	"fmt"
-	"sync"
+	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
@@ -27,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -47,12 +45,15 @@ func TestNewTxn(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
+	if tc, ok := c.(TxnClientWithFeature); ok {
+		tc.Resume()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	txnMeta := tx.(*txnOperator).mu.txn
-	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, txnMeta.SnapshotTS.Prev())
+	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 }
@@ -65,6 +66,9 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
+	if tc, ok := c.(TxnClientWithFeature); ok {
+		tc.Resume()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0), WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
@@ -75,66 +79,48 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 }
 
-func newTestTxnSender() *testTxnSender {
-	return &testTxnSender{auto: true}
-}
+func TestTxnClientAbortAllRunningTxn(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	runtime.SetupProcessLevelRuntime(rt)
 
-type testTxnSender struct {
-	sync.Mutex
-	lastRequests []txn.TxnRequest
-	auto         bool
-	manualFunc   func(*rpc.SendResult, error) (*rpc.SendResult, error)
-}
-
-func (ts *testTxnSender) Close() error {
-	return nil
-}
-
-func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	ts.Lock()
-	defer ts.Unlock()
-	ts.lastRequests = requests
-
-	responses := make([]txn.TxnResponse, 0, len(requests))
-	for _, req := range requests {
-		resp := txn.TxnResponse{
-			Txn:    &req.Txn,
-			Method: req.Method,
-			Flag:   req.Flag,
-		}
-		switch resp.Method {
-		case txn.TxnMethod_Read:
-			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("r-%d", req.CNRequest.OpCode))}
-		case txn.TxnMethod_Write:
-			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("w-%d", req.CNRequest.OpCode))}
-		case txn.TxnMethod_DEBUG:
-			resp.CNOpResponse = &txn.CNOpResponse{Payload: req.CNRequest.Payload}
-		case txn.TxnMethod_Rollback:
-			resp.Txn.Status = txn.TxnStatus_Aborted
-		case txn.TxnMethod_Commit:
-			resp.Txn.CommitTS = resp.Txn.SnapshotTS.Next()
-			resp.Txn.Status = txn.TxnStatus_Committed
-		}
-
-		responses = append(responses, resp)
+	c := NewTxnClient(newTestTxnSender())
+	if tc, ok := c.(TxnClientWithFeature); ok {
+		tc.Resume()
 	}
 
-	result := &rpc.SendResult{Responses: responses}
-	if !ts.auto {
-		return ts.manualFunc(result, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	for i := 0; i < 10; i++ {
+		_, err := c.New(ctx, newTestTimestamp(0))
+		assert.Nil(t, err)
 	}
-	return result, nil
+	require.Equal(t, 10, len(c.(*txnClient).mu.txns))
+
+	c.AbortAllRunningTxn()
+	txnList := c.(*txnClient).mu.txns
+	for i := range txnList {
+		require.Equal(t, txn.TxnStatus_Aborted, txnList[i].Status)
+	}
 }
 
-func (ts *testTxnSender) setManual(manualFunc func(*rpc.SendResult, error) (*rpc.SendResult, error)) {
-	ts.Lock()
-	defer ts.Unlock()
-	ts.manualFunc = manualFunc
-	ts.auto = false
-}
+func TestTxnClientPauseAndResume(t *testing.T) {
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	runtime.SetupProcessLevelRuntime(rt)
+	c := NewTxnClient(newTestTxnSender())
 
-func (ts *testTxnSender) getLastRequests() []txn.TxnRequest {
-	ts.Lock()
-	defer ts.Unlock()
-	return ts.lastRequests
+	tcFeature, ok1 := c.(TxnClientWithFeature)
+	tcClient, ok2 := c.(*txnClient)
+	require.Equal(t, true, ok1 && ok2)
+	tcFeature.Pause()
+	require.Equal(t, paused, tcClient.mu.state)
+	tcFeature.Resume()
+	require.Equal(t, normal, tcClient.mu.state)
 }

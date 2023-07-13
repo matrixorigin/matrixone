@@ -16,12 +16,16 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"encoding/hex"
+	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
@@ -41,8 +45,14 @@ type MOZapLog struct {
 	Stack       string `json:"stack"`
 }
 
+var logPool = sync.Pool{
+	New: func() any {
+		return &MOZapLog{}
+	},
+}
+
 func newMOZap() *MOZapLog {
-	return &MOZapLog{}
+	return logPool.Get().(*MOZapLog)
 }
 
 func (m *MOZapLog) GetName() string {
@@ -69,6 +79,7 @@ func (m *MOZapLog) Free() {
 	m.Caller = ""
 	m.Message = ""
 	m.Extra = ""
+	logPool.Put(m)
 }
 
 func (m *MOZapLog) GetTable() *table.Table { return logView.OriginTable }
@@ -80,7 +91,7 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(traceIDCol, table.UuidField(m.SpanContext.TraceID[:]))
 	}
 	if m.SpanContext.SpanID != trace.NilSpanID {
-		row.SetColumnVal(spanIDCol, table.BytesField(m.SpanContext.SpanID[:]))
+		row.SetColumnVal(spanIDCol, table.StringField(hex.EncodeToString(m.SpanContext.SpanID[:])))
 	}
 	row.SetColumnVal(spanKindCol, table.StringField(m.SpanContext.Kind.String()))
 	row.SetColumnVal(nodeUUIDCol, table.StringField(GetNodeResource().NodeUuid))
@@ -95,7 +106,7 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 }
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
-	var needReport = true
+	var discardable = false
 	if !GetTracerProvider().IsEnable() {
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
@@ -110,6 +121,9 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	// find SpanContext
 	endIdx := len(fields) - 1
 	for idx, v := range fields {
+		if v.Type == zapcore.BoolType && v.Key == logutil.MOInternalFiledKeyDiscardable {
+			discardable = true
+		}
 		if trace.IsSpanField(v) {
 			log.SpanContext = v.Interface.(*trace.SpanContext)
 			// find endIdx
@@ -125,12 +139,22 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 			break
 		}
 	}
-	if !needReport {
-		log.Free()
-		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
-	}
 	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
-	GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+	collector := GetGlobalBatchProcessor()
+	var collectFunc = collector.Collect
+	if discardable {
+		if c, support := collector.(DiscardableCollector); support {
+			collectFunc = c.DiscardableCollect
+		}
+	}
+	switch entry.Level {
+	case zap.PanicLevel, zap.DPanicLevel, zap.FatalLevel:
+		syncer := NewItemSyncer(log)
+		collectFunc(DefaultContext(), syncer)
+		syncer.Wait()
+	default:
+		collectFunc(DefaultContext(), log)
+	}
 	return buffer, err
 }

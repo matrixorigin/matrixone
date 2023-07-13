@@ -83,6 +83,8 @@ type container struct {
 type Argument struct {
 	ctr *container
 
+	// IsSink means this is a Sink Node
+	IsSink bool
 	// FuncId means the sendFunc you want to call
 	FuncId int
 	// LocalRegs means the local register you need to send to.
@@ -90,32 +92,37 @@ type Argument struct {
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
 	// for shuffle
-	ShuffleColIdx       int
+	ShuffleColIdx       int32
+	ShuffleType         int32
+	ShuffleColMin       int64
+	ShuffleColMax       int64
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr.isRemote {
-		if !arg.ctr.prepared {
-			arg.waitRemoteRegsReady(proc)
-		}
-		for _, r := range arg.ctr.remoteReceivers {
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
-			_ = cancel
-			message := cnclient.AcquireMessage()
-			{
-				message.Id = r.msgId
-				message.Cmd = pipeline.BatchMessage
-				message.Sid = pipeline.MessageEnd
-				message.Uuid = r.uuid[:]
+	if arg.ctr != nil {
+		if arg.ctr.isRemote {
+			if !arg.ctr.prepared {
+				arg.waitRemoteRegsReady(proc)
 			}
-			if pipelineFailed {
-				err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
-				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+			for _, r := range arg.ctr.remoteReceivers {
+				timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
+				_ = cancel
+				message := cnclient.AcquireMessage()
+				{
+					message.Id = r.msgId
+					message.Cmd = pipeline.BatchMessage
+					message.Sid = pipeline.MessageEnd
+					message.Uuid = r.uuid[:]
+				}
+				if pipelineFailed {
+					err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
+					message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+				}
+				r.cs.Write(timeoutCtx, message)
+				close(r.doneCh)
 			}
-			r.cs.Write(timeoutCtx, message)
-			close(r.doneCh)
 		}
 	}
 

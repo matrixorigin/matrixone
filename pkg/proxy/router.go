@@ -23,13 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 const (
 	tenantLabelKey        = "account"
-	superTenant           = "sys"
-	superUserRoot         = "root"
-	superUserDump         = "dump"
 	defaultConnectTimeout = 3 * time.Second
 )
 
@@ -96,6 +95,18 @@ func (s *CNServer) Connect() (goetty.IOSession, error) {
 	if err := c.Write(s.salt, goetty.WriteOptions{Flush: true}); err != nil {
 		return nil, err
 	}
+
+	// Send labels information.
+	reqLabel := &pb.RequestLabel{
+		Labels: s.reqLabel.allLabels(),
+	}
+	data, err := reqLabel.Encode()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -144,112 +155,33 @@ func (r *router) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
 }
 
 // selectForSuperTenant is used to select CN servers for sys tenant.
-// For sys tenant, there are some special strategies to select CN servers.
-// The following strategies are listed in order of priority：
-//  1. The CN servers which are configured as sys account.
-//  2. The CN servers which are configured as some labels whose key is not account.
-//  3. The CN servers which are configured as no labels.
-//  4. At last, if no CN servers are selected,
-//     4.1 If the username is dump or root, we just select one randomly.
-//     4.2 Else, no servers are selected.
+// For more detail, see disttae.SelectForSuperTenant.
 func (r *router) selectForSuperTenant(c clientInfo, filter func(string) bool) []*CNServer {
-	var cns, emptyCNs, allCNs []*CNServer
-
-	// S1: Select servers that configured as sys account.
-	r.moCluster.GetCNService(c.labelInfo.genSelector(), func(s metadata.CNService) bool {
-		if filter != nil && filter(s.ServiceID) {
-			return true
-		}
-		cn := &CNServer{
-			reqLabel: c.labelInfo,
-			cnLabel:  s.Labels,
-			uuid:     s.ServiceID,
-			addr:     s.SQLAddress,
-		}
-		// At this phase, only append non-empty servers.
-		if len(s.Labels) == 0 {
-			emptyCNs = append(emptyCNs, cn)
-		} else {
-			cns = append(cns, cn)
-		}
-		return true
-	})
-	if len(cns) > 0 {
-		return cns
-	}
-
-	// S2: If there are no servers that are configured as sys account.
-	// There may be some performance issues, but we need to do this still.
-	// Select all CN servers and select ones which are not configured as
-	// label with key "account".
-	r.moCluster.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
-		if filter != nil && filter(s.ServiceID) {
-			return true
-		}
-		cn := &CNServer{
-			reqLabel: c.labelInfo,
-			cnLabel:  s.Labels,
-			uuid:     s.ServiceID,
-			addr:     s.SQLAddress,
-		}
-		// Append CN servers that are not configured as label with key "account".
-		if _, ok := s.Labels[tenantLabelKey]; len(s.Labels) > 0 && !ok {
-			cns = append(cns, cn)
-		}
-		allCNs = append(allCNs, cn)
-		return true
-	})
-	if len(cns) > 0 {
-		return cns
-	}
-
-	// S3: Select CN servers which has no labels.
-	if len(emptyCNs) > 0 {
-		return emptyCNs
-	}
-
-	// S4.1: If the root is super, return all servers.
-	if c.isSuperUser() {
-		return allCNs
-	}
-
-	// S4.2: No servers are returned.
-	return nil
+	var cns []*CNServer
+	disttae.SelectForSuperTenant(c.labelInfo.genSelector(), c.username, filter,
+		func(s *metadata.CNService) {
+			cns = append(cns, &CNServer{
+				reqLabel: c.labelInfo,
+				cnLabel:  s.Labels,
+				uuid:     s.ServiceID,
+				addr:     s.SQLAddress,
+			})
+		})
+	return cns
 }
 
+// selectForCommonTenant is used to select CN servers for common tenant.
+// For more detail, see disttae.SelectForCommonTenant.
 func (r *router) selectForCommonTenant(c clientInfo, filter func(string) bool) []*CNServer {
 	var cns []*CNServer
-	var cnNotEmpty, cnEmpty bool
-	r.moCluster.GetCNService(c.labelInfo.genSelector(), func(s metadata.CNService) bool {
-		if filter != nil && filter(s.ServiceID) {
-			return true
-		}
+	disttae.SelectForCommonTenant(c.labelInfo.genSelector(), filter, func(s *metadata.CNService) {
 		cns = append(cns, &CNServer{
 			reqLabel: c.labelInfo,
 			cnLabel:  s.Labels,
 			uuid:     s.ServiceID,
 			addr:     s.SQLAddress,
 		})
-		if len(s.Labels) > 0 {
-			cnNotEmpty = true
-		} else {
-			cnEmpty = true
-		}
-		return true
 	})
-
-	// The result may contain some CN servers whose label is empty.
-	// If there are empty and non-empty ones, we should exclude the empty ones.
-	if cnNotEmpty && cnEmpty {
-		i := 0
-		for _, cn := range cns {
-			if len(cn.cnLabel) != 0 {
-				cns[i] = cn
-				i++
-			}
-		}
-		return cns[:i]
-	}
 	return cns
 }
 

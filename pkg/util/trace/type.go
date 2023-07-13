@@ -21,7 +21,10 @@
 
 package trace
 
-import "context"
+import (
+	"context"
+	"go.uber.org/zap"
+)
 
 type TracerProvider interface {
 	Tracer(instrumentationName string, opts ...TracerOption) Tracer
@@ -29,9 +32,17 @@ type TracerProvider interface {
 
 type Tracer interface {
 	// Start creates a span and a context.Context containing the newly-created span.
-	Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span)
+	//
+	// If the context.Context provided in `ctx` contains a Span then the newly-created
+	// Span will be a child of that span, otherwise it will be a root span. This behavior
+	// can be overridden by providing `WithNewRoot()` as a SpanOption, causing the
+	// newly-created Span to be a root span even if `ctx` contains a Span.
+	//
+	// Any Span that is created MUST also be ended. This is the responsibility of the user.
+	// Implementations of this API may leak memory or other resources if Spans are not ended.
+	Start(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span)
 	// Debug creates a span only with DebugMode
-	Debug(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span)
+	Debug(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span)
 	// IsEnable return true, means do record
 	IsEnable() bool
 }
@@ -42,6 +53,9 @@ type Span interface {
 	// is called. Therefore, updates to the Span are not allowed after this
 	// method has been called.
 	End(options ...SpanEndOption)
+
+	// AddExtraFields inject more details for span.
+	AddExtraFields(fields ...zap.Field)
 
 	// SpanContext returns the SpanContext of the Span. The returned SpanContext
 	// is usable even after the End method has been called for the Span.

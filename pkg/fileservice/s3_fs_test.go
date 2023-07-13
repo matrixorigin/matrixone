@@ -29,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -91,8 +92,9 @@ func TestS3FS(t *testing.T) {
 
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func(name string) FileService {
-
+			ctx := context.Background()
 			fs, err := NewS3FS(
+				ctx,
 				"",
 				name,
 				config.Endpoint,
@@ -104,13 +106,14 @@ func TestS3FS(t *testing.T) {
 			)
 			assert.Nil(t, err)
 			fs.listMaxKeys = 5 // to test continuation
-
 			return fs
 		})
 	})
 
 	t.Run("list root", func(t *testing.T) {
+		ctx := context.Background()
 		fs, err := NewS3FS(
+			ctx,
 			"",
 			"s3",
 			config.Endpoint,
@@ -121,7 +124,6 @@ func TestS3FS(t *testing.T) {
 			true,
 		)
 		assert.Nil(t, err)
-		ctx := context.Background()
 		var counterSet, counterSet2 perfcounter.CounterSet
 		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 		ctx = perfcounter.WithCounterSet(ctx, &counterSet2)
@@ -134,14 +136,16 @@ func TestS3FS(t *testing.T) {
 
 	t.Run("mem caching file service", func(t *testing.T) {
 		testCachingFileService(t, func() CachingFileService {
+			ctx := context.Background()
 			fs, err := NewS3FS(
+				ctx,
 				"",
 				"s3",
 				config.Endpoint,
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				CacheConfig{
-					MemoryCapacity: 128 * 1024,
+					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
 				},
 				nil,
 				false,
@@ -153,16 +157,18 @@ func TestS3FS(t *testing.T) {
 
 	t.Run("disk caching file service", func(t *testing.T) {
 		testCachingFileService(t, func() CachingFileService {
+			ctx := context.Background()
 			fs, err := NewS3FS(
+				ctx,
 				"",
 				"s3",
 				config.Endpoint,
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				CacheConfig{
-					MemoryCapacity: 1,
-					DiskCapacity:   128 * 1024,
-					DiskPath:       t.TempDir(),
+					MemoryCapacity: ptrTo[toml.ByteSize](1),
+					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
+					DiskPath:       ptrTo(t.TempDir()),
 				},
 				nil,
 				false,
@@ -409,21 +415,21 @@ func TestS3FSMinioServer(t *testing.T) {
 	t.Run("file service", func(t *testing.T) {
 		cacheDir := t.TempDir()
 		testFileService(t, func(name string) FileService {
-
+			ctx := context.Background()
 			fs, err := NewS3FSOnMinio(
+				ctx,
 				"",
 				name,
 				endpoint,
 				"test",
 				time.Now().Format("2006-01-02.15:04:05.000000"),
 				CacheConfig{
-					DiskPath: cacheDir,
+					DiskPath: ptrTo(cacheDir),
 				},
 				nil,
 				true,
 			)
 			assert.Nil(t, err)
-
 			return fs
 		})
 	})
@@ -447,14 +453,16 @@ func BenchmarkS3FS(b *testing.B) {
 	b.ResetTimer()
 
 	benchmarkFileService(b, func() FileService {
+		ctx := context.Background()
 		fs, err := NewS3FS(
+			ctx,
 			"",
 			"s3",
 			config.Endpoint,
 			config.Bucket,
 			time.Now().Format("2006-01-02.15:04:05.000000"),
 			CacheConfig{
-				DiskPath: cacheDir,
+				DiskPath: ptrTo(cacheDir),
 			},
 			nil,
 			true,

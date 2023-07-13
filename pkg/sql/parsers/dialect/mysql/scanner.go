@@ -15,15 +15,25 @@
 package mysql
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 const eofChar = 0x100
+
+var scannerPool = sync.Pool{
+	New: func() any {
+		return &Scanner{
+			strBuilder: new(bytes.Buffer),
+		}
+	},
+}
 
 type Scanner struct {
 	LastToken           string
@@ -32,18 +42,34 @@ type Scanner struct {
 	dialectType         dialect.DialectType
 	MysqlSpecialComment *Scanner
 
-	Pos    int
-	Line   int
-	Col    int
-	PrePos int
-	buf    string
+	CommentFlag bool
+	Pos         int
+	Line        int
+	Col         int
+	PrePos      int
+	buf         string
+
+	strBuilder *bytes.Buffer
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
+	scanner := scannerPool.Get().(*Scanner)
+	scanner.dialectType = dialectType
+	scanner.LastToken = ""
+	scanner.LastError = nil
+	scanner.posVarIndex = 0
+	scanner.MysqlSpecialComment = nil
+	scanner.Pos = 0
+	scanner.Line = 0
+	scanner.Col = 0
+	scanner.PrePos = 0
+	scanner.buf = sql
+	scanner.strBuilder.Reset()
+	return scanner
+}
 
-	return &Scanner{
-		buf: sql,
-	}
+func PutScanner(scanner *Scanner) {
+	scannerPool.Put(scanner)
 }
 
 func (s *Scanner) Scan() (int, string) {
@@ -152,10 +178,14 @@ func (s *Scanner) Scan() (int, string) {
 			return s.Scan()
 		case '*':
 			s.inc()
-			switch {
-			case s.cur() == '!' && s.dialectType == dialect.MYSQL:
-				// TODO: ExtractMysqlComment
-				return s.scanMySQLSpecificComment()
+			switch s.cur() {
+			case '!':
+				s.CommentFlag = true
+				s.inc()
+				if !s.readVersion() {
+					return LEX_ERROR, ""
+				}
+				return s.Scan()
 			default:
 				id, str := s.scanCommentTypeBlock()
 				if id == LEX_ERROR {
@@ -166,9 +196,40 @@ func (s *Scanner) Scan() (int, string) {
 		default:
 			return int(ch), ""
 		}
+	case ch == '*':
+		if !s.CommentFlag {
+			return s.stepBackOneChar(ch)
+		}
+		s.inc()
+		switch s.cur() {
+		case '/':
+			s.CommentFlag = false
+			s.inc()
+			return s.Scan()
+		default:
+			return s.stepBackOneChar(ch)
+		}
 	default:
 		return s.stepBackOneChar(ch)
 	}
+}
+
+func (s *Scanner) readVersion() bool {
+	if s.Pos < len(s.buf) {
+		if isDigit(s.cur()) {
+			if s.Pos+4 < len(s.buf) {
+				for i := 0; i < 5; i++ {
+					if !isDigit(s.cur()) {
+						return false
+					}
+					s.inc()
+				}
+				return true
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
@@ -269,7 +330,8 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 		s.inc() // advance the first '$'
 	}
 	ch := s.cur()
-	buf := new(strings.Builder)
+	buf := s.strBuilder
+	defer s.strBuilder.Reset()
 	for s.Pos < len(s.buf) {
 		if ch == delim {
 			if delim != '$' {
@@ -295,7 +357,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 	return LEX_ERROR, buf.String()
 }
 
-func handleEscape(s *Scanner, buf *strings.Builder) uint16 {
+func handleEscape(s *Scanner, buf *bytes.Buffer) uint16 {
 	s.inc()
 	ch0 := s.cur()
 	switch ch0 {
@@ -401,7 +463,7 @@ func (s *Scanner) scanCommentTypeBlock() (int, string) {
 }
 
 // scanMySQLSpecificComment scans a MySQL comment pragma, which always starts with '//*`
-func (s *Scanner) scanMySQLSpecificComment() (int, string) {
+/*func (s *Scanner) scanMySQLSpecificComment() (int, string) {
 	start := s.Pos - 3
 	for {
 		if s.cur() == '*' {
@@ -423,7 +485,7 @@ func (s *Scanner) scanMySQLSpecificComment() (int, string) {
 	s.MysqlSpecialComment = NewScanner(s.dialectType, sql)
 
 	return s.Scan()
-}
+}*/
 
 // ExtractMysqlComment extracts the version and SQL from a comment-only query
 // such as /*!50708 sql here */

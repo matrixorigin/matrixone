@@ -550,6 +550,50 @@ func (l *store) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error 
 	}
 }
 
+func (l *store) updateCNWorkState(ctx context.Context, workState pb.CNWorkState) error {
+	state, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	if _, ok := state.CNState.Stores[workState.UUID]; !ok {
+		return moerr.NewInternalError(ctx, "CN [%s] does not exist", workState.UUID)
+	}
+	cmd := hakeeper.GetUpdateCNWorkStateCmd(workState)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose CN work state",
+			zap.String("state", state.String()),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return nil
+	}
+}
+
+func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
+	state, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	if _, ok := state.CNState.Stores[stateLabel.UUID]; !ok {
+		return moerr.NewInternalError(ctx, "CN [%s] does not exist", stateLabel.UUID)
+	}
+	cmd := hakeeper.GetPatchCNStoreCmd(stateLabel)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose CN work state",
+			zap.String("state", state.String()),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return nil
+	}
+}
+
 func (l *store) decodeCmd(ctx context.Context, e raftpb.Entry) []byte {
 	if e.Type == raftpb.ApplicationEntry {
 		panic(moerr.NewInvalidState(ctx, "unexpected entry type"))
@@ -667,6 +711,34 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 	}
 }
 
+func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duration) {
+	ticker := time.NewTicker(duration)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			state, _ := l.getCheckerStateFromLeader()
+			if state != nil && state.State == pb.HAKeeperRunning {
+				l.taskSchedule(state)
+			}
+
+		case <-ctx.Done():
+			return
+		}
+
+		// l.taskSchedule could be blocking a long time, this extra select
+		// can give a chance immediately to check the ctx status when it resumes.
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			// nothing to do
+		}
+	}
+
+}
+
 func (l *store) ticker(ctx context.Context) {
 	if l.cfg.HAKeeperTickInterval.Duration == 0 {
 		panic("invalid HAKeeperTickInterval")
@@ -684,6 +756,12 @@ func (l *store) ticker(ctx context.Context) {
 	}()
 	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
 	defer haTicker.Stop()
+
+	// moving task schedule from the ticker normal routine to a
+	// separate goroutine can avoid the hakeeper's health check and tick update
+	// operations being blocked by task schedule, or the tick will be skipped and
+	// can not correctly estimate the time passing.
+	go l.tickerForTaskSchedule(ctx, l.cfg.HAKeeperCheckInterval.Duration)
 
 	for {
 		select {

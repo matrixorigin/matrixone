@@ -67,7 +67,7 @@ func (e *Engine) Rollback(_ context.Context, _ client.TxnOperator) error {
 }
 
 func (e *Engine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef) ([]engine.Reader, error) {
+	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
 	return nil, nil
 }
 
@@ -167,7 +167,7 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 	return nil
 }
 
-func (e *Engine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (engine.Nodes, error) {
+func (e *Engine) Nodes(isInternal bool, tenant string, _ string, cnLabel map[string]string) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	cluster := clusterservice.GetMOCluster()
 	var selector clusterservice.Selector

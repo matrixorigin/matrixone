@@ -21,6 +21,7 @@ select * from index_03 where col2=-2147483648;
 create table index_04 (col1 bigint,col2 int primary key,col3 float,col4 bigint,unique key id1(col1),key id2(col4));
 insert into index_04 values (67834,2,20.23,4090),(67834,4,100.00,4091);
 insert into index_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
+-- @pattern
 insert into index_04 values (3,2,20.23,4090),(2,4,100.00,4091),(4,4,100.00,4090);
 select * from index_04;
 select * from index_04 where col1 between 10 and 1000000;
@@ -34,6 +35,7 @@ insert into index_06 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from index_06;
 create table index_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned,unique key id1(col1),key id2(col4));
 insert into index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+-- @pattern
 insert into index_07 values (1,2,20.23,56),(1,4,100.00,90);
 select * from index_07;
 create table index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned,unique key id1(col1),key id2(col4));
@@ -63,6 +65,7 @@ create table index_14 (col1 bigint auto_increment primary key,col2 timestamp,col
 insert into index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
 insert into index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table index_15 (col1 bigint primary key,col2 bool,unique key c2(col2));
+-- @pattern
 insert into index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
 insert into index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from index_15;
@@ -135,6 +138,7 @@ show create table t_code_rule;
 load data infile  '$resources/load_data/unique_index_file.csv' into table t_code_rule ;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 truncate table t_code_rule;
+-- @bvt:issue#3433
 load data infile  '$resources/load_data/unique_index_duplicate.csv' into table t_code_rule;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 create table index_temp( col1 bigint(20) NOT NULL ,col2 varchar(50) NOT NULL,col3 varchar(50) NOT NULL,col4 varchar(50) NOT NULL,col5 varchar(255) NOT NULL,col6 varchar(50) NOT NULL,col7 varchar(50) NOT NULL,col8 varchar(50) NOT NULL,col9 int(11) ,col10 varchar(50) DEFAULT NULL,col11 varchar(255),col12 datetime NOT NULL,col13 varchar(50) DEFAULT NULL,col14 datetime DEFAULT NULL,col15 varchar(50) DEFAULT NULL,col16 varchar(20)  NOT NULL DEFAULT 'N');
@@ -143,7 +147,9 @@ insert into t_code_rule select * from index_temp;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 truncate table index_temp;
 load data infile  '$resources/load_data/unique_index_duplicate.csv' into table index_temp;
+-- @pattern
 insert into t_code_rule select * from index_temp;
+-- @bvt:issue
 
 --unique index more column
 create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key m1(col2,col3),key num_id(col4));
@@ -240,6 +246,7 @@ select * from create_index_06;
 create table create_index_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned);
 create unique index int_unsigned_index on create_index_07(col1);
 insert into create_index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+-- @pattern
 insert into create_index_07 values (1,2,20.23,56),(1,4,100.00,90);
 select * from create_index_07;
 create table create_index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned);
@@ -276,6 +283,7 @@ insert into create_index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01
 insert into create_index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table create_index_15 (col1 bigint primary key,col2 bool);
 create unique index bool_index on create_index_15(col2);
+-- @pattern
 insert into create_index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
 insert into create_index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from create_index_15;

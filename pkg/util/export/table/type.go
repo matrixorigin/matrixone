@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"path"
 	"strings"
 	"sync"
@@ -37,11 +38,13 @@ const MergeLogTypeALL MergeLogType = "*"
 const FilenameSeparator = "_"
 const CsvExtension = ".csv"
 const TaeExtension = ".tae"
+const FSExtension = ".fs"
 
 const ETLParamTypeAll = MergeLogTypeALL
 const ETLParamAccountAll = "*"
 
 const AccountAll = ETLParamAccountAll
+const AccountSys = "sys"
 
 var ETLParamTSAll = time.Time{}
 
@@ -309,9 +312,27 @@ type RowWriter interface {
 	FlushAndClose() (int, error)
 }
 
+type CheckWriteHook func(context.Context)
+
+// AfterWrite cooperate with RowWriter
+type AfterWrite interface {
+	AddAfter(CheckWriteHook)
+}
+
 type RowField interface {
 	GetTable() *Table
 	FillRow(context.Context, *Row)
+}
+
+// NeedCheckWrite cooperate with AfterWrite and RowField
+type NeedCheckWrite interface {
+	NeedCheckWrite() bool
+	GetCheckWriteHook() CheckWriteHook
+}
+
+type NeedSyncWrite interface {
+	NeedSyncWrite() bool
+	GetCheckWriteHook() CheckWriteHook
 }
 
 type WriteRequest interface {
@@ -340,7 +361,32 @@ func (r *RowRequest) GetContent() string {
 	return r.writer.GetContent()
 }
 
-type WriterFactory func(ctx context.Context, account string, tbl *Table, ts time.Time) RowWriter
+type WriterFactory interface {
+	GetRowWriter(ctx context.Context, account string, tbl *Table, ts time.Time) RowWriter
+	GetWriter(ctx context.Context, filepath string) io.WriteCloser
+}
+
+var _ WriterFactory = (*defaultWriterGetter)(nil)
+
+type defaultWriterGetter struct {
+	rowWriterGetter func(ctx context.Context, account string, tbl *Table, ts time.Time) RowWriter
+	writerGetter    func(ctx context.Context, filepath string) io.WriteCloser
+}
+
+func NewWriterFactoryGetter(
+	rowWriterGetter func(ctx context.Context, account string, tbl *Table, ts time.Time) RowWriter,
+	writerGetter func(ctx context.Context, filepath string) io.WriteCloser,
+) WriterFactory {
+	return &defaultWriterGetter{rowWriterGetter: rowWriterGetter, writerGetter: writerGetter}
+}
+
+func (f *defaultWriterGetter) GetRowWriter(ctx context.Context, account string, tbl *Table, ts time.Time) RowWriter {
+	return f.rowWriterGetter(ctx, account, tbl, ts)
+}
+
+func (f *defaultWriterGetter) GetWriter(ctx context.Context, filepath string) io.WriteCloser {
+	return f.writerGetter(ctx, filepath)
+}
 
 type FilePathCfg struct {
 	NodeUUID  string

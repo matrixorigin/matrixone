@@ -25,6 +25,7 @@ type CounterSet struct {
 	FileService       FileServiceCounterSet
 	FileServiceByName map[string]*CounterSet
 	DistTAE           DistTAECounterSet
+	TAE               TAECounterSet
 }
 
 type FileServiceCounterSet struct {
@@ -81,6 +82,36 @@ type DistTAECounterSet struct {
 		InsertRows   stats.Counter
 		ActiveRows   stats.Counter
 		InsertBlocks stats.Counter
+	}
+}
+
+type TAECounterSet struct {
+	LogTail struct {
+		Entries       stats.Counter
+		InsertEntries stats.Counter
+		DeleteEntries stats.Counter
+	}
+
+	CheckPoint struct {
+		DoGlobalCheckPoint      stats.Counter
+		DoIncrementalCheckpoint stats.Counter
+		DeleteGlobalEntry       stats.Counter
+		DeleteIncrementalEntry  stats.Counter
+	}
+
+	Segment struct {
+		Create              stats.Counter
+		CreateNonAppendable stats.Counter
+		SoftDelete          stats.Counter
+		MergeBlocks         stats.Counter
+		CompactBlock        stats.Counter
+	}
+
+	Block struct {
+		Create              stats.Counter
+		CreateNonAppendable stats.Counter
+		SoftDelete          stats.Counter
+		Flush               stats.Counter
 	}
 }
 

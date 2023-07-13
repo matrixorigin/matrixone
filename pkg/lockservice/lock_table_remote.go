@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -59,7 +60,8 @@ func (l *remoteLockTable) lock(
 	ctx context.Context,
 	txn *activeTxn,
 	rows [][]byte,
-	opts LockOptions) (pb.Result, error) {
+	opts LockOptions,
+	cb func(pb.Result, error)) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock.remote")
 	defer span.End()
@@ -71,26 +73,35 @@ func (l *remoteLockTable) lock(
 
 	req.LockTable = l.bind
 	req.Method = pb.Method_Lock
-	req.Lock.Options = opts
+	req.Lock.Options = opts.LockOptions
 	req.Lock.TxnID = txn.txnID
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
 
+	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
+	// after rpc completed
+	txn.Unlock()
 	resp, err := l.client.Send(ctx, req)
+	txn.Lock()
+
+	// txn closed
+	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+		cb(pb.Result{}, ErrTxnNotFound)
+		return
+	}
+
 	if err == nil {
 		defer releaseResponse(resp)
 		if err := l.maybeHandleBindChanged(resp); err != nil {
 			logRemoteLockFailed(l.serviceID, txn, rows, opts, l.bind, err)
-			return pb.Result{}, err
+			cb(pb.Result{}, err)
+			return
 		}
 
-		// we use mutex lock here to avoid the deadlock detection
-		// mechanism reading an incorrect data.
-		txn.Lock()
-		defer txn.Unlock()
-		txn.lockAdded(l.serviceID, l.bind.Table, rows, true)
+		txn.lockAdded(l.serviceID, l.bind.Table, rows, nil)
 		logRemoteLockAdded(l.serviceID, txn, rows, opts, l.bind)
-		return resp.Lock.Result, nil
+		cb(resp.Lock.Result, nil)
+		return
 	}
 
 	logRemoteLockFailed(l.serviceID, txn, rows, opts, l.bind, err)
@@ -98,7 +109,7 @@ func (l *remoteLockTable) lock(
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
 	_ = l.handleError(txn.txnID, err)
-	return pb.Result{}, err
+	cb(pb.Result{}, err)
 }
 
 func (l *remoteLockTable) unlock(
@@ -144,6 +155,7 @@ func (l *remoteLockTable) getLock(txnID, key []byte, fn func(Lock)) {
 					if w == nil {
 						break
 					}
+					w.clearAllNotify(l.serviceID, "remove temp notify")
 				}
 			}
 			return
@@ -203,7 +215,8 @@ func (l *remoteLockTable) doGetLock(txnID, key []byte) (Lock, bool, error) {
 			waiter: acquireWaiter(l.serviceID, txnID),
 		}
 		for _, v := range resp.GetTxnLock.WaitingList {
-			w := acquireWaiter(l.serviceID, v)
+			w := acquireWaiter(l.serviceID, v.TxnID)
+			w.waitTxn = v
 			lock.waiter.add(l.serviceID, w)
 		}
 		return lock, true, nil

@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,7 +78,7 @@ type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) 
 
 type TxnManager struct {
 	sync.RWMutex
-	common.ClosedState
+	sm.ClosedState
 	PreparingSM     sm.StateMachine
 	FlushQueue      sm.Queue
 	IDMap           map[string]txnif.AsyncTxn
@@ -91,6 +92,8 @@ type TxnManager struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
+
+	prevPrepareTS types.TS // for debug
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -134,7 +137,7 @@ func (mgr *TxnManager) Now() types.TS {
 func (mgr *TxnManager) Init(prevTs types.TS) error {
 	logutil.Infof("init ts to %v", prevTs.ToString())
 	mgr.TsAlloc.SetStart(prevTs)
-	logutil.Info("[INIT]", TxnMgrField(mgr))
+	logutil.Debug("[INIT]", TxnMgrField(mgr))
 	return nil
 }
 
@@ -242,7 +245,7 @@ func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 	return
 }
 
-func (mgr *TxnManager) heartbeat() {
+func (mgr *TxnManager) heartbeat(ctx context.Context) {
 	defer mgr.wg.Done()
 	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
 	for {
@@ -250,7 +253,7 @@ func (mgr *TxnManager) heartbeat() {
 		case <-mgr.ctx.Done():
 			return
 		case <-heartbeatTicker.C:
-			op := mgr.newHeartbeatOpTxn()
+			op := mgr.newHeartbeatOpTxn(ctx)
 			op.Txn.(*Txn).Add(1)
 			_, err := mgr.PreparingSM.EnqueueRecevied(op)
 			if err != nil {
@@ -260,7 +263,7 @@ func (mgr *TxnManager) heartbeat() {
 	}
 }
 
-func (mgr *TxnManager) newHeartbeatOpTxn() *OpTxn {
+func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err := exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
@@ -275,6 +278,7 @@ func (mgr *TxnManager) newHeartbeatOpTxn() *OpTxn {
 	txn := DefaultTxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
 	return &OpTxn{
+		ctx: ctx,
 		Txn: txn,
 		Op:  OpCommit,
 	}
@@ -295,7 +299,7 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	defer mgr.CommitListener.OnEndPrePrepare(op.Txn)
 	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
-	op.Txn.SetError(op.Txn.PrePrepare())
+	op.Txn.SetError(op.Txn.PrePrepare(op.ctx))
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
 	})
@@ -330,6 +334,12 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 	defer mgr.Unlock()
 
 	ts = mgr.TsAlloc.Alloc()
+	if !mgr.prevPrepareTS.IsEmpty() {
+		if ts.Less(mgr.prevPrepareTS) {
+			panic(fmt.Sprintf("timestamp rollback current %v, previous %v", ts.ToString(), mgr.prevPrepareTS.ToString()))
+		}
+	}
+	mgr.prevPrepareTS = ts
 
 	op.Txn.Lock()
 	defer op.Txn.Unlock()
@@ -507,7 +517,7 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 	for _, item := range items {
 		op := item.(*OpTxn)
 		//Notice that WaitPrepared do nothing when op is OpRollback
-		if err = op.Txn.WaitPrepared(); err != nil {
+		if err = op.Txn.WaitPrepared(op.ctx); err != nil {
 			// v0.6 TODO: Error handling
 			panic(err)
 		}
@@ -551,11 +561,11 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 	return minTS
 }
 
-func (mgr *TxnManager) Start() {
+func (mgr *TxnManager) Start(ctx context.Context) {
 	mgr.FlushQueue.Start()
 	mgr.PreparingSM.Start()
 	mgr.wg.Add(1)
-	go mgr.heartbeat()
+	go mgr.heartbeat(ctx)
 }
 
 func (mgr *TxnManager) Stop() {
@@ -563,6 +573,6 @@ func (mgr *TxnManager) Stop() {
 	mgr.wg.Wait()
 	mgr.PreparingSM.Stop()
 	mgr.FlushQueue.Stop()
-	mgr.OnException(common.ErrClose)
+	mgr.OnException(sm.ErrClose)
 	logutil.Info("[Stop]", TxnMgrField(mgr))
 }

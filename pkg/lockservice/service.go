@@ -36,6 +36,7 @@ type service struct {
 	activeTxnHolder  activeTxnHolder
 	fsp              *fixedSlicePool
 	deadlockDetector *detector
+	events           *waiterEvents
 	clock            clock.Clock
 	stopper          *stopper.Stopper
 	stopOnce         sync.Once
@@ -51,8 +52,9 @@ type service struct {
 func NewLockService(cfg Config) LockService {
 	cfg.Validate()
 	s := &service{
-		cfg: cfg,
-		fsp: newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
+		cfg:    cfg,
+		fsp:    newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
+		events: newWaiterEvents(eventsWorkers),
 		stopper: stopper.NewStopper("lock-service",
 			stopper.WithLogger(getLogger().RawLogger())),
 	}
@@ -63,6 +65,7 @@ func NewLockService(cfg Config) LockService {
 		s.abortDeadlockTxn)
 	s.clock = runtime.ProcessLevelRuntime().Clock()
 	s.initRemote()
+	s.events.start()
 	return s
 }
 
@@ -71,17 +74,44 @@ func (s *service) Lock(
 	tableID uint64,
 	rows [][]byte,
 	txnID []byte,
-	options LockOptions) (pb.Result, error) {
+	options pb.LockOptions) (pb.Result, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
 	defer span.End()
+
+	if options.ForwardTo != "" {
+		return s.forwardLock(ctx, tableID, rows, txnID, options)
+	}
 
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 	l, err := s.getLockTable(tableID)
 	if err != nil {
 		return pb.Result{}, err
 	}
-	return l.lock(ctx, txn, rows, options)
+
+	// All txn lock op must be serial. And avoid dead lock between doAcquireLock
+	// and getLock. The doAcquireLock and getLock operations of the same transaction
+	// will be concurrent (deadlock detection), which may lead to a deadlock in mutex.
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return pb.Result{}, ErrTxnNotFound
+	}
+	if txn.deadlockFound {
+		return pb.Result{}, ErrDeadLockDetected
+	}
+
+	var result pb.Result
+	l.lock(
+		ctx,
+		txn,
+		rows,
+		LockOptions{LockOptions: options},
+		func(r pb.Result, e error) {
+			result = r
+			err = e
+		})
+	return result, err
 }
 
 func (s *service) Unlock(
@@ -96,6 +126,12 @@ func (s *service) Unlock(
 	if txn == nil {
 		return nil
 	}
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
+
 	defer logUnlockTxn(s.cfg.ServiceID, txn)()
 	txn.close(s.cfg.ServiceID, txnID, commitTS, s.getLockTable)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
@@ -131,6 +167,7 @@ func (s *service) Close() error {
 		if err = s.remote.server.Close(); err != nil {
 			return
 		}
+		s.events.close()
 	})
 	return err
 }
@@ -154,7 +191,7 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 			s.getLockTable), nil
 	}
 
-	waitingList, err := s.getTxnWaitingList(txn.TxnID, txn.CreatedOn)
+	waitingList, err := s.getTxnWaitingListOnRemote(txn.TxnID, txn.CreatedOn)
 	if err != nil {
 		return false, err
 	}
@@ -230,6 +267,7 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			bind,
 			s.fsp,
 			s.deadlockDetector,
+			s.events,
 			s.clock)
 	} else {
 		return newRemoteLockTable(
@@ -258,8 +296,9 @@ type mapBasedTxnHolder struct {
 		// remoteServices known remote service
 		remoteServices map[string]*list.Element[remote]
 		// head(oldest) -> tail (newest)
-		dequeue    list.Deque[remote]
-		activeTxns map[string]*activeTxn
+		dequeue           list.Deque[remote]
+		activeTxns        map[string]*activeTxn
+		activeTxnServices map[string]string
 	}
 }
 
@@ -270,9 +309,17 @@ func newMapBasedTxnHandler(
 	h.fsp = fsp
 	h.serviceID = serviceID
 	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
+	h.mu.activeTxnServices = make(map[string]string)
 	h.mu.remoteServices = make(map[string]*list.Element[remote])
 	h.mu.dequeue = list.New[remote]()
 	return h
+}
+
+func (h *mapBasedTxnHolder) getActiveLocked(txnKey string) *activeTxn {
+	if v, ok := h.mu.activeTxns[txnKey]; ok {
+		return v
+	}
+	return nil
 }
 
 func (h *mapBasedTxnHolder) getActiveTxn(
@@ -281,7 +328,8 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	remoteService string) *activeTxn {
 	txnKey := util.UnsafeBytesToString(txnID)
 	h.mu.RLock()
-	if v, ok := h.mu.activeTxns[txnKey]; ok {
+	v := h.getActiveLocked(txnKey)
+	if v != nil {
 		h.mu.RUnlock()
 		return v
 	}
@@ -292,8 +340,13 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if v := h.getActiveLocked(txnKey); v != nil {
+		return v
+	}
+
 	txn := newActiveTxn(txnID, txnKey, h.fsp, remoteService)
 	h.mu.activeTxns[txnKey] = txn
+	h.mu.activeTxnServices[txnKey] = txn.remoteService
 
 	if remoteService != "" {
 		if _, ok := h.mu.remoteServices[remoteService]; !ok {
@@ -315,6 +368,7 @@ func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 	v, ok := h.mu.activeTxns[txnKey]
 	if ok {
 		delete(h.mu.activeTxns, txnKey)
+		delete(h.mu.activeTxnServices, txnKey)
 	}
 	return v
 }
@@ -358,12 +412,12 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 			return true
 		})
 
-		for _, txn := range h.mu.activeTxns {
-			txn.Lock()
-			if _, ok := timeoutServices[txn.remoteService]; ok {
-				timeoutTxns = append(timeoutTxns, txn.txnID)
+		for txnKey := range h.mu.activeTxns {
+			remoteService := h.mu.activeTxnServices[txnKey]
+			if _, ok := timeoutServices[remoteService]; ok {
+				timeoutTxns = append(timeoutTxns, util.UnsafeStringToBytes(txnKey))
 			}
-			txn.Unlock()
+
 		}
 	}
 	return timeoutTxns, wait

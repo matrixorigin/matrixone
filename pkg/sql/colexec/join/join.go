@@ -104,7 +104,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.DupJmAuxData()
 		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
@@ -118,6 +118,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = proc.GetVector(*bat.Vecs[rp.Pos].GetType())
+			// for inner join, if left batch is sorted , then output batch is sorted
+			rbat.Vecs[i].SetSorted(bat.Vecs[rp.Pos].GetSorted())
 		} else {
 			rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
 		}

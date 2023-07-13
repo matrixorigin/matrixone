@@ -26,7 +26,9 @@ import (
 )
 
 const (
-	Build = iota
+	BuildHashMap = iota
+	HandleRuntimeFilter
+	Eval
 	End
 )
 
@@ -57,10 +59,13 @@ type Argument struct {
 	// need to generate a push-down filter expression
 	NeedExpr    bool
 	NeedHashMap bool
+	IsDup       bool
 	Ibucket     uint64
 	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
+
+	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

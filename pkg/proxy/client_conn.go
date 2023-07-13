@@ -37,27 +37,28 @@ import (
 var clientBaseConnID uint32 = 1000
 
 // parse parses the account information from whole username.
+// The whole username parameter is like: tenant1:user1:role1?key1:value1,key2:value2
 func (c *clientInfo) parse(full string) error {
-	var delimiter byte = ':'
-	if strings.IndexByte(full, '#') >= 0 {
-		delimiter = '#'
+	var labelPart string
+	labelDelPos := strings.IndexByte(full, '?')
+	userPart := full[:]
+	if labelDelPos >= 0 {
+		userPart = full[:labelDelPos]
+		if len(full) > labelDelPos+1 {
+			labelPart = full[labelDelPos+1:]
+		}
 	}
-	var tenant, username string
-	pos := strings.IndexByte(full, delimiter)
-	if pos >= 0 {
-		tenant = strings.TrimSpace(full[:pos])
-		username = strings.TrimSpace(full[pos+1:])
-	} else {
-		username = strings.TrimSpace(full[:])
+	tenant, err := frontend.GetTenantInfo(context.Background(), userPart)
+	if err != nil {
+		return err
 	}
-	if len(username) == 0 {
-		return moerr.NewInternalErrorNoCtx("invalid username '%s'", full)
+	c.labelInfo.Tenant = Tenant(tenant.Tenant)
+	c.username = tenant.GetUser()
+
+	// For label part.
+	if len(labelPart) > 0 {
+		c.labelInfo.Labels = parseLabel(strings.TrimSpace(labelPart))
 	}
-	if tenant == "" {
-		tenant = superTenant
-	}
-	c.labelInfo.Tenant = Tenant(tenant)
-	c.username = username
 	return nil
 }
 
@@ -344,7 +345,7 @@ func (c *clientConn) handleSetVar(e *setVarEvent) error {
 // handleSuspendAccountEvent handles the suspend account event.
 func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent) error {
 	// Ignore the sys tenant.
-	if strings.ToLower(string(e.account)) == superTenant {
+	if strings.ToLower(string(e.account)) == frontend.GetDefaultTenant() {
 		return nil
 	}
 	// handle kill connection.
@@ -457,12 +458,6 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 			codeAuthFailed)
 	}
 
-	// Set the label session variable.
-	if len(c.clientInfo.allLabels()) > 0 {
-		if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
-			return nil, err
-		}
-	}
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {

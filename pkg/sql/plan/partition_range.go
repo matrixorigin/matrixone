@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -44,14 +45,11 @@ func (rpb *rangePartitionBuilder) build(ctx context.Context, partitionBinder *Pa
 	// RANGE Partitioning
 	if len(partitionType.ColumnList) == 0 {
 		partitionInfo.Type = plan.PartitionType_RANGE
-		planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+		err := buildPartitionExpr(ctx, tableDef, partitionBinder, partitionInfo, partitionType.Expr)
 		if err != nil {
 			return err
 		}
-		partitionInfo.PartitionExpr = &plan.PartitionExpr{
-			Expr:    planExpr,
-			ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
-		}
+
 	} else {
 		// RANGE COLUMNS partitioning
 		partitionInfo.Type = plan.PartitionType_RANGE_COLUMNS
@@ -148,7 +146,14 @@ func (rpb *rangePartitionBuilder) buildEvalPartitionExpression(ctx context.Conte
 		if err != nil {
 			return err
 		}
-		partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
+		tempExpr, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
+		if err != nil {
+			return err
+		}
+		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+			Id:          int32(types.T_int32),
+			NotNullable: true,
+		})
 		if err != nil {
 			return err
 		}
@@ -161,7 +166,14 @@ func (rpb *rangePartitionBuilder) buildEvalPartitionExpression(ctx context.Conte
 		if err != nil {
 			return err
 		}
-		partitionExpression, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
+		tempExpr, err := partitionBinder.baseBindExpr(partitionExprAst, 0, true)
+		if err != nil {
+			return err
+		}
+		partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+			Id:          int32(types.T_int32),
+			NotNullable: true,
+		})
 		if err != nil {
 			return err
 		}

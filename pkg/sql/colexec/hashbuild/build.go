@@ -20,7 +20,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -64,26 +68,39 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
-		case Build:
+		case BuildHashMap:
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
+				ctr.cleanHashMap()
 				return false, err
 			}
 			if ap.ctr.mp != nil {
 				anal.Alloc(ap.ctr.mp.Size())
 			}
-			ctr.state = End
-		default:
-			if ctr.bat != nil {
+			ctr.state = HandleRuntimeFilter
+
+		case HandleRuntimeFilter:
+			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
+				return false, err
+			}
+
+		case Eval:
+			if ctr.bat != nil && ctr.bat.Length() != 0 {
 				if ap.NeedHashMap {
-					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
+					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ap.IsDup)
 				}
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
 				ctr.bat = nil
 				ctr.sels = nil
 			} else {
+				ctr.cleanHashMap()
 				proc.SetInputBatch(nil)
 			}
+			ctr.state = End
+			return false, nil
+
+		default:
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 	}
@@ -127,7 +144,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		rows := ctr.mp.GroupCount()
+
+		oldRowNumberOfHashTable := ctr.mp.GroupCount()
 		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
@@ -140,12 +158,108 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			if v == 0 {
 				continue
 			}
-			if v > rows {
+
+			for v > oldRowNumberOfHashTable {
 				ctr.sels = append(ctr.sels, make([]int32, 0))
+				oldRowNumberOfHashTable++
 			}
 			ai := int64(v) - 1
 			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
+	}
+	return nil
+}
+
+func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
+	if len(ap.RuntimeFilterSenders) == 0 {
+		ctr.state = Eval
+		return nil
+	}
+
+	var runtimeFilter *pipeline.RuntimeFilter
+
+	sels := make([]int32, 0, len(ctr.sels))
+	for _, sel := range ctr.sels {
+		if len(sel) > 0 {
+			sels = append(sels, sel[0])
+		}
+	}
+
+	vec := ctr.vecs[0]
+	if len(sels) == 0 || vec == nil || vec.Length() == 0 {
+		select {
+		case <-proc.Ctx.Done():
+			ctr.state = End
+
+		case ap.RuntimeFilterSenders[0].Chan <- nil:
+			ctr.state = Eval
+		}
+
+		return nil
+	}
+
+	// Composite primary key
+	if len(ctr.vecs) > 1 && len(ctr.sels) <= plan.BloomFilterCardLimit {
+		bat := batch.NewWithSize(len(ctr.vecs))
+		bat.Zs = make([]int64, ctr.vecs[0].Length())
+		copy(bat.Vecs, ctr.vecs)
+
+		newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSenders[0].Spec.Expr, []*batch.Batch{bat})
+		if err != nil {
+			return err
+		}
+
+		vec = newVec
+	}
+
+	defer func() {
+		if vec != ctr.vecs[0] {
+			vec.Free(proc.Mp())
+			vec = nil
+		}
+	}()
+
+	if len(ctr.sels) <= plan.InFilterCardLimit {
+		inList := vector.NewVec(*vec.GetType())
+		if err := inList.Union(vec, sels, proc.Mp()); err != nil {
+			return err
+		}
+
+		defer inList.Free(proc.Mp())
+
+		colexec.SortInFilter(inList)
+		data, err := inList.MarshalBinary()
+		if err != nil {
+			return err
+		}
+
+		runtimeFilter = &pipeline.RuntimeFilter{
+			Typ:  pipeline.RuntimeFilter_IN,
+			Data: data,
+		}
+	} else if len(ctr.sels) <= plan.BloomFilterCardLimit {
+		zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
+		for i := range sels {
+			bs := vec.GetRawBytesAt(int(sels[i]))
+			index.UpdateZM(zm, bs)
+		}
+
+		runtimeFilter = &pipeline.RuntimeFilter{
+			Typ:  pipeline.RuntimeFilter_MIN_MAX,
+			Data: zm,
+		}
+	} else {
+		runtimeFilter = &pipeline.RuntimeFilter{
+			Typ: pipeline.RuntimeFilter_NO_FILTER,
+		}
+	}
+
+	select {
+	case <-proc.Ctx.Done():
+		ctr.state = End
+
+	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
+		ctr.state = Eval
 	}
 
 	return nil

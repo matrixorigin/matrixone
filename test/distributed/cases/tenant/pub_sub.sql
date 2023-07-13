@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 create publication pub1 database t;
 create account acc0 admin_name 'root' identified by '111';
 create account acc1 admin_name 'root' identified by '111';
@@ -52,7 +53,7 @@ create view v1 as (select * from sys_tbl_1);
 create publication sys_pub_1 database sys_db_1;
 show publications;
 
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- acc0 订阅
 -- @session:id=2&user=acc0:root&password=111
 create database sub1 from sys publication sys_pub_1;
@@ -69,7 +70,7 @@ show column_number from sys_tbl_1;
 show table_values from sys_tbl_1;
 -- @session
 
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- acc1 订阅
 -- @session:id=3&user=acc1:root&password=111
 create database sub1 from sys publication sys_pub_1;
@@ -84,7 +85,7 @@ select * from sub1.sys_tbl_1;
 
 -- 限制acc0不能订阅
 alter publication sys_pub_1 account acc1;
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 -- acc0 订阅
 -- @session:id=2&user=acc0:root&password=111
 show subscriptions;
@@ -102,7 +103,7 @@ select * from sys_tbl_1;
 
 -- 恢复acc0 订阅权限
 alter publication sys_pub_1 account add acc0;
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 
 -- acc0 订阅
 -- @session:id=2&user=acc0:root&password=111
@@ -220,3 +221,4 @@ drop publication pubname2;
 drop account test_tenant_1;
 drop account test_tenant_2;
 drop database db1;
+set global enable_privilege_cache = on;

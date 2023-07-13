@@ -17,6 +17,7 @@ package mometric
 import (
 	"context"
 	"regexp"
+	"runtime"
 	"testing"
 	"time"
 
@@ -77,6 +78,11 @@ func TestCollectorOpts(t *testing.T) {
 }
 
 func TestCollector(t *testing.T) {
+	if runtime.NumCPU() < 4 {
+		t.Skip("machine's performance too low to handle time sensitive case")
+		return
+	}
+	t.Logf("runtime.NumCPU: %d", runtime.NumCPU())
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
 	collector := newMetricCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2))
@@ -166,11 +172,14 @@ func (w *dummyStringWriter) FlushAndClose() (int, error) {
 func (w *dummyStringWriter) GetContent() string { return "" }
 
 func newDummyFSWriterFactory(csvCh chan string) table.WriterFactory {
-	return table.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-		w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
-		w.writer = etl.NewCSVWriter(context.TODO(), w)
-		return w
-	})
+	return table.NewWriterFactoryGetter(
+		func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+			w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
+			w.writer = etl.NewCSVWriter(context.TODO(), w)
+			return w
+		},
+		nil,
+	)
 }
 
 func dummyInitView(ctx context.Context, tbls []string) {

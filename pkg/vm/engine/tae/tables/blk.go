@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"math/rand"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -27,11 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type block struct {
@@ -40,12 +40,10 @@ type block struct {
 
 func newBlock(
 	meta *catalog.BlockEntry,
-	fs *objectio.ObjectFS,
-	indexCache model.LRUCache,
-	scheduler tasks.TaskScheduler,
+	rt *dbutils.Runtime,
 ) *block {
 	blk := &block{}
-	blk.baseBlock = newBaseBlock(blk, meta, indexCache, fs, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, rt)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	pnode := newPersistedNode(blk.baseBlock)
 	node := NewNode(pnode)
@@ -80,38 +78,37 @@ func (blk *block) Pin() *common.PinnedItem[*block] {
 }
 
 func (blk *block) GetColumnDataByIds(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnDatas(
-		context.Background(),
-		node.MustPNode(),
-		txn,
-		schema,
-		colIdxes,
-		false)
+		ctx, txn, schema, colIdxes, false,
+	)
 }
 
 // GetColumnDataById Get the snapshot at txn's start timestamp of column data.
 // Notice that for non-appendable block, if it is visible to txn,
 // then all the block data pointed by meta location also be visible to txn;
 func (blk *block) GetColumnDataById(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnData(
+		ctx,
 		txn,
 		schema,
 		col,
 		false)
 }
-func (blk *block) DataCommittedBefore(ts types.TS) bool {
+func (blk *block) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	blk.meta.RLock()
 	defer blk.meta.RUnlock()
 	return blk.meta.GetCreatedAt().Less(ts)
@@ -144,6 +141,7 @@ func (blk *block) BatchDedup(
 }
 
 func (blk *block) GetValue(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	row, col int) (v any, isNull bool, err error) {
@@ -151,12 +149,8 @@ func (blk *block) GetValue(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.getPersistedValue(
-		node.MustPNode(),
-		txn,
-		schema,
-		row,
-		col,
-		false)
+		ctx, txn, schema, row, col, false,
+	)
 }
 
 func (blk *block) RunCalibration() (score int) {
@@ -169,7 +163,7 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 		dropped = true
 		return
 	}
-	if blk.mvcc.GetChangeNodeCnt() == 0 {
+	if blk.mvcc.GetChangeIntentionCnt() == 0 {
 		// No deletes found
 		score = 0
 	} else {
@@ -188,6 +182,7 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 }
 
 func (blk *block) EstimateScore(ttl time.Duration, force bool) int {
+	ttl = time.Duration(float64(ttl) * float64(rand.Intn(5)+10) / float64(10))
 	return blk.adjustScore(blk.estimateRawScore, ttl, force)
 }
 

@@ -127,7 +127,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(bat.Length())
 		analyze.Alloc(ctr.mp.Map().Size())
@@ -136,19 +136,21 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 }
 
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
-	if !ap.IsMerger {
-		ap.Channel <- ctr.matched
-		return true, nil
-	}
+	ctr.handledLast = true
 
 	if ap.NumCPU > 1 {
-		cnt := 1
-		for v := range ap.Channel {
-			ctr.matched.Or(v)
-			cnt++
-			if cnt == int(ap.NumCPU) {
-				close(ap.Channel)
-				break
+		if !ap.IsMerger {
+			ap.Channel <- ctr.matched
+			return true, nil
+		} else {
+			cnt := 1
+			for v := range ap.Channel {
+				ctr.matched.Or(v)
+				cnt++
+				if cnt == int(ap.NumCPU) {
+					close(ap.Channel)
+					break
+				}
 			}
 		}
 	}
@@ -237,7 +239,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 	}
-	//proc.SetInputBatch(&batch.Batch{})
+
+	// proc.SetInputBatch(batch.EmptyBatch)
 	return nil
 }
 

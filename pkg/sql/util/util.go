@@ -21,9 +21,27 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	rbat := batch.NewWithSize(len(bat.Vecs))
+	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
+	for i, srcVec := range bat.Vecs {
+		vec := proc.GetVector(*srcVec.GetType())
+		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
+			rbat.Clean(proc.Mp())
+			return nil, err
+		}
+		rbat.SetVector(int32(i), vec)
+	}
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	return rbat, nil
+}
 
 func SplitTableAndColumn(name string) (string, string) {
 	var schema string
@@ -42,6 +60,15 @@ func SplitTableAndColumn(name string) (string, string) {
 		schema += xs[i]
 	}
 	return schema, xs[len(xs)-1]
+}
+
+func TableIsLoggingTable(dbName string, tableName string) bool {
+	if tableName == "statement_info" && dbName == "system" {
+		return true
+	} else if tableName == "metric" && dbName == "system_metrics" {
+		return true
+	}
+	return false
 }
 
 // TableIsClusterTable check the table type is cluster table
@@ -101,6 +128,16 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 	right := tree.NewParenExpr(andExpr)
 	// return is: account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))
 	return tree.NewOrExpr(left, right)
+}
+
+func BuildSysStatementInfoFilter(acctName string) tree.Expr {
+	equalAccount := makeStringEqualAst("account", strings.Split(acctName, ":")[0])
+	return tree.NewAndExpr(equalAccount, equalAccount)
+}
+
+func BuildSysMetricFilter(acctName string) tree.Expr {
+	equalAccount := makeStringEqualAst("account", strings.Split(acctName, ":")[0])
+	return tree.NewAndExpr(equalAccount, equalAccount)
 }
 
 // Build the filter condition AST expression for mo_tables, as follows:

@@ -177,28 +177,28 @@ ordinal_position    INT UNSIGNED(32)    YES        null
 position_in_unique_constraint    INT UNSIGNED(32)    YES        null
 show columns from `COLUMNS`;
 Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR(3)    YES        null
-table_schema    VARCHAR(256)    YES        null    
-table_name    VARCHAR(256)    YES        null    
-column_name    VARCHAR(256)    YES        null
-ordinal_position    INT(0)    YES        null
-column_default    VARCHAR(65535)    YES        null
-is_nullable    VARCHAR(3)    YES        null
-data_type    VARCHAR(65535)    YES        null
-character_maximum_length    BIGINT(0)    YES        null
-character_octet_length    BIGINT(0)    YES        null
-numeric_precision    BIGINT(0)    YES        null
-numeric_scale    BIGINT(0)    YES        null
-datetime_precision    BIGINT(0)    YES        null
-character_set_name    VARCHAR(4)    YES        null
-collation_name    VARCHAR(8)    YES        null
-column_type    VARCHAR(65535)    YES        null
-column_key    VARCHAR(3)    YES        null
-extra    VARCHAR(14)    YES        null
-privileges    VARCHAR(31)    YES        null
-column_comment    VARCHAR(2048)    YES        null
-generation_expression    VARCHAR(500)    YES        null
-srs_id    BIGINT(0)    YES        null
+table_catalog    VARCHAR(3)    NO        null        
+table_schema    VARCHAR(256)    YES        null        
+table_name    VARCHAR(256)    YES        null        
+column_name    VARCHAR(256)    YES        null        
+ordinal_position    INT(0)    YES        null        
+column_default    VARCHAR(65535)    YES        null        
+is_nullable    VARCHAR(3)    YES        null        
+data_type    VARCHAR(65535)    YES        null        
+character_maximum_length    BIGINT(0)    YES        null        
+character_octet_length    BIGINT(0)    YES        null        
+numeric_precision    BIGINT(0)    YES        null        
+numeric_scale    BIGINT(0)    YES        null        
+datetime_precision    BIGINT(0)    YES        null        
+character_set_name    VARCHAR(4)    YES        null        
+collation_name    VARCHAR(8)    YES        null        
+column_type    VARCHAR(65535)    YES        null        
+column_key    VARCHAR(3)    YES        null        
+extra    VARCHAR(14)    YES        null        
+privileges    VARCHAR(31)    NO        null        
+column_comment    VARCHAR(2048)    YES        null        
+generation_expression    VARCHAR(500)    NO        null        
+srs_id    BIGINT(0)    YES        null        
 show columns from `PROFILING`;
 Field    Type    Null    Key    Default    Extra    Comment
 messages_sent    INT(32)    YES        null
@@ -237,18 +237,18 @@ privilege_type    VARCHAR(64)    NO        ''
 is_grantable    VARCHAR(3)    NO        ''
 show columns from `SCHEMATA`;
 Field    Type    Null    Key    Default    Extra    Comment
-catalog_name    VARCHAR(5000)    YES        null
-schema_name    VARCHAR(5000)    YES        null
-default_character_set_name    VARCHAR(7)    YES        null
-default_collation_name    VARCHAR(18)    YES        null
-sql_path    VARCHAR(0)    YES        null
-default_encryption    VARCHAR(3)    YES        null
+catalog_name    VARCHAR(5000)    YES        null        
+schema_name    VARCHAR(5000)    YES        null        
+default_character_set_name    VARCHAR(7)    NO        null        
+default_collation_name    VARCHAR(18)    NO        null        
+sql_path    VARCHAR(0)    YES        null        
+default_encryption    VARCHAR(3)    NO        null        
 show columns from `CHARACTER_SETS`;
 Field    Type    Null    Key    Default    Extra    Comment
-maxlen    INT UNSIGNED(32)    YES        null
-character_set_name    VARCHAR(64)    YES        null
-description    VARCHAR(2048)    YES        null
-default_collate_name    VARCHAR(64)    YES        null
+character_set_name    VARCHAR(64)    YES        null        
+default_collate_name    VARCHAR(64)    YES        null        
+description    VARCHAR(2048)    YES        null        
+maxlen    INT UNSIGNED(32)    YES        null        
 show columns from `TRIGGERS`;
 Field    Type    Null    Key    Default    Extra    Comment
 trigger_catalog    VARCHAR(64)    YES        null
@@ -275,27 +275,27 @@ collation_connection    VARCHAR(64)    YES        null
 database_collation    VARCHAR(64)    YES        null
 show columns from `TABLES`;
 Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR(3)    YES        null
-table_schema    VARCHAR(5000)    YES        null
-table_name    VARCHAR(5000)    YES        null
-table_type    VARCHAR(14)    YES        null
-engine    VARCHAR(3)    YES        null
-version    BIGINT(0)    YES        null
-row_format    VARCHAR(10)    YES        null
-table_rows    BIGINT(0)    YES        null
-avg_row_length    BIGINT(0)    YES        null
-data_length    BIGINT(0)    YES        null
-max_data_length    BIGINT(0)    YES        null
-index_length    BIGINT(0)    YES        null
-data_free    BIGINT(0)    YES        null
-auto_increment    BIGINT UNSIGNED(0)    YES        null
-create_time    TIMESTAMP(0)    YES        null
-update_time    TIMESTAMP(0)    YES        null
-check_time    TIMESTAMP(0)    YES        null
-table_collation    VARCHAR(18)    YES        null
-checksum    BIGINT(0)    YES        null
-create_options    VARCHAR(256)    YES        null
-table_comment    TEXT(0)    YES        null
+table_catalog    VARCHAR(3)    NO        null        
+table_schema    VARCHAR(5000)    YES        null        
+table_name    VARCHAR(5000)    YES        null        
+table_type    VARCHAR(14)    YES        null        
+engine    VARCHAR(3)    YES        null        
+version    BIGINT(0)    YES        null        
+row_format    VARCHAR(10)    NO        null        
+table_rows    BIGINT(0)    YES        null        
+avg_row_length    BIGINT(0)    YES        null        
+data_length    BIGINT(0)    YES        null        
+max_data_length    BIGINT(0)    YES        null        
+index_length    BIGINT(0)    YES        null        
+data_free    BIGINT(0)    YES        null        
+auto_increment    BIGINT UNSIGNED(0)    YES        null        
+create_time    TIMESTAMP(0)    YES        null        
+update_time    TIMESTAMP(0)    YES        null        
+check_time    TIMESTAMP(0)    YES        null        
+table_collation    VARCHAR(18)    NO        null        
+checksum    BIGINT(0)    YES        null        
+create_options    VARCHAR(256)    YES        null        
+table_comment    TEXT(0)    YES        null        
 drop database if exists test;
 create database test;
 use test;

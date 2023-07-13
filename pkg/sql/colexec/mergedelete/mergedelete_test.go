@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package mergedelete
 
 import (
@@ -58,12 +59,14 @@ func TestMergeDelete(t *testing.T) {
 			catalog.BlockMeta_Delete_ID,
 			catalog.BlockMeta_DeltaLoc,
 			catalog.BlockMeta_Type,
+			catalog.BlockMeta_Partition,
 			catalog.BlockMeta_Deletes_Length,
 		},
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"mock_block_id0"}, nil),
 			testutil.MakeTextVector([]string{string(bytes)}, nil),
 			testutil.MakeInt8Vector([]int8{deletion.RawBatchOffset}, nil),
+			testutil.MakeInt32Vector([]int32{0}, nil),
 			vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool()),
 		},
 		Zs: []int64{1},
@@ -110,7 +113,7 @@ func TestMergeDelete(t *testing.T) {
 
 	metaLocBat3 := &batch.Batch{
 		Attrs: []string{
-			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_DeltaLoc,
 		},
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"d:magic:15"}, nil),
@@ -123,12 +126,14 @@ func TestMergeDelete(t *testing.T) {
 			catalog.BlockMeta_Delete_ID,
 			catalog.BlockMeta_DeltaLoc,
 			catalog.BlockMeta_Type,
+			catalog.BlockMeta_Partition,
 			catalog.BlockMeta_Deletes_Length,
 		},
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"mock_block_id1", "mock_block_id2", "mock_block_id3"}, nil),
 			testutil.MakeTextVector([]string{string(bytes1), string(bytes2), string(bytes3)}, nil),
-			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch, deletion.CNBlockOffset, deletion.FlushMetaLoc}, nil),
+			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch, deletion.CNBlockOffset, deletion.FlushDeltaLoc}, nil),
+			testutil.MakeInt32Vector([]int32{0, 0, 0}, nil),
 			vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool()),
 		},
 		Zs: []int64{1, 1, 1},
@@ -170,7 +175,7 @@ func TestMergeDelete(t *testing.T) {
 	// check attr names
 	require.True(t, reflect.DeepEqual(
 		[]string{
-			catalog.BlockMeta_MetaLoc,
+			catalog.BlockMeta_DeltaLoc,
 		},
 		result1.Attrs,
 	))

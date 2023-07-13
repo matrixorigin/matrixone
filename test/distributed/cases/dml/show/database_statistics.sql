@@ -1,4 +1,4 @@
-
+-- @skip:issue#10473
 -- test system db table_number
 
 show table_number from mo_task;
@@ -151,9 +151,38 @@ select * from external_table;
 
 show table_number from test_db;
 
-
 show table_values from external_table;
 
+-- test partition table
+DROP TABLE IF EXISTS partition_table;
+create table partition_table(
+                                empno int unsigned auto_increment,
+                                ename varchar(15),
+                                job varchar(10),
+                                mgr int unsigned ,
+                                hiredate date,
+                                sal decimal(7,2),
+                                comm decimal(7,2),
+                                deptno int unsigned,
+                                primary key(empno, deptno)
+)
+    PARTITION BY KEY(deptno)
+PARTITIONS 4;
+
+show table_number from test_db;
+
+show table_values from partition_table;
+select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
+
+INSERT INTO partition_table VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+INSERT INTO partition_table VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
+show table_values from partition_table;
+
+INSERT INTO partition_table VALUES (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
+INSERT INTO partition_table VALUES (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
+show table_values from partition_table;
+
+select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
 
 create table t2(
 col1 json

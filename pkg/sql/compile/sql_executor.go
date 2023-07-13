@@ -97,7 +97,21 @@ func (s *sqlExecutor) ExecTxn(
 	if err != nil {
 		return exec.rollback()
 	}
-	return exec.commit()
+	if err = exec.commit(); err != nil {
+		return err
+	}
+	s.maybeWaitCommittedLogApplied(exec.opts)
+	return nil
+}
+
+func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
+	if !opts.WaitCommittedLogApplied() {
+		return
+	}
+	ts := opts.Txn().Txn().CommitTS
+	if !ts.IsEmpty() {
+		s.txnClient.(client.TxnClientWithCtl).SetLatestCommitTS(ts)
+	}
 }
 
 func (s *sqlExecutor) getCompileContext(
@@ -114,15 +128,16 @@ func (s *sqlExecutor) getCompileContext(
 func (s *sqlExecutor) adjustOptions(
 	ctx context.Context,
 	opts executor.Options) (context.Context, executor.Options, error) {
-	if opts.HasAccoundID() {
+	if opts.HasAccountID() {
 		ctx = context.WithValue(
 			ctx,
 			defines.TenantIDKey{},
-			opts.AccoundID())
+			opts.AccountID())
 	}
 
 	if !opts.HasExistsTxn() {
-		txnOp, err := s.txnClient.New(ctx, opts.MinCommittedTS())
+		txnOp, err := s.txnClient.New(ctx, opts.MinCommittedTS(),
+			client.WithTxnCreateBy("sql-executor"))
 		if err != nil {
 			return nil, executor.Options{}, err
 		}
@@ -159,6 +174,16 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
+	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
+	// maybe we should fix it.
+	txnOp := exec.opts.Txn()
+	if txnOp != nil {
+		err := txnOp.GetWorkspace().IncrStatementID(exec.ctx, false)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
+
 	proc := process.New(
 		exec.ctx,
 		exec.s.mp,
@@ -171,7 +196,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
-		stmts[0])
+		stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -224,11 +249,6 @@ func (exec *txnExecutor) commit() error {
 	if exec.opts.ExistsTxn() {
 		return nil
 	}
-	if err := exec.s.eng.Commit(
-		exec.ctx,
-		exec.opts.Txn()); err != nil {
-		return err
-	}
 	return exec.opts.Txn().Commit(exec.ctx)
 }
 
@@ -236,9 +256,6 @@ func (exec *txnExecutor) rollback() error {
 	if exec.opts.ExistsTxn() {
 		return nil
 	}
-	err := exec.s.eng.Rollback(
-		exec.ctx,
-		exec.opts.Txn())
-	return multierr.Append(err,
+	return multierr.Append(nil,
 		exec.opts.Txn().Rollback(exec.ctx))
 }

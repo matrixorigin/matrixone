@@ -50,6 +50,9 @@ type replayer struct {
 	recordChan chan *entry.Entry
 
 	applyDuration time.Duration
+	readCount     int
+	internalCount int
+	applyCount    int
 
 	wg sync.WaitGroup
 }
@@ -97,7 +100,9 @@ func (r *replayer) replay() {
 
 func (r *replayer) readRecords() (readEnd bool) {
 	nextLsn, safeLsn := r.d.readFromLogServiceInReplay(r.nextToReadLsn, r.readMaxSize, func(lsn uint64, record *recordEntry) {
+		r.readCount++
 		if record.meta.metaType == TReplay {
+			r.internalCount++
 			cmd := NewEmptyReplayCmd()
 			cmd.Unmarshal(record.payload)
 			r.removeEntries(cmd.skipLsns)
@@ -167,6 +172,7 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 	if err != nil {
 		panic(err)
 	}
+	r.applyCount++
 	intervals := record.replay(r)
 	r.d.onReplayRecordEntry(logserviceLsn, intervals)
 	r.onReplayDriverLsn(intervals.GetMax())

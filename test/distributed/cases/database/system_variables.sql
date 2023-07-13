@@ -19,8 +19,10 @@ show variables like 'init%';
 show variables like 'init_connect';
 
 -- interactive_timeout
+-- @bvt:issue#10473
 show variables like 'interactive%';
 show variables like 'interactive_timeout';
+-- @bvt:issue
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 set interactive_timeout = 30000+100;
@@ -161,9 +163,10 @@ set tx_isolation = default;
 show variables like 'tx_isolation';
 
 select @@sql_mode;
-set @@sql_mode = ONLY_FULL_GROUP_BY;
+set @@sql_mode ='';
+select @@sql_mode;
+set @@sql_mode = 'ONLY_FULL_GROUP_BY';
 select @@sql_mode;
 set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
-select @@sql_mode;

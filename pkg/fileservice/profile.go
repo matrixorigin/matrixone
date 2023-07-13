@@ -48,32 +48,44 @@ func NewProfileHandler() *ProfileHandler {
 	}
 }
 
-func (p *ProfileHandler) StartProfile(w io.Writer) (stop func()) {
+func (p *ProfileHandler) StartProfile() (
+	write func(w io.Writer),
+	stop func(),
+) {
+
+	// register
 	state := <-p.stateChan
 	id := atomic.AddInt64(&p.nextProfilerID, 1)
 	profiler := newProfiler()
 	state.profilers[id] = profiler
 	p.profiling.Store(true)
 	p.stateChan <- state
-	return func() {
+
+	write = func(w io.Writer) {
 		state := <-p.stateChan
-		profiler := state.profilers[id]
+		state.profilers[id].profile.Write(w)
+		p.stateChan <- state
+	}
+
+	stop = func() {
+		state := <-p.stateChan
 		delete(state.profilers, id)
 		if len(state.profilers) == 0 {
 			p.profiling.Store(false)
 		}
 		p.stateChan <- state
-		profiler.profile.Write(w)
 	}
+
+	return
 }
 
-func (p *ProfileHandler) AddSample() {
+func (p *ProfileHandler) AddSample(duration time.Duration, tags ...string) {
 	if !p.profiling.Load() {
 		return
 	}
 	state := <-p.stateChan
 	for _, profiler := range state.profilers {
-		profiler.addSample(1)
+		profiler.addSample(1, duration, tags...)
 	}
 	p.stateChan <- state
 }
@@ -85,8 +97,9 @@ func (p *ProfileHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		sec = 30
 	}
 
-	stop := p.StartProfile(w)
+	write, stop := p.StartProfile()
 	defer stop()
+	defer write(w)
 
 	select {
 	case <-req.Context().Done():
@@ -95,10 +108,10 @@ func (p *ProfileHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 type profiler struct {
-	profile        *profile.Profile
-	functions      map[string]*profile.Function
-	nextLocationID uint64
-	nextFunctionID uint64
+	profile      *profile.Profile
+	functions    map[string]*profile.Function
+	tagFunctions map[string]*profile.Function
+	nextID       atomic.Uint64
 }
 
 func newProfiler() *profiler {
@@ -109,9 +122,14 @@ func newProfiler() *profiler {
 					Type: "count",
 					Unit: "count",
 				},
+				{
+					Type: "time",
+					Unit: "nanoseconds",
+				},
 			},
 		},
-		functions: make(map[string]*profile.Function),
+		functions:    make(map[string]*profile.Function),
+		tagFunctions: make(map[string]*profile.Function),
 	}
 }
 
@@ -119,18 +137,34 @@ func (p *profiler) getFunction(frame runtime.Frame) *profile.Function {
 	if fn, ok := p.functions[frame.Function]; ok {
 		return fn
 	}
-	p.nextFunctionID++
 	fn := &profile.Function{
-		ID:   p.nextFunctionID,
-		Name: frame.Function,
+		ID:         p.nextID.Add(1),
+		Name:       frame.Function,
+		SystemName: frame.Function,
+		Filename:   frame.File,
+		StartLine:  int64(frame.Line),
 	}
 	if frame.Func != nil {
-		file, line := frame.Func.FileLine(frame.Func.Entry())
+		file, line := frame.Func.FileLine(frame.Entry)
 		fn.Filename = file
 		fn.StartLine = int64(line)
 	}
-	p.functions[frame.Function] = fn
 	p.profile.Function = append(p.profile.Function, fn)
+	p.functions[frame.Function] = fn
+	return fn
+}
+
+func (p *profiler) getTagFunction(tag string) *profile.Function {
+	if fn, ok := p.tagFunctions[tag]; ok {
+		return fn
+	}
+	fn := &profile.Function{
+		ID:         p.nextID.Add(1),
+		Name:       tag,
+		SystemName: tag,
+	}
+	p.profile.Function = append(p.profile.Function, fn)
+	p.tagFunctions[tag] = fn
 	return fn
 }
 
@@ -139,20 +173,38 @@ func (p *profiler) getLocation(frame runtime.Frame) *profile.Location {
 		Function: p.getFunction(frame),
 		Line:     int64(frame.Line),
 	}
-	p.nextLocationID++
 	loc := &profile.Location{
-		ID:   p.nextLocationID,
-		Line: []profile.Line{line},
+		ID:      p.nextID.Add(1),
+		Address: uint64(frame.PC),
+		Line:    []profile.Line{line},
 	}
 	p.profile.Location = append(p.profile.Location, loc)
 	return loc
 }
 
-func (p *profiler) addSample(skip int) {
+func (p *profiler) getTagLocation(tag string) *profile.Location {
+	loc := &profile.Location{
+		ID: p.nextID.Add(1),
+		Line: []profile.Line{
+			{
+				Function: p.getTagFunction(tag),
+			},
+		},
+	}
+	p.profile.Location = append(p.profile.Location, loc)
+	return loc
+}
+
+func (p *profiler) addSample(skip int, duration time.Duration, tags ...string) {
 	sample := &profile.Sample{
 		Value: []int64{
 			1,
+			int64(duration / time.Nanosecond),
 		},
+	}
+
+	for _, tag := range tags {
+		sample.Location = append(sample.Location, p.getTagLocation(tag))
 	}
 
 	var pcs []uintptr
@@ -164,6 +216,7 @@ func (p *profiler) addSample(skip int) {
 	for {
 		frame, more := frames.Next()
 		if frame.Function == "" {
+			// unknown function, ignore
 			continue
 		}
 		location := p.getLocation(frame)

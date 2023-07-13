@@ -16,18 +16,16 @@ package sm
 
 import (
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type stateMachine struct {
-	closed          common.Closable
+	closed          Closable
 	wg              *sync.WaitGroup
 	receiveQueue    Queue
 	checkpointQueue Queue
 }
 
-func NewStateMachine(wg *sync.WaitGroup, closed common.Closable, rQueue, ckpQueue Queue) *stateMachine {
+func NewStateMachine(wg *sync.WaitGroup, closed Closable, rQueue, ckpQueue Queue) *stateMachine {
 	return &stateMachine{
 		closed:          closed,
 		wg:              wg,

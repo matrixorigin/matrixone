@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop account if exists `test@123456`;
 drop account if exists testaccount;
 drop account if exists 123_acc;
@@ -203,7 +204,7 @@ accountadmin    table    reference    *.*
 accountadmin    table    index    *.*
 accountadmin    table    table all    *.*
 accountadmin    table    table ownership    *.*
-accountadmin    table    values    t
+accountadmin    table    values    *.*
 public    account    connect    *
 create database account_1_db;
 CREATE USER account_1_user IDENTIFIED BY '123456';
@@ -249,3 +250,4 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
+set global enable_privilege_cache = on;

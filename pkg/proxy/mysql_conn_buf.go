@@ -15,12 +15,14 @@
 package proxy
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
 const (
@@ -35,18 +37,6 @@ const (
 	cmdLen = 1
 	// The header and cmd must be received first.
 	preRecvLen = mysqlHeadLen + cmdLen
-)
-
-// txnTag indicates the txn state.
-type txnTag uint8
-
-const (
-	// txnBegin means the statement is 'begin'.
-	txnBegin txnTag = 0
-	// txnEnd means the statement is 'commit' or 'rollback'.
-	txnEnd txnTag = 1
-	// txnBegin means the statement is others.
-	txnOther txnTag = 2
 )
 
 // MySQLCmd is the type indicate the cmd of statement.
@@ -98,6 +88,12 @@ type msgBuf struct {
 	reqC chan IEvent
 	// respC is the channel of event response.
 	respC chan []byte
+	// inTxn is the session txn state which is updated by the OK and EOF packet from server.
+	// It is used to check if we should start a connection transfer.
+	mu struct {
+		sync.Mutex
+		inTxn bool
+	}
 }
 
 // newMsgBuf creates a new message buffer.
@@ -136,64 +132,109 @@ func (b *msgBuf) writeAvail() int {
 // preRecv tries to receive a MySQL packet from remote. It receives
 // a packet header at least, and it blocks when there are nothing to
 // receive.
-func (b *msgBuf) preRecv() (int, txnTag, error) {
+func (b *msgBuf) preRecv() (int, error) {
 	// First we try to receive at least preRecvLen data and put it into
 	// the buffer.
-	if err := b.receiveAtLeast(preRecvLen); err != nil {
-		return 0, 0, err
+	if err := b.receiveAtLeast(mysqlHeadLen); err != nil {
+		return 0, err
 	}
 
-	cmd := b.buf[b.begin+mysqlHeadLen]
 	bodyLen := int(uint32(b.buf[b.begin]) | uint32(b.buf[b.begin+1])<<8 | uint32(b.buf[b.begin+2])<<16)
+	if bodyLen == 0 {
+		return mysqlHeadLen, nil
+	}
 
 	// Max length is 3 bytes.
 	if bodyLen < 1 || bodyLen >= 1<<24-1 {
-		return 0, txnOther, moerr.NewInternalErrorNoCtx("mysql protocol error: body length %d", bodyLen)
-	}
-
-	// Recognize the statement to mark the transaction status of the pipe.
-	txnRet := txnOther
-	if cmd == byte(cmdQuery) {
-		if isStmtCommit(b.buf[b.begin+preRecvLen:b.end]) ||
-			isStmtRollback(b.buf[b.begin+preRecvLen:b.end]) {
-			txnRet = txnEnd
-		} else if isStmtBegin(b.buf[b.begin+preRecvLen : b.end]) {
-			txnRet = txnBegin
-		}
+		return 0, moerr.NewInternalErrorNoCtx("mysql protocol error: body length %d", bodyLen)
 	}
 
 	// Data length does not count header length, so header length is added to it.
-	return bodyLen + mysqlHeadLen, txnRet, nil
+	return bodyLen + mysqlHeadLen, nil
 }
 
 // consumeMsg consumes the MySQL packet in the buffer, handles it by event
 // mechanism. Returns true if the command is handled, means it does not need
 // to be sent through tunnel anymore; false otherwise.
-func (b *msgBuf) consumeMsg(msg []byte, dst io.Writer) bool {
+func (b *msgBuf) consumeMsg(msg []byte) bool {
 	if b.reqC == nil {
 		return false
 	}
-	req := eventReqPool.Get().(*eventReq)
-	defer eventReqPool.Put(req)
-	req.msg = msg
-	req.dst = dst
-	e, r := makeEvent(req)
-	if e == nil {
-		return false
-	}
-	sendReq(e, b.reqC)
-	// We cannot write to b.src directly here. The response has
-	// to go to the server conn buf, and lock writeMu then
-	// write to client.
 
-	return r
+	// For the client->server pipe, we catch some statements to do some more actions.
+	if b.name == connClientName {
+		e, r := makeEvent(msg)
+		if e == nil {
+			return false
+		}
+		sendReq(e, b.reqC)
+		// We cannot write to b.src directly here. The response has
+		// to go to the server conn buf, and lock writeMu then
+		// write to client.
+
+		return r
+	}
+
+	// For the server->client pipe, we should the transaction status from the
+	// OK and EOF packet, which is used in connection transfer. If the session
+	// is in a transaction, a transfer should not start.
+	if b.name == connServerName {
+		if isOKPacket(msg) {
+			b.handleOKPacket(msg)
+		} else if isEOFPacket(msg) {
+			b.handleEOFPacket(msg)
+		}
+	}
+	return false
+}
+
+// handleOKPacket handles the OK packet from server to update the txn state.
+func (b *msgBuf) handleOKPacket(msg []byte) {
+	var mp *frontend.MysqlProtocolImpl
+	pos := 5
+	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
+	if !ok {
+		return
+	}
+	_, pos, ok = mp.ReadIntLenEnc(msg, pos)
+	if !ok {
+		return
+	}
+	// FIXME: the result set packet may pretend as OK packet if the first field is null.
+	// The example is the line 16 in file test/distributed/resources/load_data/char_varchar_1.csv.
+	// After fix, remove the following 3 lines.
+	if len(msg[pos:]) < 2 {
+		return
+	}
+	status := binary.LittleEndian.Uint16(msg[pos:])
+	b.setTxnStatus(status)
+}
+
+// handleEOFPacket handles the EOF packet from server to update the txn state.
+func (b *msgBuf) handleEOFPacket(msg []byte) {
+	status := binary.LittleEndian.Uint16(msg[3:])
+	b.setTxnStatus(status)
+}
+
+// setTxnStatus sets the txn state according to the incoming status.
+func (b *msgBuf) setTxnStatus(status uint16) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.mu.inTxn = status&frontend.SERVER_STATUS_IN_TRANS != 0
+}
+
+// isInTxn returns if the session is in a transaction.
+func (b *msgBuf) isInTxn() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.mu.inTxn
 }
 
 // sendTo sends the data in buffer to destination.
-func (b *msgBuf) sendTo(dst io.Writer) (int, error) {
-	l, _, err := b.preRecv()
+func (b *msgBuf) sendTo(dst io.Writer) (bool, error) {
+	l, err := b.preRecv()
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 	readPos := b.begin
 	writePos := readPos + l
@@ -203,8 +244,8 @@ func (b *msgBuf) sendTo(dst io.Writer) (int, error) {
 		writePos = b.end
 	}
 	b.begin = writePos
-	if writePos-readPos < preRecvLen {
-		panic(fmt.Sprintf("%d bytes have to been read", preRecvLen))
+	if writePos-readPos < mysqlHeadLen {
+		panic(fmt.Sprintf("%d bytes have to be read", mysqlHeadLen))
 	}
 
 	// Try to consume the message synchronously.
@@ -214,16 +255,16 @@ func (b *msgBuf) sendTo(dst io.Writer) (int, error) {
 		// the data at the position of writePos.
 		extraLen, err = io.ReadFull(b.src, b.buf[writePos:writePos+dataLeft])
 		if err != nil {
-			return writePos - readPos + extraLen, err
+			return false, err
 		}
 		if extraLen < dataLeft {
-			return extraLen, io.ErrShortWrite
+			return false, io.ErrShortWrite
 		}
 		writePos += extraLen
 		dataLeft = 0
 	}
-	if dataLeft == 0 && b.consumeMsg(b.buf[readPos:writePos], dst) {
-		return writePos - readPos, nil
+	if dataLeft == 0 && b.consumeMsg(b.buf[readPos:writePos]) {
+		return false, nil
 	}
 
 	b.writeMu.Lock()
@@ -231,30 +272,29 @@ func (b *msgBuf) sendTo(dst io.Writer) (int, error) {
 	// Write the data in buffer.
 	n, err := dst.Write(b.buf[readPos:writePos])
 	if err != nil {
-		return n, err
+		return false, err
 	}
 	if n < writePos-readPos {
-		return n, io.ErrShortWrite
+		return false, io.ErrShortWrite
 	}
 
 	// The buffer does not hold all packet data, so continue to read the packet.
 	if dataLeft > 0 {
 		m, err := io.CopyN(dst, b.src, int64(dataLeft))
-		n += int(m)
 		if err != nil {
-			return n, err
+			return false, err
 		}
 		if int(m) < dataLeft {
-			return n, io.ErrShortWrite
+			return false, io.ErrShortWrite
 		}
 	}
-	return n, err
+	return false, err
 }
 
 // receive receives a MySQL packet. This is used in test only.
 func (b *msgBuf) receive() ([]byte, error) {
 	// Receive header of the current packet.
-	size, _, err := b.preRecv()
+	size, err := b.preRecv()
 	if err != nil {
 		return nil, err
 	}

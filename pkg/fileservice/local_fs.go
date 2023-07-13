@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -55,6 +56,7 @@ const (
 )
 
 func NewLocalFS(
+	ctx context.Context,
 	name string,
 	rootPath string,
 	cacheConfig CacheConfig,
@@ -113,19 +115,19 @@ func NewLocalFS(
 		perfCounterSets: perfCounterSets,
 	}
 
-	if err := fs.initCaches(cacheConfig); err != nil {
+	if err := fs.initCaches(ctx, cacheConfig); err != nil {
 		return nil, err
 	}
 
 	return fs, nil
 }
 
-func (l *LocalFS) initCaches(config CacheConfig) error {
-	config.SetDefaults()
+func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
+	config.setDefaults()
 
-	if config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
+	if *config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
-			WithLRU(int64(config.MemoryCapacity)),
+			WithLRU(int64(*config.MemoryCapacity)),
 			WithPerfCounterSets(l.perfCounterSets),
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -135,13 +137,14 @@ func (l *LocalFS) initCaches(config CacheConfig) error {
 	}
 
 	if config.enableDiskCacheForLocalFS {
-		if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
+		if *config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
 			var err error
 			l.diskCache, err = NewDiskCache(
-				config.DiskPath,
-				int64(config.DiskCapacity),
+				ctx,
+				*config.DiskPath,
+				int64(*config.DiskCapacity),
 				config.DiskMinEvictInterval.Duration,
-				config.DiskEvictTarget,
+				*config.DiskEvictTarget,
 				l.perfCounterSets,
 			)
 			if err != nil {
@@ -191,7 +194,10 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -319,7 +325,10 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 		return nil
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -489,7 +498,10 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
@@ -550,7 +562,10 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
@@ -585,7 +600,10 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	for _, filePath := range filePaths {
 		if err := l.deleteSingle(ctx, filePath); err != nil {
@@ -733,7 +751,10 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 	default:
 	}
 
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	// write
 	for _, entry := range entries {

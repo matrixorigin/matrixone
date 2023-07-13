@@ -25,6 +25,7 @@ import (
 )
 
 // TxnOption options for setup transaction
+// FIXME(fagongzi): refactor TxnOption to avoid mem alloc
 type TxnOption func(*txnOperator)
 
 // TxnClientCreateOption options for create txn
@@ -41,8 +42,12 @@ type TxnClient interface {
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	// AbortAllRunningTxn set all running txn to be aborted.
+	AbortAllRunningTxn()
 	// Close closes client.sender
 	Close() error
+	// WaitLogTailAppliedAt wait log tail applied at ts
+	WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error)
 }
 
 // TxnClientWithCtl TxnClient to support ctl command.
@@ -59,6 +64,10 @@ type TxnClientWithCtl interface {
 // whether certain features are supported.
 type TxnClientWithFeature interface {
 	TxnClient
+	// Pause the txn client to prevent new txn from being created.
+	Pause()
+	// Resume the txn client to allow new txn to be created.
+	Resume()
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
 	RefreshExpressionEnabled() bool
 	// CNBasedConsistencyEnabled return true if cn based consistency feature enabled
@@ -74,6 +83,9 @@ type TxnClientWithFeature interface {
 type TxnOperator interface {
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta
+	// TxnRef returns pointer of current txn metadata. In RC mode, txn's snapshot ts
+	// will updated before statement executed.
+	TxnRef() *txn.TxnMeta
 	// Snapshot a snapshot of the transaction handle that can be passed around the
 	// network. In some scenarios, operations of a transaction are executed on multiple
 	// CN nodes for performance acceleration. But with only one CN coordinator, Snapshot
@@ -82,8 +94,9 @@ type TxnOperator interface {
 	// after the non-CN coordinator completes the transaction operation.
 	Snapshot() ([]byte, error)
 	// UpdateSnapshot in some scenarios, we need to boost the snapshotTimestamp to eliminate
-	// the w-w conflict
-	UpdateSnapshot(ts timestamp.Timestamp) error
+	// the w-w conflict.
+	// If ts is empty, it will use the latest commit timestamp which is received from DN.
+	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
 	// operation information.
 	ApplySnapshot(data []byte) error
@@ -118,6 +131,9 @@ type TxnOperator interface {
 	AddWorkspace(workspace Workspace)
 	// GetWorkspace from the transaction
 	GetWorkspace() Workspace
+
+	ResetRetry(bool)
+	IsRetry() bool
 }
 
 // DebugableTxnOperator debugable txn operator
@@ -127,6 +143,15 @@ type DebugableTxnOperator interface {
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
+}
+
+// CallbackTxnOperator callback txn operator
+type EventableTxnOperator interface {
+	TxnOperator
+
+	// AppendEventCallback append callback. All append callbacks will be called sequentially
+	// if event happend.
+	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))
 }
 
 // TxnIDGenerator txn id generator
@@ -148,17 +173,28 @@ func SetupRuntimeTxnOptions(
 // In the Push mode of LogTail's Event, the DN pushes the logtail to the subscribed
 // CN once a transaction has been Committed. So there is a actual wait (last push commit
 // ts >= start ts). This is unfriendly to TP, so we can lose some freshness and use the
-// latest commit ts received from the current DN pushg as the start ts of the transaction,
+// latest commit ts received from the current DN push as the start ts of the transaction,
 // which eliminates this physical wait.
 type TimestampWaiter interface {
 	// GetTimestamp get the latest commit ts as snapshot ts of the new txn. It will keep
 	// blocking if latest commit timestamp received from DN is less than the given value.
 	GetTimestamp(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
-	// NotifyLatestCommitTS notify the latest timestamp that received from DN
-	NotifyLatestCommitTS(timestamp.Timestamp)
+	// NotifyLatestCommitTS notify the latest timestamp that received from DN. A applied logtail
+	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and dn is
+	// reset, the epoch will be reset and all the ts of the old epoch should be invalidated.
+	NotifyLatestCommitTS(appliedTS timestamp.Timestamp)
 	// Close close the timestamp waiter
 	Close()
 }
 
 type Workspace interface {
+	// IncrStatementID incr the execute statement id. It maintains the statement id, first statement is 1,
+	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
+	// workspace will update snapshot data for later read request.
+	IncrStatementID(ctx context.Context, commit bool) error
+	// RollbackLastStatement rollback the last statement.
+	RollbackLastStatement(ctx context.Context) error
+
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
 }

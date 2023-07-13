@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -29,6 +28,7 @@ import (
 
 const (
 	taskSchedulerDefaultTimeout = 10 * time.Second
+	taskDefaultTimeout          = 30 * time.Minute
 )
 
 type scheduler struct {
@@ -48,7 +48,7 @@ func NewScheduler(taskServiceGetter func() taskservice.TaskService, cfg hakeeper
 }
 
 func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
-	workingCN, expiredCN := parseCNStores(s.cfg, cnState, currentTick)
+	workingCN := getWorkingCNs(s.cfg, cnState, currentTick)
 
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
@@ -67,30 +67,9 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	if len(tasks) == 0 {
 		return
 	}
-	orderedCN := getCNOrdered(runningTasks, workingCN)
-
+	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, workingCN)
 	s.allocateTasks(createdTasks, orderedCN)
-
-	expiredTasks := getExpiredTasks(runningTasks, expiredCN)
 	s.allocateTasks(expiredTasks, orderedCN)
-}
-
-func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error {
-	ts := s.taskServiceGetter()
-	if ts == nil {
-		return moerr.NewInternalError(ctx, "failed to get task service")
-	}
-	if err := ts.CreateBatch(ctx, tasks); err != nil {
-		runtime.ProcessLevelRuntime().Logger().Error("failed to create new tasks", zap.Error(err))
-		return err
-	}
-	runtime.ProcessLevelRuntime().Logger().Debug("new tasks created", zap.Int("created", len(tasks)))
-	v, err := ts.QueryTask(ctx)
-	if len(v) == 0 && err == nil {
-		panic("cannot read created tasks")
-	}
-	runtime.ProcessLevelRuntime().Logger().Debug("new tasks created, query", zap.Int("created", len(v)), zap.Error(err))
-	return nil
 }
 
 func (s *scheduler) StartScheduleCronTask() {
@@ -147,29 +126,34 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 		runtime.ProcessLevelRuntime().Logger().Error("failed to allocate task",
 			zap.Uint64("task-id", t.ID),
 			zap.String("task-metadata-id", t.Metadata.ID),
-			zap.String("task-runner", runner),
-			zap.Error(err))
+			zap.String("task-runner", runner))
 		return
 	}
 	orderedCN.inc(t.TaskRunner)
 }
 
-func getExpiredTasks(tasks []task.Task, expiredCN []string) (expired []task.Task) {
-	for _, t := range tasks {
-		if contains(expiredCN, t.TaskRunner) {
-			expired = append(expired, t)
-		}
-	}
-	return
-}
-
-func getCNOrdered(tasks []task.Task, workingCN []string) *cnMap {
-	orderedMap := newOrderedMap(workingCN)
+func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (orderedMap *cnMap, expired []task.Task) {
+	orderedMap = newOrderedMap(workingCN)
 	for _, t := range tasks {
 		if contains(workingCN, t.TaskRunner) {
 			orderedMap.inc(t.TaskRunner)
+		} else {
+			expired = append(expired, t)
 		}
 	}
+	for _, t := range tasks {
+		if heartbeatTimeout(t.LastHeartbeat) {
+			for _, e := range expired {
+				if t.ID == e.ID {
+					break
+				}
+			}
+			expired = append(expired, t)
+		}
+	}
+	return orderedMap, expired
+}
 
-	return orderedMap
+func heartbeatTimeout(lastHeartbeat int64) bool {
+	return time.Since(time.UnixMilli(lastHeartbeat)) > taskDefaultTimeout
 }

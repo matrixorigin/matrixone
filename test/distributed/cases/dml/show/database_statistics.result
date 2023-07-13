@@ -261,6 +261,42 @@ Number of tables in test_db
 show table_values from external_table;
 max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
 100    10    10.34    1.34    你好        aaa        2011-10-11    2011-10-10    true    false
+DROP TABLE IF EXISTS partition_table;
+create table partition_table(
+empno int unsigned auto_increment,
+ename varchar(15),
+job varchar(10),
+mgr int unsigned ,
+hiredate date,
+sal decimal(7,2),
+comm decimal(7,2),
+deptno int unsigned,
+primary key(empno, deptno)
+)
+PARTITION BY KEY(deptno)
+PARTITIONS 4;
+show table_number from test_db;
+Number of tables in test_db
+8
+show table_values from partition_table;
+max(empno)    min(empno)    max(ename)    min(ename)    max(job)    min(job)    max(mgr)    min(mgr)    max(hiredate)    min(hiredate)    max(sal)    min(sal)    max(comm)    min(comm)    max(deptno)    min(deptno)
+null    null    null    null    null    null    null    null    null    null    null    null    null    null    null    null
+select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
+mo_table_rows(test_db, partition_table)    mo_table_size(test_db, partition_table)
+0    0
+INSERT INTO partition_table VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+INSERT INTO partition_table VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
+show table_values from partition_table;
+max(empno)    min(empno)    max(ename)    min(ename)    max(job)    min(job)    max(mgr)    min(mgr)    max(hiredate)    min(hiredate)    max(sal)    min(sal)    max(comm)    min(comm)    max(deptno)    min(deptno)
+7499    7369    SMITH    ALLEN    SALESMAN    CLERK    7902    7698    1981-02-20    1980-12-17    1600.00    800.00    300.00    300.00    30    20
+INSERT INTO partition_table VALUES (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
+INSERT INTO partition_table VALUES (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
+show table_values from partition_table;
+max(empno)    min(empno)    max(ename)    min(ename)    max(job)    min(job)    max(mgr)    min(mgr)    max(hiredate)    min(hiredate)    max(sal)    min(sal)    max(comm)    min(comm)    max(deptno)    min(deptno)
+7566    7369    WARD    ALLEN    SALESMAN    CLERK    7902    7698    1981-04-02    1980-12-17    2975.00    800.00    500.00    300.00    30    20
+select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
+mo_table_rows(test_db, partition_table)    mo_table_size(test_db, partition_table)
+4    320
 create table t2(
 col1 json
 );

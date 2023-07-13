@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package mergedelete
 
 import (
@@ -52,27 +53,49 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
-	// 		blkId          		deltaLoc                        type
-	// |-----------|-----------------------------------|----------------|
-	// |  blk_id   |   batch.Marshal(metaLoc)          |  FlushMetaLoc  | DN Block
-	// |  blk_id   |   batch.Marshal(int64 offset)     |  CNBlockOffset | CN Block
-	// |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | DN Blcok
-	// |  blk_id   |   batch.Marshal(int64 offset)     | RawBatchOffset | RawBatch (in txn workspace)
+
+	// 	  blkId           deltaLoc                        type                                 partitionIdx
+	// |----------|-----------------------------|-------------------------------------------|---------------------
+	// |  blk_id  | batch.Marshal(deltaLoc)     | FlushDeltaLoc  (DN Block )                |  partitionIdx
+	// |  blk_id  | batch.Marshal(int64 offset) | CNBlockOffset (CN Block )                 |  partitionIdx
+	// |  blk_id  | batch.Marshal(rowId)        | RawRowIdBatch (DN Blcok )                 |  partitionIdx
+	// |  blk_id  | batch.Marshal(int64 offset) | RawBatchOffset(RawBatch[in txn workspace])|  partitionIdx
 	blkIds := vector.MustStrCol(bat.GetVector(0))
-	metaLocBats := vector.MustBytesCol(bat.GetVector(1))
+	deltaLocs := vector.MustBytesCol(bat.GetVector(1))
 	typs := vector.MustFixedCol[int8](bat.GetVector(2))
-	for i := 0; i < bat.Length(); i++ {
-		name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
-		bat := &batch.Batch{}
-		if err := bat.UnmarshalBinary([]byte(metaLocBats[i])); err != nil {
-			return false, err
+
+	// If the target table is a partition table, Traverse partition subtables for separate processing
+	if len(ap.PartitionSources) > 0 {
+		partitionIdxs := vector.MustFixedCol[int32](bat.GetVector(3))
+		for i := 0; i < bat.Length(); i++ {
+			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
+			bat := &batch.Batch{}
+			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
+				return false, err
+			}
+			bat.Cnt = 1
+			pIndex := partitionIdxs[i]
+			err = ap.PartitionSources[pIndex].Delete(proc.Ctx, bat, name)
+			if err != nil {
+				return false, err
+			}
 		}
-		err = ap.DelSource.Delete(proc.Ctx, bat, name)
-		if err != nil {
-			return false, err
+	} else {
+		// If the target table is a general table
+		for i := 0; i < bat.Length(); i++ {
+			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
+			bat := &batch.Batch{}
+			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
+				return false, err
+			}
+			bat.Cnt = 1
+			err = ap.DelSource.Delete(proc.Ctx, bat, name)
+			if err != nil {
+				return false, err
+			}
 		}
 	}
 	// and there are another attr used to record how many rows are deleted
-	ap.AffectedRows += uint64(vector.GetFixedAt[uint32](bat.GetVector(3), 0))
+	ap.AffectedRows += uint64(vector.GetFixedAt[uint32](bat.GetVector(4), 0))
 	return false, nil
 }

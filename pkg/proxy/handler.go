@@ -50,7 +50,7 @@ var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN serve
 // newProxyHandler creates a new proxy handler.
 func newProxyHandler(
 	ctx context.Context,
-	runtime runtime.Runtime,
+	rt runtime.Runtime,
 	cfg Config,
 	st *stopper.Stopper,
 	cs *counterSet,
@@ -70,6 +70,7 @@ func newProxyHandler(
 
 	// Create the MO cluster.
 	mc := clusterservice.NewMOCluster(c, cfg.Cluster.RefreshInterval.Duration)
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 	// Create the rebalancer.
 	var opts []rebalancerOption
@@ -81,7 +82,7 @@ func newProxyHandler(
 		opts = append(opts, withRebalancerDisabled())
 	}
 
-	re, err := newRebalancer(st, runtime.Logger(), mc, opts...)
+	re, err := newRebalancer(st, rt.Logger(), mc, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +98,7 @@ func newProxyHandler(
 	}
 	return &handler{
 		ctx:            context.Background(),
-		logger:         runtime.Logger(),
+		logger:         rt.Logger(),
 		config:         cfg,
 		stopper:        st,
 		moCluster:      mc,
@@ -109,6 +110,8 @@ func newProxyHandler(
 
 // handle handles the incoming connection.
 func (h *handler) handle(c goetty.IOSession) error {
+	h.logger.Info("new connection comes", zap.Uint64("session ID", c.ID()))
+
 	h.counterSet.connAccepted.Add(1)
 	h.counterSet.connTotal.Add(1)
 	defer h.counterSet.connTotal.Add(-1)
@@ -123,28 +126,28 @@ func (h *handler) handle(c goetty.IOSession) error {
 		h.ctx, &h.config, h.logger, h.counterSet, c, h.haKeeperClient, h.moCluster, h.router, t,
 	)
 	if err != nil {
+		h.logger.Error("failed to create client conn", zap.Error(err))
 		return err
 	}
+	h.logger.Info("client conn created")
 	defer func() { _ = cc.Close() }()
 
 	// client builds connections with a best CN server and returns
 	// the server connection.
 	sc, err := cc.BuildConnWithServer(true)
 	if err != nil {
+		h.logger.Error("failed to create server conn", zap.Error(err))
 		h.counterSet.updateWithErr(err)
 		cc.SendErrToClient(err.Error())
 		return err
 	}
+	h.logger.Info("server conn created")
 	defer func() { _ = sc.Close() }()
 
-	h.logger.Debug("build connection successfully",
+	h.logger.Info("build connection successfully",
 		zap.String("client", cc.RawConn().RemoteAddr().String()),
 		zap.String("server", sc.RawConn().RemoteAddr().String()),
 	)
-
-	if err := t.run(cc, sc); err != nil {
-		return err
-	}
 
 	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
 	defer st.Stop()
@@ -169,7 +172,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 					t.mu.Unlock()
 				}
 			case <-ctx.Done():
-				h.logger.Info("event handler stopped.")
+				h.logger.Debug("event handler stopped.")
 				return
 			}
 		}
@@ -177,13 +180,20 @@ func (h *handler) handle(c goetty.IOSession) error {
 		return err
 	}
 
+	if err := t.run(cc, sc); err != nil {
+		return err
+	}
+
 	select {
 	case <-h.ctx.Done():
 		return h.ctx.Err()
 	case err := <-t.errC:
-		h.counterSet.updateWithErr(err)
-		h.logger.Error("proxy handle error", zap.Error(err))
-		return err
+		if !isEOFErr(err) {
+			h.counterSet.updateWithErr(err)
+			h.logger.Error("proxy handle error", zap.Error(err))
+			return err
+		}
+		return nil
 	}
 }
 

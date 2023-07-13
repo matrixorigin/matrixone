@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -115,7 +117,9 @@ type testHandler struct {
 	connID      uint32
 	conn        goetty.IOSession
 	sessionVars map[string]string
+	labels      map[string]string
 	server      *testCNServer
+	status      uint16
 }
 
 func startTestCNServer(t *testing.T, ctx context.Context, addr string, cfg *tlsConfig) func() error {
@@ -217,6 +221,7 @@ func (s *testCNServer) Start() error {
 					mysqlProto: frontend.NewMysqlClientProtocol(
 						cid, c, 0, &fp),
 					sessionVars: make(map[string]string),
+					labels:      make(map[string]string),
 					server:      s,
 				}
 				go func(h *testHandler) {
@@ -231,6 +236,12 @@ func testHandle(h *testHandler) {
 	// read salt from proxy.
 	data := make([]byte, 20)
 	_, _ = h.conn.RawConn().Read(data)
+	// read label info.
+	label := &proxy.RequestLabel{}
+	reader := bufio.NewReader(h.conn.RawConn())
+	if err := label.Decode(reader); err != nil {
+		h.labels = label.Labels
+	}
 	// server writes init handshake.
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
 	// server reads auth information from client.
@@ -253,6 +264,10 @@ func testHandle(h *testHandler) {
 				h.handleShowVar()
 			} else if string(packet.Payload[1:]) == "show global variables" {
 				h.handleShowGlobalVar()
+			} else if string(packet.Payload[1:]) == "begin" {
+				h.handleStartTxn()
+			} else if string(packet.Payload[1:]) == "commit" || string(packet.Payload[1:]) == "rollback" {
+				h.handleStopTxn()
 			} else if strings.HasPrefix(string(packet.Payload[1:]), "kill connection") {
 				h.handleKillConn()
 			} else {
@@ -267,7 +282,7 @@ func testHandle(h *testHandler) {
 func (h *testHandler) handleCommon() {
 	h.mysqlProto.SetSequenceID(1)
 	// set last insert id as connection id to do test more easily.
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
 }
 
 func (h *testHandler) handleSetVar(packet *frontend.Packet) {
@@ -275,13 +290,13 @@ func (h *testHandler) handleSetVar(packet *frontend.Packet) {
 	v := strings.Split(words[2], "=")
 	h.sessionVars[v[0]] = strings.Trim(v[1], "'")
 	h.mysqlProto.SetSequenceID(1)
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
 }
 
 func (h *testHandler) handleKillConn() {
 	h.server.globalVars["killed"] = "yes"
 	h.mysqlProto.SetSequenceID(1)
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
 }
 
 func (h *testHandler) handleShowVar() {
@@ -315,7 +330,7 @@ func (h *testHandler) handleShowVar() {
 			return
 		}
 	}
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
 	for k, v := range h.sessionVars {
 		row := make([]interface{}, 2)
 		row[0] = k
@@ -329,7 +344,7 @@ func (h *testHandler) handleShowVar() {
 		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
 		return
 	}
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
 }
 
 func (h *testHandler) handleShowGlobalVar() {
@@ -363,7 +378,7 @@ func (h *testHandler) handleShowGlobalVar() {
 			return
 		}
 	}
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
 	for k, v := range h.server.globalVars {
 		row := make([]interface{}, 2)
 		row[0] = k
@@ -377,7 +392,17 @@ func (h *testHandler) handleShowGlobalVar() {
 		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
 		return
 	}
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
+}
+
+func (h *testHandler) handleStartTxn() {
+	h.status |= frontend.SERVER_STATUS_IN_TRANS
+	h.handleCommon()
+}
+
+func (h *testHandler) handleStopTxn() {
+	h.status &= ^frontend.SERVER_STATUS_IN_TRANS
+	h.handleCommon()
 }
 
 func (s *testCNServer) Stop() error {

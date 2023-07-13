@@ -174,14 +174,15 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	defer proc.PutBatch(bat)
 
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
+
+	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
-	proc.SetInputBatch(&batch.Batch{})
+	proc.SetInputBatch(batch.EmptyBatch)
 
 	if err := ctr.evalAggVector(bat, proc); err != nil {
 		return false, err
@@ -247,13 +248,16 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
+
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
+
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
-	proc.SetInputBatch(&batch.Batch{})
+	proc.SetInputBatch(batch.EmptyBatch)
+
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}

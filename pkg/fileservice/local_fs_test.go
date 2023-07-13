@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,8 +29,9 @@ func TestLocalFS(t *testing.T) {
 
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func(name string) FileService {
+			ctx := context.Background()
 			dir := t.TempDir()
-			fs, err := NewLocalFS(name, dir, DisabledCacheConfig, nil)
+			fs, err := NewLocalFS(ctx, name, dir, DisabledCacheConfig, nil)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -37,8 +39,9 @@ func TestLocalFS(t *testing.T) {
 
 	t.Run("mutable file service", func(t *testing.T) {
 		testMutableFileService(t, func() MutableFileService {
+			ctx := context.Background()
 			dir := t.TempDir()
-			fs, err := NewLocalFS("local", dir, DisabledCacheConfig, nil)
+			fs, err := NewLocalFS(ctx, "local", dir, DisabledCacheConfig, nil)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -46,8 +49,9 @@ func TestLocalFS(t *testing.T) {
 
 	t.Run("replaceable file service", func(t *testing.T) {
 		testReplaceableFileService(t, func() ReplaceableFileService {
+			ctx := context.Background()
 			dir := t.TempDir()
-			fs, err := NewLocalFS("local", dir, DisabledCacheConfig, nil)
+			fs, err := NewLocalFS(ctx, "local", dir, DisabledCacheConfig, nil)
 			assert.Nil(t, err)
 			return fs
 		})
@@ -55,9 +59,10 @@ func TestLocalFS(t *testing.T) {
 
 	t.Run("caching file service", func(t *testing.T) {
 		testCachingFileService(t, func() CachingFileService {
+			ctx := context.Background()
 			dir := t.TempDir()
-			fs, err := NewLocalFS("local", dir, CacheConfig{
-				MemoryCapacity: 128 * 1024,
+			fs, err := NewLocalFS(ctx, "local", dir, CacheConfig{
+				MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
 			}, nil)
 			assert.Nil(t, err)
 			return fs
@@ -68,8 +73,9 @@ func TestLocalFS(t *testing.T) {
 
 func BenchmarkLocalFS(b *testing.B) {
 	benchmarkFileService(b, func() FileService {
+		ctx := context.Background()
 		dir := b.TempDir()
-		fs, err := NewLocalFS("local", dir, DisabledCacheConfig, nil)
+		fs, err := NewLocalFS(ctx, "local", dir, DisabledCacheConfig, nil)
 		assert.Nil(b, err)
 		return fs
 	})
@@ -86,11 +92,12 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 
 	// new fs
 	fs, err := NewLocalFS(
+		ctx,
 		"foo",
 		t.TempDir(),
 		CacheConfig{
-			DiskPath:                  t.TempDir(),
-			DiskCapacity:              dataLen * n / 32,
+			DiskPath:                  ptrTo(t.TempDir()),
+			DiskCapacity:              ptrTo[toml.ByteSize](dataLen * n / 32),
 			enableDiskCacheForLocalFS: true,
 		},
 		nil,

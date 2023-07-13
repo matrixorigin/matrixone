@@ -47,7 +47,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(types.EncodeInt32(&val))
 	require.Error(t, err)
 
-	err = idx.BatchInsert(vecs[0], 0, 100, uint32(0))
+	err = idx.BatchInsert(vecs[0].GetDownstreamVector(), 0, 100, uint32(0))
 	require.NoError(t, err)
 
 	val = int32(55)
@@ -59,10 +59,10 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(types.EncodeInt32(&val))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(vecs[0], 0, 100, uint32(100))
+	err = idx.BatchInsert(vecs[0].GetDownstreamVector(), 0, 100, uint32(100))
 	require.NoError(t, err)
 
-	err = idx.BatchInsert(vecs[1], 0, 100, uint32(100))
+	err = idx.BatchInsert(vecs[1].GetDownstreamVector(), 0, 100, uint32(100))
 	require.NoError(t, err)
 
 	val = int32(123)
@@ -109,7 +109,7 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(vecs[0], 0, 100, uint32(0))
+	err = idx.BatchInsert(vecs[0].GetDownstreamVector(), 0, 100, uint32(0))
 	require.NoError(t, err)
 	t.Log(idx.String())
 
@@ -120,10 +120,10 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(100)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(vecs[0], 0, 100, uint32(100))
+	err = idx.BatchInsert(vecs[0].GetDownstreamVector(), 0, 100, uint32(100))
 	require.NoError(t, err)
 
-	err = idx.BatchInsert(vecs[1], 0, 100, uint32(100))
+	err = idx.BatchInsert(vecs[1].GetDownstreamVector(), 0, 100, uint32(100))
 	require.NoError(t, err)
 
 	rows, err = idx.Search([]byte(strconv.Itoa(123)))

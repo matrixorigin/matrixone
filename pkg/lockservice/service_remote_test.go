@@ -39,7 +39,7 @@ func TestLockAndUnlockOnRemote(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -201,7 +201,7 @@ func TestLockResultWithConfictAndTxnCommittedOnRemote(t *testing.T) {
 			txn1 := []byte("txn1")
 			txn2 := []byte("txn2")
 			row1 := []byte{1}
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -249,7 +249,7 @@ func TestLockResultWithConfictAndTxnAbortedOnRemote(t *testing.T) {
 			txn1 := []byte("txn1")
 			txn2 := []byte("txn2")
 			row1 := []byte{1}
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -416,7 +416,7 @@ func TestLockWithBindIsStale(t *testing.T) {
 			table uint64) {
 
 			txnID2 := []byte("txn2")
-			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
+			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -494,7 +494,7 @@ func TestLockWithBindTimeout(t *testing.T) {
 			txnID2 := []byte("txn2")
 			// l2 hold the old bind, and can not connect to s1, and wait bind changed
 			for {
-				_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
+				_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
 					Granularity: pb.Granularity_Row,
 					Mode:        pb.LockMode_Exclusive,
 					Policy:      pb.WaitPolicy_Wait,
@@ -579,7 +579,7 @@ func TestLockWithBindNotFound(t *testing.T) {
 			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
 
 			txnID2 := []byte("txn2")
-			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
+			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -656,11 +656,11 @@ func runBindChangedTests(
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1", "s2", "s3"},
-		time.Millisecond*200,
+		time.Second,
 		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
 			l2 := s[1]
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
 			txnID1 := []byte("txn1")

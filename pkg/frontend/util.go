@@ -40,10 +40,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
 
@@ -272,6 +272,102 @@ func WildcardMatch(pattern, target string) bool {
 	return p >= plen
 }
 
+// getExprValue executes the expression and returns the value.
+func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}, error) {
+	/*
+		CORNER CASE:
+			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
+
+			tree.UnresolvedName{'utf8'} can not be resolved as the column of some table.
+	*/
+	switch v := e.(type) {
+	case *tree.UnresolvedName:
+		// set @a = on, type of a is bool.
+		return v.Parts[0], nil
+	}
+
+	var err error
+
+	table := &tree.TableName{}
+	table.ObjectName = "dual"
+
+	//1.composite the 'select (expr) from dual'
+	compositedSelect := &tree.Select{
+		Select: &tree.SelectClause{
+			Exprs: tree.SelectExprs{
+				tree.SelectExpr{
+					Expr: e,
+				},
+			},
+			From: &tree.From{
+				Tables: tree.TableExprs{
+					&tree.JoinTableExpr{
+						JoinType: tree.JOIN_TYPE_CROSS,
+						Left: &tree.AliasedTableExpr{
+							Expr: table,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	//2.run the select
+	ctx := ses.GetRequestContext()
+
+	//run the statement in the same session
+	ses.ClearResultBatches()
+	err = executeStmtInSameSession(ctx, mce, ses, compositedSelect)
+	if err != nil {
+		return nil, err
+	}
+
+	batches := ses.GetResultBatches()
+	if len(batches) == 0 {
+		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+	}
+
+	if batches[0].VectorCount() > 1 {
+		return nil, moerr.NewInternalError(ctx, "the expr %s generates multi columns value", e.String())
+	}
+
+	//evaluate the count of rows, the count of columns
+	count := 0
+	var resultVec *vector.Vector
+	for _, b := range batches {
+		if b.Length() == 0 {
+			continue
+		}
+		count += b.Length()
+		if count > 1 {
+			return nil, moerr.NewInternalError(ctx, "the expr %s generates multi rows value", e.String())
+		}
+		if resultVec == nil && b.GetVector(0).Length() != 0 {
+			resultVec = b.GetVector(0)
+		}
+	}
+
+	if resultVec == nil {
+		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+	}
+
+	// for the decimal type, we need the type of expr
+	//!!!NOTE: the type here may be different from the one in the result vector.
+	var planExpr *plan.Expr
+	oid := resultVec.GetType().Oid
+	if oid == types.T_decimal64 || oid == types.T_decimal128 {
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
+		bindContext := plan2.NewBindContext(builder, nil)
+		binder := plan2.NewSetVarBinder(builder, bindContext)
+		planExpr, err = binder.BindExpr(e, 0, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return getValueFromVector(resultVec, ses, planExpr)
+}
+
 // only support single value and unary minus
 func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {
@@ -279,7 +375,7 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		// set @a = on, type of a is bool.
 		return v.Parts[0], nil
 	default:
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx())
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err := binder.BindExpr(e, 0, false)
@@ -287,12 +383,10 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 			return nil, err
 		}
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
-		bat := batch.NewWithSize(0)
-		bat.Zs = []int64{1}
 		// Here the evalExpr may execute some function that needs engine.Engine.
 		ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
 
-		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{bat})
+		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
 			return nil, err
 		}
@@ -334,10 +428,10 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 		return vec.GetStringAt(0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAt[types.Decimal64](vec, 0)
-		return plan2.MakePlan2Decimal64ExprWithType(val, plan2.DeepCopyType(expr.Typ)), nil
+		return val.Format(expr.Typ.Scale), nil
 	case types.T_decimal128:
 		val := vector.GetFixedAt[types.Decimal128](vec, 0)
-		return plan2.MakePlan2Decimal128ExprWithType(val, plan2.DeepCopyType(expr.Typ)), nil
+		return val.Format(expr.Typ.Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)
 		byteJson := types.DecodeJson(val)
@@ -397,36 +491,50 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
 		motrace.EndStatement(ctx, nil, ses.sentRows.Load())
-		logInfo(ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
 		motrace.EndStatement(ctx, err, ses.sentRows.Load())
-		logError(ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
+		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 }
 
-func logInfo(info string, msg string, fields ...zap.Field) {
+func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
 	fields = append(fields, zap.String("session_info", info))
 	logutil.Info(msg, fields...)
 }
 
-//func logDebug(info string, msg string, fields ...zap.Field) {
-//	fields = append(fields, zap.String("session_info", info))
-//	logutil.Debug(msg, fields...)
-//}
+func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Debug(msg, fields...)
+}
 
-func logError(info string, msg string, fields ...zap.Field) {
+func logError(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
 	fields = append(fields, zap.String("session_info", info))
 	logutil.Error(msg, fields...)
 }
 
 func logInfof(info string, msg string, fields ...interface{}) {
+	if strings.Contains(info, "sys:mo_logger") {
+		return
+	}
 	fields = append(fields, info)
 	logutil.Infof(msg+" %s", fields...)
 }
 
 func logDebugf(info string, msg string, fields ...interface{}) {
-	fields = append(fields, info)
-	logutil.Debugf(msg+" %s", fields...)
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		fields = append(fields, info)
+		logutil.Debugf(msg+" %s", fields...)
+	}
 }
 
 func logErrorf(info string, msg string, fields ...interface{}) {
@@ -436,7 +544,11 @@ func logErrorf(info string, msg string, fields ...interface{}) {
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
 func isCmdFieldListSql(sql string) bool {
-	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
+	if len(sql) < cmdFieldListSqlLen {
+		return false
+	}
+	prefix := sql[:cmdFieldListSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdFieldListSql) == 0
 }
 
 // makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
@@ -463,130 +575,6 @@ func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, 
 	}
 }
 
-//func getAccount(ctx context.Context) (uint32, uint32, uint32) {
-//	var accountId, userId, roleId uint32
-//
-//	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-//		accountId = v.(uint32)
-//	}
-//	if v := ctx.Value(defines.UserIDKey{}); v != nil {
-//		userId = v.(uint32)
-//	}
-//	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
-//		roleId = v.(uint32)
-//	}
-//	return accountId, userId, roleId
-//}
-
-func rewriteExpr(
-	ctx context.Context,
-	proc *process.Process,
-	compileCtx plan2.CompilerContext,
-	emptyBatch *batch.Batch,
-	params []*plan.Expr,
-	e *plan.Expr) (*plan.Expr, error) {
-
-	var err error
-	switch exprImpl := e.Expr.(type) {
-	case *plan.Expr_F:
-		needResetFunction := false
-		for i, arg := range exprImpl.F.Args {
-			if _, ok := arg.Expr.(*plan.Expr_P); ok {
-				needResetFunction = true
-			}
-			if _, ok := arg.Expr.(*plan.Expr_V); ok {
-				needResetFunction = true
-			}
-			exprImpl.F.Args[i], err = rewriteExpr(ctx, proc, compileCtx, emptyBatch, params, arg)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		// reset function
-		if needResetFunction {
-			e, err = plan2.BindFuncExprImplByPlanExpr(ctx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return e, nil
-
-	case *plan.Expr_P:
-		return plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, params[int(exprImpl.P.Pos)])
-
-	case *plan.Expr_V:
-		return plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, e)
-	}
-
-	return e, nil
-}
-
-func rowsetDataToVector(
-	ctx context.Context,
-	proc *process.Process,
-	compileCtx plan2.CompilerContext,
-	exprs []*plan.Expr,
-	tarVec *vector.Vector,
-	emptyBatch *batch.Batch,
-	params []*plan.Expr,
-	uf func(*vector.Vector, *vector.Vector, int64) error,
-) error {
-	var exprImpl *plan.Expr
-	var typ = plan2.MakePlan2Type(tarVec.GetType())
-	var err error
-
-	for _, e := range exprs {
-		if expr, ok := e.Expr.(*plan.Expr_F); ok {
-			if expr.F.Func.ObjName == "cast" {
-				castTyp := expr.F.Args[1].Typ
-				if typ.Id == castTyp.Id && typ.Width == castTyp.Width && typ.Scale == castTyp.Scale {
-					e = expr.F.Args[0]
-				}
-			}
-		}
-
-		if expr, ok := e.Expr.(*plan.Expr_P); ok {
-			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, params[int(expr.P.Pos)])
-			if err != nil {
-				return err
-			}
-		} else if _, ok := e.Expr.(*plan.Expr_V); ok {
-			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, e)
-			if err != nil {
-				return err
-			}
-		} else if _, ok := e.Expr.(*plan.Expr_C); ok {
-			exprImpl = e
-		} else {
-			exprImpl = plan2.DeepCopyExpr(e)
-			exprImpl, err = rewriteExpr(ctx, proc, compileCtx, emptyBatch, params, exprImpl)
-			if err != nil {
-				return err
-			}
-		}
-
-		exprImpl, err = plan2.ForceCastExpr(ctx, exprImpl, typ)
-		if err != nil {
-			return err
-		}
-
-		var vec *vector.Vector
-		vec, err = colexec.EvalExpressionOnce(proc, exprImpl, []*batch.Batch{emptyBatch})
-		if err != nil {
-			return err
-		}
-
-		if err = uf(tarVec, vec, 0); err != nil {
-			vec.Free(proc.Mp())
-			return err
-		}
-		vec.Free(proc.Mp())
-	}
-
-	return nil
-}
-
 func getVariableValue(varDefault interface{}) string {
 	switch val := varDefault.(type) {
 	case int64:
@@ -600,4 +588,21 @@ func getVariableValue(varDefault interface{}) string {
 	default:
 		return ""
 	}
+}
+
+func makeServerVersion(pu *mo_config.ParameterUnit, version string) string {
+	return pu.SV.ServerVersionPrefix + version
+}
+
+func copyBytes(src []byte, needCopy bool) []byte {
+	if needCopy {
+		if len(src) > 0 {
+			dst := make([]byte, len(src))
+			copy(dst, src)
+			return dst
+		} else {
+			return []byte{}
+		}
+	}
+	return src
 }

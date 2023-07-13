@@ -16,16 +16,17 @@ package disttae
 
 import (
 	"context"
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ engine.Database = new(txnDatabase)
@@ -97,26 +98,39 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	return tblName
 }
 
-func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, engine.Relation, error) {
+func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, engine.Relation) {
 	tblName := db.getTableNameById(ctx, id)
 	if tblName == "" {
-		return "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", id)
+		return "", nil
 	}
-	rel, err := db.Relation(ctx, tblName)
-	return tblName, rel, err
+	rel, _ := db.Relation(ctx, tblName, nil)
+	return tblName, rel
 }
 
-func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relation, error) {
-	logDebugf(db.txn.meta, "txnDatabase.Relation table %s", name)
+func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
+	logDebugf(*db.txn.meta, "txnDatabase.Relation table %s", name)
+	txn := db.txn
+	if txn.meta.GetStatus() == txn2.TxnStatus_Aborted {
+		return nil, moerr.NewTxnClosedNoCtx(txn.meta.ID)
+	}
+
 	//check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(genTableKey(ctx, name, db.databaseId)); exist {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
-	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
-		return v.(*txnTable), nil
+	p := db.txn.proc
+	if proc != nil {
+		p = proc.(*process.Process)
+	}
+	rel := db.txn.getCachedTable(ctx, genTableKey(ctx, name, db.databaseId),
+		db.txn.meta.SnapshotTS)
+	if rel != nil {
+		rel.proc = p
+		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
+		v.(*txnTable).proc = p
 		return v.(*txnTable), nil
 	}
 
@@ -165,8 +179,9 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		constraint:    item.Constraint,
 		rowid:         item.Rowid,
 		rowids:        item.Rowids,
+		proc:          p,
 	}
-	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
+	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
 
@@ -195,10 +210,10 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 			If we do not add DELETE entry in workspace, there is
 			a table t1 there after commit.
 		*/
-	} else if v, ok := db.txn.tableMap.Load(k); ok {
+	} else if v, ok := db.txn.tableCache.tableMap.Load(k); ok {
 		table := v.(*txnTable)
 		id = table.tableId
-		db.txn.tableMap.Delete(k)
+		db.txn.tableCache.tableMap.Delete(k)
 		rowid = table.rowid
 		rowids = table.rowids
 	} else {
@@ -258,7 +273,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	k := genTableKey(ctx, name, db.databaseId)
 	v, ok = db.txn.createMap.Load(k)
 	if !ok {
-		v, ok = db.txn.tableMap.Load(k)
+		v, ok = db.txn.tableCache.tableMap.Load(k)
 	}
 
 	if ok {

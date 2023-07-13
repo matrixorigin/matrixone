@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"io"
 	"testing"
 
@@ -22,11 +23,13 @@ import (
 )
 
 func TestProfile(t *testing.T) {
-	stop := FSProfileHandler.StartProfile(io.Discard)
+	write, stop := FSProfileHandler.StartProfile()
 	defer stop()
+	defer write(io.Discard)
 	testFileService(t, func(name string) FileService {
+		ctx := context.Background()
 		dir := t.TempDir()
-		fs, err := NewLocalFS(name, dir, DisabledCacheConfig, nil)
+		fs, err := NewLocalFS(ctx, name, dir, DisabledCacheConfig, nil)
 		assert.Nil(t, err)
 		return fs
 	})
@@ -34,15 +37,26 @@ func TestProfile(t *testing.T) {
 
 func BenchmarkNoProfileAddSample(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		FSProfileHandler.AddSample()
+		FSProfileHandler.AddSample(1)
 	}
 }
 
 func BenchmarkProfileAddSample(b *testing.B) {
-	stop := FSProfileHandler.StartProfile(io.Discard)
+	write, stop := FSProfileHandler.StartProfile()
 	defer stop()
+	defer write(io.Discard)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		FSProfileHandler.AddSample()
+		FSProfileHandler.AddSample(1)
+	}
+}
+
+func BenchmarkProfileWrite(b *testing.B) {
+	write, stop := FSProfileHandler.StartProfile()
+	defer stop()
+	FSProfileHandler.AddSample(1)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		write(io.Discard)
 	}
 }

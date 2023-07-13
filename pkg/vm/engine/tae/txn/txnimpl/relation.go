@@ -174,8 +174,9 @@ func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error 
 	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AddBlksWithMetaLoc(metaLocs []objectio.Location) error {
+func (h *txnRelation) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio.Location) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
+		ctx,
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
 		metaLocs,
@@ -214,12 +215,12 @@ func (h *txnRelation) MakeBlockIt() handle.BlockIt {
 	return newRelationBlockIt(h)
 }
 
-func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, error) {
-	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
+func (h *txnRelation) GetByFilter(ctx context.Context, filter *handle.Filter) (*common.ID, uint32, error) {
+	return h.Txn.GetStore().GetByFilter(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
 }
 
-func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, isNull bool, err error) {
-	id, row, err := h.GetByFilter(filter)
+func (h *txnRelation) GetValueByFilter(ctx context.Context, filter *handle.Filter, col int) (v any, isNull bool, err error) {
+	id, row, err := h.GetByFilter(ctx, filter)
 	if err != nil {
 		return
 	}
@@ -227,8 +228,8 @@ func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, i
 	return
 }
 
-func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
-	id, row, err := h.table.GetByFilter(filter)
+func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
+	id, row, err := h.table.GetByFilter(ctx, filter)
 	if err != nil {
 		return
 	}
@@ -245,7 +246,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 			colVal = v
 			colValIsNull = isNull
 		} else {
-			colVal, colValIsNull, err = h.table.GetValue(id, row, uint16(def.Idx))
+			colVal, colValIsNull, err = h.table.GetValue(ctx, id, row, uint16(def.Idx))
 			if err != nil {
 				return err
 			}
@@ -257,13 +258,13 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal); err != nil {
 		return
 	}
-	err = h.Append(context.Background(), bat)
+	err = h.Append(ctx, bat)
 	// FIXME!: We need to revert previous delete if append fails.
 	return
 }
 
-func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {
-	id, row, err := h.GetByFilter(filter)
+func (h *txnRelation) DeleteByFilter(ctx context.Context, filter *handle.Filter) (err error) {
+	id, row, err := h.GetByFilter(ctx, filter)
 	if err != nil {
 		return
 	}

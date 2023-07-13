@@ -30,13 +30,11 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -66,6 +64,7 @@ type S3FS struct {
 var _ FileService = new(S3FS)
 
 func NewS3FS(
+	ctx context.Context,
 	sharedConfigProfile string,
 	name string,
 	endpoint string,
@@ -90,7 +89,7 @@ func NewS3FS(
 	fs.perfCounterSets = perfCounterSets
 
 	if !noCache {
-		if err := fs.initCaches(cacheConfig); err != nil {
+		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -101,6 +100,7 @@ func NewS3FS(
 // NewS3FSOnMinio creates S3FS on minio server
 // this is needed because the URL scheme of minio server does not compatible with AWS'
 func NewS3FSOnMinio(
+	ctx context.Context,
 	sharedConfigProfile string,
 	name string,
 	endpoint string,
@@ -126,7 +126,7 @@ func NewS3FSOnMinio(
 	fs.perfCounterSets = perfCounterSets
 
 	if !noCache {
-		if err := fs.initCaches(cacheConfig); err != nil {
+		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -134,16 +134,13 @@ func NewS3FSOnMinio(
 	return fs, nil
 }
 
-func (s *S3FS) initCaches(config CacheConfig) error {
-	config.SetDefaults()
+func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
+	config.setDefaults()
 
 	// memory cache
-	if config.MemoryCapacity == 0 {
-		config.MemoryCapacity = 512 << 20
-	}
-	if config.MemoryCapacity > DisableCacheCapacity {
+	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			WithLRU(int64(config.MemoryCapacity)),
+			WithLRU(int64(*config.MemoryCapacity)),
 			WithPerfCounterSets(s.perfCounterSets),
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -153,16 +150,14 @@ func (s *S3FS) initCaches(config CacheConfig) error {
 	}
 
 	// disk cache
-	if config.DiskCapacity == 0 {
-		config.DiskCapacity = 8 << 30
-	}
-	if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
+	if *config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
 		var err error
 		s.diskCache, err = NewDiskCache(
-			config.DiskPath,
-			int64(config.DiskCapacity),
+			ctx,
+			*config.DiskPath,
+			int64(*config.DiskCapacity),
 			config.DiskMinEvictInterval.Duration,
-			config.DiskEvictTarget,
+			*config.DiskEvictTarget,
 			s.perfCounterSets,
 		)
 		if err != nil {
@@ -356,8 +351,8 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		size = int64(last.Offset + last.Size)
 	}
 
-	// reader
-	var r io.Reader
+	// content
+	var content []byte
 	if s.writeDiskCacheOnWrite && s.diskCache != nil {
 		// also write to disk cache
 		w, done, closeW, err := s.diskCache.newFileContentWriter(vector.FilePath)
@@ -371,20 +366,30 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 			}
 			err = done(ctx)
 		}()
-		r = io.TeeReader(
+		r := io.TeeReader(
 			newIOEntriesReader(ctx, vector.Entries),
 			w,
 		)
+		content, err = io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+
+	} else if len(vector.Entries) == 1 &&
+		vector.Entries[0].Size > 0 &&
+		int(vector.Entries[0].Size) == len(vector.Entries[0].Data) {
+		// one piece of data
+		content = vector.Entries[0].Data
 
 	} else {
-		r = newIOEntriesReader(ctx, vector.Entries)
+		r := newIOEntriesReader(ctx, vector.Entries)
+		content, err = io.ReadAll(r)
+		if err != nil {
+			return err
+		}
 	}
 
 	// put
-	content, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
 		expire = &vector.ExpireAt
@@ -841,6 +846,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid S3 arguments")
 	}
 
+	// arguments
 	var endpoint, region, bucket, apiKey, apiSecret, prefix, roleARN, externalID, name, sharedConfigProfile, isMinio string
 	for _, pair := range arguments {
 		key, value, ok := strings.Cut(pair, "=")
@@ -875,22 +881,27 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		}
 	}
 
+	// validate endpoint
+	var endpointURL *url.URL
 	if endpoint != "" {
-		u, err := url.Parse(endpoint)
+		var err error
+		endpointURL, err = url.Parse(endpoint)
 		if err != nil {
 			return nil, err
 		}
-		if u.Scheme == "" {
-			u.Scheme = "https"
+		if endpointURL.Scheme == "" {
+			endpointURL.Scheme = "https"
 		}
-		endpoint = u.String()
+		endpoint = endpointURL.String()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
+	// region
 	if region == "" {
 		// try to get region from bucket
+		// only works for AWS S3
 		resp, err := stdhttp.Head("https://" + bucket + ".s3.amazonaws.com")
 		if err == nil {
 			if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
@@ -899,8 +910,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		}
 	}
 
-	var credentialProvider aws.CredentialsProvider
-
+	// options for loading configs
 	loadConfigOptions := []func(*config.LoadOptions) error{
 		config.WithLogger(logutil.GetS3Logger()),
 		config.WithClientLogMode(
@@ -913,51 +923,25 @@ func newS3FS(arguments []string) (*S3FS, error) {
 				aws.LogResponseEventMessage,
 		),
 	}
+
+	// shared config profile
 	if sharedConfigProfile != "" {
 		loadConfigOptions = append(loadConfigOptions,
 			config.WithSharedConfigProfile(sharedConfigProfile),
 		)
 	}
 
-	if apiKey != "" && apiSecret != "" {
-		// static
-		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
-	}
+	credentialProvider := getCredentialsProvider(
+		ctx,
+		endpoint,
+		region,
+		apiKey,
+		apiSecret,
+		roleARN,
+		externalID,
+	)
 
-	if roleARN != "" {
-		// role arn
-		awsConfig, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
-		if err != nil {
-			return nil, err
-		}
-
-		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
-			if region == "" {
-				options.Region = "ap-northeast-1"
-			} else {
-				options.Region = region
-			}
-		})
-		credentialProvider = stscreds.NewAssumeRoleProvider(
-			stsSvc,
-			roleARN,
-			func(opts *stscreds.AssumeRoleOptions) {
-				if externalID != "" {
-					opts.ExternalID = &externalID
-				}
-			},
-		)
-		// validate
-		_, err = credentialProvider.Retrieve(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if credentialProvider != nil {
-		credentialProvider = aws.NewCredentialsCache(credentialProvider)
-	}
-
+	// load configs
 	if credentialProvider != nil {
 		loadConfigOptions = append(loadConfigOptions,
 			config.WithCredentialsProvider(
@@ -970,13 +954,17 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		return nil, err
 	}
 
+	// options for s3 client
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
-			opts.RetryMaxAttempts = 128
-			opts.RetryMode = aws.RetryModeAdaptive
+			opts.Retryer = retry.NewStandard(func(o *retry.StandardOptions) {
+				o.MaxAttempts = maxRetryAttemps
+				o.RateLimiter = noOpRateLimit{}
+			})
 		},
 	}
 
+	// credential provider for s3 client
 	if credentialProvider != nil {
 		s3Options = append(s3Options,
 			func(opt *s3.Options) {
@@ -985,9 +973,10 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		)
 	}
 
+	// endpoint for s3 client
 	if endpoint != "" {
 		if isMinio != "" {
-			// for minio
+			// special handling for MinIO
 			s3Options = append(s3Options,
 				s3.WithEndpointResolver(
 					s3.EndpointResolverFunc(
@@ -1016,6 +1005,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		}
 	}
 
+	// region for s3 client
 	if region != "" {
 		s3Options = append(s3Options,
 			func(opt *s3.Options) {
@@ -1024,17 +1014,11 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		)
 	}
 
+	// new s3 client
 	client := s3.NewFromConfig(
 		config,
 		s3Options...,
 	)
-
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: ptrTo(bucket),
-	})
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
-	}
 
 	fs := &S3FS{
 		name:        name,
@@ -1044,18 +1028,29 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		asyncUpdate: true,
 	}
 
-	return fs, nil
+	// head bucket to validate
+	_, err = fs.s3HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: ptrTo(bucket),
+	})
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+	}
 
+	return fs, nil
 }
 
 const maxRetryAttemps = 128
 
 func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, s.perfCounterSets...)
-	return retry(
+	return doWithRetry(
+		"s3 list objects",
 		func() (*s3.ListObjectsOutput, error) {
 			return s.s3Client.ListObjects(ctx, params, optFns...)
 		},
@@ -1064,12 +1059,27 @@ func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, o
 	)
 }
 
+func (s *S3FS) s3HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	return doWithRetry(
+		"s3 head bucket",
+		func() (*s3.HeadBucketOutput, error) {
+			return s.s3Client.HeadBucket(ctx, params, optFns...)
+		},
+		maxRetryAttemps,
+		isRetryableError,
+	)
+}
+
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, s.perfCounterSets...)
-	return retry(
+	return doWithRetry(
+		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
 			return s.s3Client.HeadObject(ctx, params, optFns...)
 		},
@@ -1079,7 +1089,10 @@ func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, opt
 }
 
 func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, s.perfCounterSets...)
@@ -1088,7 +1101,10 @@ func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 }
 
 func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, s.perfCounterSets...)
@@ -1101,7 +1117,8 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			params.Range = &rang
-			output, err := retry(
+			output, err := doWithRetry(
+				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
 					return s.s3Client.GetObject(ctx, params, optFns...)
 				},
@@ -1123,11 +1140,15 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 }
 
 func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, s.perfCounterSets...)
-	return retry(
+	return doWithRetry(
+		"s3 delete objects",
 		func() (*s3.DeleteObjectsOutput, error) {
 			return s.s3Client.DeleteObjects(ctx, params, optFns...)
 		},
@@ -1137,11 +1158,15 @@ func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInpu
 }
 
 func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, s.perfCounterSets...)
-	return retry(
+	return doWithRetry(
+		"s3 delete object",
 		func() (*s3.DeleteObjectOutput, error) {
 			return s.s3Client.DeleteObject(ctx, params, optFns...)
 		},
@@ -1149,3 +1174,12 @@ func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput,
 		isRetryableError,
 	)
 }
+
+// from https://github.com/aws/aws-sdk-go-v2/issues/543
+type noOpRateLimit struct{}
+
+func (noOpRateLimit) AddTokens(uint) error { return nil }
+func (noOpRateLimit) GetToken(context.Context, uint) (func() error, error) {
+	return noOpToken, nil
+}
+func noOpToken() error { return nil }

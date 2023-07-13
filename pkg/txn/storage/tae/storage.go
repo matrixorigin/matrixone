@@ -52,8 +52,8 @@ func NewTAEStorage(
 	ckpCfg *options.CheckpointCfg,
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
-	logStore options.LogstoreType,
 	incrementalDedup bool,
+	maxMessageSize uint64,
 ) (*taeStorage, error) {
 	opt := &options.Options{
 		Clock:            rt.Clock(),
@@ -61,14 +61,15 @@ func NewTAEStorage(
 		Lc:               logservicedriver.LogServiceClientFactory(factory),
 		Shard:            shard,
 		CheckpointCfg:    ckpCfg,
-		LogStoreT:        logStore,
+		LogStoreT:        options.LogstoreLogservice,
 		IncrementalDedup: incrementalDedup,
 		Ctx:              ctx,
+		MaxMessageSize:   maxMessageSize,
 	}
 
-	taeHandler := rpc.NewTAEHandle(dataDir, opt)
+	taeHandler := rpc.NewTAEHandle(ctx, dataDir, opt)
 	tae := taeHandler.GetDB()
-	logtailer := logtail.NewLogtailer(tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
+	logtailer := logtail.NewLogtailer(ctx, tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
 	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt)
 	if err != nil {
 		return nil, err

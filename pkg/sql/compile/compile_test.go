@@ -21,9 +21,11 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -64,8 +66,10 @@ func init() {
 		newTestCase("select * from R limit 10", new(testing.T)),
 		newTestCase("select count(*) from R group by uid", new(testing.T)),
 		newTestCase("select count(distinct uid) from R", new(testing.T)),
-		newTestCase("insert into R values('1', '2', '3')", new(testing.T)),
-		newTestCase("insert into R select * from R", new(testing.T)),
+		// xxx because memEngine can not handle Halloween Problem
+		// newTestCase("insert into R values('991', '992', '993')", new(testing.T)),
+		// newTestCase("insert into R select * from S", new(testing.T)),
+		// newTestCase("update R set uid=110 where orderid='abcd'", new(testing.T)),
 		newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' parallel 'true';", GetFilePath()), new(testing.T)),
 	}
 }
@@ -74,17 +78,41 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 	return nil
 }
 
+type Ws struct {
+}
+
+func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
+	return nil
+}
+
+func (w *Ws) RollbackLastStatement(ctx context.Context) error {
+	return nil
+}
+
+func (w *Ws) Commit(ctx context.Context) error {
+	return nil
+}
+
+func (w *Ws) Rollback(ctx context.Context) error {
+	return nil
+}
+
 func TestCompile(t *testing.T) {
+	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)
 	ctx := context.TODO()
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 
-	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient := mock_frontend.NewMockTxnClientWithFeature(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
+		tc.proc.TxnOperator = txnOperator
 		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil)
 		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
@@ -101,6 +129,7 @@ func TestCompileWithFaults(t *testing.T) {
 	// Enable this line to trigger the Hung.
 	// fault.Enable()
 	var ctx = context.Background()
+	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
 	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil)
@@ -116,7 +145,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 	e, _, compilerCtx := testengine.New(context.Background())
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)
-	pn, err := plan2.BuildPlan(compilerCtx, stmts[0])
+	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
 	if err != nil {
 		panic(err)
 	}

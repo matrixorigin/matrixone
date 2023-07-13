@@ -26,92 +26,6 @@ import (
 // FormatFunc is the locale format function signature.
 type FormatFunc func(string, string) (string, error)
 
-func Format(numbers, scales, locales []string, rowCount int, constVectors []bool, results []string) error {
-	var err error
-	if constVectors[0] {
-		number := numbers[0]
-		if constVectors[1] {
-			scale := scales[0]
-			if constVectors[2] {
-				//scalar - scalar - scalar
-				results[0], err = GetNumberFormat(number, scale, locales[0])
-				if err != nil {
-					return err
-				}
-			} else {
-				//scalar - scalar - vector
-				for i := 0; i < rowCount; i++ {
-					results[i], err = GetNumberFormat(number, scale, locales[i])
-					if err != nil {
-						return err
-					}
-				}
-			}
-		} else {
-			if constVectors[2] {
-				locale := locales[0]
-				//scalar - vector - scalar
-				for i := 0; i < rowCount; i++ {
-					results[i], err = GetNumberFormat(number, scales[i], locale)
-					if err != nil {
-						return err
-					}
-				}
-			} else {
-				//scalar - vector - vector
-				for i := 0; i < rowCount; i++ {
-					results[i], err = GetNumberFormat(number, scales[i], locales[i])
-					if err != nil {
-						return err
-					}
-				}
-			}
-		}
-	} else {
-		if constVectors[1] {
-			scale := scales[0]
-			if constVectors[2] {
-				locale := locales[0]
-				//vector - scalar - scalar
-				for i := 0; i < rowCount; i++ {
-					results[i], err = GetNumberFormat(numbers[i], scale, locale)
-					if err != nil {
-						return err
-					}
-				}
-			} else {
-				//vaetor - scalar - vector
-				for i := 0; i < rowCount; i++ {
-					results[i], err = GetNumberFormat(numbers[i], scale, locales[i])
-					if err != nil {
-						return err
-					}
-				}
-			}
-		} else {
-			if constVectors[2] {
-				locale := locales[0]
-				//vector - vector - scalar
-				for i := 0; i < rowCount; i++ {
-					results[i], err = GetNumberFormat(numbers[i], scales[i], locale)
-					if err != nil {
-						return err
-					}
-				}
-			} else {
-				//vector - vector - vector
-				for i := 0; i < rowCount; i++ {
-					results[i], err = GetNumberFormat(numbers[i], scales[i], locales[i])
-					if err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
 func GetNumberFormat(number, scale, locale string) (string, error) {
 	return getFormatFunctionWithLocale(locale)(number, scale)
 }
@@ -179,21 +93,6 @@ var localeToFormatFunction = map[string]FormatFunc{
 
 	//formatARSA
 	"ar_SA": formatARSA,
-	"ca_ES": formatARSA,
-	"de_AT": formatARSA,
-	"el_GR": formatARSA,
-	"eu_ES": formatARSA,
-	"fr_FR": formatARSA,
-	"fr_LU": formatARSA,
-	"gl_ES": formatARSA,
-	"hr_HR": formatARSA,
-	"it_IT": formatARSA,
-	"nl_BE": formatARSA,
-	"nl_NL": formatARSA,
-	"pl_PL": formatARSA,
-	"pt_BR": formatARSA,
-	"pt_PT": formatARSA,
-	"sl_SI": formatARSA,
 	"sr_RS": formatARSA,
 
 	//formatBEBY
@@ -224,6 +123,7 @@ var localeToFormatFunction = map[string]FormatFunc{
 	"tr_TR": formatBEBY,
 	"uk_UA": formatBEBY,
 	"vi_VN": formatBEBY,
+	"ro_RO": formatBEBY,
 
 	//formatBGBG
 	"bg_BG": formatBGBG,
@@ -240,8 +140,30 @@ var localeToFormatFunction = map[string]FormatFunc{
 
 	//formatDECH
 	"de_CH": formatDECH,
-	"it_CH": formatDECH,
-	"rm_CH": formatDECH,
+
+	//formatCAES
+	"ca_ES": formatCAES,
+	"de_AT": formatCAES,
+	"el_GR": formatCAES,
+	"eu_ES": formatCAES,
+	"fr_BE": formatCAES,
+	"fr_CA": formatCAES,
+	"fr_CH": formatCAES,
+	"fr_FR": formatCAES,
+	"fr_LU": formatCAES,
+	"gl_ES": formatCAES,
+	"hr_HR": formatCAES,
+	"it_IT": formatCAES,
+	"nl_BE": formatCAES,
+	"nl_NL": formatCAES,
+	"pl_PL": formatCAES,
+	"pt_BR": formatCAES,
+	"pt_PT": formatCAES,
+	"sl_SI": formatCAES,
+
+	//formatITCH
+	"it_CH": formatITCH,
+	"rm_CH": formatITCH,
 }
 
 // format number like 20,000,000.0000
@@ -267,6 +189,16 @@ func formatBGBG(number string, scale string) (string, error) {
 // format number like 20'000'000.0000
 func formatDECH(number string, scale string) (string, error) {
 	return format(number, scale, []byte{'\''}, []byte{'.'})
+}
+
+// format number like 20000000,0000
+func formatCAES(number string, scale string) (string, error) {
+	return format(number, scale, []byte{}, []byte{','})
+}
+
+// format number like 20'000'000.0000
+func formatITCH(number string, scale string) (string, error) {
+	return format(number, scale, []byte{'\''}, []byte{','})
 }
 
 func format(number string, scale string, comma, decimalPoint []byte) (string, error) {

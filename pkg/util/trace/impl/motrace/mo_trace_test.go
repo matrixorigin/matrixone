@@ -23,11 +23,22 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 var _1TxnID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
@@ -50,7 +61,7 @@ func TestMOTracer_Start(t *testing.T) {
 	type args struct {
 		ctx  context.Context
 		name string
-		opts []trace.SpanOption
+		opts []trace.SpanStartOption
 	}
 	rootCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextWithIDs(_1TraceID, _1SpanID))
 	stmCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextWithID(_1TraceID, trace.SpanKindStatement))
@@ -76,7 +87,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "normal",
 			fields:           fields{Enable: true},
-			args:             args{ctx: rootCtx, name: "normal", opts: []trace.SpanOption{}},
+			args:             args{ctx: rootCtx, name: "normal", opts: []trace.SpanStartOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: _1SpanID,
@@ -85,7 +96,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "newRoot",
 			fields:           fields{Enable: true},
-			args:             args{ctx: rootCtx, name: "newRoot", opts: []trace.SpanOption{trace.WithNewRoot(true)}},
+			args:             args{ctx: rootCtx, name: "newRoot", opts: []trace.SpanStartOption{trace.WithNewRoot(true)}},
 			wantNewRoot:      true,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: _1SpanID,
@@ -94,7 +105,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "statement",
 			fields:           fields{Enable: true},
-			args:             args{ctx: stmCtx, name: "newStmt", opts: []trace.SpanOption{}},
+			args:             args{ctx: stmCtx, name: "newStmt", opts: []trace.SpanStartOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: trace.NilSpanID,
@@ -103,7 +114,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "empty",
 			fields:           fields{Enable: true},
-			args:             args{ctx: context.Background(), name: "backgroundCtx", opts: []trace.SpanOption{}},
+			args:             args{ctx: context.Background(), name: "backgroundCtx", opts: []trace.SpanStartOption{}},
 			wantNewRoot:      true,
 			wantTraceId:      trace.NilTraceID,
 			wantParentSpanId: _1SpanID,
@@ -112,7 +123,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "remote",
 			fields:           fields{Enable: true},
-			args:             args{ctx: remoteCtx, name: "remoteCtx", opts: []trace.SpanOption{}},
+			args:             args{ctx: remoteCtx, name: "remoteCtx", opts: []trace.SpanStartOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: trace.NilSpanID,
@@ -199,4 +210,288 @@ func TestSpanContext_MarshalTo(t *testing.T) {
 			require.Equal(t, tt.fields.SpanID, newC.SpanID)
 		})
 	}
+}
+
+func TestMOSpan_End(t *testing.T) {
+
+	s := gostub.Stub(&freeMOSpan, func(span *MOSpan) {})
+	defer s.Reset()
+
+	ctx := context.TODO()
+	p := newMOTracerProvider(WithLongSpanTime(time.Hour), EnableTracer(true))
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "test"},
+		provider:     p,
+	}
+
+	var WG sync.WaitGroup
+
+	// short time span
+	var shortTimeSpan trace.Span
+	WG.Add(1)
+	go func() {
+		_, shortTimeSpan = tracer.Start(ctx, "shortTimeSpan")
+		defer WG.Done()
+		defer shortTimeSpan.End()
+	}()
+	WG.Wait()
+	require.Equal(t, false, shortTimeSpan.(*MOSpan).needRecord)
+	require.Equal(t, 0, len(shortTimeSpan.(*MOSpan).ExtraFields))
+
+	// span with LongTimeThreshold
+	// and set ExtraFields
+	var longTimeSpan trace.Span
+	WG.Add(1)
+	extraFields := []zap.Field{zap.String("str", "field"), zap.Int64("int", 0)}
+	go func() {
+		_, longTimeSpan = tracer.Start(ctx, "longTimeSpan", trace.WithLongTimeThreshold(time.Millisecond))
+		defer WG.Done()
+		defer longTimeSpan.End()
+
+		longTimeSpan.AddExtraFields(extraFields...)
+
+		time.Sleep(10 * time.Millisecond)
+	}()
+	WG.Wait()
+	require.Equal(t, true, longTimeSpan.(*MOSpan).needRecord)
+	require.Equal(t, 2, len(longTimeSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, false, longTimeSpan.(*MOSpan).doneProfile)
+	require.Equal(t, extraFields, longTimeSpan.(*MOSpan).ExtraFields)
+
+	// span with deadline context
+	deadlineCtx, cancel := context.WithTimeout(ctx, time.Millisecond)
+	defer cancel()
+	var deadlineSpan trace.Span
+	WG.Add(1)
+	go func() {
+		_, deadlineSpan = tracer.Start(deadlineCtx, "deadlineCtx")
+		defer WG.Done()
+		defer deadlineSpan.End()
+
+		time.Sleep(10 * time.Millisecond)
+	}()
+	WG.Wait()
+	require.Equal(t, true, deadlineSpan.(*MOSpan).needRecord)
+	require.Equal(t, 1, len(deadlineSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, false, deadlineSpan.(*MOSpan).doneProfile)
+	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan.(*MOSpan).ExtraFields)
+
+	// span with deadline context (plus calling cancel2() before func return)
+	deadlineCtx2, cancel2 := context.WithTimeout(ctx, time.Millisecond)
+	defer cancel()
+	var deadlineSpan2 trace.Span
+	WG.Add(1)
+	go func() {
+		_, deadlineSpan2 = tracer.Start(deadlineCtx2, "deadlineCtx")
+		defer WG.Done()
+		defer deadlineSpan2.End()
+
+		time.Sleep(10 * time.Millisecond)
+		cancel2()
+	}()
+	WG.Wait()
+	require.Equal(t, true, deadlineSpan2.(*MOSpan).needRecord)
+	require.Equal(t, 1, len(deadlineSpan2.(*MOSpan).ExtraFields))
+	require.Equal(t, false, deadlineSpan2.(*MOSpan).doneProfile)
+	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan2.(*MOSpan).ExtraFields)
+
+	// span with hung option, with Deadline situation
+	caseHungOptionWithDeadline := func() {
+		defer cancel()
+		var hungSpan trace.Span
+		WG.Add(1)
+		go func() {
+			_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Millisecond))
+			defer WG.Done()
+			defer hungSpan.End()
+
+			time.Sleep(10 * time.Millisecond)
+		}()
+		WG.Wait()
+		require.Equal(t, true, hungSpan.(*MOHungSpan).needRecord)
+		require.Equal(t, 1, len(hungSpan.(*MOHungSpan).ExtraFields))
+		require.Equal(t, true, hungSpan.(*MOHungSpan).doneProfile)
+		require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, hungSpan.(*MOHungSpan).ExtraFields)
+	}
+	caseHungOptionWithDeadline()
+
+	// span with hung option, with NO Deadline situation
+	caseHungOptionWithoutDeadline := func() {
+		defer cancel()
+		var hungSpan trace.Span
+		WG.Add(1)
+		go func() {
+			_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Minute))
+			defer WG.Done()
+			defer hungSpan.End()
+
+			time.Sleep(10 * time.Millisecond)
+		}()
+		WG.Wait()
+		require.Equal(t, false, hungSpan.(*MOHungSpan).needRecord)
+		require.Equal(t, 0, len(hungSpan.(*MOHungSpan).ExtraFields))
+		require.Equal(t, false, hungSpan.(*MOHungSpan).doneProfile)
+	}
+	caseHungOptionWithoutDeadline()
+
+}
+
+type dummyFileWriterFactory struct{}
+
+func (f *dummyFileWriterFactory) GetRowWriter(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+	return &dummyStringWriter{}
+}
+func (f *dummyFileWriterFactory) GetWriter(ctx context.Context, fp string) io.WriteCloser {
+	selfDir, err := filepath.Abs(".")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("root: %s\n", selfDir)
+	dirname := path.Dir(fp)
+	if dirname != "." && dirname != "./" && dirname != "/" {
+		if err := os.Mkdir(dirname, os.ModeType|os.ModePerm); err != nil && !os.IsExist(err) {
+			panic(err)
+		}
+	}
+	fw, err := os.Create(fp)
+	if err != nil {
+		panic(err)
+	}
+	return fw
+}
+
+func TestMOSpan_doProfile(t *testing.T) {
+	type fields struct {
+		opts   []trace.SpanStartOption
+		ctx    context.Context
+		tracer *MOTracer
+	}
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	tests := []struct {
+		name   string
+		fields fields
+		want   bool
+	}{
+		{
+			name: "normal",
+			fields: fields{
+				opts:   nil,
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "goroutine",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileGoroutine()}, // it will dump file into ETL folder.
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "heap",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileHeap()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "threadcreate",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileThreadCreate()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "allocs",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileAllocs()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "block",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileBlock()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "mutex",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileMutex()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "cpu",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileCpuSecs(time.Second)},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "trace",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileTraceSecs(time.Second)},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, s := tt.fields.tracer.Start(tt.fields.ctx, "test", tt.fields.opts...)
+			s.End()
+			require.Equal(t, tt.want, s.(*MOSpan).doneProfile)
+		})
+	}
+}
+
+func TestMOHungSpan_loop(t *testing.T) {
+
+	defer func() {
+		err := recover()
+		require.Nilf(t, err, "error: %s", err)
+	}()
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	_, span := tracer.Start(ctx, "test_loop", trace.WithHungThreshold(time.Hour))
+
+	hungSpan := span.(*MOHungSpan)
+	quitCancel := hungSpan.quitCancel
+	var ctrlWG sync.WaitGroup
+	ctrlWG.Add(1)
+	hungSpan.quitCancel = context.CancelFunc(func() {
+		// do nothing
+	})
+	// should not panic
+	span.End()
+	hungSpan.MOSpan = nil
+	hungSpan.mux.Lock()
+	hungSpan.deadlineCancel()
+	quitCancel()
+	hungSpan.mux.Unlock()
+	time.Sleep(time.Second)
 }

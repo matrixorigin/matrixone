@@ -67,25 +67,25 @@ func NewSum[T1 Numeric, T2 ReturnTyp]() *Sum[T1, T2] {
 func (s *Sum[T1, T2]) Grows(_ int) {
 }
 
-func (s *Sum[T1, T2]) Eval(vs []T2) []T2 {
-	return vs
+func (s *Sum[T1, T2]) Eval(vs []T2, err error) ([]T2, error) {
+	return vs, nil
 }
 
-func (s *Sum[T1, T2]) Fill(_ int64, value T1, ov T2, z int64, isEmpty bool, isNull bool) (T2, bool) {
+func (s *Sum[T1, T2]) Fill(_ int64, value T1, ov T2, z int64, isEmpty bool, isNull bool) (T2, bool, error) {
 	if !isNull {
-		return ov + T2(value)*T2(z), false
+		return ov + T2(value)*T2(z), false, nil
 	}
-	return ov, isEmpty
+	return ov, isEmpty, nil
 }
 
-func (s *Sum[T1, T2]) Merge(_ int64, _ int64, x T2, y T2, xEmpty bool, yEmpty bool, _ any) (T2, bool) {
+func (s *Sum[T1, T2]) Merge(_ int64, _ int64, x T2, y T2, xEmpty bool, yEmpty bool, _ any) (T2, bool, error) {
 	if !yEmpty {
 		if !xEmpty {
-			return x + y, false
+			return x + y, false, nil
 		}
-		return y, false
+		return y, false, nil
 	}
-	return x, xEmpty
+	return x, xEmpty, nil
 
 }
 
@@ -104,25 +104,32 @@ func NewD64Sum() *Decimal64Sum {
 func (s *Decimal64Sum) Grows(_ int) {
 }
 
-func (s *Decimal64Sum) Eval(vs []types.Decimal64) []types.Decimal64 {
-	return vs
+func (s *Decimal64Sum) Eval(vs []types.Decimal64, err error) ([]types.Decimal64, error) {
+	return vs, err
 }
 
-func (s *Decimal64Sum) Fill(_ int64, value types.Decimal64, ov types.Decimal64, z int64, isEmpty bool, isNull bool) (types.Decimal64, bool) {
+func (s *Decimal64Sum) Fill(_ int64, value types.Decimal64, ov types.Decimal64, z int64, isEmpty bool, isNull bool) (types.Decimal64, bool, error) {
 	if !isNull {
-		return ov + value*types.Decimal64(z), false
+		var err error
+		value, err = value.Mul64(types.Decimal64(z))
+		if err == nil {
+			ov, err = ov.Add64(value)
+		}
+		return ov, false, err
 	}
-	return ov, isEmpty
+	return ov, isEmpty, nil
 }
 
-func (s *Decimal64Sum) Merge(_ int64, _ int64, x types.Decimal64, y types.Decimal64, xEmpty bool, yEmpty bool, _ any) (types.Decimal64, bool) {
+func (s *Decimal64Sum) Merge(_ int64, _ int64, x types.Decimal64, y types.Decimal64, xEmpty bool, yEmpty bool, _ any) (types.Decimal64, bool, error) {
 	if !yEmpty {
 		if !xEmpty {
-			return x + y, false
+			var err error
+			x, err = x.Add64(y)
+			return x, false, err
 		}
-		return y, false
+		return y, false, nil
 	}
-	return x, xEmpty
+	return x, xEmpty, nil
 }
 
 func (s *Decimal64Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
@@ -144,28 +151,32 @@ func NewD128Sum() *Decimal128Sum {
 func (s *Decimal128Sum) Grows(_ int) {
 }
 
-func (s *Decimal128Sum) Eval(vs []types.Decimal128) []types.Decimal128 {
-	return vs
+func (s *Decimal128Sum) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+	return vs, err
 }
 
-func (s *Decimal128Sum) Fill(_ int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
+func (s *Decimal128Sum) Fill(_ int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
 	if !isNull {
-		value, _, _ = value.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, 0, 0)
-		ov, _ = ov.Add128(value)
-		return ov, false
+		var err error
+		value, _, err = value.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, 0, 0)
+		if err == nil {
+			ov, err = ov.Add128(value)
+		}
+		return ov, false, err
 	}
-	return ov, isEmpty
+	return ov, isEmpty, nil
 }
 
-func (s *Decimal128Sum) Merge(_ int64, _ int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, _ any) (types.Decimal128, bool) {
+func (s *Decimal128Sum) Merge(_ int64, _ int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, _ any) (types.Decimal128, bool, error) {
 	if !yEmpty {
 		if !xEmpty {
-			x, _ = x.Add128(y)
-			return x, false
+			var err error
+			x, err = x.Add128(y)
+			return x, false, err
 		}
-		return y, false
+		return y, false, nil
 	}
-	return x, xEmpty
+	return x, xEmpty, nil
 }
 
 func (s *Decimal128Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {

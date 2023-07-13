@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop account if exists tenant_test;
 create account tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
@@ -8,7 +9,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 drop account if exists tenant_test;
 select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' order by relname;
 account_id    relname    relkind
-0    %!%mo_increment_columns    
+0    mo_increment_columns    
 0    mo_account    r
 0    mo_columns    r
 0    mo_database    r
@@ -23,3 +24,4 @@ account_id    relname    relkind
 0    mo_user    r
 0    mo_user_defined_function    r
 0    mo_user_grant    r
+set global enable_privilege_cache = on;

@@ -17,12 +17,13 @@ package metric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"path"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -60,7 +61,7 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 	ctx, span := trace.Start(ctx, "MetricCreateCronTask")
 	defer span.End()
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerName)
-	logger.Info(fmt.Sprintf("init metric task with CronExpr: %s", StorageUsageTaskCronExpr))
+	logger.Debug(fmt.Sprintf("init metric task with CronExpr: %s", StorageUsageTaskCronExpr))
 	if err = taskService.CreateCronTask(ctx, TaskMetadata(StorageUsageCronTask, executorID), StorageUsageTaskCronExpr); err != nil {
 		return err
 	}
@@ -69,10 +70,9 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 
 // GetMetricStorageUsageExecutor collect metric server_storage_usage
 func GetMetricStorageUsageExecutor(sqlExecutor func() ie.InternalExecutor) func(ctx context.Context, task task.Task) error {
-	f := func(ctx context.Context, task task.Task) error {
+	return func(ctx context.Context, task task.Task) error {
 		return CalculateStorageUsage(ctx, sqlExecutor)
 	}
-	return f
 }
 
 const (
@@ -84,12 +84,14 @@ const (
 	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
 )
 
-var gUpdateStorageUsageInterval = defaultInterval()
+var (
+	gUpdateStorageUsageInterval atomic.Int64
+	gCheckNewInterval           atomic.Int64
+)
 
-func defaultInterval() *atomic.Int64 {
-	v := new(atomic.Int64)
-	v.Store(int64(time.Minute))
-	return v
+func init() {
+	gUpdateStorageUsageInterval.Store(int64(time.Minute))
+	gCheckNewInterval.Store(int64(time.Minute))
 }
 
 func SetUpdateStorageUsageInterval(interval time.Duration) {
@@ -100,34 +102,30 @@ func GetUpdateStorageUsageInterval() time.Duration {
 	return time.Duration(gUpdateStorageUsageInterval.Load())
 }
 
-var QuitableWait = func(ctx context.Context) (*time.Ticker, error) {
-	next := time.NewTicker(GetUpdateStorageUsageInterval())
-	return next, nil
-}
-
 func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalExecutor) (err error) {
 	ctx, span := trace.Start(ctx, "MetricStorageUsage")
 	defer span.End()
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
+	logger.Info("started")
 	defer func() {
 		logger.Info("finished", zap.Error(err))
 	}()
 
 	// start background task to check new account
-	go CheckNewAccountSize(ctx, logger, sqlExecutor)
+	go checkNewAccountSize(ctx, logger, sqlExecutor)
 
-	next := time.NewTicker(time.Second)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("receive context signal", zap.Error(ctx.Err()))
+			logger.Debug("receive context signal", zap.Error(ctx.Err()))
 			StorageUsageFactory.Reset() // clean CN data for next cron task.
 			return ctx.Err()
-
-		case <-next.C:
-			logger.Info("start next round")
+		case <-ticker.C:
 		}
+		logger.Debug("start next round")
 
 		// mysql> show accounts;
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
@@ -136,9 +134,8 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		// | sys             | root       | 2023-01-17 09:56:10 | open   | NULL           |        6 |          56 |      2082 | 0.341 | system account |
 		// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
-		executor := sqlExecutor()
-		logger.Info("query storage size")
-		result := executor.Query(ctx, ShowAllAccountSQL, ie.NewOptsBuilder().Finish())
+		logger.Debug("query storage size")
+		result := sqlExecutor().Query(ctx, ShowAllAccountSQL, ie.NewOptsBuilder().Finish())
 		err = result.Error()
 		if err != nil {
 			return err
@@ -146,38 +143,29 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 
 		cnt := result.RowCount()
 		if cnt == 0 {
-			next = time.NewTicker(time.Minute)
+			ticker.Reset(time.Minute)
 			logger.Warn("got empty account info, wait shortly")
 			continue
 		}
-		logger.Info("collect storage_usage cnt", zap.Uint64("cnt", cnt))
+		logger.Debug("collect storage_usage cnt", zap.Uint64("cnt", cnt))
 		StorageUsageFactory.Reset()
-		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
-
+		for rowIdx := uint64(0); rowIdx < cnt; rowIdx++ {
 			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
 			if err != nil {
 				return err
 			}
-
 			sizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSize)
 			if err != nil {
 				return err
 			}
-
-			logger.Info("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
+			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
 			StorageUsage(account).Set(sizeMB)
 		}
 
 		// next round
-		next, err = QuitableWait(ctx)
-		if err != nil {
-			return err
-		}
-		logger.Info("wait next round")
+		ticker.Reset(GetUpdateStorageUsageInterval())
 	}
 }
-
-var gCheckNewInterval = defaultInterval()
 
 func SetStorageUsageCheckNewInterval(interval time.Duration) {
 	gCheckNewInterval.Store(int64(interval))
@@ -187,12 +175,12 @@ func GetStorageUsageCheckNewInterval() time.Duration {
 	return time.Duration(gCheckNewInterval.Load())
 }
 
-func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor func() ie.InternalExecutor) {
+func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor func() ie.InternalExecutor) {
 	var err error
-	ctx, span := trace.Start(ctx, "CheckNewAccountSize")
+	ctx, span := trace.Start(ctx, "checkNewAccountSize")
 	defer span.End()
 	defer func() {
-		logger.Info("CheckNewAccountSize exit", zap.Error(err))
+		logger.Debug("checkNewAccountSize exit", zap.Error(err))
 	}()
 
 	opts := ie.NewOptsBuilder().Finish()
@@ -204,10 +192,10 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("receive context signal", zap.Error(ctx.Err()))
+			logger.Debug("receive context signal", zap.Error(ctx.Err()))
 			return
 		case now = <-next.C:
-			logger.Info("start check new account")
+			logger.Debug("start check new account")
 		}
 
 		// mysql> select * from mo_catalog.mo_account;
@@ -232,10 +220,10 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 
 		cnt := result.RowCount()
 		if cnt == 0 {
-			logger.Info("got empty new account info, wait next round")
+			logger.Debug("got empty new account info, wait next round")
 			continue
 		}
-		logger.Info("collect new account cnt", zap.Uint64("cnt", cnt))
+		logger.Debug("collect new account cnt", zap.Uint64("cnt", cnt))
 		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
 
 			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
@@ -270,14 +258,13 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			// done query.
 
 			// update new accounts metric
-			logger.Info("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
+			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
 				zap.String("created_time", createdTime))
 			StorageUsage(account).Set(sizeMB)
 		}
 
 		// reset next Round
 		next.Reset(GetStorageUsageCheckNewInterval())
-		logger.Info("wait next round, check new account")
+		logger.Debug("wait next round, check new account")
 	}
-
 }

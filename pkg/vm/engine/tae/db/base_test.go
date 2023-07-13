@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -57,9 +56,9 @@ type testEngine struct {
 	tenantID uint32 // for almost tests, userID and roleID is not important
 }
 
-func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
+func newTestEngine(ctx context.Context, t *testing.T, opts *options.Options) *testEngine {
 	blockio.Start()
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	return &testEngine{
 		DB: db,
 		t:  t,
@@ -70,10 +69,10 @@ func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
 
 func (e *testEngine) bindTenantID(tenantID uint32) { e.tenantID = tenantID }
 
-func (e *testEngine) restart() {
+func (e *testEngine) restart(ctx context.Context) {
 	_ = e.DB.Close()
 	var err error
-	e.DB, err = Open(e.Dir, e.Opts)
+	e.DB, err = Open(ctx, e.Dir, e.Opts)
 	// only ut executes this checker
 	e.DB.DiskCleaner.AddChecker(
 		func(item any) bool {
@@ -99,14 +98,14 @@ func (e *testEngine) createRelAndAppend(bat *containers.Batch, createDB bool) (h
 // func (e *testEngine) getRows() int {
 // 	txn, rel := e.getRelation()
 // 	rows := rel.Rows()
-// 	assert.NoError(e.t, txn.Commit())
+// 	assert.NoError(e.t, txn.Commit(context.Background()))
 // 	return int(rows)
 // }
 
 func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
 	txn, rel := e.getRelation()
 	checkAllColRowsByScan(e.t, rel, exp, applyDelete)
-	assert.NoError(e.t, txn.Commit())
+	assert.NoError(e.t, txn.Commit(context.Background()))
 }
 func (e *testEngine) dropRelation(t *testing.T) {
 	txn, err := e.StartTxn(nil)
@@ -115,7 +114,7 @@ func (e *testEngine) dropRelation(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = db.DropRelationByName(e.schema.Name)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 	return getRelation(e.t, e.tenantID, e.DB, defaultTestDB, e.schema.Name)
@@ -149,7 +148,7 @@ func (e *testEngine) DoAppend(bat *containers.Batch) {
 	txn, rel := e.getRelation()
 	err := rel.Append(context.Background(), bat)
 	assert.NoError(e.t, err)
-	assert.NoError(e.t, txn.Commit())
+	assert.NoError(e.t, txn.Commit(context.Background()))
 }
 
 func (e *testEngine) doAppendWithTxn(bat *containers.Batch, txn txnif.AsyncTxn, skipConflict bool) (err error) {
@@ -169,16 +168,16 @@ func (e *testEngine) tryAppend(bat *containers.Batch) {
 	assert.NoError(e.t, err)
 	rel, err := db.GetRelationByName(e.schema.Name)
 	if err != nil {
-		_ = txn.Rollback()
+		_ = txn.Rollback(context.Background())
 		return
 	}
 
 	err = rel.Append(context.Background(), bat)
 	if err != nil {
-		_ = txn.Rollback()
+		_ = txn.Rollback(context.Background())
 		return
 	}
-	_ = txn.Commit()
+	_ = txn.Commit(context.Background())
 }
 func (e *testEngine) deleteAll(skipConflict bool) error {
 	txn, rel := e.getRelation()
@@ -186,7 +185,7 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 	for it.Valid() {
 		blk := it.GetBlock()
 		defer blk.Close()
-		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName)
+		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		assert.NoError(e.t, err)
 		defer view.Close()
 		view.ApplyDeletes()
@@ -195,7 +194,7 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 		it.Next()
 	}
 	// checkAllColRowsByScan(e.t, rel, 0, true)
-	err := txn.Commit()
+	err := txn.Commit(context.Background())
 	if !skipConflict {
 		checkAllColRowsByScan(e.t, rel, 0, true)
 		assert.NoError(e.t, err)
@@ -207,7 +206,7 @@ func (e *testEngine) truncate() {
 	txn, db := e.getTestDB()
 	_, err := db.TruncateByName(e.schema.Name)
 	assert.NoError(e.t, err)
-	assert.NoError(e.t, txn.Commit())
+	assert.NoError(e.t, txn.Commit(context.Background()))
 }
 func (e *testEngine) globalCheckpoint(
 	endTs types.TS,
@@ -259,14 +258,15 @@ func (e *testEngine) incrementalCheckpoint(
 		assert.NoError(e.t, err)
 		assert.NoError(e.t, entry.WaitDone())
 		testutils.WaitExpect(1000, func() bool {
-			return e.Scheduler.GetPenddingLSNCnt() == 0
+			return e.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 		})
 	}
 	return nil
 }
-func initDB(t *testing.T, opts *options.Options) *DB {
+
+func initDB(ctx context.Context, t *testing.T, opts *options.Options) *DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	db, _ := Open(dir, opts)
+	db, _ := Open(ctx, dir, opts)
 	// only ut executes this checker
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {
@@ -314,7 +314,7 @@ func createDB(t *testing.T, e *DB, dbName string) {
 	assert.NoError(t, err)
 	_, err = txn.CreateDatabase(dbName, "", "")
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func dropDB(t *testing.T, e *DB, dbName string) {
@@ -322,12 +322,12 @@ func dropDB(t *testing.T, e *DB, dbName string) {
 	assert.NoError(t, err)
 	_, err = txn.DropDatabase(dbName)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func createRelation(t *testing.T, e *DB, dbName string, schema *catalog.Schema, createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, db, rel := createRelationNoCommit(t, e, dbName, schema, createDB)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	return
 }
 
@@ -368,7 +368,7 @@ func createRelationAndAppend(
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 	return
 }
 
@@ -415,7 +415,7 @@ func checkAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, ap
 
 func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDelete bool) int {
 	rows := 0
-	forEachColumnView(rel, colIdx, func(view *model.ColumnView) (err error) {
+	forEachColumnView(rel, colIdx, func(view *containers.ColumnView) (err error) {
 		if applyDelete {
 			view.ApplyDeletes()
 		}
@@ -426,9 +426,9 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 	return rows
 }
 
-func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
+func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *containers.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
-		view, err := blk.GetColumnDataById(colIdx)
+		view, err := blk.GetColumnDataById(context.Background(), colIdx)
 		if view == nil {
 			logutil.Warnf("blk %v", blk.String())
 			return
@@ -486,7 +486,7 @@ func appendFailClosure(t *testing.T, data *containers.Batch, name string, e *DB,
 		rel, _ := database.GetRelationByName(name)
 		err := rel.Append(context.Background(), data)
 		assert.NotNil(t, err)
-		assert.Nil(t, txn.Rollback())
+		assert.Nil(t, txn.Rollback(context.Background()))
 	}
 }
 
@@ -500,7 +500,7 @@ func appendClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg 
 		rel, _ := database.GetRelationByName(name)
 		err := rel.Append(context.Background(), data)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 }
 
@@ -513,14 +513,14 @@ func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *DB, 
 		database, _ := txn.GetDatabase("db")
 		rel, err := database.GetRelationByName(name)
 		if err != nil {
-			_ = txn.Rollback()
+			_ = txn.Rollback(context.Background())
 			return
 		}
 		if err = rel.Append(context.Background(), data); err != nil {
-			_ = txn.Rollback()
+			_ = txn.Rollback(context.Background())
 			return
 		}
-		_ = txn.Commit()
+		_ = txn.Commit(context.Background())
 	}
 }
 
@@ -539,25 +539,25 @@ func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *
 		metas = append(metas, meta)
 		it.Next()
 	}
-	_ = txn.Commit()
+	_ = txn.Commit(context.Background())
 	for _, meta := range metas {
 		txn, _ := getRelation(t, tenantID, e, dbName, schema.Name)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Runtime)
 		if skipConflict && err != nil {
-			_ = txn.Rollback()
+			_ = txn.Rollback(context.Background())
 			continue
 		}
 		assert.NoError(t, err)
-		err = task.OnExec()
+		err = task.OnExec(context.Background())
 		if skipConflict {
 			if err != nil {
-				_ = txn.Rollback()
+				_ = txn.Rollback(context.Background())
 			} else {
-				_ = txn.Commit()
+				_ = txn.Commit(context.Background())
 			}
 		} else {
 			assert.NoError(t, err)
-			assert.NoError(t, txn.Commit())
+			assert.NoError(t, txn.Commit(context.Background()))
 		}
 	}
 }
@@ -577,7 +577,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		}
 		segIt.Next()
 	}
-	_ = txn.Commit()
+	_ = txn.Commit(context.Background())
 	for _, seg := range segs {
 		txn, _ = e.StartTxn(nil)
 		txn.BindAccessInfo(tenantID, 0, 0)
@@ -586,7 +586,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		segHandle, err := rel.GetSegment(&seg.ID)
 		if err != nil {
 			if skipConflict {
-				_ = txn.Rollback()
+				_ = txn.Rollback(context.Background())
 				continue
 			}
 			assert.NoErrorf(t, err, "Txn Ts=%d", txn.GetStartTS())
@@ -599,22 +599,22 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 			it.Next()
 		}
 		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Scheduler)
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Runtime)
 		if skipConflict && err != nil {
-			_ = txn.Rollback()
+			_ = txn.Rollback(context.Background())
 			continue
 		}
 		assert.NoError(t, err)
-		err = task.OnExec()
+		err = task.OnExec(context.Background())
 		if skipConflict {
 			if err != nil {
-				_ = txn.Rollback()
+				_ = txn.Rollback(context.Background())
 			} else {
-				_ = txn.Commit()
+				_ = txn.Commit(context.Background())
 			}
 		} else {
 			assert.NoError(t, err)
-			assert.NoError(t, txn.Commit())
+			assert.NoError(t, txn.Commit(context.Background()))
 		}
 	}
 }
@@ -640,7 +640,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		err = task.WaitDone()
 		assert.NoError(t, err)
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }*/
 
 func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {

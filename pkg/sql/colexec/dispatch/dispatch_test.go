@@ -78,7 +78,7 @@ func TestDispatch(t *testing.T) {
 			}
 		}*/
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
+		tc.proc.Reg.InputBatch = batch.EmptyBatch
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg, false, false)

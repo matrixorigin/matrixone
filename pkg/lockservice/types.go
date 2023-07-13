@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
@@ -26,6 +27,8 @@ import (
 var (
 	// ErrDeadlockDetectorClosed deadlock detector is closed
 	ErrDeadlockDetectorClosed = moerr.NewInvalidStateNoCtx("deadlock detector is closed")
+	// ErrTxnClosed txn not found
+	ErrTxnNotFound = moerr.NewInvalidStateNoCtx("txn not found")
 	// ErrDeadLockDetected dead lock detected
 	ErrDeadLockDetected = moerr.NewDeadLockDetectedNoCtx()
 	// ErrLockTableBindChanged lock table and lock service bind changed
@@ -53,7 +56,7 @@ type LockStorage interface {
 	Seek(key []byte) ([]byte, Lock, bool)
 	// Prev returns the first KV Pair that is < the given key
 	Prev(key []byte) ([]byte, Lock, bool)
-	// Range range in [start, end)
+	// Range range in [start, end), if end == nil, no upperBounded
 	Range(start []byte, end []byte, fn func([]byte, Lock) bool)
 	// Iter iter all values
 	Iter(func([]byte, Lock) bool)
@@ -87,7 +90,7 @@ type LockService interface {
 	//
 	// Returns false if conflicts are encountered in FastFail wait policy and ErrDeadLockDetected
 	// returns if current operation was aborted by deadlock detection.
-	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (pb.Result, error)
+	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options pb.LockOptions) (pb.Result, error)
 	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
 	// the txn was committed.
 	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp) error
@@ -97,7 +100,7 @@ type LockService interface {
 
 	// Observability methods
 
-	// GetWaitingList get specical txnID's waiting list
+	// GetWaitingList get special txnID's waiting list
 	GetWaitingList(ctx context.Context, txnID []byte) (bool, []pb.WaitTxn, error)
 	// ForceRefreshLockTableBinds force refresh all lock tables binds
 	ForceRefreshLockTableBinds()
@@ -122,7 +125,7 @@ type lockTable interface {
 	// 1. ErrDeadlockDetectorClosed, indicates that the current transaction has triggered a deadlock.
 	// 2. ErrLockTableNotMatch, indicates that the LockTable binding relationship has changed.
 	// 3. Other known errors.
-	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) (pb.Result, error)
+	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions, cb func(pb.Result, error))
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp)
 	// getLock get a lock
@@ -180,7 +183,7 @@ type Client interface {
 }
 
 // RequestHandleFunc request handle func
-type RequestHandleFunc func(context.Context, *pb.Request, *pb.Response) error
+type RequestHandleFunc func(context.Context, *pb.Request, *pb.Response, morpc.ClientSession)
 
 // ServerOption server option
 type ServerOption func(*server)
@@ -196,7 +199,10 @@ type Server interface {
 }
 
 // LockOptions options for lock
-type LockOptions = pb.LockOptions
+type LockOptions struct {
+	pb.LockOptions
+	async bool
+}
 
 // Lock stores specific lock information. Since there are a large number of lock objects
 // in the LockStorage at runtime, this object has been specially designed to save memory
@@ -206,4 +212,18 @@ type Lock struct {
 	// all lock info will encode into this field to save memory overhead
 	value  byte
 	waiter *waiter
+}
+
+// SetLockServiceByServiceID set lockservice instance into process level runtime.
+func SetLockServiceByServiceID(serviceID string, value LockService) {
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService+"_"+serviceID, value)
+}
+
+// GetLockServiceByServiceID get lockservice instance by service id from process level runtime.
+func GetLockServiceByServiceID(serviceID string) LockService {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService + "_" + serviceID)
+	if !ok {
+		panic("BUG: lock service not found")
+	}
+	return v.(LockService)
 }

@@ -15,6 +15,7 @@
 package onduplicatekey
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -22,21 +23,37 @@ import (
 
 type proc = process.Process
 
+type container struct {
+	checkConflictBat *batch.Batch //batch to check conflict
+	insertBat        *batch.Batch //the final batch
+	emptyBat         *batch.Batch //use pass this batch before compute finished
+}
+
 type Argument struct {
 	// Ts is not used
 	Ts       uint64
 	Affected uint64
 	Engine   engine.Engine
 
-	Source       engine.Relation
-	UniqueSource []engine.Relation
-	Ref          *plan.ObjectRef
-	TableDef     *plan.TableDef
-
+	// Source       engine.Relation
+	// UniqueSource []engine.Relation
+	// Ref          *plan.ObjectRef
+	TableDef        *plan.TableDef
 	OnDuplicateIdx  []int32
 	OnDuplicateExpr map[string]*plan.Expr
 
 	IdxIdx []int32
+
+	ctr *container
 }
 
-func (arg *Argument) Free(*process.Process, bool) {}
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if arg.ctr != nil {
+		if arg.ctr.insertBat != nil {
+			arg.ctr.insertBat.Clean(proc.GetMPool())
+		}
+		if arg.ctr.checkConflictBat != nil {
+			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
+		}
+	}
+}

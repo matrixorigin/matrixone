@@ -62,7 +62,7 @@ func (b *BindedEngine) Hints() engine.Hints {
 }
 
 func (b *BindedEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef) ([]engine.Reader, error) {
+	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
 	return nil, nil
 }
 
@@ -70,8 +70,8 @@ func (b *BindedEngine) New(ctx context.Context, _ client.TxnOperator) error {
 	return b.engine.New(ctx, b.txnOp)
 }
 
-func (b *BindedEngine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (cnNodes engine.Nodes, err error) {
-	return b.engine.Nodes(isInternal, tenant, cnLabel)
+func (b *BindedEngine) Nodes(isInternal bool, tenant string, username string, cnLabel map[string]string) (cnNodes engine.Nodes, err error) {
+	return b.engine.Nodes(isInternal, tenant, username, cnLabel)
 }
 
 func (b *BindedEngine) Rollback(ctx context.Context, _ client.TxnOperator) error {

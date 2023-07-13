@@ -70,28 +70,6 @@ func TestEntireEngineNew(t *testing.T) {
 	assert.Equal(t, first_engine_then_tempengine, ee.state)
 }
 
-func TestEntireEngineCommit(t *testing.T) {
-	ctx := context.TODO()
-	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
-	ee.Commit(ctx, op)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.Commit(ctx, op)
-	assert.Equal(t, first_engine_then_tempengine, ee.state)
-}
-
-func TestEntireEngineRollback(t *testing.T) {
-	ctx := context.TODO()
-	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
-	ee.Rollback(ctx, op)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.Rollback(ctx, op)
-	assert.Equal(t, first_engine_then_tempengine, ee.state)
-}
-
 func TestEntireEngineDelete(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
@@ -139,10 +117,10 @@ func TestEntireEngineDatabase(t *testing.T) {
 
 func TestEntireEngineNodes(t *testing.T) {
 	ee := buildEntireEngineWithoutTempEngine()
-	ee.Nodes(false, "", nil)
+	ee.Nodes(false, "", "", nil)
 	assert.Equal(t, only_engine, ee.state)
 	ee = buildEntireEngineWithTempEngine()
-	ee.Nodes(false, "", nil)
+	ee.Nodes(false, "", "", nil)
 	assert.Equal(t, only_engine, ee.state)
 }
 
@@ -159,10 +137,10 @@ func TestEntireEngineHints(t *testing.T) {
 func TestEntireEngineNewBlockReader(t *testing.T) {
 	ctx := context.TODO()
 	ee := buildEntireEngineWithoutTempEngine()
-	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil)
+	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil)
 	assert.Equal(t, only_engine, ee.state)
 	ee = buildEntireEngineWithTempEngine()
-	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil)
+	ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil)
 	assert.Equal(t, only_engine, ee.state)
 }
 
@@ -270,7 +248,7 @@ func (e *testEngine) Database(ctx context.Context, name string, txnOp client.Txn
 	return nil, nil
 }
 
-func (e *testEngine) Nodes(_ bool, _ string, _ map[string]string) (Nodes, error) {
+func (e *testEngine) Nodes(_ bool, _ string, _ string, _ map[string]string) (Nodes, error) {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {
 		e.parent.state = e.parent.state + e.parent.step*e.parent.state
@@ -291,7 +269,7 @@ func (e *testEngine) Hints() (h Hints) {
 }
 
 func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef) ([]Reader, error) {
+	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, proc any) ([]Reader, error) {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {
 		e.parent.state = e.parent.state + e.parent.step*e.parent.state
@@ -352,6 +330,10 @@ func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
 }
 
+func (o *testOperator) TxnRef() *txn.TxnMeta {
+	return &txn.TxnMeta{}
+}
+
 func (o *testOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	return nil, nil
 }
@@ -360,6 +342,14 @@ func (o *testOperator) AddLockTable(lock.LockTable) error {
 	return nil
 }
 
-func (o *testOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
+}
+
+func (o *testOperator) ResetRetry(retry bool) {
+	panic("unimplemented")
+}
+
+func (o *testOperator) IsRetry() bool {
+	panic("unimplemented")
 }

@@ -21,8 +21,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,7 +35,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	var tableDef plan.TableDef
 
 	// check view statement
-	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
+	stmtPlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, false)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +48,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{
-				NullAbility:  true,
+				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
 				OriginString: "",
 			},
@@ -251,7 +249,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 		}
 		dropSequence.Table = ""
 	}
-	if obj != nil && obj.PubAccountId != -1 {
+	if obj != nil && obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop sequence in subscription database")
 	}
 
@@ -282,6 +280,9 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
@@ -320,6 +321,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		createTable.Database = string(stmt.Table.SchemaName)
 	}
 
+	if stmt.Temporary && stmt.PartitionOption != nil {
+		return nil, moerr.NewPartitionNoTemporary(ctx.GetContext())
+	}
+
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			return nil, moerr.NewNoDB(ctx.GetContext())
@@ -330,7 +335,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	applyIndexFunc, err := buildTableDefs(stmt, ctx, createTable)
+	err := buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
 	}
@@ -383,6 +388,15 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		// 	*tree.TableOptionIndexDirectory, *tree.TableOptionStorageMedia, *tree.TableOptionStatsSamplePages,
 		// 	*tree.TableOptionUnion, *tree.TableOptionEncryption:
 		// 	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+		case *tree.TableOptionAutoIncrement, *tree.TableOptionAUTOEXTEND_SIZE, *tree.TableOptionAvgRowLength,
+			*tree.TableOptionCharset, *tree.TableOptionChecksum, *tree.TableOptionCollate, *tree.TableOptionCompression,
+			*tree.TableOptionConnection, *tree.TableOptionDataDirectory, *tree.TableOptionIndexDirectory,
+			*tree.TableOptionDelayKeyWrite, *tree.TableOptionEncryption, *tree.TableOptionEngine, *tree.TableOptionEngineAttr,
+			*tree.TableOptionKeyBlockSize, *tree.TableOptionMaxRows, *tree.TableOptionMinRows, *tree.TableOptionPackKeys,
+			*tree.TableOptionPassword, *tree.TableOptionRowFormat, *tree.TableOptionStartTrans, *tree.TableOptionSecondaryEngineAttr,
+			*tree.TableOptionStatsAutoRecalc, *tree.TableOptionStatsPersistent, *tree.TableOptionStatsSamplePages,
+			*tree.TableOptionTablespace, *tree.TableOptionUnion:
+
 		default:
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		}
@@ -450,11 +464,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			}})
 	}
 
-	if err := applyIndexFunc(maybeAddPrimaryKey(stmt, createTable)); err != nil {
-		return nil, err
-	}
-
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	bindContext := NewBindContext(builder, nil)
 
 	// set partition(unsupport now)
@@ -541,6 +551,7 @@ func addPartitionTableDef(ctx context.Context, mainTableName string, createTable
 			Name: partitionTableName,
 			Cols: createTable.TableDef.Cols, //same as the main table's column defs
 		}
+		partitionTableDefs[i].Pkey = createTable.TableDef.GetPkey()
 		partitionTableDefs[i].Defs = append(partitionTableDefs[i].Defs, partitionPropsDef)
 	}
 	partitionDef.PartitionTableNames = partitionTableNames
@@ -565,7 +576,7 @@ func buildPartitionByClause(ctx context.Context, partitionBinder *PartitionBinde
 	return builder.build(ctx, partitionBinder, stmt, tableDef)
 }
 
-func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) (func(*ColDef) error, error) {
+func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) error {
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
@@ -576,12 +587,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		case *tree.ColumnTableDef:
 			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
-					return nil, moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
+					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
 			}
 			var pks []string
@@ -591,24 +602,24 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				switch attribute := attr.(type) {
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
 					if colType.GetId() == int32(types.T_blob) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
+						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
 					if colType.GetId() == int32(types.T_text) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
+						return moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
 					}
 					if colType.GetId() == int32(types.T_json) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
 					}
 					pks = append(pks, def.Name.Parts[0])
 				case *tree.AttributeComment:
 					comment = attribute.CMT.String()
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-						return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", def.Name.Parts[0])
+						return moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", def.Name.Parts[0])
 					}
 				case *tree.AttributeAutoIncrement:
 					auto_incr = true
 					if !types.T(colType.GetId()).IsInteger() {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
+						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
@@ -624,26 +635,26 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			if len(pks) > 0 {
 				if len(primaryKeys) > 0 {
-					return nil, moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
+					return moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
 				}
 				primaryKeys = pks
 			}
 
 			defaultValue, err := buildDefaultExpr(def, colType, ctx.GetProcess())
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if auto_incr && defaultValue.Expr != nil {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", def.Name.Parts[0])
+				return moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", def.Name.Parts[0])
 			}
 
 			onUpdateExpr, err := buildOnUpdate(def, colType, ctx.GetProcess())
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			if !checkTableColumnNameValid(def.Name.Parts[0]) {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", def.Name.Parts[0])
+				return moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", def.Name.Parts[0])
 			}
 
 			colType.AutoIncr = auto_incr
@@ -659,19 +670,24 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
+				return moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
 			}
 			pksMap := map[string]bool{}
 			for _, key := range def.KeyParts {
 				name := key.ColName.Parts[0] // name of primary key column
 				if _, ok := pksMap[name]; ok {
-					return nil, moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name '%s' in primary key", name)
+					return moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name '%s' in primary key", name)
 				}
 				primaryKeys = append(primaryKeys, name)
 				pksMap[name] = true
 				indexs = append(indexs, name)
 			}
 		case *tree.Index:
+			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
+			if err != nil {
+				return err
+			}
+
 			secondaryIndexInfos = append(secondaryIndexInfos, def)
 			for _, key := range def.KeyParts {
 				name := key.ColName.Parts[0]
@@ -679,6 +695,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 
 		case *tree.UniqueIndex:
+			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
+			if err != nil {
+				return err
+			}
+
 			uniqueIndexInfos = append(uniqueIndexInfos, def)
 			for _, key := range def.KeyParts {
 				name := key.ColName.Parts[0]
@@ -686,11 +707,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 		case *tree.ForeignKey:
 			if createTable.Temporary {
-				return nil, moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+				return moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
 			}
 			fkData, err := getForeignKeyData(ctx, createTable.TableDef, def)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			createTable.FkDbs = append(createTable.FkDbs, fkData.DbName)
 			createTable.FkTables = append(createTable.FkTables, fkData.TableName)
@@ -699,20 +720,20 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		case *tree.CheckIndex, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
-			return nil, moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			// return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		default:
-			return nil, moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		}
 	}
 
 	//add cluster table attribute
 	if stmt.IsClusterTable {
 		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
 		}
 		colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
 		if err != nil {
-			return nil, err
+			return err
 		}
 		colDef := &ColDef{
 			Name:    util.GetClusterTableAttributeName(),
@@ -741,10 +762,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	pkeyName := ""
+	// If the primary key is explicitly defined in the ddl statement
 	if len(primaryKeys) > 0 {
 		for _, primaryKey := range primaryKeys {
 			if _, ok := colMap[primaryKey]; !ok {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
+				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
 			}
 		}
 		if len(primaryKeys) == 1 {
@@ -778,41 +800,88 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colMap[primaryKey].Default.NullAbility = false
 			colMap[primaryKey].NotNull = true
 		}
+	} else {
+		// If table does not have a explicit primary key in the ddl statement, a new hidden primary key column will be add,
+		// which will not be sorted or used for any other purpose, but will only be used to add
+		// locks to the Lock operator in pessimistic transaction mode.
+		if !createTable.IsSystemExternalRel() {
+			pkeyName = catalog.FakePrimaryKeyColName
+			colDef := &ColDef{
+				ColId:  uint64(len(createTable.TableDef.Cols)),
+				Name:   pkeyName,
+				Hidden: true,
+				Typ: &Type{
+					Id:       int32(types.T_uint64),
+					AutoIncr: true,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+				NotNull: true,
+				Primary: true,
+			}
+
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
+			colMap[pkeyName] = colDef
+
+			createTable.TableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{pkeyName},
+				PkeyColName: pkeyName,
+			}
+
+			idx := len(createTable.TableDef.Cols) - 1
+			// FIXME: due to the special treatment of insert and update for composite primary key, cluster-by, the
+			// hidden primary key cannot be placed in the last column, otherwise it will cause the columns sent to
+			// tae will not match the definition of schema, resulting in panic.
+			if createTable.TableDef.ClusterBy != nil &&
+				len(stmt.ClusterByOption.ColumnList) > 1 {
+				// we must swap hide pk and cluster_by
+				createTable.TableDef.Cols[idx-1], createTable.TableDef.Cols[idx] = createTable.TableDef.Cols[idx], createTable.TableDef.Cols[idx-1]
+			}
+		}
 	}
 
 	//handle cluster by keys
 	if stmt.ClusterByOption != nil {
 		if stmt.Temporary {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with temporary table is not support")
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with temporary table is not support")
 		}
 		if len(primaryKeys) > 0 {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 		}
 		lenClusterBy := len(stmt.ClusterByOption.ColumnList)
 		var clusterByKeys []string
 		for i := 0; i < lenClusterBy; i++ {
 			colName := stmt.ClusterByOption.ColumnList[i].Parts[0]
 			if _, ok := colMap[colName]; !ok {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", colName)
+				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", colName)
 			}
 			clusterByKeys = append(clusterByKeys, colName)
 		}
 
-		clusterByColName := clusterByKeys[0]
 		if lenClusterBy == 1 {
+			clusterByColName := clusterByKeys[0]
 			for _, col := range createTable.TableDef.Cols {
 				if col.Name == clusterByColName {
 					col.ClusterBy = true
 				}
 			}
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name: clusterByColName,
+			}
 		} else {
-			clusterByColName = util.BuildCompositeClusterByColumnName(clusterByKeys)
+			clusterByColName := util.BuildCompositeClusterByColumnName(clusterByKeys)
 			colDef := MakeHiddenColDefByName(clusterByColName)
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 			colMap[clusterByColName] = colDef
-		}
-		createTable.TableDef.ClusterBy = &plan.ClusterByDef{
-			Name: clusterByColName,
+
+			createTable.TableDef.ClusterBy = &plan.ClusterByDef{
+				Name:         clusterByColName,
+				CompCbkeyCol: colDef,
+			}
 		}
 	}
 
@@ -820,136 +889,39 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// for example, the text type don't support index
 	for _, str := range indexs {
 		if _, ok := colMap[str]; !ok {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
+			return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
 		}
 		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
 		}
 		if colMap[str].Typ.Id == int32(types.T_text) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
 		}
 		if colMap[str].Typ.Id == int32(types.T_json) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
 		}
 	}
 
-	// we must lazy apply unique index, because later may add fake pk
-	// into tabledef.
-	return func(fakeCol *ColDef) error {
-		if fakeCol != nil {
-			pkeyName = fakeCol.Name
-			colMap[fakeCol.Name] = fakeCol
-		}
+	// check Constraint Name (include index/ unique)
+	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	if err != nil {
+		return err
+	}
 
-		// check Constraint Name (include index/ unique)
-		err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
-		if err != nil {
-			return err
-		}
-
-		// build index table
-		if len(uniqueIndexInfos) != 0 {
-			err = buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
-			if err != nil {
-				return err
-			}
-		}
-		if len(secondaryIndexInfos) != 0 {
-			err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	}, nil
-}
-
-// Check whether the name of the constraint(index,unqiue etc) is legal, and handle constraints without a name
-func checkConstraintNames(uniqueConstraints []*tree.UniqueIndex, indexConstraints []*tree.Index, ctx context.Context) error {
-	constrNames := map[string]bool{}
-	// Check not empty constraint name whether is duplicated.
-	for _, constr := range indexConstraints {
-		err := checkDuplicateConstraint(constrNames, constr.Name, false, ctx)
+	// build index table
+	if len(uniqueIndexInfos) != 0 {
+		err = buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
 	}
-	for _, constr := range uniqueConstraints {
-		err := checkDuplicateConstraint(constrNames, constr.Name, false, ctx)
+	if len(secondaryIndexInfos) != 0 {
+		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
 		if err != nil {
 			return err
 		}
-	}
-	// set empty constraint names(index and unique index)
-	for _, constr := range indexConstraints {
-		setEmptyIndexName(constrNames, constr)
-	}
-	for _, constr := range uniqueConstraints {
-		setEmptyUniqueIndexName(constrNames, constr)
 	}
 	return nil
-}
-
-// Check whether the constraint name is duplicate
-func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign bool, ctx context.Context) error {
-	if name == "" {
-		return nil
-	}
-	nameLower := strings.ToLower(name)
-	if namesMap[nameLower] {
-		if foreign {
-			return moerr.NewInvalidInput(ctx, "Duplicate foreign key constraint name '%s'", name)
-		}
-		return moerr.NewDuplicateKey(ctx, name)
-	}
-	namesMap[nameLower] = true
-	return nil
-}
-
-// Set name for unqiue index constraint with an empty name
-func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueIndex) {
-	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		var colName string
-		if colName == "" {
-			colName = indexConstr.KeyParts[0].ColName.Parts[0]
-		}
-		constrName := colName
-		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
-			constrName = fmt.Sprintf("%s_%d", constrName, 2)
-			i = 3
-		}
-		for namesMap[constrName] {
-			// loop forever until we find constrName that haven't been used.
-			constrName = fmt.Sprintf("%s_%d", colName, i)
-			i++
-		}
-		indexConstr.Name = constrName
-		namesMap[constrName] = true
-	}
-}
-
-// Set name for index constraint with an empty name
-func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
-	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		var colName string
-		if colName == "" {
-			colName = indexConstr.KeyParts[0].ColName.Parts[0]
-		}
-		constrName := colName
-		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
-			constrName = fmt.Sprintf("%s_%d", constrName, 2)
-			i = 3
-		}
-		for namesMap[constrName] {
-			//  loop forever until we find constrName that haven't been used.
-			constrName = fmt.Sprintf("%s_%d", colName, i)
-			i++
-		}
-		indexConstr.Name = constrName
-		namesMap[constrName] = true
-	}
 }
 
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
@@ -1160,7 +1132,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' which is published by other account", truncateTable.Table)
 		}
 
@@ -1171,6 +1143,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
+		}
+
+		if tableDef.Partition != nil {
+			truncateTable.PartitionTableNames = make([]string, len(tableDef.Partition.PartitionTableNames))
+			copy(truncateTable.PartitionTableNames, tableDef.Partition.PartitionTableNames)
 		}
 	}
 
@@ -1199,7 +1176,6 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	var attachedPlan *plan.Plan
 	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 
 	if tableDef == nil {
@@ -1212,6 +1188,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 
 		isView := (tableDef.ViewSql != nil)
+		dropTable.IsView = isView
 
 		if isView && !dropTable.IfExists {
 			// drop table v0, v0 is view
@@ -1238,7 +1215,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
 		}
 
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
 		}
 
@@ -1262,17 +1239,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			dropTable.PartitionTableNames = tableDef.GetPartition().GetPartitionTableNames()
 		}
 
-		// Check whether the table definition contains index constraints
-		if dropTable.Database != catalog.MO_CATALOG && dropTable.Table != catalog.MO_INDEXES {
-			if tableDef.Pkey != nil || len(tableDef.Indexes) > 0 {
-				var err error
-				sql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, tableDef.TblId)
-				attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
+		dropTable.TableDef = tableDef
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -1283,31 +1250,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		},
-		AttachedPlan: attachedPlan,
 	}, nil
-}
-
-var (
-	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
-	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
-	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
-	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
-)
-
-// Build a plan to modify index metadata
-func buildIndexMetadataPlan(sql string, ctx CompilerContext) (*Plan, error) {
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
-	if err != nil {
-		return nil, err
-	}
-	switch rstmt := stmt.(type) {
-	case *tree.Delete:
-		return buildDelete(rstmt, ctx)
-	case *tree.Update:
-		return buildTableUpdate(rstmt, ctx)
-	default:
-		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not the expected syntax tree")
-	}
 }
 
 func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
@@ -1332,10 +1275,11 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		if tableDef.ViewSql == nil {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop view in subscription database")
 		}
 	}
+	dropTable.IsView = true
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -1394,17 +1338,12 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which is publishing", dropDB.Database)
 	}
 
-	var attachedPlan *Plan
 	if ctx.DatabaseExists(string(stmt.Name)) {
 		databaseId, err := ctx.GetDatabaseId(string(stmt.Name))
 		if err != nil {
 			return nil, err
 		}
-		sql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, databaseId)
-		attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-		if err != nil {
-			return nil, err
-		}
+		dropDB.DatabaseId = databaseId
 	}
 
 	return &Plan{
@@ -1416,7 +1355,6 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 				},
 			},
 		},
-		AttachedPlan: attachedPlan,
 	}, nil
 }
 
@@ -1433,7 +1371,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create index in subscription database")
 	}
 	// check index
@@ -1477,21 +1415,22 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
-	index := &plan.CreateTable{TableDef: &TableDef{}}
+	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
 	if uIdx != nil {
-		if err := buildUniqueIndexTable(index, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
+		if err := buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = true
 	}
 	if sIdx != nil {
-		if err := buildSecondaryIndexDef(index, []*tree.Index{sIdx}, colMap, ctx); err != nil {
+		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, ctx); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = false
 	}
-	createIndex.Index = index
+	createIndex.Index = indexInfo
 	createIndex.Table = tableName
+	createIndex.TableDef = tableDef
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -1520,7 +1459,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
 	}
 
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
 	}
 
@@ -1536,16 +1475,8 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 
-	var attachedPlan *plan.Plan
 	if !found {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
-	} else {
-		var err error
-		sql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tableDef.TblId, dropIndex.IndexName)
-		attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	return &Plan{
@@ -1557,7 +1488,6 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		},
-		AttachedPlan: attachedPlan,
 	}, nil
 }
 
@@ -1589,7 +1519,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 				viewName)
 		}
 	} else {
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter view in subscription database")
 		}
 		if oldViewDef.ViewSql == nil {
@@ -1644,7 +1574,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef.ViewSql != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
 	}
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
 	alterTable.Database = databaseName
@@ -1652,7 +1582,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if alterTable.IsClusterTable && ctx.GetAccountId() != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
-	var attachedPlan *plan.Plan
 
 	colMap := make(map[string]*ColDef)
 	for _, col := range tableDef.Cols {
@@ -1665,6 +1594,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 
 	alterTable.TableDef = tableDef
 
+	var primaryKeys []string
+	var indexs []string
+	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
+	secondaryIndexInfos := make([]*tree.Index, 0)
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
@@ -1675,6 +1608,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			switch opt.Typ {
 			case tree.AlterTableDropColumn:
 				alterTableDrop.Typ = plan.AlterTableDrop_COLUMN
+				err := checkIsDroppableColumn(tableDef, constraintName, ctx)
+				if err != nil {
+					return nil, err
+				}
 				for _, col := range tableDef.Cols {
 					if col.Name == constraintName {
 						name_not_found = false
@@ -1687,12 +1624,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				for _, indexdef := range tableDef.Indexes {
 					if constraintName == indexdef.IndexName {
 						name_not_found = false
-						var err error
-						sql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tableDef.TblId, indexdef.IndexName)
-						attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-						if err != nil {
-							return nil, err
-						}
 						break
 					}
 				}
@@ -1700,10 +1631,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				alterTableDrop.Typ = plan.AlterTableDrop_KEY
 			case tree.AlterTableDropPrimaryKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_PRIMARY_KEY
-				if tableDef.Pkey == nil {
+				if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 					return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP Primary Key; check that column/key exists")
 				}
-				name_not_found = false
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP exists Primary Key")
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
 				for _, fk := range tableDef.Fkeys {
@@ -1740,6 +1671,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				}
 			case *tree.UniqueIndex:
+				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
+				if err != nil {
+					return nil, err
+				}
+
 				indexName := def.GetIndexName()
 				constrNames := map[string]bool{}
 				// Check not empty constraint name whether is duplicated.
@@ -1748,7 +1684,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					constrNames[nameLower] = true
 				}
 
-				err := checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
+				err = checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
 				if err != nil {
 					return nil, err
 				}
@@ -1775,7 +1711,13 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					},
 				}
 			case *tree.Index:
+				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
+				if err != nil {
+					return nil, err
+				}
+
 				indexName := def.Name
+
 				constrNames := map[string]bool{}
 				// Check not empty constraint name whether is duplicated.
 				for _, idx := range tableDef.Indexes {
@@ -1783,7 +1725,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					constrNames[nameLower] = true
 				}
 
-				err := checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
+				err = checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
 				if err != nil {
 					return nil, err
 				}
@@ -1811,7 +1753,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 						},
 					},
 				}
-
+			default:
+				return nil, moerr.NewInternalError(ctx.GetContext(), "unsupported alter option: %T", def)
 			}
 
 		case *tree.AlterOptionAlterIndex:
@@ -1830,17 +1773,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			for _, indexdef := range tableDef.Indexes {
 				if constraintName == indexdef.IndexName {
 					name_not_found = false
-					var err error
-					var sql string
-					if alterTableIndex.Visible {
-						sql = fmt.Sprintf(updateMoIndexesVisibleFormat, 1, tableDef.TblId, indexdef.IndexName)
-					} else {
-						sql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, tableDef.TblId, indexdef.IndexName)
-					}
-					attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-					if err != nil {
-						return nil, err
-					}
 					break
 				}
 			}
@@ -1852,7 +1784,154 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					AlterIndex: alterTableIndex,
 				},
 			}
+
+		case *tree.TableOptionComment:
+			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for field '%s' is too long", alterTable.TableDef.Name)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterComment{
+					AlterComment: &plan.AlterTableComment{
+						NewComment: opt.Comment,
+					},
+				},
+			}
+		case *tree.AlterTableName:
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterName{
+					AlterName: &plan.AlterTableName{
+						OldName: tableDef.Name,
+						NewName: string(opt.Name.ToTableName().ObjectName),
+					},
+				},
+			}
+		case *tree.AlterAddCol:
+			colType, err := getTypeFromAst(ctx.GetContext(), opt.Column.Type)
+			if err != nil {
+				return nil, err
+			}
+			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
+				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
+				if colType.GetWidth() > types.MaxStringSize {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
+				}
+			}
+			var pks []string
+			var comment string
+			var auto_incr bool
+			for _, attr := range opt.Column.Attributes {
+				switch attribute := attr.(type) {
+				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if colType.GetId() == int32(types.T_blob) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
+					}
+					if colType.GetId() == int32(types.T_text) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
+					}
+					if colType.GetId() == int32(types.T_json) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", opt.Column.Name.Parts[0]))
+					}
+					pks = append(pks, opt.Column.Name.Parts[0])
+				case *tree.AttributeComment:
+					comment = attribute.CMT.String()
+					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
+						return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", opt.Column.Name.Parts[0])
+					}
+				case *tree.AttributeAutoIncrement:
+					auto_incr = true
+					if !types.T(colType.GetId()).IsInteger() {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
+					}
+				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: opt.Column.Name,
+							},
+						},
+						Name: opt.Column.Name.Parts[0],
+					})
+					indexs = append(indexs, opt.Column.Name.Parts[0])
+				}
+			}
+			if len(pks) > 0 {
+				if len(primaryKeys) > 0 {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
+				}
+				primaryKeys = pks
+			}
+
+			defaultValue, err := buildDefaultExpr(opt.Column, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			if auto_incr && defaultValue.Expr != nil {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", opt.Column.Name.Parts[0])
+			}
+
+			onUpdateExpr, err := buildOnUpdate(opt.Column, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+
+			if !checkTableColumnNameValid(opt.Column.Name.Parts[0]) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", opt.Column.Name.Parts[0])
+			}
+
+			colType.AutoIncr = auto_incr
+			col := &ColDef{
+				Name:     opt.Column.Name.Parts[0],
+				Alg:      plan.CompressType_Lz4,
+				Typ:      colType,
+				Default:  defaultValue,
+				OnUpdate: onUpdateExpr,
+				Comment:  comment,
+			}
+			colMap[col.Name] = col
+			preName := ""
+			if opt.Pos.PreColName != nil {
+				preName = opt.Pos.PreColName.Parts[0]
+			}
+			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], colType, ctx)
+			if err != nil {
+				return nil, err
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AddCol{
+					AddCol: &plan.AlterAddCol{
+						Name:    opt.Column.Name.Parts[0],
+						PreName: preName,
+						Type:    colType,
+						Pos:     opt.Pos.Pos,
+					},
+				},
+			}
+		case *tree.TableOptionAutoIncrement:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Can't set AutoIncr column value.")
+		default:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
 		}
+	}
+
+	for _, str := range indexs {
+		if _, ok := colMap[str]; !ok {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
+		}
+		if colMap[str].Typ.Id == int32(types.T_blob) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
+		}
+		if colMap[str].Typ.Id == int32(types.T_text) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
+		}
+		if colMap[str].Typ.Id == int32(types.T_json) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
+		}
+	}
+
+	// check Constraint Name (include index/ unique)
+	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	if err != nil {
+		return nil, err
 	}
 
 	return &Plan{
@@ -1864,7 +1943,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				},
 			},
 		},
-		AttachedPlan: attachedPlan,
 	}, nil
 }
 
@@ -1893,7 +1971,7 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tblName)
 		}
 
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot lock table in subscription database")
 		}
 
@@ -2050,49 +2128,4 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 		}
 	}
 	return &fkData, nil
-}
-
-// maybeAddPrimaryKey for tables that do not have a primary key, we need to create a hidden
-// auto-increment column primary key. In pessimistic transactionm mode, locks arithmetic requires
-// a primary key. To avoid conflicts with Cluster-By, this primary key needs to be disabled from
-// sorting inside TAE.
-func maybeAddPrimaryKey(
-	stmt *tree.CreateTable,
-	def *plan.CreateTable) *ColDef {
-	if def.TableDef.Pkey == nil &&
-		!def.IsSystemExternalRel() {
-		def.TableDef.Cols = append(def.TableDef.Cols,
-			&ColDef{
-				ColId:  uint64(len(def.TableDef.Cols)),
-				Name:   catalog.FakePrimaryKeyColName,
-				Hidden: true,
-				Typ: &Type{
-					Id:       int32(types.T_uint64),
-					AutoIncr: true,
-				},
-				Default: &plan.Default{
-					NullAbility:  false,
-					Expr:         nil,
-					OriginString: "",
-				},
-				NotNull: true,
-				Primary: true,
-			})
-		def.TableDef.Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.FakePrimaryKeyColName},
-			PkeyColName: catalog.FakePrimaryKeyColName,
-		}
-		idx := len(def.TableDef.Cols) - 1
-		// FIXME: due to the special treatment of insert and update for composite primary key, cluster-by, the
-		// hidden primary key cannot be placed in the last column, otherwise it will cause the columns sent to
-		// tae will not match the definition of schema, resulting in panic.
-		if def.TableDef.ClusterBy != nil &&
-			len(stmt.ClusterByOption.ColumnList) > 1 {
-			// we must swap hide pk and cluster_by
-			def.TableDef.Cols[idx-1], def.TableDef.Cols[idx] = def.TableDef.Cols[idx], def.TableDef.Cols[idx-1]
-			idx = idx - 1
-		}
-		return def.TableDef.Cols[idx]
-	}
-	return nil
 }

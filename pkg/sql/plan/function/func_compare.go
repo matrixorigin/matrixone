@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +40,7 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_blob, types.T_text:
 	case types.T_binary, types.T_varbinary:
 	case types.T_uuid:
+	case types.T_Rowid:
 	default:
 		return false
 	}
@@ -62,6 +64,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_binary, types.T_varbinary:
 	case types.T_json:
 	case types.T_uuid:
+	case types.T_Rowid:
 	default:
 		return false
 	}
@@ -121,11 +124,10 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a == b
 		})
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
-			return v1 == v2
-		})
-	case types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
+		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
+			return compareVarlenaEqual(parameters, rs, proc, length)
+		}
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
 			return v1 == v2
 		})
@@ -152,6 +154,10 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_decimal128:
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a == b
+		})
+	case types.T_Rowid:
+		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
+			return a.Equal(b)
 		})
 	}
 	panic("unreached code")
@@ -589,6 +595,10 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a.Compare(b) > 0
 		})
+	case types.T_Rowid:
+		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
+			return a.Great(b)
+		})
 	}
 	panic("unreached code")
 }
@@ -676,6 +686,10 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	case types.T_decimal128:
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a.Compare(b) >= 0
+		})
+	case types.T_Rowid:
+		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
+			return a.Ge(b)
 		})
 	}
 	panic("unreached code")
@@ -765,6 +779,10 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a != b
 		})
+	case types.T_Rowid:
+		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
+			return a.NotEqual(b)
+		})
 	}
 	panic("unreached code")
 }
@@ -853,6 +871,10 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a.Compare(b) < 0
 		})
+	case types.T_Rowid:
+		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
+			return a.Less(b)
+		})
 	}
 	panic("unreached code")
 }
@@ -940,6 +962,10 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	case types.T_decimal128:
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a.Compare(b) <= 0
+		})
+	case types.T_Rowid:
+		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
+			return a.Le(b)
 		})
 	}
 	panic("unreached code")

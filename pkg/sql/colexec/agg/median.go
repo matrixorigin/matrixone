@@ -184,7 +184,10 @@ func (m *Median[T]) Grows(cnt int) {
 	}
 }
 
-func (m *Median[T]) Eval(vs []float64) []float64 {
+func (m *Median[T]) Eval(vs []float64, err error) ([]float64, error) {
+	if err != nil {
+		return nil, err
+	}
 	for i := range vs {
 		cnt := len(m.Vals[i])
 		if cnt == 0 {
@@ -199,20 +202,20 @@ func (m *Median[T]) Eval(vs []float64) []float64 {
 			vs[i] = float64(m.Vals[i][cnt>>1]+m.Vals[i][(cnt>>1)-1]) / 2
 		}
 	}
-	return vs
+	return vs, nil
 }
 
-func (m *Median[T]) Fill(i int64, value T, _ float64, z int64, isEmpty bool, isNull bool) (float64, bool) {
+func (m *Median[T]) Fill(i int64, value T, _ float64, z int64, isEmpty bool, isNull bool) (float64, bool, error) {
 	if !isNull {
 		for j := int64(0); j < z; j++ {
 			m.Vals[i] = append(m.Vals[i], value)
 		}
-		return 0, false
+		return 0, false, nil
 	}
-	return 0, isEmpty
+	return 0, isEmpty, nil
 }
 
-func (m *Median[T]) Merge(xIndex int64, yIndex int64, _ float64, _ float64, xEmpty bool, yEmpty bool, yMedian any) (float64, bool) {
+func (m *Median[T]) Merge(xIndex int64, yIndex int64, _ float64, _ float64, xEmpty bool, yEmpty bool, yMedian any) (float64, bool, error) {
 	if !yEmpty {
 		yM := yMedian.(*Median[T])
 		if !sort.IsSorted(yM.Vals[yIndex]) {
@@ -220,7 +223,7 @@ func (m *Median[T]) Merge(xIndex int64, yIndex int64, _ float64, _ float64, xEmp
 		}
 		if xEmpty {
 			m.Vals[xIndex] = append(m.Vals[xIndex], yM.Vals[yIndex]...)
-			return 0, false
+			return 0, false, nil
 		}
 		newCnt := len(m.Vals[xIndex]) + len(yM.Vals[yIndex])
 		newData := make(numericSlice[T], newCnt)
@@ -229,10 +232,10 @@ func (m *Median[T]) Merge(xIndex int64, yIndex int64, _ float64, _ float64, xEmp
 		}
 		merge(m.Vals[xIndex], yM.Vals[yIndex], newData, func(a, b T) bool { return a < b })
 		m.Vals[xIndex] = newData
-		return 0, false
+		return 0, false, nil
 	}
 
-	return 0, xEmpty
+	return 0, xEmpty, nil
 }
 
 func (m *Median[T]) MarshalBinary() ([]byte, error) {
@@ -256,7 +259,10 @@ func (m *Decimal64Median) Grows(cnt int) {
 	}
 }
 
-func (m *Decimal64Median) Eval(vs []types.Decimal128) []types.Decimal128 {
+func (m *Decimal64Median) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+	if err != nil {
+		return nil, err
+	}
 	for i := range vs {
 		cnt := len(m.Vals[i])
 		if cnt == 0 {
@@ -266,35 +272,44 @@ func (m *Decimal64Median) Eval(vs []types.Decimal128) []types.Decimal128 {
 			sort.Sort(m.Vals[i])
 		}
 		if cnt&1 == 1 {
-			vs[i], _ = types.Decimal128{B0_63: uint64(m.Vals[i][cnt>>1]), B64_127: 0}.Scale(1)
+			vs[i], err = types.Decimal128{B0_63: uint64(m.Vals[i][cnt>>1]), B64_127: 0}.Scale(1)
+			if err != nil {
+				return nil, err
+			}
 		} else {
 			a := types.Decimal128{B0_63: uint64(m.Vals[i][cnt>>1]), B64_127: 0}
 			b := types.Decimal128{B0_63: uint64(m.Vals[i][(cnt>>1)-1]), B64_127: 0}
-			vs[i], _ = a.Add128(b)
+			vs[i], err = a.Add128(b)
+			if err != nil {
+				return nil, err
+			}
 			if vs[i].Sign() {
 				vs[i] = vs[i].Minus()
-				vs[i], _ = vs[i].Scale(1)
+				vs[i], err = vs[i].Scale(1)
 				vs[i] = vs[i].Right(1).Minus()
 			} else {
-				vs[i], _ = vs[i].Scale(1)
+				vs[i], err = vs[i].Scale(1)
 				vs[i] = vs[i].Right(1)
+			}
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
-	return vs
+	return vs, nil
 }
 
-func (m *Decimal64Median) Fill(i int64, value types.Decimal64, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
+func (m *Decimal64Median) Fill(i int64, value types.Decimal64, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
 	if !isNull {
 		for j := int64(0); j < z; j++ {
 			m.Vals[i] = append(m.Vals[i], value)
 		}
-		return types.Decimal128{B0_63: 0, B64_127: 0}, false
+		return types.Decimal128{B0_63: 0, B64_127: 0}, false, nil
 	}
-	return types.Decimal128{B0_63: 0, B64_127: 0}, isEmpty
+	return types.Decimal128{B0_63: 0, B64_127: 0}, isEmpty, nil
 }
 
-func (m *Decimal64Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, _ types.Decimal128, xEmpty bool, yEmpty bool, yMedian any) (types.Decimal128, bool) {
+func (m *Decimal64Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, _ types.Decimal128, xEmpty bool, yEmpty bool, yMedian any) (types.Decimal128, bool, error) {
 	if !yEmpty {
 		yM := yMedian.(*Decimal64Median)
 		if !sort.IsSorted(yM.Vals[yIndex]) {
@@ -302,7 +317,7 @@ func (m *Decimal64Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, 
 		}
 		if xEmpty {
 			m.Vals[xIndex] = append(m.Vals[xIndex], yM.Vals[yIndex]...)
-			return types.Decimal128{B0_63: 0, B64_127: 0}, false
+			return types.Decimal128{B0_63: 0, B64_127: 0}, false, nil
 		}
 		newCnt := len(m.Vals[xIndex]) + len(yM.Vals[yIndex])
 		newData := make(decimal64Slice, newCnt)
@@ -311,10 +326,10 @@ func (m *Decimal64Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, 
 		}
 		merge(m.Vals[xIndex], yM.Vals[yIndex], newData, func(a, b types.Decimal64) bool { return a.Compare(b) < 0 })
 		m.Vals[xIndex] = newData
-		return types.Decimal128{B0_63: 0, B64_127: 0}, false
+		return types.Decimal128{B0_63: 0, B64_127: 0}, false, nil
 	}
 
-	return types.Decimal128{B0_63: 0, B64_127: 0}, xEmpty
+	return types.Decimal128{B0_63: 0, B64_127: 0}, xEmpty, nil
 }
 
 func (m *Decimal64Median) MarshalBinary() ([]byte, error) {
@@ -337,7 +352,10 @@ func (m *Decimal128Median) Grows(cnt int) {
 	}
 }
 
-func (m *Decimal128Median) Eval(vs []types.Decimal128) []types.Decimal128 {
+func (m *Decimal128Median) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+	if err != nil {
+		return nil, err
+	}
 	for i := range vs {
 		cnt := len(m.Vals[i])
 		if cnt == 0 {
@@ -347,33 +365,42 @@ func (m *Decimal128Median) Eval(vs []types.Decimal128) []types.Decimal128 {
 			sort.Sort(m.Vals[i])
 		}
 		if cnt&1 == 1 {
-			vs[i], _ = m.Vals[i][cnt>>1].Scale(1)
+			vs[i], err = m.Vals[i][cnt>>1].Scale(1)
+			if err != nil {
+				return nil, err
+			}
 		} else {
-			vs[i], _ = m.Vals[i][cnt>>1].Add128(m.Vals[i][(cnt>>1)-1])
+			vs[i], err = m.Vals[i][cnt>>1].Add128(m.Vals[i][(cnt>>1)-1])
+			if err != nil {
+				return nil, err
+			}
 			if vs[i].Sign() {
 				vs[i] = vs[i].Minus()
-				vs[i], _ = vs[i].Scale(1)
+				vs[i], err = vs[i].Scale(1)
 				vs[i] = vs[i].Right(1).Minus()
 			} else {
-				vs[i], _ = vs[i].Scale(1)
+				vs[i], err = vs[i].Scale(1)
 				vs[i] = vs[i].Right(1)
+			}
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
-	return vs
+	return vs, nil
 }
 
-func (m *Decimal128Median) Fill(i int64, value types.Decimal128, _ types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
+func (m *Decimal128Median) Fill(i int64, value types.Decimal128, _ types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
 	if !isNull {
 		for j := int64(0); j < z; j++ {
 			m.Vals[i] = append(m.Vals[i], value)
 		}
-		return types.Decimal128{B0_63: 0, B64_127: 0}, false
+		return types.Decimal128{B0_63: 0, B64_127: 0}, false, nil
 	}
-	return types.Decimal128{B0_63: 0, B64_127: 0}, isEmpty
+	return types.Decimal128{B0_63: 0, B64_127: 0}, isEmpty, nil
 }
 
-func (m *Decimal128Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, _ types.Decimal128, xEmpty bool, yEmpty bool, yMedian any) (types.Decimal128, bool) {
+func (m *Decimal128Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128, _ types.Decimal128, xEmpty bool, yEmpty bool, yMedian any) (types.Decimal128, bool, error) {
 	if !yEmpty {
 		yM := yMedian.(*Decimal128Median)
 		if !sort.IsSorted(yM.Vals[yIndex]) {
@@ -381,7 +408,7 @@ func (m *Decimal128Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128,
 		}
 		if xEmpty {
 			m.Vals[xIndex] = append(m.Vals[xIndex], yM.Vals[yIndex]...)
-			return types.Decimal128{B0_63: 0, B64_127: 0}, false
+			return types.Decimal128{B0_63: 0, B64_127: 0}, false, nil
 		}
 		if !sort.IsSorted(m.Vals[xIndex]) {
 			sort.Sort(m.Vals[xIndex])
@@ -390,9 +417,9 @@ func (m *Decimal128Median) Merge(xIndex int64, yIndex int64, _ types.Decimal128,
 		newData := make(decimal128Slice, newCnt)
 		merge(m.Vals[xIndex], yM.Vals[yIndex], newData, func(a, b types.Decimal128) bool { return a.Compare(b) < 0 })
 		m.Vals[xIndex] = newData
-		return types.Decimal128{B0_63: 0, B64_127: 0}, false
+		return types.Decimal128{B0_63: 0, B64_127: 0}, false, nil
 	}
-	return types.Decimal128{B0_63: 0, B64_127: 0}, xEmpty
+	return types.Decimal128{B0_63: 0, B64_127: 0}, xEmpty, nil
 }
 
 func (m *Decimal128Median) MarshalBinary() ([]byte, error) {

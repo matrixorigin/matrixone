@@ -65,12 +65,22 @@ func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, e
 	panic("unimplemented")
 }
 
+func (*StorageTxnClient) AbortAllRunningTxn() {
+	panic("unimplemented")
+}
+
 func (*StorageTxnClient) Close() error {
 	return nil
 }
 
 func (*StorageTxnClient) MinTimestamp() timestamp.Timestamp {
 	return timestamp.Timestamp{}
+}
+
+func (*StorageTxnClient) WaitLogTailAppliedAt(
+	ctx context.Context,
+	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{}, nil
 }
 
 type StorageTxnOperator struct {
@@ -89,6 +99,14 @@ func (s *StorageTxnOperator) GetWorkspace() client.Workspace {
 }
 
 func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) ResetRetry(retry bool) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) IsRetry() bool {
 	panic("unimplemented")
 }
 
@@ -159,6 +177,10 @@ func (s *StorageTxnOperator) Txn() txn.TxnMeta {
 	return s.meta
 }
 
+func (s *StorageTxnOperator) TxnRef() *txn.TxnMeta {
+	return &s.meta
+}
+
 func (s *StorageTxnOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 
 	// set op txn meta
@@ -226,6 +248,6 @@ func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
 	panic("should not call")
 }
 
-func (s *StorageTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (s *StorageTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }

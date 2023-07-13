@@ -105,13 +105,15 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
 		bs := EncodePrimaryKey(int64(i), packer)
-		iter := state.NewPrimaryKeyIter(ts, bs)
+		iter := state.NewPrimaryKeyIter(ts, Exact(bs))
 		n := 0
 		for iter.Next() {
 			n++
 		}
 		require.Equal(t, 1, n)
 		require.Nil(t, iter.Close())
+		yes := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), bs)
+		require.True(t, yes)
 	}
 
 	{

@@ -68,6 +68,7 @@ select * from test_11;
 -- @session}
 
 -- -------------------------------------------------------
+-- @bvt:issue#6949
 drop table if exists test_11;
 begin;
 create table test_11 (c int primary key,d int);
@@ -86,6 +87,7 @@ select * from test_11;
 -- @session:id=1{
 select * from test_11;
 -- @session}
+-- @bvt:issue
 
 -- -------------------------------------------------------
 drop table if exists test_11;

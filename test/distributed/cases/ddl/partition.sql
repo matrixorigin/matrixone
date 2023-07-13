@@ -36,9 +36,7 @@ select col1 from pt_table_3;
 
 --hash partiton列为date列表达式
 create table pt_table_5(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 char(255))partition by hash(year(col12));
--- @bvt:issue#7682
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_3;
--- @bvt:issue
+load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_5;
 select col12 from pt_table_5;
 show create table pt_table_5;
 
@@ -89,11 +87,9 @@ select col2 from pt_table_33;
 
 --range(表达式)
 create table pt_table_34(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by range(year(col14))(PARTITION p0 VALUES LESS THAN (1991) comment ='expression range',PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (2009)comment ='range',PARTITION p3 VALUES LESS THAN (2010),PARTITION p5 VALUES LESS THAN MAXVALUE);
-load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_34;
-select col14 from pt_table_34;
 
 --range column list
-create table pt_table_35(col1 tinyint not null,col2 smallint,col3 int not null,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col1))partition by range columns(col1,col3)(PARTITION p0 VALUES LESS THAN (100,300),PARTITION p1 VALUES LESS THAN (300,500),PARTITION p2 VALUES LESS THAN (500,MAXVALUE),PARTITION p3 VALUES LESS THAN (6000,MAXVALUE),PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE));
+create table pt_table_35(col1 int not null,col2 smallint,col3 int not null,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col1))partition by range columns(col1,col3)(PARTITION p0 VALUES LESS THAN (100,300),PARTITION p1 VALUES LESS THAN (300,500),PARTITION p2 VALUES LESS THAN (500,MAXVALUE),PARTITION p3 VALUES LESS THAN (6000,MAXVALUE),PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_35;
 select col14 from pt_table_35;
 
@@ -111,28 +107,29 @@ create table pt_table_37(col1 tinyint,col11 float,col12 timestamp)partition by r
 create table pt_table_37(col1 tinyint,col11 float,col12 timestamp)partition by range(ceil(col11))(PARTITION p0 VALUES LESS THAN (100),PARTITION p1 VALUES LESS THAN (2000),PARTITION p2 VALUES LESS THAN (4000),PARTITION p3 VALUES LESS THAN (6000),PARTITION p5 VALUES LESS THAN MAXVALUE);
 --异常：语法错误
 create table pt_table_37(col1 tinyint,col11 float,col12 timestamp)partition by range(col1);
+create table pt_table_37(col1 tinyint not null,col2 smallint,col3 int not null,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col1))partition by range columns(col1,col3)(PARTITION p0 VALUES LESS THAN (100,300),PARTITION p1 VALUES LESS THAN (300,500),PARTITION p2 VALUES LESS THAN (500,MAXVALUE),PARTITION p3 VALUES LESS THAN (6000,MAXVALUE),PARTITION p4 VALUES LESS THAN (MAXVALUE,MAXVALUE));
 
 --range partiton列为bigint，BIGINT UNSIGNED,主键列
-create table pt_table_41(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4))partition by list(col4) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
+create table pt_table_41(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4)) partition by list(col4) (PARTITION r0 VALUES IN (-6041648745842399623, 2267877015687134490, 7769629822818484334),PARTITION r1 VALUES IN (1234138289513302348, -3038428195984464330, -1681456935776973509),PARTITION r2 VALUES IN (-484407619835391694, -5246968895134993792, -3237107390156157130),PARTITION r3 VALUES IN (-2998549470145089608, 6123486173032718578, 6123486173032718570));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_41;
-select col8 from pt_table_41;
+select col8 from pt_table_41 order by col8;
 
-create table pt_table_42(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by list(col8) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
+create table pt_table_42(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text) partition by list(col8) (PARTITION r0 VALUES IN (14999475422109240954, 6204822205090614210, 6625004793680807490),PARTITION r1 VALUES IN (17397115807377870895, 3143191107533743301, 13381191796017069332),PARTITION r2 VALUES IN (8740918055557791046, 4029688785176298663, 6625004793680807495),PARTITION r3 VALUES IN (16635491969502097586, 7094376021034692269, 18225693328091251880));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_42;
-select col8 from pt_table_42;
+select col8 from pt_table_42 order by col8;
 
 --异常：partiton列为double
 create table pt_table_43(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by list(col10) (PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
 
 --list column partiton
-create table pt_table_44(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col4))partition by list columns(col3,col4) (PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),PARTITION p1 VALUES IN( (0,1), (0,2), (0,3), (1,1), (1,2)) comment='list column comment' ,PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) ));
+create table pt_table_44(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col3,col4)) partition by list columns(col3,col4) (PARTITION p0 VALUES IN( (-1889972806, 7769629822818484334), (NULL,NULL) ),PARTITION p1 VALUES IN( (-1030254547, -5246968895134993792),(-1006909301, -6041648745842399623),( -232972021, -3237107390156157130)) comment='list column comment' ,PARTITION p2 VALUES IN( (-179559641, 1234138289513302348),(330484802, -2998549470145089608),(476482983, -484407619835391694) ),PARTITION p3 VALUES IN( (837702822, 6123486173032718578),(1124555433, -1681456935776973509),(1287532466, -3038428195984464330),(1449911253, 2267877015687134490)));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_44;
-select col3,col4 from pt_table_44;
+select col3,col4 from pt_table_44 order by col3,col4;
 
 --list(exp)partition
-create table pt_table_45(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by list(year(col13))(PARTITION r0 VALUES IN (1999, 2001, 2003),PARTITION r1 VALUES IN (2002, 2004, 2005),PARTITION r2 VALUES IN (2006, 2007, 2008));
+create table pt_table_45(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text) partition by list(year(col13))(PARTITION r0 VALUES IN (5732, 9976, 3647, 6216),PARTITION r1 VALUES IN (7031, 6868, 4844, 6438),PARTITION r2 VALUES IN (3114, 1014, 4023, 2008));
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table_45;
-select col3,col4 from pt_table_45;
+select col3,col4 from pt_table_45 order by col3,col4;
 show create table pt_table_45;
 
 --异常text，datetime，decimal，bool
@@ -148,3 +145,8 @@ create table pt_table_52(col1 tinyint,col2 smallint,col3 int,col4 bigint,col11 v
 create table pt_table_53(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4,col3,col11))partition by list(col3) (PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),PARTITION r1 VALUES IN (2, 6, 10, 14*2, 18, 22),PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
 create table pt_table_54(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4,col3,col11))partition by list(col3) (PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),PARTITION r1 VALUES IN (2, 6, 11, 14*2, 18, 22),PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
 
+--该测试用例在mysql中是合法，在mo中不合法，原因是ceiling函数造成的，如下：
+--在MySQL中，HASH分区要求分区键必须是INT类型，或者通过表达式返回INT类型。
+--在matrixone中，当ceil函数的参数为decimal类型，返回值为decimal类型，不能作为分区表达式类型
+--但是在mysql中，当ceil函数的参数为decimal类型，返回值为int类型，可以作为分区表达式类型
+create table p_hash_table_test(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(ceil(col3)) partitions 2;

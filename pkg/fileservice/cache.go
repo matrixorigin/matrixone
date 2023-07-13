@@ -23,30 +23,41 @@ import (
 )
 
 type CacheConfig struct {
-	MemoryCapacity       toml.ByteSize `toml:"memory-capacity"`
-	DiskPath             string        `toml:"disk-path"`
-	DiskCapacity         toml.ByteSize `toml:"disk-capacity"`
-	DiskMinEvictInterval toml.Duration `toml:"disk-min-evict-interval"`
-	DiskEvictTarget      float64       `toml:"disk-evict-target"`
+	MemoryCapacity       *toml.ByteSize `toml:"memory-capacity"`
+	DiskPath             *string        `toml:"disk-path"`
+	DiskCapacity         *toml.ByteSize `toml:"disk-capacity"`
+	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
+	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
 
 	enableDiskCacheForLocalFS bool // for testing only
 }
 
-func (c *CacheConfig) SetDefaults() {
-	if c.DiskMinEvictInterval.Duration == 0 {
-		c.DiskMinEvictInterval.Duration = time.Minute * 7
+func (c *CacheConfig) setDefaults() {
+	if c.MemoryCapacity == nil {
+		size := toml.ByteSize(512 << 20)
+		c.MemoryCapacity = &size
 	}
-	if c.DiskEvictTarget == 0 {
-		c.DiskEvictTarget = 0.8
+	if c.DiskCapacity == nil {
+		size := toml.ByteSize(8 << 30)
+		c.DiskCapacity = &size
 	}
+	if c.DiskMinEvictInterval == nil {
+		c.DiskMinEvictInterval = &toml.Duration{
+			Duration: time.Minute * 7,
+		}
+	}
+	if c.DiskEvictTarget == nil {
+		target := 0.8
+		c.DiskEvictTarget = &target
+	}
+}
+
+var DisabledCacheConfig = CacheConfig{
+	MemoryCapacity: ptrTo[toml.ByteSize](DisableCacheCapacity),
+	DiskCapacity:   ptrTo[toml.ByteSize](DisableCacheCapacity),
 }
 
 const DisableCacheCapacity = 1
-
-var DisabledCacheConfig = CacheConfig{
-	MemoryCapacity: DisableCacheCapacity,
-	DiskCapacity:   DisableCacheCapacity,
-}
 
 // VectorCache caches IOVector
 type IOVectorCache interface {

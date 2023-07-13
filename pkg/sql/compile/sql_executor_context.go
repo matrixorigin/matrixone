@@ -227,7 +227,7 @@ func (c *compilerContext) getRelation(
 		return nil, err
 	}
 
-	table, err := db.Relation(c.ctx, tableName)
+	table, err := db.Relation(c.ctx, tableName, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +256,6 @@ func (c *compilerContext) getTableDef(
 	var indexes []*plan.IndexDef
 	var refChildTbls []uint64
 	var subscriptionName string
-	var pubAccountId int32 = -1
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -280,16 +279,16 @@ func (c *compilerContext) getTableDef(
 				Seqnum:    uint32(attr.Attr.Seqnum),
 			}
 			// Is it a composite primary key
-			if attr.Attr.Name == catalog.CPrimaryKeyColName {
-				continue
-			}
+			//if attr.Attr.Name == catalog.CPrimaryKeyColName {
+			//	continue
+			//}
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
 					Name: attr.Attr.Name,
 				}
-				if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
-					continue
-				}
+				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+				//	continue
+				//}
 			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
@@ -352,10 +351,12 @@ func (c *compilerContext) getTableDef(
 	}
 
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-		cols = append(cols, plan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		//cols = append(cols, plan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		primarykey.CompPkeyCol = plan.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-		cols = append(cols, plan.MakeHiddenColDefByName(clusterByDef.Name))
+		//cols = append(cols, plan.MakeHiddenColDefByName(clusterByDef.Name))
+		clusterByDef.CompCbkeyCol = plan.GetColDefFromTable(cols, clusterByDef.Name)
 	}
 	rowIdCol := plan.MakeRowIdColDef()
 	cols = append(cols, rowIdCol)
@@ -365,18 +366,16 @@ func (c *compilerContext) getTableDef(
 		SchemaName:       dbName,
 		ObjName:          tableName,
 		SubscriptionName: subscriptionName,
-		PubAccountId:     pubAccountId,
 	}
 
 	tableDef := &plan.TableDef{
-		TblId:     tableId,
-		Name:      tableName,
-		Cols:      cols,
-		Defs:      defs,
-		TableType: TableType,
-		Createsql: Createsql,
-		Pkey:      primarykey,
-		//CompositePkey: CompositePkey,
+		TblId:        tableId,
+		Name:         tableName,
+		Cols:         cols,
+		Defs:         defs,
+		TableType:    TableType,
+		Createsql:    Createsql,
+		Pkey:         primarykey,
 		ViewSql:      viewSql,
 		Partition:    partitionInfo,
 		Fkeys:        foreignKeys,

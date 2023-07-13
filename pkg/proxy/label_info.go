@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
 // LabelHash defines hash value, which is hashed from labelInfo.
@@ -44,15 +45,6 @@ type clientInfo struct {
 	// originIP that client used to communicate with server
 	originIP net.IP
 }
-
-// isSuperUser returns true if the username is root or dump.
-func (c *clientInfo) isSuperUser() bool {
-	u := strings.ToLower(c.username)
-	return u == superUserRoot || u == superUserDump
-}
-
-// sessionVarName is the session variable name which defines the label info.
-var sesssionVarName = "cn_label"
 
 // reservedLabels are the labels not allowed in user labels.
 // Ref: https://dev.mysql.com/doc/refman/8.0/en/performance-schema-connection-attribute-tables.html
@@ -107,31 +99,10 @@ func (l *labelInfo) tenantLabel() map[string]string {
 
 // isSuperTenant returns true if the tenant is sys or empty.
 func (l *labelInfo) isSuperTenant() bool {
-	if l.Tenant == "" || strings.ToLower(string(l.Tenant)) == superTenant {
+	if l.Tenant == "" || strings.ToLower(string(l.Tenant)) == frontend.GetDefaultTenant() {
 		return true
 	}
 	return false
-}
-
-// genSetVarStmt returns a statement of set session variable.
-func (l *labelInfo) genSetVarStmt() string {
-	var builder strings.Builder
-	builder.WriteString("SET SESSION ")
-	builder.WriteString(sesssionVarName)
-	builder.WriteString("='")
-	count := len(l.allLabels())
-	var i int
-	for k, v := range l.allLabels() {
-		i++
-		builder.WriteString(k)
-		builder.WriteString("=")
-		builder.WriteString(v)
-		if i != count {
-			builder.WriteString(",")
-		}
-	}
-	builder.WriteString("'")
-	return builder.String()
 }
 
 // genSelector generates the label selector according to labels in labelInfo.
@@ -154,4 +125,21 @@ func (l *labelInfo) getHash() (LabelHash, error) {
 	s := sortMap(targetMap)
 	s = sortSimpleMap(s)
 	return LabelHash(rawHash(s)), nil
+}
+
+// merge merges the incoming label info into the original one.
+// If a key has already exists, then ignore it.
+func (l *labelInfo) merge(info map[string]string) {
+	if l == nil || info == nil {
+		return
+	}
+	if l.Labels == nil {
+		l.Labels = make(map[string]string)
+	}
+	for k, v := range info {
+		if _, ok := l.Labels[k]; ok {
+			continue
+		}
+		l.Labels[k] = v
+	}
 }

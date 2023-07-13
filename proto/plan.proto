@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright 2021 Matrix Origin
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -139,7 +139,11 @@ message ObjectRef {
 	string schema_name	= 7;
 	string obj_name		= 8;
 	string subscription_name = 9;
-	int32 pub_account_id = 10;
+	PubInfo pub_info = 10;
+}
+
+message PubInfo {
+	int32 tenant_id = 1;
 }
 
 message SubscriptionMeta{
@@ -172,10 +176,11 @@ message Function {
 
 		// Window and Agg
 		AGG        = 128;
-		WIN        = 256;
+		WIN_VALUE				= 256;
+		WIN_ORDER				= 512;
 
 		// Monotonic function can filter by zonemap
-		MONOTONIC = 512;
+		MONOTONIC = 1024;
 	}
 
 	ObjectRef func		= 1;
@@ -191,16 +196,17 @@ message Expr {
 		ColRef		col 	= 5;
 		RawColRef	raw		= 6;
 		Function	f		= 7;
-		SubqueryRef	sub		= 8;
-		CorrColRef	corr	= 9;
-		TargetType  t		= 10;
-		ExprList	list	= 11;
-		MaxValue	max		= 12;
+		WindowSpec w = 8;
+		SubqueryRef	sub		= 9;
+		CorrColRef	corr	= 10;
+		TargetType  t		= 11;
+		ExprList	list	= 12;
+		MaxValue	max		= 13;
 	}
 
-	int32 aux_id = 13;
-	double ndv = 14;
-	double selectivity = 15;
+	int32 aux_id = 14;
+	double ndv = 15;
+	double selectivity = 16;
 }
 
 enum CompressType {
@@ -232,12 +238,12 @@ message ColDef {
 	string comment		= 8;
 	OnUpdate on_update  = 9;
 	bool low_card 		= 10;
-	uint32 seqnum		= 14;
+	uint32 seqnum		= 11;
 
 	// XXX: Deprecated and to be removed soon.
-	bool clusterBy		= 11;
-	bool primary        = 12;
-	int32 pkidx 		= 13;
+	bool clusterBy		= 12;
+	bool primary        = 13;
+	int32 pkidx 		= 14;
 }
 
 message Default {
@@ -313,10 +319,10 @@ message CheckDef {
 }
 
 message ClusterByDef {
-	repeated Expr parts = 1;
-
 	// XXX: Deprecated and to be removed soon.
-	string name = 2;
+	string name = 1;
+	// Composite cluster by column definition
+	ColDef comp_cbkey_col = 2;
 }
 
 message PropertyDef {
@@ -424,10 +430,13 @@ message TableFunction{
 	bytes param = 2;
 }
 
+enum ShuffleType {
+	Hash = 0;
+	Range = 1;
+}
 
 message Stats {
 	//for scan, number of blocks to read from S3
-	//for other nodes, it's meaningless
 	int32  block_num        = 1;
 	//for scan, cost of reading from S3, basically the read lines
 	//for other nodes, it means the estimated cost of current node
@@ -437,18 +446,33 @@ message Stats {
 	// average size of one row, currently not used
 	double rowsize	        = 4;
 	// hashmap size for nodes which build a hashmap
-	//for other nodes, it's meaningless
 	double hashmap_size		= 5;
 	//for scan, this means total count of all table, before filtering
-	//for other nodes, this is meanlingless
 	double table_cnt = 6;
 	//for scan, selectivity means outcnt divide total count
-	//for other node, currently be 0. will change in the future
 	double selectivity = 7;
+
+	// for group by and join node with big hashmap, use shuffle
+	// shuffle on which column. choose a column with max ndv
+	bool shuffle = 8;
+	int32 shuffleColIdx = 9;
+	// shuffle type
+	ShuffleType shuffleType = 10;
+	// for range shuffle on integer column, need to know its min and max value
+	int64 shuffleColMin = 11;
+	int64 shuffleColMax = 12;
+	//not used for now
+	int32   parallelism = 13;
+}
+
+message RowsetExpr {
+    int32 row_pos = 1;
+    int32 pos = 2;
+    Expr expr = 3;
 }
 
 message ColData {
-	repeated Expr data = 1;
+    repeated RowsetExpr data = 1;
 }
 
 message RowsetData {
@@ -471,50 +495,49 @@ message OrderBySpec {
 }
 
 message WindowSpec {
-	repeated Expr partition_by = 1;
-	repeated OrderBySpec order_by = 2;
-	int32 lead = 3;
-	int32 lag  = 4;
+	Expr window_func = 1;
+	repeated Expr partition_by = 2;
+	repeated OrderBySpec order_by = 3;
+	FrameClause frame = 4;
+	string name = 5;
+}
+
+message FrameClause {
+	enum FrameType {
+		ROWS = 0;
+		RANGE = 1;
+	}
+	FrameType type = 1;
+	FrameBound start = 2;
+	FrameBound end = 3;
+}
+
+message FrameBound {
+	enum BoundType {
+		FOLLOWING = 0;
+		PRECEDING = 1;
+		CURRENT_ROW = 2;
+	}
+	BoundType type = 1;
+	bool unBounded = 2;
+	Expr val = 3;
+}
+
+message OnDuplicateKeyCtx {
+	TableDef table_def					= 1;
+	repeated int32 on_duplicate_idx		= 2;
+	map<string, Expr> on_duplicate_expr	= 3;
 }
 
 message InsertCtx {
-	ObjectRef ref 					= 1;
-	TableDef table_def 				= 2;
-
-	repeated int32 on_duplicate_idx		= 3;
-	map<string, Expr> on_duplicate_expr	= 4;
-
-	repeated ObjectRef idx_ref 			= 5;
-	repeated int32 idx_idx 				= 6;
-
-	map<string, int32> parent_idx 	= 7;
-
-	ClusterTable cluster_table = 8;
-}
-
-message UpdateCtx {
-	repeated ObjectRef ref 				= 1;
-	repeated IdList idx 				= 2;
-	repeated TableDef tableDefs 		= 3;
-	repeated ColPosMap update_col 		= 4;
-
-	repeated ObjectRef idx_ref 			= 5;
-	repeated int32 idx_idx 				= 6;
-
-	repeated ObjectRef on_restrict_ref 	= 7;
-	repeated int32 on_restrict_idx 		= 8;
-
-	repeated ObjectRef on_cascade_ref 			= 9;
-	repeated IdList on_cascade_idx 				= 10;
-	repeated TableDef on_cascade_def			= 11;
-	repeated ColPosMap on_cascade_update_col 	= 12;
-
-	repeated ObjectRef on_set_ref 			= 13;
-	repeated IdList on_set_idx 				= 14;
-	repeated TableDef on_set_def			= 15;
-	repeated ColPosMap on_set_update_col 	= 16;
-
-	repeated ColPosMap parent_idx = 17;
+	ObjectRef ref			= 1;
+	bool add_affected_rows 	= 2;
+	bool is_cluster_table	= 3;
+	TableDef table_def		= 4;
+	// Align array index with the partition number
+	repeated uint64 partition_table_ids = 5;
+	repeated string partition_table_names = 6;
+	int32 partition_idx = 7;
 }
 
 message AnalyzeInfo {
@@ -579,14 +602,22 @@ message Node {
 
 		//
 		INSERT = 51;
-		UPDATE = 52;
-		DELETE = 53;
+		DELETE = 52;
+		//
+		LOCK_OP = 53;
 
 		//
 		INTERSECT = 54;
 		INTERSECT_ALL = 55;
 		MINUS = 56;
 		MINUS_ALL = 57;
+
+		//
+		ON_DUPLICATE_KEY = 58;
+		PRE_INSERT = 59;
+		PRE_DELETE = 60;
+		// the node which build insert batch for hidden table(unique key)
+		PRE_INSERT_UK = 61;
 	}
 
 	enum JoinType {
@@ -629,7 +660,7 @@ message Node {
 	repeated Expr agg_list = 12;
 
 	// WINDOW
-	WindowSpec win_spec = 13;
+	repeated Expr win_spec_list = 13;
 
 	// SORT
 	repeated OrderBySpec order_by = 14;
@@ -638,7 +669,6 @@ message Node {
 	Expr limit = 15;
 	Expr offset = 16;
 
-	UpdateCtx update_ctx = 17;
 	TableDef table_def = 18;
 	repeated TableDef table_def_vec = 19;
 	ObjectRef obj_ref = 20;
@@ -653,20 +683,66 @@ message Node {
 
 	repeated Expr tbl_func_expr_list = 26;
 
-    // The pipeline will determine the parallelism by traversing the plan
-    // when it is received. Then the build is built based on this information.
-    int32   parallelism = 27;
-
 	ClusterTable cluster_table = 28;
 	bool not_cacheable = 29;
 	InsertCtx insert_ctx = 30;
 
 	// used to connect two plans[steps]
-	int32 current_step = 31;
-	int32 source_step = 32;
+	int32 source_step = 31;
 
-	// FILTER for block zonemap
-	repeated Expr block_filter_list = 33;
+	PreDeleteCtx pre_delete_ctx = 32;
+	PreInsertCtx pre_insert_ctx = 33;
+	// build unique key batch before insert into hidden table which keep the unique key
+	PreInsertUkCtx pre_insert_uk_ctx = 34;
+	OnDuplicateKeyCtx on_duplicate_key = 35;
+
+	bool IsEnd = 36;
+	repeated LockTarget lock_targets = 37;
+	repeated Expr block_filter_list = 38;
+
+	// Runtime filters
+	repeated RuntimeFilterSpec runtime_filter_probe_list = 39;
+	repeated RuntimeFilterSpec runtime_filter_build_list = 40;
+
+    bytes uuid = 41;
+}
+
+message LockTarget {
+  uint64 table_id           	= 1;
+  int32 primary_col_idx_in_bat  = 2;
+  Type primary_col_typ          = 3;
+  int32 refresh_ts_idx_in_bat   = 4;
+  int32 filter_col_idx_in_bat   = 5;
+  bool lock_table 				= 6;
+	bool is_partition_table = 7;
+	repeated uint64 partition_table_ids = 8;
+	bool                block   = 9;
+}
+
+message PreInsertUkCtx {
+	// index of columns(parts of unique key) in pre batch
+	repeated int32 columns 	= 1;
+	int32 pk_column 		= 2;
+	Type pk_type 			= 3;
+	Type uk_type			= 4;
+	TableDef table_def 		= 5;
+}
+
+message PreDeleteCtx {
+	//the indexes of row_id&pk column in the batch
+	repeated int32 idx = 1;
+}
+
+message PreInsertCtx {
+	ObjectRef ref 			= 1;
+	TableDef table_def 		= 2;
+	bool has_auto_col		= 3;
+	bool is_update			= 4;
+}
+
+message RuntimeFilterSpec {
+	int32 tag = 1;
+	Expr expr = 2;
 }
 
 message IdList {
@@ -678,24 +754,16 @@ message ColPosMap {
 }
 
 message DeleteCtx {
-	repeated ObjectRef ref 			= 1;
-	repeated IdList idx				= 2;
-
-	repeated ObjectRef idx_ref 		= 3;
-	repeated int32 idx_idx 			= 4;
-
-	repeated ObjectRef on_restrict_ref 	= 5;
-	repeated int32 on_restrict_idx 		= 6;
-
-	repeated ObjectRef on_cascade_ref 	= 7;
-	repeated int32 on_cascade_idx 		= 8;
-
-	repeated ObjectRef on_set_ref 			= 9;
-	repeated TableDef on_set_def 			= 10;
-	repeated IdList on_set_idx 				= 11;
-	repeated ColPosMap on_set_update_col 	= 12;
-
-	bool can_truncate = 13;
+	bool can_truncate 		= 1;
+	ObjectRef ref 			= 2;
+	int32 row_id_idx		= 3;
+	bool add_affected_rows 	= 4;
+	bool is_cluster_table	= 5;
+	// Align array index with the partition number
+	repeated uint64 partition_table_ids = 6;
+	repeated string partition_table_names = 7;
+	int32 partition_idx = 8;
+	int32 primary_key_idx = 9;
 }
 
 message Query {
@@ -777,8 +845,8 @@ message Plan {
 		DataDefinition ddl 		= 3;
 		DataControl	dcl			= 4;
 	}
-	// AttachedPlan for the ddl statements, Attached Plan is used to modify related metadata
-	Plan AttachedPlan = 5;
+	int32 try_run_times = 5;
+	bool is_prepare 	= 6;
 }
 
 message column{
@@ -892,6 +960,7 @@ message AlterDatabase {
 message DropDatabase {
 	bool if_exists 		= 1;
 	string database 	= 2;
+	uint64 database_id	= 3;
 }
 
 message FkColName {
@@ -954,6 +1023,27 @@ message AlterTableAlterIndex {
 	bool visible = 4;
 }
 
+message AlterTableComment {
+	string new_comment = 1;
+}
+
+message AlterTableName {
+	string old_name = 1;
+	string new_name = 2;
+}
+
+message AlterAddCol {
+	string name = 1;
+	string pre_name = 2;
+	Type type = 3;
+	int32 pos = 4;
+}
+
+message AlterDropCol {
+	uint32 idx = 1;
+	uint32 seq = 2;
+}
+
 message AlterTable {
 	message Action {
 		oneof action {
@@ -961,6 +1051,10 @@ message AlterTable {
 			AlterTableAddFk add_fk 	= 2;
 			AlterTableAddIndex add_index = 3;
 			AlterTableAlterIndex alter_index = 4;
+			AlterTableComment alter_comment = 5;
+			AlterTableName alter_name = 6;
+			AlterAddCol add_col = 7;
+			AlterDropCol drop_col = 8;
 		};
 	}
 	string database			= 1;
@@ -978,6 +1072,8 @@ message DropTable {
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
 	repeated string partition_table_names = 8;
+	bool isView = 9;
+	TableDef table_def 	= 10;
 }
 
 message AlterView {
@@ -1002,13 +1098,13 @@ message DropSequence {
 message AlterSequence {
 }
 
-
 message CreateIndex {
 	string database = 1;
 	string table = 2;
-	string	origin_table_primary_key = 3;
-	CreateTable index = 4;
-	bool table_exist = 5;
+	TableDef table_def 		= 3;
+	string	origin_table_primary_key = 4;
+	CreateTable index = 5;
+	bool table_exist = 6;
 }
 
 message AlterIndex {
@@ -1026,9 +1122,10 @@ message TruncateTable {
 	string database = 1;
 	string table = 2;
 	repeated string index_table_names = 3;
-	ClusterTable cluster_table = 4;
-	uint64 table_id = 5;
-	repeated uint64 foreign_tbl = 6;
+	repeated string partition_table_names = 4;
+	ClusterTable cluster_table = 5;
+	uint64 table_id = 6;
+	repeated uint64 foreign_tbl = 7;
 }
 
 message ClusterTable{
@@ -1088,3 +1185,44 @@ message LockTables {
 }
 
 message UnLockTables{}
+
+message MetadataScanInfo {
+	enum MetadataScanInfoType {
+		COL_NAME      = 0;
+		BLOCK_ID      = 1;
+		OBJECT_NAME = 2; 
+		ENTRY_STATE   = 3;
+		SORTED        = 4;
+		IS_HIDDEN = 5;
+		META_LOC      = 6;
+		DELTA_LOC     = 7;
+		COMMIT_TS     = 8;
+		CREATE_TS     = 9;
+		DELETE_TS     = 10;
+		SEG_ID         = 11;
+		ROWS_CNT      = 12;
+		NULL_CNT      = 13;
+		COMPRESS_SIZE = 14;
+		ORIGIN_SIZE   = 15;
+		MIN           = 16;
+		MAX           =  17;
+	} 
+	string ColName  = 1;
+	bytes BlockId = 2;
+	string ObjectName = 3;
+	bool EntryState= 4;
+	bool Sorted     = 5;
+	bool IsHidden = 6;
+	bytes MetaLoc     = 7;
+	bytes DelLoc      = 8;
+	bytes CommitTs    = 9;
+	bytes CreateTs    = 10;
+	bytes DeleteTs    = 11;
+	bytes SegId        = 12;
+	int64 RowCnt      = 13;
+	int64 NullCnt     = 14;
+	int64 CompressSize = 15;
+	int64 OriginSize  = 16;
+	bytes Min          = 17;
+	bytes Max          = 18;
+}

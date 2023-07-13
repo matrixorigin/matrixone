@@ -1,0 +1,37 @@
+drop account if exists bvt_purge_log;
+create account bvt_purge_log admin_name 'admin' identified by '111';
+select purge_log('rawlog', '2023-06-30') a;
+not supported: only support sys account
+select purge_log('rawlog', '2023-06-30') a;
+a
+0
+select purge_log('statement_info', '2023-06-30') a;
+a
+0
+select purge_log('metric', '2023-06-30') a;
+a
+0
+select purge_log('rawlog,statement_info,metric', '2023-06-30') a;
+a
+0
+select purge_log('rawlog_not_exist', '2023-06-30') a;
+not supported: purge 'rawlog_not_exist'
+select purge_log('rawlog_not_exist', '123') a;
+invalid argument parsedate, bad value 123
+select purge_log('rawlog_not_exist', NULL) a;
+a
+NULL
+select purge_log(NULL, '2023-06-30') a;
+a
+NULL
+select purge_log(NULL, NULL) a;
+a
+NULL
+set @ts=now();
+select purge_log('statement_info,metric', DATE_ADD( @ts, interval 1 day)) a;
+a
+0
+select count(1) val from system_metrics.metric where `collecttime` <  DATE_ADD( @ts, interval 1 minute);
+val
+0
+drop account if exists bvt_purge_log;

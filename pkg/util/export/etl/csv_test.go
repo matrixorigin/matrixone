@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,12 +38,12 @@ func TestLocalFSWriter(t *testing.T) {
 	basedir := t.TempDir()
 	t.Logf("whereami: %s, %s", selfDir, basedir)
 
-	require.Equal(t, nil, err)
-	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), fileservice.CacheConfig{
-		MemoryCapacity: mpool.MB,
+	ctx := context.Background()
+	memCacheCapacity := toml.ByteSize(mpool.MB)
+	fs, err := fileservice.NewLocalFS(ctx, "test", path.Join(basedir, "system"), fileservice.CacheConfig{
+		MemoryCapacity: &memCacheCapacity,
 	}, nil)
 	require.Equal(t, nil, err)
-	ctx := context.Background()
 	// csv_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
 	// csv_test.go:40: write statement file error: size not match
 	// csv_test.go:50: write span file error: file existed

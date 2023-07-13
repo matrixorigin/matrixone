@@ -131,7 +131,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 	if bat != nil {
 		var err error
-		joinMap := bat.Ht.(*hashmap.JoinMap)
 		ctr.evalNullSels(bat)
 		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)
 		if err != nil {
@@ -142,7 +141,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		ctr.rewriteCond = colexec.RewriteFilterExprList(ap.OnList)
 		ctr.bat = bat
-		ctr.mp = joinMap.Dup()
+		ctr.mp = bat.DupJmAuxData()
 		//ctr.bat = bat
 		//ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 		//anal.Alloc(ctr.mp.Map().Size())
@@ -157,14 +156,18 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	count := bat.Length()
 	for i, rp := range ap.Result {
 		if rp >= 0 {
-			rbat.Vecs[i] = bat.Vecs[rp]
-			bat.Vecs[rp] = nil
+			// rbat.Vecs[i] = bat.Vecs[rp]
+			// bat.Vecs[rp] = nil
+			typ := *bat.Vecs[rp].GetType()
+			rbat.Vecs[i] = vector.NewVec(typ)
+			if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[rp]); err != nil {
+				return err
+			}
 		} else {
 			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -256,8 +259,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = markVec
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	//rbat.ExpandNulls()
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
@@ -366,7 +368,7 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 
 // collect the idx of tuple which contains null values
 func (ctr *container) evalNullSels(bat *batch.Batch) {
-	joinMap := bat.Ht.(*hashmap.JoinMap)
+	joinMap := bat.AuxData.(*hashmap.JoinMap)
 	jmSels := joinMap.Sels()
 	selsMap := make(map[int32]bool)
 	for _, sel := range jmSels {

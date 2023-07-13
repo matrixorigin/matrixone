@@ -143,14 +143,14 @@ func logLocalLockWaitOn(
 	serviceID string,
 	txn *activeTxn,
 	tableID uint64,
-	waiter *waiter,
+	w *waiter,
 	key []byte,
 	waitOn Lock) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		var waits [][]byte
-		waitOn.waiter.waiters.iter(func(b []byte) bool {
-			waits = append(waits, b)
+		waitOn.waiter.waiters.iter(func(v *waiter) bool {
+			waits = append(waits, v.txnID)
 			return true
 		})
 
@@ -158,7 +158,7 @@ func logLocalLockWaitOn(
 			serviceIDField(serviceID),
 			txnField(txn),
 			zap.Uint64("table", tableID),
-			zap.Stringer("waiter", waiter),
+			zap.Stringer("waiter", w),
 			bytesField("wait-on-key", key),
 			zap.Stringer("wait-on", waitOn),
 			bytesArrayField("wait-txn-list", waits))
@@ -172,23 +172,17 @@ func logLocalLockWaitOnResult(
 	key []byte,
 	opts LockOptions,
 	waiter *waiter,
-	err error) {
+	notify notifyValue) {
 	logger := getWithSkipLogger()
-	level := zap.DebugLevel
-	fn := logger.Debug
-	if err != nil {
-		level = zap.ErrorLevel
-		fn = logger.Error
-	}
-	if logger.Enabled(level) {
-		fn("lock wait on local result",
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("lock wait on local result",
 			serviceIDField(serviceID),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesField("wait-on-key", key),
 			zap.String("opts", opts.DebugString()),
 			zap.Stringer("waiter", waiter),
-			zap.Any("result", err))
+			zap.Stringer("result", notify))
 	}
 }
 
@@ -248,13 +242,15 @@ func logRemoteLockFailed(
 func logTxnLockAdded(
 	serviceID string,
 	txn *activeTxn,
-	rows [][]byte) {
+	rows [][]byte,
+	w *waiter) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("lock added to txn",
 			serviceIDField(serviceID),
 			txnField(txn),
-			bytesArrayField("rows", rows))
+			bytesArrayField("rows", rows),
+			zap.String("waiter", w.String()))
 	}
 }
 
@@ -329,7 +325,7 @@ func logAbortDeadLock(
 			serviceIDField(serviceID),
 			zap.String("wait-txn", txn.DebugString()),
 			txnField(activeTxn),
-			zap.Stringer("block", activeTxn.blockedWaiter))
+			waiterArrayField("blocked-waiters", activeTxn.blockedWaiters...))
 	}
 }
 
@@ -518,7 +514,7 @@ func logWaiterGetNotify(
 		logger.Debug("waiter read notify",
 			serviceIDField(serviceID),
 			zap.Stringer("waiter", w),
-			zap.Any("notify", v))
+			zap.Stringer("notify", v))
 	}
 }
 
@@ -531,7 +527,7 @@ func logWaiterNotified(
 		logger.Debug("waiter add notify",
 			serviceIDField(serviceID),
 			zap.Stringer("waiter", w),
-			zap.Any("notify", v))
+			zap.Stringer("notify", v))
 	}
 }
 
@@ -604,13 +600,15 @@ func logWaiterClose(
 func logWaiterFetchNextWaiter(
 	serviceID string,
 	w *waiter,
-	next *waiter) {
+	next *waiter,
+	v notifyValue) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("notify next waiter",
 			serviceIDField(serviceID),
 			zap.Stringer("waiter", w),
-			zap.Stringer("next-waiter", next))
+			zap.Stringer("next-waiter", next),
+			zap.Stringer("notify", v))
 	}
 }
 
@@ -653,7 +651,7 @@ func bytesArrayField(name string, values [][]byte) zap.Field {
 	var buffer bytes.Buffer
 	buffer.WriteString("[")
 	for idx, row := range values {
-		buffer.WriteString(hex.EncodeToString(row))
+		buffer.WriteString(string(row))
 		if idx != len(values)-1 {
 			buffer.WriteString(",")
 		}

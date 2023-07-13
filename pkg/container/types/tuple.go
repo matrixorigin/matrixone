@@ -60,12 +60,48 @@ import (
  * in the composite_primary_key_util.go, we default use method2 to encode tupleElement
  */
 
-type TupleElement interface{}
+type TupleElement any
 
 type Tuple []TupleElement
 
-func (t Tuple) String() string {
-	return printTuple(t)
+func (tp Tuple) String() string {
+	return printTuple(tp)
+}
+
+func (tp Tuple) ErrString() string {
+	res := ""
+	if len(tp) != 1 {
+		res = "("
+	}
+	for i, t := range tp {
+		switch t := t.(type) {
+		case bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
+			res += fmt.Sprintf("%v", t)
+		case []byte:
+			res += *(*string)(unsafe.Pointer(&t))
+		case Date:
+			res += fmt.Sprintf("%v", t.String())
+		case Time:
+			res += fmt.Sprintf("%v", t.String())
+		case Datetime:
+			res += fmt.Sprintf("%v", t.String())
+		case Timestamp:
+			res += fmt.Sprintf("%v", t.String())
+		case Decimal64:
+			res += fmt.Sprintf("%v", t.Format(0))
+		case Decimal128:
+			res += fmt.Sprintf("%v", t.Format(0))
+		default:
+			res += fmt.Sprintf("%v", t)
+		}
+		if i != len(tp)-1 {
+			res += ","
+		}
+	}
+	if len(tp) != 1 {
+		res += ")"
+	}
+	return res
 }
 
 func printTuple(tuple Tuple) string {
@@ -403,13 +439,19 @@ func (p *Packer) EncodeTimestamp(e Timestamp) {
 func (p *Packer) EncodeDecimal64(e Decimal64) {
 	p.putByte(decimal64Code)
 	b := *(*[8]byte)(unsafe.Pointer(&e))
-	p.encodeBytes(bytesCode, b[:])
+	b[7] ^= 0x80
+	for i := 7; i >= 0; i-- {
+		p.putByte(b[i])
+	}
 }
 
 func (p *Packer) EncodeDecimal128(e Decimal128) {
 	p.putByte(decimal128Code)
 	b := *(*[16]byte)(unsafe.Pointer(&e))
-	p.encodeBytes(bytesCode, b[:])
+	b[15] ^= 0x80
+	for i := 15; i >= 0; i-- {
+		p.putByte(b[i])
+	}
 }
 
 func (p *Packer) EncodeStringType(e []byte) {
@@ -569,6 +611,34 @@ func decodeFloat64(b []byte) (float64, int) {
 	return ret, 9
 }
 
+func decodeDecimal64(b []byte) (Decimal64, int) {
+	bp := make([]byte, 8)
+	copy(bp, b[:])
+	bp[0] ^= 0x80
+	for i := 0; i < 4; i++ {
+		bp[i] ^= bp[7-i]
+		bp[7-i] ^= bp[i]
+		bp[i] ^= bp[7-i]
+	}
+	ret := *(*Decimal64)(unsafe.Pointer(&bp[0]))
+	return ret, 9
+}
+
+func decodeDecimal128(b []byte) (Decimal128, int) {
+	bp := make([]byte, 16)
+	copy(bp, b[:])
+	bp[0] ^= 0x80
+	for i := 0; i < 8; i++ {
+		bp[i] ^= bp[15-i]
+		bp[15-i] ^= bp[i]
+		bp[i] ^= bp[15-i]
+	}
+	ret := *(*Decimal128)(unsafe.Pointer(&bp[0]))
+	return ret, 17
+}
+
+var DecodeTuple = decodeTuple
+
 func decodeTuple(b []byte) (Tuple, int, error) {
 	var t Tuple
 
@@ -576,8 +646,6 @@ func decodeTuple(b []byte) (Tuple, int, error) {
 
 	for i < len(b) {
 		var el interface{}
-		// used for type decimal64/128
-		var dEl []byte
 		var off int
 
 		switch {
@@ -627,18 +695,13 @@ func decodeTuple(b []byte) (Tuple, int, error) {
 		case b[i] == timestampCode:
 			el, off = decodeInt(timestampCode, b[i+1:])
 			off += 1
+		case b[i] == timeCode:
+			el, off = decodeInt(timeCode, b[i+1:])
+			off += 1
 		case b[i] == decimal64Code:
-			dEl, off = decodeBytes(b[i+1:])
-			var bb [8]byte
-			copy(bb[:], dEl[:8])
-			el = *(*Decimal64)(unsafe.Pointer(&bb))
-			off += 1
+			el, off = decodeDecimal64(b[i+1:])
 		case b[i] == decimal128Code:
-			dEl, off = decodeBytes(b[i+1:])
-			var bb [16]byte
-			copy(bb[:], dEl[:16])
-			el = *(*Decimal128)(unsafe.Pointer(&bb))
-			off += 1
+			el, off = decodeDecimal128(b[i+1:])
 		case b[i] == stringTypeCode:
 			el, off = decodeBytes(b[i+1:])
 			off += 1

@@ -1,4 +1,3 @@
--- @skip:issue#9196
 --foreign key is varchar,default ON DELETE/update option
 create table fk_01(col1 varchar(30) not null primary key,col2 int);
 create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(col1));
@@ -169,7 +168,7 @@ select * from fk_01;
 select * from fk_02;
 truncate table fk_01;
 insert into fk_01(col2,col3) values ('zhi','gao'),('er','li');
-select * from fk_01;
+select * from fk_01 order by col1;
 select * from fk_02;
 drop table fk_01;
 drop table fk_02;
@@ -243,3 +242,8 @@ create table fk_an_03(col1 int,col2 char(25),constraint ck foreign key(col1) REF
 --references not primary key
 create table fk_an_04(col1 bigint,col2 varchar(25),col3 tinyint);
 create table fk_an_05(col1 bigint,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1) REFERENCES fk_an_04(col1) on delete CASCADE on update CASCADE);
+
+create table f1 (fa int primary key);
+CREATE TABLE c1 (ca INT, cb INT);
+ALTER TABLE c1 ADD CONSTRAINT ffa FOREIGN KEY (ca) REFERENCES f1(fa);
+desc c1;

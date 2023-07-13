@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -88,6 +90,36 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 		return
 	}
 	s.startTaskRunner()
+}
+
+func (s *service) initSqlWriterFactory() {
+	addressFunc := func(ctx context.Context, randomCN bool) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		haKeeperClient, err := s.getHAKeeperClient()
+		if err != nil {
+			return "", err
+		}
+		details, err := haKeeperClient.GetClusterDetails(ctx)
+		if err != nil {
+			return "", err
+		}
+		if len(details.CNStores) == 0 {
+			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
+		}
+		if randomCN {
+			n := rand.Intn(len(details.CNStores))
+			return details.CNStores[n].SQLAddress, nil
+		}
+		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
+	}
+
+	db_holder.SetSQLWriterDBAddressFunc(addressFunc)
+}
+
+func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
+	frontend.SetSpecialUser(db_holder.MOLoggerUser, []byte(command.User.Password))
+	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
 }
 
 func (s *service) startTaskRunner() {
@@ -235,7 +267,6 @@ func (s *service) registerExecutorsLocked() {
 			if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
-
 			// init metric/log merge task cron rule
 			if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
 				return err
@@ -245,7 +276,6 @@ func (s *service) registerExecutorsLocked() {
 			if err := metric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
 				return err
 			}
-
 			return nil
 		})
 

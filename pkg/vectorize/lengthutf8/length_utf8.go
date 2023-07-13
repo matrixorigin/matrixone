@@ -54,10 +54,3 @@ func CountUTF8CodePoints(s []byte) uint64 {
 	}
 	return count
 }
-
-func StrLengthUTF8(xs []string, rs []uint64) []uint64 {
-	for i, x := range xs {
-		rs[i] = CountUTF8CodePoints([]byte(x))
-	}
-	return rs
-}

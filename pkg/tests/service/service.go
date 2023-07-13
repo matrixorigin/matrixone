@@ -281,7 +281,7 @@ type testCluster struct {
 }
 
 // NewCluster construct a cluster for integration test.
-func NewCluster(t *testing.T, opt Options) (Cluster, error) {
+func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
 		Level:  "debug",
 		Format: "console",
@@ -312,7 +312,7 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	// build cn service configurations
 	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
 	// build FileService instances
-	c.fileservices = c.buildFileServices()
+	c.fileservices = c.buildFileServices(ctx)
 
 	return c, nil
 }
@@ -1595,14 +1595,6 @@ func (c *testCluster) rangeHAKeeperService(
 }
 
 func (c *testCluster) waitSystemInitCompleted(ctx context.Context) error {
-	log, err := c.GetLogServiceIndexed(0)
-	if err != nil {
-		return err
-	}
-	if err := log.CreateInitTasks(); err != nil {
-		return err
-	}
-
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	cn, err := c.GetCNServiceIndexed(0)
 	if err != nil {

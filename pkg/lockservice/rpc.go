@@ -91,21 +91,29 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 
 	var address string
 	switch request.Method {
+	case pb.Method_ForwardLock:
+		sid := request.Lock.Options.ForwardTo
+		c.cluster.GetCNService(
+			clusterservice.NewServiceIDSelector(sid),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
 	case pb.Method_Lock,
 		pb.Method_Unlock,
 		pb.Method_GetTxnLock,
 		pb.Method_KeepRemoteLock:
+		sid := request.LockTable.ServiceID
 		c.cluster.GetCNService(
-			clusterservice.NewServiceIDSelector(
-				request.LockTable.ServiceID),
+			clusterservice.NewServiceIDSelector(sid),
 			func(s metadata.CNService) bool {
 				address = s.LockServiceAddress
 				return false
 			})
 	case pb.Method_GetWaitingList:
+		sid := request.GetWaitingList.Txn.CreatedOn
 		c.cluster.GetCNService(
-			clusterservice.NewServiceIDSelector(
-				request.GetWaitingList.Txn.CreatedOn),
+			clusterservice.NewServiceIDSelector(sid),
 			func(s metadata.CNService) bool {
 				address = s.LockServiceAddress
 				return false
@@ -235,22 +243,31 @@ func (s *server) onMessage(
 		resp := acquireResponse()
 		resp.RequestID = req.RequestID
 		resp.Method = req.Method
-		if err := handler(ctx, req, resp); err != nil {
-			resp.WrapError(err)
-		}
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("handle request completed",
-				zap.String("response", resp.DebugString()))
-		}
-		return cs.Write(ctx, resp)
-	}
-
-	switch req.Method {
-	case pb.Method_Lock:
-		go fn(req)
+		handler(ctx, req, resp, cs)
 		return nil
-	default:
-		return fn(req)
+	}
+	return fn(req)
+}
+
+func writeResponse(
+	ctx context.Context,
+	resp *pb.Response,
+	err error,
+	cs morpc.ClientSession) {
+	if err != nil {
+		resp.WrapError(err)
+	}
+	detail := ""
+	if getLogger().Enabled(zap.DebugLevel) {
+		detail = resp.DebugString()
+		getLogger().Debug("handle request completed",
+			zap.String("response", detail))
+	}
+	// after write, response will be released by rpc
+	if err := cs.Write(ctx, resp); err != nil {
+		getLogger().Error("write response failed",
+			zap.Error(err),
+			zap.String("response", detail))
 	}
 }
 

@@ -45,7 +45,8 @@ enum WaitPolicy {
 message LockOptions {
   Granularity Granularity = 1;
   LockMode    Mode        = 2;
-  WaitPolicy  policy      = 3;
+  WaitPolicy  Policy      = 3;
+  string      ForwardTo   = 4;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -76,6 +77,10 @@ enum Method {
   GetBind           = 5;
   // KeepLockTableBind keep the lock table bind on lock table allocator
   KeepLockTableBind = 6;
+  // ForwardLock forward lock request to another service
+  ForwardLock       = 7;
+  // ForwardUnlock forward unlock request to another service
+  ForwardUnlock     = 8;
 }
 
 // Request is used to send a request for a LockTable related operation to another 
@@ -136,8 +141,8 @@ message GetTxnLockRequest {
 
 // GetTxnLockResponse get txn Lock response
 message GetTxnLockResponse {
-  int32          Value       = 1;
-  repeated bytes WaitingList = 2;
+  int32            Value       = 1;
+  repeated WaitTxn WaitingList = 2 [(gogoproto.nullable) = false];
 }
 
 // GetWaitingListRequest get a waiting txn list on a specical txn request. CN -> CN

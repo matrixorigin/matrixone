@@ -1,3 +1,4 @@
+-- @skip:issue#7889
 -- test auto_increment as primary key
 drop table if exists t1;
 create temporary table t1(

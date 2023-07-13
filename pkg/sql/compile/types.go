@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -34,10 +36,6 @@ import (
 
 type (
 	TxnOperator = client.TxnOperator
-)
-
-const (
-	MinBlockNum = 200
 )
 
 type magicType int
@@ -57,7 +55,6 @@ const (
 	DropIndex
 	Deletion
 	Insert
-	Update
 	InsertValues
 	TruncateTable
 	AlterView
@@ -83,7 +80,9 @@ type Source struct {
 	Expr                   *plan.Expr
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
-	AccountId              int32
+	AccountId              *plan.PubInfo
+
+	RuntimeFilterReceivers []*colexec.RuntimeFilterChan
 }
 
 // Col is the information of attribute
@@ -140,6 +139,8 @@ type scopeContext struct {
 	children []*scopeContext
 	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
+
+	//runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
 }
 
 // anaylze information
@@ -151,10 +152,23 @@ type anaylze struct {
 	analInfos []*process.AnalyzeInfo
 }
 
+func (a *anaylze) S3IOInputCount(idx int, count int64) {
+	atomic.AddInt64(&a.analInfos[idx].S3IOInputCount, count)
+}
+
+func (a *anaylze) S3IOOutputCount(idx int, count int64) {
+	atomic.AddInt64(&a.analInfos[idx].S3IOOutputCount, count)
+}
+
+func (a *anaylze) Nodes() []*process.AnalyzeInfo {
+	return a.analInfos
+}
+
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scope []*Scope
 
+	pn   *plan.Plan
 	info plan2.ExecInfo
 
 	u any
@@ -162,7 +176,7 @@ type Compile struct {
 	//fill will be called when result data is ready.
 	fill func(any, *batch.Batch) error
 	//affectRows stores the number of rows affected while insert / update / delete
-	affectRows uint64
+	affectRows atomic.Uint64
 	// cn address
 	addr string
 	// db current database name.
@@ -187,10 +201,13 @@ type Compile struct {
 
 	s3CounterSet perfcounter.CounterSet
 
-	stepRegs map[int32][]*process.WaitRegister
+	nodeRegs map[int32]*process.WaitRegister
+	stepRegs map[int32][]int32
+
+	runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
 
 	isInternal bool
-	// cnLabel is the CN labels which is parsed from session variable "cn_label".
+	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 }
 

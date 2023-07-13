@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha1"
@@ -34,10 +35,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -62,7 +67,7 @@ var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
 var serverVersion atomic.Value
 
-const defaultSaltReadTimeout = time.Millisecond * 100
+const defaultSaltReadTimeout = time.Millisecond * 200
 
 func init() {
 	serverVersion.Store("0.5.0")
@@ -183,7 +188,9 @@ type MysqlProtocol interface {
 
 	GetStats() string
 
-	ParseExecuteData(ctx context.Context, stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error)
+	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+
+	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 }
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
@@ -460,7 +467,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numParams > 0 {
-		if err := mp.SendEOFPacketIf(0, 0); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -480,7 +487,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numColumns > 0 {
-		if err := mp.SendEOFPacketIf(0, 0); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -488,24 +495,69 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	return nil
 }
 
-func (mp *MysqlProtocolImpl) ParseExecuteData(requestCtx context.Context, stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
+func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	var err error
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
-		err = moerr.NewInternalError(requestCtx, "can not get Prepare plan in prepareStmt")
-		return
+		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
 	}
 	numParams := len(dcPrepare.Prepare.ParamTypes)
+
+	paramIdx, newPos, ok := mp.io.ReadUint16(data, pos)
+	if !ok {
+		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+	}
+	pos = newPos
+	if int(paramIdx) >= numParams {
+		return moerr.NewInternalError(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
+	}
+
+	if stmt.params == nil {
+		stmt.params = proc.GetVector(types.T_text.ToType())
+		for i := 0; i < numParams; i++ {
+			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	length := len(data) - pos
+	val, _, ok := mp.readCountOfBytes(data, pos, length)
+	if !ok {
+		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+	}
+	stmt.getFromSendLongData[int(paramIdx)] = struct{}{}
+	return util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx))
+}
+
+func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	var err error
+	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
+	if !ok {
+		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
+	}
+	numParams := len(dcPrepare.Prepare.ParamTypes)
+
+	if stmt.params == nil {
+		stmt.params = proc.GetVector(types.T_text.ToType())
+		for i := 0; i < numParams; i++ {
+			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
+			if err != nil {
+				return err
+			}
+		}
+	}
 
 	var flag uint8
 	flag, pos, ok = mp.io.ReadUint8(data, pos)
 	if !ok {
-		err = moerr.NewInternalError(requestCtx, "malform packet")
-		return
+		return moerr.NewInternalError(ctx, "malform packet")
+
 	}
 	if flag != 0 {
 		// TODO only support CURSOR_TYPE_NO_CURSOR flag now
-		err = moerr.NewInvalidInput(requestCtx, "unsupported Prepare flag '%v'", flag)
-		return
+		return moerr.NewInvalidInput(ctx, "unsupported Prepare flag '%v'", flag)
 	}
 
 	// skip iteration-count, always 1
@@ -516,8 +568,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(requestCtx context.Context, stmt *
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
 		if !ok {
-			err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-			return
+			return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 		}
 
 		// new param bound flag
@@ -528,192 +579,196 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(requestCtx context.Context, stmt *
 			// we need save it for further use.
 			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
 			if !ok {
-				err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-				return
+				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 			}
 		} else {
 			pos++
 		}
 
 		// get paramters and set value to session variables
-		names = make([]string, numParams)
-		vars = make([]any, numParams)
 		for i := 0; i < numParams; i++ {
-			varName := getPrepareStmtSessionVarName(i)
-			names[i] = varName
-
-			// TODO :if params had received via COM_STMT_SEND_LONG_DATA, use them directly.
+			// if params had received via COM_STMT_SEND_LONG_DATA, use them directly(we set the params when deal with COM_STMT_SEND_LONG_DATA).
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
+			if _, ok := stmt.getFromSendLongData[i]; ok {
+				continue
+			}
 
 			if nullBitmaps[i>>3]&(1<<(uint(i)%8)) > 0 {
-				vars[i] = nil
+				err = util.SetAnyToStringVector(proc, nil, stmt.params, i)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 
 			if (i<<1)+1 >= len(stmt.ParamTypes) {
-				err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-				return
+				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+
 			}
 			tp := stmt.ParamTypes[i<<1]
 			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
 
 			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
-				vars[i] = nil
+				err = util.SetAnyToStringVector(proc, nil, stmt.params, i)
 
 			case defines.MYSQL_TYPE_TINY:
 				val, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+
 				}
 
 				pos = newPos
 				if isUnsigned {
-					vars[i] = val
+					// vars[i] = val
+					err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 				} else {
-					vars[i] = int8(val)
+					// vars[i] = int8(val)
+					err = util.SetAnyToStringVector(proc, int8(val), stmt.params, i)
 				}
 
 			case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
 				val, newPos, ok := mp.io.ReadUint16(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 
 				pos = newPos
 				if isUnsigned {
-					vars[i] = val
+					err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 				} else {
-					vars[i] = int16(val)
+					err = util.SetAnyToStringVector(proc, int16(val), stmt.params, i)
 				}
 
 			case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
 				val, newPos, ok := mp.io.ReadUint32(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 
 				pos = newPos
 				if isUnsigned {
-					vars[i] = val
+					err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 				} else {
-					vars[i] = int32(val)
+					err = util.SetAnyToStringVector(proc, int32(val), stmt.params, i)
 				}
 
 			case defines.MYSQL_TYPE_LONGLONG:
 				val, newPos, ok := mp.io.ReadUint64(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 
 				pos = newPos
 				if isUnsigned {
-					vars[i] = val
+					err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 				} else {
-					vars[i] = int64(val)
+					err = util.SetAnyToStringVector(proc, int64(val), stmt.params, i)
 				}
 
 			case defines.MYSQL_TYPE_FLOAT:
 				val, newPos, ok := mp.io.ReadUint32(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+
 				}
 				pos = newPos
-				vars[i] = math.Float32frombits(val)
+				err = util.SetAnyToStringVector(proc, math.Float32frombits(val), stmt.params, i)
 
 			case defines.MYSQL_TYPE_DOUBLE:
 				val, newPos, ok := mp.io.ReadUint64(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 				pos = newPos
-				vars[i] = math.Float64frombits(val)
+				err = util.SetAnyToStringVector(proc, math.Float64frombits(val), stmt.params, i)
 
 			// Binary/varbinary has mysql_type_varchar.
 			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_DECIMAL,
 				defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_SET, defines.MYSQL_TYPE_GEOMETRY, defines.MYSQL_TYPE_BIT:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 				pos = newPos
-				vars[i] = val
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_TEXT:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 				pos = newPos
-				vars[i] = []byte(val)
+				// vars[i] = []byte(val)
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			case defines.MYSQL_TYPE_TIME:
 				// See https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
 				// for more details.
 				length, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 				pos = newPos
+				var val string
 				switch length {
 				case 0:
-					vars[i] = "0d 00:00:00"
+					val = "0d 00:00:00"
 				case 8, 12:
-					pos, vars[i] = mp.readTime(data, pos, length)
+					pos, val = mp.readTime(data, pos, length)
 				default:
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
+
 			case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 				// See https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
 				// for more details.
 				length, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+
 				}
 				pos = newPos
+				var val string
 				switch length {
 				case 0:
-					vars[i] = "0000-00-00 00:00:00"
+					val = "0000-00-00 00:00:00"
 				case 4:
-					pos, vars[i] = mp.readDate(data, pos)
+					pos, val = mp.readDate(data, pos)
 				case 7:
-					pos, vars[i] = mp.readDateTime(data, pos)
+					pos, val = mp.readDateTime(data, pos)
 				case 11:
-					pos, vars[i] = mp.readTimestamp(data, pos)
+					pos, val = mp.readTimestamp(data, pos)
 				default:
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+
 				}
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			case defines.MYSQL_TYPE_NEWDECIMAL:
 				// use string for decimal.  Not tested
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
-					err = moerr.NewInvalidInput(requestCtx, "mysql protocol error, malformed packet")
-					return
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+
 				}
 				pos = newPos
-				vars[i] = val
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			default:
-				err = moerr.NewInternalError(requestCtx, "unsupport parameter type")
-				return
+				return moerr.NewInternalError(ctx, "unsupport parameter type")
+
+			}
+
+			if err != nil {
+				return err
 			}
 		}
 	}
 
-	return
+	return nil
 }
 
 func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
@@ -814,6 +869,10 @@ func (mp *MysqlProtocolImpl) readIntLenEnc(data []byte, pos int) (uint64, int, b
 	}
 	// 0-250
 	return uint64(data[pos]), pos + 1, true
+}
+
+func (mp *MysqlProtocolImpl) ReadIntLenEnc(data []byte, pos int) (uint64, int, bool) {
+	return mp.readIntLenEnc(data, pos)
 }
 
 // write an int with length encoded into the buffer at the position
@@ -1069,7 +1128,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-			logInfof(mp.getDebugStringUnsafe(), "check password succeeded")
+			logDebugf(mp.getDebugStringUnsafe(), "check password succeeded")
 			ses.InitGlobalSystemVariables()
 		} else {
 			return moerr.NewInternalError(ctx, "check password failed")
@@ -1165,7 +1224,7 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
 		tipsFormat := "Access denied for user %s. %s"
-		msg := fmt.Sprintf(tipsFormat, mp.username, err.Error())
+		msg := fmt.Sprintf(tipsFormat, getUserPart(mp.username), err.Error())
 		err2 := mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], msg)
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)
@@ -1175,10 +1234,10 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 	}
 
 	mp.incDebugCount(2)
-	logInfof(mp.getDebugStringUnsafe(), "handle handshake end")
+	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")
 	err := mp.sendOKPacket(0, 0, 0, 0, "")
 	mp.incDebugCount(3)
-	logInfof(mp.getDebugStringUnsafe(), "handle handshake response ok")
+	logDebugf(mp.getDebugStringUnsafe(), "handle handshake response ok")
 	if err != nil {
 		return err
 	}
@@ -1357,6 +1416,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(ctx context.Context, dat
 	}
 
 	// client connection attributes
+	info.connectAttrs = make(map[string]string)
 	if info.capabilities&CLIENT_CONNECT_ATTRS != 0 {
 		var l uint64
 		var ok bool
@@ -1365,7 +1425,6 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(ctx context.Context, dat
 			return false, info, moerr.NewInternalError(ctx, "get length of client-connect-attrs failed")
 		}
 		endPos := pos + int(l)
-		info.connectAttrs = make(map[string]string)
 		var key, value string
 		for pos < endPos {
 			key, pos, ok = mp.readStringLenEnc(data, pos)
@@ -1760,7 +1819,11 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	pos = mp.io.WriteUint32(data, pos, column.Length())
 
 	//int<1>              type
-	pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
+	if column.ColumnType() == defines.MYSQL_TYPE_BOOL {
+		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_VARCHAR))
+	} else {
+		pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
+	}
 
 	//int<2>              flags
 	pos = mp.io.WriteUint16(data, pos, column.Flag())
@@ -1871,6 +1934,12 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 		}
 
 		switch mysqlColumn.ColumnType() {
+		case defines.MYSQL_TYPE_BOOL:
+			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
 		case defines.MYSQL_TYPE_TINY:
 			if value, err := mrs.GetInt64(ctx, rowIdx, i); err != nil {
 				return nil, err
@@ -1887,13 +1956,13 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			if value, err := mrs.GetInt64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
-				buffer = mp.appendUint32(buffer, uint32(value))
+				data = mp.appendUint32(data, uint32(value))
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
 			if value, err := mrs.GetUint64(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
-				buffer = mp.appendUint64(buffer, value)
+				data = mp.appendUint64(data, value)
 			}
 		case defines.MYSQL_TYPE_FLOAT:
 			if value, err := mrs.GetValue(ctx, rowIdx, i); err != nil {
@@ -1901,11 +1970,11 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				switch v := value.(type) {
 				case float32:
-					buffer = mp.appendUint32(buffer, math.Float32bits(v))
+					data = mp.appendUint32(data, math.Float32bits(v))
 				case float64:
-					buffer = mp.appendUint32(buffer, math.Float32bits(float32(v)))
+					data = mp.appendUint32(data, math.Float32bits(float32(v)))
 				case string:
-					buffer = mp.appendStringLenEnc(buffer, v)
+					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -1915,11 +1984,11 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				switch v := value.(type) {
 				case float32:
-					buffer = mp.appendUint64(buffer, math.Float64bits(float64(v)))
+					data = mp.appendUint64(data, math.Float64bits(float64(v)))
 				case float64:
-					buffer = mp.appendUint64(buffer, math.Float64bits(v))
+					data = mp.appendUint64(data, math.Float64bits(v))
 				case string:
-					buffer = mp.appendStringLenEnc(buffer, v)
+					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2574,9 +2643,10 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 	return mp.makeEOFPayload(warnings, status)
 }
 
-// tryUpdateSalt tries to update salt with the value read from proxy module.
-func (mp *MysqlProtocolImpl) tryUpdateSalt(rs goetty.IOSession) {
+// receiveExtraInfo tries to receive salt and labels read from proxy module.
+func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	saltLen := 20
+	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
@@ -2596,6 +2666,16 @@ func (mp *MysqlProtocolImpl) tryUpdateSalt(rs goetty.IOSession) {
 		logErrorf(mp.GetDebugString(), "failed to get salt: %v", err)
 	} else {
 		mp.SetSalt(data)
+	}
+
+	// Read requested labels from proxy.
+	label := &proxy.RequestLabel{}
+	reader := bufio.NewReader(rs.RawConn())
+	if err = label.Decode(reader); err != nil {
+		logErrorf(mp.GetDebugString(), "failed to get CN labels: %v", err)
+	} else {
+		mp.GetSession().requestLabel = label.Labels
+		logDebugf(mp.GetDebugString(), "got requested CN labels: %v", *label)
 	}
 }
 

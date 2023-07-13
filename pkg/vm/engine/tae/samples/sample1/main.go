@@ -51,8 +51,10 @@ func stopProfile() {
 }
 
 func main() {
+	ctx := context.Background()
+
 	opts := config.WithOpts(nil, 1)
-	tae, _ := db.Open(sampleDir, opts)
+	tae, _ := db.Open(ctx, sampleDir, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(10, 3)
@@ -64,7 +66,7 @@ func main() {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName, "", "")
 		_, _ = db.CreateRelation(schema)
-		if err := txn.Commit(); err != nil {
+		if err := txn.Commit(context.Background()); err != nil {
 			panic(err)
 		}
 	}
@@ -86,7 +88,7 @@ func main() {
 			if err := rel.Append(context.Background(), b); err != nil {
 				panic(err)
 			}
-			if err := txn.Commit(); err != nil {
+			if err := txn.Commit(context.Background()); err != nil {
 				panic(err)
 			}
 		}

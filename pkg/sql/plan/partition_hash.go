@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -44,14 +45,9 @@ func (hpb *hashPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 	}
 
 	//step 3: build partition expr
-	planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+	err = buildPartitionExpr(ctx, tableDef, partitionBinder, partitionDef, partitionType.Expr)
 	if err != nil {
 		return err
-	}
-
-	partitionDef.PartitionExpr = &plan.PartitionExpr{
-		Expr:    planExpr,
-		ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
 	}
 
 	err = hpb.buildPartitionDefs(ctx, partitionBinder, partitionDef, partitionSyntaxDef.Partitions)
@@ -98,7 +94,14 @@ func (hpb *hashPartitionBuilder) buildEvalPartitionExpression(ctx context.Contex
 	hashExpr := partitionType.Expr
 	partitionAst := genPartitionAst(tree.Exprs{hashExpr}, int64(partitionDef.PartitionNum))
 
-	partitionExpression, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
+	tempExpr, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
+	if err != nil {
+		return err
+	}
+	partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+		Id:          int32(types.T_int32),
+		NotNullable: true,
+	})
 	if err != nil {
 		return err
 	}

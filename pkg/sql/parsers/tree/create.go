@@ -301,7 +301,9 @@ func (node *ColumnTableDef) Format(ctx *FmtCtx) {
 		prefix := " "
 		for _, a := range node.Attributes {
 			ctx.WriteString(prefix)
-			a.Format(ctx)
+			if a != nil {
+				a.Format(ctx)
+			}
 		}
 	}
 }
@@ -1123,6 +1125,38 @@ func NewTableOptionEngine(s string) *TableOptionEngine {
 	}
 }
 
+type TableOptionEngineAttr struct {
+	tableOptionImpl
+	Engine string
+}
+
+func (node *TableOptionEngineAttr) Format(ctx *FmtCtx) {
+	ctx.WriteString("ENGINE_ATTRIBUTE = ")
+	ctx.WriteString(node.Engine)
+}
+
+func NewTableOptionEngineAttr(s string) *TableOptionEngineAttr {
+	return &TableOptionEngineAttr{
+		Engine: s,
+	}
+}
+
+type TableOptionInsertMethod struct {
+	tableOptionImpl
+	Method string
+}
+
+func (node *TableOptionInsertMethod) Format(ctx *FmtCtx) {
+	ctx.WriteString("INSERT_METHOD = ")
+	ctx.WriteString(node.Method)
+}
+
+func NewTableOptionInsertMethod(s string) *TableOptionInsertMethod {
+	return &TableOptionInsertMethod{
+		Method: s,
+	}
+}
+
 type TableOptionSecondaryEngine struct {
 	tableOptionImpl
 	Engine string
@@ -1174,6 +1208,22 @@ func (node *TableOptionCollate) Format(ctx *FmtCtx) {
 func NewTableOptionCollate(s string) *TableOptionCollate {
 	return &TableOptionCollate{
 		Collate: s,
+	}
+}
+
+type TableOptionAUTOEXTEND_SIZE struct {
+	tableOptionImpl
+	Value uint64
+}
+
+func (node *TableOptionAUTOEXTEND_SIZE) Format(ctx *FmtCtx) {
+	ctx.WriteString("AUTOEXTEND_SIZE = ")
+	ctx.WriteString(strconv.FormatUint(node.Value, 10))
+}
+
+func NewTableOptionAUTOEXTEND_SIZE(v uint64) *TableOptionAUTOEXTEND_SIZE {
+	return &TableOptionAUTOEXTEND_SIZE{
+		Value: v,
 	}
 }
 
@@ -1396,6 +1446,37 @@ func (node *TableOptionRowFormat) Format(ctx *FmtCtx) {
 func NewTableOptionRowFormat(v RowFormatType) *TableOptionRowFormat {
 	return &TableOptionRowFormat{
 		Value: v,
+	}
+}
+
+type TableOptionStartTrans struct {
+	tableOptionImpl
+	Value bool
+}
+
+func (node *TableOptionStartTrans) Format(ctx *FmtCtx) {
+	ctx.WriteString("START TRANSACTION")
+}
+
+func NewTTableOptionStartTrans(v bool) *TableOptionStartTrans {
+	return &TableOptionStartTrans{
+		Value: v,
+	}
+}
+
+type TableOptionSecondaryEngineAttr struct {
+	tableOptionImpl
+	Attr string
+}
+
+func (node *TableOptionSecondaryEngineAttr) Format(ctx *FmtCtx) {
+	ctx.WriteString("SECONDARY_ENGINE_ATTRIBUTE = ")
+	ctx.WriteString(node.Attr)
+}
+
+func NewTTableOptionSecondaryEngineAttr(v string) *TableOptionSecondaryEngineAttr {
+	return &TableOptionSecondaryEngineAttr{
+		Attr: v,
 	}
 }
 
@@ -2461,6 +2542,7 @@ type AccountStatusOption int
 const (
 	AccountStatusOpen AccountStatusOption = iota
 	AccountStatusSuspend
+	AccountStatusRestricted
 )
 
 func (aso AccountStatusOption) String() string {
@@ -2469,6 +2551,8 @@ func (aso AccountStatusOption) String() string {
 		return "open"
 	case AccountStatusSuspend:
 		return "suspend"
+	case AccountStatusRestricted:
+		return "restricted"
 	default:
 		return "open"
 	}
@@ -2486,6 +2570,8 @@ func (node *AccountStatus) Format(ctx *FmtCtx) {
 			ctx.WriteString(" open")
 		case AccountStatusSuspend:
 			ctx.WriteString(" suspend")
+		case AccountStatusRestricted:
+			ctx.WriteString(" restricted")
 		}
 	}
 }
@@ -2524,7 +2610,7 @@ type CreatePublication struct {
 	IfNotExists bool
 	Name        Identifier
 	Database    Identifier
-	Accounts    []Identifier
+	AccountsSet *AccountsSetOption
 	Comment     string
 }
 
@@ -2536,10 +2622,10 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 	ctx.WriteString(" database ")
 	node.Database.Format(ctx)
-	if len(node.Accounts) > 0 {
+	if node.AccountsSet != nil && len(node.AccountsSet.SetAccounts) > 0 {
 		ctx.WriteString(" account ")
 		prefix := ""
-		for _, a := range node.Accounts {
+		for _, a := range node.AccountsSet.SetAccounts {
 			ctx.WriteString(prefix)
 			a.Format(ctx)
 			prefix = ", "
@@ -2548,6 +2634,25 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 	if len(node.Comment) > 0 {
 		ctx.WriteString(" comment ")
 		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
+	}
+}
+
+type AttributeVisable struct {
+	columnAttributeImpl
+	Is bool //true NULL (default); false NOT NULL
+}
+
+func (node *AttributeVisable) Format(ctx *FmtCtx) {
+	if node.Is {
+		ctx.WriteString("visible")
+	} else {
+		ctx.WriteString("not visible")
+	}
+}
+
+func NewAttributeVisable(b bool) *AttributeVisable {
+	return &AttributeVisable{
+		Is: b,
 	}
 }
 

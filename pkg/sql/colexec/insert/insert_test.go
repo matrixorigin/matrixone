@@ -16,7 +16,6 @@ package insert
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -41,11 +40,6 @@ func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
 	return nil
 }
 
-var (
-	i64typ     = &plan.Type{Id: int32(types.T_int64)}
-	varchartyp = &plan.Type{Id: int32(types.T_varchar)}
-)
-
 func TestInsertOperator(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -60,8 +54,6 @@ func TestInsertOperator(t *testing.T) {
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
@@ -79,24 +71,18 @@ func TestInsertOperator(t *testing.T) {
 		},
 		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		Zs:    []int64{1, 1, 1},
+		Cnt:   1,
 	}
 	argument1 := Argument{
 		InsertCtx: &InsertCtx{
-			Rels: []engine.Relation{&mockRelation{}},
+			Rel: &mockRelation{},
 			Ref: &plan.ObjectRef{
 				Obj:        0,
 				SchemaName: "testDb",
 				ObjName:    "testTable",
 			},
-			TableDef: &plan.TableDef{
-				Cols: []*plan.ColDef{
-					{Name: "int64_column", Typ: i64typ},
-					{Name: "scalar_int64", Typ: i64typ},
-					{Name: "varchar_column", Typ: varchartyp},
-					{Name: "scalar_varchar", Typ: varchartyp},
-					{Name: "int64_column", Typ: i64typ},
-				},
-			},
+			AddAffectedRows: true,
+			Attrs:           []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		},
 	}
 	proc.Reg.InputBatch = batch1
@@ -105,12 +91,6 @@ func TestInsertOperator(t *testing.T) {
 	_, err = Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
 
-	result := argument1.InsertCtx.Rels[0].(*mockRelation).result
-	// check attr names
-	require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
-	// check vector
-	require.Equal(t, len(batch1.Vecs), len(result.Vecs))
-	for i, vec := range result.Vecs {
-		require.Equal(t, len(batch1.Zs), vec.Length(), fmt.Sprintf("column number: %d", i))
-	}
+	result := argument1.InsertCtx.Rel.(*mockRelation).result
+	require.Equal(t, result, batch.EmptyBatch)
 }

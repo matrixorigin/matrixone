@@ -61,7 +61,7 @@ type Handler interface {
 		meta txn.TxnMeta,
 		req *apipb.SyncLogTailReq,
 		resp *apipb.SyncLogTailResp,
-	) error
+	) (func(), error)
 
 	HandlePreCommitWrite(
 		ctx context.Context,
@@ -75,19 +75,26 @@ type Handler interface {
 		meta txn.TxnMeta,
 		req *db.FlushTable,
 		resp *apipb.SyncLogTailResp,
-	) error
+	) (func(), error)
 
 	HandleForceCheckpoint(
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *db.Checkpoint,
 		resp *apipb.SyncLogTailResp,
-	) error
+	) (func(), error)
 
 	HandleInspectDN(
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *db.InspectDN,
 		resp *db.InspectResp,
-	) error
+	) (func(), error)
+
+	HandleAddFaultPoint(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.FaultPoint,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 }

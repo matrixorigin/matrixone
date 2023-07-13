@@ -61,8 +61,8 @@ func TestCNServer(t *testing.T) {
 func TestRouter_SelectEmptyCN(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -71,6 +71,7 @@ func TestRouter_SelectEmptyCN(t *testing.T) {
 
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh()
 	time.Sleep(time.Millisecond * 200)
 	re := testRebalancer(t, st, logger, mc)
@@ -91,8 +92,8 @@ func TestRouter_SelectEmptyCN(t *testing.T) {
 func TestRouter_RouteForCommon(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -106,6 +107,7 @@ func TestRouter_RouteForCommon(t *testing.T) {
 
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh()
 	time.Sleep(time.Millisecond * 200)
 	re := testRebalancer(t, st, logger, mc)
@@ -176,14 +178,15 @@ func TestRouter_RouteForCommon(t *testing.T) {
 func TestRouter_RouteForSys(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
 	hc := &mockHAKeeperClient{}
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	re := testRebalancer(t, st, logger, mc)
 	ru := newRouter(mc, re, true)
 	li1 := labelInfo{
@@ -275,8 +278,8 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -321,6 +324,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh()
 	time.Sleep(time.Millisecond * 200)
 	re := testRebalancer(t, st, logger, mc)
@@ -381,8 +385,8 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -425,6 +429,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh()
 	time.Sleep(time.Millisecond * 200)
 	re := testRebalancer(t, st, logger, mc)
@@ -485,8 +490,8 @@ func TestRouter_Filter(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -518,6 +523,7 @@ func TestRouter_Filter(t *testing.T) {
 
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh()
 	time.Sleep(time.Millisecond * 200)
 	re := testRebalancer(t, st, logger, mc)
@@ -537,8 +543,8 @@ func TestRouter_RetryableConnect(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
@@ -564,6 +570,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	mc.ForceRefresh()
 	time.Sleep(time.Millisecond * 200)
 	re := testRebalancer(t, st, logger, mc)

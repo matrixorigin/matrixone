@@ -22,19 +22,27 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
 func New(ro bool, attrs []string) *Batch {
 	return &Batch{
 		Ro:    ro,
+		Cnt:   1,
 		Attrs: attrs,
 		Vecs:  make([]*vector.Vector, len(attrs)),
+	}
+}
+
+func NewWithSize(n int) *Batch {
+	return &Batch{
+		Cnt:  1,
+		Vecs: make([]*vector.Vector, n),
 	}
 }
 
@@ -68,13 +76,6 @@ func Cow(bat *Batch) {
 	copy(attrs, bat.Attrs)
 	bat.Ro = false
 	bat.Attrs = attrs
-}
-
-func NewWithSize(n int) *Batch {
-	return &Batch{
-		Cnt:  1,
-		Vecs: make([]*vector.Vector, n),
-	}
 }
 
 func (info *aggInfo) MarshalBinary() ([]byte, error) {
@@ -129,9 +130,9 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	bat.Cnt = 1
-	bat.Zs = rbat.Zs // if you drop rbat.Zs is ok, if you need return rbat,  you must deepcopy Zs.
+	bat.Zs = append(bat.Zs[:0], rbat.Zs...)
 	bat.Vecs = rbat.Vecs
-	bat.Attrs = rbat.Attrs
+	bat.Attrs = append(bat.Attrs, rbat.Attrs...)
 	// initialize bat.Aggs only if necessary
 	if len(rbat.AggInfos) > 0 {
 		bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
@@ -222,7 +223,15 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 }
 
 func (bat *Batch) Clean(m *mpool.MPool) {
-	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
+	// xxx todo maybe some bug here
+	if bat == EmptyBatch {
+		return
+	}
+	if atomic.LoadInt64(&bat.Cnt) == 0 {
+		// panic("batch is already cleaned")
+		return
+	}
+	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
 		return
 	}
 	for _, vec := range bat.Vecs {
@@ -237,8 +246,9 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	}
 	if len(bat.Zs) != 0 {
 		m.PutSels(bat.Zs)
-		bat.Zs = nil
 	}
+	bat.Attrs = nil
+	bat.Zs = nil
 	bat.Vecs = nil
 }
 
@@ -292,10 +302,6 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 		return bat, nil
 	}
 
-	// XXX Here is a good place to trigger an panic for fault injection.
-	// fault.AddFaultPoint("panic_in_batch_append", ":::", "PANIC", 0, "")
-	fault.TriggerFault("panic_in_batch_append")
-
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
 			return bat, err
@@ -329,6 +335,10 @@ func (bat *Batch) SubCnt(cnt int) {
 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
 }
 
+func (bat *Batch) SetCnt(cnt int64) {
+	atomic.StoreInt64(&bat.Cnt, cnt)
+}
+
 func (bat *Batch) GetCnt() int64 {
 	return atomic.LoadInt64(&bat.Cnt)
 }
@@ -342,27 +352,20 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 }
 
 func (bat *Batch) AntiShrink(sels []int64) {
-	selsMp := make(map[int64]bool)
-	for _, sel := range sels {
-		selsMp[sel] = true
-	}
-	newSels := make([]int64, 0, bat.Length()-len(sels))
-	for i := 0; i < bat.Length(); i++ {
-		if ok := selsMp[int64(i)]; !ok {
-			newSels = append(newSels, int64(i))
-		}
-	}
-	mp := make(map[*vector.Vector]uint8)
+	length := len(bat.Zs)
 	for _, vec := range bat.Vecs {
-		if _, ok := mp[vec]; ok {
-			continue
-		}
-		mp[vec]++
-		vec.Shrink(newSels, false)
+		vec.Shrink(sels, true)
 	}
-	vs := bat.Zs
-	for i, sel := range newSels {
-		vs[i] = vs[sel]
+	bat.Zs = bat.Zs[:length-len(sels)]
+}
+
+func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
+	jm := bat.AuxData.(*hashmap.JoinMap)
+	if jm.IsDup() {
+		ret = jm.Dup()
+	} else {
+		ret = jm
+		bat.AuxData = nil
 	}
-	bat.Zs = bat.Zs[:len(newSels)]
+	return
 }

@@ -22,8 +22,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 var (
@@ -32,7 +35,7 @@ var (
 
 var (
 	bootstrappedCheckerDB = catalog.MOTaskDB
-	initSQLs              = []string{
+	step1InitSQLs         = []string{
 		fmt.Sprintf(`create table %s.%s(
 			id 			bigint unsigned not null,
 			table_id 	bigint unsigned not null,
@@ -49,10 +52,17 @@ var (
 			primary key(id, column_name)
 		);`, catalog.MO_CATALOG, catalog.MO_INDEXES),
 
-		fmt.Sprintf("create table `%s`.`%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);",
-			catalog.MO_CATALOG,
-			catalog.AutoIncrTableName),
+		fmt.Sprintf(`create table %s.%s (
+			table_id   bigint unsigned, 
+			col_name   varchar(770), 
+			col_index  int,
+			offset     bigint unsigned, 
+			step       bigint unsigned,  
+			primary key(table_id, col_name)
+		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
+	}
 
+	step2InitSQLs = []string{
 		fmt.Sprintf(`create database %s`,
 			catalog.MOTaskDB),
 
@@ -85,49 +95,85 @@ var (
 			create_at					bigint,
 			update_at					bigint)`,
 			catalog.MOTaskDB),
+
+		fmt.Sprintf(`insert into %s.sys_async_task(
+                              task_metadata_id,
+                              task_metadata_executor,
+                              task_metadata_context,
+		                      task_metadata_option,
+		                      task_parent_id,
+		                      task_status,
+		                      task_runner,
+		                      task_epoch,
+		                      last_heartbeat,
+		                      create_at,
+		                      end_at) values ("SystemInit", 1, "", "{}", 0, 0, 0, 0, 0, %d, 0)`,
+			catalog.MOTaskDB, time.Now().UnixNano()),
 	}
 )
 
 type bootstrapper struct {
-	lock  Locker
-	clock clock.Clock
-	exec  executor.SQLExecutor
+	lock   Locker
+	clock  clock.Clock
+	client client.TxnClient
+	exec   executor.SQLExecutor
 }
 
 // NewBootstrapper create bootstrapper to bootstrap mo database
 func NewBootstrapper(
 	lock Locker,
 	clock clock.Clock,
+	client client.TxnClient,
 	exec executor.SQLExecutor) Bootstrapper {
-	return &bootstrapper{clock: clock, exec: exec, lock: lock}
+	return &bootstrapper{clock: clock, exec: exec, lock: lock, client: client}
 }
 
 func (b *bootstrapper) Bootstrap(ctx context.Context) error {
-	if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
+	getLogger().Info("start to check bootstrap state")
+
+	ok, err := b.checkAlreadyBootstrapped(ctx)
+	if ok {
+		getLogger().Info("mo already boostrapped")
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 
-	ok, err := b.lock.Get(ctx)
+	ok, err = b.lock.Get(ctx)
 	if err != nil {
 		return err
 	}
 
 	// current node get the bootstrap privilege
 	if ok {
+
 		opts := executor.Options{}
-		return b.exec.ExecTxn(
-			ctx,
-			func(te executor.TxnExecutor) error {
-				for _, sql := range initSQLs {
-					res, err := te.Exec(sql)
-					if err != nil {
-						return err
-					}
-					res.Close()
-				}
-				return nil
-			},
-			opts)
+		if err := b.exec.ExecTxn(ctx, execFunc(step1InitSQLs), opts); err != nil {
+			return err
+		}
+
+		getLogger().Info("bootstrap mo step 1 completed")
+
+		// make sure txn start at now, and make sure can see the data of step1
+		opts = opts.WithMinCommittedTS(b.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
+		if err := b.exec.ExecTxn(ctx, execFunc(step2InitSQLs), opts); err != nil {
+			getLogger().Error("bootstrap mo step 2 failed",
+				zap.Error(err))
+			return err
+		}
+		getLogger().Info("bootstrap mo step 2 completed")
+
+		if b.client != nil {
+			getLogger().Info("wait bootstrap logtail applied")
+
+			// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
+			// bootstrap data.
+			b.client.(client.TxnClientWithCtl).SetLatestCommitTS(b.now())
+		}
+
+		getLogger().Info("successfully completed bootstrap")
+		return nil
 	}
 
 	// otherwrise, wait bootstrap completed
@@ -137,6 +183,9 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(time.Second):
 			if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
+				getLogger().Info("waiting bootstrap completed",
+					zap.Bool("result", ok),
+					zap.Error(err))
 				return err
 			}
 		}
@@ -144,12 +193,11 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 }
 
 func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
-	now, _ := b.clock.Now()
 	opts := executor.Options{}
 	res, err := b.exec.Exec(
 		ctx,
 		"show databases",
-		opts.WithMinCommittedTS(now))
+		opts.WithMinCommittedTS(b.now()))
 	if err != nil {
 		return false, err
 	}
@@ -166,4 +214,22 @@ func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, erro
 		}
 	}
 	return false, nil
+}
+
+func (b *bootstrapper) now() timestamp.Timestamp {
+	n, _ := b.clock.Now()
+	return n
+}
+
+func execFunc(sql []string) func(executor.TxnExecutor) error {
+	return func(e executor.TxnExecutor) error {
+		for _, s := range sql {
+			r, err := e.Exec(s)
+			if err != nil {
+				return err
+			}
+			r.Close()
+		}
+		return nil
+	}
 }

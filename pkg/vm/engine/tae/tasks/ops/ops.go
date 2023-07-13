@@ -15,6 +15,7 @@
 package ops
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -81,13 +82,13 @@ func (op *Op) Execute() error {
 	return nil
 }
 
-func (op *Op) OnExec() error {
+func (op *Op) OnExec(ctx context.Context) error {
 	op.StartTime = time.Now()
 	err := op.Impl.PreExecute()
 	if err != nil {
 		return err
 	}
-	err = op.Impl.Execute()
+	err = op.Impl.Execute(ctx)
 	if err != nil {
 		return err
 	}
