@@ -377,6 +377,15 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 					},
 				},
 			})
+		case *tree.TableOptionAutoIncrement:
+			for _, def := range createTable.TableDef.Cols {
+				if def.Typ.AutoIncr == true {
+					if opt.Value != 0 {
+						def.Typ.Offset = opt.Value - 1
+					}
+				}
+			}
+
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,
 		// 	*tree.TableOptionCollate, *tree.TableOptionAutoIncrement, *tree.TableOptionComment,
@@ -388,7 +397,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		// 	*tree.TableOptionIndexDirectory, *tree.TableOptionStorageMedia, *tree.TableOptionStatsSamplePages,
 		// 	*tree.TableOptionUnion, *tree.TableOptionEncryption:
 		// 	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
-		case *tree.TableOptionAutoIncrement, *tree.TableOptionAUTOEXTEND_SIZE, *tree.TableOptionAvgRowLength,
+		case *tree.TableOptionAUTOEXTEND_SIZE, *tree.TableOptionAvgRowLength,
 			*tree.TableOptionCharset, *tree.TableOptionChecksum, *tree.TableOptionCollate, *tree.TableOptionCompression,
 			*tree.TableOptionConnection, *tree.TableOptionDataDirectory, *tree.TableOptionIndexDirectory,
 			*tree.TableOptionDelayKeyWrite, *tree.TableOptionEncryption, *tree.TableOptionEngine, *tree.TableOptionEngineAttr,

@@ -793,3 +793,36 @@ insert into t2 values();
 select last_insert_id();
 last_insert_id()
 102
+drop table if exists t1;
+create table t1(a int auto_increment primary key) auto_increment = 0;
+insert into t1 values();
+select last_insert_id();
+last_insert_id()
+1
+insert into t1 values(11);
+insert into t1 values();
+select last_insert_id();
+last_insert_id()
+12
+drop table if exists t1;
+create table t1(a int auto_increment primary key) auto_increment = 10;
+insert into t1 values();
+select last_insert_id();
+last_insert_id()
+11
+insert into t1 values(101);
+insert into t1 values();
+select last_insert_id();
+last_insert_id()
+102
+drop table if exists t1;
+create table t1(a int auto_increment primary key) auto_increment = 100;
+insert into t1 values();
+select last_insert_id();
+last_insert_id()
+101
+insert into t1 values(7);
+insert into t1 values();
+select last_insert_id();
+last_insert_id()
+102
