@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/clockobjcache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
@@ -56,18 +55,6 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 	return func(o *memCacheOptions) {
 		o.overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
 		o.objCache = lruobjcache.New(capacity, func(key any, value []byte, _ int64) {
-			_key := key.(IOVectorCacheKey)
-			if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
-				panic(err)
-			}
-		})
-	}
-}
-
-func WithClock(capacity int64) MemCacheOptionFunc {
-	return func(o *memCacheOptions) {
-		o.overlapChecker = interval.NewOverlapChecker("MemCache_Clock")
-		o.objCache = clockobjcache.New(capacity, func(key any, value []byte, _ int64) {
 			_key := key.(IOVectorCacheKey)
 			if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
 				panic(err)
