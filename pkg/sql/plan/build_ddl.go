@@ -1572,7 +1572,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 	}
 	if tableDef.ViewSql != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
+		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statement for View")
 	}
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")

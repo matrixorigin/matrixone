@@ -401,7 +401,6 @@ invalid input: can't drop column a with primary key covered now
 drop table t5;
 create table t5(a int, b int) cluster by a;
 alter table t5 add column c int;
-null
 alter table t5 drop column a;
 internal error: drop a column with constraint
 drop table t5;
