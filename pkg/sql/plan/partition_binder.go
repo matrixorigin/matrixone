@@ -76,7 +76,7 @@ func (p *PartitionBinder) BindExpr(expr tree.Expr, i int32, b bool) (*plan.Expr,
 	case *tree.BinaryExpr:
 		//unsupported operator
 		switch exprImpl.Op {
-		case tree.PLUS, tree.MINUS, tree.MULTI, tree.INTEGER_DIV:
+		case tree.PLUS, tree.MINUS, tree.MULTI, tree.INTEGER_DIV, tree.MOD:
 			//suggested by Zhang Xiao, only support operator +,-,*,div in version 0.8
 		default:
 			return nil, moerr.NewInvalidInput(p.GetContext(), "operator %s is not allowed in the partition expression", exprImpl.Op.ToString())
