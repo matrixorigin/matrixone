@@ -454,7 +454,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			for i, recv := range s.DataSource.RuntimeFilterReceivers {
 				rfSpecs[i] = recv.Spec
 			}
-			p.DataSource.RuntimeFilterList = rfSpecs
+			p.DataSource.RuntimeFilterProbeList = rfSpecs
 		}
 	}
 	// PreScope
@@ -565,18 +565,21 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			bat.Cnt = 1
 			s.DataSource.Bat = bat
 		}
-		if len(dsc.RuntimeFilterList) > 0 {
-			rfReceivers := make([]*colexec.RuntimeFilterChan, len(dsc.RuntimeFilterList))
+		if len(dsc.RuntimeFilterProbeList) > 0 {
+			rfReceivers := make([]*colexec.RuntimeFilterChan, len(dsc.RuntimeFilterProbeList))
 			if ctx.runtimeFilterReceiverMap == nil {
 				ctx.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 			}
-			for i, rfSpec := range dsc.RuntimeFilterList {
-				ch := make(chan *pipeline.RuntimeFilter, 1)
+			for i, rfSpec := range dsc.RuntimeFilterProbeList {
+				ch := ctx.runtimeFilterReceiverMap[rfSpec.Tag]
+				if ch == nil {
+					ch = make(chan *pipeline.RuntimeFilter, 1)
+					ctx.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+				}
 				rfReceivers[i] = &colexec.RuntimeFilterChan{
 					Spec: rfSpec,
 					Chan: ch,
 				}
-				ctx.runtimeFilterReceiverMap[rfSpec.Tag] = ch
 			}
 			s.DataSource.RuntimeFilterReceivers = rfReceivers
 		}
@@ -963,7 +966,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			for i, sender := range t.RuntimeFilterSenders {
 				rfSpecs[i] = sender.Spec
 			}
-			in.HashBuild.RuntimeFilterList = rfSpecs
+			in.HashBuild.RuntimeFilterBuildList = rfSpecs
 		}
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
@@ -1327,14 +1330,21 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.HashBuild:
 		t := opr.GetHashBuild()
 		var rfSenders []*colexec.RuntimeFilterChan
-		if t.RuntimeFilterList != nil {
-			rfSenders = make([]*colexec.RuntimeFilterChan, 0, len(t.RuntimeFilterList))
-			for _, rfSpec := range t.RuntimeFilterList {
-				if ch, ok := ctx.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
-					rfSenders = append(rfSenders, &colexec.RuntimeFilterChan{
-						Spec: rfSpec,
-						Chan: ch,
-					})
+		if len(t.RuntimeFilterBuildList) > 0 {
+			rfSenders = make([]*colexec.RuntimeFilterChan, 0, len(t.RuntimeFilterBuildList))
+			if ctx.runtimeFilterReceiverMap == nil {
+				ctx.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
+			}
+			for i, rfSpec := range t.RuntimeFilterBuildList {
+				ch := ctx.runtimeFilterReceiverMap[rfSpec.Tag]
+				if ch == nil {
+					ch = make(chan *pipeline.RuntimeFilter, 1)
+					ctx.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+				}
+
+				rfSenders[i] = &colexec.RuntimeFilterChan{
+					Spec: rfSpec,
+					Chan: ch,
 				}
 			}
 		}

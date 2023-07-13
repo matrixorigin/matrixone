@@ -284,7 +284,7 @@ message HashBuild {
   uint64 nbucket = 4;
   repeated plan.Type types = 5;
   repeated plan.Expr conds = 6;
-  repeated plan.RuntimeFilterSpec runtime_filter_list = 7;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
 }
 
 message ExternalName2ColIndex {
@@ -363,7 +363,7 @@ message Source {
   plan.Expr  expr = 7;
   plan.TableDef tableDef = 8;
   timestamp.Timestamp timestamp = 9;
-  repeated plan.RuntimeFilterSpec runtime_filter_list = 10;
+  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
 }
 
 message NodeInfo {
