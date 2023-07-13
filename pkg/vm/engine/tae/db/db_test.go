@@ -114,7 +114,7 @@ func TestAppend2(t *testing.T) {
 	// defer hb.Stop()
 
 	schema := catalog.MockSchemaAll(13, 3)
-	schema.BlockMaxRows = 400
+	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 10
 	createRelation(t, db, "db", schema, true)
 
@@ -143,7 +143,7 @@ func TestAppend2(t *testing.T) {
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	now := time.Now()
-	testutils.WaitExpect(10000, func() bool {
+	testutils.WaitExpect(20000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	t.Log(time.Since(now))
@@ -1147,11 +1147,11 @@ func TestAutoCompactABlk2(t *testing.T) {
 	defer db.Close()
 
 	schema1 := catalog.MockSchemaAll(13, 2)
-	schema1.BlockMaxRows = 20
+	schema1.BlockMaxRows = 5
 	schema1.SegmentMaxBlocks = 2
 
 	schema2 := catalog.MockSchemaAll(13, 2)
-	schema2.BlockMaxRows = 20
+	schema2.BlockMaxRows = 5
 	schema2.SegmentMaxBlocks = 2
 	{
 		txn, _ := db.StartTxn(nil)
@@ -1200,7 +1200,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	testutils.WaitExpect(8000, func() bool {
+	testutils.WaitExpect(20000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
