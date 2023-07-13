@@ -283,7 +283,14 @@ func UpgradeSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Inter
 	instant := time.Now()
 
 	for _, tbl := range tables {
-		mustExec(tbl.ToUpgradeSql(ctx))
+		stmt := tbl.ToUpgradeSql(ctx)
+		if stmt == "" {
+			continue
+		}
+		err := mustExec(stmt)
+		if err != nil {
+			return err
+		}
 	}
 	createCost = time.Since(instant)
 	return nil
