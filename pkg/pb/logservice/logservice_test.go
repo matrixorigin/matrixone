@@ -42,6 +42,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
 		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
 	})
 
@@ -53,6 +54,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Tick:           tick2,
 		ServiceAddress: hb2.ServiceAddress,
 		Role:           metadata.CNRole_TP,
+		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
 	})
 
@@ -64,6 +66,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Tick:           tick3,
 		ServiceAddress: hb3.ServiceAddress,
 		Role:           metadata.CNRole_TP,
+		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
 	})
 }
@@ -368,6 +371,7 @@ func TestCNLabelUpdate(t *testing.T) {
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
 		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
 	})
 
@@ -388,6 +392,7 @@ func TestCNLabelUpdate(t *testing.T) {
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
 		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Working,
 		Labels: map[string]metadata.LabelList{
 			"account": {
 				Labels: []string{"a1", "a2"},
@@ -412,6 +417,162 @@ func TestCNLabelUpdate(t *testing.T) {
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
 		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Working,
+		Labels: map[string]metadata.LabelList{
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	})
+}
+
+func TestCNWorkStateUpdate(t *testing.T) {
+	state := CNState{Stores: map[string]CNStoreInfo{}}
+
+	workState := CNWorkState{
+		UUID:  "cn-1",
+		State: metadata.WorkState_Working,
+	}
+	state.UpdateWorkState(workState)
+	// No heartbeat yet, nothing happens.
+	assert.Equal(t, state.Stores[workState.UUID], CNStoreInfo{})
+
+	// Add CN store to HAKeeper.
+	hb1 := CNStoreHeartbeat{UUID: "cn-1", ServiceAddress: "addr-a", Role: metadata.CNRole_AP}
+	tick1 := uint64(100)
+
+	state.Update(hb1, tick1)
+	assert.Equal(t, state.Stores[hb1.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Working,
+		Labels:         map[string]metadata.LabelList{},
+	})
+
+	workState = CNWorkState{
+		UUID:  "cn-1",
+		State: metadata.WorkState_Draining,
+	}
+
+	state.UpdateWorkState(workState)
+	assert.Equal(t, state.Stores[workState.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Draining,
+		Labels:         map[string]metadata.LabelList{},
+	})
+
+	workState = CNWorkState{
+		UUID:  "cn-1",
+		State: metadata.WorkState_Working,
+	}
+
+	state.UpdateWorkState(workState)
+	assert.Equal(t, state.Stores[workState.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Draining,
+		Labels:         map[string]metadata.LabelList{},
+	})
+}
+
+func TestCNStateLabelPatch(t *testing.T) {
+	state := CNState{Stores: map[string]CNStoreInfo{}}
+
+	stateLabel := CNStateLabel{
+		UUID:  "cn-1",
+		State: metadata.WorkState_Working,
+		Labels: map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"a1", "a2"},
+			},
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	}
+	state.PatchCNStore(stateLabel)
+	// No heartbeat yet, nothing happens.
+	assert.Equal(t, state.Stores[stateLabel.UUID], CNStoreInfo{})
+
+	// Add CN store to HAKeeper.
+	hb1 := CNStoreHeartbeat{UUID: "cn-1", ServiceAddress: "addr-a", Role: metadata.CNRole_AP}
+	tick1 := uint64(100)
+
+	state.Update(hb1, tick1)
+	assert.Equal(t, state.Stores[hb1.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Working,
+		Labels:         map[string]metadata.LabelList{},
+	})
+
+	stateLabel = CNStateLabel{
+		UUID:  "cn-1",
+		State: metadata.WorkState_Draining,
+		Labels: map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"a1", "a2"},
+			},
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	}
+	state.PatchCNStore(stateLabel)
+	assert.Equal(t, state.Stores[stateLabel.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Draining,
+		Labels: map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"a1", "a2"},
+			},
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	})
+
+	stateLabel = CNStateLabel{
+		UUID:  "cn-1",
+		State: metadata.WorkState_Drained,
+	}
+	state.PatchCNStore(stateLabel)
+	assert.Equal(t, state.Stores[stateLabel.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Drained,
+		Labels: map[string]metadata.LabelList{
+			"account": {
+				Labels: []string{"a1", "a2"},
+			},
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	})
+
+	stateLabel = CNStateLabel{
+		UUID: "cn-1",
+		Labels: map[string]metadata.LabelList{
+			"role": {
+				Labels: []string{"r1"},
+			},
+		},
+	}
+	state.PatchCNStore(stateLabel)
+	assert.Equal(t, state.Stores[stateLabel.UUID], CNStoreInfo{
+		Tick:           tick1,
+		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
+		WorkState:      metadata.WorkState_Drained,
 		Labels: map[string]metadata.LabelList{
 			"role": {
 				Labels: []string{"r1"},

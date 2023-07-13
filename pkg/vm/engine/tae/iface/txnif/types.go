@@ -48,6 +48,7 @@ type Txn2PC interface {
 }
 
 type TxnReader interface {
+	GetBase() BaseTxn
 	RLock()
 	RUnlock()
 	IsReplay() bool
@@ -143,6 +144,15 @@ type TxnUnsafe interface {
 	UnsafeGetRelation(dbId, tableId uint64) (h handle.Relation, err error)
 }
 
+type BaseTxn interface {
+	GetMemo() *TxnMemo
+	GetStartTS() types.TS
+	GetPrepareTS() types.TS
+	GetCommitTS() types.TS
+	GetLSN() uint64
+	GetTxnState(waitIfcommitting bool) TxnState
+}
+
 type AsyncTxn interface {
 	TxnUnsafe
 	TxnTest
@@ -208,7 +218,6 @@ type BaseMVCCNode interface {
 	PrepareRollback() (err error)
 
 	WriteTo(w io.Writer) (n int64, err error)
-	ReadFrom(r io.Reader) (n int64, err error)
 }
 type AppendNode interface {
 	BaseMVCCNode

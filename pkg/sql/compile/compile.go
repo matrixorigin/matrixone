@@ -360,7 +360,12 @@ func (c *Compile) Run(_ uint64) error {
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 				return err
 			}
-			return cc.runOnce()
+			if err := cc.runOnce(); err != nil {
+				return err
+			}
+			// set affectedRows to old compile to return
+			c.setAffectedRows(cc.GetAffectedRows())
+			return nil
 		}
 		return err
 	}
@@ -1111,6 +1116,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				})
 			}
 		}
+		ss = c.compileProjection(n, ss)
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
@@ -2460,6 +2466,7 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	for i := range anals {
 		//anals[i] = new(process.AnalyzeInfo)
 		anals[i] = analPool.Get().(*process.AnalyzeInfo)
+		anals[i].Reset()
 	}
 	c.anal = &anaylze{
 		qry:       qry,

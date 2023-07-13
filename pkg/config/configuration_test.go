@@ -17,8 +17,10 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetUnixSocketAddress(t *testing.T) {
@@ -46,4 +48,88 @@ func TestIsFileExist(t *testing.T) {
 	ok, err = isFileExist(notExistFile)
 	assert.NoError(t, err)
 	assert.False(t, ok)
+}
+
+func TestObservabilityParameters_SetDefaultValues1(t *testing.T) {
+
+	tests := []struct {
+		name    string
+		prepare func() *ObservabilityParameters
+		check   func(t *testing.T, cfg *ObservabilityParameters)
+	}{
+		{
+			name: "longQueryTime_0_enableAggr_200ms",
+			prepare: func() *ObservabilityParameters {
+				cfg := &ObservabilityParameters{
+					LongQueryTime:          0.0,
+					DisableStmtAggregation: false,
+				}
+				cfg.SelectAggrThreshold.UnmarshalText([]byte("200ms"))
+				return cfg
+			},
+			check: func(t *testing.T, cfg *ObservabilityParameters) {
+				cfg.SetDefaultValues("test")
+				require.Equal(t, false, cfg.DisableStmtAggregation)
+				require.Equal(t, 200*time.Millisecond, cfg.SelectAggrThreshold.Duration)
+				require.Equal(t, 0.2, cfg.LongQueryTime)
+			},
+		},
+		{
+			name: "longQueryTime_1.0_enableAggr_200ms",
+			prepare: func() *ObservabilityParameters {
+				cfg := &ObservabilityParameters{
+					LongQueryTime:          1.0,
+					DisableStmtAggregation: false,
+				}
+				cfg.SelectAggrThreshold.UnmarshalText([]byte("200ms"))
+				return cfg
+			},
+			check: func(t *testing.T, cfg *ObservabilityParameters) {
+				cfg.SetDefaultValues("test")
+				require.Equal(t, false, cfg.DisableStmtAggregation)
+				require.Equal(t, 200*time.Millisecond, cfg.SelectAggrThreshold.Duration)
+				require.Equal(t, 1.0, cfg.LongQueryTime)
+			},
+		},
+		{
+			name: "longQueryTime_0_disable_200ms",
+			prepare: func() *ObservabilityParameters {
+				cfg := &ObservabilityParameters{
+					LongQueryTime:          0.0,
+					DisableStmtAggregation: true,
+				}
+				cfg.SelectAggrThreshold.UnmarshalText([]byte("200ms"))
+				return cfg
+			},
+			check: func(t *testing.T, cfg *ObservabilityParameters) {
+				cfg.SetDefaultValues("test")
+				require.Equal(t, true, cfg.DisableStmtAggregation)
+				require.Equal(t, 200*time.Millisecond, cfg.SelectAggrThreshold.Duration)
+				require.Equal(t, 0.0, cfg.LongQueryTime)
+			},
+		},
+		{
+			name: "longQueryTime_1.0_disableAggr_200ms",
+			prepare: func() *ObservabilityParameters {
+				cfg := &ObservabilityParameters{
+					LongQueryTime:          1.0,
+					DisableStmtAggregation: true,
+				}
+				cfg.SelectAggrThreshold.UnmarshalText([]byte("200ms"))
+				return cfg
+			},
+			check: func(t *testing.T, cfg *ObservabilityParameters) {
+				cfg.SetDefaultValues("test")
+				require.Equal(t, true, cfg.DisableStmtAggregation)
+				require.Equal(t, 200*time.Millisecond, cfg.SelectAggrThreshold.Duration)
+				require.Equal(t, 1.0, cfg.LongQueryTime)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.prepare()
+			tt.check(t, cfg)
+		})
+	}
 }

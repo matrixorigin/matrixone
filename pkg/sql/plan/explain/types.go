@@ -119,6 +119,15 @@ func (buf *ExplainDataBuffer) PushPlanTitle(title string) {
 	buf.End++
 }
 
+func (buf *ExplainDataBuffer) ToString() string {
+	strBuffer := bytes.NewBufferString("")
+	rs := buf.Lines
+	for _, r := range rs {
+		strBuffer.WriteString(r + "\n")
+	}
+	return strBuffer.String()
+}
+
 type ExplainFormat int32
 
 const (
