@@ -14,26 +14,6 @@ service-addresses = [
 [metacache]
 memory-capacity = "512MB"
 
-[[fileservice]]
-name = "LOCAL"
-backend = "DISK"
-
-[[fileservice]]
-name = "SHARED"
-backend = "DISK"
-data-dir = "mo-data/s3"
-
-[fileservice.cache]
-memory-capacity = "512MB"
-disk-capacity = "8GB"
-disk-path = "mo-data/file-service-cache"
-disk-min-evict-interval = "7m"
-disk-evict-target = 0.8
-
-[[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
-
 [dn]
 uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 
