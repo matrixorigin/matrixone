@@ -19,7 +19,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -403,7 +402,7 @@ func maybeRunInDaemonMode() {
 		if err != nil {
 			panic(err)
 		}
-		log.Printf("mo-service is running in daemon mode, child process is %d", cpid)
+		logutil.Infof("mo-service is running in daemon mode, child process is %d", cpid)
 		os.Exit(0)
 	}
 }

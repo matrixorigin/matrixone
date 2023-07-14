@@ -17,12 +17,12 @@ package testengine
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -56,12 +56,12 @@ func CreateR(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "r", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 	r, err := db.Relation(ctx, "r", nil)
 	if err != nil {
-		log.Fatal(err)
+		logutil.Fatal(err.Error())
 	}
 	{
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
@@ -74,7 +74,7 @@ func CreateR(db engine.Database) {
 				}
 				// XXX MPOOL
 				if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
-					log.Fatal(err)
+					logutil.Fatal(err.Error())
 				}
 				bat.Vecs[0] = vec
 			}
@@ -85,7 +85,7 @@ func CreateR(db engine.Database) {
 					vs[i] = uint32(i % 4)
 				}
 				if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-					log.Fatal(err)
+					logutil.Fatal(err.Error())
 				}
 				bat.Vecs[1] = vec
 			}
@@ -96,13 +96,13 @@ func CreateR(db engine.Database) {
 					vs[i] = float64(i)
 				}
 				if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-					log.Fatal(err)
+					logutil.Fatal(err.Error())
 				}
 				bat.Vecs[2] = vec
 			}
 		}
 		if err := r.Write(ctx, bat); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 	{
@@ -114,7 +114,7 @@ func CreateR(db engine.Database) {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i))
 			}
 			if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[0] = vec
 		}
@@ -125,7 +125,7 @@ func CreateR(db engine.Database) {
 				vs[i-10] = uint32(i % 4)
 			}
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[1] = vec
 		}
@@ -136,12 +136,12 @@ func CreateR(db engine.Database) {
 				vs[i-10] = float64(i)
 			}
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[2] = vec
 		}
 		if err := r.Write(ctx, bat); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 }
@@ -172,12 +172,12 @@ func CreateS(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "s", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 	r, err := db.Relation(ctx, "s", nil)
 	if err != nil {
-		log.Fatal(err)
+		logutil.Fatal(err.Error())
 	}
 	{
 		bat := batch.New(true, []string{"orderid", "uid", "price"})
@@ -189,7 +189,7 @@ func CreateS(db engine.Database) {
 					vs[i] = []byte(fmt.Sprintf("%v", 30+i))
 				}
 				if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
-					log.Fatal(err)
+					logutil.Fatal(err.Error())
 				}
 				bat.Vecs[0] = vec
 			}
@@ -200,7 +200,7 @@ func CreateS(db engine.Database) {
 					vs[i] = uint32(i % 2)
 				}
 				if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-					log.Fatal(err)
+					logutil.Fatal(err.Error())
 				}
 				bat.Vecs[1] = vec
 			}
@@ -211,13 +211,13 @@ func CreateS(db engine.Database) {
 					vs[i] = float64(i)
 				}
 				if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-					log.Fatal(err)
+					logutil.Fatal(err.Error())
 				}
 				bat.Vecs[2] = vec
 			}
 		}
 		if err := r.Write(ctx, bat); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 	{
@@ -229,7 +229,7 @@ func CreateS(db engine.Database) {
 				vs[i-10] = []byte(fmt.Sprintf("%v", 40+i))
 			}
 			if err := vector.AppendBytesList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[0] = vec
 		}
@@ -240,7 +240,7 @@ func CreateS(db engine.Database) {
 				vs[i-10] = uint32(i % 2)
 			}
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[1] = vec
 		}
@@ -251,12 +251,12 @@ func CreateS(db engine.Database) {
 				vs[i-10] = float64(i)
 			}
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[2] = vec
 		}
 		if err := r.Write(ctx, bat); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 }
@@ -281,7 +281,7 @@ func CreateT(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "t", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 
@@ -313,12 +313,12 @@ func CreateT1(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "t1", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 	r, err := db.Relation(ctx, "t1", nil)
 	if err != nil {
-		log.Fatal(err)
+		logutil.Fatal(err.Error())
 	}
 	{
 		bat := batch.New(true, []string{"spid", "userid", "score"})
@@ -331,7 +331,7 @@ func CreateT1(db engine.Database) {
 			vs[3] = 3
 			vs[4] = 1
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[0] = vec
 		}
@@ -344,7 +344,7 @@ func CreateT1(db engine.Database) {
 			vs[3] = 3
 			vs[4] = 1
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[1] = vec
 		}
@@ -357,12 +357,12 @@ func CreateT1(db engine.Database) {
 			vs[3] = 3
 			vs[4] = 5
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[2] = vec
 		}
 		if err := r.Write(ctx, bat); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 	{
@@ -373,7 +373,7 @@ func CreateT1(db engine.Database) {
 			vs[0] = 4
 			vs[1] = 5
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[0] = vec
 		}
@@ -383,7 +383,7 @@ func CreateT1(db engine.Database) {
 			vs[0] = 6
 			vs[1] = 11
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[1] = vec
 		}
@@ -393,12 +393,12 @@ func CreateT1(db engine.Database) {
 			vs[0] = 10
 			vs[1] = 99
 			if err := vector.AppendFixedList(vec, vs, nil, testEngineMp); err != nil {
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 			bat.Vecs[2] = vec
 		}
 		if err := r.Write(ctx, bat); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 }
@@ -459,7 +459,7 @@ func CreateCustomer(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "customer", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 }
@@ -574,7 +574,7 @@ func CreateLineorder(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "lineorder", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 }
@@ -641,7 +641,7 @@ func CreatePart(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "part", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 }
@@ -696,7 +696,7 @@ func CreateSupplier(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "supplier", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 }
@@ -763,7 +763,7 @@ func CreateDate(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "dates", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 }
@@ -801,7 +801,7 @@ func CreateCompressFileTable(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "pressTbl", attrs); err != nil {
-			log.Fatal(err)
+			logutil.Fatal(err.Error())
 		}
 	}
 }
