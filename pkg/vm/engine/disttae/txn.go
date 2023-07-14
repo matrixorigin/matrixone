@@ -136,6 +136,7 @@ func (txn *Transaction) dumpBatch(offset int) error {
 		return nil
 	}
 
+	txn.hasS3Op.Store(true)
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		// TODO: after shrink, we should update workspace size
@@ -279,6 +280,7 @@ func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
+	txn.hasS3Op.Store(true)
 	newBat := bat
 	idx := len(txn.writes)
 	if typ == INSERT {
@@ -558,4 +560,5 @@ func (txn *Transaction) delTransaction() {
 	}
 	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
 	txn.cnBlkId_Pos = nil
+	txn.hasS3Op.Store(false)
 }
