@@ -1622,7 +1622,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 		} else {
 			dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.TxnOperator)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, ref.ObjName)
 			}
 			newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
 			newSchemaName := defines.TEMPORARY_DBNAME
