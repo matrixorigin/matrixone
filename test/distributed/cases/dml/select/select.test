@@ -224,3 +224,4 @@ insert into t1 values (1,1);
 -- @separator:table
 select mo_ctl('dn', 'flush', 'db1.t1');
 select a from t1 where a = '';
+select 1 > 0;
