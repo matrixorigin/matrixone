@@ -360,7 +360,12 @@ func (c *Compile) Run(_ uint64) error {
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 				return err
 			}
-			return cc.runOnce()
+			if err := cc.runOnce(); err != nil {
+				return err
+			}
+			// set affectedRows to old compile to return
+			c.setAffectedRows(cc.GetAffectedRows())
+			return nil
 		}
 		return err
 	}
@@ -1400,13 +1405,22 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		return nil, err
 	}
 	ss := make([]*Scope, 0, len(nodes))
+
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
+	if filterExpr != nil {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	for i := range nodes {
-		ss = append(ss, c.compileTableScanWithNode(n, nodes[i]))
+		ss = append(ss, c.compileTableScanWithNode(n, nodes[i], filterExpr))
 	}
 	return ss, nil
 }
 
-func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
+func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filterExpr *plan.Expr) *Scope {
 	var err error
 	var s *Scope
 	var tblDef *plan.TableDef
@@ -1510,7 +1524,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			PartitionRelationNames: partitionRelNames,
 			SchemaName:             n.ObjRef.SchemaName,
 			AccountId:              n.ObjRef.GetPubInfo(),
-			Expr:                   colexec.RewriteFilterExprList(n.FilterList),
+			Expr:                   plan2.DeepCopyExpr(filterExpr),
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
@@ -1541,12 +1555,13 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Restrict,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructRestrict(n),
+			Arg:     constructRestrict(n, filterExpr),
 		})
 	}
 	c.anal.isFirst = false
