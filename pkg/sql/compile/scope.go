@@ -221,15 +221,10 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
 		filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
 
-		if c.runtimeFilterReceiverMap == nil {
-			c.runtimeFilterReceiverMap = make(map[int32]chan *pbpipeline.RuntimeFilter)
-		}
-
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
 			ch, ok := c.runtimeFilterReceiverMap[spec.Tag]
 			if !ok {
-				ch = make(chan *pbpipeline.RuntimeFilter, 1)
-				c.runtimeFilterReceiverMap[spec.Tag] = ch
+				continue
 			}
 
 			select {

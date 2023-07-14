@@ -1368,7 +1368,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			IsDup:       isDup,
 		}
 
-		if arg.RuntimeFilterSpecs != nil {
+		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
 			if c.runtimeFilterReceiverMap == nil {
 				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 			}
@@ -1401,7 +1401,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			IsDup:       isDup,
 		}
 
-		if arg.RuntimeFilterSpecs != nil {
+		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
 			if c.runtimeFilterReceiverMap == nil {
 				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 			}
@@ -1434,7 +1434,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			IsDup:       isDup,
 		}
 
-		if arg.RuntimeFilterSpecs != nil {
+		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
 			if c.runtimeFilterReceiverMap == nil {
 				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 			}
