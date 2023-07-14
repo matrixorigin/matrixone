@@ -16,6 +16,8 @@ package plan
 
 import (
 	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 )
 
 // add this code in buildListPartitionItem
@@ -598,7 +599,7 @@ func EvalPlanExpr(ctx context.Context, expr *plan.Expr, process *process.Process
 		return expr, nil
 	default:
 		// try to calculate default value, return err if fails
-		newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, process)
+		newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, process, false)
 		if err != nil {
 			return nil, err
 		}

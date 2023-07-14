@@ -881,3 +881,41 @@ func TestPatchCNStore(t *testing.T) {
 	}
 	runStoreTest(t, fn)
 }
+
+func TestDeleteCNStore(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		uuid := "uuid1"
+		hb := pb.CNStoreHeartbeat{
+			UUID: uuid,
+		}
+		_, err := store.addCNStoreHeartbeat(ctx, hb)
+		assert.NoError(t, err)
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		assert.Equal(t, 1, len(state.CNState.Stores))
+		_, ok := state.CNState.Stores[uuid]
+		assert.Equal(t, true, ok)
+
+		cnStore := pb.DeleteCNStore{
+			StoreID: uuid,
+		}
+		err = store.deleteCNStore(ctx, cnStore)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		assert.Equal(t, 0, len(state.CNState.Stores))
+	}
+	runStoreTest(t, fn)
+}

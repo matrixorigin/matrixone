@@ -125,7 +125,7 @@ func init() {
 		"copy":                       COPY,
 		"undefined":                  UNDEFINED,
 		"merge":                      MERGE,
-		"tempable":                   TEMPTABLE,
+		"temptable":                  TEMPTABLE,
 		"definer":                    DEFINER,
 		"invoker":                    INVOKER,
 		"security":                   SECURITY,

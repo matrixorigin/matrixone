@@ -9871,6 +9871,8 @@ non_reserved_keyword:
 |   PUBLICATIONS
 |   PROPERTIES
 |	WEEK
+|   DEFINER
+|   SQL
 
 func_not_keyword:
     DATE_ADD
