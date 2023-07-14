@@ -91,7 +91,7 @@ func main() {
 			panic(err)
 		}
 	} else if *configFile != "" {
-		cfg := &Config{}
+		cfg := NewConfig()
 		if err := parseConfigFromFile(*configFile, cfg); err != nil {
 			panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
 		}
