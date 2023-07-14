@@ -16,12 +16,12 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/examples/message"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var (
@@ -58,7 +58,7 @@ func main() {
 		panic(err)
 	}
 
-	log.Printf("%s", resp.DebugString())
+	logutil.Infof("%s", resp.DebugString())
 }
 
 func startServer() error {
