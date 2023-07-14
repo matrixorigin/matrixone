@@ -99,6 +99,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 			return err
 		}
 
+		bat.FixedForRemoveZs()
 		// the last batch of pipeline.
 		if bat == nil {
 			break
@@ -142,6 +143,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			return false, err
 		}
 
+		bat.FixedForRemoveZs()
 		// the last batch of block.
 		if bat == nil {
 			return true, nil
@@ -182,6 +184,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}
 			}
+			ctr.bat.SetRowCount(ctr.bat.RowCount() + int(rows-oldHashGroup))
 
 			newHashGroup := ctr.hashTable.GroupCount()
 			insertCount := int(newHashGroup - oldHashGroup)
@@ -195,6 +198,8 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			}
 		}
 		ana.Output(ctr.bat, isLast)
+
+		ctr.bat.CheckForRemoveZs("minus")
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
 		bat.Clean(proc.Mp())

@@ -43,6 +43,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 
 	arg := x.(*Argument)
 	bat := proc.InputBatch()
+	bat.FixedForRemoveZs()
 	if bat == nil {
 		proc.SetInputBatch(nil)
 		return true, nil
@@ -66,6 +67,8 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		newBat.SetVector(int32(idx), vec)
 	}
 	newBat.Zs = append(newBat.Zs, bat.Zs...)
+	newBat.SetRowCount(newBat.RowCount() + bat.RowCount())
+
 	if arg.HasAutoCol {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
@@ -101,6 +104,8 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		}
 		newBat.Vecs = append(newBat.Vecs, rowIdVec)
 	}
+
+	newBat.CheckForRemoveZs("preinsert")
 	proc.SetInputBatch(newBat)
 	return false, nil
 }

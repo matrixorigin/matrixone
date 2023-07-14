@@ -48,6 +48,7 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	defer analy.Stop()
 
 	inputBat := proc.InputBatch()
+	inputBat.FixedForRemoveZs()
 	if inputBat == nil {
 		return true, nil
 	}
@@ -90,6 +91,7 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	}
 	insertUniqueBat.SetVector(indexColPos, vec)
 	insertUniqueBat.SetZs(vec.Length(), proc.Mp())
+	insertUniqueBat.SetRowCount(vec.Length())
 
 	vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
 	insertUniqueBat.SetVector(pkColPos, vec)
@@ -104,6 +106,7 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 		}
 	}
 
+	insertUniqueBat.CheckForRemoveZs("preinsertunique")
 	proc.SetInputBatch(insertUniqueBat)
 	return false, nil
 }
