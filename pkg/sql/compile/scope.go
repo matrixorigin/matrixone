@@ -217,16 +217,26 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	mcpu := s.NodeInfo.Mcpu
 	var err error
 
-	if len(s.DataSource.RuntimeFilterReceivers) > 0 {
-		exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterReceivers))
+	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
+		exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
 		filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
 
-		for _, receiver := range s.DataSource.RuntimeFilterReceivers {
+		if c.runtimeFilterReceiverMap == nil {
+			c.runtimeFilterReceiverMap = make(map[int32]chan *pbpipeline.RuntimeFilter)
+		}
+
+		for _, spec := range s.DataSource.RuntimeFilterSpecs {
+			ch, ok := c.runtimeFilterReceiverMap[spec.Tag]
+			if !ok {
+				ch = make(chan *pbpipeline.RuntimeFilter, 1)
+				c.runtimeFilterReceiverMap[spec.Tag] = ch
+			}
+
 			select {
 			case <-s.Proc.Ctx.Done():
 				return nil
 
-			case filter := <-receiver.Chan:
+			case filter := <-ch:
 				if filter == nil {
 					exprs = nil
 					s.NodeInfo.Data = s.NodeInfo.Data[:0]
@@ -236,7 +246,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 					continue
 				}
 
-				exprs = append(exprs, receiver.Spec.Expr)
+				exprs = append(exprs, spec.Expr)
 				filters = append(filters, filter)
 			}
 		}
@@ -758,11 +768,11 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 		}
 
 		// normal receive
-		//if dataBuffer == nil {
-		//	dataBuffer = m.Data
-		//} else {
-		dataBuffer = append(dataBuffer, m.Data...)
-		//}
+		if dataBuffer == nil {
+			dataBuffer = m.Data
+		} else {
+			dataBuffer = append(dataBuffer, m.Data...)
+		}
 
 		switch m.GetSid() {
 		case pbpipeline.WaitingNext:

@@ -226,11 +226,11 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 		}
 		sequence++
 
-		//if dataBuffer == nil {
-		//	dataBuffer = m.Data
-		//} else {
-		dataBuffer = append(dataBuffer, m.Data...)
-		//}
+		if dataBuffer == nil {
+			dataBuffer = m.Data
+		} else {
+			dataBuffer = append(dataBuffer, m.Data...)
+		}
 
 		if m.WaitingNextToMerge() {
 			continue
@@ -433,14 +433,15 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	// DataSource
 	if s.DataSource != nil { // if select 1, DataSource is nil
 		p.DataSource = &pipeline.Source{
-			SchemaName:   s.DataSource.SchemaName,
-			TableName:    s.DataSource.RelationName,
-			ColList:      s.DataSource.Attributes,
-			PushdownId:   s.DataSource.PushdownId,
-			PushdownAddr: s.DataSource.PushdownAddr,
-			Expr:         s.DataSource.Expr,
-			TableDef:     s.DataSource.TableDef,
-			Timestamp:    &s.DataSource.Timestamp,
+			SchemaName:             s.DataSource.SchemaName,
+			TableName:              s.DataSource.RelationName,
+			ColList:                s.DataSource.Attributes,
+			PushdownId:             s.DataSource.PushdownId,
+			PushdownAddr:           s.DataSource.PushdownAddr,
+			Expr:                   s.DataSource.Expr,
+			TableDef:               s.DataSource.TableDef,
+			Timestamp:              &s.DataSource.Timestamp,
+			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 		}
 		if s.DataSource.Bat != nil {
 			data, err := types.Encode(s.DataSource.Bat)
@@ -448,13 +449,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 				return nil, -1, err
 			}
 			p.DataSource.Block = string(data)
-		}
-		if len(s.DataSource.RuntimeFilterReceivers) > 0 {
-			rfSpecs := make([]*plan.RuntimeFilterSpec, len(s.DataSource.RuntimeFilterReceivers))
-			for i, recv := range s.DataSource.RuntimeFilterReceivers {
-				rfSpecs[i] = recv.Spec
-			}
-			p.DataSource.RuntimeFilterProbeList = rfSpecs
 		}
 	}
 	// PreScope
@@ -548,14 +542,15 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	dsc := p.GetDataSource()
 	if dsc != nil {
 		s.DataSource = &Source{
-			SchemaName:   dsc.SchemaName,
-			RelationName: dsc.TableName,
-			Attributes:   dsc.ColList,
-			PushdownId:   dsc.PushdownId,
-			PushdownAddr: dsc.PushdownAddr,
-			Expr:         dsc.Expr,
-			TableDef:     dsc.TableDef,
-			Timestamp:    *dsc.Timestamp,
+			SchemaName:         dsc.SchemaName,
+			RelationName:       dsc.TableName,
+			Attributes:         dsc.ColList,
+			PushdownId:         dsc.PushdownId,
+			PushdownAddr:       dsc.PushdownAddr,
+			Expr:               dsc.Expr,
+			TableDef:           dsc.TableDef,
+			Timestamp:          *dsc.Timestamp,
+			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 		}
 		if len(dsc.Block) > 0 {
 			bat := new(batch.Batch)
@@ -564,24 +559,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			}
 			bat.Cnt = 1
 			s.DataSource.Bat = bat
-		}
-		if len(dsc.RuntimeFilterProbeList) > 0 {
-			rfReceivers := make([]*colexec.RuntimeFilterChan, len(dsc.RuntimeFilterProbeList))
-			if ctx.runtimeFilterReceiverMap == nil {
-				ctx.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-			for i, rfSpec := range dsc.RuntimeFilterProbeList {
-				ch := ctx.runtimeFilterReceiverMap[rfSpec.Tag]
-				if ch == nil {
-					ch = make(chan *pipeline.RuntimeFilter, 1)
-					ctx.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				}
-				rfReceivers[i] = &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				}
-			}
-			s.DataSource.RuntimeFilterReceivers = rfReceivers
 		}
 	}
 	if p.Node != nil {
@@ -753,59 +730,64 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Join = &pipeline.Join{
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
-			RelList:   relList,
-			ColList:   colList,
-			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
-			LeftCond:  t.Conditions[0],
-			RightCond: t.Conditions[1],
+			Ibucket:                t.Ibucket,
+			Nbucket:                t.Nbucket,
+			RelList:                relList,
+			ColList:                colList,
+			Expr:                   t.Cond,
+			Types:                  convertToPlanTypes(t.Typs),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *left.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.LeftJoin = &pipeline.LeftJoin{
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
-			RelList:   relList,
-			ColList:   colList,
-			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
-			LeftCond:  t.Conditions[0],
-			RightCond: t.Conditions[1],
+			Ibucket:                t.Ibucket,
+			Nbucket:                t.Nbucket,
+			RelList:                relList,
+			ColList:                colList,
+			Expr:                   t.Cond,
+			Types:                  convertToPlanTypes(t.Typs),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *right.Argument:
 		rels, poses := getRelColList(t.Result)
 		in.RightJoin = &pipeline.RightJoin{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			RelList:    rels,
-			ColList:    poses,
-			Expr:       t.Cond,
-			LeftTypes:  convertToPlanTypes(t.LeftTypes),
-			RightTypes: convertToPlanTypes(t.RightTypes),
-			LeftCond:   t.Conditions[0],
-			RightCond:  t.Conditions[1],
+			Ibucket:                t.Ibucket,
+			Nbucket:                t.Nbucket,
+			RelList:                rels,
+			ColList:                poses,
+			Expr:                   t.Cond,
+			LeftTypes:              convertToPlanTypes(t.LeftTypes),
+			RightTypes:             convertToPlanTypes(t.RightTypes),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *rightsemi.Argument:
 		in.RightSemiJoin = &pipeline.RightSemiJoin{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     t.Result,
-			Expr:       t.Cond,
-			RightTypes: convertToPlanTypes(t.RightTypes),
-			LeftCond:   t.Conditions[0],
-			RightCond:  t.Conditions[1],
+			Ibucket:                t.Ibucket,
+			Nbucket:                t.Nbucket,
+			Result:                 t.Result,
+			Expr:                   t.Cond,
+			RightTypes:             convertToPlanTypes(t.RightTypes),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *rightanti.Argument:
 		in.RightAntiJoin = &pipeline.RightAntiJoin{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     t.Result,
-			Expr:       t.Cond,
-			RightTypes: convertToPlanTypes(t.RightTypes),
-			LeftCond:   t.Conditions[0],
-			RightCond:  t.Conditions[1],
+			Ibucket:                t.Ibucket,
+			Nbucket:                t.Nbucket,
+			Result:                 t.Result,
+			Expr:                   t.Cond,
+			RightTypes:             convertToPlanTypes(t.RightTypes),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *limit.Argument:
 		in.Limit = t.Limit
@@ -868,25 +850,27 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Filter = t.E
 	case *semi.Argument:
 		in.SemiJoin = &pipeline.SemiJoin{
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
-			Result:    t.Result,
-			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
-			LeftCond:  t.Conditions[0],
-			RightCond: t.Conditions[1],
+			Ibucket:                t.Ibucket,
+			Nbucket:                t.Nbucket,
+			Result:                 t.Result,
+			Expr:                   t.Cond,
+			Types:                  convertToPlanTypes(t.Typs),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *single.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
-			RelList:   relList,
-			ColList:   colList,
-			Expr:      t.Cond,
-			Types:     convertToPlanTypes(t.Typs),
-			LeftCond:  t.Conditions[0],
-			RightCond: t.Conditions[1],
+			Ibucket:                t.Ibucket,
+			Nbucket:                t.Nbucket,
+			RelList:                relList,
+			ColList:                colList,
+			Expr:                   t.Cond,
+			Types:                  convertToPlanTypes(t.Typs),
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
 	case *top.Argument:
 		in.Limit = uint64(t.Limit)
@@ -960,13 +944,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:  t.Nbucket,
 			Types:    convertToPlanTypes(t.Typs),
 			Conds:    t.Conditions,
-		}
-		if len(t.RuntimeFilterSenders) > 0 {
-			rfSpecs := make([]*plan.RuntimeFilterSpec, len(t.RuntimeFilterSenders))
-			for i, sender := range t.RuntimeFilterSenders {
-				rfSpecs[i] = sender.Spec
-			}
-			in.HashBuild.RuntimeFilterBuildList = rfSpecs
 		}
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
@@ -1130,53 +1107,58 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Join:
 		t := opr.GetJoin()
 		v.Arg = &join.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Cond:       t.Expr,
-			Typs:       convertToTypes(t.Types),
-			Result:     convertToResultPos(t.RelList, t.ColList),
-			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+			Ibucket:            t.Ibucket,
+			Nbucket:            t.Nbucket,
+			Cond:               t.Expr,
+			Typs:               convertToTypes(t.Types),
+			Result:             convertToResultPos(t.RelList, t.ColList),
+			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 		}
 	case vm.Left:
 		t := opr.GetLeftJoin()
 		v.Arg = &left.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Cond:       t.Expr,
-			Typs:       convertToTypes(t.Types),
-			Result:     convertToResultPos(t.RelList, t.ColList),
-			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+			Ibucket:            t.Ibucket,
+			Nbucket:            t.Nbucket,
+			Cond:               t.Expr,
+			Typs:               convertToTypes(t.Types),
+			Result:             convertToResultPos(t.RelList, t.ColList),
+			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 		}
 	case vm.Right:
 		t := opr.GetRightJoin()
 		v.Arg = &right.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     convertToResultPos(t.RelList, t.ColList),
-			LeftTypes:  convertToTypes(t.LeftTypes),
-			RightTypes: convertToTypes(t.RightTypes),
-			Cond:       t.Expr,
-			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+			Ibucket:            t.Ibucket,
+			Nbucket:            t.Nbucket,
+			Result:             convertToResultPos(t.RelList, t.ColList),
+			LeftTypes:          convertToTypes(t.LeftTypes),
+			RightTypes:         convertToTypes(t.RightTypes),
+			Cond:               t.Expr,
+			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 		}
 	case vm.RightSemi:
 		t := opr.GetRightSemiJoin()
 		v.Arg = &rightsemi.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     t.Result,
-			RightTypes: convertToTypes(t.RightTypes),
-			Cond:       t.Expr,
-			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+			Ibucket:            t.Ibucket,
+			Nbucket:            t.Nbucket,
+			Result:             t.Result,
+			RightTypes:         convertToTypes(t.RightTypes),
+			Cond:               t.Expr,
+			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 		}
 	case vm.RightAnti:
 		t := opr.GetRightAntiJoin()
 		v.Arg = &rightanti.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     t.Result,
-			RightTypes: convertToTypes(t.RightTypes),
-			Cond:       t.Expr,
-			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+			Ibucket:            t.Ibucket,
+			Nbucket:            t.Nbucket,
+			Result:             t.Result,
+			RightTypes:         convertToTypes(t.RightTypes),
+			Cond:               t.Expr,
+			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 		}
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
@@ -1239,22 +1221,24 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Semi:
 		t := opr.GetSemiJoin()
 		v.Arg = &semi.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     t.Result,
-			Cond:       t.Expr,
-			Typs:       convertToTypes(t.Types),
-			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+			Ibucket:            t.Ibucket,
+			Nbucket:            t.Nbucket,
+			Result:             t.Result,
+			Cond:               t.Expr,
+			Typs:               convertToTypes(t.Types),
+			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 		}
 	case vm.Single:
 		t := opr.GetSingleJoin()
 		v.Arg = &single.Argument{
-			Ibucket:    t.Ibucket,
-			Nbucket:    t.Nbucket,
-			Result:     convertToResultPos(t.RelList, t.ColList),
-			Cond:       t.Expr,
-			Typs:       convertToTypes(t.Types),
-			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
+			Ibucket:            t.Ibucket,
+			Nbucket:            t.Nbucket,
+			Result:             convertToResultPos(t.RelList, t.ColList),
+			Cond:               t.Expr,
+			Typs:               convertToTypes(t.Types),
+			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
+			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 		}
 	case vm.Mark:
 		t := opr.GetMarkJoin()
@@ -1329,33 +1313,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		}
 	case vm.HashBuild:
 		t := opr.GetHashBuild()
-		var rfSenders []*colexec.RuntimeFilterChan
-		if len(t.RuntimeFilterBuildList) > 0 {
-			rfSenders = make([]*colexec.RuntimeFilterChan, 0, len(t.RuntimeFilterBuildList))
-			if ctx.runtimeFilterReceiverMap == nil {
-				ctx.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-			for i, rfSpec := range t.RuntimeFilterBuildList {
-				ch := ctx.runtimeFilterReceiverMap[rfSpec.Tag]
-				if ch == nil {
-					ch = make(chan *pipeline.RuntimeFilter, 1)
-					ctx.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				}
-
-				rfSenders[i] = &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				}
-			}
-		}
 		v.Arg = &hashbuild.Argument{
-			Ibucket:              t.Ibucket,
-			Nbucket:              t.Nbucket,
-			NeedHashMap:          t.NeedHash,
-			NeedExpr:             t.NeedExpr,
-			Typs:                 convertToTypes(t.Types),
-			Conditions:           t.Conds,
-			RuntimeFilterSenders: rfSenders,
+			Ibucket:     t.Ibucket,
+			Nbucket:     t.Nbucket,
+			NeedHashMap: t.NeedHash,
+			NeedExpr:    t.NeedExpr,
+			Typs:        convertToTypes(t.Types),
+			Conditions:  t.Conds,
 		}
 	case vm.External:
 		t := opr.GetExternalScan()
