@@ -711,6 +711,13 @@ jobs:
           kubectl get matrixonecluster -n mo-checkin-regression-${{ github.event.pull_request.number }} | awk 'NR>1{system("kubectl delete matrixonecluster/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
           sleep 60      
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
+
+          # move etl/pprof to result
+          if [ "$(aws s3 ls s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl/ | grep pprof | wc -l)" -eq 1 ]; then
+            aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1;
+            aws s3 mv s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl/pprof s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl/pprof --recursive > /dev/null 2>&1;
+          fi
+
           #delete bucket
           kubectl get bucket -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
           #delete namespace
