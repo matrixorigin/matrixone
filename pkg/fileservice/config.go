@@ -33,7 +33,8 @@ const (
 
 func GetDefaultBackend() string { return diskFileServiceBackend }
 func GetRawBackendByBackend(src string) string {
-	if src == diskFileServiceBackend {
+	switch src {
+	case diskFileServiceBackend, memFileServiceBackend:
 		return diskETLFileServiceBackend
 	}
 	return src
