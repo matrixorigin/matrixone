@@ -358,7 +358,7 @@ func doLock(
 		fetchFunc = GetFetchRowsFunc(pkType)
 	}
 
-	rows, g := fetchFunc(
+	has, rows, g := fetchFunc(
 		vec,
 		opts.parker,
 		pkType,
@@ -366,6 +366,9 @@ func doLock(
 		opts.lockTable,
 		opts.filter,
 		opts.filterCols)
+	if !has {
+		return timestamp.Timestamp{}, nil
+	}
 
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
