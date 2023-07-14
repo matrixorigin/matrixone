@@ -324,6 +324,11 @@ func (r *blockReader) Read(
 	// get the block read filter
 	filter := r.getReadFilter(r.proc)
 
+	// if any null expr is found in the primary key (composite primary keys), quick return
+	if r.filterState.hasNull {
+		return nil, nil
+	}
+
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 		if filter != nil && blockInfo.Sorted {

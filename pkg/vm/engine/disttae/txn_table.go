@@ -1442,6 +1442,8 @@ func (tbl *txnTable) newMergeReader(
 		if pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Const, len(pk.Names))
 			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
+
+			// return empty reader if the composite primary key has null value
 			if hasNull {
 				return []engine.Reader{
 					new(emptyReader),
