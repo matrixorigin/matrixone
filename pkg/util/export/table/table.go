@@ -860,6 +860,9 @@ func GetTable(b string) (*Table, bool) {
 	return tbl, exist
 }
 
+// SetPathBuilder
+//
+// Deprecated. Please init static
 func SetPathBuilder(ctx context.Context, pathBuilder string) error {
 	tables := GetAllTable()
 	bp := PathBuilderFactory(pathBuilder)

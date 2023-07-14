@@ -73,6 +73,7 @@ type Merge struct {
 	pathBuilder table.PathBuilder       // const as NewAccountDatePathBuilder()
 
 	// MaxFileSize 控制合并后最大文件大小，default: 128 MB
+	// Deprecated
 	MaxFileSize int64 // WithMaxFileSize
 	// MaxMergeJobs 允许进行的 Merge 的任务个数，default: 16
 	MaxMergeJobs int64 // WithMaxMergeJobs
@@ -81,6 +82,7 @@ type Merge struct {
 	// Deprecated: useless in Merge all in one file
 	MinFilesMerge int // WithMinFilesMerge
 	// FileCacheSize 控制 Merge 过程中，允许缓存的文件大小，default: 32 MB
+	// Deprecated
 	FileCacheSize int64
 
 	// logger
@@ -707,7 +709,7 @@ func LongRunETLMerge(ctx context.Context, task task.Task, logger *log.MOLogger, 
 		return nil
 	}
 
-	newOptions := []MergeOption{WithMaxFileSize(maxFileSize.Load())}
+	var newOptions []MergeOption
 	newOptions = append(newOptions, opts...)
 	newOptions = append(newOptions, WithTable(tables[0]))
 	merge, err := NewMerge(ctx, newOptions...)
@@ -777,7 +779,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		}
 
 		// handle metric
-		newOptions := []MergeOption{WithMaxFileSize(maxFileSize.Load())}
+		var newOptions []MergeOption
 		newOptions = append(newOptions, opts...)
 		newOptions = append(newOptions, WithTable(table))
 		merge, err := NewMerge(ctx, newOptions...)

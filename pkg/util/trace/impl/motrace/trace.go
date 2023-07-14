@@ -54,7 +54,6 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 	opts = append(opts,
 		withMOVersion(SV.MoVersion),
 		EnableTracer(!SV.DisableTrace),
-		WithBatchProcessMode(SV.BatchProcessor),
 		WithExportInterval(SV.TraceExportInterval),
 		WithLongQueryTime(SV.LongQueryTime),
 		WithLongSpanTime(SV.LongSpanTime.Duration),
