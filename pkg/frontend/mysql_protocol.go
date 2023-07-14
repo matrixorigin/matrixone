@@ -1812,16 +1812,19 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	//lenenc_int     length of fixed-length fields [0c]
 	pos = mp.io.WriteUint8(data, pos, 0x0c)
 
-	//int<2>              character set
-	pos = mp.io.WriteUint16(data, pos, column.Charset())
-
-	//int<4>              column length
-	pos = mp.io.WriteUint32(data, pos, column.Length())
-
-	//int<1>              type
 	if column.ColumnType() == defines.MYSQL_TYPE_BOOL {
+		//int<2>              character set
+		pos = mp.io.WriteUint16(data, pos, 0x21)
+		//int<4>              column length
+		pos = mp.io.WriteUint32(data, pos, 12)
+		//int<1>              type
 		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_VARCHAR))
 	} else {
+		//int<2>              character set
+		pos = mp.io.WriteUint16(data, pos, column.Charset())
+		//int<4>              column length
+		pos = mp.io.WriteUint32(data, pos, column.Length())
+		//int<1>              type
 		pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
 	}
 
