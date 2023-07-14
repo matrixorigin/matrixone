@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/stretchr/testify/require"
 
@@ -8541,4 +8542,36 @@ func TestGetUserPart(t *testing.T) {
 	require.Equal(t, "user1", getUserPart(user1))
 	user1 = "user1?a:b"
 	require.Equal(t, "user1", getUserPart(user1))
+}
+
+func TestCheckRoleWhetherTableOwner(t *testing.T) {
+
+}
+
+func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
+
+}
+
+func TestGetSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(t *testing.T) {
+
+}
+
+func TestDoAlterDatabaseConfig(t *testing.T) {
+
+}
+
+func TestDoAlterAccountConfig(t *testing.T) {
+
+}
+
+func TestInsertRecordToMoMysqlCompatibilityMode(t *testing.T) {
+
+}
+
+func TestDeleteRecordToMoMysqlCompatbilityMode(t *testing.T) {
+
+}
+
+func TestGetVersionCompatibility(t *testing.T) {
+
 }
