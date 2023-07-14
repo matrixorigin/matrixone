@@ -108,40 +108,53 @@ func getValidCompositePKCnt(vals []*plan.Const) int {
 	return cnt
 }
 
-func getCompositPKVals(expr *plan.Expr, pks []string, vals []*plan.Const, proc *process.Process) bool {
+func getCompositPKVals(
+	expr *plan.Expr,
+	pks []string,
+	vals []*plan.Const,
+	proc *process.Process,
+) (ok bool, hasNull bool) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		fname := exprImpl.F.Func.ObjName
 		switch fname {
 		case "and":
-			getCompositPKVals(exprImpl.F.Args[0], pks, vals, proc)
+			_, hasNull = getCompositPKVals(exprImpl.F.Args[0], pks, vals, proc)
+			if hasNull {
+				return false, true
+			}
 			return getCompositPKVals(exprImpl.F.Args[1], pks, vals, proc)
 		case "=":
 			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
 				if pos := getPosInCompositPK(leftExpr.Col.Name, pks); pos != -1 {
 					_, ret := getConstValueByExpr(exprImpl.F.Args[1], proc)
 					if ret == nil {
-						return false
+						return false, false
+					} else if ret.Isnull {
+						return false, true
 					}
 					vals[pos] = ret
-					return true
+					return true, false
 				}
-				return false
+				return false, false
 			}
 			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
 				if pos := getPosInCompositPK(rightExpr.Col.Name, pks); pos != -1 {
 					_, ret := getConstValueByExpr(exprImpl.F.Args[0], proc)
 					if ret == nil {
-						return false
+						return false, false
+					} else if ret.Isnull {
+						return false, true
 					}
 					vals[pos] = ret
+					return true, false
 				}
-				return false
+				return false, false
 			}
-			return false
+			return false, false
 		}
 	}
-	return false
+	return false, false
 }
 
 func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) (bool, *plan.Const) {

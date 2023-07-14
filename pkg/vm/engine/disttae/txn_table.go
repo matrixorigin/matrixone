@@ -1441,7 +1441,12 @@ func (tbl *txnTable) newMergeReader(
 		// here we try to serialize the composite primary key
 		if pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Const, len(pk.Names))
-			getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
+			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
+			if hasNull {
+				return []engine.Reader{
+					new(emptyReader),
+				}, nil
+			}
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
 				var packer *types.Packer

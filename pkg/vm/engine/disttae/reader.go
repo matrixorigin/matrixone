@@ -153,11 +153,12 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
 	// evaluate
 	pkNames := mixin.tableDef.Pkey.Names
 	pkVals := make([]*plan.Const, len(pkNames))
-	ok := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
+	ok, hasNull := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
 
 	if !ok || pkVals[0] == nil {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
+		mixin.filterState.hasNull = hasNull
 		return
 	}
 	cnt := getValidCompositePKCnt(pkVals)

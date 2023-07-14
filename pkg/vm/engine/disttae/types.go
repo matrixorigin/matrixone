@@ -451,6 +451,7 @@ type withFilterMixin struct {
 		filter   blockio.ReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
+		hasNull  bool
 	}
 
 	sels []int32
