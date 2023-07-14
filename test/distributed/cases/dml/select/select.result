@@ -463,3 +463,6 @@ count(*)
 select count(*) from t1 where a = null;
 count(*)
 0
+select 1 > 0;
+1 > 0
+true

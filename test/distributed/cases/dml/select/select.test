@@ -246,3 +246,4 @@ select count(*) from t1 where a = null;
 select mo_ctl('dn', 'flush', 'db1.t1');
 select count(*) from t1 where a is null;
 select count(*) from t1 where a = null;
+select 1 > 0;
