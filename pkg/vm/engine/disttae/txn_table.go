@@ -582,8 +582,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	bat := batch.EmptyForConstFoldBatch
 	for i := range exprs {
 		newExprs[i] = plan2.DeepCopyExpr(exprs[i])
-		newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
-		foldedExpr, _ := plan2.ConstantFold(bat, newExprs[i], tbl.proc)
+		// newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
+		foldedExpr, _ := plan2.ConstantFold(bat, newExprs[i], tbl.proc, true)
 		if foldedExpr != nil {
 			newExprs[i] = foldedExpr
 		}
