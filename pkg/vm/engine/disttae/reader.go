@@ -217,7 +217,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 	// C: {A|B} and {A|B}
 	// D: {A|B|C} [and {A|B|C}]*
 	// for other patterns, no filter is needed
-	ok, searchFunc := getNonCompositePKSearchFuncByExpr(
+	ok, hasNull, searchFunc := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
 		mixin.tableDef.Pkey.PkeyColName,
 		mixin.columns.colTypes[mixin.columns.pkPos].Oid,
@@ -226,6 +226,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 	if !ok || searchFunc == nil {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
+		mixin.filterState.hasNull = hasNull
 		return
 	}
 
