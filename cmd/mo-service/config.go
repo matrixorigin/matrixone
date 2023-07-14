@@ -150,11 +150,16 @@ func (c *Config) validate() error {
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
 	}
+	c.initFileServiceConfig()
 	for idx := range c.FileServices {
 		switch c.FileServices[idx].Name {
 		case defines.LocalFileServiceName, defines.ETLFileServiceName:
 			if c.FileServices[idx].DataDir == "" {
 				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
+			}
+		case defines.SharedFileServiceName:
+			if c.FileServices[idx].DataDir == "" {
+				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, "s3")
 			}
 		}
 	}
@@ -165,6 +170,51 @@ func (c *Config) validate() error {
 		c.Log.StacktraceLevel = zap.PanicLevel.String()
 	}
 	return nil
+}
+
+// initFileServiceConfig make sure there are default config for LOCAL, SHARED, ETL (with backend DISK / DISK-ETL)
+func (c *Config) initFileServiceConfig() {
+	var existLocal, existShared, existETL bool
+	var sharedConfig fileservice.Config
+	for _, cfg := range c.FileServices {
+		switch cfg.Name {
+		case defines.LocalFileServiceName:
+			existLocal = true
+		case defines.SharedFileServiceName:
+			sharedConfig = cfg
+			existShared = true
+		case defines.ETLFileServiceName:
+			existETL = true
+		}
+	}
+	// check config in order: local -> shared -> etl
+	if !existLocal {
+		c.FileServices = append(c.FileServices, fileservice.Config{
+			Name:    defines.LocalFileServiceName,
+			Backend: fileservice.GetDefaultBackend(),
+			// Cache: use default cache
+			// DataDir: use default value {c.DataDir}/local
+		})
+	}
+	if !existShared {
+		sharedConfig = fileservice.Config{
+			Name:    defines.SharedFileServiceName,
+			Backend: fileservice.GetDefaultBackend(),
+			// Cache: use default cache
+			// DataDir: use default value {c.DataDir}/s3
+		}
+		c.FileServices = append(c.FileServices, sharedConfig)
+	}
+	if !existETL {
+		cfg := fileservice.Config{
+			Name:    defines.ETLFileServiceName,
+			Backend: fileservice.GetRawBackendByBackend(sharedConfig.Backend),
+			S3:      sharedConfig.S3,
+			// Cache: ignore cache config from SHARED
+			// DataDir: use default value {c.DataDir}/etl
+		}
+		c.FileServices = append(c.FileServices, cfg)
+	}
 }
 
 func (c *Config) initMetaCache() {

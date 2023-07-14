@@ -31,6 +31,14 @@ const (
 	minioFileServiceBackend   = "MINIO"
 )
 
+func GetDefaultBackend() string { return diskFileServiceBackend }
+func GetRawBackendByBackend(src string) string {
+	if src == diskFileServiceBackend {
+		return diskETLFileServiceBackend
+	}
+	return src
+}
+
 // Config fileService config
 type Config struct {
 	// Name name of fileservice, describe what an instance of fileservice is used for
