@@ -121,7 +121,7 @@ func (w *S3Writer) SetTableName(name string) {
 
 func (w *S3Writer) SetSeqnums(seqnums []uint16) {
 	w.seqnums = seqnums
-	logutil.Infof("s3 table set directly %q seqnums: %+v", w.tablename, w.seqnums)
+	logutil.Debugf("s3 table set directly %q seqnums: %+v", w.tablename, w.seqnums)
 }
 
 func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, error) {
@@ -145,7 +145,7 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 			}
 		}
 	}
-	logutil.Infof("s3 table set from AllocS3Writer %q seqnums: %+v", writer.tablename, writer.seqnums)
+	logutil.Debugf("s3 table set from AllocS3Writer %q seqnums: %+v", writer.tablename, writer.seqnums)
 
 	// Get Single Col pk index
 	for idx, colDef := range tableDef.Cols {
@@ -200,7 +200,7 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 				}
 			}
 		}
-		logutil.Infof("s3 table set from AllocS3WriterP%d %q seqnums: %+v", i, writers[i].tablename, writers[i].seqnums)
+		logutil.Debugf("s3 table set from AllocS3WriterP%d %q seqnums: %+v", i, writers[i].tablename, writers[i].seqnums)
 
 		// Get Single Col pk index
 		for idx, colDef := range tableDef.Cols {
@@ -649,7 +649,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 // For more information, please refer to the comment about func WriteEnd in Writer interface
 func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
-	logutil.Infof("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
+	logutil.Debugf("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
 	if err != nil {
 		return nil, err
 	}
