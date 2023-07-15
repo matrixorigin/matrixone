@@ -51,13 +51,15 @@ func TestMetric(t *testing.T) {
 		defer StopMetricSync()
 
 		const (
-			none      = "--None"
-			createDB  = "create database"
-			createTbl = "create table"
-			insertRow = "insert into"
+			none       = "--None"
+			createDB   = "create database"
+			createTbl  = "CREATE TABLE"
+			createView = "CREATE VIEW"
+			insertRow  = "insert into"
 		)
 		prevSqlKind := none
 		for sql := range sqlch {
+			t.Logf("sql: %s", sql)
 			if strings.HasPrefix(sql, prevSqlKind) {
 				continue
 			}
@@ -69,6 +71,9 @@ func TestMetric(t *testing.T) {
 				require.True(t, strings.HasPrefix(sql, createTbl), "income sql: %s", sql)
 				prevSqlKind = createTbl
 			case createTbl:
+				require.True(t, strings.HasPrefix(sql, createView), "income sql: %s", sql)
+				prevSqlKind = createView
+			case createView:
 				require.True(t, strings.HasPrefix(sql, insertRow), "income sql: %s", sql)
 				goto GOON
 			default:
@@ -123,65 +128,6 @@ func TestDescExtra(t *testing.T) {
 	assert.Equal(t, extra.labels[0].GetName(), "is_internal")
 	assert.Equal(t, extra.labels[1].GetName(), "node")
 	assert.Equal(t, extra.labels[2].GetName(), "xy")
-}
-
-func TestMetricSingleTable(t *testing.T) {
-	sqlch := make(chan string, 100)
-	factory := newExecutorFactory(sqlch)
-
-	withModifiedConfig(func() {
-		SV := config.NewObservabilityParameters()
-		SV.SetDefaultValues("test")
-		SV.Host = "0.0.0.0"
-		SV.StatusPort = 7001
-		SV.EnableMetricToProm = true
-		SV.MetricExportInterval = 1
-		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
-		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
-		defer StopMetricSync()
-
-		const (
-			none       = "--None"
-			createDB   = "create database"
-			createTbl  = "CREATE TABLE"
-			createView = "CREATE VIEW"
-			insertRow  = "insert into"
-		)
-		prevSqlKind := none
-		for sql := range sqlch {
-			t.Logf("sql: %s", sql)
-			if strings.HasPrefix(sql, prevSqlKind) {
-				continue
-			}
-			switch prevSqlKind {
-			case none:
-				require.True(t, strings.HasPrefix(sql, createDB), "income sql: %s", sql)
-				prevSqlKind = createDB
-			case createDB:
-				require.True(t, strings.HasPrefix(sql, createTbl), "income sql: %s", sql)
-				prevSqlKind = createTbl
-			case createTbl:
-				require.True(t, strings.HasPrefix(sql, createView), "income sql: %s", sql)
-				prevSqlKind = createView
-			case createView:
-				require.True(t, strings.HasPrefix(sql, insertRow), "income sql: %s", sql)
-				goto GOON
-			default:
-				require.True(t, false, "unknow sql kind %s", sql)
-			}
-		}
-	GOON:
-		client := http.Client{
-			Timeout: 120 * time.Second,
-		}
-		r, err := client.Get("http://127.0.0.1:7001/metrics")
-		require.Nil(t, err)
-		require.Equal(t, r.StatusCode, 200)
-
-		content, _ := io.ReadAll(r.Body)
-		require.Contains(t, string(content), "# HELP") // check we have metrics output
-	})
 }
 
 func TestGetSchemaForAccount(t *testing.T) {
