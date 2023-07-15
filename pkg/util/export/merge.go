@@ -583,18 +583,6 @@ func (w *ContentWriter) FlushAndClose() (int, error) {
 	return w.writer.WriteString(w.buf.String())
 }
 
-func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath string, buf []byte, tbl *table.Table, mp *mpool.MPool) (ETLWriter, error) {
-
-	if strings.LastIndex(filePath, table.TaeExtension) > 0 {
-		writer := etl.NewTAEWriter(ctx, tbl, mp, filePath, fs)
-		return writer, nil
-	} else {
-		// CSV
-		fsWriter := etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath))
-		return etl.NewCSVWriter(ctx, fsWriter), nil
-	}
-}
-
 type Cache interface {
 	Put(*table.Row)
 	Size() int64

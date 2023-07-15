@@ -32,14 +32,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/robfig/cron/v3"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/simdcsv"
+	"github.com/robfig/cron/v3"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -173,6 +174,18 @@ var newFilePath = func(tbl *table.Table, ts time.Time) string {
 //
 //	return nil
 //}
+
+func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath string, buf []byte, tbl *table.Table, mp *mpool.MPool) (ETLWriter, error) {
+
+	if strings.LastIndex(filePath, table.TaeExtension) > 0 {
+		writer := etl.NewTAEWriter(ctx, tbl, mp, filePath, fs)
+		return writer, nil
+	} else {
+		// CSV
+		fsWriter := etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath))
+		return etl.NewCSVWriter(ctx, fsWriter), nil
+	}
+}
 
 func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) ([]string, error) {
 	mux.Lock()
