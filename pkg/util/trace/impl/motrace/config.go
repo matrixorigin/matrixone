@@ -55,17 +55,12 @@ type tracerProviderConfig struct {
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
-	// Deprecated
-	batchProcessMode string         // WithBatchProcessMode
-	batchProcessor   BatchProcessor // WithBatchProcessor
+	batchProcessor BatchProcessor // WithBatchProcessor
 
 	// writerFactory gen writer for CSV output
 	writerFactory table.WriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
 	// disableSqlWriter
 	disableSqlWriter bool // set by WithSQLWriterDisable
-
-	// skipRunningStmt
-	skipRunningStmt bool // set by WithSkipRunningStmt
 
 	// stmt aggregation
 	disableStmtAggregation bool          // set by WithStmtAggregationDisable
@@ -82,6 +77,8 @@ type tracerProviderConfig struct {
 	longQueryTime int64 //  WithLongQueryTime
 	// longSpanTime
 	longSpanTime time.Duration
+	// skipRunningStmt
+	skipRunningStmt bool // set by WithSkipRunningStmt
 
 	bufferSizeThreshold int64 // WithBufferSizeThreshold
 
