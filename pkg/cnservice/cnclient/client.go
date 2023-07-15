@@ -17,6 +17,7 @@ package cnclient
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -32,24 +33,32 @@ import (
 // client each node will hold only one client.
 // It is responsible for sending messages to other nodes. and messages were received
 // and handled by cn-server.
-var client *CNClient
+var client atomic.Pointer[CNClient]
 
 func CloseCNClient() error {
-	return client.Close()
+	c := client.Load()
+	if c == nil {
+		return nil
+	}
+	return c.Close()
 }
 
 func GetStreamSender(backend string) (morpc.Stream, error) {
-	return client.NewStream(backend)
+	return client.Load().NewStream(backend)
 }
 
 func AcquireMessage() *pipeline.Message {
-	return client.acquireMessage().(*pipeline.Message)
+	return client.Load().acquireMessage().(*pipeline.Message)
 }
 
 func IsCNClientReady() bool {
-	client.Lock()
-	defer client.Unlock()
-	return client.ready
+	c := client.Load()
+	if c == nil {
+		return false
+	}
+	c.Lock()
+	defer c.Unlock()
+	return c.ready
 }
 
 type CNClient struct {
@@ -119,7 +128,7 @@ type ClientConfig struct {
 func NewCNClient(
 	localServiceAddress string,
 	cfg *ClientConfig) error {
-	if client != nil {
+	if client.Load() != nil {
 		return nil
 	}
 
@@ -131,7 +140,9 @@ func NewCNClient(
 	cli.Lock()
 	defer cli.Unlock()
 	cli.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
-	client = cli
+	if !client.CompareAndSwap(nil, cli) {
+		return nil
+	}
 	codec := morpc.NewMessageCodec(cli.acquireMessage,
 		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
@@ -186,10 +197,11 @@ func (cfg *ClientConfig) Fill() {
 }
 
 func GetRPCClient() morpc.RPCClient {
-	if client == nil {
+	c := client.Load()
+	if c == nil {
 		return nil
 	}
-	client.Lock()
-	defer client.Unlock()
-	return client.client
+	c.Lock()
+	defer c.Unlock()
+	return c.client
 }
