@@ -245,13 +245,15 @@ func (txn *Transaction) EndStatement() {
 }
 
 func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error {
-	if !txn.startStatementCalled {
-		logutil.Fatal("BUG: StartStatement not called")
+	if !commit {
+		if !txn.startStatementCalled {
+			logutil.Fatal("BUG: StartStatement not called")
+		}
+		if txn.incrStatementCalled {
+			logutil.Fatal("BUG: IncrStatementID called twice")
+		}
+		txn.incrStatementCalled = true
 	}
-	if txn.incrStatementCalled {
-		logutil.Fatal("BUG: IncrStatementID called twice")
-	}
-	txn.incrStatementCalled = true
 
 	if err := txn.mergeTxnWorkspace(); err != nil {
 		return err

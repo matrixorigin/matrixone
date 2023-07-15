@@ -362,11 +362,6 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
-	tc.GetWorkspace().StartStatement()
-	defer func() {
-		tc.GetWorkspace().EndStatement()
-	}()
-
 	util.LogTxnCommit(tc.getTxnMeta(false))
 
 	if tc.option.readyOnly {
