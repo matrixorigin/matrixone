@@ -279,6 +279,10 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		txn.writes = txn.writes[:end]
 		txn.statements = txn.statements[:txn.statementID]
 	}
+	// rollback current statement's writes info
+	for b := range txn.batchSelectList {
+		delete(txn.batchSelectList, b)
+	}
 	return nil
 }
 func (txn *Transaction) resetSnapshot() error {
@@ -381,8 +385,6 @@ type txnTable struct {
 	// offset of the writes in workspace
 	writesOffset int
 
-	// localState stores uncommitted data
-	localState *logtailreplay.PartitionState
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
 	// localTS timestamp.Timestamp

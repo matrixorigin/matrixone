@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -33,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -720,6 +720,159 @@ func TestUpdateCNLabel(t *testing.T) {
 		assert.NotEmpty(t, state)
 		info, ok1 = state.CNState.Stores[uuid]
 		assert.True(t, ok1)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		_, ok3 = info.Labels["role"]
+		assert.False(t, ok3)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestUpdateCNWorkState(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		uuid := "uuid1"
+		workState := pb.CNWorkState{
+			UUID:  uuid,
+			State: metadata.WorkState_Working,
+		}
+		err := store.updateCNWorkState(ctx, workState)
+		assert.EqualError(t, err, fmt.Sprintf("internal error: CN [%s] does not exist", uuid))
+
+		// begin heartbeat to add CN store.
+		hb := pb.CNStoreHeartbeat{
+			UUID: uuid,
+		}
+		_, err = store.addCNStoreHeartbeat(ctx, hb)
+		assert.NoError(t, err)
+
+		err = store.updateCNWorkState(ctx, workState)
+		assert.NoError(t, err)
+
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 := state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+
+		workState = pb.CNWorkState{
+			UUID:  uuid,
+			State: metadata.WorkState_Draining,
+		}
+		err = store.updateCNWorkState(ctx, workState)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 = state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+
+		workState = pb.CNWorkState{
+			UUID:  uuid,
+			State: metadata.WorkState_Working,
+		}
+		err = store.updateCNWorkState(ctx, workState)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 = state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestPatchCNStore(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		uuid := "uuid1"
+		stateLabel := pb.CNStateLabel{
+			UUID:  uuid,
+			State: metadata.WorkState_Working,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+				"role":    {Labels: []string{"1", "2"}},
+			},
+		}
+		err := store.patchCNStore(ctx, stateLabel)
+		assert.EqualError(t, err, fmt.Sprintf("internal error: CN [%s] does not exist", uuid))
+
+		// begin heartbeat to add CN store.
+		hb := pb.CNStoreHeartbeat{
+			UUID: uuid,
+		}
+		_, err = store.addCNStoreHeartbeat(ctx, hb)
+		assert.NoError(t, err)
+
+		err = store.patchCNStore(ctx, stateLabel)
+		assert.NoError(t, err)
+
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 := state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+		labels1, ok2 := info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 := info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+
+		stateLabel = pb.CNStateLabel{
+			UUID:  uuid,
+			State: metadata.WorkState_Draining,
+		}
+		err = store.patchCNStore(ctx, stateLabel)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 = state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 = info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+
+		stateLabel = pb.CNStateLabel{
+			UUID: uuid,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+			},
+		}
+		err = store.patchCNStore(ctx, stateLabel)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 = state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
 		labels1, ok2 = info.Labels["account"]
 		assert.True(t, ok2)
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})
