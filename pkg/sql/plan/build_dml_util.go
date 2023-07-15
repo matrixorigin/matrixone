@@ -2364,3 +2364,109 @@ func appendLockNode(
 	lastNodeId = builder.appendNode(lockNode, bindCtx)
 	return lastNodeId, true
 }
+
+type sinkMeta struct {
+	step  int
+	scans []*sinkScanMeta
+}
+
+type sinkScanMeta struct {
+	step           int
+	nodeId         int32
+	sinkNodeId     int32
+	preNodeId      int32
+	preNodeIsUnion bool //if preNode is Union, one sinkScan to one sink is fine
+}
+
+func reduceSinkSinkScanNodes(qry *Query) {
+	if len(qry.Steps) == 1 {
+		return
+	}
+	stepMaps := make(map[int]int32)
+	sinks := make(map[int32]*sinkMeta)
+	for i, nodeId := range qry.Steps {
+		stepMaps[i] = nodeId
+		collectSinkAndSinkScanMeta(qry, sinks, i, nodeId, -1)
+	}
+
+	// merge one sink to one sinkScan
+	pointToNodeMap := make(map[int32][]int32)
+	for sinkNodeId, meta := range sinks {
+		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion {
+			// one sink to one sinkScan
+			sinkNode := qry.Nodes[sinkNodeId]
+			sinkScanPreNode := qry.Nodes[meta.scans[0].preNodeId]
+			sinkScanPreNode.Children = sinkNode.Children
+			// fmt.Print(sinkNodeId)
+			delete(stepMaps, meta.step)
+		} else {
+			for _, scanMeta := range meta.scans {
+				if _, ok := pointToNodeMap[sinkNodeId]; !ok {
+					pointToNodeMap[sinkNodeId] = []int32{scanMeta.nodeId}
+				} else {
+					pointToNodeMap[sinkNodeId] = append(pointToNodeMap[sinkNodeId], scanMeta.nodeId)
+				}
+			}
+		}
+	}
+
+	if len(qry.Steps) > len(stepMaps) {
+		// reset steps & some sinkScan's sourceStep
+		newSteps := make([]int32, 0, len(stepMaps))
+		for _, nodeId := range stepMaps {
+			newStepIdx := len(newSteps)
+			newSteps = append(newSteps, nodeId)
+
+			//曾经指向这个 nodeId 的 valuesScan 要指向的新的 step
+			if sinkScanNodeIds, ok := pointToNodeMap[nodeId]; ok {
+				for _, sinkScanNodeId := range sinkScanNodeIds {
+					qry.Nodes[sinkScanNodeId].SourceStep = int32(newStepIdx)
+				}
+			}
+		}
+
+		qry.Steps = newSteps
+	}
+}
+
+func collectSinkAndSinkScanMeta(
+	qry *Query,
+	sinks map[int32]*sinkMeta,
+	oldStep int,
+	nodeId int32,
+	preNodeId int32) {
+	node := qry.Nodes[nodeId]
+
+	if node.NodeType == plan.Node_SINK {
+		if _, ok := sinks[nodeId]; !ok {
+			sinks[nodeId] = &sinkMeta{
+				step:  oldStep,
+				scans: make([]*sinkScanMeta, 0, len(qry.Steps)),
+			}
+		} else {
+			sinks[nodeId].step = oldStep
+		}
+	} else if node.NodeType == plan.Node_SINK_SCAN {
+		sinkNodeId := qry.Steps[node.SourceStep]
+		if _, ok := sinks[sinkNodeId]; !ok {
+			sinks[sinkNodeId] = &sinkMeta{
+				step:  -1,
+				scans: make([]*sinkScanMeta, 0, len(qry.Steps)),
+			}
+		}
+
+		meta := &sinkScanMeta{
+			step:           oldStep,
+			nodeId:         nodeId,
+			sinkNodeId:     sinkNodeId,
+			preNodeId:      preNodeId,
+			preNodeIsUnion: qry.Nodes[preNodeId].NodeType == plan.Node_UNION,
+		}
+		sinks[sinkNodeId].scans = append(sinks[sinkNodeId].scans, meta)
+	}
+
+	for _, childId := range node.Children {
+		collectSinkAndSinkScanMeta(qry, sinks, oldStep, childId, nodeId)
+	}
+
+}

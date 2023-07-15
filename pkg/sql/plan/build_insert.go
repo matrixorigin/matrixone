@@ -173,6 +173,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 		query.StmtType = plan.Query_INSERT
 	}
+	reduceSinkSinkScanNodes(query)
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,

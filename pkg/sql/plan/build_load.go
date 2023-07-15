@@ -124,6 +124,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 	query := builder.qry
+	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT
 
 	pn := &Plan{

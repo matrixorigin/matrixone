@@ -71,6 +71,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		return nil, err
 	}
 
+	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_UPDATE
 	return &Plan{
 		Plan: &plan.Plan_Query{
