@@ -202,7 +202,7 @@ func performLock(
 		if target.filter != nil {
 			filterCols = vector.MustFixedCol[int32](bat.GetVector(target.filterColIndexInBatch))
 		}
-		refreshTS, err := doLock(
+		locked, refreshTS, err := doLock(
 			proc.Ctx,
 			arg.block,
 			arg.engine,
@@ -221,12 +221,16 @@ func performLock(
 		if getLogger().Enabled(zap.DebugLevel) {
 			getLogger().Debug("lock result",
 				zap.Uint64("table", target.tableID),
+				zap.Bool("locked", locked),
 				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
 				zap.String("refresh-ts", refreshTS.DebugString()),
 				zap.Error(err))
 		}
 		if err != nil {
 			return err
+		}
+		if !locked {
+			continue
 		}
 
 		// refreshTS is last commit ts + 1, because we need see the committed data.
@@ -273,7 +277,7 @@ func LockTable(
 	opts := DefaultLockOptions(parker).
 		WithLockTable(true).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
-	refreshTS, err := doLock(
+	_, refreshTS, err := doLock(
 		proc.Ctx,
 		false,
 		eng,
@@ -310,7 +314,7 @@ func LockRows(
 	opts := DefaultLockOptions(parker).
 		WithLockTable(false).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
-	refreshTS, err := doLock(
+	_, refreshTS, err := doLock(
 		proc.Ctx,
 		false,
 		eng,
@@ -341,13 +345,13 @@ func doLock(
 	proc *process.Process,
 	vec *vector.Vector,
 	pkType types.Type,
-	opts LockOptions) (timestamp.Timestamp, error) {
+	opts LockOptions) (bool, timestamp.Timestamp, error) {
 	txnOp := proc.TxnOperator
 	txnClient := proc.TxnClient
 	lockService := proc.LockService
 
 	if !txnOp.Txn().IsPessimistic() {
-		return timestamp.Timestamp{}, nil
+		return false, timestamp.Timestamp{}, nil
 	}
 
 	if opts.maxCountPerLock == 0 {
@@ -358,7 +362,7 @@ func doLock(
 		fetchFunc = GetFetchRowsFunc(pkType)
 	}
 
-	rows, g := fetchFunc(
+	has, rows, g := fetchFunc(
 		vec,
 		opts.parker,
 		pkType,
@@ -366,6 +370,9 @@ func doLock(
 		opts.lockTable,
 		opts.filter,
 		opts.filterCols)
+	if !has {
+		return false, timestamp.Timestamp{}, nil
+	}
 
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
@@ -392,12 +399,12 @@ func doLock(
 		txn.ID,
 		options)
 	if err != nil {
-		return timestamp.Timestamp{}, err
+		return false, timestamp.Timestamp{}, err
 	}
 
 	// add bind locks
 	if err := txnOp.AddLockTable(result.LockedOn); err != nil {
-		return timestamp.Timestamp{}, err
+		return false, timestamp.Timestamp{}, err
 	}
 
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
@@ -410,7 +417,7 @@ func doLock(
 		// wait logtail applied at lockedTS - 1
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS.Prev())
 		if err != nil {
-			return timestamp.Timestamp{}, err
+			return false, timestamp.Timestamp{}, err
 		}
 
 		fn := opts.hasNewVersionInRangeFunc
@@ -421,13 +428,13 @@ func doLock(
 		// if [snapshotTS, lockedTS) has been modified, need retry at new snapshot ts
 		changed, err := fn(proc, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
 		if err != nil {
-			return timestamp.Timestamp{}, err
+			return false, timestamp.Timestamp{}, err
 		}
 		if changed {
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
-				return timestamp.Timestamp{}, err
+				return false, timestamp.Timestamp{}, err
 			}
-			return newSnapshotTS, nil
+			return true, newSnapshotTS, nil
 		}
 	}
 
@@ -435,7 +442,7 @@ func doLock(
 	// current txn can read and write normally
 	if !result.HasConflict ||
 		!result.HasPrevCommit {
-		return timestamp.Timestamp{}, nil
+		return true, timestamp.Timestamp{}, nil
 	}
 
 	// Arriving here means that at least one of the conflicting
@@ -450,15 +457,15 @@ func doLock(
 	// is modified between [snapshotTS,prev.commits] and raise the SnapshotTS of
 	// the SI transaction to eliminate conflicts)
 	if !txnOp.Txn().IsRCIsolation() {
-		return timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx)
+		return false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx)
 	}
 
 	// forward rc's snapshot ts
 	snapshotTS := result.Timestamp.Next()
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
-		return timestamp.Timestamp{}, err
+		return false, timestamp.Timestamp{}, err
 	}
-	return snapshotTS, nil
+	return true, snapshotTS, nil
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
