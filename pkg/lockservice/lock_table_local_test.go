@@ -430,7 +430,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					for _, txnID := range c.existsWaiters[i] {
 						w := acquireWaiter("", []byte(txnID))
 						w.setStatus("", blocking)
-						lock.waiter.add("", w)
+						lock.waiter.add("", true, w)
 						wg.Add(1)
 						require.NoError(t, stopper.RunTask(func(ctx context.Context) {
 							wg.Done()
