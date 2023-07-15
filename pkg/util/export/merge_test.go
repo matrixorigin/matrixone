@@ -223,150 +223,6 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 
 var mergeLock sync.Mutex
 
-//func TestNewMerge(t *testing.T) {
-//	mergeLock.Lock()
-//	defer mergeLock.Unlock()
-//	fs := testutil.NewFS()
-//	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
-//
-//	ctx := trace.Generate(context.Background())
-//
-//	defaultOpts := []MergeOption{
-//		WithFileService(fs),
-//		WithTable(dummyTable),
-//		WithMaxFileSize(1),
-//		WithMinFilesMerge(1),
-//		WithMaxFileSize(16 * mpool.MB),
-//		WithMaxMergeJobs(16),
-//	}
-//
-//	type args struct {
-//		ctx  context.Context
-//		opts []MergeOption
-//		// extension
-//		logsExt, mergedExt string
-//	}
-//	tests := []struct {
-//		name string
-//		args args
-//		want *Merge
-//	}{
-//		{
-//			name: "csv",
-//			args: args{
-//				ctx:       ctx,
-//				opts:      defaultOpts,
-//				logsExt:   table.CsvExtension,
-//				mergedExt: table.CsvExtension,
-//			},
-//			want: nil,
-//		},
-//	}
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			err := initLogsFile(tt.args.ctx, fs, dummyTable, ts)
-//			require.Nil(t, err)
-//
-//			got, err := NewMerge(tt.args.ctx, tt.args.opts...)
-//			require.Nil(t, err)
-//			require.NotNil(t, got)
-//
-//			err = got.Main(tt.args.ctx, ts)
-//			require.Nilf(t, err, "err: %v", err)
-//
-//			files := make([]string, 0, 1)
-//			dir := []string{"/"}
-//			for len(dir) > 0 {
-//				entrys, _ := fs.List(tt.args.ctx, dir[0])
-//				for _, e := range entrys {
-//					p := path.Join(dir[0], e.Name)
-//					if e.IsDir {
-//						dir = append(dir, p)
-//					} else {
-//						files = append(files, p)
-//					}
-//				}
-//				dir = dir[1:]
-//			}
-//			require.Equal(t, 1, len(files))
-//			t.Logf("%v", files)
-//
-//			//r, err = newETLReader(tt.args.ctx, m.Table, m.FS, path.FilePath, path.FileSize, m.mp)
-//			r, err := NewCSVReader(tt.args.ctx, fs, files[0])
-//			require.Nil(t, err)
-//			lines := 0
-//			for l, err := r.ReadLine(); l != nil && err == nil; l, err = r.ReadLine() {
-//				lines++
-//				t.Logf("line %d: %s", lines, l)
-//			}
-//			require.Nil(t, err)
-//			require.Equal(t, 6, lines)
-//
-//		})
-//	}
-//}
-
-//
-//func TestNewMergeWithContextDone(t *testing.T) {
-//	if simdcsv.SupportedCPU() {
-//		t.Skip()
-//	}
-//	mergeLock.Lock()
-//	defer mergeLock.Unlock()
-//	fs := testutil.NewFS()
-//	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
-//
-//	ctx := trace.Generate(context.Background())
-//
-//	type args struct {
-//		ctx  context.Context
-//		opts []MergeOption
-//	}
-//	tests := []struct {
-//		name string
-//		args args
-//		want *Merge
-//	}{
-//		{
-//			name: "normal",
-//			args: args{
-//				ctx: ctx,
-//				opts: []MergeOption{
-//					WithFileService(fs),
-//					WithTable(dummyTable),
-//					WithMaxFileSize(1),
-//					WithMinFilesMerge(1),
-//					WithMaxFileSize(16 * mpool.MB),
-//					WithMaxMergeJobs(16),
-//				},
-//			},
-//			want: nil,
-//		},
-//	}
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			ctx, cancel := context.WithCancel(tt.args.ctx)
-//
-//			files, err := initEmptyLogFile(ctx, fs, dummyTable, ts)
-//			require.Nil(t, err)
-//
-//			got, err := NewMerge(ctx, tt.args.opts...)
-//			require.Nil(t, err)
-//			require.NotNil(t, got)
-//
-//			reader, err := newETLReader(got.ctx, dummyTable, got.FS, files[0], 0, nil)
-//			require.Nil(t, err)
-//
-//			// trigger context.Done
-//			cancel()
-//			_, err = reader.ReadLine()
-//			t.Logf("doMergeFiles meet err: %s", err)
-//			require.Equal(t, err.Error(), "internal error: read files meet context Done")
-//		})
-//	}
-//}
-
 func TestNewMergeNOFiles(t *testing.T) {
 	const newSqlWriteLogic = true
 	if simdcsv.SupportedCPU() || newSqlWriteLogic {
@@ -405,7 +261,6 @@ func TestNewMergeNOFiles(t *testing.T) {
 					WithFileService(fs),
 					WithTable(dummyTable),
 					WithMaxFileSize(1),
-					WithMinFilesMerge(1),
 					WithMaxFileSize(16 * mpool.MB),
 					WithMaxMergeJobs(16),
 				},
@@ -421,7 +276,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 			require.Nil(t, err)
 			require.NotNil(t, got)
 
-			err = got.doMergeFiles(ctx, dummyTable.Table, tt.args.files, 0)
+			err = got.doMergeFiles(ctx, tt.args.files)
 			require.Equal(t, true, strings.Contains(err.Error(), tt.wantMsg))
 
 		})
@@ -450,7 +305,7 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 			name: "normal",
 			args: args{
 				ctx:  context.Background(),
-				opts: []MergeOption{WithFileService(fs), WithMinFilesMerge(1)},
+				opts: []MergeOption{WithFileService(fs)},
 				task: task.Task{
 					Metadata: task.TaskMetadata{
 						ID:                   "",
@@ -554,7 +409,7 @@ func TestNewMergeService(t *testing.T) {
 			name: "normal",
 			args: args{
 				ctx:  ctx,
-				opts: []MergeOption{WithFileService(fs), WithMinFilesMerge(1), WithTable(dummyTable)},
+				opts: []MergeOption{WithFileService(fs), WithTable(dummyTable)},
 			},
 			want:  nil,
 			want1: false,

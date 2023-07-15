@@ -127,18 +127,10 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	defaultOptions := []BufferOption{BufferWithReminder(defaultReminder), BufferWithSizeThreshold(config.bufferSizeThreshold)}
 	var p = config.batchProcessor
 	// init BatchProcess for trace/log/error
-	switch {
-	case config.batchProcessMode == InternalExecutor:
-		// register buffer pipe implements
-		panic(moerr.NewNotSupported(ctx, "not support process mode: %s", config.batchProcessMode))
-	case config.batchProcessMode == FileService:
-		p.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
-		p.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
-		p.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
-		p.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))
-	default:
-		return moerr.NewInternalError(ctx, "unknown batchProcessMode: %s", config.batchProcessMode)
-	}
+	p.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
+	p.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
+	p.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
+	p.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))
 	logutil.Info("init GlobalBatchProcessor")
 	if !p.Start() {
 		return moerr.NewInternalError(ctx, "trace exporter already started")
@@ -153,13 +145,8 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
 	config := &GetTracerProvider().tracerProviderConfig
 	WithSQLExecutor(sqlExecutor).apply(config)
-	switch config.batchProcessMode {
-	case InternalExecutor, FileService:
-		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
-			return err
-		}
-	default:
-		return moerr.NewInternalError(ctx, "unknown batchProcessMode: %s", config.batchProcessMode)
+	if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
+		return err
 	}
 	return nil
 }

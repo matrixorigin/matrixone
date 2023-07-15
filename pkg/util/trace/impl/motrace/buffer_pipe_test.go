@@ -68,7 +68,6 @@ func init() {
 		EnableTracer(true),
 		withMOVersion("v0.test.0"),
 		WithNode("node_uuid", trace.NodeTypeStandalone),
-		WithBatchProcessMode(FileService),
 		WithFSWriterFactory(&dummyFSWriterFactory{}),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil

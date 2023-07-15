@@ -87,11 +87,9 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	go traceMemStats(ctx)
 
-	SV := &config.ObservabilityParameters{}
+	SV := config.NewObservabilityParameters()
 	SV.SetDefaultValues("test")
 	SV.MergeCycle.Duration = 5 * time.Minute
-	SV.MergeMaxFileSize = 128
-	SV.MergedExtension = "tae"
 	if err := export.InitMerge(ctx, SV); err != nil {
 		panic(err)
 	}
@@ -147,7 +145,7 @@ func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Ta
 	logutil.Infof("[%v] create merge task, err: %v", table.GetName(), err)
 	ts, err := time.Parse("2006-01-02 15:04:05", "2023-01-03 00:00:00")
 	logutil.Infof("[%v] create ts: %v, err: %v", table.GetName(), ts, err)
-	err = merge.Main(ctx, ts)
+	err = merge.ListRange(ctx)
 	if err != nil {
 		logutil.Infof("[%v] failed to merge: %v", table.GetName(), err)
 	} else {

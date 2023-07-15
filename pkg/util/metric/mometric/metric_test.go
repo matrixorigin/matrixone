@@ -14,9 +14,7 @@
 package mometric
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -29,14 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-const InternalExecutor = "InternalExecutor"
-const FileService = "FileService"
 
 func TestMetric(t *testing.T) {
 	sqlch := make(chan string, 100)
@@ -45,14 +39,12 @@ func TestMetric(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	withModifiedConfig(func() {
-		SV := &config.ObservabilityParameters{}
+		SV := config.NewObservabilityParameters()
 		SV.SetDefaultValues("test")
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = true
-		SV.BatchProcessor = FileService
 		SV.MetricExportInterval = 1
-		SV.MetricMultiTable = true
 		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
 		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
@@ -101,13 +93,11 @@ func TestMetricNoProm(t *testing.T) {
 	factory := newExecutorFactory(sqlch)
 
 	withModifiedConfig(func() {
-		SV := &config.ObservabilityParameters{}
+		SV := config.NewObservabilityParameters()
 		SV.SetDefaultValues("test")
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = false
-		SV.BatchProcessor = FileService
-		SV.MetricMultiTable = true
 
 		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
 		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
@@ -135,37 +125,17 @@ func TestDescExtra(t *testing.T) {
 	assert.Equal(t, extra.labels[2].GetName(), "xy")
 }
 
-var dummyOptionsFactory = table.GetOptionFactory(context.TODO(), table.NormalTableEngine)
-
-func TestCreateTable(t *testing.T) {
-	buf := new(bytes.Buffer)
-	name := "sql_test_counter"
-	sql := createTableSqlFromMetricFamily(prom.NewDesc(name, "", []string{"zzz", "aaa"}, nil), buf, dummyOptionsFactory)
-	assert.Equal(t, sql, fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
-		metric.MetricDBConst, name, metric.LblTimeConst, metric.LblValueConst, metric.LblNodeConst, metric.LblRoleConst,
-	))
-
-	sql = createTableSqlFromMetricFamily(prom.NewDesc(name, "", nil, nil), buf, dummyOptionsFactory)
-	assert.Equal(t, sql, fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20))",
-		metric.MetricDBConst, name, metric.LblTimeConst, metric.LblValueConst, metric.LblNodeConst, metric.LblRoleConst,
-	))
-}
-
 func TestMetricSingleTable(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
 
 	withModifiedConfig(func() {
-		SV := &config.ObservabilityParameters{}
+		SV := config.NewObservabilityParameters()
 		SV.SetDefaultValues("test")
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = true
-		SV.BatchProcessor = FileService
 		SV.MetricExportInterval = 1
-		SV.MetricMultiTable = false
 		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
 		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))

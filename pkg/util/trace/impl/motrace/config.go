@@ -26,11 +26,6 @@ import (
 )
 
 const (
-	InternalExecutor = "InternalExecutor"
-	FileService      = "FileService"
-)
-
-const (
 	MOStatementType = "statement"
 	MOSpanType      = "span"
 	MOLogType       = "log"
@@ -60,6 +55,7 @@ type tracerProviderConfig struct {
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
+	// Deprecated
 	batchProcessMode string         // WithBatchProcessMode
 	batchProcessor   BatchProcessor // WithBatchProcessor
 
@@ -231,11 +227,6 @@ func DebugMode(debug bool) tracerProviderOption {
 	}
 }
 
-func WithBatchProcessMode(mode string) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.batchProcessMode = mode
-	}
-}
 func WithBatchProcessor(p BatchProcessor) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.batchProcessor = p

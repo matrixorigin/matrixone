@@ -15,7 +15,6 @@
 package mometric
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -57,7 +55,6 @@ var moExporter metric.MetricExporter
 var moCollector MetricCollector
 var statsLogWriter *StatsLogWriter
 var statusSvr *statusServer
-var multiTable = false // need set before newMetricFSCollector and initTables
 
 var inited uint32
 
@@ -71,7 +68,6 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		withExportInterval(SV.MetricExportInterval),
 		withUpdateInterval(SV.MetricStorageUsageUpdateInterval.Duration),
 		withCheckNewInterval(SV.MetricStorageUsageCheckNewInterval.Duration),
-		withMultiTable(SV.MetricMultiTable),
 	)
 	for _, opt := range opts {
 		opt.ApplyTo(&initOpts)
@@ -80,7 +76,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	initConfigByParameterUnit(SV)
 	registry = prom.NewRegistry()
 	if initOpts.writerFactory != nil {
-		moCollector = newMetricFSCollector(initOpts.writerFactory, WithFlushInterval(initOpts.exportInterval), ExportMultiTable(initOpts.multiTable))
+		moCollector = newMetricFSCollector(initOpts.writerFactory, WithFlushInterval(initOpts.exportInterval))
 	} else {
 		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
@@ -89,19 +85,20 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 
 	// register metrics and create tables
 	registerAllMetrics()
-	multiTable = initOpts.multiTable
 	if initOpts.needInitTable {
-		initTables(ctx, ieFactory, SV.BatchProcessor)
+		initTables(ctx, ieFactory)
 	}
 
 	// start the data flow
-	serviceCtx := context.Background()
-	moCollector.Start(serviceCtx)
-	moExporter.Start(serviceCtx)
-	statsLogWriter.Start(serviceCtx)
-	metric.SetMetricExporter(moExporter)
+	if !SV.DisableMetric {
+		serviceCtx := context.Background()
+		moCollector.Start(serviceCtx)
+		moExporter.Start(serviceCtx)
+		statsLogWriter.Start(serviceCtx)
+		metric.SetMetricExporter(moExporter)
+	}
 
-	if metric.GetExportToProm() {
+	if metric.EnableExportToProm() {
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
@@ -162,7 +159,7 @@ func mustRegiterToProm(collector prom.Collector) {
 
 func mustRegister(collector metric.Collector) {
 	registry.MustRegister(collector)
-	if metric.GetExportToProm() {
+	if metric.EnableExportToProm() {
 		mustRegiterToProm(collector.CollectorToProm())
 	} else {
 		collector.CancelToProm()
@@ -182,12 +179,12 @@ func initConfigByParameterUnit(SV *config.ObservabilityParameters) {
 }
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	initTables(ctx, ieFactory, motrace.FileService)
+	initTables(ctx, ieFactory)
 	return nil
 }
 
 // initTables gathers all metrics and extract metadata to format create table sql
-func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batchProcessMode string) {
+func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	exec := ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish())
 	mustExec := func(sql string) {
@@ -216,46 +213,14 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 		close(descChan)
 	}()
 
-	if !multiTable {
-		mustExec(SingleMetricTable.ToCreateSql(ctx, true))
-		for desc := range descChan {
-			view := getView(ctx, desc)
-			sql := view.ToCreateSql(ctx, true)
-			mustExec(sql)
-		}
-	} else {
-		optFactory := table.GetOptionFactory(ctx, table.NormalTableEngine)
-		buf := new(bytes.Buffer)
-		for desc := range descChan {
-			sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
-			mustExec(sql)
-		}
+	mustExec(SingleMetricTable.ToCreateSql(ctx, true))
+	for desc := range descChan {
+		view := getView(ctx, desc)
+		sql := view.ToCreateSql(ctx, true)
+		mustExec(sql)
 	}
 
 	createCost = time.Since(instant)
-}
-
-type optionsFactory func(db, tbl, account string) table.TableOptions
-
-// instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
-func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsFactory optionsFactory) string {
-	buf.Reset()
-	extra := newDescExtra(desc)
-	opts := optionsFactory(MetricDBConst, extra.fqName, table.AccountAll)
-	buf.WriteString("create ")
-	buf.WriteString(opts.GetCreateOptions())
-	buf.WriteString(fmt.Sprintf(
-		"table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20)",
-		MetricDBConst, extra.fqName, metric.LblTimeConst, metric.LblValueConst, metric.LblNodeConst, metric.LblRoleConst,
-	))
-	for _, lbl := range extra.labels {
-		buf.WriteString(", `")
-		buf.WriteString(lbl.GetName())
-		buf.WriteString("` varchar(20)")
-	}
-	buf.WriteRune(')')
-	buf.WriteString(opts.GetTableOptions(nil))
-	return buf.String()
 }
 
 func getView(ctx context.Context, desc *prom.Desc) *table.View {
@@ -287,9 +252,8 @@ func newDescExtra(desc *prom.Desc) *descExtra {
 type InitOptions struct {
 	writerFactory table.WriterFactory // see WithWriterFactory
 	// needInitTable control to do the initTables
+	// Deprecated: use InitSchema instead.
 	needInitTable bool // see WithInitAction
-	// initSingleTable
-	multiTable bool // see WithMultiTable
 	// exportInterval
 	exportInterval time.Duration // see withExportInterval
 	// updateInterval, update StorageUsage interval
@@ -312,15 +276,10 @@ func WithWriterFactory(factory table.WriterFactory) InitOption {
 	})
 }
 
+// Deprecated: Use InitSchema instead.
 func WithInitAction(init bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.needInitTable = init
-	})
-}
-
-func withMultiTable(multi bool) InitOption {
-	return InitOption(func(options *InitOptions) {
-		options.multiTable = multi
 	})
 }
 
