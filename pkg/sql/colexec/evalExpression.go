@@ -300,9 +300,10 @@ type ColumnExpressionExecutor struct {
 }
 
 type ParamExpressionExecutor struct {
-	vec *vector.Vector
-	pos int
-	typ types.Type
+	null *vector.Vector
+	vec  *vector.Vector
+	pos  int
+	typ  types.Type
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
@@ -310,6 +311,14 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	if err != nil {
 		return nil, err
 	}
+
+	if val == nil {
+		if expr.null == nil {
+			expr.null = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+		}
+		return expr.null, nil
+	}
+
 	if expr.vec == nil {
 		expr.vec = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
 	} else {
@@ -319,8 +328,6 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		}
 	}
 	return expr.vec, nil
-
-	// return proc.GetPrepareParamsAt(int(expr.pos))
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {

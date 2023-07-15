@@ -69,6 +69,10 @@ var serverVersion atomic.Value
 
 const defaultSaltReadTimeout = time.Millisecond * 200
 
+const charsetBinary = 0x3f
+const charsetVarchar = 0x21
+const boolColumnLength = 12
+
 func init() {
 	serverVersion.Store("0.5.0")
 }
@@ -1769,9 +1773,9 @@ func setCharacter(column *MysqlColumn) {
 	switch column.columnType {
 	// blob type should use 0x3f to show the binary data
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
-		column.SetCharset(0x21)
+		column.SetCharset(charsetVarchar)
 	default:
-		column.SetCharset(0x3f)
+		column.SetCharset(charsetBinary)
 	}
 }
 
@@ -1812,16 +1816,19 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	//lenenc_int     length of fixed-length fields [0c]
 	pos = mp.io.WriteUint8(data, pos, 0x0c)
 
-	//int<2>              character set
-	pos = mp.io.WriteUint16(data, pos, column.Charset())
-
-	//int<4>              column length
-	pos = mp.io.WriteUint32(data, pos, column.Length())
-
-	//int<1>              type
 	if column.ColumnType() == defines.MYSQL_TYPE_BOOL {
+		//int<2>              character set
+		pos = mp.io.WriteUint16(data, pos, charsetVarchar)
+		//int<4>              column length
+		pos = mp.io.WriteUint32(data, pos, boolColumnLength)
+		//int<1>              type
 		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_VARCHAR))
 	} else {
+		//int<2>              character set
+		pos = mp.io.WriteUint16(data, pos, column.Charset())
+		//int<4>              column length
+		pos = mp.io.WriteUint32(data, pos, column.Length())
+		//int<1>              type
 		pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
 	}
 
