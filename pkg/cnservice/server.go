@@ -482,19 +482,19 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		var opts []client.TxnClientCreateOption
 		opts = append(opts,
 			client.WithTimestampWaiter(s.timestampWaiter))
-		if s.cfg.Txn.EnableSacrificingFreshness {
+		if s.cfg.Txn.EnableSacrificingFreshness == 1 {
 			opts = append(opts,
 				client.WithEnableSacrificingFreshness())
 		}
-		if s.cfg.Txn.EnableCNBasedConsistency {
+		if s.cfg.Txn.EnableCNBasedConsistency == 1 {
 			opts = append(opts,
 				client.WithEnableCNBasedConsistency())
 		}
-		if s.cfg.Txn.EnableRefreshExpression {
+		if s.cfg.Txn.EnableRefreshExpression == 1 {
 			opts = append(opts,
 				client.WithEnableRefreshExpression())
 		}
-		if s.cfg.Txn.EnableLeakCheck {
+		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
 				func(txnID []byte, createAt time.Time, createBy string) {

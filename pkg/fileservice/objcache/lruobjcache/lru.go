@@ -21,10 +21,11 @@ import (
 
 type LRU struct {
 	sync.Mutex
-	capacity int64
-	size     int64
-	evicts   *list.List
-	kv       map[any]*list.Element
+	capacity  int64
+	size      int64
+	evicts    *list.List
+	kv        map[any]*list.Element
+	postEvict func(key any, value []byte, sz int64)
 }
 
 type lruItem struct {
@@ -33,20 +34,22 @@ type lruItem struct {
 	Size  int64
 }
 
-func New(capacity int64) *LRU {
+func New(capacity int64, postEvict func(key any, value []byte, sz int64)) *LRU {
 	return &LRU{
-		capacity: capacity,
-		evicts:   list.New(),
-		kv:       make(map[any]*list.Element),
+		capacity:  capacity,
+		evicts:    list.New(),
+		kv:        make(map[any]*list.Element),
+		postEvict: postEvict,
 	}
 }
 
-func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
+func (l *LRU) Set(key any, value []byte, size int64, preloading bool) (isNewEntry bool) {
 	l.Lock()
 	defer l.Unlock()
 
 	if elem, ok := l.kv[key]; ok {
 		// replace
+		isNewEntry = false
 		item := elem.Value.(*lruItem)
 		l.size -= item.Size
 		l.size += size
@@ -59,6 +62,7 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
 
 	} else {
 		// insert
+		isNewEntry = true
 		item := &lruItem{
 			Key:   key,
 			Value: value,
@@ -75,6 +79,7 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
 	}
 
 	l.evict()
+	return
 }
 
 func (l *LRU) evict() {
@@ -95,6 +100,9 @@ func (l *LRU) evict() {
 			l.size -= item.Size
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)
+			if l.postEvict != nil {
+				l.postEvict(item.Key, item.Value, item.Size)
+			}
 			break
 		}
 
