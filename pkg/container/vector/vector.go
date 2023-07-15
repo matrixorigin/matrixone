@@ -266,6 +266,9 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) *Vec
 }
 
 func (v *Vector) IsConst() bool {
+	if v == nil {
+		fmt.Print("ddd")
+	}
 	return v.class == CONSTANT
 }
 

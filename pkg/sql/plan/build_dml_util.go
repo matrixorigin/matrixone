@@ -2397,7 +2397,6 @@ func reduceSinkSinkScanNodes(qry *Query) {
 			sinkNode := qry.Nodes[sinkNodeId]
 			sinkScanPreNode := qry.Nodes[meta.scans[0].preNodeId]
 			sinkScanPreNode.Children = sinkNode.Children
-			// fmt.Print(sinkNodeId)
 			delete(stepMaps, meta.step)
 		} else {
 			for _, scanMeta := range meta.scans {
@@ -2416,15 +2415,12 @@ func reduceSinkSinkScanNodes(qry *Query) {
 		for _, nodeId := range stepMaps {
 			newStepIdx := len(newSteps)
 			newSteps = append(newSteps, nodeId)
-
-			//曾经指向这个 nodeId 的 valuesScan 要指向的新的 step
 			if sinkScanNodeIds, ok := pointToNodeMap[nodeId]; ok {
 				for _, sinkScanNodeId := range sinkScanNodeIds {
 					qry.Nodes[sinkScanNodeId].SourceStep = int32(newStepIdx)
 				}
 			}
 		}
-
 		qry.Steps = newSteps
 	}
 }
