@@ -79,16 +79,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
+			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = SendLast
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.IsEmpty() {
 				bat.Clean(proc.Mp())
 				continue
 			}
 
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
+			if ctr.bat == nil || ctr.bat.IsEmpty() {
 				proc.PutBatch(bat)
 				continue
 			}
@@ -125,6 +126,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		return err
 	}
 
+	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
@@ -223,6 +225,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
+
+	rowCountIncrese := 0
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -271,6 +275,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 					ctr.matched.Add(uint64(sel))
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
+					rowCountIncrese++
 				}
 			} else {
 				for j, rp := range ap.Result {
@@ -290,9 +295,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					ctr.matched.Add(uint64(sel))
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 				}
+				rowCountIncrese += len(sels)
 			}
 		}
 	}
+
+	rbat.SetRowCount(rbat.RowCount() + rowCountIncrese)
+	rbat.CheckForRemoveZs("right")
 	proc.SetInputBatch(rbat)
 	return nil
 }

@@ -78,16 +78,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
+			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = SendLast
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.IsEmpty() {
 				bat.Clean(proc.Mp())
 				continue
 			}
 
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
+			if ctr.bat == nil || ctr.bat.IsEmpty() {
 				proc.PutBatch(bat)
 				continue
 			}
@@ -124,6 +125,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		return err
 	}
 
+	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
@@ -177,8 +179,11 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	for _, sel := range sels {
 		rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 	}
+	rbat.SetRowCount(rbat.RowCount() + len(sels))
 
 	analyze.Output(rbat, isLast)
+
+	rbat.CheckForRemoveZs("rightanti")
 	proc.SetInputBatch(rbat)
 	return false, nil
 }

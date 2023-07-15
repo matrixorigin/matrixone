@@ -312,6 +312,10 @@ func (bat *Batch) SetZs(len int, m *mpool.MPool) {
 	}
 }
 
+func (bat *Batch) AddRowCount(rowCount int) {
+	bat.rowCount += rowCount
+}
+
 func (bat *Batch) SetRowCount(rowCount int) {
 	bat.rowCount = rowCount
 }

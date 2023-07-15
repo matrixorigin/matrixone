@@ -70,6 +70,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			bat := proc.InputBatch()
+			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = Eval
 				continue
@@ -160,7 +161,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
 	var start int64
 
-	length := int64(len(bat.Zs))
+	length := int64(bat.RowCount())
 	if n := int64(len(ctr.sels)); n < limit {
 		start = limit - n
 		if start > length {
@@ -176,6 +177,8 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 			ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs[i])
 			n++
 		}
+		ctr.bat.SetRowCount(ctr.bat.RowCount() + int(start))
+
 		if n == limit {
 			ctr.sort()
 		}
@@ -220,7 +223,9 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-	proc.Reg.InputBatch = ctr.bat
+
+	ctr.bat.CheckForRemoveZs("top")
+	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil
 	return nil
 }

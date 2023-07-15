@@ -69,6 +69,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 		if err != nil {
 			return false, err
 		}
+
+		bat.FixedForRemoveZs()
 		if end {
 			break
 		}
@@ -86,6 +88,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 			}
 		}
 		ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs...)
+		ctr.bat.AddRowCount(bat.RowCount())
 	}
 
 	// init agg frame
@@ -135,6 +138,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 	}
 
 	anal.Output(ctr.bat, isLast)
+
+	ctr.bat.CheckForRemoveZs("window")
 	proc.SetInputBatch(ctr.bat)
 	return true, nil
 }

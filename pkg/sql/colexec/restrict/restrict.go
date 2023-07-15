@@ -44,10 +44,11 @@ func Prepare(proc *process.Process, arg any) (err error) {
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	bat := proc.InputBatch()
+	bat.FixedForRemoveZs()
 	if bat == nil {
 		return true, nil
 	}
-	if bat.Length() == 0 {
+	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
@@ -60,7 +61,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	var sels []int64
 	for i := range ap.ctr.executors {
-		if bat.Length() == 0 {
+		if bat.IsEmpty() {
 			break
 		}
 
@@ -119,6 +120,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		proc.SetInputBatch(nil)
 	} else {
 		anal.Output(bat, isLast)
+
+		bat.CheckForRemoveZs("restrict")
 		proc.SetInputBatch(bat)
 	}
 	return false, nil
