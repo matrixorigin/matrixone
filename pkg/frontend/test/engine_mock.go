@@ -13,7 +13,6 @@ import (
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	types "github.com/matrixorigin/matrixone/pkg/container/types"
 	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
-	pipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -234,21 +233,6 @@ func (m *MockRelation) AlterTable(ctx context.Context, c *engine.ConstraintDef, 
 func (mr *MockRelationMockRecorder) AlterTable(ctx, c, constraint interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AlterTable", reflect.TypeOf((*MockRelation)(nil).AlterTable), ctx, c, constraint)
-}
-
-// ApplyRuntimeFilters mocks base method.
-func (m *MockRelation) ApplyRuntimeFilters(arg0 context.Context, arg1 [][]byte, arg2 []*plan.Expr, arg3 []*pipeline.RuntimeFilter) ([][]byte, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplyRuntimeFilters", arg0, arg1, arg2, arg3)
-	ret0, _ := ret[0].([][]byte)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ApplyRuntimeFilters indicates an expected call of ApplyRuntimeFilters.
-func (mr *MockRelationMockRecorder) ApplyRuntimeFilters(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyRuntimeFilters", reflect.TypeOf((*MockRelation)(nil).ApplyRuntimeFilters), arg0, arg1, arg2, arg3)
 }
 
 // DelTableDef mocks base method.
