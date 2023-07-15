@@ -918,6 +918,7 @@ var (
 				stage_id int unsigned auto_increment,
 				stage_name varchar(64),
 				url text,
+				credentials text,
 				stage_status varchar(64),
 				created_time timestamp,
 				comment text,

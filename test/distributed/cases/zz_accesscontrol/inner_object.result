@@ -189,6 +189,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 stage_id    INT UNSIGNED(32)    NO    PRI    null
 stage_name    VARCHAR(64)    YES        null
 url    TEXT(0)    YES        null
+credentials    TEXT(0)    YES        null
 stage_status    VARCHAR(64)    YES        null
 created_time    TIMESTAMP(0)    YES        null
 comment    TEXT(0)    YES        null
