@@ -24,10 +24,11 @@ import (
 )
 
 type MemCache struct {
-	objCache       ObjectCache
-	ch             chan func()
-	counterSets    []*perfcounter.CounterSet
-	overlapChecker *interval.OverlapChecker
+	objCache             ObjectCache
+	ch                   chan func()
+	counterSets          []*perfcounter.CounterSet
+	overlapChecker       *interval.OverlapChecker
+	enableOverlapChecker bool
 }
 
 func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
@@ -44,22 +45,29 @@ func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
 	}
 
 	return &MemCache{
-		overlapChecker: initOpts.overlapChecker,
-		objCache:       initOpts.objCache,
-		ch:             ch,
-		counterSets:    initOpts.counterSets,
+		overlapChecker:       initOpts.overlapChecker,
+		enableOverlapChecker: initOpts.enableOverlapChecker,
+		objCache:             initOpts.objCache,
+		ch:                   ch,
+		counterSets:          initOpts.counterSets,
 	}
 }
 
 func WithLRU(capacity int64) MemCacheOptionFunc {
 	return func(o *memCacheOptions) {
 		o.overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
-		o.objCache = lruobjcache.New(capacity, func(key any, value []byte, _ int64) {
-			_key := key.(IOVectorCacheKey)
-			if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
-				panic(err)
+		o.enableOverlapChecker = true
+
+		postEvictFn := func(key any, value []byte, _ int64) {
+			if o.enableOverlapChecker {
+				_key := key.(IOVectorCacheKey)
+				if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
+					panic(err)
+				}
 			}
-		})
+		}
+
+		o.objCache = lruobjcache.New(capacity, postEvictFn)
 	}
 }
 
@@ -72,9 +80,10 @@ func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) MemCacheOptionFu
 type MemCacheOptionFunc func(*memCacheOptions)
 
 type memCacheOptions struct {
-	objCache       ObjectCache
-	overlapChecker *interval.OverlapChecker
-	counterSets    []*perfcounter.CounterSet
+	objCache             ObjectCache
+	overlapChecker       *interval.OverlapChecker
+	counterSets          []*perfcounter.CounterSet
+	enableOverlapChecker bool
 }
 
 func defaultMemCacheOptions() memCacheOptions {
@@ -173,7 +182,7 @@ func (m *MemCache) Update(
 
 				// Update overlap checker when new key-interval is inserted into the cache.
 				// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
-				if isNewEntry {
+				if m.enableOverlapChecker && isNewEntry {
 					if err = m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
 						panic(err)
 					}
@@ -184,7 +193,7 @@ func (m *MemCache) Update(
 
 			// Update overlap checker when new key-interval is inserted into the cache.
 			// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
-			if isNewEntry {
+			if m.enableOverlapChecker && isNewEntry {
 				if err = m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
 					panic(err)
 				}
