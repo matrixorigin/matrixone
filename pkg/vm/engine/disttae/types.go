@@ -247,6 +247,8 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 			}
 		}
 		txn.writes = append(txn.writes[:start], writes...)
+		// restore the scope of the statement
+		txn.statements[txn.statementID-1] = len(txn.writes)
 	}
 	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
