@@ -261,9 +261,12 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	if i < 0 || i >= proc.prepareParams.Length() {
 		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
-	val := proc.prepareParams.GetRawBytesAt(i)
-	// vec := vector.NewConstBytes(*proc.prepareParams.GetType(), val, 1, proc.Mp())
-	return val, nil
+	if proc.prepareParams.IsNull(uint64(i)) {
+		return nil, nil
+	} else {
+		val := proc.prepareParams.GetRawBytesAt(i)
+		return val, nil
+	}
 }
 
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
