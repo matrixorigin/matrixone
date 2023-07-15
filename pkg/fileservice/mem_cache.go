@@ -165,12 +165,11 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		var isNewEntry bool
 		if async {
 			obj := entry.ObjectBytes // copy from loop variable
 			objSize := entry.ObjectSize
 			m.ch <- func() {
-				m.objCache.Set(key, obj, objSize, vector.Preloading)
+				isNewEntry := m.objCache.Set(key, obj, objSize, vector.Preloading)
 
 				// Update overlap checker when new key-interval is inserted into the cache.
 				// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
@@ -181,7 +180,7 @@ func (m *MemCache) Update(
 				}
 			}
 		} else {
-			isNewEntry = m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
+			isNewEntry := m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
 
 			// Update overlap checker when new key-interval is inserted into the cache.
 			// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
