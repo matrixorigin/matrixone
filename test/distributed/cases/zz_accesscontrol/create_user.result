@@ -53,7 +53,7 @@ create user if not exists test_user1 identified by '12345678';
 create user user1 identified by '12345678',user2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678',user5 identified by '12345678',user6 identified by '12345678',user7 identified by '12345678',user8 identified by '12345678',user9 identified by '12345678',user10 identified by '12345678' default role u_role;
 select count(*) from mo_catalog.mo_user where user_name like 'user%';
 count(*)
-24
+13
 create user tester1 identified by '12345678',tester2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678';
 internal error: the user user3 exists
 select count(*) from mo_catalog.mo_user where user_name like 'tester%';

@@ -27,8 +27,6 @@ jobs:
   
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |
-          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-compose/config/cn-0.toml
-          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-compose/config/cn-1.toml
           cat ./etc/launch-tae-compose/config/cn-0.toml
           cat ./etc/launch-tae-compose/config/cn-1.toml
 

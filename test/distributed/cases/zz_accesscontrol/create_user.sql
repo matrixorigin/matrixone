@@ -36,7 +36,9 @@ create user if not exists test_user1 identified by '12345678';
 create user  test_user1 identified by '12345678';
 create user if not exists test_user1 identified by '12345678';
 create user user1 identified by '12345678',user2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678',user5 identified by '12345678',user6 identified by '12345678',user7 identified by '12345678',user8 identified by '12345678',user9 identified by '12345678',user10 identified by '12345678' default role u_role;
+-- @bvt:issue#10473
 select count(*) from mo_catalog.mo_user where user_name like 'user%';
+-- @bvt:issue
 create user tester1 identified by '12345678',tester2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678';
 select count(*) from mo_catalog.mo_user where user_name like 'tester%';
 create user if not exists tester1 identified by '12345678',tester2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678';

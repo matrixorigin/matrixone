@@ -43,8 +43,11 @@ uuid = "713F97B0-1E28-4F80-849D-FE0979AE734A"
 service-address = "dn:41010"
 listen-address = "0.0.0.0:41010"
 
+[dn.lockservice]
+listen-address = "0.0.0.0:17001"
+service-address = "dn:17001"
+
 [dn.Txn]
-incremental-dedup = "false"
 
 [dn.Txn.Storage]
 backend = "TAE"

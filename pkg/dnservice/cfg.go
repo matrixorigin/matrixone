@@ -25,9 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 var (
@@ -49,13 +49,10 @@ var (
 	defaultIncrementalInterval = time.Minute
 	defaultGlobalMinCount      = int64(60)
 	defaultMinCount            = int64(100)
-	defaultLogBackend          = string(options.LogstoreLogservice)
 
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
-	defaultRpcPayloadCopyBufferSize   = 1024 * mpool.KB
-	defaultLogtailCollectInterval     = 50 * time.Millisecond
+	defaultLogtailCollectInterval     = 2 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
-	defaultMaxLogtailFetchFailure     = 5
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
@@ -106,11 +103,9 @@ type Config struct {
 		ListenAddress              string        `toml:"listen-address"`
 		ServiceAddress             string        `toml:"service-address"`
 		RpcMaxMessageSize          toml.ByteSize `toml:"rpc-max-message-size"`
-		RpcPayloadCopyBufferSize   toml.ByteSize `toml:"rpc-payload-copy-buffer-size"`
 		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum"`
 		LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
 		LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
-		MaxLogtailFetchFailure     int           `toml:"max-logtail-fetch-failure"`
 	}
 
 	// Txn transactions configuration
@@ -119,6 +114,9 @@ type Config struct {
 		// than the specified time, it will be considered a zombie transaction and the backend will
 		// roll back the transaction.
 		ZombieTimeout toml.Duration `toml:"zombie-timeout"`
+
+		// Mode. [Optimistic|Pessimistic], default Optimistic.
+		Mode string `toml:"mode"`
 
 		// If IncrementalDedup is 'true', it will enable the incremental dedup feature.
 		// If incremental dedup feature is disable,
@@ -132,8 +130,6 @@ type Config struct {
 			dataDir string `toml:"-"`
 			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
 			Backend StorageType `toml:"backend"`
-			// LogBackend the backend used to store logs
-			LogBackend string `toml:"log-backend"`
 		}
 	}
 
@@ -174,9 +170,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
-	}
-	if c.Txn.Storage.LogBackend == "" {
-		c.Txn.Storage.LogBackend = defaultLogBackend
 	}
 	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
 		return moerr.NewInternalError(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
@@ -220,28 +213,30 @@ func (c *Config) Validate() error {
 	if c.LogtailServer.RpcMaxMessageSize <= 0 {
 		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)
 	}
-	if c.LogtailServer.RpcPayloadCopyBufferSize <= 0 {
-		c.LogtailServer.RpcPayloadCopyBufferSize = toml.ByteSize(defaultRpcPayloadCopyBufferSize)
-	}
 	if c.LogtailServer.LogtailCollectInterval.Duration <= 0 {
 		c.LogtailServer.LogtailCollectInterval.Duration = defaultLogtailCollectInterval
 	}
 	if c.LogtailServer.LogtailResponseSendTimeout.Duration <= 0 {
 		c.LogtailServer.LogtailResponseSendTimeout.Duration = defaultLogtailResponseSendTimeout
 	}
-	if c.LogtailServer.MaxLogtailFetchFailure <= 0 {
-		c.LogtailServer.MaxLogtailFetchFailure = defaultMaxLogtailFetchFailure
-	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
+
+	if c.Txn.Mode == "" {
+		c.Txn.Mode = txn.TxnMode_Optimistic.String()
+	} else {
+		if !txn.ValidTxnMode(c.Txn.Mode) {
+			return moerr.NewInternalError(context.Background(), "invalid txn mode %s", c.Txn.Mode)
+		}
+	}
+
 	if c.Txn.IncrementalDedup == "" {
-		// todo : base CN.Txn.Mode to set defaule value of c.Txn.IncrementalDedup
-		// if cnCfg.Txn.Mode == txn.TxnMode_Pessimistic.String() {
-		// 	c.Txn.IncrementalDedup = "true"
-		// } else {
-		c.Txn.IncrementalDedup = "false"
-		// }
+		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+			c.Txn.IncrementalDedup = "true"
+		} else {
+			c.Txn.IncrementalDedup = "false"
+		}
 	} else {
 		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
 		if c.Txn.IncrementalDedup != "true" && c.Txn.IncrementalDedup != "false" {

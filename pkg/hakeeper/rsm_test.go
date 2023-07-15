@@ -726,3 +726,213 @@ func TestHandleUpdateCNLabel(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, labels.Labels, []string{"1", "2"})
 }
+
+func TestHandleUpdateCNWorkState(t *testing.T) {
+	uuid := "uuid1"
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	state := pb.CNWorkState{
+		UUID:  uuid,
+		State: metadata.WorkState_Unknown,
+	}
+	cmd := GetUpdateCNWorkStateCmd(state)
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s := tsm1.state.CNState
+	assert.Equal(t, 0, len(s.Stores))
+
+	cmd = GetTickCmd()
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	hb := pb.CNStoreHeartbeat{
+		UUID: uuid,
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	cmd = GetCNStoreHeartbeatCmd(data)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+
+	state = pb.CNWorkState{
+		UUID:  uuid,
+		State: metadata.WorkState_Working,
+	}
+	cmd = GetUpdateCNWorkStateCmd(state)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok := s.Stores[uuid]
+	assert.True(t, ok)
+	assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+
+	state = pb.CNWorkState{
+		UUID:  uuid,
+		State: metadata.WorkState_Unknown,
+	}
+	cmd = GetUpdateCNWorkStateCmd(state)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok = s.Stores[uuid]
+	assert.True(t, ok)
+	assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+
+	state = pb.CNWorkState{
+		UUID:  uuid,
+		State: metadata.WorkState_Draining,
+	}
+	cmd = GetUpdateCNWorkStateCmd(state)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok = s.Stores[uuid]
+	assert.True(t, ok)
+	assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+}
+
+func TestHandlePatchCNStore(t *testing.T) {
+	uuid := "uuid1"
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	stateLabel := pb.CNStateLabel{
+		UUID:  uuid,
+		State: metadata.WorkState_Unknown,
+		Labels: map[string]metadata.LabelList{
+			"account": {Labels: []string{"a", "b"}},
+			"role":    {Labels: []string{"1", "2"}},
+		},
+	}
+	cmd := GetPatchCNStoreCmd(stateLabel)
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s := tsm1.state.CNState
+	assert.Equal(t, 0, len(s.Stores))
+
+	cmd = GetTickCmd()
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	hb := pb.CNStoreHeartbeat{
+		UUID: uuid,
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	cmd = GetCNStoreHeartbeatCmd(data)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+
+	cmd = GetPatchCNStoreCmd(stateLabel)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok := s.Stores[uuid]
+	assert.True(t, ok)
+	assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+	labels, ok := info.Labels["account"]
+	assert.True(t, ok)
+	assert.Equal(t, labels.Labels, []string{"a", "b"})
+	labels, ok = info.Labels["role"]
+	assert.True(t, ok)
+	assert.Equal(t, labels.Labels, []string{"1", "2"})
+
+	stateLabel = pb.CNStateLabel{
+		UUID:  uuid,
+		State: metadata.WorkState_Working,
+	}
+	cmd = GetPatchCNStoreCmd(stateLabel)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok = s.Stores[uuid]
+	assert.True(t, ok)
+	assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+	labels, ok = info.Labels["account"]
+	assert.True(t, ok)
+	assert.Equal(t, labels.Labels, []string{"a", "b"})
+	labels, ok = info.Labels["role"]
+	assert.True(t, ok)
+	assert.Equal(t, labels.Labels, []string{"1", "2"})
+
+	stateLabel = pb.CNStateLabel{
+		UUID: uuid,
+		Labels: map[string]metadata.LabelList{
+			"role": {Labels: []string{"1", "2"}},
+		},
+	}
+	cmd = GetPatchCNStoreCmd(stateLabel)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok = s.Stores[uuid]
+	assert.True(t, ok)
+	assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+	_, ok = info.Labels["account"]
+	assert.False(t, ok)
+	labels, ok = info.Labels["role"]
+	assert.True(t, ok)
+	assert.Equal(t, labels.Labels, []string{"1", "2"})
+
+	stateLabel = pb.CNStateLabel{
+		UUID:  uuid,
+		State: metadata.WorkState_Draining,
+	}
+	cmd = GetPatchCNStoreCmd(stateLabel)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s = tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok = s.Stores[uuid]
+	assert.True(t, ok)
+	assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+	_, ok = info.Labels["account"]
+	assert.False(t, ok)
+	labels, ok = info.Labels["role"]
+	assert.True(t, ok)
+	assert.Equal(t, labels.Labels, []string{"1", "2"})
+}
+
+func TestHandleDeleteCNStore(t *testing.T) {
+	uuid := "uuid1"
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+
+	cmd := GetTickCmd()
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	hb := pb.CNStoreHeartbeat{
+		UUID: uuid,
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	cmd = GetCNStoreHeartbeatCmd(data)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s := tsm1.state.CNState
+	assert.Equal(t, 1, len(s.Stores))
+
+	cnStore := pb.DeleteCNStore{
+		StoreID: uuid,
+	}
+	cmd = GetDeleteCNStoreCmd(cnStore)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s = tsm1.state.CNState
+	assert.Equal(t, 0, len(s.Stores))
+}

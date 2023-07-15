@@ -425,6 +425,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailreplay.BlockEntry) error {
 	// It is better to use the Marshal() method
 	info.BlockId = blk.BlockID[:]
+	info.ObjectName = blk.MetaLocation().Name().String()
 	info.MetaLoc = blk.MetaLoc[:]
 	info.DelLoc = blk.DeltaLoc[:]
 	info.SegId = blk.SegmentID[:]
@@ -542,7 +543,6 @@ func (tbl *txnTable) reset(newId uint64) {
 	tbl._partState = nil
 	tbl.blockInfos = nil
 	tbl.blockInfosUpdated = false
-	tbl.localState = logtailreplay.NewPartitionState(true)
 }
 
 func (tbl *txnTable) resetSnapshot() {
@@ -582,8 +582,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	bat := batch.EmptyForConstFoldBatch
 	for i := range exprs {
 		newExprs[i] = plan2.DeepCopyExpr(exprs[i])
-		newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
-		foldedExpr, _ := plan2.ConstantFold(bat, newExprs[i], tbl.proc)
+		// newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
+		foldedExpr, _ := plan2.ConstantFold(bat, newExprs[i], tbl.proc, true)
 		if foldedExpr != nil {
 			newExprs[i] = foldedExpr
 		}
@@ -1330,15 +1330,6 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	}
 	bat.SetAttributes([]string{catalog.Row_ID})
 
-	/*
-		var packer *types.Packer
-		put := tbl.db.txn.engine.packerPool.Get(&packer)
-		defer put.Put()
-
-		 if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
-		 	return err
-		 }
-	*/
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil
@@ -1450,7 +1441,14 @@ func (tbl *txnTable) newMergeReader(
 		// here we try to serialize the composite primary key
 		if pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Const, len(pk.Names))
-			getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
+			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
+
+			// return empty reader if the composite primary key has null value
+			if hasNull {
+				return []engine.Reader{
+					new(emptyReader),
+				}, nil
+			}
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
 				var packer *types.Packer
@@ -1467,7 +1465,12 @@ func (tbl *txnTable) newMergeReader(
 			}
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc)
+			ok, hasNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc)
+			if hasNull {
+				return []engine.Reader{
+					new(emptyReader),
+				}, nil
+			}
 			if ok {
 				var packer *types.Packer
 				put := tbl.db.txn.engine.packerPool.Get(&packer)
@@ -1803,5 +1806,5 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	if err != nil {
 		return false, err
 	}
-	return part.PrimaryKeysMayBeModified(tbl.tableId, from, to, keysVector, packer), nil
+	return part.PrimaryKeysMayBeModified(from, to, keysVector, packer), nil
 }
