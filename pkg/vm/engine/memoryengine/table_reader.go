@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -221,8 +220,4 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([][]byte, error) {
 		}
 	}
 	return shards, nil
-}
-
-func (t *Table) ApplyRuntimeFilters(_ context.Context, ranges [][]byte, _ []*plan.Expr, _ []*pipeline.RuntimeFilter) ([][]byte, error) {
-	return ranges, nil
 }

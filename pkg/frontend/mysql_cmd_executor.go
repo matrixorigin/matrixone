@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
@@ -214,7 +215,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
-	if sqlType != internalSql {
+	if sqlType != constant.InternalSql {
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
 
@@ -261,7 +262,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
-	if sqlType != internalSql {
+	if sqlType != constant.InternalSql {
 		ses.tStmt = stm
 	}
 	if !stm.IsZeroTxnID() {
@@ -285,7 +286,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	if len(sqlTypes) > 0 {
 		sqlType = sqlTypes[0]
 	} else {
-		sqlType = externSql
+		sqlType = constant.ExternSql
 	}
 	if len(envStmt) > 0 {
 		for i, sql := range envStmt {

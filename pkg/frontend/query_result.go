@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -48,7 +49,7 @@ func openSaveQueryResult(ses *Session) bool {
 	if ses.ast == nil || ses.tStmt == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType == internalSql {
+	if ses.tStmt.SqlSourceType == constant.InternalSql {
 		return false
 	}
 	val, err := ses.GetGlobalVar("save_query_result")

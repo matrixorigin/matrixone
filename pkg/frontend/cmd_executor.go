@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -82,7 +83,7 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 	sql := ui.getSql()
 	ui.sqlSourceType = nil
 	if ui.getStmt() != nil {
-		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
 	tenant := ses.GetTenantInfo()
@@ -90,28 +91,28 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 		if tenant != nil {
 			tenant.SetUser("")
 		}
-		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
 	flag, _, _ := isSpecialUser(tenant.User)
 	if flag {
-		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
 	for len(sql) > 0 {
 		p1 := strings.Index(sql, "/*")
 		p2 := strings.Index(sql, "*/")
 		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
-			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
 			return
 		}
 		source := strings.TrimSpace(sql[p1+2 : p2])
 		if source == cloudUserTag {
-			ui.sqlSourceType = append(ui.sqlSourceType, cloudUserSql)
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
 		} else if source == cloudNoUserTag {
-			ui.sqlSourceType = append(ui.sqlSourceType, cloudNoUserSql)
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudNoUserSql)
 		} else {
-			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
 		}
 		sql = sql[p2+2:]
 	}

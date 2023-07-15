@@ -185,6 +185,18 @@ func parsePatchCNStoreCmd(cmd []byte) pb.CNStateLabel {
 	return result
 }
 
+func parseDeleteCNStoreCmd(cmd []byte) pb.DeleteCNStore {
+	if parseCmdTag(cmd) != pb.RemoveCNStore {
+		panic("not a RemoveCNStore cmd")
+	}
+	payload := cmd[headerSize:]
+	var result pb.DeleteCNStore
+	if err := result.Unmarshal(payload); err != nil {
+		panic(err)
+	}
+	return result
+}
+
 func GetSetStateCmd(state pb.HAKeeperState) []byte {
 	cmd := make([]byte, headerSize+4)
 	binaryEnc.PutUint32(cmd, uint32(pb.SetStateUpdate))
@@ -264,6 +276,15 @@ func GetPatchCNStoreCmd(stateLabel pb.CNStateLabel) []byte {
 	cmd := make([]byte, headerSize+stateLabel.Size())
 	binaryEnc.PutUint32(cmd, uint32(pb.PatchCNStore))
 	if _, err := stateLabel.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GetDeleteCNStoreCmd(cnStore pb.DeleteCNStore) []byte {
+	cmd := make([]byte, headerSize+cnStore.Size())
+	binaryEnc.PutUint32(cmd, uint32(pb.RemoveCNStore))
+	if _, err := cnStore.MarshalTo(cmd[headerSize:]); err != nil {
 		panic(err)
 	}
 	return cmd
@@ -587,6 +608,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleUpdateCNWorkState(cmd), nil
 	case pb.PatchCNStore:
 		return s.handlePatchCNStore(cmd), nil
+	case pb.RemoveCNStore:
+		return s.handleDeleteCNCmd(parseDeleteCNStoreCmd(cmd).StoreID), nil
 	default:
 		panic(moerr.NewInvalidInputNoCtx("unknown haKeeper cmd '%v'", cmd))
 	}

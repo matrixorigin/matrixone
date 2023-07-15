@@ -88,7 +88,6 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 	// handle HungThreshold
 	if threshold := span.SpanConfig.HungThreshold(); threshold > 0 {
 		s := newMOHungSpan(span)
-		go s.loop()
 		return trace.ContextWithSpan(ctx, s), s
 	}
 
@@ -116,48 +115,45 @@ type MOHungSpan struct {
 	quitCtx context.Context
 	// quitCancel cancel quitCtx in End()
 	quitCancel context.CancelFunc
-	// deadlineCtx is used to check hung threshold in work goroutine loop().
-	deadlineCtx    context.Context
-	deadlineCancel context.CancelFunc
+	trigger    *time.Timer
+	stop       func()
+	stopped    bool
 	// mux control doProfile exec order, called in loop and End
 	mux sync.Mutex
 }
 
 func newMOHungSpan(span *MOSpan) *MOHungSpan {
-	originCtx, originCancel := context.WithCancel(span.ctx)
 	ctx, cancel := context.WithTimeout(span.ctx, span.SpanConfig.HungThreshold())
 	span.ctx = ctx
-	return &MOHungSpan{
-		MOSpan:         span,
-		quitCtx:        originCtx,
-		quitCancel:     originCancel,
-		deadlineCtx:    ctx,
-		deadlineCancel: cancel,
+	s := &MOHungSpan{
+		MOSpan:     span,
+		quitCtx:    ctx,
+		quitCancel: cancel,
 	}
-}
-
-func (s *MOHungSpan) loop() {
-	select {
-	case <-s.quitCtx.Done():
-	case <-s.deadlineCtx.Done():
+	s.trigger = time.AfterFunc(s.HungThreshold(), func() {
 		s.mux.Lock()
 		defer s.mux.Unlock()
-		if e := s.quitCtx.Err(); e == context.Canceled {
-			break
+		if e := s.quitCtx.Err(); e == context.Canceled || s.stopped {
+			return
 		}
 		s.doProfile()
 		logutil.Warn("span trigger hung threshold",
 			trace.SpanField(s.SpanContext()),
 			zap.String("span_name", s.Name),
 			zap.Duration("threshold", s.HungThreshold()))
+	})
+	s.stop = func() {
+		s.trigger.Stop()
+		s.quitCancel()
+		s.stopped = true
 	}
-	s.deadlineCancel()
+	return s
 }
 
 func (s *MOHungSpan) End(options ...trace.SpanEndOption) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	s.quitCancel()
+	s.stop()
 	s.MOSpan.End(options...)
 }
 
@@ -276,7 +272,7 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 		}
 	}
 	if !s.needRecord {
-		go freeMOSpan(s)
+		freeMOSpan(s)
 		return
 	}
 	// apply End option

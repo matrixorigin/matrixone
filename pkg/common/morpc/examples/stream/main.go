@@ -17,12 +17,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/examples/message"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var (
@@ -72,7 +72,7 @@ func main() {
 		if m == nil {
 			return
 		}
-		log.Printf("%s", m.DebugString())
+		logutil.Infof("%s", m.DebugString())
 	}
 }
 
