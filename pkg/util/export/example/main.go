@@ -126,7 +126,7 @@ func mergeAll(ctx context.Context, fs *fileservice.LocalETLFS) {
 	if err != nil {
 		logutil.Infof("[%v] failed to NewMerge: %v", "All", err)
 	}
-	err = merge.ListRange(ctx)
+	err = merge.Main(ctx)
 	if err != nil {
 		logutil.Infof("[%v] failed to merge: %v", "All", err)
 	} else {
@@ -145,7 +145,7 @@ func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Ta
 	logutil.Infof("[%v] create merge task, err: %v", table.GetName(), err)
 	ts, err := time.Parse("2006-01-02 15:04:05", "2023-01-03 00:00:00")
 	logutil.Infof("[%v] create ts: %v, err: %v", table.GetName(), ts, err)
-	err = merge.ListRange(ctx)
+	err = merge.Main(ctx)
 	if err != nil {
 		logutil.Infof("[%v] failed to merge: %v", table.GetName(), err)
 	} else {
