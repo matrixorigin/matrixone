@@ -212,7 +212,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// statement ID and updating snapshot TS.
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
 	txnOp := cwft.GetProcess().TxnOperator
-	if txnOp != nil {
+	if txnOp != nil && !cwft.ses.IsBackgroundSession() {
 		txnOp.GetWorkspace().StartStatement()
 		defer func() {
 			txnOp.GetWorkspace().EndStatement()
