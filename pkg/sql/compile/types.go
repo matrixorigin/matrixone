@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -82,7 +81,7 @@ type Source struct {
 	Timestamp              timestamp.Timestamp
 	AccountId              *plan.PubInfo
 
-	RuntimeFilterReceivers []*colexec.RuntimeFilterChan
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 }
 
 // Col is the information of attribute
@@ -139,8 +138,6 @@ type scopeContext struct {
 	children []*scopeContext
 	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
-
-	//runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
 }
 
 // anaylze information
