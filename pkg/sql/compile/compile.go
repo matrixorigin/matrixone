@@ -16,10 +16,12 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -329,6 +331,8 @@ func (c *Compile) Run(_ uint64) error {
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 	if err := c.runOnce(); err != nil {
+		c.fatalLog(0, err)
+
 		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 			c.proc.TxnOperator.Txn().IsRCIsolation() {
@@ -358,9 +362,11 @@ func (c *Compile) Run(_ uint64) error {
 				c.isInternal,
 				c.cnLabel)
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+				c.fatalLog(1, err)
 				return err
 			}
 			if err := cc.runOnce(); err != nil {
+				c.fatalLog(1, err)
 				return err
 			}
 			// set affectedRows to old compile to return
@@ -2962,4 +2968,35 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
 	}
 	return c.newMergeScope(ss2)
+}
+
+// TODO(fagonzgi): this env is used to check and find RC bugs in pessimistic mode. Will remove it later version.
+var (
+	checkRCInvalidError = os.Getenv("check_rc_invalid_error") == "true"
+)
+
+func (c *Compile) fatalLog(retry int, err error) {
+	if !checkRCInvalidError {
+		return
+	}
+
+	if err == nil {
+		return
+	}
+	fatal := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+		moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) ||
+		moerr.IsMoErrCode(err, moerr.ER_DUP_ENTRY) ||
+		moerr.IsMoErrCode(err, moerr.ER_DUP_ENTRY_WITH_KEY_NAME)
+	if !fatal {
+		return
+	}
+	if retry == 0 && moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+		return
+	}
+
+	logutil.Fatalf("BUG(RC): txn %s retry %d, error %+v\n",
+		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
+		retry,
+		err.Error())
 }

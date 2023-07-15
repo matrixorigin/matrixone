@@ -17,6 +17,8 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"os"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
+)
+
+// TODO(fagongzi): this env is used to check and find RC bugs in pessimistic mode. Will remove it later version.
+var (
+	checkRCInvalidError = os.Getenv("check_rc_invalid_error") == "true"
 )
 
 var (
@@ -714,7 +721,16 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		if err := tc.checkResponseTxnStatusForCommit(resp); err != nil {
 			return err
 		}
-		return tc.checkTxnError(resp.TxnError, commitTxnErrors)
+		err := tc.checkTxnError(resp.TxnError, commitTxnErrors)
+		if checkRCInvalidError && err != nil && tc.mu.txn.IsPessimistic() {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				util.GetLogger().Fatal("failed",
+					zap.Error(err),
+					zap.String("txn", hex.EncodeToString(tc.txnID)))
+			}
+			return err
+		}
 	case txn.TxnMethod_Rollback:
 		if err := tc.checkResponseTxnStatusForRollback(resp); err != nil {
 			return err
