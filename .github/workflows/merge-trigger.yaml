@@ -8,6 +8,7 @@ on:
       - '**.go'
       - '**.c'
       - '**.h'
+      - '.github/workflows/merge-trigger.yaml'
 env:
    branch: main
 
