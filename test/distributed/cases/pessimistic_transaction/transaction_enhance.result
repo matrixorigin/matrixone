@@ -93,8 +93,9 @@ begin;
 use transaction_enhance;
 drop table atomic_table_11;
 drop table atomic_table_11;
+no such table transaction_enhance.atomic_table_11
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
-w-w conflict
 drop table if exists atomic_table_12;
 create table atomic_table_12(c1 int,c2 varchar(25));
 insert into atomic_table_12 values (3,"a"),(4,"b"),(5,"c");
@@ -150,11 +151,10 @@ c1    c2
 8    h
 insert into atomic_table_13 values (6,"h");
 internal error: Cannot add or update a child row: a foreign key constraint fails
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 show create table atomic_table_13;
 Table    Create Table
-atomic_table_13    CREATE TABLE `atomic_table_13` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
+atomic_table_13    CREATE TABLE `atomic_table_13` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`),\nCONSTRAINT `ffa` FOREIGN KEY (`c1`) REFERENCES `atomic_table_12_2` (`c1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 drop table if exists atomic_table_12_3;
 drop table if exists atomic_table_13;
 create table atomic_table_12_3(c1 int primary key,c2 varchar(25));
@@ -196,7 +196,7 @@ c1    c2
 rollback ;
 show create table atomic_table_13;
 Table    Create Table
-atomic_table_13    CREATE TABLE `atomic_table_13` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`),\nCONSTRAINT `ffa` FOREIGN KEY (`c1`) REFERENCES `atomic_table_12_4` (`c1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+atomic_table_13    CREATE TABLE `atomic_table_13` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
 drop table if exists atomic_table_12_5;
 drop table if exists atomic_table_13;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
@@ -224,6 +224,7 @@ alter table atomic_table_14 add  index key1(c1);
 use transaction_enhance;
 drop table atomic_table_14;
 insert into atomic_table_14 values (6,"a"),(7,"b");
+no such table transaction_enhance.atomic_table_14
 select * from atomic_table_14;
 SQL parser error: table "atomic_table_14" does not exist
 commit;

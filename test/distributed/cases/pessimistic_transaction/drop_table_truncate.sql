@@ -47,6 +47,7 @@ drop table t1;
 show tables;
 commit;
 
+-- @bvt:issue#10316
 create table t1(a int);
 begin;
 insert into t1 values (1);
@@ -71,3 +72,4 @@ select * from t2;
 drop table t2;
 show tables;
 commit;
+-- @bvt:issue

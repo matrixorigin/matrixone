@@ -85,6 +85,7 @@ rollback ;
 show create table test_12;
 select * from test_12;
 
+-- @bvt:issue#9852
 start transaction;
 create table test_12(col1 int primary key,col2 varchar(25));
 insert into test_12 values(1,'a'),(2,'b');
@@ -100,6 +101,7 @@ commit;
 show create table test_12;
 select * from test_12;
 drop table test_12;
+-- @bvt:issue
 
 start transaction;
 create table test_12(col1 int primary key auto_increment,col2 varchar(25));

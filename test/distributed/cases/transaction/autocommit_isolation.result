@@ -1,4 +1,4 @@
-drop table if exists test_11;
+
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
 Insert into test_11 values(2,2);

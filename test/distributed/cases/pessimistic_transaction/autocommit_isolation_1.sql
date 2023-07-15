@@ -249,7 +249,7 @@ update test_11 set c = 100 where d = 50;
 select * from test_11;
 -- @session}
 select * from test_11;
--- @wait:0:commit
+-- @wait:1:commit
 update test_11 set c = 101 where c = 50;
 
 commit;
@@ -285,7 +285,7 @@ update test_11 set c = 100 where d = 50;
 select * from test_11;
 -- @session}
 select * from test_11;
--- @wait:0:commit
+-- @wait:1:commit
 update test_11 set c = 100 where d = 50;
 
 commit;

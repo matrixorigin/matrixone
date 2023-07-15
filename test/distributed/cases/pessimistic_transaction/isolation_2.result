@@ -114,6 +114,7 @@ create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 use isolation_2;
 create table dis_table_04(a int);
+table dis_table_04 already exists
 insert into dis_table_04 values (4);
 drop database dis_db_01;
 Can't drop database 'dis_db_01'; database doesn't exist
@@ -506,7 +507,7 @@ begin;
 insert into dis_table_07 values (2,'blue',10.00,'2021-01-20');
 use isolation_2;
 insert into dis_table_07 values (2,'blue',11.00,'2021-01-20');
-Duplicate entry '3a15024601626c756500421be27948a20d6000' for key '__mo_cpkey_col'
+Duplicate entry '(2,blue,2021-01-20 00:00:00)' for key '__mo_cpkey_col'
 select * from dis_table_07;
 a    b    c    d
 1    yellow    20.09    2020-09-27 00:00:00

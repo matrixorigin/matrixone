@@ -80,6 +80,7 @@ create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 -- @session:id=1{
 use isolation_2;
+-- @wait:0:commit
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 drop database dis_db_01;
@@ -185,6 +186,7 @@ select * from dis_temp_01;
 drop table dis_temp_01;
 -- @bvt:issue
 
+-- @bvt:issue#10585
 start transaction;
 load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02;
 -- @session:id=1{
@@ -217,14 +219,13 @@ select b, c from dis_table_02;
 select * from dis_view_02;
 drop table dis_view_02;
 
+-- @bvt:issue#10316
 begin ;
 select * from dis_table_01;
 -- @session:id=1{
 truncate table dis_table_01;
 -- @session}
--- @bvt:issue#9095
-insert into dis_table_01 select 9999,'abcdefg';
--- @bvt:issue
+
 -- @session:id=1{
 select * from dis_table_01;
 -- @session}
@@ -258,8 +259,9 @@ select b, c from dis_table_02;
 -- @session:id=1{
 select b, c from dis_table_02;
 -- @session}
-
+-- @bvt:issue
 --------------------------------
+-- @bvt:issue#10585
 create database if not exists iso_db_02;
 start transaction ;
 use iso_db_02;
@@ -307,6 +309,7 @@ update dis_table_04 set b=(select 'kkkk')  where a=879;
 -- @session:id=1{
 select * from dis_table_04;
 -- @session}
+-- @bvt:issue
 ----------------------------
 -- @bvt:issue#9124
 begin ;

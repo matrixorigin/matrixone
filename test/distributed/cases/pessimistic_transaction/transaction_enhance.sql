@@ -41,15 +41,15 @@ select * from atomic_table_10;
 commit;
 select * from atomic_table_10;
 
+-- @bvt:issue#10491
 -- drop table
-
 drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
 
--- @session:id=2&user=sys:dump&password=111
+-- @session:id=1{
 -- @wait:0:commit
 use transaction_enhance;
 insert into atomic_table_11 values (6,"a");
@@ -58,7 +58,9 @@ select * from atomic_table_11;
 
 commit;
 select * from atomic_table_11;
+-- @bvt:issue
 
+-- @bvt:issue#10491
 drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
@@ -73,6 +75,7 @@ select * from atomic_table_11;
 -- @session}
 rollback ;
 select * from atomic_table_11;
+-- @bvt:issue
 
 drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));
@@ -126,6 +129,7 @@ alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references at
 -- @session:id=1{
 use transaction_enhance;
 show create table atomic_table_12_2;
+-- @wait:0:commit
 insert into atomic_table_13 values (8,"h");
 select * from atomic_table_13;
 -- @session}
@@ -144,6 +148,7 @@ begin;
 alter table atomic_table_13 drop foreign key ffa;
 -- @session:id=1{
 use transaction_enhance;
+-- @wait:0:commit
 insert into atomic_table_13 values (8,"h");
 select * from atomic_table_13;
 -- @session}
@@ -161,6 +166,7 @@ begin;
 alter table atomic_table_13 drop foreign key ffa;
 -- @session:id=1{
 use transaction_enhance;
+-- @wait:0:commit
 insert into atomic_table_13 values (8,"h");
 select * from atomic_table_13;
 -- @session}
@@ -190,6 +196,7 @@ start transaction ;
 alter table atomic_table_14 add  index key1(c1);
 -- @session:id=1{
 use transaction_enhance;
+-- @wait:0:commit
 drop table atomic_table_14;
 -- @session}
 insert into atomic_table_14 values (6,"a"),(7,"b");
@@ -197,6 +204,7 @@ select * from atomic_table_14;
 commit;
 select * from atomic_table_14;
 
+-- @bvt:issue#10316
 drop table if exists atomic_table_15;
 create table atomic_table_15(c1 int,c2 varchar(25));
 begin;
@@ -231,6 +239,7 @@ insert into atomic_table_17 values (6,"a"),(7,"b");
 drop table atomic_table_17;
 -- @session:id=1{
 use transaction_enhance;
+-- @wait:0:commit
 alter table atomic_table_17 add constraint unique key (c1);
 update atomic_table_17 set c1=8 where c2="b";
 -- @session}
@@ -308,3 +317,4 @@ commit;
 select * from atomic_table_18;
 set autocommit=1;
 drop account if exists trans_acc1;
+-- @bvt:issue#9852
