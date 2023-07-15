@@ -33,7 +33,6 @@ listen-address = "127.0.0.1:41010"
 service-address = "127.0.0.1:41010"
 
 [dn.Txn]
-incremental-dedup = "false"
 
 [dn.Txn.Storage]
 # txn storage backend implementation. [TAE|MEM]
