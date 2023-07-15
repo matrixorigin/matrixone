@@ -423,6 +423,46 @@ mo_ctl(dn, flush, db1.t1)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select a from t1 where a = '';
 invalid argument cast to int, bad value
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1 (a int,b int, primary key(a,b));
+insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
+select count(*) from t1 where a is null;
+count(*)
+0
+select count(*) from t1 where a = null;
+count(*)
+0
+select mo_ctl('dn', 'flush', 'db1.t1');
+mo_ctl(dn, flush, db1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select count(*) from t1 where a is null;
+count(*)
+0
+select count(*) from t1 where a = null;
+count(*)
+0
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1 (a int,b int, primary key(a));
+insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
+select count(*) from t1 where a is null;
+count(*)
+0
+select count(*) from t1 where a = null;
+count(*)
+0
+select mo_ctl('dn', 'flush', 'db1.t1');
+mo_ctl(dn, flush, db1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select count(*) from t1 where a is null;
+count(*)
+0
+select count(*) from t1 where a = null;
+count(*)
+0
 select 1 > 0;
 1 > 0
 true

@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -599,110 +598,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		tbl.proc,
 	)
 	return
-}
-
-func (tbl *txnTable) ApplyRuntimeFilters(ctx context.Context, blocks [][]byte, exprs []*plan.Expr, filters []*pipeline.RuntimeFilter) ([][]byte, error) {
-	var err error
-	evaluators := make([]RuntimeFilterEvaluator, len(filters))
-
-	for i, filter := range filters {
-		switch filter.Typ {
-		case pipeline.RuntimeFilter_IN:
-			vec := vector.NewVec(types.T_any.ToType())
-			err = vec.UnmarshalBinary(filter.Data)
-			if err != nil {
-				return nil, err
-			}
-			evaluators[i] = &RuntimeInFilter{
-				InList: vec,
-			}
-
-		case pipeline.RuntimeFilter_MIN_MAX:
-			evaluators[i] = &RuntimeZonemapFilter{
-				Zm: objectio.ZoneMap(filter.Data),
-			}
-		}
-	}
-
-	proc := tbl.db.txn.proc
-
-	var (
-		objMeta  objectio.ObjectMeta
-		skipObj  bool
-		auxIdCnt int32
-	)
-
-	for _, expr := range exprs {
-		auxIdCnt = plan2.AssignAuxIdForExpr(expr, auxIdCnt)
-	}
-
-	columnMap := make(map[int]int)
-	zms := make([]objectio.ZoneMap, auxIdCnt)
-	vecs := make([]*vector.Vector, auxIdCnt)
-	plan2.GetColumnMapByExprs(exprs, tbl.getTableDef(), &columnMap)
-
-	defer func() {
-		for i := range vecs {
-			if vecs[i] != nil {
-				vecs[i].Free(proc.Mp())
-			}
-		}
-	}()
-
-	errCtx := errutil.ContextWithNoReport(ctx, true)
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
-	}
-	curr := 1 // Skip the first block which is always the memtable
-	for i := 1; i < len(blocks); i++ {
-		blk := catalog.DecodeBlockInfo(blocks[i])
-		location := blk.MetaLocation()
-
-		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, fs); err != nil {
-				return nil, err
-			}
-
-			skipObj = false
-			// here we only eval expr on the object meta if it has more than 2 blocks
-			if objMeta.BlockCount() > 2 {
-				for i, expr := range exprs {
-					zm := colexec.GetExprZoneMap(errCtx, proc, expr, objMeta, columnMap, zms, vecs)
-					if zm.IsInited() && !evaluators[i].Evaluate(zm) {
-						skipObj = true
-						break
-					}
-				}
-			}
-		}
-
-		if skipObj {
-			continue
-		}
-
-		var skipBlk bool
-
-		// eval filter expr on the block
-		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
-		for i, expr := range exprs {
-			zm := colexec.GetExprZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs)
-			if zm.IsInited() && !evaluators[i].Evaluate(zm) {
-				skipBlk = true
-				break
-			}
-		}
-
-		if skipBlk {
-			continue
-		}
-
-		// store the block in ranges
-		blocks[curr] = blocks[i]
-		curr++
-	}
-
-	return blocks[:curr], nil
 }
 
 // txn can read :
@@ -1441,7 +1336,14 @@ func (tbl *txnTable) newMergeReader(
 		// here we try to serialize the composite primary key
 		if pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Const, len(pk.Names))
-			getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
+			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
+
+			// return empty reader if the composite primary key has null value
+			if hasNull {
+				return []engine.Reader{
+					new(emptyReader),
+				}, nil
+			}
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
 				var packer *types.Packer
@@ -1458,7 +1360,12 @@ func (tbl *txnTable) newMergeReader(
 			}
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc)
+			ok, hasNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc)
+			if hasNull {
+				return []engine.Reader{
+					new(emptyReader),
+				}, nil
+			}
 			if ok {
 				var packer *types.Packer
 				put := tbl.db.txn.engine.packerPool.Get(&packer)
