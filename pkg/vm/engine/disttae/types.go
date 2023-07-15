@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -170,7 +171,9 @@ type Transaction struct {
 	statementID   int
 	statements    []int
 
-	hasS3Op atomic.Bool
+	hasS3Op              atomic.Bool
+	startStatementCalled bool
+	incrStatementCalled  bool
 }
 
 type Pos struct {
@@ -224,7 +227,32 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
+func (txn *Transaction) StartStatement() {
+	if txn.startStatementCalled {
+		logutil.Fatal("BUG: StartStatement called twice")
+	}
+	txn.startStatementCalled = true
+	txn.incrStatementCalled = false
+}
+
+func (txn *Transaction) EndStatement() {
+	if !txn.startStatementCalled {
+		logutil.Fatal("BUG: StartStatement not called")
+	}
+
+	txn.startStatementCalled = false
+	txn.incrStatementCalled = false
+}
+
 func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error {
+	if !txn.startStatementCalled {
+		logutil.Fatal("BUG: StartStatement not called")
+	}
+	if txn.incrStatementCalled {
+		logutil.Fatal("BUG: IncrStatementID called twice")
+	}
+	txn.incrStatementCalled = true
+
 	if err := txn.mergeTxnWorkspace(); err != nil {
 		return err
 	}

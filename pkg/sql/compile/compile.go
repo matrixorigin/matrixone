@@ -2889,6 +2889,9 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	}
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
 		WithTxn(c.proc.TxnOperator).
 		WithDatabase(c.db)
 	return exec.Exec(c.proc.Ctx, sql, opts)
