@@ -36,10 +36,9 @@ func NewWorker(freeWorkerPoolCh chan chan Work, wg *sync.WaitGroup) *Worker {
 }
 
 func (w *Worker) Start() {
+	w.wg.Add(1)
 	go func() {
-		w.wg.Add(1)
 		for {
-
 			// Add workerCh back to freeWorkerPoolCh when it is not doing any work (ie completed the old work).
 			w.freeWorkerPoolCh <- w.workerCh
 

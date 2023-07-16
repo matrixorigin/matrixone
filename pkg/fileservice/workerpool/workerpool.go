@@ -43,7 +43,7 @@ func NewWorkerPool(workerCount int) *WorkerPool {
 
 	freeWorkerPoolCh := make(chan chan Work, workerCount)
 	workersWg := &sync.WaitGroup{}
-	workers := make([]*Worker, workerCount, workerCount)
+	workers := make([]*Worker, workerCount)
 	for i := 0; i < workerCount; i++ {
 		workers[i] = NewWorker(freeWorkerPoolCh, workersWg)
 	}
@@ -69,13 +69,13 @@ func (q *WorkerPool) Start() {
 	for i := 0; i < len(q.workers); i++ {
 		q.workers[i].Start()
 	}
+	q.dispatcherWg.Add(1)
 	go q.startDispatcher()
 
 	q.stopped.Store(false)
 }
 
 func (q *WorkerPool) startDispatcher() {
-	q.dispatcherWg.Add(1)
 	for {
 		select {
 		case work := <-q.dispatcherCh:
