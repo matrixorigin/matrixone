@@ -15,7 +15,7 @@
 package workerpool
 
 import (
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"sync/atomic"
 )
@@ -105,7 +105,7 @@ func (q *WorkerPool) Stop() {
 
 func (q *WorkerPool) Submit(work Work) error {
 	if q.stopped.Load() {
-		return errors.New("worker pool stopped")
+		return moerr.NewInternalErrorNoCtx("worker pool stopped")
 	}
 
 	q.dispatcherCh <- work
