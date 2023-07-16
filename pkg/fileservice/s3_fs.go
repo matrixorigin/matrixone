@@ -963,6 +963,14 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		externalID,
 	)
 
+	// validate
+	if credentialProvider != nil {
+		_, err := credentialProvider.Retrieve(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// load configs
 	if credentialProvider != nil {
 		loadConfigOptions = append(loadConfigOptions,
