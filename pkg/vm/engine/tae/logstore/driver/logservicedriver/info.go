@@ -199,6 +199,21 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 	}
 	info.syncing = interval.GetMax()
 }
+
+func (info *driverInfo) gcAddr(logserviceLsn uint64) {
+	info.addrMu.Lock()
+	defer info.addrMu.Unlock()
+	lsnToDelete := make([]uint64, 0)
+	for serviceLsn := range info.addr {
+		if serviceLsn < logserviceLsn {
+			lsnToDelete = append(lsnToDelete, serviceLsn)
+		}
+	}
+	for _, lsn := range lsnToDelete {
+		delete(info.addr, lsn)
+	}
+}
+
 func (info *driverInfo) getSynced() uint64 {
 	info.syncedMu.RLock()
 	lsn := info.synced

@@ -657,3 +657,44 @@ func TestHAKeeperClientPatchCNStore(t *testing.T) {
 	}
 	runServiceTest(t, true, true, fn)
 }
+
+func TestHAKeeperClientDeleteCNStore(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{testServiceAddress},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c1.Close())
+			assert.NoError(t, c2.Close())
+		}()
+
+		hb := pb.CNStoreHeartbeat{
+			UUID:           s.ID(),
+			ServiceAddress: "addr1",
+		}
+		_, err = c2.SendCNHeartbeat(ctx, hb)
+		require.NoError(t, err)
+		state, err := c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		_, ok := state.CNState.Stores[s.ID()]
+		assert.True(t, ok)
+
+		cnStore := pb.DeleteCNStore{
+			StoreID: s.ID(),
+		}
+		err = c1.DeleteCNStore(ctx, cnStore)
+		require.NoError(t, err)
+
+		state, err = c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		_, ok = state.CNState.Stores[s.ID()]
+		assert.False(t, ok)
+	}
+	runServiceTest(t, true, true, fn)
+}

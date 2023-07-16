@@ -33,7 +33,6 @@ backend = "DISK-ETL"
 uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 
 [dn.Txn]
-incremental-dedup = "false"
 
 [dn.Txn.Storage]
 backend = "TAE"
