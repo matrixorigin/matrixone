@@ -28,6 +28,7 @@ type CacheConfig struct {
 	DiskCapacity         *toml.ByteSize `toml:"disk-capacity"`
 	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
 	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
+	DiskAsyncFileLoad    bool           `toml:"disk-async-file-load"`
 
 	enableDiskCacheForLocalFS bool // for testing only
 }

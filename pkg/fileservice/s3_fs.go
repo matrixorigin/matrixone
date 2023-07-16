@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/workerpool"
 	"io"
 	"math"
 	stdhttp "net/http"
@@ -56,6 +57,8 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int32
+
+	fileLoaderWorkerPool *workerpool.WorkerPool
 }
 
 // key mapping scheme:
@@ -94,6 +97,11 @@ func NewS3FS(
 		}
 	}
 
+	if cacheConfig.DiskAsyncFileLoad {
+		fs.fileLoaderWorkerPool = workerpool.NewWorkerPool(16)
+		fs.fileLoaderWorkerPool.Start()
+	}
+
 	return fs, nil
 }
 
@@ -129,6 +137,11 @@ func NewS3FSOnMinio(
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
+	}
+
+	if cacheConfig.DiskAsyncFileLoad {
+		fs.fileLoaderWorkerPool = workerpool.NewWorkerPool(16)
+		fs.fileLoaderWorkerPool.Start()
 	}
 
 	return fs, nil
@@ -442,7 +455,16 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			if err != nil {
 				return
 			}
-			err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+			if s.fileLoaderWorkerPool != nil {
+				err = s.fileLoaderWorkerPool.Submit(func() {
+					err = s.Preload(ctx, vector.FilePath)
+				})
+				if err != nil {
+					return
+				}
+			} else {
+				err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+			}
 		}()
 	}
 

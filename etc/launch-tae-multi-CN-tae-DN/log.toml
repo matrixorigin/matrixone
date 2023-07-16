@@ -22,6 +22,7 @@ disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
 disk-min-evict-interval = "7m"
 disk-evict-target = 0.8
+disk-async-file-load = false
 
 [[fileservice]]
 name = "ETL"
