@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"golang.org/x/exp/slices"
 )
 
 var CNPrimaryCheck = false
@@ -2409,10 +2410,17 @@ func reduceSinkSinkScanNodes(qry *Query) {
 		}
 	}
 
-	if len(qry.Steps) > len(stepMaps) {
+	newStepLength := len(stepMaps)
+	if len(qry.Steps) > newStepLength {
 		// reset steps & some sinkScan's sourceStep
-		newSteps := make([]int32, 0, len(stepMaps))
-		for _, nodeId := range stepMaps {
+		newSteps := make([]int32, 0, newStepLength)
+		keys := make([]int, 0, newStepLength)
+		for key := range stepMaps {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		for _, key := range keys {
+			nodeId := stepMaps[key]
 			newStepIdx := len(newSteps)
 			newSteps = append(newSteps, nodeId)
 			if sinkScanNodeIds, ok := pointToNodeMap[nodeId]; ok {
