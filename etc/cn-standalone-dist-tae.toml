@@ -39,19 +39,6 @@ init-hakeeper-members = [
   "131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
 ]
 
-[[fileservice]]
-name = "LOCAL"
-backend = "MEM"
-
-[[fileservice]]
-name = "SHARED"
-backend = "MEM"
-
-[[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
-data-dir = "store"
-
 [observability]
 disableTrace = true
 disableMetric = true
