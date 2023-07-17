@@ -674,7 +674,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 
 		// task run long time
 		if len(args) != 0 {
-			logger.Warn("ETL_merge_task should have empty args", zap.Int("cnt", len(args)))
+			logger.Warn("ETLMergeTask should have empty args", zap.Int("cnt", len(args)))
 		}
 		if err := LongRunETLMerge(ctx, task, logger, opts...); err != nil {
 			return err
@@ -702,7 +702,7 @@ const ParamSeparator = " "
 // MergeTaskMetadata handle args like: "{db_tbl_name} [date, default: today]"
 func MergeTaskMetadata(id task.TaskCode, args ...string) task.TaskMetadata {
 	return task.TaskMetadata{
-		ID:       path.Join("ETL_merge_task", path.Join(args...)),
+		ID:       path.Join("ETLMergeTask", path.Join(args...)),
 		Executor: id,
 		Context:  []byte(strings.Join(args, ParamSeparator)),
 		Options:  task.TaskOptions{Concurrency: 1},
