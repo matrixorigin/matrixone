@@ -118,7 +118,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	queryOpts := ie.NewOptsBuilder().Database("system").Internal(true).Finish()
+	queryOpts := ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish()
 	for {
 		select {
 		case <-ctx.Done():
@@ -200,7 +200,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		logger.Info("mometric is disable.")
 		return
 	}
-	opts := ie.NewOptsBuilder().Database("system").Internal(true).Finish()
+	opts := ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish()
 
 	var now time.Time
 	var interval = GetStorageUsageCheckNewInterval()
