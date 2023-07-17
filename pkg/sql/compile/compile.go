@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -2970,13 +2969,10 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 	return c.newMergeScope(ss2)
 }
 
-// TODO(fagonzgi): this env is used to check and find RC bugs in pessimistic mode. Will remove it later version.
-var (
-	checkRCInvalidError = os.Getenv("check_rc_invalid_error") == "true"
-)
-
 func (c *Compile) fatalLog(retry int, err error) {
-	if !checkRCInvalidError {
+	v, ok := moruntime.ProcessLevelRuntime().
+		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+	if !ok || !v.(bool) {
 		return
 	}
 
