@@ -16,7 +16,7 @@ package fileservice
 
 import (
 	"context"
-	"strings"
+	"os"
 
 	alicredentials "github.com/aliyun/credentials-go/credentials"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -49,30 +49,30 @@ func getCredentialsProvider(
 		ret = aws.NewCredentialsCache(ret)
 	}()
 
-	// aliyun
-	if strings.Contains(endpoint, "aliyuncs.com") {
-		provider := newAliyunCredentialsProvider(roleARN, externalID)
-		_, err := provider.Retrieve(ctx)
-		if err == nil {
-			return provider
-		}
-		logutil.Info("skipping bad aliyun credential provider",
-			zap.Any("error", err),
-		)
-	}
+	// aliyun TODO
+	//if strings.Contains(endpoint, "aliyuncs.com") {
+	//	provider := newAliyunCredentialsProvider(roleARN, externalID)
+	//	_, err := provider.Retrieve(ctx)
+	//	if err == nil {
+	//		return provider
+	//	}
+	//	logutil.Info("skipping bad aliyun credential provider",
+	//		zap.Any("error", err),
+	//	)
+	//}
 
-	// qcloud
-	if strings.Contains(endpoint, "myqcloud.com") ||
-		strings.Contains(endpoint, "tencentcos.cn") {
-		provider := newTencentCloudCredentialsProvider(roleARN, externalID)
-		_, err := provider.Retrieve(ctx)
-		if err == nil {
-			return provider
-		}
-		logutil.Info("skipping bad qcloud credential provider",
-			zap.Any("error", err),
-		)
-	}
+	// qcloud TODO
+	//if strings.Contains(endpoint, "myqcloud.com") ||
+	//	strings.Contains(endpoint, "tencentcos.cn") {
+	//	provider := newTencentCloudCredentialsProvider(roleARN, externalID)
+	//	_, err := provider.Retrieve(ctx)
+	//	if err == nil {
+	//		return provider
+	//	}
+	//	logutil.Info("skipping bad qcloud credential provider",
+	//		zap.Any("error", err),
+	//	)
+	//}
 
 	// aws role arn
 	if roleARN != "" {
@@ -131,6 +131,11 @@ func getCredentialsProvider(
 	return
 }
 
+func init() {
+	_ = newAliyunCredentialsProvider
+	_ = newTencentCloudCredentialsProvider
+}
+
 func newAliyunCredentialsProvider(
 	roleARN string,
 	externalID string,
@@ -139,6 +144,53 @@ func newAliyunCredentialsProvider(
 	return aws.CredentialsProviderFunc(
 		func(_ context.Context) (cs aws.Credentials, err error) {
 
+			set := func(cred alicredentials.Credential) error {
+				accessKeyID, err := cred.GetAccessKeyId()
+				if err != nil {
+					return err
+				}
+				cs.AccessKeyID = *accessKeyID
+
+				secretAccessKey, err := cred.GetAccessKeySecret()
+				if err != nil {
+					return err
+				}
+				cs.SecretAccessKey = *secretAccessKey
+
+				return nil
+			}
+
+			// rrsa
+			if roleARN,
+				OIDCProviderARN,
+				OIDCTokenFile,
+				sessionName :=
+				os.Getenv(alicredentials.ENVRoleArn),
+				os.Getenv(alicredentials.ENVOIDCProviderArn),
+				os.Getenv(alicredentials.ENVOIDCTokenFile),
+				os.Getenv(alicredentials.ENVRoleSessionName); roleARN != "" {
+				if sessionName == "" {
+					sessionName = "aliyun-rrsa"
+				}
+				config := new(alicredentials.Config).
+					SetType("oidc_role_arn").
+					SetRoleArn(roleARN).
+					SetOIDCProviderArn(OIDCProviderARN).
+					SetOIDCTokenFilePath(OIDCTokenFile).
+					SetRoleSessionName(sessionName)
+				var cred alicredentials.Credential
+				cred, err = alicredentials.NewCredential(config)
+				if err != nil {
+					return
+				}
+				if err = set(cred); err != nil {
+					return
+				}
+				// skip default
+				return
+			}
+
+			// default credentials chain
 			aliCredential, err := alicredentials.NewCredential(nil)
 			if err != nil {
 				return
@@ -156,6 +208,7 @@ func newAliyunCredentialsProvider(
 			}
 			cs.SecretAccessKey = *secretAccessKey
 
+			// with role arn
 			if roleARN != "" {
 				config := new(alicredentials.Config)
 				config.SetType("ram_role_arn")
@@ -168,18 +221,9 @@ func newAliyunCredentialsProvider(
 				if err != nil {
 					return
 				}
-				var accessKeyID *string
-				accessKeyID, err = cred.GetAccessKeyId()
-				if err != nil {
+				if err = set(cred); err != nil {
 					return
 				}
-				cs.AccessKeyID = *accessKeyID
-				var secretAccessKey *string
-				secretAccessKey, err = cred.GetAccessKeySecret()
-				if err != nil {
-					return
-				}
-				cs.SecretAccessKey = *secretAccessKey
 			}
 
 			return
@@ -195,6 +239,7 @@ func newTencentCloudCredentialsProvider(
 	return aws.CredentialsProviderFunc(
 		func(_ context.Context) (cs aws.Credentials, err error) {
 
+			// default credentials chain
 			provider := tencentcommon.DefaultProviderChain()
 
 			credentials, err := provider.GetCredential()
@@ -205,6 +250,7 @@ func newTencentCloudCredentialsProvider(
 			cs.AccessKeyID = credentials.GetSecretId()
 			cs.SecretAccessKey = credentials.GetSecretKey()
 
+			// with role arn
 			if roleARN != "" {
 				roleARNProvider := tencentcommon.DefaultRoleArnProvider(
 					credentials.GetSecretId(),
