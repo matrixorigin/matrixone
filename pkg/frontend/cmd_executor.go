@@ -19,10 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -208,7 +208,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of compile is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		logInfo(ses, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 	}
 
 	err = stmtExec.ResponseBeforeExec(ctx, ses)
@@ -225,7 +225,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of run is longer than 1s
 	if time.Since(runBegin) > time.Second {
-		logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+		logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 	}
 
 	_ = stmtExec.RecordExecPlan(ctx)
