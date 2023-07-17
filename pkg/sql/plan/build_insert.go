@@ -233,6 +233,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		for insertRowIdx, pkColIdx := range pkPosInValues {
 			if pkValueExprs[pkColIdx] == nil {
 				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true)
+				if constExpr == nil {
+					return nil
+				}
 				typ := makePlan2Type(bat.Vecs[insertRowIdx].GetType())
 
 				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
