@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -202,6 +203,8 @@ type Compile struct {
 	stepRegs map[int32][]int32
 
 	runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
+
+	lock sync.RWMutex
 
 	isInternal bool
 	// cnLabel is the CN labels which is received from proxy when build connection.

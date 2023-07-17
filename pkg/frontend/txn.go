@@ -17,9 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -244,7 +245,7 @@ func (th *TxnHandler) CommitTxn() error {
 	txnCtx, txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
-		logErrorf(sessionInfo, "CommitTxn: txn operator is null")
+		logError(ses, sessionInfo, "CommitTxn: txn operator is null")
 	}
 	if txnCtx == nil {
 		panic("context should not be nil")
@@ -287,7 +288,10 @@ func (th *TxnHandler) CommitTxn() error {
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()
-			logErrorf(sessionInfo, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
+			logError(ses, sessionInfo,
+				"CommitTxn: txn operator commit failed",
+				zap.String("txnId", txnId),
+				zap.Error(err))
 		}
 		ses.updateLastCommitTS(txnOp.Txn().CommitTS)
 	}
@@ -306,7 +310,9 @@ func (th *TxnHandler) RollbackTxn() error {
 	txnCtx, txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
-		logErrorf(sessionInfo, "RollbackTxn: txn operator is null")
+		logError(ses, ses.GetDebugString(),
+			"RollbackTxn: txn operator is null",
+			zap.String("sessionInfo", sessionInfo))
 	}
 	if txnCtx == nil {
 		panic("context should not be nil")
@@ -342,7 +348,10 @@ func (th *TxnHandler) RollbackTxn() error {
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()
-			logErrorf(sessionInfo, "RollbackTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
+			logError(ses, ses.GetDebugString(),
+				"RollbackTxn: txn operator commit failed",
+				zap.String("txnId", txnId),
+				zap.Error(err))
 		}
 	}
 	th.SetTxnOperatorInvalid()
@@ -359,7 +368,9 @@ func (th *TxnHandler) GetTxn() (context.Context, TxnOperator, error) {
 	ses := th.GetSession()
 	txnCtx, txnOp, err := ses.TxnCreate()
 	if err != nil {
-		logErrorf(ses.GetDebugString(), "GetTxn. error:%v", err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to get transaction",
+			zap.Error(err))
 		return nil, nil, err
 	}
 	return txnCtx, txnOp, err
