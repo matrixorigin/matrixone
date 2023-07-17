@@ -65,7 +65,7 @@ func (f *dummyFSWriterFactory) GetRowWriter(ctx context.Context, account string,
 }
 func (f *dummyFSWriterFactory) GetWriter(ctx context.Context, fp string) io.WriteCloser { return nil }
 
-func bootstrap(ctx context.Context) error {
+func bootstrap(ctx context.Context) (error, bool) {
 	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
 	SV := config.ObservabilityParameters{}
 	SV.SetDefaultValues("v0.6.0")
@@ -239,7 +239,7 @@ func main() {
 	ctx := context.Background()
 
 	// rootCtx should be root Context of Server running, you can get it also by motrace.DefaultContext()
-	err := bootstrap(ctx)
+	err, _ := bootstrap(ctx)
 	if err != nil {
 		panic(err)
 	}

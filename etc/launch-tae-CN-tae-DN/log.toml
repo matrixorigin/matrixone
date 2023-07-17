@@ -28,10 +28,6 @@ disk-async-file-load = true
 name = "ETL"
 backend = "DISK-ETL"
 
-[observability]
-statusPort = 7001
-enableTraceDebug = false
-
 [hakeeper-client]
 service-addresses = [
   "127.0.0.1:32001",
