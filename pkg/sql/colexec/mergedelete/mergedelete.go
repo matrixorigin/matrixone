@@ -37,7 +37,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	var name string
 	ap := arg.(*Argument)
 	bat := proc.Reg.InputBatch
-	bat.FixedForRemoveZs()
 	if bat == nil {
 		// ToDo:
 		// start to do compaction for cn blocks

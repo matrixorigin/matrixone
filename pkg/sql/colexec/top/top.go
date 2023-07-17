@@ -70,7 +70,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			bat := proc.InputBatch()
-			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = Eval
 				continue
@@ -174,10 +173,9 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				}
 			}
 			ctr.sels = append(ctr.sels, n)
-			ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs[i])
 			n++
 		}
-		ctr.bat.SetRowCount(ctr.bat.RowCount() + int(start))
+		ctr.bat.AddRowCount(int(start))
 
 		if n == limit {
 			ctr.sort()
@@ -197,7 +195,6 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
 					return err
 				}
-				ctr.bat.Zs[0] = bat.Zs[i]
 			}
 			heap.Fix(ctr, 0)
 		}
@@ -223,8 +220,6 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-
-	ctr.bat.CheckForRemoveZs("top")
 	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil
 	return nil

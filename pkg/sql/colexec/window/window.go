@@ -70,7 +70,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 			return false, err
 		}
 
-		bat.FixedForRemoveZs()
 		if end {
 			break
 		}
@@ -87,7 +86,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 				return false, err
 			}
 		}
-		ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs...)
 		ctr.bat.AddRowCount(bat.RowCount())
 	}
 
@@ -139,7 +137,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 
 	anal.Output(ctr.bat, isLast)
 
-	ctr.bat.CheckForRemoveZs("window")
 	proc.SetInputBatch(ctr.bat)
 	return true, nil
 }
@@ -412,10 +409,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	ovec := ctr.orderVecs[0].vec
 	var strCol []string
 
+	rowCount := bat.RowCount()
 	if ctr.sels == nil {
-		ctr.sels = make([]int64, len(bat.Zs))
+		ctr.sels = make([]int64, rowCount)
 	}
-	for i := 0; i < len(bat.Zs); i++ {
+	for i := 0; i < rowCount; i++ {
 		ctr.sels[i] = int64(i)
 	}
 

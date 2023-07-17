@@ -50,7 +50,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 
 	bat := proc.InputBatch()
-	bat.FixedForRemoveZs()
 	if bat == nil || bat.IsEmpty() {
 		return f, e
 	}

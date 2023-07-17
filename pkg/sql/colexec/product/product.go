@@ -53,12 +53,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
-			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
 			}
-			if len(bat.Zs) == 0 {
+			if bat.IsEmpty() {
 				bat.Clean(proc.Mp())
 				continue
 			}
@@ -85,7 +84,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if err != nil {
 		return err
 	}
-	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 	}
@@ -96,7 +94,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer bat.Clean(proc.Mp())
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = vector.NewVec(*bat.Vecs[rp.Pos].GetType())
@@ -121,13 +118,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 				}
 			}
-			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
 		}
 	}
-	rbat.SetRowCount(rbat.RowCount() + count*count2)
-
+	rbat.AddRowCount(count * count2)
 	anal.Output(rbat, isLast)
-	rbat.CheckForRemoveZs("product")
 	proc.SetInputBatch(rbat)
 	return nil
 }

@@ -72,7 +72,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
-			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -103,7 +102,6 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 		return err
 	}
 
-	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
@@ -116,7 +114,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = proc.GetVector(*bat.Vecs[rp.Pos].GetType())
@@ -191,7 +188,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							}
 						}
 					}
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 					rowCount++
 				}
 			} else {
@@ -208,18 +204,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						}
 					}
 				}
-				for _, sel := range sels {
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
-				}
 				rowCount += len(sels)
 			}
 		}
 	}
 
-	rbat.SetRowCount(rbat.RowCount() + rowCount)
+	rbat.AddRowCount(rowCount)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
-	rbat.CheckForRemoveZs("join")
 	return nil
 }
 

@@ -52,7 +52,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	bat.FixedForRemoveZs()
 
 	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
@@ -80,16 +79,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 	anal.Alloc(int64(newAlloc))
 
-	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	rbat.SetRowCount(bat.RowCount())
 
 	proc.PutBatch(bat)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
-
-	if rbat != nil {
-		rbat.CheckForRemoveZs("projection")
-	}
-
 	return false, nil
 }

@@ -754,7 +754,6 @@ func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,
 		rbat.Vecs[i] = vector.NewConstNull(typ, 0, nil)
 		cfs[i] = vector.GetConstSetFunction(typ, mp)
 	}
-	rbat.Zs = mp.GetSels()
 	return rbat, cfs
 }
 
@@ -765,13 +764,7 @@ func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
 			return err
 		}
 	}
-	if n := cap(joinBat.Zs); n < length {
-		joinBat.Zs = joinBat.Zs[:n]
-		for ; n < length; n++ {
-			joinBat.Zs = append(joinBat.Zs, 1)
-		}
-	}
-	joinBat.Zs = joinBat.Zs[:length]
+	joinBat.SetRowCount(length)
 	return nil
 }
 

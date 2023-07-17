@@ -33,7 +33,6 @@ func Prepare(_ *process.Process, _ any) error {
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	bat := proc.InputBatch()
-	bat.FixedForRemoveZs()
 	if bat == nil {
 		return true, nil
 	}
@@ -57,8 +56,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		ap.Seen += uint64(length)
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
-
-		bat.CheckForRemoveZs("offset")
 		proc.SetInputBatch(bat)
 		return false, nil
 	}

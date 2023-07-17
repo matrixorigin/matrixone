@@ -163,10 +163,7 @@ func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err err
 			break
 		}
 	}
-	bat.SetZs(wholeLength, mp)
 	bat.SetRowCount(wholeLength)
-
-	bat.CheckForRemoveZs("merge order")
 	proc.SetInputBatch(bat)
 	return sendOver, nil
 }
@@ -216,8 +213,6 @@ func (ctr *container) removeBatch(proc *process.Process, index int) {
 		proc.PutVector(cols[i])
 	}
 	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
-
-	proc.Mp().PutSels(bat.Zs)
 }
 
 func String(arg any, buf *bytes.Buffer) {
@@ -296,8 +291,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 			// If only one batch, no need to sort. just send it.
 			if len(ctr.batchList) == 1 {
-				ctr.batchList[0].CheckForRemoveZs("merge order")
-
 				proc.SetInputBatch(ctr.batchList[0])
 				ctr.batchList[0] = nil
 				return true, nil

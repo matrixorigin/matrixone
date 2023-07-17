@@ -74,7 +74,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
-			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -105,7 +104,6 @@ func (ctr *container) build(anal process.Analyze) error {
 		return err
 	}
 
-	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
@@ -118,7 +116,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
@@ -180,7 +177,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 			eligible = append(eligible, int32(i+k))
-			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 			rowCountIncrease++
 		}
 		for j, pos := range ap.Result {
@@ -192,10 +188,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		eligible = eligible[:0]
 	}
 
-	rbat.SetRowCount(rbat.RowCount() + rowCountIncrease)
+	rbat.AddRowCount(rowCountIncrease)
 	anal.Output(rbat, isLast)
-
-	rbat.CheckForRemoveZs("semi")
 	proc.SetInputBatch(rbat)
 	return nil
 }

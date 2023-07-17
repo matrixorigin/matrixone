@@ -264,7 +264,7 @@ func (w *S3Writer) Output(proc *process.Process) error {
 		}
 		bat.SetVector(int32(i), vec)
 	}
-	bat.Zs = append(bat.Zs, w.metaLocBat.Zs...)
+	bat.SetRowCount(w.metaLocBat.RowCount())
 	w.ResetMetaLocBat(proc)
 	proc.SetInputBatch(bat)
 	return nil
@@ -367,9 +367,7 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 				}
 			}
 		}
-		for j := 0; j < rows; j++ {
-			rbat.Zs = append(rbat.Zs, bat.Zs[j+start])
-		}
+		rbat.AddRowCount(rows)
 		start += rows
 		if w.batSize = w.batSize + uint64(rbat.Size()); w.batSize > WriteS3Threshold {
 			res = true
@@ -577,8 +575,9 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 		}
 	}
 	var strCol []string
-	sels := make([]int64, len(bat.Zs))
-	for i := 0; i < len(bat.Zs); i++ {
+	rowCount := bat.RowCount()
+	sels := make([]int64, rowCount)
+	for i := 0; i < rowCount; i++ {
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex))

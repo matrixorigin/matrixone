@@ -65,7 +65,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	}
 
 	bat := proc.InputBatch()
-	bat.FixedForRemoveZs()
 	if bat == nil {
 		// scenario 1 for cn write s3, more in the comment of S3Writer
 		if ap.ToWriteS3 {
@@ -147,7 +146,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			}
 			insertBat.SetVector(int32(i), vec)
 		}
-		insertBat.Zs = append(insertBat.Zs, bat.Zs...)
 		insertBat.SetRowCount(insertBat.RowCount() + bat.RowCount())
 
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
@@ -156,9 +154,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				return false, err
 			}
 			for i, partitionBat := range insertBatches {
-				partitionBat.FixedForRemoveZs()
-
-				err := ap.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
+				err = ap.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
 				if err != nil {
 					partitionBat.Clean(proc.Mp())
 					return false, err
@@ -197,16 +193,13 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 	for _, w := range s3Writers {
 		//deep copy.
 		bat := w.GetMetaLocBat()
-		bat.FixedForRemoveZs()
 		res, err = res.Append(proc.Ctx, proc.GetMPool(), bat)
 		if err != nil {
 			return
 		}
-		res.Zs = append(res.Zs, bat.Zs...)
 		res.SetRowCount(res.RowCount() + bat.RowCount())
 		w.ResetMetaLocBat(proc)
 	}
-	res.CheckForRemoveZs("insert")
 	proc.SetInputBatch(res)
 	return
 }

@@ -97,7 +97,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if err != nil {
 			return true, nil
 		}
-		bat.FixedForRemoveZs()
 		if end {
 			return false, nil
 		}
@@ -178,7 +177,6 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				}
 			}
 			ctr.sels = append(ctr.sels, n)
-			ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs[i])
 			n++
 		}
 		ctr.bat.SetRowCount(ctr.bat.RowCount() + bat.RowCount())
@@ -200,7 +198,6 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
 					return err
 				}
-				ctr.bat.Zs[0] = bat.Zs[i]
 			}
 			heap.Fix(ctr, 0)
 		}
@@ -227,8 +224,6 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	anal.Output(ctr.bat, isLast)
-
-	ctr.bat.CheckForRemoveZs("merge top")
 	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil
 	return nil

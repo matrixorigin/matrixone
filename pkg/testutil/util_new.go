@@ -133,7 +133,7 @@ func NewBatchWithVectors(vs []*vector.Vector, zs []int64) *batch.Batch {
 		if zs == nil {
 			zs = MakeBatchZs(l, false)
 		}
-		bat.Zs = append([]int64{}, zs...)
+		bat.SetRowCount(len(zs))
 		bat.Vecs = vs
 	}
 	return bat

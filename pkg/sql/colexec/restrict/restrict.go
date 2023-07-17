@@ -44,7 +44,6 @@ func Prepare(proc *process.Process, arg any) (err error) {
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	bat := proc.InputBatch()
-	bat.FixedForRemoveZs()
 	if bat == nil {
 		return true, nil
 	}
@@ -120,8 +119,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		proc.SetInputBatch(nil)
 	} else {
 		anal.Output(bat, isLast)
-
-		bat.CheckForRemoveZs("restrict")
 		proc.SetInputBatch(bat)
 	}
 	return false, nil

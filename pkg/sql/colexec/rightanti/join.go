@@ -36,7 +36,6 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.bat = batch.NewWithSize(len(ap.RightTypes))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.RightTypes {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
@@ -78,7 +77,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
-			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = SendLast
 				continue
@@ -125,7 +123,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		return err
 	}
 
-	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
@@ -155,7 +152,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	}
 
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
@@ -176,14 +172,9 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 			return false, err
 		}
 	}
-	for _, sel := range sels {
-		rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
-	}
-	rbat.SetRowCount(rbat.RowCount() + len(sels))
+	rbat.AddRowCount(len(sels))
 
 	analyze.Output(rbat, isLast)
-
-	rbat.CheckForRemoveZs("rightanti")
 	proc.SetInputBatch(rbat)
 	return false, nil
 }

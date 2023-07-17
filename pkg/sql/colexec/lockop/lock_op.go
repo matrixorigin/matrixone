@@ -104,7 +104,6 @@ func callNonBlocking(
 	proc *process.Process,
 	arg *Argument) (bool, error) {
 	bat := proc.InputBatch()
-	bat.FixedForRemoveZs()
 
 	if bat == nil {
 		return true, arg.rt.retryError
@@ -177,7 +176,6 @@ func callBlocking(
 			arg.rt.step = stepEnd
 		}
 
-		bat.CheckForRemoveZs("lock op")
 		proc.SetInputBatch(bat)
 		return false, nil
 	case stepEnd:
@@ -655,7 +653,6 @@ func (arg *Argument) getBatch(
 	}
 
 	bat, end, err := fn(anal)
-	bat.FixedForRemoveZs()
 	if err != nil {
 		return nil, err
 	}

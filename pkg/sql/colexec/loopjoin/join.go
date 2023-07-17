@@ -102,7 +102,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = proc.GetVector(*bat.Vecs[rp.Pos].GetType())
@@ -110,10 +109,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
-	count := bat.Length()
+	count := bat.RowCount()
 	if ctr.joinBat == nil {
 		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
 	}
+
+	rowCountIncrease := 0
 	for i := 0; i < count; i++ {
 		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
 			ctr.bat.Length(), ctr.cfs); err != nil {
@@ -130,23 +131,23 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if vec.IsConst() {
 			b, null := rs.GetValue(0)
 			if !null && b {
-				for j := 0; j < len(ctr.bat.Zs); j++ {
+				for j := 0; j < ctr.bat.RowCount(); j++ {
 					for k, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+							if err = rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 								vec.Free(proc.Mp())
 								rbat.Clean(proc.Mp())
 								return err
 							}
 						} else {
-							if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
+							if err = rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
 								vec.Free(proc.Mp())
 								rbat.Clean(proc.Mp())
 								return err
 							}
 						}
 					}
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+					rowCountIncrease++
 				}
 			}
 		} else {
@@ -169,11 +170,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							}
 						}
 					}
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+					rowCountIncrease++
 				}
 			}
 		}
 	}
+
+	rbat.SetRowCount(rowCountIncrease)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil

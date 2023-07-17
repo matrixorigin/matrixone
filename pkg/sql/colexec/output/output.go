@@ -29,11 +29,7 @@ func Prepare(_ *process.Process, _ any) error {
 
 func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
-	if bat := proc.InputBatch(); bat != nil && bat.Length() > 0 {
-		// WTF
-		for i := range bat.Zs {
-			bat.Zs[i] = 1
-		}
+	if bat := proc.InputBatch(); bat != nil && !bat.IsEmpty() {
 		if err := ap.Func(ap.Data, bat); err != nil {
 			proc.PutBatch(bat)
 			return false, err

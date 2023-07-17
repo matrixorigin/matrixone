@@ -52,7 +52,6 @@ func Prepare(proc *process.Process, arg any) (err error) {
 		}
 	}
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
@@ -89,7 +88,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
 				}
 
-				ctr.bat.CheckForRemoveZs("hash build")
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
 				ctr.bat = nil
@@ -117,7 +115,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			return err
 		}
 
-		bat.FixedForRemoveZs()
 		if bat == nil {
 			break
 		}
@@ -204,7 +201,6 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	// Composite primary key
 	if len(ctr.vecs) > 1 && len(ctr.sels) <= plan.BloomFilterCardLimit {
 		bat := batch.NewWithSize(len(ctr.vecs))
-		bat.Zs = make([]int64, ctr.vecs[0].Length())
 		bat.SetRowCount(ctr.vecs[0].Length())
 		copy(bat.Vecs, ctr.vecs)
 

@@ -99,14 +99,13 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 			return err
 		}
 
-		bat.FixedForRemoveZs()
 		// the last batch of pipeline.
 		if bat == nil {
 			break
 		}
 
 		// just an empty batch.
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -143,13 +142,12 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			return false, err
 		}
 
-		bat.FixedForRemoveZs()
 		// the last batch of block.
 		if bat == nil {
 			return true, nil
 		}
 		// just an empty batch.
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -181,10 +179,9 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 					// ensure that the same value will only be inserted once.
 					rows++
 					inserted[j] = 1
-					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}
 			}
-			ctr.bat.SetRowCount(ctr.bat.RowCount() + int(rows-oldHashGroup))
+			ctr.bat.AddRowCount(int(rows - oldHashGroup))
 
 			newHashGroup := ctr.hashTable.GroupCount()
 			insertCount := int(newHashGroup - oldHashGroup)
@@ -198,8 +195,6 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			}
 		}
 		ana.Output(ctr.bat, isLast)
-
-		ctr.bat.CheckForRemoveZs("minus")
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
 		bat.Clean(proc.Mp())

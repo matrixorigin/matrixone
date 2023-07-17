@@ -36,7 +36,6 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.bat = batch.NewWithSize(len(ap.RightTypes))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.RightTypes {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
@@ -79,7 +78,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
-			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = SendLast
 				continue
@@ -126,7 +124,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		return err
 	}
 
-	bat.FixedForRemoveZs()
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
@@ -167,7 +164,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	}
 
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
@@ -191,10 +187,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		}
 
 	}
-	for _, sel := range sels {
-		rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
-	}
-
+	rbat.AddRowCount(len(sels))
 	analyze.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return false, nil
@@ -204,7 +197,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = proc.GetVector(*bat.Vecs[rp.Pos].GetType())
@@ -274,7 +266,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						}
 					}
 					ctr.matched.Add(uint64(sel))
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 					rowCountIncrese++
 				}
 			} else {
@@ -293,15 +284,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 				for _, sel := range sels {
 					ctr.matched.Add(uint64(sel))
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 				}
 				rowCountIncrese += len(sels)
 			}
 		}
 	}
 
-	rbat.SetRowCount(rbat.RowCount() + rowCountIncrese)
-	rbat.CheckForRemoveZs("right")
+	rbat.AddRowCount(rowCountIncrese)
 	proc.SetInputBatch(rbat)
 	return nil
 }

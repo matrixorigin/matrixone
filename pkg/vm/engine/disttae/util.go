@@ -66,7 +66,7 @@ func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *p
 	}
 
 	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+	bat.SetRowCount(1)
 
 	ret, err := colexec.EvalExpressionOnce(proc, funExpr, []*batch.Batch{bat})
 	if err != nil {

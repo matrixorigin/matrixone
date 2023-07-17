@@ -40,7 +40,6 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
@@ -97,7 +96,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
-			bat.FixedForRemoveZs()
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -130,7 +128,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
-	bat.FixedForRemoveZs()
 	if bat != nil {
 		var err error
 		joinMap := bat.AuxData.(*hashmap.JoinMap)
@@ -167,11 +164,9 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
 		}
 	}
-	rbat.Zs = append(rbat.Zs, bat.Zs...)
-	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
+	rbat.AddRowCount(bat.RowCount())
 	anal.Output(rbat, isLast)
 
-	rbat.CheckForRemoveZs("mark")
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -262,11 +257,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = markVec
 		}
 	}
-	rbat.Zs = append(rbat.Zs, bat.Zs...)
-	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
+	rbat.AddRowCount(bat.RowCount())
 	anal.Output(rbat, isLast)
-
-	rbat.CheckForRemoveZs("mark")
 	proc.SetInputBatch(rbat)
 	return nil
 }
@@ -423,8 +415,6 @@ func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) (*
 			return nil, err
 		}
 	}
-
-	bat.Zs = append(bat.Zs, originBatch.Zs...)
-	bat.SetRowCount(bat.RowCount() + originBatch.RowCount())
+	bat.AddRowCount(originBatch.RowCount())
 	return bat, nil
 }
