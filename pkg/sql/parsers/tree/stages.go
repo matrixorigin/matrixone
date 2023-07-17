@@ -31,10 +31,10 @@ func (node *CreateStage) Format(ctx *FmtCtx) {
 
 	ctx.WriteString("URL=")
 	ctx.WriteString(node.URL)
-	
-	if node.CRENTIALS !=
 
-
+	ctx.WriteString(" ")
+	ctx.WriteString("CREDENTIALS=")
+	ctx.WriteString(node.CRENTIALS)
 }
 
 func (node *CreateStage) GetStatementType() string { return "Create Stage" }

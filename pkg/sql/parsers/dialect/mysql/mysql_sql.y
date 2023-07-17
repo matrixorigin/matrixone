@@ -5059,11 +5059,11 @@ account_name:
 account_auth_option:
     ADMIN_NAME equal_opt account_admin_name account_identified
     {
-    $$ = tree.AccountAuthOption{
-        Equal:$2,
-        AdminName:$3,
-        IdentifiedType:$4,
-    }
+        $$ = tree.AccountAuthOption{
+            Equal:$2,
+            AdminName:$3,
+            IdentifiedType:$4,
+        }
     }
 
 account_admin_name:
@@ -5079,23 +5079,23 @@ account_admin_name:
 account_identified:
     IDENTIFIED BY STRING
     {
-    $$ = tree.AccountIdentified{
-        Typ: tree.AccountIdentifiedByPassword,
-        Str: $3,
-    }
+        $$ = tree.AccountIdentified{
+            Typ: tree.AccountIdentifiedByPassword,
+            Str: $3,
+        }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
     {
-    $$ = tree.AccountIdentified{
-        Typ: tree.AccountIdentifiedByRandomPassword,
-    }
+        $$ = tree.AccountIdentified{
+            Typ: tree.AccountIdentifiedByRandomPassword,
+        }
     }
 |   IDENTIFIED WITH STRING
     {
-    $$ = tree.AccountIdentified{
-        Typ: tree.AccountIdentifiedWithSSL,
-        Str: $3,
-    }
+        $$ = tree.AccountIdentified{
+            Typ: tree.AccountIdentifiedWithSSL,
+            Str: $3,
+        }
     }
 
 account_status_option:
@@ -5129,15 +5129,15 @@ account_status_option:
 account_comment_opt:
     {
         $$ = tree.AccountComment{
-        Exist: false,
-    }
+            Exist: false,
+        }
     }
 |   COMMENT_KEYWORD STRING
     {
-    $$ = tree.AccountComment{
-        Exist: true,
-        Comment: $2,
-    }
+        $$ = tree.AccountComment{
+            Exist: true,
+            Comment: $2,
+        }
     }
 
 create_user_stmt:
@@ -5155,13 +5155,13 @@ create_user_stmt:
 create_publication_stmt:
     CREATE PUBLICATION not_exists_opt ident DATABASE ident alter_publication_accounts_opt comment_opt
     {
-	$$ = &tree.CreatePublication{
-	    IfNotExists: $3,
-	    Name: tree.Identifier($4.Compare()),
-	    Database: tree.Identifier($6.Compare()),
-	    AccountsSet: $7,
-	    Comment: $8,
-	}
+	    $$ = &tree.CreatePublication{
+	        IfNotExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+	        Database: tree.Identifier($6.Compare()),
+	        AccountsSet: $7,
+	        Comment: $8,
+	    }
     }
 
 comment_opt:
@@ -5176,51 +5176,51 @@ comment_opt:
 alter_publication_stmt:
 ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
     {
-	$$ = &tree.AlterPublication{
-	    IfExists: $3,
-	    Name: tree.Identifier($4.Compare()),
-	    AccountsSet: $5,
-	    Comment: $6,
-	}
+	    $$ = &tree.AlterPublication{
+	        IfExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+	        AccountsSet: $5,
+	        Comment: $6,
+	    }
     }
 
 alter_publication_accounts_opt:
     {
-	$$ = nil
+	    $$ = nil
     }
     | ACCOUNT ALL
     {
-	$$ = &tree.AccountsSetOption{
-	    All: true,
-	}
+	    $$ = &tree.AccountsSetOption{
+	        All: true,
+	    }
     }
     | ACCOUNT accounts_list
     {
     	$$ = &tree.AccountsSetOption{
-	    SetAccounts: $2,
-	}
+	        SetAccounts: $2,
+	    }
     }
     | ACCOUNT ADD accounts_list
     {
     	$$ = &tree.AccountsSetOption{
-	    AddAccounts: $3,
-	}
+	        AddAccounts: $3,
+	    }
     }
     | ACCOUNT DROP accounts_list
     {
     	$$ = &tree.AccountsSetOption{
-	    DropAccounts: $3,
-	}
+	        DropAccounts: $3,
+	    }
     }
 
 
 drop_publication_stmt:
 DROP PUBLICATION exists_opt ident
     {
-	$$ = &tree.DropPublication{
-	    IfExists: $3,
-	    Name: tree.Identifier($4.Compare()),
-	}
+	    $$ = &tree.DropPublication{
+	        IfExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+	    }
     }
 
 account_role_name:
@@ -5237,19 +5237,19 @@ user_comment_or_attribute_opt:
     }
 |   COMMENT_KEYWORD STRING
     {
-    $$ = tree.AccountCommentOrAttribute{
-        Exist: true,
-        IsComment: true,
-        Str: $2,
-    }
+        $$ = tree.AccountCommentOrAttribute{
+            Exist: true,
+            IsComment: true,
+            Str: $2,
+        }
     }
 |   ATTRIBUTE STRING
     {
-    $$ = tree.AccountCommentOrAttribute{
-        Exist: true,
-        IsComment: false,
-        Str: $2,
-    }
+        $$ = tree.AccountCommentOrAttribute{
+            Exist: true,
+            IsComment: false,
+            Str: $2,
+        }
     }
 
 //conn_options:
