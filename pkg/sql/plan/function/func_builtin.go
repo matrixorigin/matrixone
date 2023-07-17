@@ -17,6 +17,12 @@ package function
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
+	"strings"
+	"time"
+	"unsafe"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,11 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"math/rand"
-	"strings"
-	"time"
-	"unsafe"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {

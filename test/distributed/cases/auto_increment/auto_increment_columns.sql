@@ -449,3 +449,28 @@ insert into t1 values();
 select last_insert_id();
 insert into t2 values();
 select last_insert_id();
+
+-- test for auto_increment column with default value
+drop table if exists t1;
+create table t1(a int auto_increment primary key) auto_increment = 0;
+insert into t1 values();
+select last_insert_id();
+insert into t1 values(11);
+insert into t1 values();
+select last_insert_id();
+
+drop table if exists t1;
+create table t1(a int auto_increment primary key) auto_increment = 10;
+insert into t1 values();
+select last_insert_id();
+insert into t1 values(101);
+insert into t1 values();
+select last_insert_id();
+
+drop table if exists t1;
+create table t1(a int auto_increment primary key) auto_increment = 100;
+insert into t1 values();
+select last_insert_id();
+insert into t1 values(7);
+insert into t1 values();
+select last_insert_id();
