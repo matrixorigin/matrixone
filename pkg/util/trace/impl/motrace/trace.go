@@ -50,7 +50,7 @@ func init() {
 
 var inited uint32
 
-func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) error {
+func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opts ...TracerProviderOption) (error, bool) {
 	opts = append(opts,
 		withMOVersion(SV.MoVersion),
 		EnableTracer(!SV.DisableTrace),
@@ -71,10 +71,14 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 	return Init(ctx, opts...)
 }
 
-func Init(ctx context.Context, opts ...TracerProviderOption) error {
+// Init initializes the tracer with the given options.
+// If EnableTracer is set to false, this function does nothing.
+// If EnableTracer is set to true, the tracer is initialized.
+// Init only allow called once.
+func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act bool) {
 	// fix multi-init in standalone
 	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
-		return nil
+		return nil, false
 	}
 
 	// init TraceProvider
@@ -99,7 +103,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) error {
 
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
-		return err
+		return err, true
 	}
 
 	// init tool dependence
@@ -111,7 +115,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) error {
 	logutil.Debugf("trace with LongSpanTime: %v", GetTracerProvider().longSpanTime)
 	logutil.Debugf("trace with DisableSpan: %v", GetTracerProvider().disableSpan)
 
-	return nil
+	return nil, true
 }
 
 func initExporter(ctx context.Context, config *tracerProviderConfig) error {

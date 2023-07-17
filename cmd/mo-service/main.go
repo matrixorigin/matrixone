@@ -349,17 +349,22 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		initWG.Add(1)
 		collector := export.NewMOCollector(ctx, export.WithOBCollectorConfig(&SV.OBCollectorConfig))
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
-			if err = motrace.InitWithConfig(ctx,
+			err, act := motrace.InitWithConfig(ctx,
 				&SV,
 				motrace.WithNode(UUID, nodeRole),
 				motrace.WithBatchProcessor(collector),
 				motrace.WithFSWriterFactory(writerFactory),
 				motrace.WithSQLExecutor(nil),
-			); err != nil {
+			)
+			initWG.Done()
+			if err != nil {
 				panic(err)
 			}
-			initWG.Done()
+			if !act {
+				return
+			}
 			<-ctx.Done()
+			logutil.Info("motrace receive shutdown signal, wait other services shutdown complete.")
 			serviceWG.Wait()
 			logutil.Info("Shutdown service complete.")
 			// flush trace/log/error framework
@@ -371,7 +376,9 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 	if !SV.DisableMetric || SV.EnableMetricToProm {
 		stopper.RunNamedTask("metric", func(ctx context.Context) {
-			mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole, mometric.WithWriterFactory(writerFactory))
+			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole, mometric.WithWriterFactory(writerFactory)); !act {
+				return
+			}
 			<-ctx.Done()
 			mometric.StopMetricSync()
 		})

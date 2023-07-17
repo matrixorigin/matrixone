@@ -58,10 +58,10 @@ var statusSvr *statusServer
 
 var inited uint32
 
-func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.ObservabilityParameters, nodeUUID, role string, opts ...InitOption) {
+func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.ObservabilityParameters, nodeUUID, role string, opts ...InitOption) (act bool) {
 	// fix multi-init in standalone
 	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
-		return
+		return false
 	}
 	var initOpts InitOptions
 	opts = append(opts,
@@ -118,6 +118,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	metric.SetStorageUsageCheckNewInterval(initOpts.checkNewInterval)
 	logutil.Debugf("metric with ExportInterval: %v", initOpts.exportInterval)
 	logutil.Debugf("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
+	return true
 }
 
 func StopMetricSync() {
