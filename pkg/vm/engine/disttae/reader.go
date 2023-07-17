@@ -398,18 +398,63 @@ func (r *blockMergeReader) Close() error {
 	return nil
 }
 
+func (r *blockMergeReader) prefetchDeletes() error {
+	//load delta locations for r.blocks.
+	if !r.loaded {
+		for _, info := range r.blks {
+			bats, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[info.BlockID]
+			if !ok {
+				return nil
+			}
+			for _, bat := range bats {
+				vs := vector.MustStrCol(bat.GetVector(0))
+				for _, deltaLoc := range vs {
+					location, err := blockio.EncodeLocationFromString(deltaLoc)
+					if err != nil {
+						return err
+					}
+					r.deletaLocs[location.Name().String()] =
+						append(r.deletaLocs[location.Name().String()], location)
+				}
+			}
+
+		}
+		// Get Single Col pk index
+		for idx, colDef := range r.tableDef.Cols {
+			if colDef.Name == r.tableDef.Pkey.PkeyColName {
+				r.pkidx = idx
+				break
+			}
+		}
+		r.loaded = true
+	}
+
+	//prefetch the deletes
+	for name, locs := range r.deletaLocs {
+		pref, err := blockio.BuildPrefetchParams(r.fs, locs[0])
+		if err != nil {
+			return err
+		}
+		for _, loc := range locs {
+			//rowid + pk
+			pref.AddBlock([]uint16{0, uint16(r.pkidx)}, []uint16{loc.ID()})
+
+		}
+		delete(r.deletaLocs, name)
+		return blockio.PrefetchWithMerged(pref)
+	}
+	return nil
+}
+
 func (r *blockMergeReader) loadDeletes(ctx context.Context) error {
 	if len(r.blks) == 0 {
 		return nil
 	}
 	info := r.blks[0]
 	// load deletes from txn.blockId_dn_delete_metaLoc_batch
-	if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[info.BlockID]; ok {
-		//TODO::prefetch the deletes
-		err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
-		if err != nil {
-			return err
-		}
+	err := r.table.LoadDeletesForBlock(info.BlockID, &r.buffer)
+	if err != nil {
+		return err
 	}
 	// load deletes from partition state for the specified block
 	{
@@ -456,6 +501,10 @@ func (r *blockMergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	//prefetch deletes for r.blks
+	if err := r.prefetchDeletes(); err != nil {
+		return nil, err
+	}
 	//load deletes for the specified block
 	if err := r.loadDeletes(ctx); err != nil {
 		return nil, err
