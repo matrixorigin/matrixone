@@ -2953,13 +2953,12 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 }
 
 func (c *Compile) fatalLog(retry int, err error) {
+	if err == nil {
+		return
+	}
 	v, ok := moruntime.ProcessLevelRuntime().
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
 	if !ok || !v.(bool) {
-		return
-	}
-
-	if err == nil {
 		return
 	}
 	fatal := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
