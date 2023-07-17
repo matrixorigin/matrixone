@@ -196,18 +196,10 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 			anal.Output(ctr.bat, isLast)
 		}
 
-		// todo(cms): i reset zs here.
-		for i := range ctr.bat.Zs {
-			ctr.bat.Zs[i] = 1
-		}
-
-		ctr.bat.CheckForRemoveZs("group")
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
 		return true, nil
 	}
-
-	bat.FixedForRemoveZs()
 
 	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
@@ -240,8 +232,6 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 
 func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr *container) (err error) {
 	ctr.bat = batch.NewWithSize(0)
-	ctr.bat.Zs = proc.Mp().GetSels()
-	ctr.bat.Zs = append(ctr.bat.Zs, 0)
 	ctr.bat.SetRowCount(1)
 
 	ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
@@ -272,26 +262,15 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					anal.Alloc(int64(vec.Size()))
 				}
 				ctr.bat.Aggs = nil
-				// todo(cms): comment this lines.
-				//for i := range ctr.bat.Zs { // reset zs
-				//	ctr.bat.Zs[i] = 1
-				//}
 			}
-			// todo(cms): set all zs to 1 here because next operator `merge group` never use zs really.
-			for i := range ctr.bat.Zs { // reset zs
-				ctr.bat.Zs[i] = 1
-			}
-
 			anal.Output(ctr.bat, isLast)
 		}
 
-		ctr.bat.CheckForRemoveZs("group")
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
 		return true, nil
 	}
 
-	bat.FixedForRemoveZs()
 	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		return false, nil
@@ -319,7 +298,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 
 	if ctr.bat == nil {
 		ctr.bat = batch.NewWithSize(len(ap.Exprs))
-		ctr.bat.Zs = proc.Mp().GetSels()
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
@@ -360,10 +338,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 
 // processH8 use whole batch to fill the aggregation.
 func (ctr *container) processH0(bat *batch.Batch) error {
-	for _, z := range bat.Zs {
-		ctr.bat.Zs[0] += z
-	}
-	// TODO(cms):
 	ctr.bat.SetRowCount(1)
 
 	mulAggIdx := 0
@@ -494,11 +468,8 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			ctr.inserted[k] = 1
 			hashRows++
 			cnt++
-			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
 		valCnt++
-		ai := int64(v) - 1
-		ctr.bat.Zs[ai] += bat.Zs[i+k]
 	}
 	ctr.bat.SetRowCount(ctr.bat.RowCount() + cnt)
 

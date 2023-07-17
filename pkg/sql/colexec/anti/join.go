@@ -71,8 +71,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 
-			bat.FixedForRemoveZs()
-
 			if bat.IsEmpty() {
 				bat.Clean(proc.Mp())
 				continue
@@ -99,8 +97,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	}
 
 	if bat != nil {
-		bat.FixedForRemoveZs()
-
 		ctr.bat = bat
 		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
 		ctr.hasNull = ctr.mp.HasNull()
@@ -113,7 +109,6 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
@@ -130,13 +125,11 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 					return err
 				}
 			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
 		rbat.SetRowCount(rbat.RowCount() + n)
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
-	rbat.CheckForRemoveZs("anti")
 	return nil
 }
 
@@ -144,7 +137,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
@@ -184,7 +176,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			if vals[k] == 0 {
 				eligible = append(eligible, int32(i+k))
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				rowCountIncrease++
 				continue
 			}
@@ -217,7 +208,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					continue
 				}
 				eligible = append(eligible, int32(i+k))
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				rowCountIncrease++
 			}
 		}
@@ -233,7 +223,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
-	rbat.CheckForRemoveZs("anti")
 	return nil
 }
 

@@ -95,7 +95,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	ap := arg.(*Argument)
 
 	bat := proc.InputBatch()
-	bat.FixedForRemoveZs()
 	if bat == nil {
 		if ap.FuncId == ShuffleToAllFunc {
 			return sendShuffledBats(ap, proc)
@@ -107,7 +106,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
-	bat.CheckForRemoveZs("dispatch")
 	return ap.ctr.sendFunc(bat, ap, proc)
 }
 
