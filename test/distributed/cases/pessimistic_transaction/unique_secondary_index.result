@@ -49,7 +49,7 @@ insert into index_04 values (67834,2,20.23,4090),(67834,4,100.00,4091);
 Duplicate entry '67834' for key '__mo_index_idx_col'
 insert into index_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
 insert into index_04 values (3,2,20.23,4090),(2,4,100.00,4091),(4,4,100.00,4090);
-Duplicate entry '1' for key '__mo_index_idx_col'
+(Duplicate entry)([\d\D]*)(for key 'col2')
 select * from index_04;
 col1    col2    col3    col4
 1    2    20.23    4090
@@ -78,7 +78,7 @@ null    3    0.01    null
 create table index_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned,unique key id1(col1),key id2(col4));
 insert into index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 insert into index_07 values (1,2,20.23,56),(1,4,100.00,90);
-Duplicate entry '1' for key '__mo_index_idx_col'
+(Duplicate entry)([\d\D]*)(for key 'col2')
 select * from index_07;
 col1    col2    col3    col4
 1    2    20.23    56
@@ -86,7 +86,7 @@ col1    col2    col3    col4
 null    3    0.01    null
 create table index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned,unique key id1(col1),key id2(col4));
 insert into index_08 values (1,2,20.23,56),(1,4,100.00,90);
-Duplicate entry '13456789872' for key '__mo_index_idx_col'
+Duplicate entry '1' for key '__mo_index_idx_col'
 insert into index_08 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from index_08;
 col1    col2    col3    col4

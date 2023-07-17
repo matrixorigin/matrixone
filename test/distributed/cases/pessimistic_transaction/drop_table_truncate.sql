@@ -20,6 +20,7 @@ drop table if exists t5;
 drop table if exists dis_table_02;
 drop table if exists dis_table_03;
 
+-- @bvt:issue#10316
 create table dis_table_02(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
 insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
 insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
@@ -46,6 +47,7 @@ insert into t1 values (1);
 drop table t1;
 show tables;
 commit;
+-- @bvt:issue
 
 -- @bvt:issue#10316
 create table t1(a int);

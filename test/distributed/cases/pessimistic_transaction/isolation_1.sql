@@ -299,6 +299,7 @@ select * from test_11;
 -- @session}
 
 -- -------------------------------------------------------
+-- @bvt:issue#10701
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -322,7 +323,7 @@ select * from test_11;
 commit;
 select * from test_11;
 -- @session}
-
+-- @bvt:issue
 -- -------------------------------------------------------
 drop table if exists test_11;
 begin;

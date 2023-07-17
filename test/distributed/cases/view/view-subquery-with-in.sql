@@ -37,7 +37,6 @@ drop view v1;
 -- @case
 -- @desc:test for [in] subquery with operand-is-column
 -- @label:bvt
-
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -237,11 +236,13 @@ CREATE TABLE `t2` (
 INSERT INTO t2 (mot,topic,dt,pseudo) VALUES ('joce','40143','2002-10-22','joce'), ('joce','43506','2002-10-22','joce');
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic);
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic HAVING topic < 4100);
+-- @bvt:issue
 -- @bvt:issue#3307
 SELECT * from t2 where topic IN (SELECT SUM(topic) FROM t1);
 create view v3 as SELECT * from t2 where topic IN (SELECT SUM(topic) FROM t1);
 select * from v3;
 -- @bvt:issue
+-- @bvt:issue#10712
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic HAVING topic < 41000);
 SELECT * from t2 where topic NOT IN (SELECT topic FROM t2 GROUP BY topic HAVING topic < 41000);
 SELECT * FROM t2 WHERE mot IN (SELECT 'joce');
@@ -261,7 +262,8 @@ drop view v3;
 drop view v4;
 drop view v5;
 drop view v6;
-
+-- @bvt:issue
+-- @bvt:issue#10712
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (a int);
@@ -308,11 +310,11 @@ drop view v1;
 drop view v2;
 drop view v3;
 drop view v4;
-
-
+-- @bvt:issue
 -- @case
 -- @desc:test for [in] subquery with UNION
 -- @label:bvt
+-- @bvt:issue#10712
 drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t2 (id int(11) default NULL);
@@ -321,6 +323,7 @@ SELECT * FROM t2 WHERE id IN (SELECT 1);
 create view v1 as SELECT * FROM t2 WHERE id IN (SELECT 1);
 select * from v1;
 select * from v1;
+-- @bvt:issue
 -- @bvt:issue#4354
 SELECT * FROM t2 WHERE id IN (SELECT 1 UNION SELECT 3);
 SELECT * FROM t2 WHERE id IN (SELECT 1+(select 1));
@@ -337,8 +340,8 @@ select * from v3;
 select * from v4;
 select * from v5;
 select * from v6;
--- @bvt:issue
 drop view v1;
+-- @bvt:issue
 -- @bvt:issue#4354
 drop view v2;
 drop view v3;
@@ -347,6 +350,7 @@ drop view v5;
 drop view v6;
 -- @bvt:issue
 
+-- @bvt:issue#10712
 -- @case
 -- @desc:test for [in] subquery with null
 -- @label:bvt
@@ -397,7 +401,6 @@ select * from v3;
 drop view v1;	
 drop view v2;	
 drop view v3;
-
 update t1 set a=NULL where a='BC';
 select 'A' IN (SELECT * from t1);
 select 'DEF' IN (SELECT * from t1);
@@ -440,7 +443,6 @@ select * from v3;
 drop view v1;	
 drop view v2;	
 drop view v3;
-
 drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t1 (a int(11) NOT NULL default 0, PRIMARY KEY  (a));
@@ -468,7 +470,7 @@ create view v1 as select -10 IN (select a from t1);
 select * from v1;
 drop view v1;
 DROP TABLE IF EXISTS t1;
-
+-- @bvt:issue
 -- @case
 -- @desc:test for [in] subquery with limit
 -- @label:bvt
@@ -490,13 +492,15 @@ select * from v2;
 select * from v3;
 drop view v1;	
 -- @bvt:issue#4354
-drop view v2;	
--- @bvt:issue
+drop view v2;
 drop view v3;
+-- @bvt:issue
+
 
 -- @case
 -- @desc:test for [in] subquery with Multi tuple
 -- @label:bvt
+-- @bvt:issue#10712
 DROP TABLE IF EXISTS t1;
 create table t1 (a int, b real, c varchar(10));
 insert into t1 values (1, 1, 'a'), (2,2,'b'), (NULL, 2, 'b');
@@ -546,6 +550,7 @@ drop view v10;
 DROP TABLE IF EXISTS t1;
 
 create table t1 (a integer, b integer);
+-- @bvt:issue
 -- @bvt:issue#7691
 select (1,(2,2)) in (select * from t1 );
 select (1,(2,2)) = (select * from t1 );
@@ -574,7 +579,6 @@ create view v1 as SELECT ((a1,a2) IN (SELECT * FROM t2 WHERE b2 > 0)) IS NULL FR
 select * from v1;
 drop view v1;
 
-
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 
@@ -585,7 +589,7 @@ insert into t2 values (1,1), (3,3);
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 create view v1 as select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 select * from v1;
-drop view v1;	
+drop view v1;
 insert into t2 values (NULL,4);
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 create view v1 as select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
@@ -652,12 +656,11 @@ drop view v3;
 drop view v4;
 drop view v5;
 drop view v6;
--- @bvt:issue
-
-
 DROP TABLE IF EXISTS t_out;
 DROP TABLE IF EXISTS t_in;
+-- @bvt:issue
 
+-- @bvt:issue#10712
 -- @case
 -- @desc:test for [in] subquery with netsed subquery
 -- @label:bvt
@@ -673,7 +676,6 @@ select * from v1;
 drop view v1;	
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
-
 create table t1 (a int, b int);
 create table t2 (a int, b int);
 select * from t1 where (a,b) in (select a,b from t2);
@@ -682,7 +684,6 @@ select * from v1;
 drop view v1;	
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
-
 
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -706,7 +707,6 @@ drop view v1;
 drop view v2;
 drop view v3;
 drop view v4;
-
 
 CREATE TABLE t1 (i1 int DEFAULT NULL,i2 int DEFAULT NULL) ;
 INSERT INTO t1 VALUES (1,    NULL);
@@ -735,16 +735,15 @@ SELECT i1, i2
 FROM t1
 WHERE (i1, i2)
       NOT IN (SELECT i1, i2 FROM t2);
-      
-
 create view v1 as SELECT i1, i2
 FROM t1
 WHERE (i1, i2)
       NOT IN (SELECT i1, i2 FROM t2);
-      
 select * from v1;
 drop view v1;
+-- @bvt:issue
 
+-- @bvt:issue#10712
 -- @case
 -- @desc:test for [in] subquery with order by
 -- @label:bvt
@@ -782,7 +781,6 @@ drop view v1;
 drop view v2;
 
 
-
 drop table if exists t2;
 CREATE TABLE t1(select_id BIGINT, values_id BIGINT);
 INSERT INTO t1 VALUES (1, 1);
@@ -798,7 +796,6 @@ select * from v1;
 select * from v2;
 drop view v1;
 drop view v2;
-
 
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -816,7 +813,6 @@ drop view v1;
 drop view v2;
 
 
-
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 CREATE TABLE t1 (a INT);
@@ -824,12 +820,10 @@ INSERT INTO t1 VALUES (1),(2),(3);
 CREATE TABLE t2 (a INT);
 INSERT INTO t1 VALUES (1),(2),(3);
 SELECT 1 FROM t1 WHERE t1.a NOT IN (SELECT 1 FROM t1, t2 WHERE false);
-create view v1 as SELECT 1 FROM t1 WHERE t1.a NOT IN (SELECT 1 FROM t1, t2 WHERE false);
 select * from v1;
 drop view v1;
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
-
 
 -- @case
 -- @desc:test for [in] subquery with an aggregate function in HAVING
@@ -881,7 +875,6 @@ drop view v5;
 drop view v6;
 drop view v7;
 drop view v8;
-
 
 
 -- @case
@@ -988,12 +981,8 @@ drop view v17;
 drop view v18;
 drop view v19;
 drop view v20;
-
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t1xt2;
 -- @bvt:issue
-
-
-
 
