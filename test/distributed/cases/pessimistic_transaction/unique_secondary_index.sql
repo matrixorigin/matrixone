@@ -18,7 +18,6 @@ insert into index_03(col2,col3,col4) values (67834,20.23,4090),(56473,100.00,567
 insert into index_03(col2,col3,col4) values (-2147483648,1.2,100),(2147483647,2.0,5);
 select * from index_03;
 select * from index_03 where col2=-2147483648;
--- @bvt:issue#10695
 create table index_04 (col1 bigint,col2 int primary key,col3 float,col4 bigint,unique key id1(col1),key id2(col4));
 insert into index_04 values (67834,2,20.23,4090),(67834,4,100.00,4091);
 insert into index_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
@@ -43,7 +42,6 @@ create table index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4
 insert into index_08 values (1,2,20.23,56),(1,4,100.00,90);
 insert into index_08 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from index_08;
--- @bvt:issue
 create table index_09 (col1 bigint primary key,col2 decimal(4,2),col3 decimal(4,2),unique key d1(col2),key d2(col3));
 insert into index_09 values (1000,20.23,20.00),(1200,20.23,0.10);
 insert into index_09 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);

@@ -5,6 +5,7 @@
 -- @label:bvt
 SELECT 1 IN (SELECT 1);
 
+-- @bvt:issue#10712
 create view v1 as SELECT 1 IN (SELECT 1);
 select * from v1;
 drop view v1;
@@ -991,7 +992,7 @@ drop view v20;
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t1xt2;
-
+-- @bvt:issue
 
 
 
