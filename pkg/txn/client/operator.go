@@ -18,10 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"os"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -31,11 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
-)
-
-// TODO(fagongzi): this env is used to check and find RC bugs in pessimistic mode. Will remove it later version.
-var (
-	checkRCInvalidError = os.Getenv("check_rc_invalid_error") == "true"
 )
 
 var (
@@ -722,15 +717,20 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 			return err
 		}
 		err := tc.checkTxnError(resp.TxnError, commitTxnErrors)
-		if checkRCInvalidError && err != nil && tc.mu.txn.IsPessimistic() {
+		if err == nil || !tc.mu.txn.IsPessimistic() {
+			return err
+		}
+
+		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+		if ok && !v.(bool) {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
 				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 				util.GetLogger().Fatal("failed",
 					zap.Error(err),
 					zap.String("txn", hex.EncodeToString(tc.txnID)))
 			}
-			return err
 		}
+		return err
 	case txn.TxnMethod_Rollback:
 		if err := tc.checkResponseTxnStatusForRollback(resp); err != nil {
 			return err
