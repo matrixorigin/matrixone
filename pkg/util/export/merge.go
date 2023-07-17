@@ -15,10 +15,8 @@
 package export
 
 import (
-	"bytes"
 	"container/list"
 	"context"
-	"encoding/csv"
 	"fmt"
 	"io"
 	"path"
@@ -555,35 +553,6 @@ func NewCSVReader(ctx context.Context, fs fileservice.FileService, path string) 
 
 	// return content Reader
 	return NewContentReader(ctx, path, simdCsvReader, reader), nil
-}
-
-var _ ETLWriter = (*ContentWriter)(nil)
-
-type ContentWriter struct {
-	writer io.StringWriter
-	buf    *bytes.Buffer
-	parser *csv.Writer
-}
-
-func (w *ContentWriter) WriteRow(row *table.Row) error {
-	panic("not implement")
-}
-
-func NewContentWriter(writer io.StringWriter, buffer []byte) *ContentWriter {
-	buf := bytes.NewBuffer(buffer)
-	return &ContentWriter{
-		writer: writer,
-		buf:    buf,
-		parser: csv.NewWriter(buf),
-	}
-}
-
-func (w *ContentWriter) WriteStrings(record []string) error {
-	return nil
-}
-
-func (w *ContentWriter) FlushAndClose() (int, error) {
-	return w.writer.WriteString(w.buf.String())
 }
 
 type Cache interface {

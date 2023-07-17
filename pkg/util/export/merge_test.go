@@ -17,7 +17,9 @@ package export
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -212,12 +215,20 @@ func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *tabl
 	return files, nil
 }
 
-func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) error {
+func getdummyMpool() *mpool.MPool {
+	mp, err := mpool.NewMPool("testETL", 0, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	return mp
+}
+
+func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time, ext string) (string, error) {
 	mux.Lock()
 	defer mux.Unlock()
 
 	var newFilePath = func(ts time.Time) string {
-		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts, table.CsvExtension)
+		filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts, ext)
 		p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
 		filepath := path.Join(p, filename)
 		return filepath
@@ -226,12 +237,13 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 	buf := make([]byte, 0, 4096)
 
 	ts1 := ts
-	writer, _ := newETLWriter(ctx, fs, newFilePath(ts1), buf, nil, nil)
+	path := newFilePath(ts1)
+	writer, _ := newETLWriter(ctx, fs, path, buf, tbl, getdummyMpool())
 	writer.WriteStrings(dummyFillTable("row1", 1, 1.0).ToStrings())
 	writer.WriteStrings(dummyFillTable("row2", 2, 2.0).ToStrings())
 	writer.FlushAndClose()
 
-	return nil
+	return path, nil
 }
 
 var mergeLock sync.Mutex
@@ -337,7 +349,7 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			err := initSingleLogsFile(tt.args.ctx, fs, dummyTable, ts)
+			_, err := initSingleLogsFile(tt.args.ctx, fs, dummyTable, ts, table.CsvExtension)
 			require.Nil(t, err)
 
 			got := MergeTaskExecutorFactory(tt.args.opts...)
@@ -434,6 +446,93 @@ func TestNewMergeService(t *testing.T) {
 			require.Nil(t, err)
 			require.NotNil(t, got)
 			require.Equal(t, tt.want1, got1)
+		})
+	}
+}
+
+func Test_newETLReader(t *testing.T) {
+	ctx := trace.Generate(context.TODO())
+	fs := testutil.NewFS()
+	mp := getdummyMpool()
+	require.NotNil(t, mp)
+
+	type args struct {
+		ctx  context.Context
+		tbl  *table.Table
+		fs   fileservice.FileService
+		ext  string
+		size int64
+		mp   *mpool.MPool
+	}
+	tests := []struct {
+		name string
+		args args
+		want ETLReader
+	}{
+		{
+			name: "csv",
+			args: args{
+				ctx:  ctx,
+				tbl:  dummyTable,
+				fs:   fs,
+				ext:  table.CsvExtension,
+				size: 0,
+				mp:   mp,
+			},
+			want: &ContentReader{},
+		},
+		{
+			name: "tae",
+			args: args{
+				ctx:  ctx,
+				tbl:  dummyTable,
+				fs:   fs,
+				ext:  table.TaeExtension,
+				size: 0,
+				mp:   mp,
+			},
+			want: &etl.TAEReader{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path, err := initSingleLogsFile(tt.args.ctx, tt.args.fs, tt.args.tbl, time.Now(), tt.args.ext)
+			assert.Nil(t, err)
+			got, err := newETLReader(tt.args.ctx, tt.args.tbl, tt.args.fs, path, tt.args.size, tt.args.mp)
+			assert.Nil(t, err)
+			assert.Equal(t, reflect.TypeOf(tt.want), reflect.TypeOf(got))
+		})
+	}
+}
+
+func TestInitMerge(t *testing.T) {
+	type args struct {
+		ctx context.Context
+		SV  *config.ObservabilityParameters
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "normal",
+			args: args{
+				ctx: context.TODO(),
+				SV:  config.NewObservabilityParameters(),
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				if err != nil {
+					t.Errorf("%v", i)
+					return false
+				}
+				return true
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.wantErr(t, InitMerge(tt.args.ctx, tt.args.SV), fmt.Sprintf("InitMerge(%v, %v)", tt.args.ctx, tt.args.SV))
 		})
 	}
 }

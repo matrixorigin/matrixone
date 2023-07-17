@@ -93,6 +93,9 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, (cnt+BatchSize)/BatchSize, len(batchs))
 
+	_, err = r.ReadLine()
+	require.Nil(t, err)
+
 	// read index
 	for _, bbs := range r.bs {
 		_, err = r.blockReader.LoadZoneMaps(context.Background(),
@@ -403,4 +406,48 @@ func TestTAEWriter_writeEmpty(t *testing.T) {
 	var e *moerr.Error
 	require.True(t, errors.As(err, &e))
 	require.Equal(t, moerr.ErrEmptyRange, e.ErrorCode())
+}
+
+func TestTAEWriter_WriteStrings(t *testing.T) {
+
+	type fields struct {
+	}
+	type args struct {
+		prepare func() (Line []string)
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "normal",
+			args: args{
+				prepare: func() (Line []string) {
+					rows := genLines(1)
+					return rows[0].ToStrings()
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	cfg := table.FilePathCfg{NodeUUID: "uuid", NodeType: "type", Extension: table.TaeExtension}
+	ctx := context.TODO()
+	tbl := dummyAllTypeTable
+	fs := testutil.NewFS()
+	filePath := cfg.LogsFilePathFactory("sys", tbl, time.Now())
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.Nil(t, err)
+	writer := NewTAEWriter(ctx, tbl, mp, filePath, fs)
+	defer writer.FlushAndClose()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := writer.WriteStrings(tt.args.prepare()); (err != nil) != tt.wantErr {
+				t.Errorf("WriteStrings() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
 }
