@@ -57,14 +57,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func DebugPrintScope(prefix []byte, ss []*Scope) {
-	for _, s := range ss {
-		DebugPrintScope(append(prefix, '\t'), s.PreScopes)
-		p := pipeline.NewMerge(s.Instructions, nil)
-		logutil.Debugf("%s:%v %v", prefix, s.Magic, p)
-	}
-}
-
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -183,8 +175,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
+	if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
+		return s.ParallelRun(c, s.IsRemote)
+	}
+
+	if !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 

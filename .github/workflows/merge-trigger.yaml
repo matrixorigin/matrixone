@@ -669,7 +669,7 @@ jobs:
           retention-days: 7
 
   clean_up_env:
-    if: ${{ always() }}
+    if: ${{ always() && github.event.pull_request.merged == true }}
     name: CLEAN ENV AND NOTICE
     runs-on: arm64-runner
     needs: [docker_image_build,setup_mo_test_env,bvt_test,ssb_and_tpch_test,sysbench_test,tpcc_test]
