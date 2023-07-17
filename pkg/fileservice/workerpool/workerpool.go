@@ -51,7 +51,7 @@ func NewWorkerPool(workerCount int) *WorkerPool {
 	return &WorkerPool{
 		// In this worker pool pattern, dispatcherCh is unbounded.
 		// Ref: https://github.com/dirkaholic/kyoo/blob/9ae445c9faa96238cb604edd4fe91b6d347586db/jobqueue.go#L28
-		// In worker pool patterns, the dispatcher channel could be
+		// In other worker pool patterns, the dispatcher channel could be
 		// bounded: https://github.com/godoylucase/workers-pool/blob/9ec8790cace339252642eed54d93c1f5dc46967f/wpool/exec.go#L39
 		dispatcherCh: make(chan Work),
 		dispatcherWg: &sync.WaitGroup{},
