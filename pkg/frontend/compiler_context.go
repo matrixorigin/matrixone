@@ -499,6 +499,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	obj := &plan2.ObjectRef{
 		SchemaName:       dbName,
 		ObjName:          tableName,
+		Obj:              int64(tableId),
 		SubscriptionName: subscriptionName,
 	}
 	if pubAccountId != -1 {
