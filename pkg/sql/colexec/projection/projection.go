@@ -60,6 +60,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
+	rbat.Zs = proc.GetMPool().GetSels()
 
 	// do projection.
 	for i := range ap.ctr.projExecutors {

@@ -150,12 +150,15 @@ func (c *Config) validate() error {
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
 	}
-	for idx := range c.FileServices {
-		switch c.FileServices[idx].Name {
-		case defines.LocalFileServiceName, defines.ETLFileServiceName:
-			if c.FileServices[idx].DataDir == "" {
-				c.FileServices[idx].DataDir = filepath.Join(c.DataDir, strings.ToLower(c.FileServices[idx].Name))
-			}
+	for i, config := range c.FileServices {
+		// set default data dir
+		if config.DataDir == "" {
+			c.FileServices[i].DataDir = c.defaultFileServiceDataDir(config.Name)
+		}
+		// set default disk cache dir
+		if config.Cache.DiskPath == nil {
+			path := filepath.Join(c.DataDir, strings.ToLower(config.Name)+"-cache")
+			c.FileServices[i].Cache.DiskPath = &path
 		}
 	}
 	if c.Limit.Memory == 0 {
@@ -173,12 +176,67 @@ func (c *Config) initMetaCache() {
 	}
 }
 
+func (c *Config) defaultFileServiceDataDir(name string) string {
+	return filepath.Join(c.DataDir, strings.ToLower(name))
+}
+
 func (c *Config) createFileService(ctx context.Context, defaultName string, perfCounterSet *perfcounter.CounterSet, serviceType metadata.ServiceType, nodeUUID string) (*fileservice.FileServices, error) {
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
 	if perfCounterSet.FileServiceByName == nil {
 		perfCounterSet.FileServiceByName = make(map[string]*perfcounter.CounterSet)
+	}
+
+	// default LOCAL fs
+	ok := false
+	for _, config := range c.FileServices {
+		if strings.EqualFold(config.Name, defines.LocalFileServiceName) {
+			ok = true
+			break
+		}
+	}
+	// default to local disk
+	if !ok {
+		c.FileServices = append(c.FileServices, fileservice.Config{
+			Name:    defines.LocalFileServiceName,
+			Backend: "DISK",
+			DataDir: c.defaultFileServiceDataDir(defines.LocalFileServiceName),
+		})
+	}
+
+	// default SHARED fs
+	ok = false
+	for _, config := range c.FileServices {
+		if strings.EqualFold(config.Name, defines.SharedFileServiceName) {
+			ok = true
+			break
+		}
+	}
+	// default to local disk
+	if !ok {
+		c.FileServices = append(c.FileServices, fileservice.Config{
+			Name:    defines.SharedFileServiceName,
+			Backend: "DISK",
+			DataDir: c.defaultFileServiceDataDir(defines.SharedFileServiceName),
+		})
+	}
+
+	// default ETL fs
+	ok = false
+	for _, config := range c.FileServices {
+		if strings.EqualFold(config.Name, defines.ETLFileServiceName) {
+			ok = true
+			break
+		}
+	}
+	// default to local disk
+	if !ok {
+		c.FileServices = append(c.FileServices, fileservice.Config{
+			Name:    defines.ETLFileServiceName,
+			Backend: "DISK-ETL", // must be ETL
+			DataDir: c.defaultFileServiceDataDir(defines.ETLFileServiceName),
+		})
 	}
 
 	for _, config := range c.FileServices {
@@ -241,9 +299,9 @@ func (c *Config) createFileService(ctx context.Context, defaultName string, perf
 		return nil, err
 	}
 
-	// ensure etl exists, for trace & metric
+	// ensure etl exists and is ETL
 	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
-		_, err = fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
+		_, err = fileservice.Get[fileservice.ETLFileService](fs, defines.ETLFileServiceName)
 		if err != nil {
 			return nil, moerr.ConvertPanicError(context.Background(), err)
 		}
