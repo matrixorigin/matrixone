@@ -217,7 +217,7 @@ func (l *remoteLockTable) doGetLock(txnID, key []byte) (Lock, bool, error) {
 		for _, v := range resp.GetTxnLock.WaitingList {
 			w := acquireWaiter(l.serviceID, v.TxnID)
 			w.waitTxn = v
-			lock.waiter.add(l.serviceID, w)
+			lock.waiter.add(l.serviceID, true, w)
 		}
 		return lock, true, nil
 	}

@@ -14,24 +14,6 @@ service-addresses = [
     "127.0.0.1:32021",
 ]
 
-[[fileservice]]
-# local fileservice instance, used to store TAE Data and DNStore metadata.
-name = "local"
-# use disk as fileservice backend
-backend = "DISK"
-# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
-# in the data dir
-data-dir = "data-dir"
-
-[[fileservice]]
-# s3 fileservice instance, used to store data.
-name = "SHARED"
-# use disk as fileservice backend.
-backend = "DISK"
-# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
-# in the data dir
-data-dir = "data-dir"
-
 [dn]
 uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "127.0.0.1:41010"

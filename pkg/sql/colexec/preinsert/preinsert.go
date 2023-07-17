@@ -54,6 +54,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	}
 	defer proc.PutBatch(bat)
 	newBat := batch.NewWithSize(len(arg.Attrs))
+	newBat.Zs = proc.GetMPool().GetSels()
 	newBat.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
 		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])

@@ -142,6 +142,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 	case *plan.Expr_P:
 		return &ParamExpressionExecutor{
+			vec: nil,
 			pos: int(t.P.Pos),
 			typ: types.T_text.ToType(),
 		}, nil
@@ -299,12 +300,34 @@ type ColumnExpressionExecutor struct {
 }
 
 type ParamExpressionExecutor struct {
-	pos int
-	typ types.Type
+	null *vector.Vector
+	vec  *vector.Vector
+	pos  int
+	typ  types.Type
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
-	return proc.GetPrepareParamsAt(int(expr.pos))
+	val, err := proc.GetPrepareParamsAt(int(expr.pos))
+	if err != nil {
+		return nil, err
+	}
+
+	if val == nil {
+		if expr.null == nil {
+			expr.null = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+		}
+		return expr.null, nil
+	}
+
+	if expr.vec == nil {
+		expr.vec = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
+	} else {
+		err := vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return expr.vec, nil
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
