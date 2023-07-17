@@ -236,7 +236,7 @@ func (gc *GroupConcat) Eval(m *mpool.MPool) (*vector.Vector, error) {
 // rowCount indicates the number of times the rowIndex-row is repeated.
 // for group_concat(distinct a,b,c separator '|'); vecs is: a,b,c
 // remember that, we won't do evalExpr here, so the groupExpr is not used here
-func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, rowCount int64, vecs []*vector.Vector) error {
+func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, vecs []*vector.Vector) error {
 	if hasNull(vecs, rowIndex) {
 		return nil
 	}
@@ -272,27 +272,22 @@ func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, rowCount int64, ve
 			gc.inserts[groupIndex] += insert_row
 		}
 	} else {
-		for k := 0; k < int(rowCount); k++ {
-			if len(gc.res[groupIndex]) != 0 {
-				gc.res[groupIndex] += gc.arg.Separator
-				gc.inserts[groupIndex] += gc.arg.Separator
-			} else {
-				gc.groups++
-			}
-			gc.res[groupIndex] += res_row
-			gc.inserts[groupIndex] += insert_row
+		if len(gc.res[groupIndex]) != 0 {
+			gc.res[groupIndex] += gc.arg.Separator
+			gc.inserts[groupIndex] += gc.arg.Separator
+		} else {
+			gc.groups++
 		}
+		gc.res[groupIndex] += res_row
+		gc.inserts[groupIndex] += insert_row
 	}
 	return nil
 }
 
-// BulkFill use a whole vector to update the data of agg's group
-// groupIndex is the index number of the group
-// rowCounts is the count number of each row.
-func (gc *GroupConcat) BulkFill(groupIndex int64, rowCounts []int64, vecs []*vector.Vector) error {
+func (gc *GroupConcat) BulkFill(groupIndex int64, rowCount int, vecs []*vector.Vector) error {
 	length := vecs[0].Length()
 	for i := 0; i < length; i++ {
-		if err := gc.Fill(groupIndex, int64(i), rowCounts[i], vecs); err != nil {
+		if err := gc.Fill(groupIndex, int64(i), vecs); err != nil {
 			return err
 		}
 	}
@@ -311,12 +306,12 @@ func (gc *GroupConcat) BulkFill(groupIndex int64, rowCounts []int64, vecs []*vec
 //	rowCounts[i] is count number of the row[i]
 //
 // For a more detailed introduction of rowCounts, please refer to comments of Function Fill.
-func (gc *GroupConcat) BatchFill(offset int64, os []uint8, vps []uint64, rowCounts []int64, vecs []*vector.Vector) error {
+func (gc *GroupConcat) BatchFill(offset int64, os []uint8, vps []uint64, vecs []*vector.Vector) error {
 	for i := range os {
 		if vps[i] == 0 {
 			continue
 		}
-		if err := gc.Fill(int64(vps[i]-1), offset+int64(i), rowCounts[i+int(offset)], vecs); err != nil {
+		if err := gc.Fill(int64(vps[i]-1), offset+int64(i), vecs); err != nil {
 			return err
 		}
 	}

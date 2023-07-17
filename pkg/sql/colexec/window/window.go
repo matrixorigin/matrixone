@@ -173,7 +173,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 
 				if ctr.os[o] <= ctr.ps[p] {
 
-					if err = ctr.bat.Aggs[idx].Fill(int64(p-1), int64(o), 1, []*vector.Vector{vec}); err != nil {
+					if err = ctr.bat.Aggs[idx].Fill(int64(p-1), int64(o), []*vector.Vector{vec}); err != nil {
 						return err
 					}
 
@@ -203,7 +203,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			if right < start || left > end || left >= right {
-				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(0), 1, []*vector.Vector{nullVec}); err != nil {
+				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(0), []*vector.Vector{nullVec}); err != nil {
 					return err
 				}
 				continue
@@ -217,7 +217,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			for k := left; k < right; k++ {
-				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(k), 1, []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
+				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(k), []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
 					return err
 				}
 			}

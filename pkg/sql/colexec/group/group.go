@@ -344,13 +344,13 @@ func (ctr *container) processH0(bat *batch.Batch) error {
 	unaryAggIdx := 0
 	for i, ag := range ctr.bat.Aggs {
 		if ctr.mapAggType[int32(i)] == UnaryAgg {
-			err := ag.BulkFill(0, bat.Zs, []*vector.Vector{ctr.aggVecs[unaryAggIdx].vec})
+			err := ag.BulkFill(0, bat.RowCount(), []*vector.Vector{ctr.aggVecs[unaryAggIdx].vec})
 			if err != nil {
 				return err
 			}
 			unaryAggIdx++
 		} else {
-			err := ag.BulkFill(0, bat.Zs, ctr.ToVectors(mulAggIdx))
+			err := ag.BulkFill(0, bat.RowCount(), ctr.ToVectors(mulAggIdx))
 			if err != nil {
 				return err
 			}
@@ -492,13 +492,13 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 	unaryAggIdx := 0
 	for j, ag := range ctr.bat.Aggs {
 		if ctr.mapAggType[int32(j)] == UnaryAgg {
-			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, []*vector.Vector{ctr.aggVecs[unaryAggIdx].vec})
+			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, []*vector.Vector{ctr.aggVecs[unaryAggIdx].vec})
 			if err != nil {
 				return err
 			}
 			unaryAggIdx++
 		} else {
-			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, bat.Zs, ctr.ToVectors(mulAggIdx))
+			err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, ctr.ToVectors(mulAggIdx))
 			if err != nil {
 				return err
 			}
