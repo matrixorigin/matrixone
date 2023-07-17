@@ -337,6 +337,9 @@ var SingleMetricTable = &table.Table{
 	SupportConstAccess: true,
 }
 
+// GetAllTables
+//
+// Deprecated: use table.GetAllTables() instead.
 func GetAllTables() []*table.Table {
 	return []*table.Table{SingleMetricTable}
 }

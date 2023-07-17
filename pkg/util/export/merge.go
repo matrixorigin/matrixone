@@ -626,7 +626,7 @@ func (c *SliceCache) Size() int64 { return c.size }
 
 func LongRunETLMerge(ctx context.Context, task task.Task, logger *log.MOLogger, opts ...MergeOption) error {
 	// should init once in/with schema-init.
-	tables := table.GetAllTable()
+	tables := table.GetAllTables()
 	if len(tables) == 0 {
 		logger.Info("empty tables")
 		return nil
