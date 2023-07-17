@@ -1083,3 +1083,54 @@ func TestServiceHandleCNPatchStore(t *testing.T) {
 	}
 	runServiceTest(t, true, true, fn)
 }
+
+func TestServiceHandleCNDeleteStore(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		uuid := "uuid1"
+		ctx0, cancel0 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel0()
+		req := pb.Request{
+			Method: pb.CN_HEARTBEAT,
+			CNHeartbeat: &pb.CNStoreHeartbeat{
+				UUID: uuid,
+			},
+		}
+		resp := s.handleCNHeartbeat(ctx0, req)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx1, cancel1 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel1()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx1, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		_, ok := resp.CheckerState.CNState.Stores[uuid]
+		assert.True(t, ok)
+
+		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel2()
+		req = pb.Request{
+			Method: pb.DELETE_CN_STORE,
+			DeleteCNStore: &pb.DeleteCNStore{
+				StoreID: uuid,
+			},
+		}
+		resp = s.handleDeleteCNStore(ctx2, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
+		defer cancel3()
+		req = pb.Request{
+			Method: pb.GET_CLUSTER_STATE,
+		}
+		resp = s.handleGetCheckerState(ctx3, req)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		assert.NotEmpty(t, resp.CheckerState)
+		_, ok = resp.CheckerState.CNState.Stores[uuid]
+		assert.False(t, ok)
+	}
+	runServiceTest(t, true, true, fn)
+}

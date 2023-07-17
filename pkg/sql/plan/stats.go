@@ -648,7 +648,7 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error
 	node := qry.Nodes[nodeId]
 	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
 		for i, e := range node.FilterList {
-			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc)
+			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false)
 			if err != nil {
 				return err
 			}

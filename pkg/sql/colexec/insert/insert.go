@@ -138,6 +138,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 	} else {
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
+		insertBat.Zs = proc.GetMPool().GetSels()
 		insertBat.Attrs = ap.InsertCtx.Attrs
 		for i := range insertBat.Attrs {
 			vec := proc.GetVector(*bat.Vecs[i].GetType())

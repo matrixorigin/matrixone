@@ -583,7 +583,29 @@ func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) er
 	cmd := hakeeper.GetPatchCNStoreCmd(stateLabel)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
-		l.runtime.Logger().Error("failed to propose CN work state",
+		l.runtime.Logger().Error("failed to propose CN patch store",
+			zap.String("state", state.String()),
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return nil
+	}
+}
+
+func (l *store) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error {
+	state, err := l.getCheckerState()
+	if err != nil {
+		return err
+	}
+	if _, ok := state.CNState.Stores[cnStore.StoreID]; !ok {
+		return nil
+	}
+	cmd := hakeeper.GetDeleteCNStoreCmd(cnStore)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose delete CN store",
 			zap.String("state", state.String()),
 			zap.Error(err))
 		return handleNotHAKeeperError(ctx, err)
