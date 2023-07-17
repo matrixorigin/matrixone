@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	HashMapSizeForBucket = 250000
+	HashMapSizeForBucket = 500000
 	MAXShuffleDOP        = 64
 	ShuffleThreshHold    = 50000
 )
@@ -86,30 +86,30 @@ func GetRangeShuffleIndexUnsigned(minVal, maxVal, currentVal uint64, upplerLimit
 	}
 }
 
-func GetHashColumn(expr *plan.Expr) *plan.ColRef {
+func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			col := GetHashColumn(arg)
+			col, typ := GetHashColumn(arg)
 			if col != nil {
-				return col
+				return col, typ
 			}
 		}
 	case *plan.Expr_Col:
-		return exprImpl.Col
+		return exprImpl.Col, expr.Typ.Id
 	}
-	return nil
+	return nil, -1
 }
 
-func maybeSorted(n *plan.Node, builder *QueryBuilder, scanID int32) bool {
+func maybeSorted(n *plan.Node, builder *QueryBuilder, tag int32) bool {
 	// for scan node, primary key and cluster by may be sorted
 	if n.NodeType == plan.Node_TABLE_SCAN {
-		return n.NodeId == scanID
+		return n.BindingTags[0] == tag
 	}
 	// for inner join, if left child may be sorted, then inner join may be sorted
 	if n.NodeType == plan.Node_JOIN && n.JoinType == plan.Node_INNER {
 		leftChild := builder.qry.Nodes[n.Children[0]]
-		return maybeSorted(leftChild, builder, scanID)
+		return maybeSorted(leftChild, builder, tag)
 	}
 	return false
 }
@@ -121,28 +121,27 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	if builder == nil {
 		return
 	}
-	ctx := builder.ctxByNode[n.NodeId]
-	if ctx == nil {
+	tableDef, ok := builder.tag2Table[col.RelPos]
+	if !ok {
 		return
 	}
-	if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
-		tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-		colName := tableDef.Cols[col.ColPos].Name
-		if GetSortOrder(tableDef, colName) != 0 {
-			return
-		}
-		if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, binding.nodeId) {
-			return
-		}
-		sc := builder.compCtx.GetStatsCache()
-		if sc == nil {
-			return
-		}
-		s := sc.GetStatsInfoMap(binding.tableID)
-		n.Stats.ShuffleType = plan.ShuffleType_Range
-		n.Stats.ShuffleColMin = int64(s.MinValMap[colName])
-		n.Stats.ShuffleColMax = int64(s.MaxValMap[colName])
+
+	colName := tableDef.Cols[col.ColPos].Name
+	if GetSortOrder(tableDef, colName) != 0 {
+		return
 	}
+	if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
+		return
+	}
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil {
+		return
+	}
+	s := sc.GetStatsInfoMap(tableDef.TblId)
+	n.Stats.ShuffleType = plan.ShuffleType_Range
+	n.Stats.ShuffleColMin = int64(s.MinValMap[colName])
+	n.Stats.ShuffleColMax = int64(s.MaxValMap[colName])
+
 }
 
 // to determine if join need to go shuffle
@@ -171,19 +170,20 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	// get the column of left child
-	hashCol := GetHashColumn(n.OnList[idx])
+	hashCol, typ := GetHashColumn(n.OnList[idx])
 	if hashCol == nil {
 		return
 	}
 	//for now ,only support integer and string type
-	switch types.T(n.OnList[idx].Typ.Id) {
+	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
 		n.Stats.ShuffleColIdx = int32(idx)
 		n.Stats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
 	case types.T_varchar, types.T_char, types.T_text:
-		n.Stats.ShuffleColIdx = int32(idx)
-		n.Stats.Shuffle = true
+		// for now, do not support hash shuffle join. will support it in the future
+		//n.Stats.ShuffleColIdx = int32(idx)
+		//n.Stats.Shuffle = true
 	}
 }
 
@@ -214,12 +214,12 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	hashCol := GetHashColumn(n.GroupBy[idx])
+	hashCol, typ := GetHashColumn(n.GroupBy[idx])
 	if hashCol == nil {
 		return
 	}
 	//for now ,only support integer and string type
-	switch types.T(n.GroupBy[idx].Typ.Id) {
+	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
 		n.Stats.ShuffleColIdx = int32(idx)
 		n.Stats.Shuffle = true

@@ -2357,6 +2357,10 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	// so we set it to false now
 	c.anal.isFirst = false
 	mergeChildren := c.newMergeScope(children)
+
+	// a hack here to stop shuffle join, delete this in the future
+	n.Stats.Shuffle = false
+
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructBroadcastDispatch(1, rs, c.addr, n),

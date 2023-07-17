@@ -1120,7 +1120,8 @@ func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, node
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
 	if node.Stats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
-		arg.ShuffleColIdx = plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx]).ColPos
+		hashCol, _ := plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
+		arg.ShuffleColIdx = hashCol.ColPos
 		arg.ShuffleType = int32(node.Stats.ShuffleType)
 		arg.ShuffleColMin = node.Stats.ShuffleColMin
 		arg.ShuffleColMax = node.Stats.ShuffleColMax
