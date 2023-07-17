@@ -158,6 +158,10 @@ func (c *Config) validate() error {
 		c.Clock.MaxClockOffset.Duration = 0
 	}
 	for i, config := range c.FileServices {
+		// rename 's3' to 'shared'
+		if strings.EqualFold(config.Name, "s3") {
+			c.FileServices[i].Name = defines.SharedFileServiceName
+		}
 		// set default data dir
 		if config.DataDir == "" {
 			c.FileServices[i].DataDir = c.defaultFileServiceDataDir(config.Name)
@@ -247,11 +251,6 @@ func (c *Config) createFileService(ctx context.Context, defaultName string, perf
 	}
 
 	for _, config := range c.FileServices {
-
-		// for old config compatibility
-		if strings.EqualFold(config.Name, "s3") {
-			config.Name = defines.SharedFileServiceName
-		}
 
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
