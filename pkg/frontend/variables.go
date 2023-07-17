@@ -1895,6 +1895,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("socket"),
 		Default:           "/tmp/mysql.sock",
 	},
+	"sql_auto_is_null": {
+		Name:              "sql_auto_is_null",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("sql_auto_is_null"),
+		Default:           int64(1),
+	},
+	"sql_big_selects": {
+		Name:              "sql_big_selects",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("sql_big_selects"),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
