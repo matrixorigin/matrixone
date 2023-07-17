@@ -439,11 +439,11 @@ Variable_name    Value
 wait_timeout    28800
 show variables like 'character_set_results';
 Variable_name    Value
-character_set_results    utf8
+character_set_results    utf8mb4
 set character_set_server = default;
 show variables like 'character_set_results';
 Variable_name    Value
-character_set_results    utf8
+character_set_results    utf8mb4
 show variables like 'character_set_server';
 Variable_name    Value
 character_set_server    utf8mb4
