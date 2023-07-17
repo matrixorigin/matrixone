@@ -17,12 +17,12 @@ package etl
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,6 +37,8 @@ const BatchSize = 8192
 
 var _ table.RowWriter = (*TAEWriter)(nil)
 
+// TAEWriter implements table.RowWriter and writes data to a tae file.
+// Deprecated
 type TAEWriter struct {
 	ctx          context.Context
 	columnsTypes []types.Type
@@ -52,6 +54,8 @@ type TAEWriter struct {
 	flushRows int
 }
 
+// NewTAEWriter returns a new instance of TAEWriter
+// Deprecated
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
 	w := &TAEWriter{
 		ctx:       ctx,
@@ -287,6 +291,8 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 	return nil
 }
 
+// TAEReader implements the io.Reader interface for reading a tae file.
+// Deprecated
 type TAEReader struct {
 	ctx      context.Context
 	filepath string
@@ -304,6 +310,8 @@ type TAEReader struct {
 	rowIdx   int
 }
 
+// NewTaeReader returns a TAEReader.
+// Deprecated
 func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService, mp *mpool.MPool) (*TAEReader, error) {
 	var err error
 	r := &TAEReader{
