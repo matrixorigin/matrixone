@@ -106,6 +106,7 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.stepRegs = make(map[int32][]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
+	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 	return c
 }
 
@@ -224,6 +225,8 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
+
+	//fmt.Println(DebugShowScopes([]*Scope{s}))
 
 	switch s.Magic {
 	case Normal:
