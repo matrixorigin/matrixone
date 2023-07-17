@@ -1233,17 +1233,19 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	defer span.End()
 
 	// lock table
-	db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
-	if err != nil {
-		panic(err)
-	}
-	rel, err := db.Relation(ctx, n.TableDef.Name, c.proc)
-	if err != nil {
-		return nil, err
-	}
-	err = lockTable(c.e, c.proc, rel)
-	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
-		return nil, err
+	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		if err != nil {
+			panic(err)
+		}
+		rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		err = lockTable(c.e, c.proc, rel)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			return nil, err
+		}
 	}
 
 	ID2Addr := make(map[int]int, 0)
@@ -1254,7 +1256,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		ID2Addr[i] = mcpu - tmp
 	}
 	param := &tree.ExternParam{}
-	err = json.Unmarshal([]byte(n.TableDef.Createsql), param)
+	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if err != nil {
 		return nil, err
 	}
