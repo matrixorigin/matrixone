@@ -417,8 +417,8 @@ func doLock(
 		!txnOp.IsRetry() &&
 		txnOp.Txn().IsRCIsolation() {
 
-		// wait logtail applied at lockedTS - 1
-		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS.Prev())
+		// wait last committed logtail applied
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {
 			return false, timestamp.Timestamp{}, err
 		}
@@ -428,7 +428,7 @@ func doLock(
 			fn = hasNewVersionInRange
 		}
 
-		// if [snapshotTS, lockedTS) has been modified, need retry at new snapshot ts
+		// if [snapshotTS, lockedTS] has been modified, need retry at new snapshot ts
 		changed, err := fn(proc, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
 		if err != nil {
 			return false, timestamp.Timestamp{}, err
@@ -681,7 +681,7 @@ func getRowsFilter(
 	}
 }
 
-// [from, to).
+// [from, to].
 // 1. if has a mvcc record <= from, return false, means no changed
 // 2. otherwise return true, changed
 func hasNewVersionInRange(
