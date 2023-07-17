@@ -68,7 +68,7 @@ func EnvOrDefaultInt[T int32 | int64](key string, defaultValue T) T {
 }
 func GetRawHistBufLimit() int32 { return atomic.LoadInt32(&configRawHistBufLimit) }
 
-func GetExportToProm() bool { return atomic.LoadInt32(&configExportToProm) != 0 }
+func EnableExportToProm() bool { return atomic.LoadInt32(&configExportToProm) != 0 }
 
 func GetForceInit() bool { return atomic.LoadInt32(&configForceReinit) != 0 }
 

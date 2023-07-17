@@ -192,7 +192,7 @@ func TestFSCollector(t *testing.T) {
 	ctx := context.Background()
 	csvCh := make(chan string, 100)
 	factory := newDummyFSWriterFactory(csvCh)
-	collector := newMetricFSCollector(factory, WithFlushInterval(3*time.Second), WithMetricThreshold(4), ExportMultiTable(false))
+	collector := newMetricFSCollector(factory, WithFlushInterval(3*time.Second), WithMetricThreshold(4))
 	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}
