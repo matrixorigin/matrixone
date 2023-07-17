@@ -457,10 +457,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			}
 			if s.fileLoaderWorkerPool != nil {
 				err = s.fileLoaderWorkerPool.Submit(func() {
-					err = s.Preload(ctx, vector.FilePath)
-					if err != nil {
-						// TODO: Need advice on how to collect and process async file load errors.
-					}
+					_ = s.Preload(ctx, vector.FilePath)
 				})
 
 			} else {
