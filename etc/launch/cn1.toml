@@ -14,19 +14,6 @@ service-addresses = [
     "127.0.0.1:32021",
 ]
 
-[[fileservice]]
-name = "LOCAL"
-backend = "MEM"
-
-[[fileservice]]
-name = "SHARED"
-backend = "MEM"
-
-[[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
-data-dir = "mo-data/local/etl"
-
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "127.0.0.1:3307"
@@ -39,6 +26,4 @@ type = "memory"
 statusPort = 9001
 
 [cn.txn]
-enable-sacrificing-freshness = false
-enable-cn-based-consistency = false
 

@@ -1396,7 +1396,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("authentication_windows_log_level", 0, 4, false),
-		Default:           2,
+		Default:           int64(2),
 	},
 	"authentication_windows_use_principal_name": {
 		Name:              "authentication_windows_use_principal_name",
@@ -1436,7 +1436,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("back_log", 1, 65535, false),
-		Default:           -1,
+		Default:           int64(-1),
 	},
 	"basedir": {
 		Name:              "basedir",
@@ -1484,7 +1484,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("bulk_insert_buffer_size", 0, 4294967295, false),
-		Default:           8388608,
+		Default:           int64(8388608),
 	},
 	"caching_sha2_password_digest_rounds": {
 		Name:              "caching_sha2_password_digest_rounds",
@@ -1492,7 +1492,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("caching_sha2_password_digest_rounds", 5000, 4095000, false),
-		Default:           5000,
+		Default:           int64(5000),
 	},
 	"caching_sha2_password_auto_generate_rsa_keys": {
 		Name:              "caching_sha2_password_auto_generate_rsa_keys",
@@ -1564,7 +1564,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("connect_timeout", 2, 31536000, false),
-		Default:           10,
+		Default:           int64(10),
 	},
 	"connection_memory_chunk_size": {
 		Name:              "connection_memory_chunk_size",
@@ -1572,7 +1572,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("connection_memory_chunk_size", 0, 536870912, false),
-		Default:           8192,
+		Default:           int64(8192),
 	},
 	"connection_memory_limit": {
 		Name:              "connection_memory_limit",
@@ -1580,7 +1580,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("connection_memory_limit", 0, math.MaxInt64, false),
-		Default:           math.MaxInt64,
+		Default:           int64(math.MaxInt64),
 	},
 	"core_file": {
 		Name:              "core_file",
@@ -1604,7 +1604,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("cte_max_recursion_depth", 0, 4294967295, false),
-		Default:           1000,
+		Default:           int64(1000),
 	},
 	"datadir": {
 		Name:              "datadir",
@@ -1652,7 +1652,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("default_password_lifetime", 0, 65535, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"default_storage_engine": {
 		Name:              "default_storage_engine",
@@ -1684,7 +1684,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("default_week_format", 0, 7, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"delay_key_write": {
 		Name:              "delay_key_write",
@@ -1700,7 +1700,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("delayed_insert_limit", 1, math.MaxInt64, false),
-		Default:           100,
+		Default:           int64(100),
 	},
 	"delayed_insert_timeout": {
 		Name:              "delayed_insert_timeout",
@@ -1708,7 +1708,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("delayed_insert_timeout", 1, 31536000, false),
-		Default:           300,
+		Default:           int64(300),
 	},
 	"delayed_queue_size": {
 		Name:              "delayed_queue_size",
@@ -1716,7 +1716,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("delayed_queue_size", 1, math.MaxInt64, false),
-		Default:           1000,
+		Default:           int64(1000),
 	},
 	"disabled_storage_engines": {
 		Name:              "disabled_storage_engines",
@@ -1740,7 +1740,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("div_precision_increment", 0, 30, false),
-		Default:           4,
+		Default:           int64(4),
 	},
 	"end_markers_in_json": {
 		Name:              "end_markers_in_json",
@@ -1756,7 +1756,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("eq_range_index_dive_limit", 0, 4294967295, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"event_scheduler": {
 		Name:              "event_scheduler",
@@ -1804,7 +1804,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("flush_time", 0, 31536000, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"ft_boolean_syntax": {
 		Name:              "ft_boolean_syntax",
@@ -1820,7 +1820,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("ft_max_word_len", 10, 84, false),
-		Default:           84,
+		Default:           int64(84),
 	},
 	"ft_min_word_len": {
 		Name:              "ft_max_word_len",
@@ -1828,7 +1828,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("ft_min_word_len", 1, 82, false),
-		Default:           4,
+		Default:           int64(4),
 	},
 	"ft_query_expansion_limit": {
 		Name:              "ft_query_expansion_limit",
@@ -1836,7 +1836,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("ft_query_expansion_limit", 0, 1000, false),
-		Default:           20,
+		Default:           int64(20),
 	},
 	"ft_stopword_file": {
 		Name:              "ft_stopword_file",
@@ -1868,7 +1868,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("generated_random_password_length", 5, 255, false),
-		Default:           20,
+		Default:           int64(20),
 	},
 	"global_connection_memory_limit": {
 		Name:              "global_connection_memory_limit",
@@ -1876,7 +1876,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("global_connection_memory_limit", 16777216, math.MaxInt64, false),
-		Default:           math.MaxInt64,
+		Default:           int64(math.MaxInt64),
 	},
 	"global_connection_memory_tracking": {
 		Name:              "global_connection_memory_tracking",
@@ -1892,7 +1892,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("group_concat_max_len", 4, math.MaxInt64, false),
-		Default:           4,
+		Default:           int64(4),
 	},
 	"have_ssl": {
 		Name:              "have_ssl",
@@ -1916,7 +1916,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("histogram_generation_max_mem_size", 1000000, math.MaxInt64, false),
-		Default:           1000000,
+		Default:           int64(1000000),
 	},
 	"host_cache_size": {
 		Name:              "host_cache_size",
@@ -1924,7 +1924,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("host_cache_size", 0, 65536, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"hostname": {
 		Name:              "hostname",
@@ -1940,7 +1940,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("information_schema_stats_expiry", 0, 86400, false),
-		Default:           86400,
+		Default:           int64(86400),
 	},
 	"init_file": {
 		Name:              "init_file",
@@ -1972,7 +1972,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("join_buffer_size", 128, 4294967168, false),
-		Default:           262144,
+		Default:           int64(262144),
 	},
 	"keep_files_on_create": {
 		Name:              "join_buffer_size",
@@ -1988,7 +1988,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("key_buffer_size", 0, 4294967295, false),
-		Default:           8388608,
+		Default:           int64(8388608),
 	},
 	"key_cache_age_threshold": {
 		Name:              "key_cache_age_threshold",
@@ -1996,7 +1996,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("key_cache_age_threshold", 100, 4294967295, false),
-		Default:           300,
+		Default:           int64(300),
 	},
 	"key_cache_block_size": {
 		Name:              "key_cache_block_size",
@@ -2004,7 +2004,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("key_cache_block_size", 512, 16384, false),
-		Default:           1024,
+		Default:           int64(1024),
 	},
 	"key_cache_division_limit": {
 		Name:              "key_cache_division_limit",
@@ -2012,7 +2012,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("key_cache_division_limit", 1, 100, false),
-		Default:           100,
+		Default:           int64(100),
 	},
 	"large_files_support": {
 		Name:              "large_files_support",
@@ -2036,7 +2036,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("large_page_size", 0, 65535, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"lc_messages": {
 		Name:              "lc_messages",
@@ -2076,7 +2076,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("lock_wait_timeout", 1, 31536000, false),
-		Default:           31536000,
+		Default:           int64(31536000),
 	},
 	"locked_in_memory": {
 		Name:              "locked_in_memory",
@@ -2116,7 +2116,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("log_error_verbosity", 1, 3, false),
-		Default:           2,
+		Default:           int64(2),
 	},
 	"log_output": {
 		Name:              "log_output",
@@ -2204,7 +2204,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("log_throttle_queries_not_using_indexes", 0, 4294967295, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"long_query_time": {
 		Name:              "long_query_time",
@@ -2212,7 +2212,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("long_query_time", 0, 31536000, false),
-		Default:           10,
+		Default:           int64(10),
 	},
 	"low_priority_updates": {
 		Name:              "low_priority_updates",
@@ -2244,7 +2244,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_connect_errors", 1, 4294967295, false),
-		Default:           100,
+		Default:           int64(100),
 	},
 	"max_connections": {
 		Name:              "max_connections",
@@ -2252,7 +2252,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_connections", 1, 100000, false),
-		Default:           151,
+		Default:           int64(151),
 	},
 	"max_delayed_threads": {
 		Name:              "max_delayed_threads",
@@ -2260,7 +2260,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_delayed_threads", 0, 16384, false),
-		Default:           20,
+		Default:           int64(20),
 	},
 	"max_digest_length": {
 		Name:              "max_digest_length",
@@ -2268,7 +2268,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_digest_length", 0, 1048576, false),
-		Default:           1024,
+		Default:           int64(1024),
 	},
 	"max_error_count": {
 		Name:              "max_error_count",
@@ -2276,7 +2276,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("max_error_count", 0, 65535, false),
-		Default:           1024,
+		Default:           int64(1024),
 	},
 	"max_execution_time": {
 		Name:              "max_execution_time",
@@ -2284,7 +2284,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("max_execution_time", 0, 4294967295, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"max_heap_table_size": {
 		Name:              "max_heap_table_size",
@@ -2292,7 +2292,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("max_heap_table_size", 16384, 4294966272, false),
-		Default:           16777216,
+		Default:           int64(16777216),
 	},
 	"max_insert_delayed_threads": {
 		Name:              "max_insert_delayed_threads",
@@ -2300,7 +2300,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_insert_delayed_threads", 0, 16384, false),
-		Default:           20,
+		Default:           int64(20),
 	},
 	"max_join_size": {
 		Name:              "max_join_size",
@@ -2308,7 +2308,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("max_join_size", 0, math.MaxInt64, false),
-		Default:           math.MaxInt64,
+		Default:           int64(math.MaxInt64),
 	},
 	"max_length_for_sort_data": {
 		Name:              "max_length_for_sort_data",
@@ -2316,7 +2316,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("max_length_for_sort_data", 4, 8388608, false),
-		Default:           4096,
+		Default:           int64(4096),
 	},
 	"max_points_in_geometry": {
 		Name:              "max_points_in_geometry",
@@ -2324,7 +2324,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("max_points_in_geometry", 3, 1048576, false),
-		Default:           65536,
+		Default:           int64(65536),
 	},
 	"max_prepared_stmt_count": {
 		Name:              "max_prepared_stmt_count",
@@ -2332,7 +2332,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_prepared_stmt_count", 0, 4194304, false),
-		Default:           16382,
+		Default:           int64(16382),
 	},
 	"max_seeks_for_key": {
 		Name:              "max_seeks_for_key",
@@ -2340,7 +2340,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("max_seeks_for_key", 1, 4294967295, false),
-		Default:           4294967295,
+		Default:           int64(4294967295),
 	},
 	"max_sort_length": {
 		Name:              "max_sort_length",
@@ -2348,7 +2348,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("max_sort_length", 4, 8388608, false),
-		Default:           1024,
+		Default:           int64(1024),
 	},
 	"max_sp_recursion_depth": {
 		Name:              "max_sp_recursion_depth",
@@ -2356,7 +2356,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_sp_recursion_depth", 0, 255, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"max_user_connections": {
 		Name:              "max_user_connections",
@@ -2364,7 +2364,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_user_connections", 0, 4294967295, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"max_write_lock_count": {
 		Name:              "max_write_lock_count",
@@ -2372,7 +2372,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_write_lock_count", 1, 4294967295, false),
-		Default:           4294967295,
+		Default:           int64(4294967295),
 	},
 	"mecab_rc_file": {
 		Name:              "mecab_rc_file",
@@ -2388,7 +2388,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("metadata_locks_cache_size", 1, 1048576, false),
-		Default:           1024,
+		Default:           int64(1024),
 	},
 	"metadata_locks_hash_instances": {
 		Name:              "metadata_locks_hash_instances",
@@ -2396,7 +2396,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("metadata_locks_hash_instances", 1, 1024, false),
-		Default:           8,
+		Default:           int64(8),
 	},
 	"min_examined_row_limit": {
 		Name:              "min_examined_row_limit",
@@ -2404,7 +2404,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("min_examined_row_limit", 0, 4294967295, false),
-		Default:           0,
+		Default:           int64(0),
 	},
 	"myisam_data_pointer_size": {
 		Name:              "myisam_data_pointer_size",
@@ -2412,7 +2412,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("myisam_data_pointer_size", 2, 7, false),
-		Default:           6,
+		Default:           int64(6),
 	},
 	"myisam_max_sort_file_size": {
 		Name:              "myisam_max_sort_file_size",
@@ -2420,7 +2420,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("myisam_max_sort_file_size", 0, 2146435072, false),
-		Default:           2146435072,
+		Default:           int64(2146435072),
 	},
 	"myisam_mmap_size": {
 		Name:              "myisam_mmap_size",
@@ -2428,7 +2428,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("myisam_mmap_size", 7, 4294967295, false),
-		Default:           4294967295,
+		Default:           int64(4294967295),
 	},
 	"myisam_recover_options": {
 		Name:              "myisam_recover_options",
@@ -2444,7 +2444,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("myisam_repair_threads", 1, 4294967295, false),
-		Default:           1,
+		Default:           int64(1),
 	},
 	"myisam_sort_buffer_size": {
 		Name:              "myisam_sort_buffer_size",
@@ -2452,7 +2452,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("myisam_sort_buffer_size", 4096, 4294967295, false),
-		Default:           8388608,
+		Default:           int64(8388608),
 	},
 	"myisam_stats_method": {
 		Name:              "myisam_stats_method",
@@ -2500,7 +2500,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("net_read_timeout", 1, 31536000, false),
-		Default:           30,
+		Default:           int64(30),
 	},
 	"net_retry_count": {
 		Name:              "net_retry_count",
@@ -2508,7 +2508,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("net_retry_count", 1, 4294967295, false),
-		Default:           10,
+		Default:           int64(10),
 	},
 	"new": {
 		Name:              "new",
@@ -2524,7 +2524,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("ngram_token_size", 1, 10, false),
-		Default:           2,
+		Default:           int64(2),
 	},
 	"offline_mode": {
 		Name:              "offline_mode",
@@ -2575,11 +2575,11 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           int64(62),
 	},
 	"optimizer_trace": {
-		Name:              "optimizer_search_depth",
+		Name:              "optimizer_trace",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("optimizer_search_depth"),
+		Type:              InitSystemVariableStringType("optimizer_trace"),
 		Default:           "",
 	},
 	"optimizer_trace_features": {

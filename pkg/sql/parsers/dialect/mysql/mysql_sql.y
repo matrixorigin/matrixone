@@ -8627,6 +8627,13 @@ literal:
     {
         $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_hexnum)
     }
+|   UNDERSCORE_BINARY HEXNUM
+    {
+        if strings.HasPrefix($2, "0x") {
+            $2 = $2[2:]
+        }
+        $$ = tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_bit)
+    }
 |   DECIMAL_VALUE
     {
         $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_decimal)
