@@ -1305,18 +1305,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
-			if c.runtimeFilterReceiverMap == nil {
-				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
 			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
-				if !ok {
-					ch = make(chan *pipeline.RuntimeFilter, 1)
-					c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				}
-
+				ch := make(chan *pipeline.RuntimeFilter, 1)
+				c.lock.Lock()
+				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+				c.lock.Unlock()
 				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 					Spec: rfSpec,
 					Chan: ch,
@@ -1336,18 +1330,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
-			if c.runtimeFilterReceiverMap == nil {
-				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
 			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
-				if !ok {
-					ch = make(chan *pipeline.RuntimeFilter, 1)
-					c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				}
-
+				ch := make(chan *pipeline.RuntimeFilter, 1)
+				c.lock.Lock()
+				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+				c.lock.Unlock()
 				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 					Spec: rfSpec,
 					Chan: ch,
@@ -1369,18 +1357,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 		}
 
 		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
-			if c.runtimeFilterReceiverMap == nil {
-				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
 			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
-				if !ok {
-					ch = make(chan *pipeline.RuntimeFilter, 1)
-					c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				}
-
+				ch := make(chan *pipeline.RuntimeFilter, 1)
+				c.lock.Lock()
+				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+				c.lock.Unlock()
 				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 					Spec: rfSpec,
 					Chan: ch,
@@ -1402,18 +1384,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 		}
 
 		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
-			if c.runtimeFilterReceiverMap == nil {
-				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
 			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
-				if !ok {
-					ch = make(chan *pipeline.RuntimeFilter, 1)
-					c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				}
-
+				ch := make(chan *pipeline.RuntimeFilter, 1)
+				c.lock.Lock()
+				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+				c.lock.Unlock()
 				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 					Spec: rfSpec,
 					Chan: ch,
@@ -1435,18 +1411,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 		}
 
 		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
-			if c.runtimeFilterReceiverMap == nil {
-				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
 			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
-				if !ok {
-					ch = make(chan *pipeline.RuntimeFilter, 1)
-					c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				}
-
+				ch := make(chan *pipeline.RuntimeFilter, 1)
+				c.lock.Lock()
+				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+				c.lock.Unlock()
 				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 					Spec: rfSpec,
 					Chan: ch,
@@ -1466,18 +1436,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
-			if c.runtimeFilterReceiverMap == nil {
-				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
 			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
-				if !ok {
-					ch = make(chan *pipeline.RuntimeFilter, 1)
-					c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				}
-
+				ch := make(chan *pipeline.RuntimeFilter, 1)
+				c.lock.Lock()
+				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+				c.lock.Unlock()
 				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 					Spec: rfSpec,
 					Chan: ch,
@@ -1497,18 +1461,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
-			if c.runtimeFilterReceiverMap == nil {
-				c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
 			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
-				if !ok {
-					ch = make(chan *pipeline.RuntimeFilter, 1)
-					c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				}
-
+				ch := make(chan *pipeline.RuntimeFilter, 1)
+				c.lock.Lock()
+				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+				c.lock.Unlock()
 				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 					Spec: rfSpec,
 					Chan: ch,
