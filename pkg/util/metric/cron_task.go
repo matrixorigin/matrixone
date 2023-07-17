@@ -117,6 +117,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
+	queryOpts := ie.NewOptsBuilder().Database("system").Internal(true).Finish()
 	for {
 		select {
 		case <-ctx.Done():
@@ -124,8 +125,8 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			StorageUsageFactory.Reset() // clean CN data for next cron task.
 			return ctx.Err()
 		case <-ticker.C:
+			logger.Info("start next round")
 		}
-		logger.Debug("start next round")
 
 		// mysql> show accounts;
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
@@ -135,7 +136,12 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
 		logger.Debug("query storage size")
-		result := sqlExecutor().Query(ctx, ShowAllAccountSQL, ie.NewOptsBuilder().Finish())
+		showAccounts := func(ctx context.Context) ie.InternalExecResult {
+			ctx, spanQ := trace.Start(ctx, "QueryStorageStorage", trace.WithHungThreshold(time.Minute))
+			defer spanQ.End()
+			return sqlExecutor().Query(ctx, ShowAllAccountSQL, queryOpts)
+		}
+		result := showAccounts(ctx)
 		err = result.Error()
 		if err != nil {
 			return err
@@ -164,6 +170,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 
 		// next round
 		ticker.Reset(GetUpdateStorageUsageInterval())
+		logger.Info("wait next round")
 	}
 }
 
@@ -180,10 +187,10 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	ctx, span := trace.Start(ctx, "checkNewAccountSize")
 	defer span.End()
 	defer func() {
-		logger.Debug("checkNewAccountSize exit", zap.Error(err))
+		logger.Info("checkNewAccountSize exit", zap.Error(err))
 	}()
 
-	opts := ie.NewOptsBuilder().Finish()
+	opts := ie.NewOptsBuilder().Database("system").Internal(true).Finish()
 
 	var now time.Time
 	var interval = GetStorageUsageCheckNewInterval()
