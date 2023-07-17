@@ -44,11 +44,10 @@ func MockTxnWithStartTS(ts types.TS) *txnbase.Txn {
 type DeleteChain struct {
 	*sync.RWMutex
 	*txnbase.MVCCChain[*DeleteNode]
-	mvcc      *MVCCHandle
-	links     map[uint32]*DeleteNode
-	cnt       atomic.Uint32
-	mask      *nulls.Bitmap
-	persisted *nulls.Bitmap
+	mvcc  *MVCCHandle
+	links map[uint32]*DeleteNode
+	cnt   atomic.Uint32
+	mask  *nulls.Bitmap
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
@@ -61,7 +60,6 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		links:     make(map[uint32]*DeleteNode),
 		mvcc:      mvcc,
 		mask:      &nulls.Bitmap{},
-		persisted: &nulls.Bitmap{},
 	}
 	return chain
 }
@@ -69,7 +67,7 @@ func (chain *DeleteChain) AddDeleteCnt(cnt uint32) {
 	chain.cnt.Add(cnt)
 }
 func (chain *DeleteChain) IsEmpty() bool {
-	return chain.persisted.IsEmpty() && chain.mask.IsEmpty()
+	return chain.mask.IsEmpty()
 }
 func (chain *DeleteChain) GetDeleteCnt() uint32 {
 	return chain.cnt.Load()
@@ -119,10 +117,6 @@ func (chain *DeleteChain) hasOverLap(start, end uint64) bool {
 			yes = true
 			break
 		}
-		if chain.persisted != nil && chain.persisted.Contains(i) {
-			yes = true
-			break
-		}
 	}
 	return yes
 }
@@ -167,8 +161,13 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.De
 func (chain *DeleteChain) AddPersistedNodeLocked(txn txnif.AsyncTxn, deltaloc objectio.Location) txnif.DeleteNode {
 	node := NewPersistedDeleteNode(txn, deltaloc)
 	node.AttachTo(chain)
-	mask := node.getPersistedRows()
-	node.chain.Load().persisted = mask
+	node.setPersistedRows()
+	mask := node.chain.Load().mask
+	it := node.mask.Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		mask.Add(uint64(row))
+	}
 	return node
 }
 
@@ -191,17 +190,18 @@ func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 
 func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
 	new := NewDeleteChain(chain.RWMutex, chain.mvcc)
-	new.persisted = chain.mask
+	new.mask = chain.mask
 
 	chain.LoopChain(func(n *DeleteNode) bool {
 		if !n.IsVisibleByTS(flushed) {
+			if n.nt == NT_Persisted {
+				return false
+			}
 			n.AttachTo(new)
 			it := n.mask.Iterator()
 			for it.HasNext() {
 				row := it.Next()
 				new.InsertInDeleteView(row, n)
-				new.persisted.Del(uint64(row))
-				new.mask.Add(uint64(row))
 			}
 		}
 		return true

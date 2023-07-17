@@ -241,7 +241,7 @@ func (blk *baseBlock) fillPersistedDeletesInRange(
 	ctx context.Context,
 	start, end types.TS,
 	view *containers.BaseView) (err error) {
-	blk.foreachPersistedDeletesCommittedInRange(
+	err = blk.foreachPersistedDeletesCommittedInRange(
 		ctx,
 		start,
 		end,
@@ -256,7 +256,28 @@ func (blk *baseBlock) fillPersistedDeletesInRange(
 		},
 		nil,
 	)
-	return nil
+	return err
+}
+
+func (blk *baseBlock) persistedCollectDeleteMaskInRange(
+	ctx context.Context,
+	start, end types.TS) (deletes *nulls.Nulls, err error) {
+	err = blk.foreachPersistedDeletesCommittedInRange(
+		ctx,
+		start,
+		end,
+		true,
+		func(i int, rowIdVec *vector.Vector) {
+			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
+			row := rowid.GetRowOffset()
+			if deletes == nil {
+				deletes = nulls.NewWithSize(int(row) + 1)
+			}
+			deletes.Add(uint64(row))
+		},
+		nil,
+	)
+	return
 }
 
 func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(

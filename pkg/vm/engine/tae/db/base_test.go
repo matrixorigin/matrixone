@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	checkpoint2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
@@ -264,6 +265,51 @@ func (e *testEngine) incrementalCheckpoint(
 		})
 	}
 	return nil
+}
+
+func (e *testEngine) tryDeleteByDeltaloc(vals []any) (ok bool, err error) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(e.t, err)
+	ok, err = e.tryDeleteByDeltalocWithTxn(vals, txn)
+	if ok {
+		assert.NoError(e.t, txn.Commit(context.Background()))
+	} else {
+		assert.NoError(e.t, txn.Rollback(context.Background()))
+	}
+	return
+}
+
+func (e *testEngine) tryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) (ok bool, err error) {
+	rel := e.getRelationWithTxn(txn)
+
+	idOffsetsMap := make(map[common.ID][]uint32)
+	for _, val := range vals {
+		filter := handle.NewEQFilter(val)
+		id, offset, err := rel.GetByFilter(context.Background(), filter)
+		assert.NoError(e.t, err)
+		offsets, ok := idOffsetsMap[*id]
+		if !ok {
+			offsets = make([]uint32, 0)
+		}
+		offsets = append(offsets, offset)
+		idOffsetsMap[*id] = offsets
+	}
+
+	for id, offsets := range idOffsetsMap {
+		seg, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(id.SegmentID())
+		assert.NoError(e.t, err)
+		blk, err := seg.GetBlockEntryByID(&id.BlockID)
+		assert.NoError(e.t, err)
+		deltaLoc, err := mockCNDeleteInS3(e.Runtime.Fs, blk.GetBlockData(), e.schema, txn, offsets)
+		assert.NoError(e.t, err)
+		ok, err = rel.TryDeleteByDeltaloc(&id, deltaLoc)
+		assert.NoError(e.t, err)
+		if !ok {
+			return ok, err
+		}
+	}
+	ok = true
+	return
 }
 
 func initDB(ctx context.Context, t *testing.T, opts *options.Options) *DB {
@@ -663,7 +709,7 @@ func mockCNDeleteInS3(fs *objectio.ObjectFS, blk data.Block, schema *catalog.Sch
 		pkVal := view.GetData().Get(int(row))
 		pkVec.Append(pkVal, false)
 		rowID := objectio.NewRowid(blkID, row)
-		rowIDVec.Append(rowID, false)
+		rowIDVec.Append(*rowID, false)
 	}
 	bat := containers.NewBatch()
 	bat.AddVector(catalog.AttrRowID, rowIDVec)

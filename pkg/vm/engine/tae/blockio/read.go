@@ -501,7 +501,7 @@ func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservi
 	}
 	blkmeta := meta.GetBlockMeta(uint32(deltaloc.ID()))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
-	return maxSeqnum == 2, nil
+	return maxSeqnum == 1, nil
 }
 
 func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows *nulls.Bitmap) {

@@ -7521,18 +7521,211 @@ func TestReplayDeletes(t *testing.T) {
 	segString2 := seg.Repr()
 	assert.Equal(t, segString1, segString2)
 }
+func TestApplyDeltalocation1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 10
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	tae.createRelAndAppend(bat, true)
+
+	// apply deleteloc fails on ablk
+	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	ok, err := tae.tryDeleteByDeltaloc([]any{v1})
+	assert.NoError(t, err)
+	assert.False(t, ok)
+
+	tae.compactBlocks(false)
+	filter := handle.NewEQFilter(v1)
+	txn, rel := tae.getRelation()
+	id, offset, err := rel.GetByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	ok, err = tae.tryDeleteByDeltaloc([]any{v1})
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	// range delete conflicts with deletes in deltaloc
+	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	// apply deltaloc fails if there're persisted deletes
+	v2 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
+	ok, err = tae.tryDeleteByDeltaloc([]any{v2})
+	assert.NoError(t, err)
+	assert.False(t, ok)
+
+	// apply deltaloc fails if there're deletes in memory
+	tae.compactBlocks(false)
+	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	filter = handle.NewEQFilter(v3)
+	txn, rel = tae.getRelation()
+	id, offset, err = rel.GetByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	v4 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(4)
+	ok, err = tae.tryDeleteByDeltaloc([]any{v4})
+	assert.NoError(t, err)
+	assert.False(t, ok)
+
+}
 
 // test compact
-func TestApplyDeltalocation1(t *testing.T) {
+func TestApplyDeltalocation2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 10
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	tae.createRelAndAppend(bat, true)
+	tae.compactBlocks(false)
+
+	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	v5 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+	filter3 := handle.NewEQFilter(v3)
+	filter5 := handle.NewEQFilter(v5)
+
+	tae.tryDeleteByDeltaloc([]any{v3, v5})
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	txn, rel := tae.getRelation()
+	_, _, err := rel.GetByFilter(context.Background(), filter5)
+	assert.Error(t, err)
+	_, _, err = rel.GetByFilter(context.Background(), filter3)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.checkRowsByScan(8, true)
+
+	tae.restart(context.Background())
+	txn, rel = tae.getRelation()
+	_, _, err = rel.GetByFilter(context.Background(), filter5)
+	assert.Error(t, err)
+	_, _, err = rel.GetByFilter(context.Background(), filter3)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.checkRowsByScan(8, true)
+
+	tae.compactBlocks(false)
+	txn, rel = tae.getRelation()
+	_, _, err = rel.GetByFilter(context.Background(), filter5)
+	assert.Error(t, err)
+	_, _, err = rel.GetByFilter(context.Background(), filter3)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.checkRowsByScan(8, true)
+
+	tae.restart(context.Background())
+	txn, rel = tae.getRelation()
+	_, _, err = rel.GetByFilter(context.Background(), filter5)
+	assert.Error(t, err)
+	_, _, err = rel.GetByFilter(context.Background(), filter3)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.checkRowsByScan(8, true)
 
 }
 
 // test dedup
-func TestApplyDeltalocation2(t *testing.T) {
+func TestApplyDeltalocation3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 10
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	bats := bat.Split(rows)
+	defer bat.Close()
+	tae.createRelAndAppend(bat, true)
+	tae.compactBlocks(false)
+
+	txn, rel := tae.getRelation()
+	blkIt := rel.MakeBlockIt()
+	blkMeta := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry)
+
+	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	filter3 := handle.NewEQFilter(v3)
+	_, offset3, err := rel.GetByFilter(context.Background(), filter3)
+	assert.NoError(t, err)
+
+	deltaLoc, err := mockCNDeleteInS3(tae.Runtime.Fs, blkMeta.GetBlockData(), schema, txn, []uint32{offset3})
+	assert.NoError(t, err)
+
+	ok, err := rel.TryDeleteByDeltaloc(blkMeta.AsCommonID(), deltaLoc)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	assert.NoError(t, txn.Commit(context.Background()))
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	txn, rel = tae.getRelation()
+	_, _, err = rel.GetByFilter(context.Background(), filter3)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.checkRowsByScan(9, true)
+
+	tae.DoAppend(bats[3])
 }
 
 // test logtail
-func TestApplyDeltalocation3(t *testing.T) {
+func TestApplyDeltalocation4(t *testing.T) {
+
+}
+
+func TestApplyDeltalocation5(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 10
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	tae.createRelAndAppend(bat, true)
+	tae.compactBlocks(false)
+
+	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	v5 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+	// filter3 := handle.NewEQFilter(v3)
+	filter5 := handle.NewEQFilter(v5)
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	ok, err := tae.tryDeleteByDeltaloc([]any{v3})
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	{
+		txn2, rel2 := tae.getRelation()
+		err = rel2.DeleteByFilter(context.Background(), filter5)
+		assert.NoError(t, err)
+		assert.NoError(t, txn2.Commit(context.Background()))
+	}
+
+	assert.Error(t, txn.Commit(context.Background()))
 
 }

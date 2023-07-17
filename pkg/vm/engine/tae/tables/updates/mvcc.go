@@ -176,6 +176,9 @@ func (n *MVCCHandle) CollectDeleteLocked(
 				txn.GetTxnState(true)
 				n.RLock()
 			}
+			if node.nt == NT_Persisted {
+				return true
+			}
 			in, before := node.PreparedIn(start, end)
 			if in {
 				it := node.mask.Iterator()

@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -230,7 +229,7 @@ func (node *DeleteNode) ApplyRollback() (err error) {
 	return
 }
 
-func (node *DeleteNode) getPersistedRows() *nulls.Bitmap {
+func (node *DeleteNode) setPersistedRows() {
 	if node.nt != NT_Persisted {
 		panic("unsupport")
 	}
@@ -255,17 +254,17 @@ func (node *DeleteNode) getPersistedRows() *nulls.Bitmap {
 			)
 		}
 	}
-	mask := &nulls.Bitmap{}
+	node.mask = roaring.NewBitmap()
 	rowids := containers.ToDNVector(bat.Vecs[0])
 	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
 		offset := rowid.GetRowOffset()
-		mask.Add(uint64(offset))
+		node.mask.Add(offset)
 		return nil
 	}, nil)
 	if err != nil {
 		panic(err)
 	}
-	return mask
+	return
 }
 
 func LoadPersistedDeletes(
@@ -412,7 +411,12 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmd = NewDeleteCmd(id, node)
+	switch node.nt {
+	case NT_Merge, NT_Normal:
+		cmd = NewDeleteCmd(id, node)
+	case NT_Persisted:
+		cmd = NewPersistedDeleteCmd(id, node)
+	}
 	return
 }
 func (node *DeleteNode) GetPrefix() []byte {
@@ -428,7 +432,12 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 		node.chain.Load().RemoveNodeLocked(node)
 		node.chain.Load().DeleteInDeleteView(node)
 	case NT_Persisted:
-		node.chain.Load().persisted = nil
+		mask := node.mask
+		it := mask.Iterator()
+		for it.HasNext() {
+			row := it.Next()
+			node.chain.Load().mask.Del(uint64(row))
+		}
 	}
 	node.TxnMVCCNode.PrepareRollback()
 	return
@@ -444,7 +453,7 @@ func (node *DeleteNode) OnApply() (err error) {
 		case NT_Merge, NT_Normal:
 			err = listener(node.mask.GetCardinality(), node.GetCommitTSLocked())
 		case NT_Persisted:
-			err = listener(uint64(node.chain.Load().persisted.GetCardinality()), node.GetCommitTSLocked())
+			err = listener(uint64(node.mask.GetCardinality()), node.GetCommitTSLocked())
 		}
 	}
 	return
