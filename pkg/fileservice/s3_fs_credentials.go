@@ -17,7 +17,6 @@ package fileservice
 import (
 	"context"
 	"os"
-	"strings"
 
 	alicredentials "github.com/aliyun/credentials-go/credentials"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -50,30 +49,30 @@ func getCredentialsProvider(
 		ret = aws.NewCredentialsCache(ret)
 	}()
 
-	// aliyun
-	if strings.Contains(endpoint, "aliyuncs.com") {
-		provider := newAliyunCredentialsProvider(roleARN, externalID)
-		_, err := provider.Retrieve(ctx)
-		if err == nil {
-			return provider
-		}
-		logutil.Info("skipping bad aliyun credential provider",
-			zap.Any("error", err),
-		)
-	}
+	// aliyun TODO
+	//if strings.Contains(endpoint, "aliyuncs.com") {
+	//	provider := newAliyunCredentialsProvider(roleARN, externalID)
+	//	_, err := provider.Retrieve(ctx)
+	//	if err == nil {
+	//		return provider
+	//	}
+	//	logutil.Info("skipping bad aliyun credential provider",
+	//		zap.Any("error", err),
+	//	)
+	//}
 
-	// qcloud
-	if strings.Contains(endpoint, "myqcloud.com") ||
-		strings.Contains(endpoint, "tencentcos.cn") {
-		provider := newTencentCloudCredentialsProvider(roleARN, externalID)
-		_, err := provider.Retrieve(ctx)
-		if err == nil {
-			return provider
-		}
-		logutil.Info("skipping bad qcloud credential provider",
-			zap.Any("error", err),
-		)
-	}
+	// qcloud TODO
+	//if strings.Contains(endpoint, "myqcloud.com") ||
+	//	strings.Contains(endpoint, "tencentcos.cn") {
+	//	provider := newTencentCloudCredentialsProvider(roleARN, externalID)
+	//	_, err := provider.Retrieve(ctx)
+	//	if err == nil {
+	//		return provider
+	//	}
+	//	logutil.Info("skipping bad qcloud credential provider",
+	//		zap.Any("error", err),
+	//	)
+	//}
 
 	// aws role arn
 	if roleARN != "" {
@@ -130,6 +129,11 @@ func getCredentialsProvider(
 	}
 
 	return
+}
+
+func init() {
+	_ = newAliyunCredentialsProvider
+	_ = newTencentCloudCredentialsProvider
 }
 
 func newAliyunCredentialsProvider(
