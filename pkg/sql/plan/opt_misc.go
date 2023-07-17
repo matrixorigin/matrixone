@@ -702,7 +702,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32) int32 {
 	newOnList := make([]*Expr, 0, len(node.OnList))
 	colMap := make(map[[2]int32]int32)
 	for _, expr := range node.OnList {
-		if equi, _ := isEquiCond(expr, leftTags, rightTags); equi {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
 			col := getJoinCondLeftCol(expr, leftTags)
 			if col != nil {
 				if _, ok := colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}]; ok {

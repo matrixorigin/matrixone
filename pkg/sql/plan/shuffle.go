@@ -114,7 +114,7 @@ func maybeSorted(n *plan.Node, builder *QueryBuilder, scanID int32) bool {
 	return false
 }
 
-func determinShuffleTypeForGroupBy(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
+func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
 	// hash by default
 	n.Stats.ShuffleType = plan.ShuffleType_Hash
 
@@ -142,6 +142,48 @@ func determinShuffleTypeForGroupBy(col *plan.ColRef, n *plan.Node, builder *Quer
 		n.Stats.ShuffleType = plan.ShuffleType_Range
 		n.Stats.ShuffleColMin = int64(s.MinValMap[colName])
 		n.Stats.ShuffleColMax = int64(s.MaxValMap[colName])
+	}
+}
+
+// to determine if join need to go shuffle
+func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
+	// do not shuffle by default
+	n.Stats.ShuffleColIdx = -1
+	if n.NodeType != plan.Node_JOIN || n.JoinType != plan.Node_INNER {
+		return
+	}
+	// for now ,only support one join condition
+	if len(n.OnList) != 1 {
+		return
+	}
+	if !builder.IsEquiJoin(n) {
+		return
+	}
+	if n.Stats.HashmapSize < HashMapSizeForBucket {
+		return
+	}
+
+	idx := 0
+	//find the highest ndv
+	highestNDV := n.OnList[idx].Ndv
+	if highestNDV < ShuffleThreshHold {
+		return
+	}
+
+	// get the column of left child
+	hashCol := GetHashColumn(n.OnList[idx])
+	if hashCol == nil {
+		return
+	}
+	//for now ,only support integer and string type
+	switch types.T(n.OnList[idx].Typ.Id) {
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+		n.Stats.ShuffleColIdx = int32(idx)
+		n.Stats.Shuffle = true
+		determinShuffleType(hashCol, n, builder)
+	case types.T_varchar, types.T_char, types.T_text:
+		n.Stats.ShuffleColIdx = int32(idx)
+		n.Stats.Shuffle = true
 	}
 }
 
@@ -181,7 +223,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
 		n.Stats.ShuffleColIdx = int32(idx)
 		n.Stats.Shuffle = true
-		determinShuffleTypeForGroupBy(hashCol, n, builder)
+		determinShuffleType(hashCol, n, builder)
 	case types.T_varchar, types.T_char, types.T_text:
 		n.Stats.ShuffleColIdx = int32(idx)
 		n.Stats.Shuffle = true
@@ -231,6 +273,8 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 		determinShuffleForGroupBy(node, builder)
 	case plan.Node_TABLE_SCAN:
 		determinShuffleForScan(node, builder)
+	case plan.Node_JOIN:
+		determinShuffleForJoin(node, builder)
 	default:
 		node.Stats.ShuffleColIdx = -1
 	}
