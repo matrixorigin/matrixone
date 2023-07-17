@@ -407,12 +407,15 @@ func doLock(
 		return false, timestamp.Timestamp{}, err
 	}
 
+	snapshotTS := txnOp.Txn().SnapshotTS
+	// if has no conflict, lockedTS means the latest commit ts of this table
+	lockedTS := result.Timestamp
+
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
 	if !result.HasConflict &&
+		snapshotTS.LessEq(lockedTS) && // only retry when snapshotTS <= lockedTS, means lost some update in rc mode.
 		!txnOp.IsRetry() &&
 		txnOp.Txn().IsRCIsolation() {
-		snapshotTS := txnOp.Txn().SnapshotTS
-		lockedTS := result.Timestamp
 
 		// wait logtail applied at lockedTS - 1
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS.Prev())
@@ -461,7 +464,7 @@ func doLock(
 	}
 
 	// forward rc's snapshot ts
-	snapshotTS := result.Timestamp.Next()
+	snapshotTS = result.Timestamp.Next()
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, timestamp.Timestamp{}, err
 	}
