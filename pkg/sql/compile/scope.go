@@ -217,7 +217,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
 
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
+			c.lock.RLock()
 			ch, ok := c.runtimeFilterReceiverMap[spec.Tag]
+			c.lock.RUnlock()
 			if !ok {
 				continue
 			}

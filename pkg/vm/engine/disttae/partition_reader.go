@@ -31,15 +31,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
-// TODO::PartitionReader should inherit from withFilterMixin.
 type PartitionReader struct {
+	table    *txnTable
+	prepared bool
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
-	deletes map[types.Rowid]uint8
-	iter    logtailreplay.RowsIter
-	// used to get idx of sepcified col
-	//TODO:: inherit from withFilterMixin
+	deletes  map[types.Rowid]uint8
+	iter     logtailreplay.RowsIter
 	seqnumMp map[string]int
 	typsMap  map[string]types.Type
 }
@@ -47,7 +46,59 @@ type PartitionReader struct {
 var _ engine.Reader = new(PartitionReader)
 
 func (p *PartitionReader) Close() error {
+	//p.withFilterMixin.reset()
+	p.inserts = nil
+	p.deletes = nil
 	p.iter.Close()
+	return nil
+}
+
+func (p *PartitionReader) prepare() error {
+	txn := p.table.db.txn
+	var inserts []*batch.Batch
+	var deletes map[types.Rowid]uint8
+	//prepare inserts and deletes for partition reader.
+	if !txn.readOnly.Load() && !p.prepared {
+		inserts = make([]*batch.Batch, 0, len(p.table.writes))
+		deletes = make(map[types.Rowid]uint8)
+		for _, entry := range p.table.writes {
+			if entry.typ == INSERT {
+				if entry.bat == nil || entry.bat.Length() == 0 {
+					continue
+				}
+				if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+					continue
+				}
+				inserts = append(inserts, entry.bat)
+				continue
+			}
+			//entry.typ == DELETE
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.isGeneratedByTruncate() {
+					continue
+				}
+				//deletes in txn.Write maybe comes from PartitionState.Rows ,
+				// PartitionReader need to skip them.
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
+		}
+		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
+		// so, here only load deletes which don't belong to PartitionState.blks.
+		p.table.LoadDeletesForVolatileBlocksIn(p.table._partState, deletes)
+		p.inserts = inserts
+		p.deletes = deletes
+		p.prepared = true
+	}
 	return nil
 }
 
@@ -60,6 +111,11 @@ func (p *PartitionReader) Read(
 	if p == nil {
 		return nil, nil
 	}
+	//prepare data for read.
+	if err := p.prepare(); err != nil {
+		return nil, err
+	}
+	//p.tryUpdateColumns(colNames)
 	//read batch resides in memory from txn.writes.
 	if len(p.inserts) > 0 {
 		bat := p.inserts[0].GetSubBatch(colNames)
@@ -137,7 +193,7 @@ func (p *PartitionReader) Read(
 					}
 				} else {
 					idx := 2 /*rowid and commits*/ + p.seqnumMp[name]
-					if idx >= len(entry.Batch.Vecs) /*add column*/ ||
+					if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 						entry.Batch.Attrs[idx] == "" /*drop column*/ {
 						if err := vector.AppendAny(
 							b.Vecs[i],

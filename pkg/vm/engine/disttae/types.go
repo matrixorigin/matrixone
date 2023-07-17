@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -484,6 +485,11 @@ type blockReader struct {
 type blockMergeReader struct {
 	*blockReader
 	table *txnTable
+
+	//for perfetch deletes
+	loaded     bool
+	pkidx      int
+	deletaLocs map[string][]objectio.Location
 }
 
 type mergeReader struct {
