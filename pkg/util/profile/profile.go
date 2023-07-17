@@ -18,27 +18,53 @@ import (
 	"fmt"
 	"io"
 	"runtime/pprof"
+	"runtime/trace"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
-	GOROUTINE = "goroutine"
-	HEAP      = "heap"
-	CPU       = "cpu"
+	GOROUTINE    = "goroutine"
+	HEAP         = "heap"
+	ALLOCS       = "allocs"
+	THREADCREATE = "threadcreate"
+	BLOCK        = "block"
+	MUTEX        = "mutex"
+
+	CPU   = "cpu"
+	TRACE = "trace"
 )
 
+// ProfileGoroutine you can see more infos in https://pkg.go.dev/runtime/pprof#Profile
 func ProfileGoroutine(w io.Writer, debug int) error {
-	profile := pprof.Lookup(GOROUTINE)
-	if err := profile.WriteTo(w, debug); err != nil {
-		return err
-	}
-	return nil
+	return ProfileRuntime(GOROUTINE, w, debug)
 }
 
 func ProfileHeap(w io.Writer, debug int) error {
-	profile := pprof.Lookup(HEAP)
+	return ProfileRuntime(HEAP, w, debug)
+}
+
+func ProfileAllocs(w io.Writer, debug int) error {
+	return ProfileRuntime(ALLOCS, w, debug)
+}
+
+func ProfileThreadcreate(w io.Writer, debug int) error {
+	return ProfileRuntime(THREADCREATE, w, debug)
+}
+
+func ProfileBlock(w io.Writer, debug int) error {
+	return ProfileRuntime(BLOCK, w, debug)
+}
+
+func ProfileMutex(w io.Writer, debug int) error {
+	return ProfileRuntime(MUTEX, w, debug)
+}
+
+func ProfileRuntime(name string, w io.Writer, debug int) error {
+	profile := pprof.Lookup(name)
 	if profile == nil {
-		return nil
+		return moerr.GetOkExpectedEOB()
 	}
 	if err := profile.WriteTo(w, debug); err != nil {
 		return err
@@ -53,6 +79,16 @@ func ProfileCPU(w io.Writer, d time.Duration) error {
 	}
 	time.Sleep(d)
 	pprof.StopCPUProfile()
+	return nil
+}
+
+func ProfileTrace(w io.Writer, d time.Duration) error {
+	err := trace.Start(w)
+	if err != nil {
+		return err
+	}
+	time.Sleep(d)
+	trace.Stop()
 	return nil
 }
 

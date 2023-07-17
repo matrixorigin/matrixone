@@ -153,11 +153,12 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
 	// evaluate
 	pkNames := mixin.tableDef.Pkey.Names
 	pkVals := make([]*plan.Const, len(pkNames))
-	ok := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
+	ok, hasNull := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
 
 	if !ok || pkVals[0] == nil {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
+		mixin.filterState.hasNull = hasNull
 		return
 	}
 	cnt := getValidCompositePKCnt(pkVals)
@@ -216,7 +217,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 	// C: {A|B} and {A|B}
 	// D: {A|B|C} [and {A|B|C}]*
 	// for other patterns, no filter is needed
-	ok, searchFunc := getNonCompositePKSearchFuncByExpr(
+	ok, hasNull, searchFunc := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
 		mixin.tableDef.Pkey.PkeyColName,
 		mixin.columns.colTypes[mixin.columns.pkPos].Oid,
@@ -225,6 +226,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 	if !ok || searchFunc == nil {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
+		mixin.filterState.hasNull = hasNull
 		return
 	}
 
@@ -322,6 +324,11 @@ func (r *blockReader) Read(
 
 	// get the block read filter
 	filter := r.getReadFilter(r.proc)
+
+	// if any null expr is found in the primary key (composite primary keys), quick return
+	if r.filterState.hasNull {
+		return nil, nil
+	}
 
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {

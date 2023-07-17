@@ -139,6 +139,7 @@ func (d *DiskCache) Read(
 			continue
 		}
 
+		t0 := time.Now()
 		numRead++
 
 		var file *os.File
@@ -172,14 +173,14 @@ func (d *DiskCache) Read(
 
 		vector.Entries[i] = entry
 		numHit++
-		d.cacheHit()
+		d.cacheHit(time.Since(t0))
 	}
 
 	return nil
 }
 
-func (d *DiskCache) cacheHit() {
-	FSProfileHandler.AddSample()
+func (d *DiskCache) cacheHit(duration time.Duration) {
+	FSProfileHandler.AddSample(duration)
 }
 
 func (d *DiskCache) Update(

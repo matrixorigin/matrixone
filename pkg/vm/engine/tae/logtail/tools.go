@@ -66,12 +66,12 @@ func BatchToString(name string, bat *containers.Batch, isSpecialRowID bool) stri
 		_, _ = w.WriteString(fmt.Sprintf("(attr=%s)", bat.Attrs[i]))
 		if bat.Attrs[i] == catalog.AttrRowID {
 			if isSpecialRowID {
-				_, _ = w.WriteString(ToStringTemplate(vec, common.PrintN, common.WithSpecialRowid{}))
+				_, _ = w.WriteString(ToStringTemplate(vec, common.DefaultMaxRowsToPrint, common.WithSpecialRowid{}))
 			} else {
-				_, _ = w.WriteString(ToStringTemplate(vec, common.PrintN))
+				_, _ = w.WriteString(ToStringTemplate(vec, common.DefaultMaxRowsToPrint))
 			}
 		} else {
-			_, _ = w.WriteString(ToStringTemplate(vec, common.PrintN, common.WithDoNotPrintBin{}))
+			_, _ = w.WriteString(ToStringTemplate(vec, common.DefaultMaxRowsToPrint, common.WithDoNotPrintBin{}))
 		}
 		_ = w.WriteByte('\n')
 	}

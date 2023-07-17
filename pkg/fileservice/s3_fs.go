@@ -33,11 +33,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -913,9 +910,6 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		}
 	}
 
-	// credential provider
-	var credentialProvider aws.CredentialsProvider
-
 	// options for loading configs
 	loadConfigOptions := []func(*config.LoadOptions) error{
 		config.WithLogger(logutil.GetS3Logger()),
@@ -937,54 +931,19 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		)
 	}
 
-	// static credential
-	if apiKey != "" && apiSecret != "" {
-		// static
-		credentialProvider = aws.NewCredentialsCache(
-			credentials.NewStaticCredentialsProvider(apiKey, apiSecret, ""),
-		)
-	}
+	credentialProvider := getCredentialsProvider(
+		ctx,
+		endpoint,
+		region,
+		apiKey,
+		apiSecret,
+		roleARN,
+		externalID,
+	)
 
-	// credentials for 3rd-party services
-	//TODO fix this
-	//if credentialProvider == nil && endpointURL != nil {
-	//	hostname := endpointURL.Hostname()
-	//	if strings.Contains(hostname, "aliyuncs.com") {
-	//		credentialProvider = newAliyunCredentialsProvider()
-	//	} else if strings.Contains(hostname, "myqcloud.com") ||
-	//		strings.Contains(hostname, "tencentcos.cn") {
-	//		credentialProvider = newTencentCloudCredentialsProvider()
-	//	}
-	//}
-
-	// role arn credential
-	if roleARN != "" {
-		// role arn
-		awsConfig, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
-		if err != nil {
-			return nil, err
-		}
-
-		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
-			if region == "" {
-				options.Region = "ap-northeast-1"
-			} else {
-				options.Region = region
-			}
-		})
-		credentialProvider = aws.NewCredentialsCache(
-			stscreds.NewAssumeRoleProvider(
-				stsSvc,
-				roleARN,
-				func(opts *stscreds.AssumeRoleOptions) {
-					if externalID != "" {
-						opts.ExternalID = &externalID
-					}
-				},
-			),
-		)
-		// validate
-		_, err = credentialProvider.Retrieve(ctx)
+	// validate
+	if credentialProvider != nil {
+		_, err := credentialProvider.Retrieve(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1091,7 +1050,10 @@ func newS3FS(arguments []string) (*S3FS, error) {
 const maxRetryAttemps = 128
 
 func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, s.perfCounterSets...)
@@ -1117,7 +1079,10 @@ func (s *S3FS) s3HeadBucket(ctx context.Context, params *s3.HeadBucketInput, opt
 }
 
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, s.perfCounterSets...)
@@ -1132,7 +1097,10 @@ func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, opt
 }
 
 func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, s.perfCounterSets...)
@@ -1141,7 +1109,10 @@ func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 }
 
 func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, s.perfCounterSets...)
@@ -1177,7 +1148,10 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 }
 
 func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, s.perfCounterSets...)
@@ -1192,7 +1166,10 @@ func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInpu
 }
 
 func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
-	FSProfileHandler.AddSample()
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, s.perfCounterSets...)

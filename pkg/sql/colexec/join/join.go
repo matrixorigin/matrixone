@@ -104,7 +104,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.DupJmAuxData()
 		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil

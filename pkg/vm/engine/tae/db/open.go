@@ -227,6 +227,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			"logtail-gc",
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {
+				logutil.Info(db.Runtime.ExportLogtailStats())
 				ckp := db.BGCheckpointRunner.MaxCheckpoint()
 				if ckp != nil {
 					// use previous end to gc logtail

@@ -59,6 +59,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlCompatible:    mysqlCompatible,
 		tag2Table:          make(map[int32]*TableDef),
 		isPrepareStatement: isPrepareStatement,
+		deleteNode:         make(map[uint64]int32),
 	}
 }
 
@@ -996,6 +997,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootID := range builder.qry.Steps {
 		rootID, _ = builder.pushdownFilters(rootID, nil, false)
+		err := foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
+		if err != nil {
+			return nil, err
+		}
+
 		colRefCnt := make(map[[2]int32]int)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 
@@ -1032,7 +1038,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			colRefCnt[[2]int32{resultTag, int32(i)}] = 1
 		}
 
-		_, err := builder.remapAllColRefs(rootID, colRefCnt)
+		_, err = builder.remapAllColRefs(rootID, colRefCnt)
 		if err != nil {
 			return nil, err
 		}
