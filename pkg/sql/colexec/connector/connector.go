@@ -29,28 +29,28 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	reg := ap.Reg
 	bat := proc.InputBatch()
 	if bat == nil {
-		return true, nil
+		return process.ExecStop, nil
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
-		return false, nil
+		return process.ExecNext, nil
 	}
 	select {
 	case <-proc.Ctx.Done():
 		proc.PutBatch(bat)
 		logutil.Warn("proc context done during connector send")
-		return true, nil
+		return process.ExecStop, nil
 	case <-reg.Ctx.Done():
 		proc.PutBatch(bat)
 		logutil.Warn("reg.Ctx done during connector send")
-		return true, nil
+		return process.ExecStop, nil
 	case reg.Ch <- bat:
 		proc.SetInputBatch(nil)
-		return false, nil
+		return process.ExecNext, nil
 	}
 }

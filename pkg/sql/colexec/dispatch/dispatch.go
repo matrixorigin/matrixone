@@ -91,22 +91,32 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 
 	bat := proc.InputBatch()
 	if bat == nil {
 		if ap.FuncId == ShuffleToAllFunc {
-			return sendShuffledBats(ap, proc)
+			ok, err := sendShuffledBats(ap, proc)
+			if ok {
+				return process.ExecStop, err
+			} else {
+				return process.ExecNext, err
+			}
 		}
-		return true, nil
+		return process.ExecStop, nil
 	}
 
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
-		return false, nil
+		return process.ExecNext, nil
 	}
-	return ap.ctr.sendFunc(bat, ap, proc)
+	ok, err := ap.ctr.sendFunc(bat, ap, proc)
+	if ok {
+		return process.ExecStop, err
+	} else {
+		return process.ExecNext, err
+	}
 }
 
 func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {

@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -179,7 +180,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	LockOp: lockop.Prepare,
 }
 
-var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
+var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecStatus, error){
 	Top:         top.Call,
 	Join:        join.Call,
 	Semi:        semi.Call,
