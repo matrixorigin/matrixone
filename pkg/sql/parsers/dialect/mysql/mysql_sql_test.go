@@ -2159,6 +2159,16 @@ var (
 			input: "create publication pub1 database db1 comment 'test'",
 		},
 		{
+			input:  "CREATE STAGE my_ext_stage URL='s3://load/files/'",
+			output: "create stage my_ext_stageurl 's3://load/files/'",
+		},
+		{
+			input: "CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS=(AWS_KEY_ID='1a2b3c' AWS_SECRET_KEY='4x5y6z');",
+		},
+		{
+			input: "CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS=(AWS_KEY_ID='1a2b3c' AWS_SECRET_KEY='4x5y6z') ENABLE = TRUE;",
+		},
+		{
 			input: "create database db1 from acc0 publication pub1",
 		},
 		{

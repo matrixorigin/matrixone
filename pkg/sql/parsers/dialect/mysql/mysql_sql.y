@@ -251,7 +251,7 @@ import (
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
-%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS ENABLE
 %token <item> INTEGRAL HEX BIT_LITERAL FLOAT
 %token <str>  HEXNUM
 %token <str> NULL TRUE FALSE
@@ -472,7 +472,9 @@ import (
 
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
-%type <statement>  create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <statement> create_stage_stmt
+%type <str> urlparams crentialsparams_opt directoryparams_opt
 %type <str> comment_opt
 %type <subscriptionOption> subcription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
@@ -4854,6 +4856,7 @@ create_stmt:
 |   create_user_stmt
 |   create_account_stmt
 |   create_publication_stmt
+|   create_stage_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -5162,6 +5165,67 @@ create_publication_stmt:
 	        AccountsSet: $7,
 	        Comment: $8,
 	    }
+    }
+
+create_stage_stmt:
+    CREATE STAGE not_exists_opt ident urlparams credntialsparams_opt directoryparams_opt comment_opt
+    {
+        $$ = &tree.CreateStage{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Url: $5,
+            Credntials: $6,
+            Status: $7,
+            Comment: $8,
+        }
+    }
+
+urlparams:
+    URL '=' STRING
+    {
+        $$ = $3
+    }
+
+credntialsparams_opt:
+    {
+        $$ = []string{}
+    }
+|   CREDENTIALS '=' '(' credntialsparams ')'
+    {
+        $$ = $4
+    }
+
+credntialsparams:
+    credntialsparam
+    {
+        $$ = $1
+    }
+|   credntialsparams ',' credntialsparam
+    {
+        $$ = append($1, $3...)
+    }
+
+credntialsparam:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
+    }
+
+directoryparams_opt:
+    {
+        $$ = "false"
+    }
+|   ENABLE '=' TRUE
+    {
+        $$ = "true"
+    }
+|   ENABLE '=' FALSE
+    {
+        $$ = "false"
     }
 
 comment_opt:

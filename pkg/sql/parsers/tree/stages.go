@@ -14,12 +14,16 @@
 
 package tree
 
+import "fmt"
+
 type CreateStage struct {
 	statementImpl
 	IfNotExists bool
 	Name        Identifier
-	URL         string
-	CRENTIALS   string
+	Url         string
+	Credntials  []string
+	Status      string
+	Comment     string
 }
 
 func (node *CreateStage) Format(ctx *FmtCtx) {
@@ -29,12 +33,23 @@ func (node *CreateStage) Format(ctx *FmtCtx) {
 	}
 	node.Name.Format(ctx)
 
-	ctx.WriteString("URL=")
-	ctx.WriteString(node.URL)
+	ctx.WriteString("url ")
+	ctx.WriteString(fmt.Sprintf("'%s'", node.Url))
 
-	ctx.WriteString(" ")
-	ctx.WriteString("CREDENTIALS=")
-	ctx.WriteString(node.CRENTIALS)
+	if len(node.Credntials) > 0 {
+		ctx.WriteString("crentiasl ")
+		for i := 0; i < len(node.Credntials)-1; i += 2 {
+			ctx.WriteString(fmt.Sprintf("'%s'", node.Credntials[i]))
+			ctx.WriteString("=")
+			ctx.WriteString(fmt.Sprintf("'%s'", node.Credntials[i+1]))
+			ctx.WriteString(",")
+		}
+	}
+
+	if len(node.Comment) > 0 {
+		ctx.WriteString("comment ")
+		ctx.WriteString(fmt.Sprintf("'%s'", node.Comment))
+	}
 }
 
 func (node *CreateStage) GetStatementType() string { return "Create Stage" }
