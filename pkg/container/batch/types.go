@@ -29,12 +29,10 @@ var (
 
 func init() {
 	EmptyForConstFoldBatch.rowCount = 1
-	EmptyForConstFoldBatch.Zs = []int64{1}
 }
 
 type EncodeBatch struct {
 	rowCount int64
-	Zs       []int64
 	Vecs     []*vector.Vector
 	Attrs    []string
 	AggInfos []aggInfo
@@ -50,18 +48,8 @@ func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
 	rl := int64(m.rowCount)
 	buf.Write(types.EncodeInt64(&rl))
 
-	// Zs
-	l := int32(len(m.Zs))
-	buf.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		n, _ := buf.Write(types.EncodeInt64(&m.Zs[i]))
-		if n != 8 {
-			panic("unexpected length for int64")
-		}
-	}
-
 	// Vecs
-	l = int32(len(m.Vecs))
+	l := int32(len(m.Vecs))
 	buf.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		data, err := m.Vecs[i].MarshalBinary()
@@ -110,18 +98,8 @@ func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
 	m.rowCount = types.DecodeInt64(buf[:8])
 	buf = buf[8:]
 
-	// Zs
-	l := types.DecodeInt32(buf[:4])
-	buf = buf[4:]
-	zs := make([]int64, l)
-	for i := 0; i < int(l); i++ {
-		zs[i] = types.DecodeInt64(buf[:8])
-		buf = buf[8:]
-	}
-	m.Zs = zs
-
 	// Vecs
-	l = types.DecodeInt32(buf[:4])
+	l := types.DecodeInt32(buf[:4])
 	buf = buf[4:]
 	vecs := make([]*vector.Vector, l)
 	for i := 0; i < int(l); i++ {
@@ -192,7 +170,6 @@ type Batch struct {
 	// Vecs col data
 	Vecs []*vector.Vector
 	// ring
-	Zs   []int64
 	Aggs []agg.Agg[any]
 
 	// row count of batch, to instead of old len(Zs).
