@@ -91,6 +91,7 @@ commit;
 select * from ct_06;
 
 --comprimary key conflict
+-- @pattern
 create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
 insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31),(3,'90','2111-02-09',10.01);
 begin;
