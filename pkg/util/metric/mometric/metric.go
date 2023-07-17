@@ -56,6 +56,7 @@ var moCollector MetricCollector
 var statsLogWriter *StatsLogWriter
 var statusSvr *statusServer
 
+var enable bool
 var inited uint32
 
 func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.ObservabilityParameters, nodeUUID, role string, opts ...InitOption) (act bool) {
@@ -114,11 +115,16 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		logutil.Debugf("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
 
-	metric.SetUpdateStorageUsageInterval(initOpts.updateInterval)
-	metric.SetStorageUsageCheckNewInterval(initOpts.checkNewInterval)
+	enable = true
+	SetUpdateStorageUsageInterval(initOpts.updateInterval)
+	SetStorageUsageCheckNewInterval(initOpts.checkNewInterval)
 	logutil.Debugf("metric with ExportInterval: %v", initOpts.exportInterval)
 	logutil.Debugf("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
 	return true
+}
+
+func IsEnable() bool {
+	return enable
 }
 
 func StopMetricSync() {

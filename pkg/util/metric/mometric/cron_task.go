@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metric
+package mometric
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -122,10 +123,15 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		select {
 		case <-ctx.Done():
 			logger.Debug("receive context signal", zap.Error(ctx.Err()))
-			StorageUsageFactory.Reset() // clean CN data for next cron task.
+			metric.StorageUsageFactory.Reset() // clean CN data for next cron task.
 			return ctx.Err()
 		case <-ticker.C:
 			logger.Info("start next round")
+		}
+
+		if !IsEnable() {
+			logger.Debug("mometric is disable.")
+			continue
 		}
 
 		// mysql> show accounts;
@@ -154,7 +160,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			continue
 		}
 		logger.Debug("collect storage_usage cnt", zap.Uint64("cnt", cnt))
-		StorageUsageFactory.Reset()
+		metric.StorageUsageFactory.Reset()
 		for rowIdx := uint64(0); rowIdx < cnt; rowIdx++ {
 			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
 			if err != nil {
@@ -165,7 +171,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 				return err
 			}
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
-			StorageUsage(account).Set(sizeMB)
+			metric.StorageUsage(account).Set(sizeMB)
 		}
 
 		// next round
@@ -190,6 +196,10 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		logger.Info("checkNewAccountSize exit", zap.Error(err))
 	}()
 
+	if !IsEnable() {
+		logger.Info("mometric is disable.")
+		return
+	}
 	opts := ie.NewOptsBuilder().Database("system").Internal(true).Finish()
 
 	var now time.Time
@@ -267,7 +277,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			// update new accounts metric
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
 				zap.String("created_time", createdTime))
-			StorageUsage(account).Set(sizeMB)
+			metric.StorageUsage(account).Set(sizeMB)
 		}
 
 		// reset next Round
