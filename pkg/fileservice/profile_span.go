@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/google/pprof/profile"
@@ -100,37 +101,41 @@ func (s *SpanProfiler) Begin() (profiler *SpanProfiler, end func()) {
 	}
 	profiler.spans = append(profiler.spans, span)
 
+	var endOnce sync.Once
 	end = func() {
-		endGoID := goid.Get()
+		endOnce.Do(func() {
 
-		if endGoID != goID {
-			panic("span must end in the same goroutine as begin")
-		}
-		if profiler.spans[len(profiler.spans)-1] != span {
-			panic("interleaving span")
-		}
+			endGoID := goid.Get()
 
-		duration := time.Since(span.BeginTime) - span.SubSpanDuration
-		if duration <= 0 {
-			// no need to add sample
-			return
-		}
+			if endGoID != goID {
+				panic("span must end in the same goroutine as begin")
+			}
+			if profiler.spans[len(profiler.spans)-1] != span {
+				panic("interleaving span")
+			}
 
-		sample := &profile.Sample{
-			Value: []int64{
-				1,
-				int64(duration / time.Nanosecond),
-			},
-			Location: locations,
-		}
-		profiler.profile.Sample = append(profiler.profile.Sample, sample)
+			duration := time.Since(span.BeginTime) - span.SubSpanDuration
+			if duration <= 0 {
+				// no need to add sample
+				return
+			}
 
-		profiler.spans = profiler.spans[:len(profiler.spans)-1]
-		if len(profiler.spans) > 0 {
-			// add duration to parent's sub span duration
-			profiler.spans[len(profiler.spans)-1].SubSpanDuration += duration
-		}
+			sample := &profile.Sample{
+				Value: []int64{
+					1,
+					int64(duration / time.Nanosecond),
+				},
+				Location: locations,
+			}
+			profiler.profile.Sample = append(profiler.profile.Sample, sample)
 
+			profiler.spans = profiler.spans[:len(profiler.spans)-1]
+			if len(profiler.spans) > 0 {
+				// add duration to parent's sub span duration
+				profiler.spans[len(profiler.spans)-1].SubSpanDuration += duration
+			}
+
+		})
 	}
 
 	return
@@ -138,6 +143,9 @@ func (s *SpanProfiler) Begin() (profiler *SpanProfiler, end func()) {
 
 // Write writes the packed profile to writer w
 func (s *SpanProfiler) Write(w io.Writer) error {
+	if len(s.profile.Sample) == 0 {
+		return nil
+	}
 	return s.profile.Write(w)
 }
 
