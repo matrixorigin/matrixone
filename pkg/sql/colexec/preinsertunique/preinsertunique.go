@@ -40,7 +40,7 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatus, error) {
 	argument := arg.(*Argument)
 
 	analy := proc.GetAnalyze(idx)
@@ -49,13 +49,13 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 
 	inputBat := proc.InputBatch()
 	if inputBat == nil {
-		return true, nil
+		return process.ExecStop, nil
 	}
 
 	if inputBat.Length() == 0 {
 		inputBat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
 	defer proc.PutBatch(inputBat)
 
@@ -102,10 +102,10 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 		err := insertUniqueBat.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
 		if err != nil {
 			insertUniqueBat.Clean(proc.GetMPool())
-			return false, err
+			return process.ExecNext, err
 		}
 	}
 
 	proc.SetInputBatch(insertUniqueBat)
-	return false, nil
+	return process.ExecNext, nil
 }

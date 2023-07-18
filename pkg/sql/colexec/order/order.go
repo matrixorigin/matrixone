@@ -16,6 +16,7 @@ package order
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -246,22 +247,22 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ctr := arg.(*Argument).ctr
 
 	bat := proc.InputBatch()
 	if bat == nil {
-		return true, ctr.sortAndSend(proc)
+		return process.ExecStop, ctr.sortAndSend(proc)
 	}
 
 	enoughToSend, err := ctr.appendBatch(proc, bat)
 	if err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 	if enoughToSend {
-		return false, ctr.sortAndSend(proc)
+		return process.ExecNext, ctr.sortAndSend(proc)
 	}
 
 	proc.SetInputBatch(batch.EmptyBatch)
-	return false, nil
+	return process.ExecNext, nil
 }
