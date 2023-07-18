@@ -16,7 +16,6 @@ package shuffle
 
 import (
 	"bytes"
-	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,52 +36,23 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func combineShuffleBatches(ap *Argument, proc *process.Process) *batch.Batch {
-	var lenVecs int
-	shuffledBats := ap.ctr.shuffledBats
-	var newBat *batch.Batch
-
-	allEmpty := true
-	for _, bat := range shuffledBats {
-		if bat == nil || bat.Length() == 0 {
-			continue
-		}
-		lenVecs = len(bat.Vecs)
-		allEmpty = false
-		if newBat == nil {
-			newBat = batch.NewWithSize(lenVecs)
-			newBat.ShuffleIDX = make([]int, 0, len(shuffledBats))
-			newBat.Zs = proc.Mp().GetSels()
-			for j := range bat.Vecs {
-				newBat.Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
-			}
-		}
-	}
-	if allEmpty {
-		return nil
-	}
-
-	for _, bat := range shuffledBats {
-		if bat != nil && bat.Length() != 0 {
-			newBat.Append(context.TODO(), proc.Mp(), bat)
-		}
-		newBat.ShuffleIDX = append(newBat.ShuffleIDX, newBat.Length())
-	}
-
-	return newBat
-}
-
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil {
-		proc.SetInputBatch(combineShuffleBatches(ap, proc))
-		return true, nil
+		for i := range ap.ctr.shuffledBats {
+			if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > 0 {
+				proc.SetInputBatch(ap.ctr.shuffledBats[i])
+				ap.ctr.shuffledBats[i] = nil
+				return process.ExecHasMore, nil
+			}
+		}
+		return process.ExecStop, nil
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		sendOneBatch(ap, proc)
-		return false, nil
+		return process.ExecNext, nil
 	}
 	if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
 		return hashShuffle(bat, ap, proc)
@@ -168,7 +138,7 @@ func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, reg
 	shuffledBats := ap.ctr.shuffledBats
 
 	shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
-	shuffledBats[regIndex].ShuffleIDX = []int{regIndex}
+	shuffledBats[regIndex].ShuffleIDX = regIndex
 	shuffledBats[regIndex].Zs = proc.Mp().GetSels()
 	for j := range shuffledBats[regIndex].Vecs {
 		shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
@@ -228,13 +198,13 @@ func sendOneBatch(ap *Argument, proc *process.Process) {
 	}
 }
 
-func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (process.ExecStatus, error) {
 	err := genShuffledBatsByHash(ap, bat, proc)
 	if err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 	sendOneBatch(ap, proc)
-	return false, nil
+	return process.ExecNext, nil
 }
 
 func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
@@ -368,21 +338,21 @@ func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, proc *process.Proces
 	return nil
 }
 
-func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (process.ExecStatus, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.GetSorted() {
 		ok, regIndex := allBatchInOneRange(ap, bat)
 		if ok {
-			bat.ShuffleIDX = []int{int(regIndex)}
+			bat.ShuffleIDX = int(regIndex)
 			proc.SetInputBatch(bat)
-			return false, nil
+			return process.ExecNext, nil
 		}
 	}
 
 	err := genShuffledBatsByRange(ap, bat, proc)
 	if err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 	sendOneBatch(ap, proc)
-	return false, nil
+	return process.ExecNext, nil
 }
