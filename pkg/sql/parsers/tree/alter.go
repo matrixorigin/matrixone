@@ -282,6 +282,7 @@ type AlterColPos struct {
 	Pos        int32
 }
 
+// suggest rename: AlterAddColumnPosition
 type AlterAddCol struct {
 	Column *ColumnTableDef
 	Pos    *AlterColPos

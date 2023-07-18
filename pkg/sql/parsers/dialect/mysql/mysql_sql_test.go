@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
-		output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
+		input:  "ALTER TABLE t1 MODIFY c INT",
+		output: "ALTER TABLE t1 MODIFY c INT",
 	}
 )
 

@@ -96,7 +96,12 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.AlterView:
 		return buildAlterView(stmt, ctx)
 	case *tree.AlterTable:
-		return buildAlterTable(stmt, ctx)
+		//_, err := buildAlterTable3(stmt, ctx)
+		//if err != nil {
+		//	return nil, err
+		//}
+		return buildAlterTable3(stmt, ctx)
+		//return buildAlterTable(stmt, ctx)
 	case *tree.CreateIndex:
 		return buildCreateIndex(stmt, ctx)
 	case *tree.DropIndex:
