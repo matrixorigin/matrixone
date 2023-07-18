@@ -64,7 +64,7 @@ func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err
 	var ok process.ExecStatus
 
 	for i := start; i < len(ins); i++ {
-		if ok, err = execFunc[ins[i].Op](i, proc, ins[i].Arg, ins[i].IsFirst, ins[i].IsLast); err != nil {
+		if ok, err = execFunc[ins[i].Op](ins[i].Idx, proc, ins[i].Arg, ins[i].IsFirst, ins[i].IsLast); err != nil {
 			// error handling weirdness
 			return ok == process.ExecStop || end, err
 		}
