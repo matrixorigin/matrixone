@@ -78,7 +78,7 @@ null    3    0.01    null
 create table index_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned,unique key id1(col1),key id2(col4));
 insert into index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 insert into index_07 values (1,2,20.23,56),(1,4,100.00,90);
-(Duplicate entry)([\d\D]*)(for key 'col2')
+Duplicate entry '\d' for key 'col2'
 select * from index_07;
 col1    col2    col3    col4
 1    2    20.23    56
