@@ -1613,7 +1613,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
+		Arg: constructDispatch(0, rs, c.addr, n),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
@@ -2038,7 +2038,7 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, n),
+				Arg: constructDispatch(j, children, ss[i].NodeInfo.Addr, n),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -2301,7 +2301,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 	leftMerge := c.newMergeScope(ss)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
+		Arg: constructDispatch(0, rs, c.addr, n),
 	})
 	leftMerge.IsEnd = true
 
@@ -2310,7 +2310,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 	rightMerge := c.newMergeScope(children)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
+		Arg: constructDispatch(1, rs, c.addr, n),
 	})
 	rightMerge.IsEnd = true
 
@@ -2389,9 +2389,13 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	// so we set it to false now
 	c.anal.isFirst = false
 	mergeChildren := c.newMergeScope(children)
+
+	// a hack here to stop shuffle join, delete this in the future
+	n.Stats.Shuffle = false
+
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
+		Arg: constructDispatch(1, rs, c.addr, n),
 	})
 	mergeChildren.IsEnd = true
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
