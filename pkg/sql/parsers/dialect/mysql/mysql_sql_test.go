@@ -2168,7 +2168,7 @@ var (
 		},
 		{
 			input:  "CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c', 'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE;",
-			output: "create stage my_ext_stage1 url='s3://load/files/' crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'}",
+			output: "create stage my_ext_stage1 url='s3://load/files/' crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'} enabled",
 		},
 		{
 			input:  "DROP STAGE my_ext_stage1",
@@ -2177,6 +2177,14 @@ var (
 		{
 			input:  "DROP STAGE if exists my_ext_stage1",
 			output: "drop stage if not exists my_ext_stage1",
+		},
+		{
+			input:  "ALTER STAGE my_ext_stage SET URL='s3://loading/files/new/'",
+			output: "alter stage my_ext_stage set  url='s3://loading/files/new/'",
+		},
+		{
+			input:  "ALTER STAGE my_ext_stage SET CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};",
+			output: "alter stage my_ext_stage set  crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'}",
 		},
 		{
 			input: "create database db1 from acc0 publication pub1",

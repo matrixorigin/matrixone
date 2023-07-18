@@ -477,8 +477,8 @@ import (
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
-%type <statement> create_stage_stmt drop_stage_stmt
-%type <str> urlparams directoryparams_opt
+%type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
+%type <str> urlparams
 %type <str> comment_opt
 %type <subscriptionOption> subcription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
@@ -552,7 +552,7 @@ import (
 %type <funcExpr> function_call_window
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credntialsparams_opt credntialsparams credntialsparam
+%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credntialsparams credntialsparam
 %type <str> charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
@@ -2576,6 +2576,7 @@ alter_stmt:
 |   alter_view_stmt
 |   alter_table_stmt
 |   alter_publication_stmt
+|   alter_stage_stmt
 // |    alter_ddl_stmt
 
 alter_view_stmt:
@@ -5177,13 +5178,13 @@ create_publication_stmt:
     }
 
 create_stage_stmt:
-    CREATE STAGE not_exists_opt ident urlparams credntialsparams_opt directoryparams_opt comment_opt
+    CREATE STAGE not_exists_opt ident urlparams stage_credentials_opt stage_status_opt stage_comment_opt
     {
         $$ = &tree.CreateStage{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
             Url: $5,
-            Credntials: $6,
+            Credentials: $6,
             Status: $7,
             Comment: $8,
         }
@@ -5272,8 +5273,37 @@ credntialsparam:
         $$ = append($$, $3)
     }
 
+urlparams:
+    URL '=' STRING
+    {
+        $$ = $3
+    }
+
+comment_opt:
+    {
+        $$ = ""
+    }
+|   COMMENT_KEYWORD STRING
+    {
+        $$ = $2
+    }
+
+alter_stage_stmt:
+    ALTER STAGE exists_opt ident SET stage_url_opt stage_credentials_opt stage_status_opt stage_comment_opt
+    {
+        $$ = &tree.AlterStage{
+            	IfNotExists: $3,
+	            Name: tree.Identifier($4.Compare()),           
+	            UrlOption: $6,
+	            CredntialsOption: $7,
+	            StatusOption: $8,
+	            Comment: $9,
+        }
+    }
+
+
 alter_publication_stmt:
-ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
     {
 	    $$ = &tree.AlterPublication{
 	        IfExists: $3,
