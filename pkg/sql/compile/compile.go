@@ -63,6 +63,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -383,12 +384,13 @@ func (c *Compile) runOnce() error {
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
-	for _, s := range c.scope {
+	for i := range c.scope {
 		wg.Add(1)
-		go func(scope *Scope) {
+		scope := c.scope[i]
+		ants.Submit(func() {
 			errC <- c.run(scope)
 			wg.Done()
-		}(s)
+		})
 	}
 	wg.Wait()
 	c.scope = nil
