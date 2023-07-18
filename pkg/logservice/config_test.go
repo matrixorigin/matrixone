@@ -183,7 +183,7 @@ func TestFillConfig(t *testing.T) {
 	assert.Equal(t, defaultRaftAddress, c.RaftListenAddress)
 	assert.Equal(t, defaultGossipAddress, c.GossipAddress)
 	assert.Equal(t, defaultGossipAddress, c.GossipListenAddress)
-	assert.Equal(t, 0, len(c.GossipSeedAddresses))
+	assert.Equal(t, 1, len(c.GossipSeedAddresses))
 	assert.Equal(t, hakeeper.DefaultTickPerSecond, c.HAKeeperConfig.TickPerSecond)
 	assert.Equal(t, hakeeper.DefaultLogStoreTimeout, c.HAKeeperConfig.LogStoreTimeout.Duration)
 	assert.Equal(t, hakeeper.DefaultDNStoreTimeout, c.HAKeeperConfig.DNStoreTimeout.Duration)
@@ -249,7 +249,7 @@ func TestHAKeeperClientConfigValidate(t *testing.T) {
 		ok  bool
 	}{
 		{
-			HAKeeperClientConfig{}, false,
+			HAKeeperClientConfig{}, true,
 		},
 		{
 			HAKeeperClientConfig{DiscoveryAddress: "localhost:9090"}, true,
