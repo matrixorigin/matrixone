@@ -44,17 +44,21 @@ message Connector {
   int32 connector_index = 2;
 }
 
+message Shuffle{
+  int32 ShuffleColIdx=1;
+  int32 ShuffleType = 2;
+  int64 ShuffleColMin = 3;
+  int64 ShuffleColMax = 4;
+  int32 AliveRegCnt = 5;
+}
+
 message Dispatch {
   int32 func_id = 1;
   repeated Connector local_connector = 2;
   repeated WrapNode remote_connector = 3;
-  int32 ShuffleColIdx=4;
-  repeated int32 ShuffleRegIdxLocal=5;
-  repeated int32 ShuffleRegIdxRemote=6;
-  bool  is_sink = 7;
-  int32 ShuffleType = 8;
-  int64 ShuffleColMin = 9;
-  int64 ShuffleColMax = 10;
+  repeated int32 ShuffleRegIdxLocal=4;
+  repeated int32 ShuffleRegIdxRemote=5;
+  bool  is_sink = 6;
 }
 
 message MultiArguemnt{
@@ -341,6 +345,8 @@ message Instruction{
 
   Deletion delete = 31;
   LockOp lock_op = 32;
+
+  Shuffle shuffle = 33;
 }
 
 message AnalysisList {
