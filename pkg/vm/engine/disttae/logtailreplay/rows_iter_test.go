@@ -45,6 +45,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	}
 
 	{
+		// iter again
 		iter := state.NewRowsIter(types.BuildTS(0, 0), nil, false)
 		n := 0
 		for iter.Next() {
@@ -63,7 +64,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	}
 
 	{
-		// insert
+		// insert number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
 		vec1 := vector.NewVec(types.T_int64.ToType())
@@ -82,6 +83,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}, 0, packer)
 	}
 
+	// rows iter
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
 		iter := state.NewRowsIter(ts, nil, false)
@@ -91,10 +93,8 @@ func TestPartitionStateRowsIter(t *testing.T) {
 			n++
 			entry := iter.Entry()
 			rowIDs[entry.RowID] = true
-
 			// RowExists
 			require.True(t, state.RowExists(entry.RowID, ts))
-
 		}
 		require.Equal(t, i+1, n)
 		require.Equal(t, i+1, len(rowIDs))
@@ -112,12 +112,12 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}
 		require.Equal(t, 1, n)
 		require.Nil(t, iter.Close())
-		yes := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), bs)
-		require.True(t, yes)
+		modified := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), bs)
+		require.True(t, modified)
 	}
 
 	{
-		// duplicated rows
+		// insert duplicated rows
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
 		vec1 := vector.NewVec(types.T_int64.ToType())
@@ -136,6 +136,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}, 0, packer)
 	}
 
+	// rows iter
 	for i := 0; i < num; i++ {
 		iter := state.NewRowsIter(types.BuildTS(int64(i), 0), nil, false)
 		n := 0
@@ -152,7 +153,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	deleteAt := 1000
 	{
-		// delete
+		// delete number i at (deleteAt+i) with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 		tsVec := vector.NewVec(types.T_TS.ToType())
 		for i := 0; i < num; i++ {
@@ -160,7 +161,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 			vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
 		}
 		state.HandleRowsDelete(ctx, &api.Batch{
-			Attrs: []string{"rowid", "time", "a"},
+			Attrs: []string{"rowid", "time"},
 			Vecs: []*api.Vector{
 				mustVectorToProto(rowIDVec),
 				mustVectorToProto(tsVec),
@@ -170,6 +171,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	for i := 0; i < num; i++ {
 		{
+			// rows iter
 			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i), 0), nil, false)
 			rowIDs := make(map[types.Rowid]bool)
 			n := 0
@@ -184,6 +186,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}
 
 		{
+			// deleted rows iter
 			blockID, _ := buildRowID(i + 1).Decode()
 			iter := state.NewRowsIter(types.BuildTS(int64(deleteAt+i+1), 0), &blockID, true)
 			rowIDs := make(map[types.Rowid]bool)
@@ -197,6 +200,30 @@ func TestPartitionStateRowsIter(t *testing.T) {
 			require.Equal(t, 1, len(rowIDs))
 			require.Nil(t, iter.Close())
 		}
+
+		{
+			// primary key change detection
+			key := EncodePrimaryKey(int64(i), packer)
+			modified := state.PrimaryKeyMayBeModified(
+				types.BuildTS(int64(deleteAt+i), 0).Prev(),
+				types.BuildTS(int64(deleteAt+i), 0).Next(),
+				key,
+			)
+			require.True(t, modified)
+		}
+
+		{
+			// primary key iter
+			key := EncodePrimaryKey(int64(i), packer)
+			iter := state.NewPrimaryKeyIter(types.BuildTS(int64(deleteAt+i+1), 0), Exact(key))
+			n := 0
+			for iter.Next() {
+				n++
+			}
+			iter.Close()
+			require.Equal(t, 0, n) // not visible
+		}
+
 	}
 
 	deleteAt = 2000
@@ -233,5 +260,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 			require.Nil(t, iter.Close())
 		}
 	}
+
+	//TODO delete and insert at the same time stamp
 
 }
