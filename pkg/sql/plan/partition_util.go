@@ -596,9 +596,7 @@ func EvalPlanExpr(ctx context.Context, expr *plan.Expr, process *process.Process
 		return expr, nil
 	default:
 		// try to calculate default value, return err if fails
-		bat := batch.NewWithSize(0)
-		bat.Zs = []int64{1}
-		newExpr, err := ConstantFold(bat, expr, process)
+		newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, process)
 		if err != nil {
 			return nil, err
 		}

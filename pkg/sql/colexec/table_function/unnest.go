@@ -117,7 +117,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if bat == nil {
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.IsEmpty() {
 		return false, nil
 	}
 	jsonVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})

@@ -767,9 +767,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	filter, err := ConstantFold(bat, filter, proc)
+	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc)
 	if err != nil {
 		return false
 	}
@@ -1081,10 +1079,8 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	if proc == nil {
 		return nil
 	}
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
 	for i := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
+		tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(exprList[i]), proc)
 		exprList[i] = tmpexpr
 	}
 	return colexec.RewriteFilterExprList(exprList)

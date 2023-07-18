@@ -381,12 +381,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	if err = expr.resultVector.PreExtendAndReset(batches[0].Length()); err != nil {
+	if err = expr.resultVector.PreExtendAndReset(batches[0].RowCount()); err != nil {
 		return nil, err
 	}
 
 	if err = expr.evalFn(
-		expr.parameterResults, expr.resultVector, proc, batches[0].Length()); err != nil {
+		expr.parameterResults, expr.resultVector, proc, batches[0].RowCount()); err != nil {
 		return nil, err
 	}
 	return expr.resultVector.GetResultVector(), nil
@@ -461,7 +461,7 @@ func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
 	if !expr.fixed {
-		expr.resultVector.SetLength(batches[0].Length())
+		expr.resultVector.SetLength(batches[0].RowCount())
 	}
 	return expr.resultVector, nil
 }

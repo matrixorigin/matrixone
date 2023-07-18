@@ -400,9 +400,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			continue
 		}
 
-		if bat.Zs[j] <= 0 {
-			continue
-		}
 		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
 		if err != nil {
 			return err
@@ -973,10 +970,7 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 	bat := batch.New(true, []string{"Variable_name", "Value"})
 	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
 	cnt := len(rows)
-	bat.Zs = make([]int64, cnt)
-	for i := range bat.Zs {
-		bat.Zs[i] = 1
-	}
+	bat.SetRowCount(cnt)
 	v0 := make([]string, cnt)
 	v1 := make([]string, cnt)
 	for i, row := range rows {

@@ -158,16 +158,6 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq out
 		}
 		rowIndex = rowIndexBackup
 	}
-	//duplicate rows
-	for i := int64(0); i < dataSet.Zs[j]-1; i++ {
-		erow, rr := oq.getEmptyRow()
-		if rr != nil {
-			return nil, rr
-		}
-		for l := 0; l < len(dataSet.Vecs); l++ {
-			erow[l] = row[l]
-		}
-	}
 	return row, nil
 }
 

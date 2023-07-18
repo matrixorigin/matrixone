@@ -1612,11 +1612,8 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 }
 
 func fillResultSet(oq outputPool, dataSet *batch.Batch, ses *Session) error {
-	n := dataSet.Vecs[0].Length()
+	n := dataSet.RowCount()
 	for j := 0; j < n; j++ { //row index
-		if dataSet.Zs[j] <= 0 {
-			continue
-		}
 		//needCopyBytes = true. we need to copy the bytes from the batch.Batch
 		//to avoid the data being changed after the batch.Batch returned to the
 		//pipeline.

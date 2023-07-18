@@ -23,13 +23,14 @@ import (
 )
 
 var (
-	EmptyBatch             = &Batch{rowCount: 0}
-	EmptyForConstFoldBatch = NewWithSize(0)
-)
+	EmptyBatch = &Batch{rowCount: 0}
 
-func init() {
-	EmptyForConstFoldBatch.rowCount = 1
-}
+	EmptyForConstFoldBatch = &Batch{
+		Cnt:      1,
+		Vecs:     make([]*vector.Vector, 0),
+		rowCount: 1,
+	}
+)
 
 type EncodeBatch struct {
 	rowCount int64

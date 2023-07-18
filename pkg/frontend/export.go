@@ -368,17 +368,13 @@ func appendBytes(writeByte, tmp, symbol []byte, enclosed byte, flag bool) []byte
 
 func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
 	ses := obj.(*Session)
-	bat2 := &batch.Batch{}
+	bat2 := batch.NewWithSize(len(bat.Vecs))
 	for _, vec := range bat.Vecs {
 		// XXX should we free the old vec here ?
 		tmp, _ := vec.Dup(ses.GetMemPool())
 		bat2.Vecs = append(bat2.Vecs, tmp)
 	}
-	bat2.Zs = make([]int64, bat.Vecs[0].Length())
-	for k := 0; k < bat.Vecs[0].Length(); k++ {
-		bat2.Zs[k] = 1
-	}
-	bat2.Cnt = 1
+	bat2.SetRowCount(bat.RowCount())
 	return bat2
 }
 

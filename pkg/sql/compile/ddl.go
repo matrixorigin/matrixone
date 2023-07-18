@@ -1505,8 +1505,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	var bat batch.Batch
 	bat.Ro = true
 	bat.Cnt = 0
-	bat.Zs = make([]int64, 1)
-	bat.Zs[0] = 1
+	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {
 		attrs[i] = plan2.Sequence_cols_name[i]
