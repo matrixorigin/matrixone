@@ -35,7 +35,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
@@ -46,9 +46,9 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 		switch ctr.state {
 		case Build:
 			if end, err := ctr.build(proc, anal, isFirst); err != nil {
-				return false, err
+				return process.ExecNext, err
 			} else if end {
-				return true, nil
+				return process.ExecStop, nil
 			}
 			ctr.state = Eval
 		case Eval:
@@ -58,7 +58,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End
-							return false, err
+							return process.ExecNext, err
 						}
 						ctr.bat.Aggs[i] = nil
 						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
@@ -78,7 +78,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
 			ap.Free(proc, false)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }

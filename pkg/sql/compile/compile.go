@@ -106,6 +106,7 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.stepRegs = make(map[int32][]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
+	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 	return c
 }
 
@@ -224,6 +225,8 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
+
+	//fmt.Println(DebugShowScopes([]*Scope{s}))
 
 	switch s.Magic {
 	case Normal:
@@ -1228,6 +1231,23 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
+
+	// lock table
+	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		if err != nil {
+			panic(err)
+		}
+		rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		err = lockTable(c.e, c.proc, rel)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			return nil, err
+		}
+	}
+
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {
@@ -1999,12 +2019,8 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	currentIsFirst := c.anal.isFirst
-	c.anal.isFirst = false
-	dop := plan2.GetShuffleDop()
-	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
-
+// shuffle and dispatch must stick together
+func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Node) {
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
@@ -2014,6 +2030,11 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		}
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
+				Op:  vm.Shuffle,
+				Arg: constructShuffleArg(children, n),
+			})
+
+			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
 				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, n),
 			})
@@ -2021,6 +2042,15 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 			ss[i].IsEnd = true
 		}
 	}
+}
+
+func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+	currentIsFirst := c.anal.isFirst
+	c.anal.isFirst = false
+	dop := plan2.GetShuffleDop()
+	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+
+	c.constructShuffleAndDispatch(ss, children, n)
 
 	// saving the last operator of all children to make sure the connector setting in
 	// the right place
