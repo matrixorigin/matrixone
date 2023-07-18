@@ -149,6 +149,14 @@ type AnalyzeInfo struct {
 	InsertTime int64
 }
 
+type ExecStatus int
+
+const (
+	ExecStop = iota
+	ExecNext
+	ExecHasMore
+)
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.

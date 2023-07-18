@@ -102,19 +102,19 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
 	//append lock node
-	builder.qry.LoadTag = true
-	if lockNodeId, ok := appendLockNode(
-		builder,
-		bindCtx,
-		lastNodeId,
-		tableDef,
-		true,
-		true,
-		-1,
-		nil,
-	); ok {
-		lastNodeId = lockNodeId
-	}
+	// builder.qry.LoadTag = true
+	// if lockNodeId, ok := appendLockNode(
+	// 	builder,
+	// 	bindCtx,
+	// 	lastNodeId,
+	// 	tableDef,
+	// 	true,
+	// 	true,
+	// 	-1,
+	// 	nil,
+	// ); ok {
+	// 	lastNodeId = lockNodeId
+	// }
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef)

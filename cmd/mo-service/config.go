@@ -113,6 +113,13 @@ type Config struct {
 	MetaCache objectio.CacheConfig `toml:"metacache"`
 }
 
+// NewConfig return Config with default values.
+func NewConfig() *Config {
+	return &Config{
+		Observability: *config.NewObservabilityParameters(),
+	}
+}
+
 func parseConfigFromFile(file string, cfg any) error {
 	if file == "" {
 		return moerr.NewInternalError(context.Background(), "toml config file not set")

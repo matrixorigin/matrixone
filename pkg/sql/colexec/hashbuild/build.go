@@ -60,7 +60,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -71,7 +71,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		case BuildHashMap:
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 				ctr.cleanHashMap()
-				return false, err
+				return process.ExecNext, err
 			}
 			if ap.ctr.mp != nil {
 				anal.Alloc(ap.ctr.mp.Size())
@@ -80,7 +80,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 
 		case HandleRuntimeFilter:
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 		case Eval:
@@ -97,11 +97,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 				proc.SetInputBatch(nil)
 			}
 			ctr.state = End
-			return false, nil
+			return process.ExecNext, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }

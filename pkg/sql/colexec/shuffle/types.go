@@ -12,35 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package output
+package shuffle
 
 import (
-	"bytes"
-
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	buf.WriteString("sql output")
+type Argument struct {
+	ctr           *container
+	ShuffleColIdx int32
+	ShuffleType   int32
+	ShuffleColMin int64
+	ShuffleColMax int64
+	AliveRegCnt   int32
 }
 
-func Prepare(_ *process.Process, _ any) error {
-	return nil
+type container struct {
+	sels         [][]int32
+	shuffledBats []*batch.Batch
 }
 
-func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	// WTF?   This operator NEVER return ExecStop!!!???
-	ap := arg.(*Argument)
-	if bat := proc.Reg.InputBatch; bat != nil && bat.Length() > 0 {
-		// WTF
-		for i := range bat.Zs {
-			bat.Zs[i] = 1
-		}
-		if err := ap.Func(ap.Data, bat); err != nil {
-			proc.PutBatch(bat)
-			return process.ExecNext, err
-		}
-		proc.PutBatch(bat)
-	}
-	return process.ExecNext, nil
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+
 }
