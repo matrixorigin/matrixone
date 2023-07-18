@@ -73,7 +73,6 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 
 	{ // send to remote regs
 		encodeData, errEncode := types.Encode(bat)
-		defer proc.PutBatch(bat)
 		if errEncode != nil {
 			return false, errEncode
 		}
@@ -105,6 +104,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 		if regIndex == batIndex {
 			if bat != nil && bat.Length() != 0 {
 				encodeData, errEncode := types.Encode(bat)
+				// in shuffle dispatch, this batch only send to remote CN, we can safely put it back into pool
 				defer proc.PutBatch(bat)
 				if errEncode != nil {
 					return errEncode
@@ -191,7 +191,6 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	}
 
 	encodeData, errEncode := types.Encode(bat)
-	defer proc.PutBatch(bat)
 	if errEncode != nil {
 		return false, errEncode
 	}
