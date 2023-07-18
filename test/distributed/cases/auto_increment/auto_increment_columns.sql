@@ -413,11 +413,13 @@ insert into t1 values(null), (3), (null), (6), (null), (65535);
 select * from t1;
 insert into t1 values();
 
+-- @bvt:issue#10204
 drop table t1;
 create table t1(a int unsigned auto_increment);
 insert into t1 values(null), (3), (null), (6), (null), (4294967295);
 select * from t1;
 insert into t1 values();
+-- @bvt:issue
 
 drop table t1;
 create table t1(a bigint unsigned auto_increment);
@@ -446,4 +448,29 @@ select last_insert_id();
 insert into t1 values();
 select last_insert_id();
 insert into t2 values();
+select last_insert_id();
+
+-- test for auto_increment column with default value
+drop table if exists t1;
+create table t1(a int auto_increment primary key) auto_increment = 0;
+insert into t1 values();
+select last_insert_id();
+insert into t1 values(11);
+insert into t1 values();
+select last_insert_id();
+
+drop table if exists t1;
+create table t1(a int auto_increment primary key) auto_increment = 10;
+insert into t1 values();
+select last_insert_id();
+insert into t1 values(101);
+insert into t1 values();
+select last_insert_id();
+
+drop table if exists t1;
+create table t1(a int auto_increment primary key) auto_increment = 100;
+insert into t1 values();
+select last_insert_id();
+insert into t1 values(7);
+insert into t1 values();
 select last_insert_id();

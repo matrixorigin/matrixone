@@ -1358,6 +1358,30 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("net_buffer_length", 1024, 1048576, false),
 		Default:           int64(16384),
 	},
+	"enable_privilege_cache": {
+		Name:              "enable_privilege_cache",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("enable_privilege_cache"),
+		Default:           int64(1),
+	},
+	"clear_privilege_cache": {
+		Name:              "clear_privilege_cache",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("clear_privilege_cache"),
+		Default:           int64(0),
+	},
+	"foreign_key_checks": {
+		Name:              "foreign_key_checks",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("foreign_key_checks"),
+		Default:           int64(1),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
@@ -1437,4 +1461,13 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 func getSystemTimeZone() string {
 	tz, _ := time.Now().Zone()
 	return tz
+}
+
+func valueIsBoolTrue(value interface{}) (bool, error) {
+	svbt := SystemVariableBoolType{}
+	newValue, err2 := svbt.Convert(value)
+	if err2 != nil {
+		return false, err2
+	}
+	return svbt.IsTrue(newValue), nil
 }

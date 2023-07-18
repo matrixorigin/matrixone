@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 type TxnCompilerContext struct {
@@ -133,7 +134,10 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	ses := tcc.GetSession()
 	_, err = tcc.GetTxnHandler().GetStorage().Database(txnCtx, name, txn)
 	if err != nil {
-		logErrorf(ses.GetDebugString(), "get database %v failed. error %v", name, err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to get database",
+			zap.String("databaseName", name),
+			zap.Error(err))
 		return false
 	}
 
@@ -187,7 +191,10 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(txnCtx, dbName, txn)
 	if err != nil {
-		logErrorf(ses.GetDebugString(), "get database %v error %v", dbName, err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to get database",
+			zap.String("databaseName", dbName),
+			zap.Error(err))
 		return nil, nil, err
 	}
 
@@ -198,11 +205,14 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	// logDebugf(ses.GetDebugString(), "dbName %v tableNames %v", dbName, tableNames)
 
 	//open table
-	table, err := db.Relation(txnCtx, tableName)
+	table, err := db.Relation(txnCtx, tableName, nil)
 	if err != nil {
 		tmpTable, e := tcc.getTmpRelation(txnCtx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
-			logErrorf(ses.GetDebugString(), "get table %v error %v", tableName, err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to get table",
+				zap.String("tableName", tableName),
+				zap.Error(err))
 			return nil, nil, err
 		} else {
 			table = tmpTable
@@ -219,10 +229,12 @@ func (tcc *TxnCompilerContext) getTmpRelation(_ context.Context, tableName strin
 	}
 	db, err := e.Database(txnCtx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
-		logErrorf(tcc.GetSession().GetDebugString(), "get temp database error %v", err)
+		logError(tcc.ses, tcc.ses.GetDebugString(),
+			"Failed to get temp database",
+			zap.Error(err))
 		return nil, err
 	}
-	table, err := db.Relation(txnCtx, tableName)
+	table, err := db.Relation(txnCtx, tableName, nil)
 	return table, err
 }
 
@@ -405,16 +417,16 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Seqnum:    uint32(attr.Attr.Seqnum),
 			}
 			// Is it a composite primary key
-			if attr.Attr.Name == catalog.CPrimaryKeyColName {
-				continue
-			}
+			//if attr.Attr.Name == catalog.CPrimaryKeyColName {
+			//	continue
+			//}
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
 					Name: attr.Attr.Name,
 				}
-				if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
-					continue
-				}
+				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
+				//	continue
+				//}
 			}
 			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
@@ -477,10 +489,12 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		//cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		primarykey.CompPkeyCol = plan2.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+		//cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
+		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
 	}
 	rowIdCol := plan2.MakeRowIdColDef()
 	cols = append(cols, rowIdCol)
@@ -497,6 +511,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	obj := &plan2.ObjectRef{
 		SchemaName:       dbName,
 		ObjName:          tableName,
+		Obj:              int64(tableId),
 		SubscriptionName: subscriptionName,
 	}
 	if pubAccountId != -1 {
@@ -506,14 +521,13 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	tableDef := &plan2.TableDef{
-		TblId:     tableId,
-		Name:      tableName,
-		Cols:      cols,
-		Defs:      defs,
-		TableType: TableType,
-		Createsql: Createsql,
-		Pkey:      primarykey,
-		//CompositePkey: CompositePkey,
+		TblId:        tableId,
+		Name:         tableName,
+		Cols:         cols,
+		Defs:         defs,
+		TableType:    TableType,
+		Createsql:    Createsql,
+		Pkey:         primarykey,
 		ViewSql:      viewSql,
 		Partition:    partitionInfo,
 		Fkeys:        foreignKeys,

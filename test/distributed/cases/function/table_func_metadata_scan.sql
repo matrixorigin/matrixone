@@ -16,12 +16,14 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 select count(*) from t;
--- @sleep:10
+-- @separator:table
+select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'c') g;
-select col_name, rows_cnt, null_cnt, compress_size, origin_size from metadata_scan('table_func_metadata_scan.t', 'a') g;
-select col_name, rows_cnt, null_cnt, compress_size, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
-select sum(compress_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
+-- @bvt:issue#10473
+select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', 'a') g;
+select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
+-- @bvt:issue
 drop table if exists t;

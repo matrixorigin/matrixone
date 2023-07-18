@@ -108,7 +108,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var end bool
 	var err error
 	ap := arg.(*Argument)
@@ -126,7 +126,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if end {
 		ap.Free(proc, false)
 	}
-	return end, err
+	if end {
+		return process.ExecStop, err
+	} else {
+		return process.ExecNext, err
+	}
 }
 
 func (ctr *container) getBatchAggs(ap *Argument) error {

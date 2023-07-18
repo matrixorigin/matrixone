@@ -18,7 +18,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/docker/go-units v0.5.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20230520035916-bc1fed6f5e26
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/felixge/fgprof v0.9.3
 	github.com/go-sql-driver/mysql v1.7.1
@@ -36,6 +36,7 @@ require (
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/panjf2000/ants/v2 v2.7.4
+	github.com/petermattis/goid v0.0.0-20230518223814-80aa455d8761
 	github.com/pierrec/lz4/v4 v4.1.17
 	github.com/pkg/errors v0.9.1
 	github.com/plar/go-adaptive-radix-tree v1.0.5
@@ -138,6 +139,7 @@ require (
 replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76
 
 replace (
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8 => github.com/matrixorigin/goetty/v2 v2.0.0-20230628075727-26c9a2fd5fb8
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376

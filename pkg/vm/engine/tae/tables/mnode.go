@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
@@ -42,7 +41,6 @@ type memoryNode struct {
 	block       *baseBlock
 	writeSchema *catalog.Schema
 	data        *containers.Batch
-	prefix      []byte
 
 	//index for primary key : Art tree + ZoneMap.
 	pkIndex *indexwrapper.MutIndex
@@ -51,17 +49,30 @@ type memoryNode struct {
 func newMemoryNode(block *baseBlock) *memoryNode {
 	impl := new(memoryNode)
 	impl.block = block
-	impl.prefix = block.meta.MakeKey()
 
 	// Get the lastest schema, it will not be modified, so just keep the pointer
 	schema := block.meta.GetSchema()
 	impl.writeSchema = schema
-	opts := containers.Options{}
-	opts.Allocator = common.MutMemAllocator
-	impl.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
+	// impl.data = containers.BuildBatchWithPool(
+	// 	schema.AllNames(), schema.AllTypes(), 0, block.rt.VectorPool.Memtable,
+	// )
 	impl.initPKIndex(schema)
 	impl.OnZeroCB = impl.close
 	return impl
+}
+
+func (node *memoryNode) mustData() *containers.Batch {
+	if node.data != nil {
+		return node.data
+	}
+	schema := node.writeSchema
+	opts := containers.Options{
+		Allocator: common.MutMemAllocator,
+	}
+	node.data = containers.BuildBatch(
+		schema.AllNames(), schema.AllTypes(), opts,
+	)
+	return node.data
 }
 
 func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
@@ -75,8 +86,10 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 func (node *memoryNode) close() {
 	mvcc := node.block.mvcc
 	logutil.Debugf("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
-	node.data.Close()
-	node.data = nil
+	if node.data != nil {
+		node.data.Close()
+		node.data = nil
+	}
 	if node.pkIndex != nil {
 		node.pkIndex.Close()
 		node.pkIndex = nil
@@ -115,11 +128,15 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 		// TODO(aptend): use default value
 		return nil, true
 	}
-	vec := node.data.Vecs[idx]
+	data := node.mustData()
+	vec := data.Vecs[idx]
 	return vec.Get(row), vec.IsNull(row)
 }
 
 func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+	if node.data == nil {
+		return nil
+	}
 	return node.data.Vecs[colIdx].Foreach(op, sels)
 }
 
@@ -128,6 +145,9 @@ func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {
 }
 
 func (node *memoryNode) Rows() uint32 {
+	if node.data == nil {
+		return 0
+	}
 	return uint32(node.data.Length())
 }
 
@@ -141,14 +161,35 @@ func (node *memoryNode) GetColumnDataWindow(
 	if !ok {
 		return containers.FillConstVector(int(to-from), readSchema.ColDefs[col].Type, nil), nil
 	}
+	if node.data == nil {
+		vec = containers.MakeVector(node.writeSchema.AllTypes()[idx])
+		return
+	}
 	data := node.data.Vecs[idx]
-	vec = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+	vec = data.CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
+	// vec = data.CloneWindow(int(from), int(to-from), common.MutMemAllocator)
 	return
 }
 
 func (node *memoryNode) GetDataWindowOnWriteSchema(
 	from, to uint32) (bat *containers.BatchWithVersion, err error) {
-	inner := node.data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+	if node.data == nil {
+		schema := node.writeSchema
+		opts := containers.Options{
+			Allocator: common.DefaultAllocator,
+		}
+		inner := containers.BuildBatch(
+			schema.AllNames(), schema.AllTypes(), opts,
+		)
+		return &containers.BatchWithVersion{
+			Version:    node.writeSchema.Version,
+			NextSeqnum: uint16(node.writeSchema.Extra.NextColSeqnum),
+			Seqnums:    node.writeSchema.AllSeqnums(),
+			Batch:      inner,
+		}, nil
+	}
+	inner := node.data.CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
+	// inner := node.data.CloneWindow(int(from), int(to-from), common.MutMemAllocator)
 	bat = &containers.BatchWithVersion{
 		Version:    node.writeSchema.Version,
 		NextSeqnum: uint16(node.writeSchema.Extra.NextColSeqnum),
@@ -160,27 +201,49 @@ func (node *memoryNode) GetDataWindowOnWriteSchema(
 
 func (node *memoryNode) GetDataWindow(
 	readSchema *catalog.Schema,
-	from, to uint32) (bat *containers.Batch, err error) {
+	colIdxes []int,
+	from, to uint32,
+) (bat *containers.Batch, err error) {
+	if node.data == nil {
+		schema := node.writeSchema
+		opts := containers.Options{
+			Allocator: common.DefaultAllocator,
+		}
+		bat = containers.BuildBatch(
+			schema.AllNames(), schema.AllTypes(), opts,
+		)
+		return
+	}
+
 	// manually clone data
-	bat = containers.NewBatchWithCapacity(len(readSchema.ColDefs))
+	bat = containers.NewBatchWithCapacity(len(colIdxes))
 	if node.data.Deletes != nil {
 		bat.Deletes = bat.WindowDeletes(int(from), int(to-from), false)
 	}
-	for _, col := range readSchema.ColDefs {
-		idx, ok := node.writeSchema.SeqnumMap[col.SeqNum]
+	for _, colIdx := range colIdxes {
+		colDef := readSchema.ColDefs[colIdx]
+		idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
 		var vec containers.Vector
 		if !ok {
-			vec = containers.FillConstVector(int(from-to), col.Type, nil)
+			vec = containers.FillConstVector(int(to-from), colDef.Type, nil)
 		} else {
-			vec = node.data.Vecs[idx].CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+			vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
 		}
-		bat.AddVector(col.Name, vec)
+		bat.AddVector(colDef.Name, vec)
 	}
 	return
 }
 
 func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
-	left := node.writeSchema.BlockMaxRows - uint32(node.data.Length())
+	var length uint32
+	if node.data == nil {
+		length = 0
+	} else {
+		length = uint32(node.data.Length())
+	}
+
+	left := node.writeSchema.BlockMaxRows - length
+
 	if left == 0 {
 		err = moerr.NewInternalErrorNoCtx("not appendable")
 		return
@@ -199,11 +262,11 @@ func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 		&node.block.meta.ID,
 		startRow,
 		length,
-		common.DefaultAllocator,
+		common.MutMemAllocator,
 	); err != nil {
 		return
 	}
-	err = node.data.Vecs[node.writeSchema.PhyAddrKey.Idx].ExtendVec(col)
+	err = node.mustData().Vecs[node.writeSchema.PhyAddrKey.Idx].ExtendVec(col)
 	col.Free(common.DefaultAllocator)
 	return
 }
@@ -212,7 +275,7 @@ func (node *memoryNode) ApplyAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn) (from int, err error) {
 	schema := node.writeSchema
-	from = int(node.data.Length())
+	from = int(node.mustData().Length())
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := node.data.Vecs[def.Idx]
@@ -409,7 +472,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	readSchema *catalog.Schema,
 	colIdxes []int,
 	skipDeletes bool,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	node.block.RLock()
 	defer node.block.RUnlock()
 	maxRow, visible, deSels, err := node.block.mvcc.GetVisibleRowLocked(txn)
@@ -417,13 +480,13 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 		// blk.RUnlock()
 		return
 	}
-	data, err := node.GetDataWindow(readSchema, 0, maxRow)
+	data, err := node.GetDataWindow(readSchema, colIdxes, 0, maxRow)
 	if err != nil {
 		return
 	}
-	view = model.NewBlockView()
-	for _, colIdx := range colIdxes {
-		view.SetData(colIdx, data.Vecs[colIdx])
+	view = containers.NewBlockView()
+	for i, colIdx := range colIdxes {
+		view.SetData(colIdx, data.Vecs[i])
 	}
 	if skipDeletes {
 		return
@@ -449,7 +512,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 	readSchema *catalog.Schema,
 	col int,
 	skipDeletes bool,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	node.block.RLock()
 	defer node.block.RUnlock()
 	maxRow, visible, deSels, err := node.block.mvcc.GetVisibleRowLocked(txn)
@@ -457,7 +520,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 		return
 	}
 
-	view = model.NewColumnView(col)
+	view = containers.NewColumnView(col)
 	var data containers.Vector
 	if data, err = node.GetColumnDataWindow(
 		readSchema,

@@ -110,6 +110,7 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		PartitionTableIds:   make([]uint64, len(ctx.PartitionTableIds)),
 		PartitionTableNames: make([]string, len(ctx.PartitionTableNames)),
 		PartitionIdx:        ctx.PartitionIdx,
+		PrimaryKeyIdx:       ctx.PrimaryKeyIdx,
 	}
 	copy(newCtx.PartitionTableIds, ctx.PartitionTableIds)
 	copy(newCtx.PartitionTableNames, ctx.PartitionTableNames)
@@ -169,6 +170,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
 		FilterColIdxInBat:  target.FilterColIdxInBat,
 		LockTable:          target.LockTable,
+		Block:              target.Block,
 	}
 }
 
@@ -206,6 +208,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:           node.IsEnd,
 	}
+	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
 	copy(newNode.Children, node.Children)
 	copy(newNode.BindingTags, node.BindingTags)
@@ -394,20 +397,25 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		return nil
 	}
 	newTable := &plan.TableDef{
-		TblId:         table.TblId,
-		Name:          table.Name,
-		Hidden:        table.Hidden,
-		TableType:     table.TableType,
-		Createsql:     table.Createsql,
-		RefChildTbls:  make([]uint64, len(table.RefChildTbls)),
-		Cols:          make([]*plan.ColDef, len(table.Cols)),
-		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
-		Name2ColIndex: table.Name2ColIndex,
-		Indexes:       make([]*IndexDef, len(table.Indexes)),
-		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
-		IsLocked:      table.IsLocked,
-		IsTemporary:   table.IsTemporary,
-		TableLockType: table.TableLockType,
+		TblId:          table.TblId,
+		Name:           table.Name,
+		Hidden:         table.Hidden,
+		Cols:           make([]*plan.ColDef, len(table.Cols)),
+		TableType:      table.TableType,
+		Createsql:      table.Createsql,
+		Version:        table.Version,
+		Pkey:           DeepCopyPrimaryKeyDef(table.Pkey),
+		Indexes:        make([]*IndexDef, len(table.Indexes)),
+		Fkeys:          make([]*plan.ForeignKeyDef, len(table.Fkeys)),
+		RefChildTbls:   make([]uint64, len(table.RefChildTbls)),
+		Checks:         make([]*plan.CheckDef, len(table.Checks)),
+		Props:          make([]*plan.PropertyDef, len(table.Props)),
+		Defs:           make([]*plan.TableDef_DefType, len(table.Defs)),
+		Name2ColIndex:  table.Name2ColIndex,
+		IsLocked:       table.IsLocked,
+		TableLockType:  table.TableLockType,
+		IsTemporary:    table.IsTemporary,
+		AutoIncrOffset: table.AutoIncrOffset,
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)
@@ -420,6 +428,20 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		newTable.Fkeys[idx] = DeepCopyFkey(fkey)
 	}
 
+	for idx, col := range table.Checks {
+		newTable.Checks[idx] = &plan.CheckDef{
+			Name:  col.Name,
+			Check: DeepCopyExpr(col.Check),
+		}
+	}
+
+	for idx, prop := range table.Props {
+		newTable.Props[idx] = &plan.PropertyDef{
+			Key:   prop.Key,
+			Value: prop.Value,
+		}
+	}
+
 	if table.TblFunc != nil {
 		newTable.TblFunc = &plan.TableFunction{
 			Name:  table.TblFunc.Name,
@@ -428,18 +450,15 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		copy(newTable.TblFunc.Param, table.TblFunc.Param)
 	}
 
-	if table.Pkey != nil {
-		newTable.Pkey = DeepCopyPrimaryKeyDef(table.Pkey)
-	}
-
 	if table.ClusterBy != nil {
 		newTable.ClusterBy = &plan.ClusterByDef{
-			Parts: make([]*plan.Expr, len(table.ClusterBy.Parts)),
-			Name:  table.ClusterBy.Name,
+			//Parts: make([]*plan.Expr, len(table.ClusterBy.Parts)),
+			Name:         table.ClusterBy.Name,
+			CompCbkeyCol: DeepCopyColDef(table.ClusterBy.CompCbkeyCol),
 		}
-		for i, part := range table.ClusterBy.Parts {
-			newTable.ClusterBy.Parts[i] = DeepCopyExpr(part)
-		}
+		//for i, part := range table.ClusterBy.Parts {
+		//	newTable.ClusterBy.Parts[i] = DeepCopyExpr(part)
+		//}
 	}
 
 	if table.ViewSql != nil {
@@ -518,10 +537,14 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	newCol := &plan.ColData{
-		Data: make([]*plan.Expr, len(col.Data)),
+		Data: make([]*plan.RowsetExpr, len(col.Data)),
 	}
 	for i, e := range col.Data {
-		newCol.Data[i] = DeepCopyExpr(e)
+		newCol.Data[i] = &plan.RowsetExpr{
+			Pos:    e.Pos,
+			RowPos: e.RowPos,
+			Expr:   DeepCopyExpr(e.Expr),
+		}
 	}
 
 	return newCol
@@ -545,19 +568,23 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 }
 
 func DeepCopyPlan(pl *Plan) *Plan {
-	switch pl := pl.Plan.(type) {
+	switch p := pl.Plan.(type) {
 	case *Plan_Query:
 		return &Plan{
 			Plan: &plan.Plan_Query{
-				Query: DeepCopyQuery(pl.Query),
+				Query: DeepCopyQuery(p.Query),
 			},
+			IsPrepare:   pl.IsPrepare,
+			TryRunTimes: pl.TryRunTimes,
 		}
 
 	case *plan.Plan_Ddl:
 		return &Plan{
 			Plan: &plan.Plan_Ddl{
-				Ddl: DeepCopyDataDefinition(pl.Ddl),
+				Ddl: DeepCopyDataDefinition(p.Ddl),
 			},
+			IsPrepare:   pl.IsPrepare,
+			TryRunTimes: pl.TryRunTimes,
 		}
 
 	default:
@@ -839,7 +866,9 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_V:
 		newExpr.Expr = &plan.Expr_V{
 			V: &plan.VarRef{
-				Name: item.V.GetName(),
+				Name:   item.V.GetName(),
+				Global: item.V.GetGlobal(),
+				System: item.V.GetSystem(),
 			},
 		}
 

@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
+func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	if stmt.Param.Tail.Lines != nil && stmt.Param.Tail.Lines.StartingBy != "" {
 		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support StartingBy field.")
 	}
@@ -47,9 +47,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	}
 	tableDef := tblInfo.tableDefs[0]
 	objRef := tblInfo.objRef[0]
-	// if tblInfo.haveConstraint {
-	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "table '%v' have contraint, can not use load statement", tblName)
-	// }
 
 	tableDef.Name2ColIndex = map[string]int32{}
 	var externalProject []*Expr
@@ -80,7 +77,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	}
 	tableDef.Createsql = string(json_byte)
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	bindCtx := NewBindContext(builder, nil)
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
@@ -104,6 +101,21 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
+	//append lock node
+	// builder.qry.LoadTag = true
+	// if lockNodeId, ok := appendLockNode(
+	// 	builder,
+	// 	bindCtx,
+	// 	lastNodeId,
+	// 	tableDef,
+	// 	true,
+	// 	true,
+	// 	-1,
+	// 	nil,
+	// ); ok {
+	// 	lastNodeId = lockNodeId
+	// }
+
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef)
 	checkInsertPkDup := false
@@ -113,25 +125,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	}
 	query := builder.qry
 	query.StmtType = plan.Query_INSERT
-	query.LoadTag = true
-
-	// lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, newTableDef, lastNodeId, false)
-
-	// insertNode := &plan.Node{
-	// 	Children: []int32{lastNodeId},
-	// 	NodeType: plan.Node_INSERT,
-	// 	Stats:    &plan.Stats{},
-	// 	InsertCtx: &plan.InsertCtx{
-	// 		Ref:             objRef,
-	// 		TableDef:        newTableDef,
-	// 		AddAffectedRows: true,
-	// 		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
-	// 	},
-	// }
-	// lastNodeId = builder.appendNode(insertNode, bindCtx)
-	// query := builder.qry
-	// query.StmtType = plan.Query_INSERT
-	// query.Steps = []int32{lastNodeId}
 
 	pn := &Plan{
 		Plan: &plan.Plan_Query{

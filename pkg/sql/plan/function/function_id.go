@@ -242,6 +242,7 @@ const (
 	USER
 	CONNECTION_ID
 	CHARSET
+	CONVERT
 	CURRENT_ROLE
 	FOUND_ROWS
 	ICULIBVERSION
@@ -294,6 +295,7 @@ const (
 	MO_TABLE_COL_MIN // table column min value
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
+	PURGE_LOG   // purge mo internal log, like rawlog, statement_info, metric
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -476,6 +478,7 @@ var functionIdRegister = map[string]int32{
 	"current_user":                   USER,
 	"connection_id":                  CONNECTION_ID,
 	"charset":                        CHARSET,
+	"convert":                        CONVERT,
 	"current_account_id":             CURRENT_ACCOUNT_ID,
 	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
@@ -516,6 +519,7 @@ var functionIdRegister = map[string]int32{
 	"regexp_like":                    REGEXP_LIKE,
 	"regexp_replace":                 REGEXP_REPLACE,
 	"regexp_substr":                  REGEXP_SUBSTR,
+	"repeat":                         REPEAT,
 	"mo_memory_usage":                MO_MEMORY_USAGE,
 	"mo_enable_memory_usage_detail":  MO_ENABLE_MEMORY_USAGE_DETAIL,
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
@@ -538,6 +542,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
 	"mo_log_date":                    MO_LOG_DATE,
+	"purge_log":                      PURGE_LOG,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,

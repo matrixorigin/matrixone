@@ -146,19 +146,27 @@ func (r *rebalancer) rebalanceByHash(hash LabelHash) {
 func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 	// get CN servers from mocluster for this label.
 	li := r.connManager.getLabelInfo(hash)
-	var cns []*CNServer
+	// CNs are the CN server UUIDs that match the given labelHash
+	cns := make(map[string]struct{})
+	// emptyCNs are the fallback CN UUIDs that used to serve the connections when there is no CN match the label hash
+	emptyCNs := make(map[string]struct{})
+
 	r.mc.GetCNService(li.genSelector(), func(s metadata.CNService) bool {
-		cns = append(cns, &CNServer{
-			hash:     hash,
-			reqLabel: li,
-			cnLabel:  s.Labels,
-			uuid:     s.ServiceID,
-			addr:     s.SQLAddress,
-		})
+		if len(s.Labels) > 0 {
+			cns[s.ServiceID] = struct{}{}
+		} else {
+			emptyCNs[s.ServiceID] = struct{}{}
+		}
 		return true
 	})
-	cnCount := len(cns)
-	if cnCount == 0 {
+
+	// we expect all conns are served by the selected CNs
+	desiredCnCount := len(cns)
+	if desiredCnCount == 0 {
+		// no CN selected, fallback to re-balance session across empty CNs
+		desiredCnCount = len(emptyCNs)
+	}
+	if desiredCnCount == 0 {
 		return nil
 	}
 
@@ -168,19 +176,23 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 		return nil
 	}
 
-	// Calculate the upper limit of tunnels that each CN server could take.
+	// Calculate the upper limit of tunnels that each CN server could take
 	r.connManager.Lock()
 	defer r.connManager.Unlock()
 	tunnelCount := tuns.count()
-	avg := float64(tunnelCount) / float64(cnCount)
+	avg := float64(tunnelCount) / float64(desiredCnCount)
 	upperLimit := int(math.Max(1, math.Ceil(avg*(1+r.tolerance))))
 
 	var ret []*tunnel
 	// For each CN server, pick the tunnels that need to move to other
 	// CN servers.
-	for _, ts := range tuns {
+	for uuid, ts := range tuns {
 		if ts.count() > upperLimit {
 			ret = append(ret, pickTunnels(ts, ts.count()-upperLimit)...)
+		}
+		if _, ok := emptyCNs[uuid]; ok && len(cns) > 0 {
+			// when there ARE selected CNs, migrate tunnels (if any) in empty CNs to the selected CNs
+			ret = append(ret, pickTunnels(ts, ts.count())...)
 		}
 	}
 	return ret

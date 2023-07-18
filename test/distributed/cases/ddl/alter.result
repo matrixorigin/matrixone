@@ -327,4 +327,58 @@ index08    0    col3    2    col4    A    0    NULL    NULL                    Y
 index08    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
 index08    1    zxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
 drop table index08;
+drop table if exists index09;
+CREATE TABLE index09(
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 VARCHAR(16) NOT NULL,
+col4 int unsigned NOT NULL,
+UNIQUE KEY u1 (col1 DESC)
+);
+insert into index09 values(1, '1980-12-17','Abby', 21);
+insert into index09 values(2, '1981-02-20','Bob', 22);
+show index from index09;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index09    0    u1    1    col1    A    0    NULL    NULL                    YES    NULL
+ALTER TABLE emp ADD UNIQUE INDEX idx1 (col1 ASC, col2 DESC);
+no such table test.emp
+show index from index09;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index09    0    u1    1    col1    A    0    NULL    NULL                    YES    NULL
+drop table index09;
+drop table if exists index10;
+CREATE TABLE index10(
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 VARCHAR(16) NOT NULL,
+col4 int unsigned NOT NULL,
+INDEX idx1 (col1 DESC),
+KEY idx2 (col2 DESC)
+);
+insert into index10 values(1, '1980-12-17','Abby', 21);
+insert into index10 values(2, '1981-02-20','Bob', 22);
+show index from index10;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index10    1    idx1    1    col1    A    0    NULL    NULL                    YES    NULL
+index10    1    idx2    1    col2    A    0    NULL    NULL                    YES    NULL
+ALTER TABLE emp ADD INDEX idx3 (col1 ASC, col2 DESC);
+no such table test.emp
+show index from index10;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index10    1    idx1    1    col1    A    0    NULL    NULL                    YES    NULL
+index10    1    idx2    1    col2    A    0    NULL    NULL                    YES    NULL
+drop table index10;
+CREATE TABLE `t2` (
+`a` INT DEFAULT NULL
+) COMMENT='New table comment';
+alter table t2 drop primary key;
+internal error: Can't DROP Primary Key; check that column/key exists
+alter table t2 AUTO_INCREMENT=10;
+invalid input: Can't set AutoIncr column value.
+CREATE TABLE `t3` (
+`a` INT NOT NULL,
+PRIMARY KEY (`a`)
+);
+alter table t3 drop primary key;
+internal error: Can't DROP exists Primary Key
 drop database test;

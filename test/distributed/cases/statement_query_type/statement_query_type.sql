@@ -162,7 +162,7 @@ select sleep(1);
 
 -- RESULT CHECK: part 1
 select sleep(15);
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 112;
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 99;
 
 
 -- CASE: part 2
@@ -332,7 +332,7 @@ select sleep(15);
 -- @session:id=1&user=bvt_query_type:admin:accountadmin&password=123456
 select sleep(15);
 -- @session
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
 
 -- CASE: last
 begin;

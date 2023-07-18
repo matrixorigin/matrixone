@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,7 +78,7 @@ type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) 
 
 type TxnManager struct {
 	sync.RWMutex
-	common.ClosedState
+	sm.ClosedState
 	PreparingSM     sm.StateMachine
 	FlushQueue      sm.Queue
 	IDMap           map[string]txnif.AsyncTxn
@@ -91,6 +92,8 @@ type TxnManager struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
+
+	prevPrepareTS types.TS // for debug
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -331,6 +334,12 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 	defer mgr.Unlock()
 
 	ts = mgr.TsAlloc.Alloc()
+	if !mgr.prevPrepareTS.IsEmpty() {
+		if ts.Less(mgr.prevPrepareTS) {
+			panic(fmt.Sprintf("timestamp rollback current %v, previous %v", ts.ToString(), mgr.prevPrepareTS.ToString()))
+		}
+	}
+	mgr.prevPrepareTS = ts
 
 	op.Txn.Lock()
 	defer op.Txn.Unlock()
@@ -564,6 +573,6 @@ func (mgr *TxnManager) Stop() {
 	mgr.wg.Wait()
 	mgr.PreparingSM.Stop()
 	mgr.FlushQueue.Stop()
-	mgr.OnException(common.ErrClose)
+	mgr.OnException(sm.ErrClose)
 	logutil.Info("[Stop]", TxnMgrField(mgr))
 }

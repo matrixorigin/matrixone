@@ -75,6 +75,9 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 		storeInfo = CNStoreInfo{}
 		storeInfo.Labels = make(map[string]metadata.LabelList)
 	}
+	if storeInfo.WorkState == metadata.WorkState_Unknown {
+		storeInfo.WorkState = metadata.WorkState_Working
+	}
 	storeInfo.Tick = tick
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.SQLAddress = hb.SQLAddress
@@ -95,6 +98,42 @@ func (s *CNState) UpdateLabel(label CNStoreLabel) {
 	}
 	storeInfo.Labels = label.Labels
 	s.Stores[label.UUID] = storeInfo
+}
+
+// UpdateWorkState updates work state of CN store.
+func (s *CNState) UpdateWorkState(state CNWorkState) {
+	if state.GetState() == metadata.WorkState_Unknown {
+		return
+	}
+	storeInfo, ok := s.Stores[state.UUID]
+	// If the CN store does not exist, we should do nothing and wait for
+	// CN heartbeat.
+	if !ok {
+		return
+	}
+	// If current state is more advanced, do nothing.
+	if storeInfo.WorkState >= state.GetState() {
+		return
+	}
+	storeInfo.WorkState = state.State
+	s.Stores[state.UUID] = storeInfo
+}
+
+// PatchCNStore updates work state and labels of CN store.
+func (s *CNState) PatchCNStore(stateLabel CNStateLabel) {
+	storeInfo, ok := s.Stores[stateLabel.UUID]
+	// If the CN store does not exist, we should do nothing and wait for
+	// CN heartbeat.
+	if !ok {
+		return
+	}
+	if stateLabel.GetState() > storeInfo.WorkState {
+		storeInfo.WorkState = stateLabel.State
+	}
+	if stateLabel.Labels != nil {
+		storeInfo.Labels = stateLabel.Labels
+	}
+	s.Stores[stateLabel.UUID] = storeInfo
 }
 
 // NewDNState creates a new DNState.
@@ -165,7 +204,8 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 			recorded.Replicas = incoming.Replicas
 		} else if incoming.Epoch == recorded.Epoch && incoming.Epoch > 0 {
 			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) {
-				panic("inconsistent replicas")
+				panic(fmt.Sprintf("inconsistent replicas, recorded: %+v, incoming: %+v",
+					recorded, incoming))
 			}
 		}
 

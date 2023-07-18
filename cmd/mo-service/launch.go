@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -72,7 +73,7 @@ func startLogServiceCluster(
 
 	var cfg *Config
 	for _, file := range files {
-		cfg = &Config{}
+		cfg = NewConfig()
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
@@ -94,7 +95,7 @@ func startDNServiceCluster(
 	}
 
 	for _, file := range files {
-		cfg := &Config{}
+		cfg := NewConfig()
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
@@ -119,7 +120,7 @@ func startCNServiceCluster(
 
 	var cfg *Config
 	for _, file := range files {
-		cfg = &Config{}
+		cfg = NewConfig()
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
@@ -154,7 +155,7 @@ func startProxyServiceCluster(
 
 	var cfg *Config
 	for _, file := range files {
-		cfg = &Config{}
+		cfg = NewConfig()
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
@@ -184,12 +185,15 @@ func waitHAKeeperReady(cfg logservice.HAKeeperClientConfig) (logservice.CNHAKeep
 }
 
 func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*2)
 	defer cancel()
 
 	// wait HAKeeper running
 	for {
 		state, err := client.GetClusterState(ctx)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 			state.State != logpb.HAKeeperRunning {
 			// not ready

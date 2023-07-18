@@ -59,6 +59,7 @@ type Argument struct {
 	// need to generate a push-down filter expression
 	NeedExpr    bool
 	NeedHashMap bool
+	IsDup       bool
 	Ibucket     uint64
 	Nbucket     uint64
 	Typs        []types.Type

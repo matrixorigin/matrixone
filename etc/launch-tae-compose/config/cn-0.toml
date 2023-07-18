@@ -48,6 +48,10 @@ listen-address = "0.0.0.0:6002"
 service-address = "cn-0:6002"
 sql-address = "cn-0:6001"
 
+[cn.lockservice]
+listen-address = "0.0.0.0:17001"
+service-address = "cn-0:17001"
+
 [cn.ctl.address]
 listen-address = "0.0.0.0:19958"
 service-address = "cn-0:19958"
@@ -59,5 +63,3 @@ type = "distributed-tae"
 port = 6001
 
 [cn.txn]
-enable-sacrificing-freshness = false
-enable-cn-based-consistency = false

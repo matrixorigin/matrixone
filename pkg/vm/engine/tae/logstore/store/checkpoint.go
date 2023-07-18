@@ -18,12 +18,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
 func (w *StoreImpl) RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error) {
 	ckpEntry = w.makeRangeCheckpointEntry(gid, start, end)
 	drentry, _, err := w.doAppend(GroupCKP, ckpEntry)
-	if err == common.ErrClose {
+	if err == sm.ErrClose {
 		return nil, err
 	}
 	if err != nil {
@@ -70,7 +71,7 @@ func (w *StoreImpl) onCheckpoint() {
 func (w *StoreImpl) ckpCkp() {
 	e := w.makeInternalCheckpointEntry()
 	driverEntry, _, err := w.doAppend(GroupInternal, e)
-	if err == common.ErrClose {
+	if err == sm.ErrClose {
 		return
 	}
 	if err != nil {
@@ -112,6 +113,7 @@ func (w *StoreImpl) onTruncateQueue(items ...any) {
 			lsn = w.driverCheckpointing.Load()
 			err = w.driver.Truncate(lsn)
 		}
+		w.gcWalDriverLsnMap(lsn)
 		w.driverCheckpointed = lsn
 	}
 }

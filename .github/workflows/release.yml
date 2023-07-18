@@ -5,18 +5,15 @@ name: release
 on:
   release:
     types: [published]
-env: 
-   branch: main
 
 jobs:
   linux-amd64-build-job:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -24,7 +21,7 @@ jobs:
       - name: Build normal
         run: |
           make build
-          zip -r mo-linux-amd64.zip mo-service ./etc/launch-tae-CN-tae-DN
+          zip -r mo-linux-x86_64.zip mo-service ./etc/launch-tae-CN-tae-DN
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
@@ -34,24 +31,23 @@ jobs:
         run: |
           echo ${{ steps.get_release.outputs.upload_url }}
           echo ${{ steps.get_release.outputs.tag_name }}
-      - name: Upload Release normal linux amd64
+      - name: Upload Release normal linux x86_64
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
         with:
           upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./mo-linux-amd64.zip
-          asset_name: mo-${{ steps.get_release.outputs.tag_name }}-linux-amd64.zip
+          asset_path: ./mo-linux-x86_64.zip
+          asset_name: mo-${{ steps.get_release.outputs.tag_name }}-linux-x86_64.zip
           asset_content_type: application/zip
+  
   linux-arm64-build-job:
     runs-on: arm64-runner
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
-          
+        uses: actions/checkout@v3     
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -64,8 +60,7 @@ jobs:
         id: get_release
         uses: bruceadams/get-release@v1.3.2
         env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
-          
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}         
       - name: Echo some info
         run: |
           echo ${{ steps.get_release.outputs.upload_url }}
@@ -84,11 +79,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
-          
+        uses: actions/checkout@v3     
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -139,10 +132,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
-
+      - name: Get tags
+        run: git fetch --tags origin
       - name: Check go Version
         run: |
           go version

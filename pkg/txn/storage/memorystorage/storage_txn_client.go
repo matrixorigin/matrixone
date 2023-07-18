@@ -65,12 +65,22 @@ func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, e
 	panic("unimplemented")
 }
 
+func (*StorageTxnClient) AbortAllRunningTxn() {
+	panic("unimplemented")
+}
+
 func (*StorageTxnClient) Close() error {
 	return nil
 }
 
 func (*StorageTxnClient) MinTimestamp() timestamp.Timestamp {
 	return timestamp.Timestamp{}
+}
+
+func (*StorageTxnClient) WaitLogTailAppliedAt(
+	ctx context.Context,
+	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{}, nil
 }
 
 type StorageTxnOperator struct {
@@ -89,6 +99,14 @@ func (s *StorageTxnOperator) GetWorkspace() client.Workspace {
 }
 
 func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) ResetRetry(retry bool) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) IsRetry() bool {
 	panic("unimplemented")
 }
 

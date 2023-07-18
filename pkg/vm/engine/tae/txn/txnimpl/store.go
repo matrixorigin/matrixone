@@ -16,22 +16,22 @@ package txnimpl
 
 import (
 	"context"
-	"runtime/trace"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -41,18 +41,17 @@ import (
 type txnStore struct {
 	ctx context.Context
 	txnbase.NoopTxnStore
-	mu            sync.RWMutex
-	transferTable *model.HashPageTable
-	dbs           map[uint64]*txnDB
-	driver        wal.Driver
-	indexCache    model.LRUCache
-	txn           txnif.AsyncTxn
-	catalog       *catalog.Catalog
-	cmdMgr        *commandManager
-	logs          []entry.Entry
-	warChecker    *warChecker
-	dataFactory   *tables.DataFactory
-	writeOps      atomic.Uint32
+	mu          sync.RWMutex
+	rt          *dbutils.Runtime
+	dbs         map[uint64]*txnDB
+	driver      wal.Driver
+	txn         txnif.AsyncTxn
+	catalog     *catalog.Catalog
+	cmdMgr      *commandManager
+	logs        []entry.Entry
+	warChecker  *warChecker
+	dataFactory *tables.DataFactory
+	writeOps    atomic.Uint32
 
 	wg sync.WaitGroup
 }
@@ -61,12 +60,11 @@ var TxnStoreFactory = func(
 	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
-	transferTable *model.HashPageTable,
-	indexCache model.LRUCache,
+	rt *dbutils.Runtime,
 	dataFactory *tables.DataFactory,
 	maxMessageSize uint64) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(ctx, catalog, driver, transferTable, indexCache, dataFactory, maxMessageSize)
+		return newStore(ctx, catalog, driver, rt, dataFactory, maxMessageSize)
 	}
 }
 
@@ -74,21 +72,19 @@ func newStore(
 	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
-	transferTable *model.HashPageTable,
-	indexCache model.LRUCache,
+	rt *dbutils.Runtime,
 	dataFactory *tables.DataFactory,
 	maxMessageSize uint64) *txnStore {
 	return &txnStore{
-		ctx:           ctx,
-		transferTable: transferTable,
-		dbs:           make(map[uint64]*txnDB),
-		catalog:       catalog,
-		cmdMgr:        newCommandManager(driver, maxMessageSize),
-		driver:        driver,
-		logs:          make([]entry.Entry, 0),
-		dataFactory:   dataFactory,
-		indexCache:    indexCache,
-		wg:            sync.WaitGroup{},
+		ctx:         ctx,
+		rt:          rt,
+		dbs:         make(map[uint64]*txnDB),
+		catalog:     catalog,
+		cmdMgr:      newCommandManager(driver, maxMessageSize),
+		driver:      driver,
+		logs:        make([]entry.Entry, 0),
+		dataFactory: dataFactory,
+		wg:          sync.WaitGroup{},
 	}
 }
 
@@ -612,7 +608,7 @@ func (store *txnStore) WaitPrepared(ctx context.Context) (err error) {
 			return
 		}
 	}
-	trace.WithRegion(ctx, "Wait for WAL to be flushed", func() {
+	moprobe.WithRegion(ctx, moprobe.TxnStoreWaitWALFlush, func() {
 		for _, e := range store.logs {
 			if err = e.WaitDone(); err != nil {
 				break

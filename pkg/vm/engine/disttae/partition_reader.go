@@ -18,298 +18,216 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type PartitionReader struct {
-	typsMap              map[string]types.Type
-	inserts              []*batch.Batch
-	deletes              map[types.Rowid]uint8
-	skipBlocks           map[types.Blockid]uint8
-	iter                 logtailreplay.RowsIter
-	sourceBatchNameIndex map[string]int
-
-	// the following attributes are used to support cn2s3
-	procMPool       *mpool.MPool
-	s3FileService   fileservice.FileService
-	s3BlockReader   *blockio.BlockReader
-	extendId2s3File map[string]int
-
-	// used to get idx of sepcified col
-	seqnumMp        map[string]int
-	blockBatch      *BlockBatch
-	currentFileName string
-	deletedBlocks   *deletedBlocks
-}
-
-// BlockBatch is used to record the metaLoc info
-// for the s3 block written by current txn, it's
-// stored in the txn writes
-type BlockBatch struct {
-	metas  []string
-	idx    int
-	length int
-}
-
-func (blockBatch *BlockBatch) read() (res string) {
-	if blockBatch.idx == blockBatch.length {
-		return
-	}
-	res = blockBatch.metas[blockBatch.idx]
-	blockBatch.idx++
-	return
-}
-
-func (blockBatch *BlockBatch) hasRows() bool {
-	return blockBatch.idx < blockBatch.length
-}
-
-func (blockBatch *BlockBatch) setBat(bat *batch.Batch) {
-	blockBatch.metas = vector.MustStrCol(bat.Vecs[0])
-	blockBatch.idx = 0
-	blockBatch.length = len(blockBatch.metas)
+	table    *txnTable
+	prepared bool
+	// inserted rows comes from txn.writes.
+	inserts []*batch.Batch
+	//deleted rows comes from txn.writes or partitionState.rows.
+	deletes  map[types.Rowid]uint8
+	iter     logtailreplay.RowsIter
+	seqnumMp map[string]int
+	typsMap  map[string]types.Type
 }
 
 var _ engine.Reader = new(PartitionReader)
 
 func (p *PartitionReader) Close() error {
+	//p.withFilterMixin.reset()
+	p.inserts = nil
+	p.deletes = nil
 	p.iter.Close()
 	return nil
 }
 
-func (p *PartitionReader) getSeqnums(colNames []string) (res []uint16) {
-	for _, str := range colNames {
-		if str == catalog.Row_ID {
-			continue
+func (p *PartitionReader) prepare() error {
+	txn := p.table.db.txn
+	var inserts []*batch.Batch
+	var deletes map[types.Rowid]uint8
+	//prepare inserts and deletes for partition reader.
+	if !txn.readOnly.Load() && !p.prepared {
+		inserts = make([]*batch.Batch, 0, len(p.table.writes))
+		deletes = make(map[types.Rowid]uint8)
+		for _, entry := range p.table.writes {
+			if entry.typ == INSERT {
+				if entry.bat == nil || entry.bat.Length() == 0 {
+					continue
+				}
+				if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+					continue
+				}
+				inserts = append(inserts, entry.bat)
+				continue
+			}
+			//entry.typ == DELETE
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.isGeneratedByTruncate() {
+					continue
+				}
+				//deletes in txn.Write maybe comes from PartitionState.Rows ,
+				// PartitionReader need to skip them.
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
 		}
-		v, ok := p.seqnumMp[str]
-		if !ok {
-			panic("not existed col in partitionReader")
-		}
-		res = append(res, uint16(v))
+		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
+		// so, here only load deletes which don't belong to PartitionState.blks.
+		p.table.LoadDeletesForVolatileBlocksIn(p.table._partState, deletes)
+		p.inserts = inserts
+		p.deletes = deletes
+		p.prepared = true
 	}
-	return
+	return nil
 }
 
-func (p *PartitionReader) getTyps(colNames []string) (res []types.Type) {
-	for _, str := range colNames {
-		if str == catalog.Row_ID {
-			continue
-		}
-		v, ok := p.typsMap[str]
-		if !ok {
-			panic("not existed col in partitionReader")
-		}
-		res = append(res, v)
-	}
-	return
-}
-
-func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
+func (p *PartitionReader) Read(
+	ctx context.Context,
+	colNames []string,
+	expr *plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool) (*batch.Batch, error) {
 	if p == nil {
 		return nil, nil
 	}
-	if p.blockBatch == nil {
-		p.blockBatch = &BlockBatch{}
+	//prepare data for read.
+	if err := p.prepare(); err != nil {
+		return nil, err
 	}
-	// dumpBatch or compaction will set some batches as nil
-	if len(p.inserts) > 0 && (p.inserts[0] == nil || p.inserts[0].Length() == 0) {
+	//p.tryUpdateColumns(colNames)
+	//read batch resides in memory from txn.writes.
+	if len(p.inserts) > 0 {
+		bat := p.inserts[0].GetSubBatch(colNames)
+		rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
 		p.inserts = p.inserts[1:]
-		return batch.EmptyBatch, nil
-	}
-	if len(p.inserts) > 0 || p.blockBatch.hasRows() {
-		var bat *batch.Batch
-		if p.blockBatch.hasRows() || p.inserts[0].Attrs[0] == catalog.BlockMeta_MetaLoc { // boyu should handle delete for s3 block
-			var err error
-			var location objectio.Location
-			//var ivec *fileservice.IOVector
-			// read block
-			// These blocks may have been written to s3 before the transaction was committed if the transaction is huge,
-			//  but note that these blocks are only invisible to other transactions
-			if !p.blockBatch.hasRows() {
-				p.blockBatch.setBat(p.inserts[0])
-				p.inserts = p.inserts[1:]
+		b := batch.NewWithSize(len(colNames))
+		b.SetAttributes(colNames)
+		for i, name := range colNames {
+			if vp == nil {
+				b.Vecs[i] = vector.NewVec(p.typsMap[name])
+			} else {
+				b.Vecs[i] = vp.GetVector(p.typsMap[name])
 			}
-			metaLoc := p.blockBatch.read()
-			location, err = blockio.EncodeLocationFromString(metaLoc)
-			if err != nil {
-				return nil, err
-			}
-			name := location.Name().String()
-			if name != p.currentFileName {
-				p.s3BlockReader, err = blockio.NewObjectReader(p.s3FileService, location)
-				p.extendId2s3File[name] = 0
-				p.currentFileName = name
-				if err != nil {
+		}
+		for i, vec := range b.Vecs {
+			srcVec := bat.Vecs[i]
+			uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
+			for j := 0; j < bat.Length(); j++ {
+				if _, ok := p.deletes[rowIds[j]]; ok {
+					continue
+				}
+				if err := uf(vec, srcVec, int64(j)); err != nil {
 					return nil, err
 				}
 			}
-			bat, err = p.s3BlockReader.LoadColumns(ctx, p.getSeqnums(colNames), p.getTyps(colNames), location.ID(), p.procMPool)
-			if err != nil {
-				return nil, err
-			}
-			rbat := batch.NewWithSize(bat.VectorCount())
-			rbat.SetAttributes(colNames)
-			for i, vec := range bat.Vecs {
-				typ := *vec.GetType()
-				if vp == nil {
-					rbat.Vecs[i] = vector.NewVec(typ)
-				} else {
-					rbat.Vecs[i] = vp.GetVector(typ)
-				}
-				if err := vector.GetUnionAllFunction(typ, mp)(rbat.Vecs[i], vec); err != nil {
-					bat.Clean(p.procMPool)
-					rbat.Clean(p.procMPool)
-					return nil, err
-				}
-			}
-			bat.Clean(p.procMPool)
-			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
-
-			var hasRowId bool
-			// note: if there is rowId colName, it must be the last one
-			if colNames[len(colNames)-1] == catalog.Row_ID {
-				hasRowId = true
-			}
-			sid := location.Name().SegmentId()
-			blkid := objectio.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
-			if hasRowId {
-				// add rowId col for rbat
-				lens := rbat.Length()
-				vec := vector.NewVec(types.T_Rowid.ToType())
-				vec.PreExtend(lens, p.procMPool)
-				for i := 0; i < lens; i++ {
-					if err := vector.AppendFixed(vec, *objectio.NewRowid(blkid, uint32(i)), false,
-						p.procMPool); err != nil {
-						return rbat, err
-					}
-				}
-				rbat.Vecs = append(rbat.Vecs, vec)
-			}
-
-			deletes := p.deletedBlocks.getDeletedOffsetsByBlock(blkid)
-			if len(deletes) != 0 {
-				rbat.AntiShrink(deletes)
-			}
-			logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
-			logutil.Debug(testutil.OperatorCatchBatch("partition reader[s3]", rbat))
-			return rbat, nil
-		} else {
-			bat = p.inserts[0].GetSubBatch(colNames)
-			rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
-			p.inserts = p.inserts[1:]
-			b := batch.NewWithSize(len(colNames))
-			b.SetAttributes(colNames)
-			for i, name := range colNames {
-				if vp == nil {
-					b.Vecs[i] = vector.NewVec(p.typsMap[name])
-				} else {
-					b.Vecs[i] = vp.GetVector(p.typsMap[name])
-				}
-			}
-			for i, vec := range b.Vecs {
-				srcVec := bat.Vecs[i]
-				uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
-				for j := 0; j < bat.Length(); j++ {
-					//FIXME::it seems that redundant to check rowIds[j] in p.deletes.
-					if _, ok := p.deletes[rowIds[j]]; ok {
-						continue
-					}
-					if err := uf(vec, srcVec, int64(j)); err != nil {
-						return nil, err
-					}
-				}
-			}
-			logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
-			//		CORNER CASE:
-			//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
-			//		the bat.Length() is not always the right value for the result batch b.
-			b.SetZs(b.Vecs[0].Length(), mp)
-			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
-			return b, nil
 		}
-	}
-	const maxRows = 8192
-	b := batch.NewWithSize(len(colNames))
-	b.SetAttributes(colNames)
-	for i, name := range colNames {
-		if vp == nil {
-			b.Vecs[i] = vector.NewVec(p.typsMap[name])
-		} else {
-			b.Vecs[i] = vp.GetVector(p.typsMap[name])
+		logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
+		//		CORNER CASE:
+		//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
+		//		the bat.Length() is not always the right value for the result batch b.
+		b.SetZs(b.Vecs[0].Length(), mp)
+		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+			logutil.Debug(testutil.OperatorCatchBatch(
+				"partition reader[workspace:memory]",
+				b))
 		}
-	}
-	rows := 0
-	appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))
-	for i, name := range b.Attrs {
-		if name == catalog.Row_ID {
-			appendFuncs[i] = vector.GetUnionOneFunction(types.T_Rowid.ToType(), mp)
-		} else {
-			appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
-		}
+		return b, nil
 	}
 
-	for p.iter.Next() {
-		entry := p.iter.Entry()
-		if _, ok := p.deletes[entry.RowID]; ok {
-			continue
-		}
-		if p.skipBlocks != nil {
-			if _, ok := p.skipBlocks[entry.BlockID]; ok {
-				continue
+	//read batch from partitionState.rows.
+	{
+		const maxRows = 8192
+		b := batch.NewWithSize(len(colNames))
+		b.SetAttributes(colNames)
+		for i, name := range colNames {
+			if vp == nil {
+				b.Vecs[i] = vector.NewVec(p.typsMap[name])
+			} else {
+				b.Vecs[i] = vp.GetVector(p.typsMap[name])
 			}
 		}
-		if p.sourceBatchNameIndex == nil {
-			p.sourceBatchNameIndex = make(map[string]int)
-			for i, name := range entry.Batch.Attrs {
-				p.sourceBatchNameIndex[name] = i
-			}
-		}
+		rows := 0
+		appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
-				if err := vector.AppendFixed(b.Vecs[i], entry.RowID, false, mp); err != nil {
-					return nil, err
-				}
+				appendFuncs[i] = vector.GetUnionOneFunction(types.T_Rowid.ToType(), mp)
 			} else {
-				idx := 2 /*rowid and commits*/ + p.seqnumMp[name]
-				if idx >= len(entry.Batch.Vecs) /*add column*/ || entry.Batch.Attrs[idx] == "" /*drop column*/ {
-					if err := vector.AppendAny(b.Vecs[i], nil, true, mp); err != nil {
+				appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
+			}
+		}
+		//read rows from partitionState.rows.
+		for p.iter.Next() {
+			entry := p.iter.Entry()
+			if _, ok := p.deletes[entry.RowID]; ok {
+				continue
+			}
+			for i, name := range b.Attrs {
+				if name == catalog.Row_ID {
+					if err := vector.AppendFixed(
+						b.Vecs[i],
+						entry.RowID,
+						false,
+						mp); err != nil {
 						return nil, err
 					}
 				} else {
-					appendFuncs[i](
-						b.Vecs[i],
-						entry.Batch.Vecs[2 /*rowid and commits*/ +p.seqnumMp[name]],
-						entry.Offset,
-					)
-				}
+					idx := 2 /*rowid and commits*/ + p.seqnumMp[name]
+					if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
+						entry.Batch.Attrs[idx] == "" /*drop column*/ {
+						if err := vector.AppendAny(
+							b.Vecs[i],
+							nil,
+							true,
+							mp); err != nil {
+							return nil, err
+						}
+					} else {
+						appendFuncs[i](
+							b.Vecs[i],
+							entry.Batch.Vecs[2 /*rowid and commits*/ +p.seqnumMp[name]],
+							entry.Offset,
+						)
+					}
 
+				}
+			}
+			rows++
+			if rows == maxRows {
+				break
 			}
 		}
-		rows++
-		if rows == maxRows {
-			break
+		if rows > 0 {
+			b.SetZs(rows, mp)
 		}
+		if rows == 0 {
+			return nil, nil
+		}
+		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+			logutil.Debug(testutil.OperatorCatchBatch(
+				"partition reader[snapshot: partitionState.rows]",
+				b))
+		}
+		return b, nil
 	}
-	if rows > 0 {
-		b.SetZs(rows, mp)
-	}
-	if rows == 0 {
-		return nil, nil
-	}
-	// XXX I'm not sure `normal` is a good description
-	logutil.Debug(testutil.OperatorCatchBatch("partition reader[normal]", b))
-	return b, nil
 }

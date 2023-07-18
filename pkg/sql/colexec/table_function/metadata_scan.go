@@ -82,7 +82,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan: %v", err)
 	}
 
-	rel, err := db.Relation(proc.Ctx, tablename)
+	rel, err := db.Relation(proc.Ctx, tablename, nil)
 	if err != nil {
 		return false, err
 	}
@@ -162,6 +162,8 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 				return err
 			}
 			vector.AppendFixed(opBat.Vecs[i], bid, false, mp)
+		case plan.MetadataScanInfo_OBJECT_NAME:
+			vector.AppendBytes(opBat.Vecs[i], []byte(info.ObjectName), false, mp)
 
 		case plan.MetadataScanInfo_ENTRY_STATE:
 			vector.AppendFixed(opBat.Vecs[i], info.EntryState, false, mp)
@@ -225,8 +227,8 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			vector.AppendBytes(opBat.Vecs[i], info.Max, false, mp)
 		default:
 		}
-		opBat.Zs = append(opBat.Zs, 1)
 	}
+	opBat.Zs = append(opBat.Zs, 1)
 
 	return nil
 }

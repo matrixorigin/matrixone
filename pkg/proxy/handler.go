@@ -149,10 +149,6 @@ func (h *handler) handle(c goetty.IOSession) error {
 		zap.String("server", sc.RawConn().RemoteAddr().String()),
 	)
 
-	if err := t.run(cc, sc); err != nil {
-		return err
-	}
-
 	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
 	defer st.Stop()
 	// Starts the event handler go-routine to handle the events comes from tunnel data flow,
@@ -181,6 +177,10 @@ func (h *handler) handle(c goetty.IOSession) error {
 			}
 		}
 	}); err != nil {
+		return err
+	}
+
+	if err := t.run(cc, sc); err != nil {
 		return err
 	}
 

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -296,6 +297,98 @@ func TestQueryLog(t *testing.T) {
 		assert.Equal(t, entries[0].Data, cmd)
 	}
 	runStoreTest(t, fn)
+}
+
+func proceedHAKeeperToRunning(t *testing.T, store *store) {
+	state, err := store.getCheckerState()
+	assert.NoError(t, err)
+	assert.Equal(t, pb.HAKeeperCreated, state.State)
+
+	err = store.setInitialClusterInfo(1, 1, 1)
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	hb := store.getHeartbeatMessage()
+	_, err = store.addLogStoreHeartbeat(ctx, hb)
+	assert.NoError(t, err)
+
+	state, err = store.getCheckerState()
+	assert.NoError(t, err)
+	assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+
+	_, term, err := store.isLeaderHAKeeper()
+	assert.NoError(t, err)
+
+	store.bootstrap(term, state)
+	state, err = store.getCheckerState()
+
+	assert.NoError(t, err)
+	assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
+
+	cmd, err := store.getCommandBatch(ctx, store.id())
+	require.NoError(t, err)
+	require.Equal(t, 1, len(cmd.Commands))
+	assert.True(t, cmd.Commands[0].Bootstrapping)
+
+	// handle startReplica to make sure logHeartbeat msg contain shards info,
+	// which used in store.checkBootstrap to determine if all log shards ready
+	service := &Service{store: store}
+	service.handleStartReplica(cmd.Commands[0])
+
+	for state.State != pb.HAKeeperRunning && store.bootstrapCheckCycles > 0 {
+		func() {
+			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			_, err = store.addLogStoreHeartbeat(ctx, store.getHeartbeatMessage())
+			assert.NoError(t, err)
+
+			store.checkBootstrap(state)
+			state, err = store.getCheckerState()
+			assert.NoError(t, err)
+
+			time.Sleep(time.Millisecond * 100)
+		}()
+	}
+
+	assert.Equal(t, pb.HAKeeperRunning, state.State)
+}
+
+// test if the tickerForTaskSchedule can push forward these routine
+func TestTickerForTaskSchedule(t *testing.T) {
+	fn := func(t *testing.T, store *store, taskService taskservice.TaskService) {
+
+		tickerCxt, tickerCancel := context.WithCancel(context.Background())
+		defer tickerCancel()
+
+		//do task schedule background
+		go store.tickerForTaskSchedule(tickerCxt, time.Millisecond*10)
+
+		// making hakeeper state proceeds to running before test task schedule
+		proceedHAKeeperToRunning(t, store)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		err := taskService.Create(ctx, task.TaskMetadata{ID: "1234"})
+		assert.NoError(t, err)
+
+		cnUUID := uuid.New().String()
+		cmd := pb.CNStoreHeartbeat{UUID: cnUUID}
+		_, err = store.addCNStoreHeartbeat(ctx, cmd)
+		assert.NoError(t, err)
+
+		// waiting the background taskSchedule operation
+		// schedule task we created to CN node
+		time.Sleep(time.Millisecond * 200)
+
+		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(tasks))
+	}
+
+	runHakeeperTaskServiceTest(t, fn)
 }
 
 func TestHAKeeperTick(t *testing.T) {
@@ -632,6 +725,197 @@ func TestUpdateCNLabel(t *testing.T) {
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})
 		_, ok3 = info.Labels["role"]
 		assert.False(t, ok3)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestUpdateCNWorkState(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		uuid := "uuid1"
+		workState := pb.CNWorkState{
+			UUID:  uuid,
+			State: metadata.WorkState_Working,
+		}
+		err := store.updateCNWorkState(ctx, workState)
+		assert.EqualError(t, err, fmt.Sprintf("internal error: CN [%s] does not exist", uuid))
+
+		// begin heartbeat to add CN store.
+		hb := pb.CNStoreHeartbeat{
+			UUID: uuid,
+		}
+		_, err = store.addCNStoreHeartbeat(ctx, hb)
+		assert.NoError(t, err)
+
+		err = store.updateCNWorkState(ctx, workState)
+		assert.NoError(t, err)
+
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 := state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+
+		workState = pb.CNWorkState{
+			UUID:  uuid,
+			State: metadata.WorkState_Draining,
+		}
+		err = store.updateCNWorkState(ctx, workState)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 = state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+
+		workState = pb.CNWorkState{
+			UUID:  uuid,
+			State: metadata.WorkState_Working,
+		}
+		err = store.updateCNWorkState(ctx, workState)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 = state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestPatchCNStore(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		uuid := "uuid1"
+		stateLabel := pb.CNStateLabel{
+			UUID:  uuid,
+			State: metadata.WorkState_Working,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+				"role":    {Labels: []string{"1", "2"}},
+			},
+		}
+		err := store.patchCNStore(ctx, stateLabel)
+		assert.EqualError(t, err, fmt.Sprintf("internal error: CN [%s] does not exist", uuid))
+
+		// begin heartbeat to add CN store.
+		hb := pb.CNStoreHeartbeat{
+			UUID: uuid,
+		}
+		_, err = store.addCNStoreHeartbeat(ctx, hb)
+		assert.NoError(t, err)
+
+		err = store.patchCNStore(ctx, stateLabel)
+		assert.NoError(t, err)
+
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 := state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
+		labels1, ok2 := info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 := info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+
+		stateLabel = pb.CNStateLabel{
+			UUID:  uuid,
+			State: metadata.WorkState_Draining,
+		}
+		err = store.patchCNStore(ctx, stateLabel)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 = state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 = info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+
+		stateLabel = pb.CNStateLabel{
+			UUID: uuid,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+			},
+		}
+		err = store.patchCNStore(ctx, stateLabel)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		info, ok1 = state.CNState.Stores[uuid]
+		assert.True(t, ok1)
+		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		_, ok3 = info.Labels["role"]
+		assert.False(t, ok3)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestDeleteCNStore(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.id()
+		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		uuid := "uuid1"
+		hb := pb.CNStoreHeartbeat{
+			UUID: uuid,
+		}
+		_, err := store.addCNStoreHeartbeat(ctx, hb)
+		assert.NoError(t, err)
+		state, err := store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		assert.Equal(t, 1, len(state.CNState.Stores))
+		_, ok := state.CNState.Stores[uuid]
+		assert.Equal(t, true, ok)
+
+		cnStore := pb.DeleteCNStore{
+			StoreID: uuid,
+		}
+		err = store.deleteCNStore(ctx, cnStore)
+		assert.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, state)
+		assert.Equal(t, 0, len(state.CNState.Stores))
 	}
 	runStoreTest(t, fn)
 }

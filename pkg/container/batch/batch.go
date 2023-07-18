@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -334,6 +335,10 @@ func (bat *Batch) SubCnt(cnt int) {
 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
 }
 
+func (bat *Batch) SetCnt(cnt int64) {
+	atomic.StoreInt64(&bat.Cnt, cnt)
+}
+
 func (bat *Batch) GetCnt() int64 {
 	return atomic.LoadInt64(&bat.Cnt)
 }
@@ -352,4 +357,15 @@ func (bat *Batch) AntiShrink(sels []int64) {
 		vec.Shrink(sels, true)
 	}
 	bat.Zs = bat.Zs[:length-len(sels)]
+}
+
+func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
+	jm := bat.AuxData.(*hashmap.JoinMap)
+	if jm.IsDup() {
+		ret = jm.Dup()
+	} else {
+		ret = jm
+		bat.AuxData = nil
+	}
+	return
 }

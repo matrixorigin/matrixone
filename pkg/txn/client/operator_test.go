@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestRead(t *testing.T) {
@@ -188,7 +189,7 @@ func TestMissingSenderWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(nil, txn.TxnMeta{})
+	newTxnOperator(nil, nil, txn.TxnMeta{})
 }
 
 func TestMissingTxnIDWillPanic(t *testing.T) {
@@ -199,7 +200,7 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{})
+	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{})
 }
 
 func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
@@ -210,7 +211,7 @@ func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
 		assert.Fail(t, "must panic")
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
+	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
 }
 
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
@@ -222,6 +223,7 @@ func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 	}()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	newTxnOperator(
+		nil,
 		newTestTxnSender(),
 		txn.TxnMeta{ID: []byte{1}, SnapshotTS: timestamp.Timestamp{PhysicalTime: 1}},
 		WithTxnReadyOnly(),
@@ -342,26 +344,6 @@ func TestWriteOnCommittedTxn(t *testing.T) {
 	})
 }
 
-func TestWriteOnInvalidEpoch(t *testing.T) {
-	runTimestampWaiterTests(
-		t,
-		func(tw *timestampWaiter) {
-			tw.NotifyLatestCommitTS(newTestTimestamp(1))
-			runOperatorTestsWithOptions(
-				t,
-				func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-					tw.UpdateEpoch(1)
-					_, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-					assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
-				},
-				newTestTimestamp(0),
-				[]TxnOption{},
-				WithEnableSacrificingFreshness(),
-				WithTimestampWaiter(tw))
-		},
-	)
-}
-
 func TestWriteOnCommittingTxn(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
@@ -385,7 +367,9 @@ func TestSnapshotTxnOperator(t *testing.T) {
 
 		tc2, err := newTxnOperatorWithSnapshot(tc.sender, v)
 		assert.NoError(t, err)
+		assert.True(t, tc2.mu.txn.Mirror)
 
+		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true
@@ -448,6 +432,7 @@ func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 				_ *testTxnSender) {
 				tc.timestampWaiter = waiter
 				tc.mu.txn.SnapshotTS = newTestTimestamp(10)
+				tc.mu.txn.Isolation = txn.TxnIsolation_SI
 
 				ts := int64(100)
 				c := make(chan struct{})
@@ -467,6 +452,48 @@ func TestRollbackMultiTimes(t *testing.T) {
 		require.NoError(t, tc.Rollback(ctx))
 		require.Error(t, tc.Rollback(ctx))
 	})
+}
+
+func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
+	lockservice.RunLockServicesForTest(
+		zap.InfoLevel,
+		[]string{"s1"},
+		time.Second,
+		func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
+			l := ls[0]
+			tw := NewTimestampWaiter()
+			initTS := newTestTimestamp(1)
+			tw.NotifyLatestCommitTS(initTS)
+			runOperatorTestsWithOptions(
+				t,
+				func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+					require.Equal(t, initTS.Next(), tc.mu.txn.SnapshotTS)
+
+					_, err := l.Lock(ctx, 1, [][]byte{[]byte("k1")}, tc.mu.txn.ID, lock.LockOptions{})
+					require.NoError(t, err)
+
+					tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+
+					ctx2, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+					st := time.Now()
+					c := make(chan struct{})
+					go func() {
+						defer close(c)
+						time.Sleep(time.Second)
+						tw.NotifyLatestCommitTS(initTS.Next().Next())
+					}()
+					require.NoError(t, tc.Commit(ctx2))
+					<-c
+					require.True(t, time.Since(st) > time.Second)
+				},
+				newTestTimestamp(0).Next(),
+				[]TxnOption{WithTxnMode(txn.TxnMode_Pessimistic), WithTxnIsolation(txn.TxnIsolation_RC)},
+				WithTimestampWaiter(tw),
+				WithEnableSacrificingFreshness(),
+				WithLockService(l))
+		},
+		nil)
 }
 
 func runOperatorTests(

@@ -19,7 +19,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -91,7 +90,7 @@ func main() {
 			panic(err)
 		}
 	} else if *configFile != "" {
-		cfg := &Config{}
+		cfg := NewConfig()
 		if err := parseConfigFromFile(*configFile, cfg); err != nil {
 			panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
 		}
@@ -233,6 +232,7 @@ func startDNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getDNServiceConfig()
+
 		s, err := dnservice.NewService(
 			perfCounterSet,
 			&c,
@@ -345,24 +345,26 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	}
 
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, SV.LogsExtension, !SV.DisableSqlWriter)
-		_ = table.SetPathBuilder(ctx, SV.PathBuilder)
-	}
-	if !SV.DisableTrace {
+		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
 		initWG.Add(1)
 		collector := export.NewMOCollector(ctx, export.WithOBCollectorConfig(&SV.OBCollectorConfig))
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
-			if err = motrace.InitWithConfig(ctx,
+			err, act := motrace.InitWithConfig(ctx,
 				&SV,
 				motrace.WithNode(UUID, nodeRole),
 				motrace.WithBatchProcessor(collector),
 				motrace.WithFSWriterFactory(writerFactory),
 				motrace.WithSQLExecutor(nil),
-			); err != nil {
+			)
+			initWG.Done()
+			if err != nil {
 				panic(err)
 			}
-			initWG.Done()
+			if !act {
+				return
+			}
 			<-ctx.Done()
+			logutil.Info("motrace receive shutdown signal, wait other services shutdown complete.")
 			serviceWG.Wait()
 			logutil.Info("Shutdown service complete.")
 			// flush trace/log/error framework
@@ -372,9 +374,11 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		})
 		initWG.Wait()
 	}
-	if !SV.DisableMetric {
+	if !SV.DisableMetric || SV.EnableMetricToProm {
 		stopper.RunNamedTask("metric", func(ctx context.Context) {
-			mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole, mometric.WithWriterFactory(writerFactory))
+			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole, mometric.WithWriterFactory(writerFactory)); !act {
+				return
+			}
 			<-ctx.Done()
 			mometric.StopMetricSync()
 		})
@@ -403,7 +407,7 @@ func maybeRunInDaemonMode() {
 		if err != nil {
 			panic(err)
 		}
-		log.Printf("mo-service is running in daemon mode, child process is %d", cpid)
+		logutil.Infof("mo-service is running in daemon mode, child process is %d", cpid)
 		os.Exit(0)
 	}
 }

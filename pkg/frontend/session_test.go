@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -61,11 +62,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
@@ -123,8 +120,6 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
@@ -192,8 +187,6 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
@@ -241,7 +234,6 @@ func TestSession_TxnBegin(t *testing.T) {
 		hints := engine.Hints{CommitOrRollbackTimeout: time.Second * 10}
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil), gSysVars, false, nil, nil)
 		session.SetRequestContext(context.Background())
 		session.SetConnectContext(context.Background())
@@ -558,7 +550,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 	convey.Convey("test", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-
+		testutil.SetupAutoIncrService()
 		ctx := context.TODO()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
@@ -567,8 +559,6 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
@@ -585,7 +575,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
-		db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 

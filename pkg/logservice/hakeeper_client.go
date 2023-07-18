@@ -83,6 +83,12 @@ type ProxyHAKeeperClient interface {
 	GetCNState(ctx context.Context) (pb.CNState, error)
 	// UpdateCNLabel updates the labels of CN.
 	UpdateCNLabel(ctx context.Context, label pb.CNStoreLabel) error
+	// UpdateCNWorkState updates the work state of CN.
+	UpdateCNWorkState(ctx context.Context, state pb.CNWorkState) error
+	// PatchCNStore updates the work state and labels of CN.
+	PatchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error
+	// DeleteCNStore deletes a CN store from HAKeeper.
+	DeleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error
 }
 
 // TODO: HAKeeper discovery to be implemented
@@ -262,6 +268,7 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 	}
 
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	allocIDs, ok := c.mu.allocIDByKey[key]
 	if !ok {
 		allocIDs = &allocID{nextID: 0, lastID: 0}
@@ -271,7 +278,6 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 	if allocIDs.nextID != allocIDs.lastID {
 		v := allocIDs.nextID
 		allocIDs.nextID++
-		c.mu.Unlock()
 		return v, nil
 	}
 
@@ -289,7 +295,6 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 
 		allocIDs.nextID = firstID + 1
 		allocIDs.lastID = firstID + batch - 1
-		c.mu.Unlock()
 		return firstID, err
 	}
 }
@@ -369,6 +374,57 @@ func (c *managedHAKeeperClient) UpdateCNLabel(ctx context.Context, label pb.CNSt
 			return err
 		}
 		err := c.getClient().updateCNLabel(ctx, label)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
+}
+
+// UpdateCNWorkState implements the ProxyHAKeeperClient interface.
+func (c *managedHAKeeperClient) UpdateCNWorkState(ctx context.Context, state pb.CNWorkState) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.getClient().updateCNWorkState(ctx, state)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
+}
+
+// PatchCNStore implements the ProxyHAKeeperClient interface.
+func (c *managedHAKeeperClient) PatchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.getClient().patchCNStore(ctx, stateLabel)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return err
+	}
+}
+
+// DeleteCNStore implements the ProxyHAKeeperClient interface.
+func (c *managedHAKeeperClient) DeleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return err
+		}
+		err := c.getClient().deleteCNStore(ctx, cnStore)
 		if err != nil {
 			c.resetClient()
 		}
@@ -619,6 +675,42 @@ func (c *hakeeperClient) updateCNLabel(ctx context.Context, label pb.CNStoreLabe
 	req := pb.Request{
 		Method:       pb.UPDATE_CN_LABEL,
 		CNStoreLabel: &label,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *hakeeperClient) updateCNWorkState(ctx context.Context, state pb.CNWorkState) error {
+	req := pb.Request{
+		Method:      pb.UPDATE_CN_WORK_STATE,
+		CNWorkState: &state,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *hakeeperClient) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
+	req := pb.Request{
+		Method:       pb.PATCH_CN_STORE,
+		CNStateLabel: &stateLabel,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *hakeeperClient) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error {
+	req := pb.Request{
+		Method:        pb.DELETE_CN_STORE,
+		DeleteCNStore: &cnStore,
 	}
 	_, err := c.request(ctx, req)
 	if err != nil {

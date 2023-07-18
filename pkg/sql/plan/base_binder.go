@@ -94,10 +94,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			for i := len(*tmpScope) - 1; i >= 0; i-- {
 				curScope := (*tmpScope)[i]
 				if _, ok := curScope[strings.ToLower(exprImpl.Parts[0])]; ok {
+					typ := types.T_text.ToType()
 					expr = &Expr{
-						Typ: &plan.Type{
-							Id: int32(types.T_any),
-						},
+						Typ: makePlan2Type(&typ),
 						Expr: &plan.Expr_V{
 							V: &plan.VarRef{
 								Name:   exprImpl.Parts[0],
@@ -241,10 +240,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
+	typ := types.T_text.ToType()
 	return &Expr{
-		Typ: &plan.Type{
-			Id: int32(types.T_any),
-		},
+		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_P{
 			P: &plan.ParamRef{
 				Pos: int32(astExpr.Offset),
@@ -254,10 +252,9 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 }
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
+	typ := types.T_text.ToType()
 	return &Expr{
-		Typ: &plan.Type{
-			Id: int32(types.T_any),
-		},
+		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
 				Name:   astExpr.Name,
@@ -270,7 +267,7 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	if b.ctx == nil {
-		return nil, moerr.NewInvalidInput(b.GetContext(), "ambigous column reference '%v'", astExpr.Parts[0])
+		return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", astExpr.Parts[0])
 	}
 
 	col := astExpr.Parts[0]
@@ -1029,7 +1026,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		if err == nil && proc != nil {
 			bat := batch.NewWithSize(0)
 			bat.Zs = []int64{1}
-			tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(retExpr), proc)
+			tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(retExpr), proc, false)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
@@ -1406,12 +1403,6 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, moerr.NewInvalidArg(ctx, "cast types length not match args length", "")
 		}
 		for idx, castType := range argsCastType {
-			if _, ok := args[idx].Expr.(*plan.Expr_P); ok {
-				continue
-			}
-			if _, ok := args[idx].Expr.(*plan.Expr_V); ok {
-				continue
-			}
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue

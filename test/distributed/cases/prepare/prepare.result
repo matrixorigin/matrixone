@@ -52,7 +52,7 @@ a	b
 9	99
 deallocate prepare stmt1;
 drop table t1;
-create table t1(a timestamp);
+create table t1(a timestamp(6));
 prepare stmt1 from "insert into t1 values (current_timestamp())";
 execute stmt1;
 execute stmt1;
@@ -323,6 +323,26 @@ pk    ui    si
 SET @si_min = -9223372036854775808;
 PREPARE s1 FROM 'SELECT * FROM numbers WHERE ui=?';
 EXECUTE s1 USING @si_min;
-pk    ui    si
+invalid argument cast to uint64, bad value -9223372036854775808
 DEALLOCATE PREPARE s1;
 drop table numbers;
+drop table if exists t1;
+create table t1 (a int);
+prepare stmt1 from select * from t1;
+execute stmt1;
+a
+alter table t1 add column b int after a;
+execute stmt1;
+internal error: table 't1' has been changed, please reset prepare statement 'stmt1'
+prepare stmt1 from select * from t1;
+execute stmt1;
+a    b
+truncate table t1;
+execute stmt1;
+internal error: table 't1' has been changed, please reset prepare statement 'stmt1'
+prepare stmt1 from select * from t1;
+execute stmt1;
+a    b
+drop table t1;
+execute stmt1;
+internal error: table 't1' in prepare statement 'stmt1' does not exist anymore

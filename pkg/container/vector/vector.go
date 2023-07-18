@@ -71,16 +71,34 @@ func (v *Vector) SetSorted(b bool) {
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
 	v.class = FLAT
-	//v.data = v.data[:0]
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
+
+	v.length = 0
+	v.nsp.Reset()
+	v.sorted = false
+}
+
+func (v *Vector) ResetArea() {
+	v.area = v.area[:0]
+}
+
+// TODO: It is semantically same as Reset, need to merge them later.
+func (v *Vector) ResetWithNewType(t *types.Type) {
+	oldTyp := v.typ
+	v.typ = *t
+	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
 	v.nsp = nulls.Nulls{}
-
 	v.length = 0
-	//v.capacity = cap(v.data) / v.typ.TypeSize()
-	v.nsp.Reset()
+	v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.sorted = false
+	if oldTyp.Oid != t.Oid {
+		v.setupColFromData()
+	}
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -97,6 +115,12 @@ func (v *Vector) Length() int {
 
 func (v *Vector) Capacity() int {
 	return v.capacity
+}
+
+// Allocated returns the total allocated memory size of the vector.
+// it can be used to estimate the memory usage of the vector.
+func (v *Vector) Allocated() int {
+	return cap(v.data) + cap(v.area)
 }
 
 func (v *Vector) SetLength(n int) {
@@ -288,8 +312,7 @@ func SetFixedAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
 
 func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
 	var va types.Varlena
-	var err error
-	va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+	err := BuildVarlenaFromByteSlice(v, &va, &bs, mp)
 	if err != nil {
 		return err
 	}
@@ -311,14 +334,17 @@ func (v *Vector) IsConstNull() bool {
 func (v *Vector) GetArea() []byte {
 	return v.area
 }
+func (v *Vector) SetArea(a []byte) {
+	v.area = a
+}
 
-func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
+func GetPtrAt[T any](v *Vector, idx int64) *T {
 	if v.IsConst() {
 		idx = 0
 	} else {
 		idx *= int64(v.GetType().TypeSize())
 	}
-	return unsafe.Pointer(&v.data[idx])
+	return (*T)(unsafe.Pointer(&v.data[idx]))
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
@@ -718,7 +744,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 			vva[vi] = wva[wi]
 		} else {
 			bs := wva[wi].GetByteSlice(w.area)
-			vva[vi], v.area, err = types.BuildVarlena(bs, v.area, mp)
+			err = BuildVarlenaFromByteSlice(v, &vva[vi], &bs, mp)
 			if err != nil {
 				return err
 			}
@@ -1371,7 +1397,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				if nulls.Contains(&w.nsp, uint64(i)) {
 					nulls.Add(&v.nsp, uint64(v.length))
 				} else {
-					va, v.area, err = types.BuildVarlena(ws[i].GetByteSlice(w.area), v.area, mp)
+					err = BuildVarlenaFromValena(v, &va, &ws[i], &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -1650,7 +1676,11 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			if w.IsConst() {
 				return appendOneBytes(v, ws[0].GetByteSlice(w.area), false, mp)
 			}
-			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(&w.nsp, uint64(sel)), mp)
+			if nulls.Contains(&w.nsp, uint64(sel)) {
+				return appendOneBytes(v, []byte{}, true, mp)
+			} else {
+				return appendOneBytes(v, ws[sel].GetByteSlice(w.area), false, mp)
+			}
 		}
 	case types.T_Blockid:
 		return func(v, w *Vector, sel int64) error {
@@ -1945,9 +1975,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	}
 
 	if v.GetType().IsVarlen() {
-		var err error
-		bs := w.col.([]types.Varlena)[sel].GetByteSlice(w.area)
-		v.col.([]types.Varlena)[oldLen], v.area, err = types.BuildVarlena(bs, v.area, mp)
+		err := BuildVarlenaFromValena(v, &v.col.([]types.Varlena)[oldLen], &(w.col.([]types.Varlena)[sel]), &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -1985,8 +2013,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	if v.GetType().IsVarlen() {
 		var err error
 		var va types.Varlena
-		bs := w.col.([]types.Varlena)[sel].GetByteSlice(w.area)
-		va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+		err = BuildVarlenaFromValena(v, &va, &(w.col.([]types.Varlena)[sel]), &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2021,8 +2048,7 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			bs := w.col.([]types.Varlena)[0].GetByteSlice(w.area)
-			va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+			err = BuildVarlenaFromValena(v, &va, &(w.col.([]types.Varlena)[0]), &w.area, mp)
 			if err != nil {
 				return err
 			}
@@ -2051,7 +2077,7 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 					continue
 				}
 				bs := wCol[sel].GetByteSlice(w.area)
-				vCol[oldLen+i], v.area, err = types.BuildVarlena(bs, v.area, mp)
+				err = BuildVarlenaFromByteSlice(v, &vCol[oldLen+i], &bs, mp)
 				if err != nil {
 					return err
 				}
@@ -2059,7 +2085,7 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		} else {
 			for i, sel := range sels {
 				bs := wCol[sel].GetByteSlice(w.area)
-				vCol[oldLen+i], v.area, err = types.BuildVarlena(bs, v.area, mp)
+				err = BuildVarlenaFromByteSlice(v, &vCol[oldLen+i], &bs, mp)
 				if err != nil {
 					return err
 				}
@@ -2111,8 +2137,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			bs := w.col.([]types.Varlena)[0].GetByteSlice(w.area)
-			va, v.area, err = types.BuildVarlena(bs, v.area, mp)
+			err = BuildVarlenaFromValena(v, &va, &(w.col.([]types.Varlena)[0]), &w.area, mp)
 			if err != nil {
 				return err
 			}
@@ -2140,8 +2165,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
-						bs := wCol[int(offset)+i].GetByteSlice(w.area)
-						vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
+						err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
 						if err != nil {
 							return err
 						}
@@ -2156,8 +2180,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
-						bs := wCol[int(offset)+i].GetByteSlice(w.area)
-						vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
+						err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
 						if err != nil {
 							return err
 						}
@@ -2168,8 +2191,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
-					bs := wCol[int(offset)+i].GetByteSlice(w.area)
-					vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
+					err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -2180,8 +2202,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if flags[i] == 0 {
 						continue
 					}
-					bs := wCol[int(offset)+i].GetByteSlice(w.area)
-					vCol[v.length], v.area, err = types.BuildVarlena(bs, v.area, mp)
+					err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -2328,7 +2349,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	}
 	vec.class = CONSTANT
 	col := vec.col.([]types.Varlena)
-	va, vec.area, err = types.BuildVarlena(val, vec.area, mp)
+	err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 	if err != nil {
 		return err
 	}
@@ -2499,7 +2520,7 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
 	} else {
-		va, vec.area, err = types.BuildVarlena(val, vec.area, mp)
+		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
 		}
@@ -2536,7 +2557,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
 		col := vec.col.([]types.Varlena)
-		va, vec.area, err = types.BuildVarlena(val, vec.area, mp)
+		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
 		}
@@ -2578,7 +2599,7 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 		if len(isNulls) > 0 && isNulls[i] {
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
-			va, vec.area, err = types.BuildVarlena(w, vec.area, mp)
+			err = BuildVarlenaFromByteSlice(vec, &va, &w, mp)
 			if err != nil {
 				return err
 			}
@@ -2602,7 +2623,8 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 		if len(isNulls) > 0 && isNulls[i] {
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
-			va, vec.area, err = types.BuildVarlena([]byte(w), vec.area, mp)
+			bs := []byte(w)
+			err = BuildVarlenaFromByteSlice(vec, &va, &bs, mp)
 			if err != nil {
 				return err
 			}
@@ -2705,6 +2727,16 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	if start == end {
 		return w, nil
 	}
+	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
+	if start == end {
+		return nil
+	}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()
 	if mp == nil {
@@ -2721,7 +2753,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	} else {
 		err := w.PreExtend(end-start, mp)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		w.length = end - start
 		if v.GetType().IsVarlen() {
@@ -2731,9 +2763,9 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 			for i := start; i < end; i++ {
 				if !nulls.Contains(&v.nsp, uint64(i)) {
 					bs := vCol[i].GetByteSlice(v.area)
-					va, w.area, err = types.BuildVarlena(bs, w.area, mp)
+					err = BuildVarlenaFromByteSlice(w, &va, &bs, mp)
 					if err != nil {
-						return nil, err
+						return err
 					}
 					wCol[i-start] = va
 				}
@@ -2744,7 +2776,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		}
 	}
 
-	return w, nil
+	return nil
 }
 
 // GetMinMaxValue returns the min and max value of the vector.
@@ -3044,4 +3076,57 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
 	return
+}
+
+func BuildVarlenaInline(v1, v2 *types.Varlena) {
+	// use three dword operation to improve performance
+	p1 := v1.UnsafePtr()
+	p2 := v2.UnsafePtr()
+	*(*int64)(p1) = *(*int64)(p2)
+	*(*int64)(unsafe.Add(p1, 8)) = *(*int64)(unsafe.Add(p2, 8))
+	*(*int64)(unsafe.Add(p1, 16)) = *(*int64)(unsafe.Add(p2, 16))
+}
+
+func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.MPool) error {
+	vlen := len(*bs)
+	area1 := vec.GetArea()
+	voff := len(area1)
+	if voff+vlen < cap(area1) || m == nil {
+		area1 = append(area1, *bs...)
+		v1.SetOffsetLen(uint32(voff), uint32(vlen))
+		vec.SetArea(area1)
+		return nil
+	}
+	var err error
+	area1, err = m.Grow2(area1, *bs, voff+vlen)
+	if err != nil {
+		return err
+	}
+	v1.SetOffsetLen(uint32(voff), uint32(vlen))
+	vec.SetArea(area1)
+	return nil
+}
+
+func BuildVarlenaFromValena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
+	if (*v2)[0] <= types.VarlenaInlineSize {
+		BuildVarlenaInline(v1, v2)
+		return nil
+	}
+	bs := v2.GetByteSlice(*area)
+	return BuildVarlenaNoInline(vec, v1, &bs, m)
+}
+
+func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpool.MPool) error {
+	vlen := len(*bs)
+	if vlen <= types.VarlenaInlineSize {
+		// first clear varlena to 0
+		p1 := v.UnsafePtr()
+		*(*int64)(p1) = 0
+		*(*int64)(unsafe.Add(p1, 8)) = 0
+		*(*int64)(unsafe.Add(p1, 16)) = 0
+		v[0] = byte(vlen)
+		copy(v[1:1+vlen], *bs)
+		return nil
+	}
+	return BuildVarlenaNoInline(vec, v, bs, m)
 }

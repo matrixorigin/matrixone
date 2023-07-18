@@ -109,17 +109,18 @@ func (cpk *SortKey) HasColumn(idx int) (found bool) { _, found = cpk.search[idx]
 func (cpk *SortKey) GetSingleIdx() int              { return cpk.Defs[0].Idx }
 
 type Schema struct {
-	Version     uint32
-	AcInfo      accessInfo
-	Name        string
-	ColDefs     []*ColDef
-	Comment     string
-	Partitioned int8   // 1: the table has partitions ; 0: no partition
-	Partition   string // the info about partitions when the table has partitions
-	Relkind     string
-	Createsql   string
-	View        string
-	Constraint  []byte
+	Version        uint32
+	CatalogVersion uint32
+	AcInfo         accessInfo
+	Name           string
+	ColDefs        []*ColDef
+	Comment        string
+	Partitioned    int8   // 1: the table has partitions ; 0: no partition
+	Partition      string // the info about partitions when the table has partitions
+	Relkind        string
+	Createsql      string
+	View           string
+	Constraint     []byte
 
 	// do not send to cn
 	BlockMaxRows     uint32
@@ -150,7 +151,7 @@ func (s *Schema) Clone() *Schema {
 	}
 	ns := NewEmptySchema(s.Name)
 	r := bytes.NewBuffer(buf)
-	if _, err = ns.ReadFrom(r); err != nil {
+	if _, err = ns.ReadFromWithVersion(r, IOET_WALTxnCommand_Table_CurrVer); err != nil {
 		panic(err)
 	}
 	return ns
@@ -201,7 +202,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		if coldef.IsAutoIncrement() || coldef.IsClusterBy() || coldef.IsPrimary() || coldef.IsPhyAddr() {
 			return moerr.NewInternalErrorNoCtx("drop a column with constraint")
 		}
-		logutil.Debugf("[Alter] drop column %s %d %d", coldef.Name, coldef.Idx, coldef.SeqNum)
+		logutil.Infof("[Alter] drop column %s %d %d", coldef.Name, coldef.Idx, coldef.SeqNum)
 		delete(s.NameMap, coldef.Name)
 		delete(s.SeqnumMap, coldef.SeqNum)
 		fixed, pending := s.ColDefs[:coldef.Idx], s.ColDefs[coldef.Idx+1:]
@@ -222,6 +223,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		if s.Extra.OldName == "" {
 			s.Extra.OldName = s.Name
 		}
+		logutil.Infof("[Alter] rename table %s -> %s", s.Name, rename.NewName)
 		s.Name = rename.NewName
 	default:
 		return moerr.NewNYINoCtx("unsupported alter kind: %v", req.Kind)
@@ -289,7 +291,7 @@ func (s *Schema) MustRestoreExtra(data []byte) {
 	}
 }
 
-func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
+func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	var sn2 int
 	if sn2, err = r.Read(types.EncodeUint32(&s.BlockMaxRows)); err != nil {
 		return
@@ -303,6 +305,15 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += int64(sn2)
+	switch ver {
+	case IOET_WALTxnCommand_Table_V1:
+		s.CatalogVersion = pkgcatalog.CatalogVersion_V1
+	case IOET_WALTxnCommand_Table_V2:
+		if sn2, err = r.Read(types.EncodeUint32(&s.CatalogVersion)); err != nil {
+			return
+		}
+		n += int64(sn2)
+	}
 
 	var sn int64
 	if sn, err = s.AcInfo.ReadFrom(r); err != nil {
@@ -430,6 +441,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = w.Write(types.EncodeUint32(&s.Version)); err != nil {
+		return
+	}
+	if _, err = w.Write(types.EncodeUint32(&s.CatalogVersion)); err != nil {
 		return
 	}
 	if _, err = s.AcInfo.WriteTo(&w); err != nil {

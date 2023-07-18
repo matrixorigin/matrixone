@@ -291,9 +291,10 @@ func TestEvalZonemapFilter(t *testing.T) {
 
 func TestGetCompositePkValueByExpr(t *testing.T) {
 	type myCase struct {
-		desc   []string
-		exprs  []*plan.Expr
-		expect []int
+		desc    []string
+		exprs   []*plan.Expr
+		expect  []int
+		hasNull []bool
 	}
 	// a, b, c, d are columns of table t1
 	// d,c,b are composite primary key
@@ -303,9 +304,15 @@ func TestGetCompositePkValueByExpr(t *testing.T) {
 			"b=10 and d=20", "b=10 and c=20 and d=30",
 			"c=10 and d=20", "d=10 or a=10", "d=10 or c=20 and a=30",
 			"d=10 or c=20 and d=30", "d=10 and c=20 or d=30",
+			"d=null", "c=null", "b=null", "null=b", "c=null and a=10",
+		},
+		hasNull: []bool{
+			false, false, false, false, false, false, false, false, false, false, false,
+			true, true, true, true, true,
 		},
 		expect: []int{
 			0, 0, 1, 0, 1, 3, 2, 0, 0, 1, 0,
+			0, 0, 0, 0, 0,
 		},
 		exprs: []*plan.Expr{
 			makeFunctionExprForTest("=", []*plan.Expr{
@@ -440,13 +447,18 @@ func TestGetCompositePkValueByExpr(t *testing.T) {
 	}
 	pks := []string{"d", "c", "b"}
 	for i, expr := range tc.exprs {
-		vals := make([]*plan.Expr_C, len(pks))
-		ok := getCompositPKVals(expr, pks, vals)
-		for _, val := range vals {
-			t.Logf("val: %v", val)
-		}
+		vals := make([]*plan.Const, len(pks))
+		ok, hasNull := getCompositPKVals(expr, pks, vals, nil)
 		cnt := 0
+		require.Equal(t, tc.hasNull[i], hasNull)
+		if hasNull {
+			require.False(t, ok)
+			continue
+		}
 		if ok {
+			for _, val := range vals {
+				t.Logf("val: %v", val)
+			}
 			cnt = getValidCompositePKCnt(vals)
 		}
 		require.Equal(t, tc.expect[i], cnt)
@@ -489,7 +501,7 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 
 	t.Run("test getPkValueByExpr", func(t *testing.T) {
 		for i, testCase := range testCases {
-			result, data := getPkValueByExpr(testCase.expr, "a", testCase.typ)
+			result, _, data := getPkValueByExpr(testCase.expr, "a", testCase.typ, nil)
 			if result != testCase.result {
 				t.Fatalf("test getPkValueByExpr at cases[%d], get result is different with expected", i)
 			}

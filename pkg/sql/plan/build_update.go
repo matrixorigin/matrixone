@@ -15,20 +15,18 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err error) {
+func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
 	tblInfo, err := getUpdateTableInfo(ctx, stmt)
 	if err != nil {
 		return nil, err
 	}
 	// new logic
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	queryBindCtx := NewBindContext(builder, nil)
 	lastNodeId, updatePlanCtxs, err := selectUpdateTables(builder, queryBindCtx, stmt, tblInfo)
 	if err != nil {
@@ -44,10 +42,11 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	if err != nil {
 		return nil, err
 	}
-	if !updatePlanCtxs[0].checkInsertPkDup {
-		pkFilterExpr := getPkFilterExpr(builder, tblInfo.tableDefs[0])
-		updatePlanCtxs[0].pkFilterExpr = pkFilterExpr
-	}
+	// need change to get update values. not get values from where clause
+	// if !updatePlanCtxs[0].checkInsertPkDup {
+	// 	pkFilterExpr := getPkFilterExpr(builder, tblInfo.tableDefs[0])
+	// 	updatePlanCtxs[0].pkFilterExprs = []*Expr{pkFilterExpr}
+	// }
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
 	// append sink node
@@ -187,11 +186,24 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		// add update expr to project list
 		updateColPosMap := make(map[string]int)
 		offset := len(tableDef.Cols)
+		updatePkCol := false
+		var pkNameMap = make(map[string]struct{})
+		if tableDef.Pkey != nil {
+			for _, pkName := range tableDef.Pkey.Names {
+				pkNameMap[pkName] = struct{}{}
+			}
+		} else {
+			// we don't known if update pk. just set true and let check pk dup work
+			updatePkCol = true
+		}
 		for colName, updateKey := range updateKeys {
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateKey,
 			})
 			updateColPosMap[colName] = offset
+			if _, ok := pkNameMap[colName]; ok {
+				updatePkCol = true
+			}
 			offset++
 		}
 
@@ -206,6 +218,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 		upPlanCtx.checkInsertPkDup = checkInsertPkDup
+		upPlanCtx.updatePkCol = updatePkCol
 
 		for idx, col := range tableDef.Cols {
 			// row_id、compPrimaryKey、clusterByKey will not inserted from old data
@@ -245,28 +258,30 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	return lastNodeId, updatePlanCtxs, nil
 }
 
-func getPkFilterExpr(builder *QueryBuilder, tableDef *TableDef) *Expr {
+// func getPkFilterExpr(builder *QueryBuilder, tableDef *TableDef) *Expr {
 
-	for _, node := range builder.qry.Nodes {
-		if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 {
-			continue
-		}
+// 	for _, node := range builder.qry.Nodes {
+// 		if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 {
+// 			continue
+// 		}
 
-		preNode := builder.qry.Nodes[node.Children[0]]
-		if preNode.NodeType != plan.Node_TABLE_SCAN || preNode.TableDef.TblId != tableDef.TblId {
-			continue
-		}
+// 		preNode := builder.qry.Nodes[node.Children[0]]
+// 		if preNode.NodeType != plan.Node_TABLE_SCAN || preNode.TableDef.TblId != tableDef.TblId {
+// 			continue
+// 		}
 
-		pkName := fmt.Sprintf("%s.%s", tableDef.Name, tableDef.Pkey.PkeyColName)
-		if e, ok := node.FilterList[0].Expr.(*plan.Expr_F); ok && e.F.Func.ObjName == "=" {
-			if pkExpr, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok && pkExpr.Col.Name == pkName {
-				return DeepCopyExpr(e.F.Args[1])
-			}
+// 		basePkName := tableDef.Pkey.PkeyColName
+// 		tblAndPkName := fmt.Sprintf("%s.%s", tableDef.Name, tableDef.Pkey.PkeyColName)
+// 		if e, ok := node.FilterList[0].Expr.(*plan.Expr_F); ok && e.F.Func.ObjName == "=" {
+// 			if pkExpr, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
+// 				return DeepCopyExpr(e.F.Args[1])
+// 			}
 
-			if pkExpr, ok := e.F.Args[1].Expr.(*plan.Expr_Col); ok && pkExpr.Col.Name == pkName {
-				return DeepCopyExpr(e.F.Args[0])
-			}
-		}
-	}
-	return nil
-}
+// 			if pkExpr, ok := e.F.Args[1].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
+// 				return DeepCopyExpr(e.F.Args[0])
+// 			}
+
+// 		}
+// 	}
+// 	return nil
+// }

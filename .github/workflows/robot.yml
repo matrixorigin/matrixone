@@ -6,8 +6,9 @@ on:
     types: [closed, assigned, opened]
   schedule:
     - cron: '30 8 * * *'
+  issue_comment:
+    types: [created]
   workflow_dispatch:
-
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
@@ -45,7 +46,7 @@ jobs:
           milestone: "v0.8.0"
 
   check-bvt-issue:
-    if: github.event.action == 'closed'
+    if: github.event_name == 'issues' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
       - name: CheckOut
@@ -58,7 +59,6 @@ jobs:
           ISSUE_NUM: ${{ github.event.issue.number }}
         run: |
           res=`grep -r "issue#$ISSUE_NUM" ${{ github.workspace }}/test || true`
-
           if [ -n "$res" ]; then
             echo "::set-output name=check_val::True"
           else
@@ -85,6 +85,7 @@ jobs:
 
   issue-reopen:
     runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && github.event.action == 'closed'
     steps:
       - name: Reopen Issue
         if: github.event.issue.user.login != github.event.sender.login && github.event.action == 'closed' && github.event.sender.login != 'sukki37' && github.event.sender.login != 'aressu1985' && github.event.sender.login != 'fengttt'
@@ -93,38 +94,53 @@ jobs:
           actions: 'open-issue'
           token: ${{ secrets.TOKEN_ACTION }}
           issue-number: ${{ github.event.issue.number }}
+       
+  issue_close_check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+    steps:
+      - uses: guguducken/pull-issue-reviewer@issue_close_check_with_name
+        with:
+          token_action: ${{ secrets.TOKEN_ACTION }}
+          uri_notice: ${{ secrets.DOCU_GROUP_HOOK }}
+          name_label: "doc influence"
+          mentions: "Prinz,DengNan"
+  
+  auto-to-project:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    steps:
+      - name: Add Issue To GitHub Project
+        uses: actions/add-to-project@v0.4.0
+        with:
+          project-url: https://github.com/orgs/matrixorigin/projects/13/views/1
+          github-token: ${{ secrets.TOKEN_ACTION }}
+          labeled: kind/bug,kind/docs,kind/enhancement,kind/feature,kind/questions,kind/performance,kind/refactoring,kind/subtask
+          label-operator: OR
+
+  Rerun-Actions:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issue_comment' && github.event.action == 'created'
+    steps:
+      - uses: guguducken/workflow-rerun-action@v0.0.3
+        with:
+          action-token: ${{ secrets.TOKEN_ACTION }}
+          user: matrix-meow
+          workflow-this: Command to Rerun Workflows
 
   nightly-check:
-    if: github.event_name != 'issues'
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: arm64-runner
     steps:
       - uses: actions/checkout@v3
         with:
           fetch-depth: '3'
           path: ./matrixone
-
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.20'
           cache: true
-
-      # - name: Build MatrixOne
-      #   run: |
-      #     cd $GITHUB_WORKSPACE/matrixone && make clean && make build
-
-      # - name: Static Code Analysis
-      #   continue-on-error: true
-      #   run: |
-      #     cd $GITHUB_WORKSPACE/matrixone
-      #     make install-static-check-tools
-      #     make static-check &>lint.out
-          
-      # - name: count sca failed files
-      #   run: |
-      #     cd $GITHUB_WORKSPACE/matrixone
-      #     echo "FAILED_FILES_NUM=$(cat lint.out | grep -E '^pkg|^cmd' | awk -F ".go" '{if(NF>=2) {print $1}}' | sort -u | wc -l)" >> $GITHUB_ENV
-
       - name: Set Variables
         run: |
           echo "ut_report='UT-Report.out'" >> $GITHUB_ENV
@@ -136,21 +152,17 @@ jobs:
           echo "bvt_html_coverage='bvt_coverage.html'" >> $GITHUB_ENV
           echo "ut_excluded_pkg='pkg/pb\|pkg/sql/parsers/goyacc\|yaccpar'" >> $GITHUB_ENV
           echo "bvt_excluded_pkg='pkg/pb\|yaccpar'" >> $GITHUB_ENV
-
       - name: Clone test-tool repository
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
           path: ./mo-tester
           ref: main
-
       - name: Set up JDK 8 for x64
         uses: actions/setup-java@v3
         with:
           java-version: '8'
           distribution: 'adopt'
-          architecture: x64
-
       - name: Start Unit Test
         timeout-minutes: 120
         run: |
@@ -160,8 +172,6 @@ jobs:
           echo "ut start"
           CGO_CFLAGS="-I${GITHUB_WORKSPACE}/matrixone/cgo" CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/matrixone/cgo -lmo" go test -v -tags matrixone_test -p 6 -covermode=count -coverprofile=${{ env.raw_ut_coverage }} -coverpkg=./pkg/... ${test_scope} | tee ${{ env.ut_report }}
           echo "ut finished"
-
-
       - name: Start BVT Test Service
         if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
@@ -172,16 +182,13 @@ jobs:
           GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
           export GOCOVERDIR=$GITHUB_WORKSPACE/matrixone
           go build -cover "$GOLDFLAGS" -o mo-service ./cmd/mo-service/
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN
-          
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN        
       - name: Start BVT Test
         if: ${{ always() && !cancelled() }}
         id: bvt_on_pr_version
-        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases 2>&1
-
       - name: Generate UT and BVT Coverage File
         if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
@@ -200,7 +207,6 @@ jobs:
           echo "bvt_coverage finished"
           go tool cover -o ${{ env.bvt_html_coverage }} -html=${{ env.bvt_coverage }}
           echo "bvt_html_coverage finished"        
-
       - name: Coverage Calculate
         if: ${{ always() && !cancelled() }}
         run: |
@@ -242,7 +248,6 @@ jobs:
           cat bvt_tmp.txt | sort -k 1 -k 2n >> coverage_report.txt
           # zip -r code_quality_reports.zip ${{ env.bvt_html_coverage }} ${{ env.ut_html_coverage }} coverage_report.txt lint.out UT-Report.out
           zip -r code_quality_reports.zip ${{ env.bvt_html_coverage }} ${{ env.ut_html_coverage }} coverage_report.txt UT-Report.out
-
       - name: Generate Notice Content
         if: ${{ always() && !cancelled() }}
         run: |
@@ -252,8 +257,7 @@ jobs:
           echo "Url=${{ github.event.repository.html_url }}/actions/runs/${{ github.run_id }}" >> $GITHUB_ENV
           echo 'Detail<<EOF' >> $GITHUB_ENV
           cat coverage_report.txt >> $GITHUB_ENV
-          echo 'EOF' >> $GITHUB_ENV
-          
+          echo 'EOF' >> $GITHUB_ENV          
       - uses: actions/upload-artifact@v3
         if: ${{ always() && !cancelled() }}
         continue-on-error: true
@@ -262,7 +266,6 @@ jobs:
           path: |
             ${{ github.workspace }}/matrixone/code_quality_reports.zip
           retention-days: 7
-
       - uses: actions/upload-artifact@v3
         if: ${{ failure() }}
         continue-on-error: true
@@ -271,8 +274,8 @@ jobs:
           path: |
             ${{ github.workspace }}/matrixone
           retention-days: 7
-
       - name: WeChat Work notification
+        if: ${{ always() && !cancelled() }}
         id: notification
         uses: chf007/action-wechat-work@master
         env:
@@ -281,8 +284,8 @@ jobs:
           msgtype: markdown
           mentioned_list: '["@all"]'
           content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nBVT Coverage Summary:<font color=\"warning\">${{ env.BVT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
-
       - name: WeChat Work notification
+        if: ${{ always() && !cancelled() }}
         id: detail-notification
         uses: chf007/action-wechat-work@master
         env:

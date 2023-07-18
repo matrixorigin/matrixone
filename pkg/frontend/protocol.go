@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -83,35 +84,28 @@ type Response struct {
 	warnings                   uint16
 }
 
-func NewResponse(category int, status uint16, cmd int, d interface{}) *Response {
+func NewResponse(category int, affectedRows, lastInsertId uint64, warnings, status uint16, cmd int, d interface{}) *Response {
 	return &Response{
-		category: category,
-		status:   status,
-		cmd:      cmd,
-		data:     d,
-	}
-}
-
-func NewGeneralErrorResponse(cmd CommandType, err error) *Response {
-	return NewResponse(ErrorResponse, 0, int(cmd), err)
-}
-
-func NewGeneralOkResponse(cmd CommandType) *Response {
-	return NewResponse(OkResponse, 0, int(cmd), nil)
-}
-
-func NewOkResponse(affectedRows, lastInsertId uint64, warnings, status uint16, cmd int, d interface{}) *Response {
-	resp := &Response{
-		category:     OkResponse,
-		status:       status,
-		cmd:          cmd,
-		data:         d,
+		category:     category,
 		affectedRows: affectedRows,
 		lastInsertId: lastInsertId,
 		warnings:     warnings,
+		status:       status,
+		cmd:          cmd,
+		data:         d,
 	}
+}
 
-	return resp
+func NewGeneralErrorResponse(cmd CommandType, status uint16, err error) *Response {
+	return NewResponse(ErrorResponse, 0, 0, 0, status, int(cmd), err)
+}
+
+func NewGeneralOkResponse(cmd CommandType, status uint16) *Response {
+	return NewResponse(OkResponse, 0, 0, 0, status, int(cmd), nil)
+}
+
+func NewOkResponse(affectedRows, lastInsertId uint64, warnings, status uint16, cmd int, d interface{}) *Response {
+	return NewResponse(OkResponse, affectedRows, lastInsertId, warnings, status, cmd, d)
 }
 
 func (resp *Response) GetData() interface{} {
@@ -463,8 +457,12 @@ func (fp *FakeProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareSt
 	return nil
 }
 
-func (fp *FakeProtocol) ParseExecuteData(ctx context.Context, stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
-	return nil, nil, nil
+func (fp *FakeProtocol) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
+func (fp *FakeProtocol) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
 }
 
 func (fp *FakeProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
@@ -520,7 +518,7 @@ func (fp *FakeProtocol) ConnectionID() uint32 {
 }
 
 func (fp *FakeProtocol) Peer() string {
-	return ""
+	return "0.0.0.0:0"
 }
 
 func (fp *FakeProtocol) GetDatabaseName() string {

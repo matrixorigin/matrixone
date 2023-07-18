@@ -15,15 +15,17 @@
 package plan
 
 import (
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
+func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepareStmt bool) (p *Plan, err error) {
 	if isReplace {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}
@@ -47,7 +49,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
 	}
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
@@ -61,9 +63,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	if err != nil {
 		return nil, err
 	}
-	var pkFilterExpr *Expr
+	var pkFilterExprs []*Expr
 	if !checkInsertPkDup {
-		pkFilterExpr = getPkValueExpr(builder, tableDef, pkPosInValues)
+		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
@@ -72,10 +74,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		// append on duplicate key node
 		tableDef = DeepCopyTableDef(tableDef)
 		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+			//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+			tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
 		}
 		if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+			//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+			tableDef.Cols = append(tableDef.Cols, tableDef.ClusterBy.CompCbkeyCol)
 		}
 		dupProjection := getProjectionByLastNode(builder, lastNodeId)
 		onDuplicateKeyNode := &Node{
@@ -163,7 +167,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExpr)
+		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs)
 		if err != nil {
 			return nil, err
 		}
@@ -176,38 +180,94 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	}, err
 }
 
-func getPkValueExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues int) *Expr {
-	pkPos, pkTyp := getPkPos(tableDef, true)
-	if pkPos == -1 || pkTyp.AutoIncr {
+func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableDef, pkPosInValues map[int]int) []*Expr {
+	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
 		return nil
 	}
-	colTyp := makeTypeByPlan2Type(pkTyp)
-	targetTyp := &plan.Expr{
-		Typ: pkTyp,
-		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: pkTyp,
-			},
-		},
-	}
 
-	for _, node := range builder.qry.Nodes {
-		if node.NodeType != plan.Node_VALUE_SCAN {
-			continue
-		}
-		if len(node.RowsetData.Cols[0].Data) != 1 {
-			continue
-		}
-
-		oldExpr := node.RowsetData.Cols[pkPosInValues].Data[0]
-		if !rule.IsConstant(oldExpr) {
+	pkPos, pkTyp := getPkPos(tableDef, true)
+	if pkPos == -1 {
+		if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
 			return nil
 		}
-		pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr), colTyp, targetTyp)
-		if err != nil {
-			return nil
-		}
-		return pkValueExpr
+	} else if pkTyp.AutoIncr {
+		return nil
 	}
-	return nil
+
+	node := builder.qry.Nodes[0]
+
+	pkValueExprs := make([]*Expr, len(pkPosInValues))
+	for idx, cols := range node.RowsetData.Cols {
+		pkColIdx, ok := pkPosInValues[idx]
+		if !ok {
+			continue
+		}
+		if len(cols.Data) == 1 {
+			rowExpr := DeepCopyExpr(cols.Data[0].Expr)
+			e, err := forceCastExpr(builder.GetContext(), rowExpr, tableDef.Cols[idx].Typ)
+			if err != nil {
+				return nil
+			}
+			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+				Typ: tableDef.Cols[idx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						ColPos: int32(pkColIdx),
+					},
+				},
+			}, e})
+			if err != nil {
+				return nil
+			}
+			pkValueExprs[pkColIdx] = expr
+		}
+	}
+	proc := ctx.GetProcess()
+	var bat *batch.Batch
+	if builder.isPrepareStatement {
+		bat = proc.GetPrepareBatch()
+	} else {
+		bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
+	}
+	if bat != nil {
+		for insertRowIdx, pkColIdx := range pkPosInValues {
+			if pkValueExprs[pkColIdx] == nil {
+				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true)
+				if constExpr == nil {
+					return nil
+				}
+				typ := makePlan2Type(bat.Vecs[insertRowIdx].GetType())
+
+				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					Typ: typ,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkColIdx),
+						},
+					},
+				}, &plan.Expr{
+					Typ: typ,
+					Expr: &plan.Expr_C{
+						C: constExpr,
+					},
+				}})
+				if err != nil {
+					return nil
+				}
+
+				pkValueExprs[pkColIdx] = expr
+			}
+		}
+	}
+	return pkValueExprs
+
+	// if len(pkValueExprs) == 1 {
+	// 	return pkValueExprs[0]
+	// } else {
+	// 	pkValueExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", pkValueExprs)
+	// 	if err != nil {
+	// 		return nil
+	// 	}
+	// 	return pkValueExpr
+	// }
 }

@@ -236,4 +236,50 @@ alter table index08 add index zxxxx(col3);
 show index from index08;
 drop table index08;
 
+drop table if exists index09;
+CREATE TABLE index09(
+                        col1 INT NOT NULL,
+                        col2 DATE NOT NULL,
+                        col3 VARCHAR(16) NOT NULL,
+                        col4 int unsigned NOT NULL,
+                        UNIQUE KEY u1 (col1 DESC)
+);
+
+insert into index09 values(1, '1980-12-17','Abby', 21);
+insert into index09 values(2, '1981-02-20','Bob', 22);
+show index from index09;
+ALTER TABLE emp ADD UNIQUE INDEX idx1 (col1 ASC, col2 DESC);
+show index from index09;
+drop table index09;
+
+drop table if exists index10;
+CREATE TABLE index10(
+                        col1 INT NOT NULL,
+                        col2 DATE NOT NULL,
+                        col3 VARCHAR(16) NOT NULL,
+                        col4 int unsigned NOT NULL,
+                        INDEX idx1 (col1 DESC),
+                        KEY idx2 (col2 DESC)
+);
+
+insert into index10 values(1, '1980-12-17','Abby', 21);
+insert into index10 values(2, '1981-02-20','Bob', 22);
+show index from index10;
+ALTER TABLE emp ADD INDEX idx3 (col1 ASC, col2 DESC);
+show index from index10;
+drop table index10;
+
+CREATE TABLE `t2` (
+`a` INT DEFAULT NULL
+) COMMENT='New table comment';
+
+alter table t2 drop primary key;
+alter table t2 AUTO_INCREMENT=10;
+
+CREATE TABLE `t3` (
+`a` INT NOT NULL,
+PRIMARY KEY (`a`)
+);
+alter table t3 drop primary key;
+
 drop database test;

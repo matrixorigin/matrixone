@@ -157,9 +157,12 @@ type QueryBuilder struct {
 
 	nextTag int32
 
+	isPrepareStatement bool
 	mysqlCompatible    bool
 	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 	isForUpdate        bool // if it's a query plan for update
+
+	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 }
 
 type CTERef struct {

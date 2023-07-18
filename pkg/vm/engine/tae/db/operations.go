@@ -114,6 +114,27 @@ func (m *InspectDN) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+const (
+	EnableFaultInjection  = "enable_fault_injection"
+	DisableFaultInjection = "disable_fault_injection"
+)
+
+type FaultPoint struct {
+	Name   string
+	Freq   string
+	Action string
+	Iarg   int64
+	Sarg   string
+}
+
+func (m *FaultPoint) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *FaultPoint) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 type CreateDatabaseResp struct {
 	ID uint64
 }

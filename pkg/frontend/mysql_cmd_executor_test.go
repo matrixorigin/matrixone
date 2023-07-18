@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -82,8 +83,6 @@ func Test_mce(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
@@ -299,8 +298,6 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
@@ -360,8 +357,6 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -467,8 +462,6 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -549,8 +542,6 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -713,8 +704,6 @@ func Test_handleSelectVariables(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -760,8 +749,6 @@ func Test_handleShowVariables(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
@@ -853,8 +840,6 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -930,13 +915,11 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		db := mock_frontend.NewMockDatabase(ctrl)
 		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
 
 		table := mock_frontend.NewMockRelation(ctrl)
-		db.EXPECT().Relation(ctx, "t").Return(table, nil).AnyTimes()
+		db.EXPECT().Relation(ctx, "t", nil).Return(table, nil).AnyTimes()
 		defs := []engine.TableDef{
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: types.T_char.ToType()}},
 			&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: types.T_int32.ToType()}},
@@ -1058,7 +1041,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		}
 		stm := &motrace.StatementInfo{StatementID: uuid.New(), Statement: sql, RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
-		json, _, stats := h.Marshal(mock.CurrentContext().GetContext())
+		json := h.Marshal(mock.CurrentContext().GetContext())
+		_, stats := h.Stats(mock.CurrentContext().GetContext())
 		require.Equal(t, int64(0), stats.RowsRead)
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
@@ -1072,7 +1056,7 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan.BuildPlan(ctx, stmts[0])
+	return plan.BuildPlan(ctx, stmts[0], false)
 }
 
 func Test_getSqlType(t *testing.T) {
@@ -1081,7 +1065,7 @@ func Test_getSqlType(t *testing.T) {
 		ses := &Session{}
 		ui := &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, internalSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.InternalSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1091,27 +1075,27 @@ func Test_getSqlType(t *testing.T) {
 		SetSpecialUser(user, nil)
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, internalSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.InternalSql)
 
 		tenant.User = "dump"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, externSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.ExternSql)
 
 		sql = "/* cloud_user */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, cloudUserSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.CloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, cloudNoUserSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.CloudNoUserSql)
 
 		sql = "/* json */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, externSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.ExternSql)
 	})
 }
 
@@ -1218,8 +1202,6 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -1275,7 +1257,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 		err = mce.handleShowBackendServers(ctx, 0, 1)
 		require.NoError(t, err)
 		rs := ses.GetMysqlResultSet()
-		require.Equal(t, uint64(3), rs.GetColumnCount())
+		require.Equal(t, uint64(4), rs.GetColumnCount())
 		require.Equal(t, uint64(2), rs.GetRowCount())
 	})
 
@@ -1316,7 +1298,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 		err = mce.handleShowBackendServers(ctx, 0, 1)
 		require.NoError(t, err)
 		rs := ses.GetMysqlResultSet()
-		require.Equal(t, uint64(3), rs.GetColumnCount())
+		require.Equal(t, uint64(4), rs.GetColumnCount())
 		require.Equal(t, uint64(1), rs.GetRowCount())
 
 		row, err := rs.GetRow(ctx, 0)
@@ -1341,7 +1323,7 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	si := motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
-	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{externSql, externSql}, moerr.NewInternalErrorNoCtx("test"))
+	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
 	si = motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 

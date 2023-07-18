@@ -55,7 +55,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	analyze := proc.GetAnalyze(idx)
 	analyze.Start()
 	defer analyze.Stop()
@@ -65,7 +65,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, analyze); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			if ctr.mp == nil {
 				ctr.state = End
@@ -76,7 +76,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, analyze)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 			if bat == nil {
@@ -94,15 +94,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 
 			if err := ctr.probe(bat, ap, proc, analyze, isFirst, isLast); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
-			return false, nil
+			return process.ExecNext, nil
 
 		case SendLast:
 			setNil, err := ctr.sendLast(ap, proc, analyze, isFirst, isLast)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 			ctr.state = End
@@ -110,11 +110,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 
-			return false, nil
+			return process.ExecNext, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }
@@ -127,7 +127,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(bat.Length())
 		analyze.Alloc(ctr.mp.Map().Size())
@@ -138,19 +138,19 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	ctr.handledLast = true
 
-	if !ap.IsMerger {
-		ap.Channel <- ctr.matched
-		return true, nil
-	}
-
 	if ap.NumCPU > 1 {
-		cnt := 1
-		for v := range ap.Channel {
-			ctr.matched.Or(v)
-			cnt++
-			if cnt == int(ap.NumCPU) {
-				close(ap.Channel)
-				break
+		if !ap.IsMerger {
+			ap.Channel <- ctr.matched
+			return true, nil
+		} else {
+			cnt := 1
+			for v := range ap.Channel {
+				ctr.matched.Or(v)
+				cnt++
+				if cnt == int(ap.NumCPU) {
+					close(ap.Channel)
+					break
+				}
 			}
 		}
 	}

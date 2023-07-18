@@ -17,12 +17,12 @@ package frontend
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -58,6 +58,8 @@ type ComputationWrapper interface {
 	RecordExecPlan(ctx context.Context) error
 
 	GetLoadTag() bool
+
+	GetServerStatus() uint16
 }
 
 type ColumnInfo interface {
@@ -91,10 +93,13 @@ type PrepareStmt struct {
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
 	IsInsertValues bool
+	InsertBat      *batch.Batch
+	proc           *process.Process
 
-	mp        *mpool.MPool
-	InsertBat *batch.Batch
-	ufs       []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
+	exprList [][]colexec.ExpressionExecutor
+
+	params              *vector.Vector
+	getFromSendLongData map[int]struct{}
 }
 
 /*
@@ -103,10 +108,6 @@ Disguise the COMMAND CMD_FIELD_LIST as sql query.
 const (
 	cmdFieldListSql    = "__++__internal_cmd_field_list"
 	cmdFieldListSqlLen = len(cmdFieldListSql)
-	internalSql        = "internal_sql"
-	cloudUserSql       = "cloud_user_sql"
-	cloudNoUserSql     = "cloud_nonuser_sql"
-	externSql          = "external_sql"
 	cloudUserTag       = "cloud_user"
 	cloudNoUserTag     = "cloud_nonuser"
 )
@@ -192,8 +193,19 @@ type outputPool interface {
 }
 
 func (prepareStmt *PrepareStmt) Close() {
+	if prepareStmt.params != nil {
+		prepareStmt.params.Free(prepareStmt.proc.Mp())
+	}
 	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.Clean(prepareStmt.mp)
+		prepareStmt.InsertBat.SetCnt(1)
+		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
 		prepareStmt.InsertBat = nil
+	}
+	if prepareStmt.exprList != nil {
+		for _, exprs := range prepareStmt.exprList {
+			for _, expr := range exprs {
+				expr.Free()
+			}
+		}
 	}
 }

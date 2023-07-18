@@ -31,8 +31,8 @@ import (
 const (
 	defaultDataDir           = "mo-data/logservice"
 	defaultSnapshotExportDir = "exported-snapshot"
-	defaultServiceAddress    = "0.0.0.0:32000"
-	defaultRaftAddress       = "0.0.0.0:32001"
+	defaultRaftAddress       = "0.0.0.0:32000"
+	defaultServiceAddress    = "0.0.0.0:32001"
 	defaultGossipAddress     = "0.0.0.0:32002"
 	defaultGossipSeedAddress = "127.0.0.1:32002"
 
@@ -42,6 +42,8 @@ const (
 	defaultTruncateInterval    = 10 * time.Second
 	defaultMaxExportedSnapshot = 20
 	defaultMaxMessageSize      = 1024 * 1024 * 100
+	// The default value for HAKeeper truncate interval.
+	defaultHAKeeperTruncateInterval = 24 * time.Hour
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -107,8 +109,11 @@ type Config struct {
 	// cluster health checks.
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
 	// TruncateInterval is the interval of how often log service should
-	// process truncate.
+	// process truncate for regular shards.
 	TruncateInterval toml.Duration `toml:"truncate-interval"`
+	// HAKeeperTruncateInterval is the interval of how often log service should
+	// process truncate for HAKeeper shard.
+	HAKeeperTruncateInterval toml.Duration `toml:"hakeeper-truncate-interval"`
 
 	RPC struct {
 		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.
@@ -290,6 +295,9 @@ func (c *Config) Validate() error {
 	if c.TruncateInterval.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("TruncateInterval not set")
 	}
+	if c.HAKeeperTruncateInterval.Duration == 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperTruncateInterval not set")
+	}
 	if c.RPC.MaxMessageSize == 0 {
 		return moerr.NewBadConfigNoCtx("MaxMessageSize not set")
 	}
@@ -364,6 +372,9 @@ func (c *Config) Fill() {
 	} else if len(c.GossipAddress) != 0 && len(c.GossipListenAddress) == 0 {
 		c.GossipListenAddress = c.GossipAddress
 	}
+	if len(c.GossipSeedAddresses) == 0 {
+		c.GossipSeedAddresses = []string{defaultGossipSeedAddress}
+	}
 	if c.HAKeeperConfig.TickPerSecond == 0 {
 		c.HAKeeperConfig.TickPerSecond = hakeeper.DefaultTickPerSecond
 	}
@@ -375,6 +386,12 @@ func (c *Config) Fill() {
 	}
 	if c.HAKeeperConfig.CNStoreTimeout.Duration == 0 {
 		c.HAKeeperConfig.CNStoreTimeout.Duration = hakeeper.DefaultCNStoreTimeout
+	}
+	if c.HAKeeperClientConfig.DiscoveryAddress == "" && len(c.HAKeeperClientConfig.ServiceAddresses) == 0 {
+		c.HAKeeperClientConfig.ServiceAddresses = []string{defaultServiceAddress}
+	}
+	if c.HAKeeperClientConfig.AllocateIDBatch == 0 {
+		c.HAKeeperClientConfig.AllocateIDBatch = 100
 	}
 	if c.HeartbeatInterval.Duration == 0 {
 		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
@@ -390,6 +407,9 @@ func (c *Config) Fill() {
 	}
 	if c.TruncateInterval.Duration == 0 {
 		c.TruncateInterval.Duration = defaultTruncateInterval
+	}
+	if c.HAKeeperTruncateInterval.Duration == 0 {
+		c.HAKeeperTruncateInterval.Duration = defaultHAKeeperTruncateInterval
 	}
 	if c.RPC.MaxMessageSize == 0 {
 		c.RPC.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
@@ -412,7 +432,7 @@ type HAKeeperClientConfig struct {
 // Validate validates the HAKeeperClientConfig.
 func (c *HAKeeperClientConfig) Validate() error {
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfigNoCtx("HAKeeperClientConfig not set")
+		c.ServiceAddresses = []string{defaultServiceAddress}
 	}
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
@@ -450,7 +470,7 @@ func (c *ClientConfig) Validate() error {
 		return moerr.NewBadConfigNoCtx("DNReplicaID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfigNoCtx("ServiceAddresses not set")
+		c.ServiceAddresses = []string{defaultServiceAddress}
 	}
 	return nil
 }

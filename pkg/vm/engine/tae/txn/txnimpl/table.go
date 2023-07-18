@@ -25,6 +25,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -137,7 +138,7 @@ func (tbl *txnTable) PrePreareTransfer(phase string) (err error) {
 func (tbl *txnTable) TransferDeleteIntent(
 	id *common.ID,
 	row uint32) (changed bool, nid *common.ID, nrow uint32, err error) {
-	pinned, err := tbl.store.transferTable.Pin(*id)
+	pinned, err := tbl.store.rt.TransferTable.Pin(*id)
 	if err != nil {
 		err = nil
 		return
@@ -170,7 +171,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 }
 
 func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
-	if tbl.store.transferTable == nil {
+	if tbl.store.rt.TransferTable == nil {
 		return
 	}
 	if len(tbl.deleteNodes) == 0 {
@@ -233,8 +234,9 @@ func (tbl *txnTable) recurTransferDelete(
 		TableID: id.TableID,
 		BlockID: blockID,
 	}
+	var err error
 	if page2, ok = memo[blockID]; !ok {
-		page2, err := tbl.store.transferTable.Pin(*newID)
+		page2, err = tbl.store.rt.TransferTable.Pin(*newID)
 		if err == nil {
 			memo[blockID] = page2
 		}
@@ -247,7 +249,8 @@ func (tbl *txnTable) recurTransferDelete(
 			offset,
 			depth+1)
 	}
-	if err := tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
+
+	if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
 		return err
 	}
 	common.DoIfDebugEnabled(func() {
@@ -304,7 +307,7 @@ func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32, phase stri
 		}
 	}()
 
-	pinned, err := tbl.store.transferTable.Pin(*id)
+	pinned, err := tbl.store.rt.TransferTable.Pin(*id)
 	// cannot find a transferred record. maybe the transferred record was TTL'ed
 	// here we can convert the error back to r-w conflict
 	if err != nil {
@@ -636,7 +639,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					tbl.store.dataFactory.Fs.Service,
+					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
 				)
@@ -951,7 +954,7 @@ func (tbl *txnTable) quickSkipThisBlock(
 	keysZM index.ZM,
 	meta *catalog.BlockEntry,
 ) (ok bool, err error) {
-	zm, err := meta.GetPKZoneMap(ctx, tbl.store.dataFactory.Fs.Service)
+	zm, err := meta.GetPKZoneMap(ctx, tbl.store.rt.Fs.Service)
 	if err != nil {
 		return
 	}
@@ -975,8 +978,8 @@ func (tbl *txnTable) tryGetCurrentObjectBF(
 	currBf, err = blockio.LoadBF(
 		ctx,
 		currLocation,
-		tbl.store.indexCache,
-		tbl.store.dataFactory.Fs.Service,
+		tbl.store.rt.Cache.FilterIndex,
+		tbl.store.rt.Fs.Service,
 		false,
 	)
 	return
@@ -1118,7 +1121,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					tbl.store.dataFactory.Fs.Service,
+					tbl.store.rt.Fs.Service,
 					loc,
 					nil,
 				)
@@ -1157,7 +1160,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM) (err error) {
-	trace.WithRegion(context.Background(), "DoPrecommitDedupByPK", func() {
+	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		segIt := tbl.entry.MakeSegmentIt(false)
 		for segIt.Valid() {
 			seg := segIt.Get().GetPayload()

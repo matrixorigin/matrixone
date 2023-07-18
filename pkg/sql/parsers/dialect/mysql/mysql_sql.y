@@ -196,6 +196,10 @@ import (
     accountIdentified tree.AccountIdentified
     accountStatus tree.AccountStatus
     accountComment tree.AccountComment
+    stageComment tree.StageComment
+    stageStatus tree.StageStatus
+    stageUrl tree.StageUrl
+    stageCredentials tree.StageCredentials
     accountCommentOrAttribute tree.AccountCommentOrAttribute
     userIdentified *tree.AccountIdentified
     accountRole *tree.Role
@@ -227,6 +231,11 @@ import (
     elseIfClauseList []*tree.ElseIfStmt
     subscriptionOption *tree.SubscriptionOption
     accountsSetOption *tree.AccountsSetOption
+
+    transactionCharacteristic *tree.TransactionCharacteristic
+    transactionCharacteristicList []*tree.TransactionCharacteristic
+    isolationLevel tree.IsolationLevelType
+    accessMode tree.AccessModeType
 }
 
 %token LEX_ERROR
@@ -235,7 +244,8 @@ import (
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER 
+%token <str> INSTANT INPLACE COPY DISABLE ENABLE UNDEFINED MERGE TEMPTABLE DEFINER INVOKER SQL SECURITY CASCADED
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
@@ -246,7 +256,7 @@ import (
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
-%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS
 %token <item> INTEGRAL HEX BIT_LITERAL FLOAT
 %token <str>  HEXNUM
 %token <str> NULL TRUE FALSE
@@ -300,7 +310,7 @@ import (
 %token <str> STATUS VARIABLES ROLE PROXY AVG_ROW_LENGTH STORAGE DISK MEMORY
 %token <str> CHECKSUM COMPRESSION DATA DIRECTORY DELAY_KEY_WRITE ENCRYPTION ENGINE
 %token <str> MAX_ROWS MIN_ROWS PACK_KEYS ROW_FORMAT STATS_AUTO_RECALC STATS_PERSISTENT STATS_SAMPLE_PAGES
-%token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
+%token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM ENGINE_ATTRIBUTE SECONDARY_ENGINE_ATTRIBUTE INSERT_METHOD
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
@@ -332,20 +342,20 @@ import (
 %token <str> SLAVE CLIENT USAGE RELOAD FILE TEMPORARY ROUTINE EVENT SHUTDOWN
 
 // Type Modifiers
-%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY
+%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY AUTOEXTEND_SIZE
 
 // Account
-%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
+%token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY RESTRICTED
 
 // User
-%token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD
+%token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD SHARED EXCLUSIVE
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
 
 // Explain
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
 
 // MODump
 %token <str> MODUMP
@@ -379,7 +389,7 @@ import (
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Match
-%token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION
+%token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
@@ -434,7 +444,7 @@ import (
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
-%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
+%type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
@@ -467,8 +477,10 @@ import (
 
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
-%type <statement>  create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
-%type <str> comment_opt
+%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
+%type <str> urlparams
+%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subcription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
 
@@ -513,7 +525,7 @@ import (
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list
-%type <str> charset_name storage_opt collate_name column_format storage_media
+%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -541,7 +553,7 @@ import (
 %type <funcExpr> function_call_window
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params
+%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
 %type <str> charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
@@ -632,7 +644,7 @@ import (
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt parallel_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt
+%type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword separator_opt
 %type <insert> insert_data
@@ -658,7 +670,7 @@ import (
 %type <updateExpr> load_set_item
 %type <updateExprs> load_set_list load_set_spec_opt
 %type <strs> index_name_and_type_opt index_name_list
-%type <str> index_name index_type key_or_index_opt key_or_index
+%type <str> index_name index_type key_or_index_opt key_or_index insert_method_options
 // type <str> mo_keywords
 %type <properties> properties_list
 %type <property> property_elem
@@ -686,6 +698,10 @@ import (
 %type <accountStatus> account_status_option
 %type <accountComment> account_comment_opt
 %type <accountCommentOrAttribute> user_comment_or_attribute_opt
+%type <stageComment> stage_comment_opt
+%type <stageStatus> stage_status_opt
+%type <stageUrl> stage_url_opt
+%type <stageCredentials> stage_credentials_opt
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 
@@ -704,6 +720,10 @@ import (
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
 
+%type<transactionCharacteristic> transaction_characteristic
+%type<transactionCharacteristicList> transaction_characteristic_list
+%type<isolationLevel> isolation_level
+%type<accessMode> access_mode
 %%
 
 start_command:
@@ -1804,6 +1824,84 @@ set_stmt:
 |   set_password_stmt
 |   set_role_stmt
 |   set_default_role_stmt
+|   set_transaction_stmt
+
+set_transaction_stmt:
+    SET TRANSACTION transaction_characteristic_list
+    {
+	$$ = &tree.SetTransaction{
+	    Global: false,
+	    CharacterList: $3,
+	    }
+    }
+|   SET GLOBAL TRANSACTION transaction_characteristic_list
+    {
+        $$ = &tree.SetTransaction{
+            Global: true,
+            CharacterList: $4,
+            }
+    }
+|   SET SESSION TRANSACTION transaction_characteristic_list
+    {
+        $$ = &tree.SetTransaction{
+            Global: false,
+            CharacterList: $4,
+            }
+    }
+
+
+transaction_characteristic_list:
+    transaction_characteristic
+    {
+	$$ = []*tree.TransactionCharacteristic{ $1 }
+    }
+|   transaction_characteristic_list ',' transaction_characteristic
+    {
+	$$ = append($1, $3)
+    }
+
+transaction_characteristic:
+    ISOLATION LEVEL isolation_level
+    {
+	$$ = &tree.TransactionCharacteristic{
+	    IsLevel: true,
+	    Isolation: $3,
+	}
+    }
+|   access_mode
+    {
+	$$ = &tree.TransactionCharacteristic{
+	    Access: $1,
+	}
+    }
+
+isolation_level:
+    REPEATABLE READ
+    {
+	$$ = tree.ISOLATION_LEVEL_REPEATABLE_READ
+    }
+|   READ COMMITTED
+    {
+	$$ = tree.ISOLATION_LEVEL_READ_COMMITTED
+    }
+|   READ UNCOMMITTED
+    {
+	$$ = tree.ISOLATION_LEVEL_READ_UNCOMMITTED
+    }
+|   SERIALIZABLE
+    {
+	$$ = tree.ISOLATION_LEVEL_SERIALIZABLE
+    }
+
+access_mode:
+   READ WRITE
+   {
+	$$ = tree.ACCESS_MODE_READ_WRITE
+   }
+| READ ONLY
+   {
+	$$ = tree.ACCESS_MODE_READ_ONLY
+   }
 
 set_role_stmt:
     SET ROLE role_spec
@@ -2479,6 +2577,7 @@ alter_stmt:
 |   alter_view_stmt
 |   alter_table_stmt
 |   alter_publication_stmt
+|   alter_stage_stmt
 // |    alter_ddl_stmt
 
 alter_view_stmt:
@@ -2502,7 +2601,7 @@ alter_table_stmt:
     }
 
 alter_option_list:
-alter_option
+    alter_option
     {
         $$ = []tree.AlterTableOption{$1}
     }
@@ -2512,30 +2611,30 @@ alter_option
     }
 
 alter_option:
-ADD table_elem_2
+    ADD table_elem_2
     {
         opt := &tree.AlterOptionAdd{
             Def:  $2,
         }
         $$ = tree.AlterTableOption(opt)
     }
-| DROP alter_table_drop
+|   DROP alter_table_drop
     {
         $$ = tree.AlterTableOption($2)
     }
-| ALTER alter_table_alter
+|   ALTER alter_table_alter
     {
     	$$ = tree.AlterTableOption($2)
     }
-| table_option
+|   table_option
     {
         $$ = tree.AlterTableOption($1)
     }
-| RENAME TO alter_table_rename
+|   RENAME rename_type alter_table_rename
     {
         $$ = tree.AlterTableOption($3)
     }
-| ADD column_def pos_info
+|   ADD column_def pos_info
     {
         $$ = tree.AlterTableOption(
             &tree.AlterAddCol{
@@ -2544,7 +2643,7 @@ ADD table_elem_2
             },
         )
     }
-| ADD COLUMN column_def pos_info
+|   ADD COLUMN column_def pos_info
     {
         $$ = tree.AlterTableOption(
             &tree.AlterAddCol{
@@ -2553,6 +2652,75 @@ ADD table_elem_2
             },
         )
     }
+|   ALGORITHM equal_opt algorithm_type
+    {
+        $$ = &tree.AlterOptionAlterCheck{
+            Type: $1,
+        }
+    }
+|   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
+    {
+        $$ = tree.NewTableOptionCharset($4)
+    }
+|   CONVERT TO CHARACTER SET charset_name
+    {
+        $$ = tree.NewTableOptionCharset($5)
+    }
+|   CONVERT TO CHARACTER SET charset_name COLLATE equal_opt charset_name
+    {
+        $$ = tree.NewTableOptionCharset($5)
+    }
+|   able_type KEYS
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+|   space_type TABLESPACE
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+|   FORCE
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+|   LOCK equal_opt lock_type
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+|   with_type VALIDATION
+    {
+        $$ = tree.NewTableOptionCharset($1)
+    }
+
+rename_type:
+    {
+        $$ = ""
+    }
+|   TO
+|   AS
+
+algorithm_type:
+    DEFAULT
+|   INSTANT
+|   INPLACE
+|   COPY
+
+able_type:
+    DISABLE
+|   ENABLE
+
+space_type:
+    DISCARD
+|   IMPORT
+
+lock_type:
+    DEFAULT
+|   NONE
+|   SHARED
+|   EXCLUSIVE
+
+with_type:
+    WITHOUT
+|   WITH   
 
 pos_info:
     {
@@ -2627,13 +2795,27 @@ alter_table_drop:
     }
 
 alter_table_alter:
-   INDEX ident visibility
-   {
-	$$ = &tree.AlterOptionAlterIndex{
+    INDEX ident visibility
+    {
+        $$ = &tree.AlterOptionAlterIndex{
             Visibility:  $3,
             Name: tree.Identifier($2.Compare()),
         }
-   }
+    }
+|   CHECK ident enforce
+    {
+        $$ = &tree.AlterOptionAlterCheck{
+            Type: $1,
+            Enforce: $3,
+        }
+    }
+|   CONSTRAINT ident enforce
+    {
+        $$ = &tree.AlterOptionAlterCheck{
+            Type: $1,
+            Enforce: $3,
+        }
+    }
 
 visibility:
     VISIBLE
@@ -2642,7 +2824,7 @@ visibility:
     }
 |   INVISIBLE
     {
-   	$$ = tree.VISIBLE_TYPE_INVISIBLE
+   	    $$ = tree.VISIBLE_TYPE_INVISIBLE
     }
 
 
@@ -3307,6 +3489,7 @@ drop_ddl_stmt:
 |   drop_sequence_stmt
 |   drop_publication_stmt
 |   drop_procedure_stmt
+|   drop_stage_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -3374,9 +3557,9 @@ drop_index_stmt:
     }
 
 drop_table_stmt:
-    DROP TABLE exists_opt table_name_list
+    DROP TABLE temporary_opt exists_opt table_name_list drop_table_opt
     {
-        $$ = &tree.DropTable{IfExists: $3, Names: $4}
+        $$ = &tree.DropTable{IfExists: $4, Names: $5}
     }
 
 drop_view_stmt:
@@ -3387,6 +3570,10 @@ drop_view_stmt:
 
 drop_database_stmt:
     DROP DATABASE exists_opt ident
+    {
+        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
+    }
+|   DROP SCHEMA exists_opt ident
     {
         $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
     }
@@ -4763,6 +4950,7 @@ create_stmt:
 |   create_user_stmt
 |   create_account_stmt
 |   create_publication_stmt
+|   create_stage_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -4937,7 +5125,16 @@ func_return:
     }
 
 create_view_stmt:
-    CREATE VIEW not_exists_opt table_name column_list_opt AS select_stmt
+    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+    {
+        $$ = &tree.CreateView{
+            Name: $5,
+            ColNames: $6,
+            AsSource: $8,
+            IfNotExists: $4,
+        }
+    }
+|   CREATE VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
         $$ = &tree.CreateView{
             Name: $4,
@@ -4959,6 +5156,59 @@ create_account_stmt:
     	}
     }
 
+view_list_opt:
+    view_opt
+    {
+        $$ = $1
+    }
+|   view_list_opt view_opt
+    {
+        $$ = $$ + $2
+    }
+
+view_opt:
+    OR REPLACE
+    {
+        $$ = "OR REPLACE"
+    }
+|   ALGORITHM '=' algorithm_type_2
+    {
+        $$ = "ALGORITHM = " + $3
+    }
+|   DEFINER '=' user_name
+    {
+        $$ = "DEFINER = "
+    }
+|   SQL SECURITY security_opt
+    {
+        $$ = "SQL SECURITY " + $3
+    }
+
+view_tail:
+    {
+        $$ = ""
+    }
+|   WITH check_type CHECK OPTION
+    {
+        $$ = "WITH " + $2 + " CHECK OPTION"
+    }
+
+algorithm_type_2:
+    UNDEFINED
+|   MERGE
+|   TEMPTABLE
+
+security_opt:
+    DEFINER
+|   INVOKER
+
+check_type:
+    {
+        $$ = ""
+    }
+|   CASCADED
+|   LOCAL
+
 account_name:
     ident
     {
@@ -4968,11 +5218,11 @@ account_name:
 account_auth_option:
     ADMIN_NAME equal_opt account_admin_name account_identified
     {
-    $$ = tree.AccountAuthOption{
-        Equal:$2,
-        AdminName:$3,
-        IdentifiedType:$4,
-    }
+        $$ = tree.AccountAuthOption{
+            Equal:$2,
+            AdminName:$3,
+            IdentifiedType:$4,
+        }
     }
 
 account_admin_name:
@@ -4988,58 +5238,65 @@ account_admin_name:
 account_identified:
     IDENTIFIED BY STRING
     {
-    $$ = tree.AccountIdentified{
-        Typ: tree.AccountIdentifiedByPassword,
-        Str: $3,
-    }
+        $$ = tree.AccountIdentified{
+            Typ: tree.AccountIdentifiedByPassword,
+            Str: $3,
+        }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
     {
-    $$ = tree.AccountIdentified{
-        Typ: tree.AccountIdentifiedByRandomPassword,
-    }
+        $$ = tree.AccountIdentified{
+            Typ: tree.AccountIdentifiedByRandomPassword,
+        }
     }
 |   IDENTIFIED WITH STRING
     {
-    $$ = tree.AccountIdentified{
-        Typ: tree.AccountIdentifiedWithSSL,
-        Str: $3,
-    }
+        $$ = tree.AccountIdentified{
+            Typ: tree.AccountIdentifiedWithSSL,
+            Str: $3,
+        }
     }
 
 account_status_option:
     {
         $$ = tree.AccountStatus{
-        Exist: false,
-    }
+            Exist: false,
+        }
     }
 |   OPEN
     {
-    $$ = tree.AccountStatus{
-        Exist: true,
-        Option: tree.AccountStatusOpen,
-    }
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusOpen,
+        }
     }
 |   SUSPEND
     {
-    $$ = tree.AccountStatus{
-        Exist: true,
-        Option: tree.AccountStatusSuspend,
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusSuspend,
+        }
     }
+|   RESTRICTED
+    {
+        $$ = tree.AccountStatus{
+            Exist: true,
+            Option: tree.AccountStatusRestricted,
+        }
     }
 
 account_comment_opt:
     {
         $$ = tree.AccountComment{
-        Exist: false,
-    }
+            Exist: false,
+        }
     }
 |   COMMENT_KEYWORD STRING
     {
-    $$ = tree.AccountComment{
-        Exist: true,
-        Comment: $2,
-    }
+        $$ = tree.AccountComment{
+            Exist: true,
+            Comment: $2,
+        }
     }
 
 create_user_stmt:
@@ -5057,72 +5314,197 @@ create_user_stmt:
 create_publication_stmt:
     CREATE PUBLICATION not_exists_opt ident DATABASE ident alter_publication_accounts_opt comment_opt
     {
-	$$ = &tree.CreatePublication{
-	    IfNotExists: $3,
-	    Name: tree.Identifier($4.Compare()),
-	    Database: tree.Identifier($6.Compare()),
-	    AccountsSet: $7,
-	    Comment: $8,
-	}
+	    $$ = &tree.CreatePublication{
+	        IfNotExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+	        Database: tree.Identifier($6.Compare()),
+	        AccountsSet: $7,
+	        Comment: $8,
+	    }
+    }
+
+create_stage_stmt:
+    CREATE STAGE not_exists_opt ident urlparams stage_credentials_opt stage_status_opt stage_comment_opt
+    {
+        $$ = &tree.CreateStage{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Url: $5,
+            Credentials: $6,
+            Status: $7,
+            Comment: $8,
+        }
+    }
+
+stage_status_opt:
+    {
+        $$ = tree.StageStatus{
+            Exist: false,
+        }
+    }
+|   ENABLE '=' TRUE
+    {
+        $$ = tree.StageStatus{
+            Exist: true,
+            Option: tree.StageStatusEnabled,
+        }
+    }
+|   ENABLE '=' FALSE
+    {
+        $$ = tree.StageStatus{
+            Exist: true,
+            Option: tree.StageStatusDisabled,
+        }
+    }
+
+stage_comment_opt:
+    {
+        $$ = tree.StageComment{
+            Exist: false,
+        }
+    }
+|   COMMENT_KEYWORD STRING
+    {
+        $$ = tree.StageComment{
+            Exist: true,
+            Comment: $2,
+        }
+    }
+
+stage_url_opt:
+    {
+        $$ = tree.StageUrl{
+            Exist: false,
+        }
+    }
+|   URL '=' STRING
+    {
+        $$ = tree.StageUrl{
+            Exist: true,
+            Url: $3,
+        }
+    }
+
+stage_credentials_opt:
+    {
+        $$ = tree.StageCredentials {
+            Exist:false,
+        }
+    }
+|   CREDENTIALS '=' '{' credentialsparams '}'
+    {
+        $$ = tree.StageCredentials {
+            Exist:true,
+            Credentials:$4,
+        }
+    }
+
+credentialsparams:
+    credentialsparam
+    {
+        $$ = $1
+    }
+|   credentialsparams ',' credentialsparam
+    {
+        $$ = append($1, $3...)
+    }
+
+credentialsparam:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
+    }
+
+urlparams:
+    URL '=' STRING
+    {
+        $$ = $3
     }
 
 comment_opt:
     {
-    	$$ = ""
+        $$ = ""
     }
-    | COMMENT_KEYWORD STRING
+|   COMMENT_KEYWORD STRING
     {
-    	$$ = $2
+        $$ = $2
     }
 
-alter_publication_stmt:
-ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+alter_stage_stmt:
+    ALTER STAGE exists_opt ident SET stage_url_opt stage_credentials_opt stage_status_opt stage_comment_opt
     {
-	$$ = &tree.AlterPublication{
-	    IfExists: $3,
-	    Name: tree.Identifier($4.Compare()),
-	    AccountsSet: $5,
-	    Comment: $6,
-	}
+        $$ = &tree.AlterStage{
+            	IfNotExists: $3,
+	            Name: tree.Identifier($4.Compare()),           
+	            UrlOption: $6,
+	            CredentialsOption: $7,
+	            StatusOption: $8,
+	            Comment: $9,
+        }
+    }
+
+
+alter_publication_stmt:
+    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    {
+	    $$ = &tree.AlterPublication{
+	        IfExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+	        AccountsSet: $5,
+	        Comment: $6,
+	    }
     }
 
 alter_publication_accounts_opt:
     {
-	$$ = nil
+	    $$ = nil
     }
     | ACCOUNT ALL
     {
-	$$ = &tree.AccountsSetOption{
-	    All: true,
-	}
+	    $$ = &tree.AccountsSetOption{
+	        All: true,
+	    }
     }
     | ACCOUNT accounts_list
     {
     	$$ = &tree.AccountsSetOption{
-	    SetAccounts: $2,
-	}
+	        SetAccounts: $2,
+	    }
     }
     | ACCOUNT ADD accounts_list
     {
     	$$ = &tree.AccountsSetOption{
-	    AddAccounts: $3,
-	}
+	        AddAccounts: $3,
+	    }
     }
     | ACCOUNT DROP accounts_list
     {
     	$$ = &tree.AccountsSetOption{
-	    DropAccounts: $3,
-	}
+	        DropAccounts: $3,
+	    }
     }
 
 
 drop_publication_stmt:
 DROP PUBLICATION exists_opt ident
     {
-	$$ = &tree.DropPublication{
-	    IfExists: $3,
-	    Name: tree.Identifier($4.Compare()),
-	}
+	    $$ = &tree.DropPublication{
+	        IfExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+	    }
+    }
+
+drop_stage_stmt:
+DROP STAGE exists_opt ident
+    {
+        $$ = &tree.DropStage{
+            IfNotExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+        }
     }
 
 account_role_name:
@@ -5139,19 +5521,19 @@ user_comment_or_attribute_opt:
     }
 |   COMMENT_KEYWORD STRING
     {
-    $$ = tree.AccountCommentOrAttribute{
-        Exist: true,
-        IsComment: true,
-        Str: $2,
-    }
+        $$ = tree.AccountCommentOrAttribute{
+            Exist: true,
+            IsComment: true,
+            Str: $2,
+        }
     }
 |   ATTRIBUTE STRING
     {
-    $$ = tree.AccountCommentOrAttribute{
-        Exist: true,
-        IsComment: false,
-        Str: $2,
-    }
+        $$ = tree.AccountCommentOrAttribute{
+            Exist: true,
+            IsComment: false,
+            Str: $2,
+        }
     }
 
 //conn_options:
@@ -5510,7 +5892,7 @@ using_opt:
     {
         $$ = tree.INDEX_TYPE_RTREE
     }
-|    USING BSI
+|   USING BSI
     {
         $$ = tree.INDEX_TYPE_BSI
     }
@@ -5846,6 +6228,19 @@ temporary_opt:
         $$ = true
     }
 
+drop_table_opt:
+    {
+        $$ = true
+    }
+|   RESTRICT
+    {
+        $$ = true
+    }
+|   CASCADE
+    {
+        $$ = true
+    }
+
 partition_by_opt:
     {
         $$ = nil
@@ -6128,7 +6523,11 @@ table_option_list:
     }
 
 table_option:
-    AUTO_INCREMENT equal_opt INTEGRAL
+    AUTOEXTEND_SIZE equal_opt INTEGRAL
+    {
+        $$ = tree.NewTableOptionAUTOEXTEND_SIZE(uint64($3.(int64)))
+    }
+|   AUTO_INCREMENT equal_opt INTEGRAL
     {
         $$ = tree.NewTableOptionAutoIncrement(uint64($3.(int64)))
     }
@@ -6181,6 +6580,14 @@ table_option:
     {
         $$ = tree.NewTableOptionEngine($3)
     }
+|   ENGINE_ATTRIBUTE equal_opt STRING
+    {
+        $$ = tree.NewTableOptionEngineAttr($3)
+    }
+|   INSERT_METHOD equal_opt insert_method_options
+    {
+        $$ = tree.NewTableOptionInsertMethod($3)
+    }
 |   KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
         $$ = tree.NewTableOptionKeyBlockSize(uint64($3.(int64)))
@@ -6209,6 +6616,14 @@ table_option:
     {
         $$ = tree.NewTableOptionRowFormat($3)
     }
+|   START TRANSACTION
+    {
+        $$ = tree.NewTTableOptionStartTrans(true)
+    }
+|   SECONDARY_ENGINE_ATTRIBUTE equal_opt STRING
+    {
+        $$ = tree.NewTTableOptionSecondaryEngineAttr($3)
+    }
 |   STATS_AUTO_RECALC equal_opt INTEGRAL
     {
         $$ = &tree.TableOptionStatsAutoRecalc{Value: uint64($3.(int64))}
@@ -6233,19 +6648,22 @@ table_option:
     {
         $$ = &tree.TableOptionStatsSamplePages{Default: true}
     }
-|   TABLESPACE equal_opt ident storage_opt
+|   TABLESPACE equal_opt ident
     {
-        $$= tree.NewTableOptionTablespace($3.Compare(), $4)
+        $$= tree.NewTableOptionTablespace($3.Compare(), "")
+    }
+|   storage_opt
+    {
+        $$= tree.NewTableOptionTablespace("", $1)
     }
 |   UNION equal_opt '(' table_name_list ')'
     {
         $$= tree.NewTableOptionUnion($4)
     }
-|    PROPERTIES '(' properties_list ')'
+|   PROPERTIES '(' properties_list ')'
     {
         $$ = &tree.TableOptionProperties{Preperties: $3}
     }
-// |   INSERT_METHOD equal_opt insert_method_options
 
 properties_list:
     property_elem
@@ -6264,10 +6682,7 @@ property_elem:
     }
 
 storage_opt:
-    {
-        $$ = ""
-    }
-|   STORAGE DISK
+    STORAGE DISK
     {
         $$ = " " + $1 + " " + $2
     }
@@ -6352,7 +6767,7 @@ table_elem_list:
     }
 
 table_elem:
-column_def
+    column_def
     {
         $$ = tree.TableDef($1)
     }
@@ -6385,7 +6800,16 @@ index_def:
             IndexOption: $7,
         }
     }
-|    key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
+|   FULLTEXT key_or_index_opt index_name '(' index_column_list ')' USING index_type index_option_list
+    {
+        $$ = &tree.FullTextIndex{
+            KeyParts: $5,
+            Name: $3,
+            Empty: true,
+            IndexOption: $9,
+        }
+    }
+|   key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
         keyTyp := tree.INDEX_TYPE_INVALID
         if $3[1] != "" {
@@ -6408,6 +6832,29 @@ index_def:
             IndexOption: $7,
         }
     }
+|   key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' USING index_type index_option_list
+    {
+        keyTyp := tree.INDEX_TYPE_INVALID
+        if $3[1] != "" {
+               t := strings.ToLower($3[1])
+            switch t {
+            case "zonemap":
+                keyTyp = tree.INDEX_TYPE_ZONEMAP
+            case "bsi":
+                keyTyp = tree.INDEX_TYPE_BSI
+            default:
+                yylex.Error("Invail the type of index")
+                return 1
+            }
+        }
+        $$ = &tree.Index{
+            IfNotExists: $2,
+            KeyParts: $5,
+            Name: $3[0],
+            KeyType: keyTyp,
+            IndexOption: $9,
+        }
+    }
 
 constaint_def:
     constraint_keyword constraint_elem
@@ -6424,7 +6871,7 @@ constaint_def:
         }
         $$ = $2
     }
-|    constraint_elem
+|   constraint_elem
     {
         $$ = $1
     }
@@ -6432,14 +6879,23 @@ constaint_def:
 constraint_elem:
     PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
-         $$ = &tree.PrimaryKeyIndex{
+        $$ = &tree.PrimaryKeyIndex{
             KeyParts: $5,
             Name: $3[0],
             Empty: $3[1] == "",
             IndexOption: $7,
         }
     }
-|    UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
+|   PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' USING index_type index_option_list
+    {
+        $$ = &tree.PrimaryKeyIndex{
+            KeyParts: $5,
+            Name: $3[0],
+            Empty: $3[1] == "",
+            IndexOption: $9,
+        }
+    }
+|   UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
         $$ = &tree.UniqueIndex{
             KeyParts: $5,
@@ -6448,7 +6904,16 @@ constraint_elem:
             IndexOption: $7,
         }
     }
-|    FOREIGN KEY not_exists_opt index_name '(' index_column_list ')' references_def
+|   UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' USING index_type index_option_list
+    {
+        $$ = &tree.UniqueIndex{
+            KeyParts: $5,
+            Name: $3[0],
+            Empty: $3[1] == "",
+            IndexOption: $9,
+        }
+    }
+|   FOREIGN KEY not_exists_opt index_name '(' index_column_list ')' references_def
     {
         $$ = &tree.ForeignKey{
             IfNotExists: $3,
@@ -6458,7 +6923,7 @@ constraint_elem:
             Empty: true,
         }
     }
-|    CHECK '(' expression ')' enforce_opt
+|   CHECK '(' expression ')' enforce_opt
     {
         $$ = &tree.CheckIndex{
             Expr: $3,
@@ -6476,14 +6941,14 @@ key_or_index_opt:
     {
         $$ = ""
     }
-|    key_or_index
+|   key_or_index
     {
         $$ = $1
     }
 
 key_or_index:
     KEY
-|    INDEX
+|   INDEX
 
 index_name_and_type_opt:
     index_name
@@ -6492,13 +6957,13 @@ index_name_and_type_opt:
         $$[0] = $1
         $$[1] = ""
     }
-|    index_name USING index_type
+|   index_name USING index_type
     {
         $$ = make([]string, 2)
         $$[0] = $1
         $$[1] = $3
     }
-|    ident TYPE index_type
+|   ident TYPE index_type
     {
         $$ = make([]string, 2)
         $$[0] = $1.Compare()
@@ -6507,10 +6972,15 @@ index_name_and_type_opt:
 
 index_type:
     BTREE
-|    HASH
-|    RTREE
-|    ZONEMAP
-|    BSI
+|   HASH
+|   RTREE
+|   ZONEMAP
+|   BSI
+
+insert_method_options:
+    NO
+|   FIRST
+|   LAST
 
 index_name:
     {
@@ -6626,6 +7096,14 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeColumnFormat($2)
     }
+|   SECONDARY_ENGINE_ATTRIBUTE '=' STRING
+    {
+        $$ = nil
+    }
+|   ENGINE_ATTRIBUTE '=' STRING
+    {
+        $$ = nil
+    }
 |   STORAGE storage_media
     {
         $$ = tree.NewAttributeStorage($2)
@@ -6661,7 +7139,19 @@ column_attribute_elem:
     }
 |   LOW_CARDINALITY
     {
-	$$ = tree.NewAttributeLowCardinality()
+	    $$ = tree.NewAttributeLowCardinality()
+    }
+|   VISIBLE
+    {
+        $$ = tree.NewAttributeVisable(true)
+    }
+|   INVISIBLE
+    {
+        $$ = tree.NewAttributeVisable(false)
+    }
+|   default_opt CHARACTER SET equal_opt ident
+    {
+        $$ = nil
     }
 
 enforce:
@@ -8612,18 +9102,42 @@ decimal_type:
                 }
         }
     }
-// |   DECIMAL decimal_length_opt
-//     {
-//         $$ = tree.TYPE_DOUBLE
-//         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Scale = $2.Scale
-//     }
-// |   NUMERIC decimal_length_opt
-//     {
-//         $$ = tree.TYPE_DOUBLE
-//         $$.InternalType.DisplayWith = $2.DisplayWith
-//         $$.InternalType.Scale = $2.Scale
-//     }
+|   NUMERIC decimal_length_opt
+    {
+        locale := ""
+        if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
+        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+        return 1
+        }
+        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
+            yylex.Error("For decimal(M), M must between 0 and 38.")
+                return 1
+        } else if $2.DisplayWith <= 16 {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  64,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+        }
+        } else {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  128,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+                }
+        }
+    }
 |   REAL float_length_opt
     {
         locale := ""
@@ -9323,6 +9837,9 @@ non_reserved_keyword:
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
+|   SECONDARY_ENGINE_ATTRIBUTE
+|   ENGINE_ATTRIBUTE
+|   INSERT_METHOD
 |   CASCADE
 |   DATA
 |	DAY
@@ -9492,6 +10009,8 @@ non_reserved_keyword:
 |   PUBLICATIONS
 |   PROPERTIES
 |	WEEK
+|   DEFINER
+|   SQL
 
 func_not_keyword:
     DATE_ADD

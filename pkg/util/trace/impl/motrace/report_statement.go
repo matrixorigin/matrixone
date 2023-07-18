@@ -19,16 +19,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 var NilStmtID [16]byte
@@ -36,16 +42,108 @@ var NilTxnID [16]byte
 var NilSesID [16]byte
 
 // StatementInfo implement export.IBuffer2SqlItem and export.CsvFields
+
+var _ IBuffer2SqlItem = (*StatementInfo)(nil)
+
+const Decimal128Width = 38
+const Decimal128Scale = 0
+
+func convertFloat64ToDecimal128(val float64) (types.Decimal128, error) {
+	return types.Decimal128FromFloat64(val, Decimal128Width, Decimal128Scale)
+}
+func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
+	if err != nil {
+		logutil.Panic("mustDecimal128", zap.Error(err))
+	}
+	return v
+}
+
+func StatementInfoNew(i Item, ctx context.Context) Item {
+	windowSize, _ := ctx.Value(DurationKey).(time.Duration)
+	if s, ok := i.(*StatementInfo); ok {
+		// process the execplan
+		s.ExecPlan2Stats(ctx)
+		// remove the plan
+		s.jsonByte = nil
+		s.ExecPlan = nil
+
+		// remove the TransacionID
+		s.TransactionID = NilTxnID
+		s.StatementTag = ""
+		s.StatementFingerprint = ""
+		s.Error = nil
+		s.RowsRead = 0
+		s.BytesScan = 0
+		s.ResultCount = 0
+		s.AggrCount = 1
+		s.StmtBuilder.WriteString(s.Statement)
+		duration := s.Duration
+		s.Duration = windowSize
+		s.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(s.statsArray.GetMemorySize() * float64(duration)))
+		s.RequestAt = s.ResponseAt.Truncate(windowSize)
+		s.ResponseAt = s.RequestAt.Add(windowSize)
+		return s
+	}
+	return nil
+}
+
+func StatementInfoUpdate(existing, new Item) {
+
+	e := existing.(*StatementInfo)
+	n := new.(*StatementInfo)
+	// update the stats
+	if GetTracerProvider().enableStmtMerge {
+		e.StmtBuilder.WriteString("; ")
+		e.StmtBuilder.WriteString(n.Statement)
+	}
+	e.AggrCount += 1
+	// responseAt is the last response time
+	n.ExecPlan2Stats(context.Background())
+	if err := mergeStats(e, n); err != nil {
+		// handle error
+		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
+	}
+}
+
+func StatementInfoFilter(i Item) bool {
+	// Attempt to perform a type assertion to *StatementInfo
+	statementInfo, ok := i.(*StatementInfo)
+
+	if !ok {
+		// The item couldn't be cast to *StatementInfo
+		return false
+	}
+
+	if statementInfo.Status == StatementStatusRunning {
+		return false
+	}
+
+	// Check SqlSourceType
+	switch statementInfo.SqlSourceType {
+	case constant.InternalSql, constant.ExternSql, constant.CloudNoUserSql:
+		// Check StatementType
+		switch statementInfo.StatementType {
+		case "Insert", "Update", "Delete", "Execute", "Select":
+			if statementInfo.Duration <= GetTracerProvider().selectAggrThreshold {
+				return true
+			}
+		}
+	}
+	// If no conditions matched, return false
+	return false
+}
+
 type StatementInfo struct {
-	StatementID          [16]byte  `json:"statement_id"`
-	TransactionID        [16]byte  `json:"transaction_id"`
-	SessionID            [16]byte  `jons:"session_id"`
-	Account              string    `json:"account"`
-	User                 string    `json:"user"`
-	Host                 string    `json:"host"`
-	RoleId               uint32    `json:"role_id"`
-	Database             string    `json:"database"`
-	Statement            string    `json:"statement"`
+	StatementID          [16]byte `json:"statement_id"`
+	TransactionID        [16]byte `json:"transaction_id"`
+	SessionID            [16]byte `jons:"session_id"`
+	Account              string   `json:"account"`
+	User                 string   `json:"user"`
+	Host                 string   `json:"host"`
+	RoleId               uint32   `json:"role_id"`
+	Database             string   `json:"database"`
+	Statement            string   `json:"statement"`
+	StmtBuilder          strings.Builder
 	StatementFingerprint string    `json:"statement_fingerprint"`
 	StatementTag         string    `json:"statement_tag"`
 	SqlSourceType        string    `json:"sql_source_type"`
@@ -64,6 +162,10 @@ type StatementInfo struct {
 	// RowsRead, BytesScan generated from ExecPlan
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
+	AggrCount int64 `json:"aggr_count"` // see EndStatement
+
+	// AggrMemoryTime
+	AggrMemoryTime types.Decimal128
 
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
@@ -87,7 +189,16 @@ type StatementInfo struct {
 	exported bool
 
 	// keep []byte as elem
-	jsonByte, statsJsonByte []byte
+	jsonByte   []byte
+	statsArray statistic.StatsArray
+}
+
+type Key struct {
+	SessionID     [16]byte
+	StatementType string
+	Window        time.Time
+	Status        StatementInfoStatus
+	SqlSourceType string
 }
 
 var stmtPool = sync.Pool{
@@ -103,6 +214,10 @@ func NewStatementInfo() *StatementInfo {
 type Statistic struct {
 	RowsRead  int64
 	BytesScan int64
+}
+
+func (s *StatementInfo) Key(duration time.Duration) interface{} {
+	return Key{SessionID: s.SessionID, StatementType: s.StatementType, Window: s.ResponseAt.Truncate(duration), Status: s.Status, SqlSourceType: s.SqlSourceType}
 }
 
 func (s *StatementInfo) GetName() string {
@@ -121,7 +236,7 @@ func (s *StatementInfo) Size() int64 {
 	num := int64(unsafe.Sizeof(s)) + deltaStmtContentLength + int64(
 		len(s.Account)+len(s.User)+len(s.Host)+
 			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag)+
-			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsJsonByte),
+			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsArray)*8,
 	)
 	if s.jsonByte == nil {
 		return num + jsonByteLength
@@ -153,7 +268,7 @@ func (s *StatementInfo) Free() {
 		s.exported = false
 		// clean []byte
 		s.jsonByte = nil
-		s.statsJsonByte = nil
+		s.statsArray.Reset()
 		stmtPool.Put(s)
 	}
 }
@@ -194,7 +309,12 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(errCodeCol, table.StringField(fmt.Sprintf("%d", errCode)))
 		row.SetColumnVal(errorCol, table.StringField(fmt.Sprintf("%s", s.Error)))
 	}
-	execPlan, stats := s.ExecPlan2Json(ctx)
+	execPlan := s.ExecPlan2Json(ctx)
+	if s.AggrCount > 0 {
+		float64Val := calculateAggrMemoryBytes(s.AggrMemoryTime, float64(s.Duration))
+		s.statsArray.WithMemorySize(float64Val)
+	}
+	stats := s.ExecPlan2Stats(ctx)
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
 		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
@@ -207,46 +327,78 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(bytesScanCol, table.Int64Field(s.BytesScan))
 	row.SetColumnVal(stmtTypeCol, table.StringField(s.StatementType))
 	row.SetColumnVal(queryTypeCol, table.StringField(s.QueryType))
+	row.SetColumnVal(aggrCntCol, table.Int64Field(s.AggrCount))
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
 }
 
-// ExecPlan2Json return ExecPlan Serialized json-str
-// and set RowsRead, BytesScan from ExecPlan
-//
-// please used in s.mux.Lock()
-func (s *StatementInfo) ExecPlan2Json(ctx context.Context) ([]byte, []byte) {
-	var stats Statistic
+// calculateAggrMemoryBytes return scale = statistic.Decimal128ToFloat64Scale float64 val
+func calculateAggrMemoryBytes(dividend types.Decimal128, divisor float64) float64 {
+	scale := int32(statistic.Decimal128ToFloat64Scale)
+	divisorD := mustDecimal128(types.Decimal128FromFloat64(divisor, Decimal128Width, scale))
+	val, valScale, err := dividend.Div(divisorD, 0, scale)
+	val = mustDecimal128(val, err)
+	return types.Decimal128ToFloat64(val, valScale)
+}
 
+// mergeStats n (new one) into e (existing one)
+func mergeStats(e, n *StatementInfo) error {
+	e.statsArray.Add(&n.statsArray)
+	val, _, err := e.AggrMemoryTime.Add(
+		mustDecimal128(convertFloat64ToDecimal128(n.statsArray.GetMemorySize()*float64(n.Duration))),
+		Decimal128Scale,
+		Decimal128Scale,
+	)
+	e.AggrMemoryTime = mustDecimal128(val, err)
+	return nil
+}
+
+// ExecPlan2Json return ExecPlan Serialized json-str //
+// please used in s.mux.Lock()
+func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
 	if s.jsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
 		uuidStr := uuid.UUID(s.StatementID).String()
-		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)),
-			[]byte(`{"code":200,"message":"NO ExecPlan"}`)
+		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr))
 	} else {
-		s.jsonByte, s.statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
-		s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
+		s.jsonByte = s.ExecPlan.Marshal(ctx)
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 		//	// get nil ExecPlan json-str
 		//	jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		//}
 	}
-	if len(s.statsJsonByte) == 0 {
-		s.statsJsonByte = []byte("{}")
-	}
 endL:
-	return s.jsonByte, s.statsJsonByte
+	return s.jsonByte
+}
+
+// ExecPlan2Stats return Stats Serialized int array str
+// and set RowsRead, BytesScan from ExecPlan
+func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
+	var stats Statistic
+
+	if s.ExecPlan == nil {
+		if s.statsArray.GetVersion() == 0 {
+			s.statsArray.Init()
+		}
+		return s.statsArray.ToJsonString()
+	} else {
+		s.statsArray, stats = s.ExecPlan.Stats(ctx)
+		s.RowsRead = stats.RowsRead
+		s.BytesScan = stats.BytesScan
+		return s.statsArray.ToJsonString()
+	}
 }
 
 func GetLongQueryTime() time.Duration {
 	return time.Duration(GetTracerProvider().longQueryTime)
 }
 
-type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
+type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson statistic.StatsArray, stats Statistic)
 
 type SerializableExecPlan interface {
-	Marshal(context.Context) ([]byte, []byte, Statistic)
+	Marshal(context.Context) []byte
 	Free()
+	Stats(ctx context.Context) (statistic.StatsArray, Statistic)
 }
 
 func (s *StatementInfo) SetSerializableExecPlan(execPlan SerializableExecPlan) {
@@ -264,8 +416,18 @@ func (s *StatementInfo) IsZeroTxnID() bool {
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {
+	if s.Status == StatementStatusRunning && GetTracerProvider().skipRunningStmt {
+		return
+	}
 	s.reported = true
 	ReportStatement(ctx, s)
+}
+
+func (s *StatementInfo) MarkResponseAt() {
+	if s.ResponseAt.IsZero() {
+		s.ResponseAt = time.Now()
+		s.Duration = s.ResponseAt.Sub(s.RequestAt)
+	}
 }
 
 var EndStatement = func(ctx context.Context, err error, sentRows int64) {
@@ -282,8 +444,8 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 		// do report
 		s.end = true
 		s.ResultCount = sentRows
-		s.ResponseAt = time.Now()
-		s.Duration = s.ResponseAt.Sub(s.RequestAt)
+		s.AggrCount = 0
+		s.MarkResponseAt()
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err
@@ -334,6 +496,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	// Todo: review how to aggregate the internal SQL statements logging
 	if s.User == "internal" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
+			go s.Free()
 			return nil
 		}
 	}

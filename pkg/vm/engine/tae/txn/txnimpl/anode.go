@@ -16,14 +16,13 @@ package txnimpl
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 // anode corresponds to an appendable standalone-uncommitted block
@@ -99,12 +98,24 @@ func (n *anode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.GetLocalSchema()
 	if n.data == nil {
-		opts := containers.Options{}
-		opts.Capacity = data.Length() - int(offset)
-		if opts.Capacity > int(MaxNodeRows) {
-			opts.Capacity = int(MaxNodeRows)
+		capacity := data.Length() - int(offset)
+		if capacity > int(MaxNodeRows) {
+			capacity = int(MaxNodeRows)
 		}
-		n.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
+		n.data = containers.BuildBatchWithPool(
+			schema.AllNames(),
+			schema.AllTypes(),
+			capacity,
+			n.table.store.rt.VectorPool.Small,
+		)
+
+		// n.data = containers.BuildBatch(
+		// 	schema.AllNames(),
+		// 	schema.AllTypes(),
+		// 	containers.Options{
+		// 		Capacity: capacity,
+		// 	},
+		// )
 	}
 
 	from := uint32(n.data.Length())
@@ -124,18 +135,21 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 }
 
 func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	var col *vector.Vector
-	if col, err = objectio.ConstructRowidColumn(
-		&n.meta.ID, startRow, length, common.DefaultAllocator,
+	col := n.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	if err = objectio.ConstructRowidColumnTo(
+		col.GetDownstreamVector(),
+		&n.meta.ID, startRow, length,
+		col.GetAllocator(),
 	); err != nil {
+		col.Close()
 		return
 	}
-	err = n.data.Vecs[n.table.GetLocalSchema().PhyAddrKey.Idx].ExtendVec(col)
-	col.Free(common.DefaultAllocator)
+	err = n.data.Vecs[n.table.GetLocalSchema().PhyAddrKey.Idx].ExtendVec(col.GetDownstreamVector())
+	col.Close()
 	return
 }
 
-func (n *anode) FillBlockView(view *model.BlockView, colIdxes []int) (err error) {
+func (n *anode) FillBlockView(view *containers.BlockView, colIdxes []int) (err error) {
 	for _, colIdx := range colIdxes {
 		orig := n.data.Vecs[colIdx]
 		view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
@@ -143,7 +157,7 @@ func (n *anode) FillBlockView(view *model.BlockView, colIdxes []int) (err error)
 	view.DeleteMask = n.data.Deletes
 	return
 }
-func (n *anode) FillColumnView(view *model.ColumnView) (err error) {
+func (n *anode) FillColumnView(view *containers.ColumnView) (err error) {
 	orig := n.data.Vecs[view.ColIdx]
 	view.SetData(orig.CloneWindow(0, orig.Length()))
 	view.DeleteMask = n.data.Deletes
@@ -208,14 +222,14 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 
 func (n *anode) GetColumnDataByIds(
 	colIdxes []int,
-) (view *model.BlockView, err error) {
-	view = model.NewBlockView()
+) (view *containers.BlockView, err error) {
+	view = containers.NewBlockView()
 	err = n.FillBlockView(view, colIdxes)
 	return
 }
 
-func (n *anode) GetColumnDataById(ctx context.Context, colIdx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(colIdx)
+func (n *anode) GetColumnDataById(ctx context.Context, colIdx int) (view *containers.ColumnView, err error) {
+	view = containers.NewColumnView(colIdx)
 	err = n.FillColumnView(view)
 	return
 }

@@ -24,8 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
@@ -49,7 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const MaxPrepareNumberInOneSession = 64
+var MaxPrepareNumberInOneSession int = 100000
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -76,6 +75,9 @@ type Session struct {
 
 	// mpool
 	mp *mpool.MPool
+
+	// the process of the session
+	proc *process.Process
 
 	pu *config.ParameterUnit
 
@@ -417,6 +419,14 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 			panic(err)
 		}
 	}
+	ses.proc = process.New(
+		context.TODO(),
+		ses.mp,
+		ses.GetTxnHandler().GetTxnClient(),
+		nil,
+		pu.FileService,
+		pu.LockService,
+		ses.GetAutoIncrCacheManager())
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Close()
@@ -437,7 +447,6 @@ func (ses *Session) Close() {
 	ses.gSysVars = nil
 	for _, stmt := range ses.prepareStmts {
 		stmt.Close()
-
 	}
 	ses.prepareStmts = nil
 	ses.requestCtx = nil
@@ -461,6 +470,13 @@ func (ses *Session) Close() {
 	ses.sqlHelper = nil
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	if ses.proc != nil {
+		ses.proc.FreeVectors()
+		bats := ses.proc.GetValueScanBatchs()
+		for _, bat := range bats {
+			bat.Clean(ses.proc.Mp())
+		}
+	}
 	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
 		mpool.DeleteMPool(mp)
@@ -966,27 +982,6 @@ func (ses *Session) SetTenantInfo(ti *TenantInfo) {
 	ses.tenant = ti
 }
 
-func checkPlanIsInsertValues(p *plan.Plan) (bool, *batch.Batch) {
-	qry := p.GetQuery()
-	if qry != nil && qry.StmtType == plan.Query_INSERT {
-		for _, node := range qry.Nodes {
-			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
-				colCount := len(node.TableDef.Cols)
-				bat := batch.NewWithSize(colCount)
-				attrs := make([]string, colCount)
-				for i := 0; i < colCount; i++ {
-					attrs[i] = node.TableDef.Cols[i].Name
-					vec := vector.NewVec(plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ))
-					bat.SetVector(int32(i), vec)
-				}
-				bat.Attrs = attrs
-				return true, bat
-			}
-		}
-	}
-	return false, nil
-}
-
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -997,24 +992,14 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 	} else {
 		stmt.Close()
 	}
-
-	plan := prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan()
-	isInsertValues, bat := checkPlanIsInsertValues(plan)
-	prepareStmt.IsInsertValues = isInsertValues
-	prepareStmt.InsertBat = bat
-	if prepareStmt.IsInsertValues {
-		mp := ses.mp
-		if mp == nil {
-			mp = mpool.MustNewNoFixed("session-prepare-insert-values")
-		}
-		prepareStmt.mp = mp
-		prepareStmt.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Vecs))
-		for i, vec := range bat.Vecs {
-			prepareStmt.ufs[i] = vector.GetUnionOneFunction(*vec.GetType(), mp)
-		}
+	isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
+		prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+	if isInsertValues {
+		prepareStmt.proc = ses.proc
+		prepareStmt.exprList = exprList
 	}
-
 	ses.prepareStmts[name] = prepareStmt
+
 	return nil
 }
 
@@ -1082,6 +1067,7 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	ses.txnCompileCtx.proc = ses.proc
 	return ses.txnCompileCtx
 }
 
@@ -1242,7 +1228,11 @@ func (ses *Session) SetUserName(uname string) {
 }
 
 func (ses *Session) GetConnectionID() uint32 {
-	return ses.GetMysqlProtocol().ConnectionID()
+	protocol := ses.GetMysqlProtocol()
+	if protocol != nil {
+		return ses.GetMysqlProtocol().ConnectionID()
+	}
+	return 0
 }
 
 func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
@@ -1338,6 +1328,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
 		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
+	}
+
+	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
+		ses.getRoutine().setResricted(true)
+	} else {
+		ses.getRoutine().setResricted(false)
 	}
 
 	tenant.SetTenantID(uint32(tenantID))
@@ -1957,4 +1953,43 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	}
 
 	return nil, moerr.NewInternalError(ctx, "can not resolve global system variable %s", varName)
+}
+
+func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d interface{}, cwIndex, cwsLen int) *Response {
+	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
+	var resp *Response
+	if cwIndex < cwsLen-1 {
+		resp = NewResponse(category, affectedRows, 0, 0,
+			ses.GetServerStatus()|SERVER_MORE_RESULTS_EXISTS, cmd, d)
+	} else {
+		resp = NewResponse(category, affectedRows, 0, 0, ses.GetServerStatus(), cmd, d)
+	}
+	return resp
+}
+
+func checkPlanIsInsertValues(proc *process.Process,
+	p *plan.Plan) (bool, [][]colexec.ExpressionExecutor) {
+	qry := p.GetQuery()
+	if qry != nil {
+		for _, node := range qry.Nodes {
+			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
+				exprList := make([][]colexec.ExpressionExecutor, len(node.RowsetData.Cols))
+				for i, col := range node.RowsetData.Cols {
+					exprList[i] = make([]colexec.ExpressionExecutor, 0, len(col.Data))
+					for _, data := range col.Data {
+						if data.Pos >= 0 {
+							continue
+						}
+						expr, err := colexec.NewExpressionExecutor(proc, data.Expr)
+						if err != nil {
+							return false, nil
+						}
+						exprList[i] = append(exprList[i], expr)
+					}
+				}
+				return true, exprList
+			}
+		}
+	}
+	return false, nil
 }

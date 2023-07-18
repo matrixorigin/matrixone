@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
@@ -59,6 +60,11 @@ func (scanner *dbScanner) OnExec() {
 	scanner.dbmask.Clear()
 	scanner.tablemask.Clear()
 	scanner.segmask.Clear()
+	dbutils.PrintMemStats()
+
+	// compact logtail table
+	scanner.db.LogtailMgr.TryCompactTable()
+
 	for _, op := range scanner.ops {
 		err := op.PreExecute()
 		if err != nil {

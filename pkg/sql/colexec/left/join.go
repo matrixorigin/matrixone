@@ -51,7 +51,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -61,14 +61,14 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 			if bat == nil {
@@ -81,18 +81,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 			if ctr.bat.Length() == 0 {
 				if err := ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-					return false, err
+					return process.ExecNext, err
 				}
 			} else {
 				if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
-					return false, err
+					return process.ExecNext, err
 				}
 			}
-			return false, nil
+			return process.ExecNext, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }
@@ -105,7 +105,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.DupJmAuxData()
 		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
@@ -173,8 +173,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if ctr.inBuckets[k] == 0 {
 				continue
 			}
+
+			// if null or not found.
+			// the result row was  [left cols, null cols]
 			if zvals[k] == 0 || vals[k] == 0 {
 				for j, rp := range ap.Result {
+					// columns from the left table.
 					if rp.Rel == 0 {
 						if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
@@ -190,14 +194,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
+
 			sels := mSels[vals[k]-1]
 			matched := false
 			if ap.Cond != nil {
+				if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+					1, ctr.cfs1); err != nil {
+					return err
+				}
+
 				for _, sel := range sels {
-					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
-						1, ctr.cfs1); err != nil {
-						return err
-					}
 					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
 						1, ctr.cfs2); err != nil {
 						return err
@@ -248,6 +254,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 				}
 			}
+
 			if !matched {
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {

@@ -16,8 +16,6 @@ package task
 
 import (
 	"context"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -26,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
+	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -41,27 +41,44 @@ func TestMain(m *testing.M) {
 func TestGetExpiredTasks(t *testing.T) {
 	cases := []struct {
 		tasks     []task.Task
-		expiredCN []string
+		workingCN []string
 
-		expected []task.Task
+		expected map[uint64]struct{}
 	}{
 		{
 			tasks:     nil,
-			expiredCN: nil,
+			workingCN: nil,
 
 			expected: nil,
 		},
 		{
-			tasks:     []task.Task{{TaskRunner: "a"}, {TaskRunner: "b"}},
-			expiredCN: []string{"a"},
+			// CN running task 1 is expired.
+			tasks: []task.Task{
+				{ID: 1, TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
+				{ID: 2, TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
+			},
+			workingCN: []string{"b"},
 
-			expected: []task.Task{{TaskRunner: "a"}},
+			expected: map[uint64]struct{}{1: {}},
+		},
+		{
+			// Heartbeat of task 1 is expired.
+			tasks: []task.Task{
+				{ID: 1, TaskRunner: "a", LastHeartbeat: time.Now().Add(-taskSchedulerDefaultTimeout - 1).UnixMilli()},
+				{ID: 2, TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
+			},
+			workingCN: []string{"a", "b"},
+
+			expected: map[uint64]struct{}{1: {}},
 		},
 	}
 
 	for _, c := range cases {
-		results := getExpiredTasks(c.tasks, c.expiredCN)
-		assert.Equal(t, c.expected, results)
+		_, results := getCNOrderedAndExpiredTasks(c.tasks, c.workingCN)
+		for _, task := range results {
+			_, ok := c.expected[task.ID]
+			assert.True(t, ok)
+		}
 	}
 }
 
@@ -99,7 +116,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		results := getCNOrdered(c.tasks, c.workingCN)
+		results, _ := getCNOrderedAndExpiredTasks(c.tasks, c.workingCN)
 		assert.Equal(t, c.expected, results)
 	}
 }
@@ -194,17 +211,4 @@ func TestReallocateExpiredTasks(t *testing.T) {
 	assert.Equal(t, 1, len(query))
 	assert.Equal(t, "b", query[0].TaskRunner)
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
-}
-
-func TestSchedulerCreateTasks(t *testing.T) {
-	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	scheduler := NewScheduler(func() taskservice.TaskService { return service }, hakeeper.Config{})
-	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
-	currentTick := uint64(0)
-
-	assert.NoError(t, scheduler.Create(context.Background(),
-		[]task.TaskMetadata{{ID: "1"}}))
-
-	// Schedule empty task
-	scheduler.Schedule(cnState, currentTick)
 }

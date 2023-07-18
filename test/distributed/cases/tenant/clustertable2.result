@@ -1,3 +1,4 @@
+set global enable_privilege_cache = off;
 drop database if exists db1;
 create database db1;
 create table db1.b(b int);
@@ -138,3 +139,4 @@ t
 0
 drop table mo_instance;
 drop account if exists acc_idx;
+set global enable_privilege_cache = on;

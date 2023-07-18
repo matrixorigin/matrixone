@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
@@ -65,14 +66,14 @@ var (
 	}
 )
 
-// WithTxnReadyOnly setup readyonly flag
+// WithTxnReadyOnly setup readonly flag
 func WithTxnReadyOnly() TxnOption {
 	return func(tc *txnOperator) {
 		tc.option.readyOnly = true
 	}
 }
 
-// WithTxnDisable1PCOpt disable 1pc optimisation on distributed transaction. By default, mo enables 1pc
+// WithTxnDisable1PCOpt disable 1pc opt on distributed transaction. By default, mo enables 1pc
 // optimization for distributed transactions. For write operations, if all partitions' prepares are
 // executed successfully, then the transaction is considered committed and returned directly to the
 // client. Partitions' prepared data are committed asynchronously.
@@ -82,7 +83,7 @@ func WithTxnDisable1PCOpt() TxnOption {
 	}
 }
 
-// WithTxnCNCoordinator set cn txn coodinator
+// WithTxnCNCoordinator set cn txn coordinator
 func WithTxnCNCoordinator() TxnOption {
 	return func(tc *txnOperator) {
 		tc.option.coordinator = true
@@ -156,23 +157,26 @@ type txnOperator struct {
 	mu struct {
 		sync.RWMutex
 		closed       bool
-		epoch        uint64
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
 		callbacks    map[EventType][]func(txn.TxnMeta)
+		retry        bool
 	}
 	workspace       Workspace
 	timestampWaiter TimestampWaiter
+	clock           clock.Clock
 }
 
 func newTxnOperator(
+	clock clock.Clock,
 	sender rpc.TxnSender,
 	txnMeta txn.TxnMeta,
 	options ...TxnOption) *txnOperator {
 	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
 	tc.txnID = txnMeta.ID
+	tc.clock = clock
 	for _, opt := range options {
 		opt(tc)
 	}
@@ -191,6 +195,7 @@ func newTxnOperatorWithSnapshot(
 
 	tc := &txnOperator{sender: sender}
 	tc.mu.txn = v.Txn
+	tc.mu.txn.Mirror = true
 	tc.txnID = v.Txn.ID
 	tc.mu.lockTables = v.LockTables
 	tc.option.disable1PCOpt = v.Disable1PCOpt
@@ -268,18 +273,13 @@ func (tc *txnOperator) UpdateSnapshot(
 	}
 
 	minTS := ts
-	// we need to waiter the latest snapshot ts which is greater than the current snapshot
-	if minTS.IsEmpty() {
-		minTS = tc.mu.txn.SnapshotTS
-	}
 
-	epoch, lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
+	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
 		ctx,
 		minTS)
 	if err != nil {
 		return err
 	}
-	tc.mu.epoch = epoch
 	tc.mu.txn.SnapshotTS = lastSnapshotTS
 	return nil
 }
@@ -379,6 +379,11 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
 	util.LogTxnRollback(tc.getTxnMeta(false))
+	if tc.workspace != nil {
+		if err := tc.workspace.Rollback(ctx); err != nil {
+			return err
+		}
+	}
 
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -423,11 +428,26 @@ func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
 		panic("lock in optimistic mode")
 	}
 
-	if err := tc.checkStatus(true); err != nil {
-		return err
+	// mirror txn can not check status, and the txn's status is on the creation cn of the txn.
+	if !tc.mu.txn.Mirror {
+		if err := tc.checkStatus(true); err != nil {
+			return err
+		}
 	}
 
 	return tc.doAddLockTableLocked(value)
+}
+
+func (tc *txnOperator) ResetRetry(retry bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.retry = retry
+}
+
+func (tc *txnOperator) IsRetry() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.retry
 }
 
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
@@ -466,11 +486,20 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if commit {
+		if tc.workspace != nil {
+			if err := tc.workspace.Commit(ctx); err != nil {
+				return nil, err
+			}
+		}
 		tc.mu.Lock()
 		defer func() {
 			tc.closeLocked()
 			tc.mu.Unlock()
 		}()
+		if tc.mu.closed {
+			return nil, moerr.NewTxnClosedNoCtx(tc.txnID)
+		}
+
 		if tc.needUnlockLocked() {
 			tc.mu.txn.LockTables = tc.mu.lockTables
 			defer tc.unlock(ctx)
@@ -544,11 +573,6 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 	}
 
 	if tc.mu.closed {
-		return moerr.NewTxnClosedNoCtx(tc.txnID)
-	}
-
-	if tc.timestampWaiter != nil &&
-		tc.timestampWaiter.Epoch() != tc.mu.epoch {
 		return moerr.NewTxnClosedNoCtx(tc.txnID)
 	}
 	return nil
@@ -760,7 +784,7 @@ func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) err
 	case txn.TxnStatus_Committed, txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtx("invalid respose status for commit, %v", txnMeta.Status))
+		panic(moerr.NewInternalErrorNoCtx("invalid response status for commit, %v", txnMeta.Status))
 	}
 }
 
@@ -778,7 +802,7 @@ func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) e
 	case txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtx("invalud response status for rollback %v", txnMeta.Status))
+		panic(moerr.NewInternalErrorNoCtx("invalid response status for rollback %v", txnMeta.Status))
 	}
 }
 
@@ -798,6 +822,17 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) {
+	// rc mode need to see the committed value, so wait logtail applied
+	if tc.mu.txn.IsRCIsolation() &&
+		tc.timestampWaiter != nil {
+		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
+		if err != nil {
+			util.GetLogger().Error("txn wait committed log applied failed in rc mode",
+				util.TxnField(tc.mu.txn),
+				zap.Error(err))
+		}
+	}
+
 	if err := tc.option.lockService.Unlock(
 		ctx,
 		tc.mu.txn.ID,
@@ -817,6 +852,8 @@ func (tc *txnOperator) needUnlockLocked() bool {
 }
 
 func (tc *txnOperator) closeLocked() {
-	tc.mu.closed = true
-	tc.triggerEventLocked(ClosedEvent)
+	if !tc.mu.closed {
+		tc.mu.closed = true
+		tc.triggerEventLocked(ClosedEvent)
+	}
 }

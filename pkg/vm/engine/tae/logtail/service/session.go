@@ -91,6 +91,13 @@ func (sm *SessionManager) DeleteSession(stream morpcStream) {
 	delete(sm.clients, stream)
 }
 
+func (sm *SessionManager) HasSession(stream morpcStream) bool {
+	sm.RLock()
+	defer sm.RUnlock()
+	_, ok := sm.clients[stream]
+	return ok
+}
+
 // ListSession takes a snapshot of all sessions.
 func (sm *SessionManager) ListSession() []*Session {
 	sm.RLock()
@@ -223,11 +230,18 @@ func NewSession(
 	sender := func() {
 		defer ss.wg.Done()
 
+		var cnt int64
+		timer := time.NewTimer(100 * time.Second)
+
 		for {
 			select {
 			case <-ss.sessionCtx.Done():
 				ss.logger.Error("stop session sender", zap.Error(ss.sessionCtx.Err()))
 				return
+
+			case <-timer.C:
+				ss.logger.Info("send logtail channel blocked", zap.Int64("sendRound", cnt))
+				timer.Reset(10 * time.Second)
 
 			case msg, ok := <-ss.sendChan:
 				if !ok {
@@ -241,7 +255,11 @@ func NewSession(
 					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
 					defer cancel()
 
+					now := time.Now()
 					err := ss.stream.write(ctx, msg.response)
+					if sendCost := time.Since(now); sendCost > 10*time.Second {
+						ss.logger.Info("send logtail too much", zap.Int64("sendRound", cnt), zap.Duration("duration", sendCost))
+					}
 					if err != nil {
 						ss.logger.Error("fail to send logtail response",
 							zap.Error(err),
@@ -256,6 +274,8 @@ func NewSession(
 					ss.notifier.NotifySessionError(ss, err)
 					return
 				}
+				cnt++
+				timer.Reset(10 * time.Second)
 			}
 		}
 	}
@@ -277,6 +297,21 @@ func (ss *Session) PostClean() {
 
 	ss.cancelFunc()
 	ss.wg.Wait()
+
+	left := len(ss.sendChan)
+
+	// release all left responses in sendChan
+	if left > 0 {
+		i := 0
+		for resp := range ss.sendChan {
+			ss.responses.Release(resp.response)
+			i++
+			if i >= left {
+				break
+			}
+		}
+		ss.logger.Info("release left responses", zap.Int("left", left))
+	}
 }
 
 // Register registers table for client.
@@ -325,7 +360,7 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 
-	qualified := make([]logtail.TableLogtail, 0, len(ss.tables))
+	qualified := make([]logtail.TableLogtail, 0, 4)
 	for _, t := range tails {
 		if state, ok := ss.tables[t.id]; ok && state == TableSubscribed {
 			qualified = append(qualified, t.tail)
@@ -377,6 +412,8 @@ func (ss *Session) Publish(
 	if err == nil {
 		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
 		ss.exactFrom = to
+	} else {
+		ss.notifier.NotifySessionError(ss, err)
 	}
 	return err
 }

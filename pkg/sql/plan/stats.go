@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const BlockNumForceOneCN = 200
@@ -120,6 +120,11 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
+		if !info.ColumnZMs[i].IsInited() {
+			s.MinValMap[colName] = 0
+			s.MaxValMap[colName] = 0
+			continue
+		}
 		switch info.DataTypes[i].Oid {
 		case types.T_int8:
 			s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
@@ -154,8 +159,23 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 
 // cols in one table, return if ndv of  multi column is high enough
 func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
+	if tableDef == nil {
+		return false
+	}
+	// first to check if it is primary key.
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		pks := make([]int32, len(pkNames))
+		for i := range pkNames {
+			pks[i] = tableDef.Name2ColIndex[pkNames[i]]
+		}
+		if containsAllPKs(cols, pks) {
+			return true
+		}
+	}
+
 	sc := builder.compCtx.GetStatsCache()
-	if sc == nil || tableDef == nil {
+	if sc == nil {
 		return false
 	}
 	s := sc.GetStatsInfoMap(tableDef.TblId)
@@ -448,6 +468,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if !isCrossJoin {
 				outcnt *= selectivity
 			}
+			for _, pred := range node.OnList {
+				pred.Ndv = getExprNdv(pred, builder)
+			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -583,21 +606,23 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 
 	case plan.Node_VALUE_SCAN:
-		if node.RowsetData == nil {
-			node.Stats = DefaultStats()
-		} else {
-			colsData := node.RowsetData.Cols
-			rowCount := float64(len(colsData[0].Data))
-			blockNumber := rowCount/float64(options.DefaultBlockMaxRows) + 1
-			node.Stats = &plan.Stats{
-				TableCnt:    (rowCount),
-				BlockNum:    int32(blockNumber),
-				Outcnt:      rowCount,
-				Cost:        rowCount,
-				Selectivity: 1,
+		node.Stats = DefaultStats()
+		/*
+			if node.RowsetData == nil {
+				node.Stats = DefaultStats()
+			} else {
+				colsData := node.RowsetData.Cols
+				rowCount := float64(len(colsData[0].Data))
+				blockNumber := rowCount/float64(options.DefaultBlockMaxRows) + 1
+				node.Stats = &plan.Stats{
+					TableCnt:    (rowCount),
+					BlockNum:    int32(blockNumber),
+					Outcnt:      rowCount,
+					Cost:        rowCount,
+					Selectivity: 1,
+				}
 			}
-		}
-
+		*/
 	case plan.Node_SINK_SCAN:
 		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
 
@@ -637,6 +662,26 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	}
 }
 
+func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error {
+	node := qry.Nodes[nodeId]
+	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
+		for i, e := range node.FilterList {
+			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false)
+			if err != nil {
+				return err
+			}
+			node.FilterList[i] = foldedExpr
+		}
+	}
+	for _, childId := range node.Children {
+		err := foldTableScanFilters(proc, qry, childId)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if !needStats(node.TableDef) {
 		return DefaultStats()
@@ -655,15 +700,9 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.TableCnt = s.TableCnt
 	var blockSel float64 = 1
 
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		fixColumnName(node.TableDef, node.FilterList[i])
-		foldedExpr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
-		if foldedExpr != nil {
-			node.FilterList[i] = foldedExpr
-		}
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
 		if currentBlockSel < blockSelectivityThreshHold {

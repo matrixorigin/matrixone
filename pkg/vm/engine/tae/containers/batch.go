@@ -179,6 +179,22 @@ func (bat *Batch) Window(offset, length int) *Batch {
 	return win
 }
 
+func (bat *Batch) CloneWindowWithPool(offset, length int, pool *VectorPool) (cloned *Batch) {
+	cloned = new(Batch)
+	cloned.Attrs = make([]string, len(bat.Attrs))
+	copy(cloned.Attrs, bat.Attrs)
+	cloned.Nameidx = make(map[string]int, len(bat.Nameidx))
+	for k, v := range bat.Nameidx {
+		cloned.Nameidx[k] = v
+	}
+	cloned.Deletes = bat.WindowDeletes(offset, length, true)
+	cloned.Vecs = make([]Vector, len(bat.Vecs))
+	for i := range cloned.Vecs {
+		cloned.Vecs[i] = bat.Vecs[i].CloneWindowWithPool(offset, length, pool)
+	}
+	return
+}
+
 func (bat *Batch) CloneWindow(offset, length int, allocator ...*mpool.MPool) (cloned *Batch) {
 	cloned = new(Batch)
 	cloned.Attrs = make([]string, len(bat.Attrs))
@@ -239,7 +255,13 @@ func (bat *Batch) Equals(o *Batch) bool {
 func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 	var tmpn int64
-	buffer := MakeVector(types.T_varchar.ToType())
+	var buffer Vector
+	if bat.Pool != nil {
+		t := types.T_varchar.ToType()
+		buffer = bat.Pool.GetVector(&t)
+	} else {
+		buffer = MakeVector(types.T_varchar.ToType())
+	}
 	defer buffer.Close()
 	mp := buffer.GetAllocator()
 	bufVec := buffer.GetDownstreamVector()

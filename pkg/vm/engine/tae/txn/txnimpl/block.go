@@ -23,9 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -219,7 +219,7 @@ func (blk *txnBlock) Rows() int {
 	return blk.entry.GetBlockData().Rows()
 }
 
-func (blk *txnBlock) GetColumnDataByName(ctx context.Context, attr string) (*model.ColumnView, error) {
+func (blk *txnBlock) GetColumnDataByName(ctx context.Context, attr string) (*containers.ColumnView, error) {
 	schema := blk.table.GetLocalSchema()
 	colIdx := schema.GetColIdx(attr)
 	if blk.isUncommitted {
@@ -228,7 +228,7 @@ func (blk *txnBlock) GetColumnDataByName(ctx context.Context, attr string) (*mod
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, schema, colIdx)
 }
 
-func (blk *txnBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (*model.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (*containers.BlockView, error) {
 	schema := blk.table.GetLocalSchema()
 	attrIds := make([]int, len(attrs))
 	for i, attr := range attrs {
@@ -240,14 +240,18 @@ func (blk *txnBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (
 	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, attrIds)
 }
 
-func (blk *txnBlock) GetColumnDataById(ctx context.Context, colIdx int) (*model.ColumnView, error) {
+func (blk *txnBlock) GetDeltaPersistedTS() types.TS {
+	return blk.entry.GetDeltaPersistedTSByTxn(blk.Txn)
+}
+
+func (blk *txnBlock) GetColumnDataById(ctx context.Context, colIdx int) (*containers.ColumnView, error) {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx)
 	}
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdx)
 }
 
-func (blk *txnBlock) GetColumnDataByIds(ctx context.Context, colIdxes []int) (*model.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByIds(ctx context.Context, colIdxes []int) (*containers.BlockView, error) {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes)
 	}

@@ -30,10 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap/zapcore"
@@ -41,23 +41,29 @@ import (
 
 // CompactSegmentTaskFactory merge non-appendable blocks of an appendable-segment
 // into a new non-appendable segment.
-var CompactSegmentTaskFactory = func(mergedBlks []*catalog.BlockEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
+var CompactSegmentTaskFactory = func(
+	mergedBlks []*catalog.BlockEntry, rt *dbutils.Runtime,
+) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		mergedSegs := make([]*catalog.SegmentEntry, 1)
 		mergedSegs[0] = mergedBlks[0].GetSegment()
-		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, scheduler)
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, rt)
 	}
 }
 
-var MergeBlocksIntoSegmentTaskFctory = func(mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
+var MergeBlocksIntoSegmentTaskFctory = func(
+	mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.SegmentEntry,
+	rt *dbutils.Runtime,
+) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, scheduler)
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, rt)
 	}
 }
 
 type mergeBlocksTask struct {
 	*tasks.BaseTask
 	txn         txnif.AsyncTxn
+	rt          *dbutils.Runtime
 	toSegEntry  *catalog.SegmentEntry
 	createdSegs []*catalog.SegmentEntry
 	mergedSegs  []*catalog.SegmentEntry
@@ -65,19 +71,22 @@ type mergeBlocksTask struct {
 	createdBlks []*catalog.BlockEntry
 	compacted   []handle.Block
 	rel         handle.Relation
-	scheduler   tasks.TaskScheduler
 	scopes      []common.ID
 	deletes     []*nulls.Bitmap
 }
 
-func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) (task *mergeBlocksTask, err error) {
+func NewMergeBlocksTask(
+	ctx *tasks.Context, txn txnif.AsyncTxn,
+	mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry,
+	rt *dbutils.Runtime,
+) (task *mergeBlocksTask, err error) {
 	task = &mergeBlocksTask{
 		txn:         txn,
+		rt:          rt,
 		mergedBlks:  mergedBlks,
 		mergedSegs:  mergedSegs,
 		createdBlks: make([]*catalog.BlockEntry, 0),
 		compacted:   make([]handle.Block, 0),
-		scheduler:   scheduler,
 		toSegEntry:  toSegEntry,
 	}
 	dbId := mergedBlks[0].GetSegment().GetTable().GetDB().ID
@@ -121,20 +130,19 @@ func (task *mergeBlocksTask) mergeColumns(
 	}
 	if sort {
 		if isPrimary {
-			retVecs, mapping = mergesort.MergeSortedColumn(srcVecs, sortedIdx, fromLayout, toLayout)
+			retVecs, mapping = mergesort.MergeSortedColumn(srcVecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
 		} else {
-			retVecs = mergesort.ShuffleColumn(srcVecs, *sortedIdx, fromLayout, toLayout)
+			retVecs = mergesort.ShuffleColumn(srcVecs, *sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
 		}
 	} else {
 		retVecs, mapping = task.mergeColumnWithOutSort(srcVecs, fromLayout, toLayout)
 	}
-	for _, vec := range srcVecs {
-		vec.Close()
-	}
 	return
 }
 
-func (task *mergeBlocksTask) mergeColumnWithOutSort(column []containers.Vector, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
+func (task *mergeBlocksTask) mergeColumnWithOutSort(
+	column []containers.Vector, fromLayout, toLayout []uint32,
+) (ret []containers.Vector, mapping []uint32) {
 	totalLength := uint32(0)
 	for _, i := range toLayout {
 		totalLength += i
@@ -143,7 +151,7 @@ func (task *mergeBlocksTask) mergeColumnWithOutSort(column []containers.Vector, 
 	for i := range mapping {
 		mapping[i] = uint32(i)
 	}
-	ret = mergesort.Reshape(column, fromLayout, toLayout)
+	ret = mergesort.Reshape(column, fromLayout, toLayout, task.rt.VectorPool.Transient)
 	return
 }
 
@@ -178,8 +186,19 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 }
 
 func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
+	task.rt.Throttle.AcquireCompactionQuota()
+	defer task.rt.Throttle.ReleaseCompactionQuota()
 	logutil.Info("[Start] Mergeblocks", common.OperationField(task.Name()),
 		common.OperandField(task))
+	phaseNumber := 0
+	defer func() {
+		if err != nil {
+			logutil.Error("[DoneWithErr] Mergeblocks", common.OperationField(task.Name()),
+				common.AnyField("error", err),
+				common.AnyField("phase", phaseNumber),
+			)
+		}
+	}()
 	now := time.Now()
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
@@ -198,7 +217,6 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 
 	// merge data according to the schema at startTs
 	schema := task.rel.Schema().(*catalog.Schema)
-	var view *model.ColumnView
 	sortVecs := make([]containers.Vector, 0)
 	rows := make([]uint32, 0)
 	skipBlks := make([]int, 0)
@@ -216,10 +234,13 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		sortColDef = schema.PhyAddrKey
 	}
 	logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
-
+	phaseNumber = 1
 	idxes := make([]uint16, 0, len(schema.ColDefs)-1)
 	seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
+	Idxs := make([]int, 0, len(schema.ColDefs))
+	views := make([]*containers.BlockView, len(task.compacted))
 	for _, def := range schema.ColDefs {
+		Idxs = append(Idxs, def.Idx)
 		if def.IsPhyAddr() {
 			continue
 		}
@@ -232,15 +253,14 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 			return
 		}
 	}
-
 	for i, block := range task.compacted {
-		if view, err = block.GetColumnDataById(ctx, sortColDef.Idx); err != nil {
+		if views[i], err = block.GetColumnDataByIds(ctx, Idxs); err != nil {
 			return
 		}
-		defer view.Close()
-		task.deletes[i] = view.DeleteMask
-		view.ApplyDeletes()
-		vec := view.Orphan()
+		defer views[i].Close()
+		task.deletes[i] = views[i].DeleteMask
+		views[i].ApplyDeletes()
+		vec := views[i].Columns[sortColDef.Idx].GetData()
 		defer vec.Close()
 		if vec.Length() == 0 {
 			skipBlks = append(skipBlks, i)
@@ -287,6 +307,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	// Flush sort key it correlates to only one column
 	batchs := make([]*containers.Batch, 0)
 	blockHandles := make([]handle.Block, 0)
+	phaseNumber = 2
 	for i, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
@@ -305,6 +326,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
 
+	phaseNumber = 3
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
@@ -313,17 +335,12 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		// PhyAddr column was processed before
 		// If only one single sort key, it was processed before
 		vecs = vecs[:0]
-		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(ctx, def.Idx); err != nil {
-				return
-			}
-			defer view.Close()
-			view.ApplyDeletes()
-			vec := view.Orphan()
+		for i := range task.compacted {
+			vec := views[i].Columns[def.Idx].Orphan()
+			defer vec.Close()
 			if vec.Length() == 0 {
 				continue
 			}
-			defer vec.Close()
 			vecs = append(vecs, vec)
 		}
 		vecs, _ := task.mergeColumns(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
@@ -335,6 +352,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
+	phaseNumber = 4
 	name := objectio.BuildObjectName(&task.toSegEntry.ID, 0)
 	writer, err := blockio.NewBlockWriterNew(task.mergedBlks[0].GetBlockData().GetFs().Service, name, schema.Version, seqnums)
 	if err != nil {
@@ -354,6 +372,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	phaseNumber = 5
 	var metaLoc objectio.Location
 	for i, block := range blocks {
 		metaLoc = blockio.EncodeLocation(name, block.GetExtent(), uint32(batchs[i].Length()), block.GetID())
@@ -367,6 +386,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
+	phaseNumber = 6
 	for _, compacted := range task.compacted {
 		seg := compacted.GetSegment()
 		if err = seg.SoftDeleteBlock(compacted.ID()); err != nil {
@@ -379,6 +399,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
+	phaseNumber = 7
 	table := task.toSegEntry.GetTable()
 	txnEntry := txnentries.NewMergeBlocksEntry(
 		task.txn,
@@ -392,7 +413,8 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		toAddr,
 		task.deletes,
 		skipBlks,
-		task.scheduler)
+		task.rt,
+	)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return err
 	}

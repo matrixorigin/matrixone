@@ -29,10 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -267,17 +266,15 @@ func (s *service) registerExecutorsLocked() {
 			if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
 				return err
 			}
-
 			// init metric/log merge task cron rule
 			if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
 				return err
 			}
 
 			// init metric task
-			if err := metric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
+			if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
 				return err
 			}
-
 			return nil
 		})
 
@@ -286,5 +283,5 @@ func (s *service) registerExecutorsLocked() {
 		export.MergeTaskExecutorFactory(export.WithFileService(s.etlFS)))
 	// init metric task
 	s.task.runner.RegisterExecutor(task.TaskCode_MetricStorageUsage,
-		metric.GetMetricStorageUsageExecutor(ieFactory))
+		mometric.GetMetricStorageUsageExecutor(ieFactory))
 }

@@ -24,12 +24,12 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 message Type {
-	int32 id            = 1;
-	bool notNullable	= 2;
-	bool auto_incr      = 3;
-	int32 width			= 4;
-	int32 scale 		= 5;
-	string table 		= 6;
+	int32 id         = 1;
+	bool notNullable = 2;
+	bool auto_incr   = 3;
+	int32 width      = 4;
+	int32 scale      = 5;
+	string table     = 6;
 };
 
 // Const: if a const value can be reprensented by int64 or
@@ -319,10 +319,10 @@ message CheckDef {
 }
 
 message ClusterByDef {
-	repeated Expr parts = 1;
-
 	// XXX: Deprecated and to be removed soon.
-	string name = 2;
+	string name = 1;
+	// Composite cluster by column definition
+	ColDef comp_cbkey_col = 2;
 }
 
 message PropertyDef {
@@ -423,6 +423,8 @@ message TableDef {
 	bool isLocked = 27;
 	TableLockType tableLockType = 28;
 	bool is_temporary = 29;
+
+	uint64 auto_incr_offset = 30;
 }
 
 message TableFunction{
@@ -465,8 +467,14 @@ message Stats {
 	int32   parallelism = 13;
 }
 
+message RowsetExpr {
+    int32 row_pos = 1;
+    int32 pos = 2;
+    Expr expr = 3;
+}
+
 message ColData {
-	repeated Expr data = 1;
+    repeated RowsetExpr data = 1;
 }
 
 message RowsetData {
@@ -697,6 +705,8 @@ message Node {
 	// Runtime filters
 	repeated RuntimeFilterSpec runtime_filter_probe_list = 39;
 	repeated RuntimeFilterSpec runtime_filter_build_list = 40;
+
+    bytes uuid = 41;
 }
 
 message LockTarget {
@@ -708,6 +718,7 @@ message LockTarget {
   bool lock_table 				= 6;
 	bool is_partition_table = 7;
 	repeated uint64 partition_table_ids = 8;
+	bool                block   = 9;
 }
 
 message PreInsertUkCtx {
@@ -754,6 +765,7 @@ message DeleteCtx {
 	repeated uint64 partition_table_ids = 6;
 	repeated string partition_table_names = 7;
 	int32 partition_idx = 8;
+	int32 primary_key_idx = 9;
 }
 
 message Query {
@@ -836,6 +848,7 @@ message Plan {
 		DataControl	dcl			= 4;
 	}
 	int32 try_run_times = 5;
+	bool is_prepare 	= 6;
 }
 
 message column{
@@ -1179,37 +1192,39 @@ message MetadataScanInfo {
 	enum MetadataScanInfoType {
 		COL_NAME      = 0;
 		BLOCK_ID      = 1;
-		ENTRY_STATE   = 2;
-		SORTED        = 3;
-		IS_HIDDEN = 4;
-		META_LOC      = 5;
-		DELTA_LOC     = 6;
-		COMMIT_TS     = 7;
-		CREATE_TS     = 8;
-		DELETE_TS     = 9;
-		SEG_ID         = 10;
-		ROWS_CNT      = 11;
-		NULL_CNT      = 12;
-		COMPRESS_SIZE = 13;
-		ORIGIN_SIZE   = 14;
-		MIN           = 15;
-		MAX           = 16;	
+		OBJECT_NAME = 2; 
+		ENTRY_STATE   = 3;
+		SORTED        = 4;
+		IS_HIDDEN = 5;
+		META_LOC      = 6;
+		DELTA_LOC     = 7;
+		COMMIT_TS     = 8;
+		CREATE_TS     = 9;
+		DELETE_TS     = 10;
+		SEG_ID         = 11;
+		ROWS_CNT      = 12;
+		NULL_CNT      = 13;
+		COMPRESS_SIZE = 14;
+		ORIGIN_SIZE   = 15;
+		MIN           = 16;
+		MAX           =  17;
 	} 
-	string ColName  =1;
-	bytes BlockId =2;
-	bool EntryState=3;
-	bool Sorted     =4;
-	bool IsHidden =5;
-	bytes MetaLoc     =6;
-	bytes DelLoc      =7;
-	bytes CommitTs    =8;
-	bytes CreateTs    =9;
-	bytes DeleteTs    = 10;
-	bytes SegId        = 11;
-	int64 RowCnt      = 12;
-	int64 NullCnt     = 13;
-	int64 CompressSize= 14;
-	int64 OriginSize  = 15;
-	bytes Min          = 16;
-	bytes Max          =17;
+	string ColName  = 1;
+	bytes BlockId = 2;
+	string ObjectName = 3;
+	bool EntryState= 4;
+	bool Sorted     = 5;
+	bool IsHidden = 6;
+	bytes MetaLoc     = 7;
+	bytes DelLoc      = 8;
+	bytes CommitTs    = 9;
+	bytes CreateTs    = 10;
+	bytes DeleteTs    = 11;
+	bytes SegId        = 12;
+	int64 RowCnt      = 13;
+	int64 NullCnt     = 14;
+	int64 CompressSize = 15;
+	int64 OriginSize  = 16;
+	bytes Min          = 17;
+	bytes Max          = 18;
 }

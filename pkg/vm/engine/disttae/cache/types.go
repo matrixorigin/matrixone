@@ -58,6 +58,7 @@ type databaseCache struct {
 type tableCache struct {
 	data       *btree.BTreeG[*TableItem]
 	rowidIndex *btree.BTreeG[*TableItem]
+	tableGuard *tableGuard
 }
 
 type DatabaseItem struct {
@@ -101,13 +102,14 @@ type TableItem struct {
 	Rowids []types.Rowid
 
 	// table def
-	Kind        string
-	ViewDef     string
-	Constraint  []byte
-	Comment     string
-	Partitioned int8
-	Partition   string
-	CreateSql   string
+	Kind           string
+	ViewDef        string
+	Constraint     []byte
+	Comment        string
+	Partitioned    int8
+	Partition      string
+	CreateSql      string
+	CatalogVersion uint32
 
 	// primary index
 	PrimaryIdx    int

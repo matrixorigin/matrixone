@@ -42,11 +42,12 @@ type Scanner struct {
 	dialectType         dialect.DialectType
 	MysqlSpecialComment *Scanner
 
-	Pos    int
-	Line   int
-	Col    int
-	PrePos int
-	buf    string
+	CommentFlag bool
+	Pos         int
+	Line        int
+	Col         int
+	PrePos      int
+	buf         string
 
 	strBuilder *bytes.Buffer
 }
@@ -177,10 +178,14 @@ func (s *Scanner) Scan() (int, string) {
 			return s.Scan()
 		case '*':
 			s.inc()
-			switch {
-			case s.cur() == '!' && s.dialectType == dialect.MYSQL:
-				// TODO: ExtractMysqlComment
-				return s.scanMySQLSpecificComment()
+			switch s.cur() {
+			case '!':
+				s.CommentFlag = true
+				s.inc()
+				if !s.readVersion() {
+					return LEX_ERROR, ""
+				}
+				return s.Scan()
 			default:
 				id, str := s.scanCommentTypeBlock()
 				if id == LEX_ERROR {
@@ -191,9 +196,40 @@ func (s *Scanner) Scan() (int, string) {
 		default:
 			return int(ch), ""
 		}
+	case ch == '*':
+		if !s.CommentFlag {
+			return s.stepBackOneChar(ch)
+		}
+		s.inc()
+		switch s.cur() {
+		case '/':
+			s.CommentFlag = false
+			s.inc()
+			return s.Scan()
+		default:
+			return s.stepBackOneChar(ch)
+		}
 	default:
 		return s.stepBackOneChar(ch)
 	}
+}
+
+func (s *Scanner) readVersion() bool {
+	if s.Pos < len(s.buf) {
+		if isDigit(s.cur()) {
+			if s.Pos+4 < len(s.buf) {
+				for i := 0; i < 5; i++ {
+					if !isDigit(s.cur()) {
+						return false
+					}
+					s.inc()
+				}
+				return true
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
@@ -427,7 +463,7 @@ func (s *Scanner) scanCommentTypeBlock() (int, string) {
 }
 
 // scanMySQLSpecificComment scans a MySQL comment pragma, which always starts with '//*`
-func (s *Scanner) scanMySQLSpecificComment() (int, string) {
+/*func (s *Scanner) scanMySQLSpecificComment() (int, string) {
 	start := s.Pos - 3
 	for {
 		if s.cur() == '*' {
@@ -449,7 +485,7 @@ func (s *Scanner) scanMySQLSpecificComment() (int, string) {
 	s.MysqlSpecialComment = NewScanner(s.dialectType, sql)
 
 	return s.Scan()
-}
+}*/
 
 // ExtractMysqlComment extracts the version and SQL from a comment-only query
 // such as /*!50708 sql here */

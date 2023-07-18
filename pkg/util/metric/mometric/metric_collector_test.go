@@ -172,11 +172,14 @@ func (w *dummyStringWriter) FlushAndClose() (int, error) {
 func (w *dummyStringWriter) GetContent() string { return "" }
 
 func newDummyFSWriterFactory(csvCh chan string) table.WriterFactory {
-	return table.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-		w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
-		w.writer = etl.NewCSVWriter(context.TODO(), w)
-		return w
-	})
+	return table.NewWriterFactoryGetter(
+		func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+			w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
+			w.writer = etl.NewCSVWriter(context.TODO(), w)
+			return w
+		},
+		nil,
+	)
 }
 
 func dummyInitView(ctx context.Context, tbls []string) {
@@ -189,7 +192,7 @@ func TestFSCollector(t *testing.T) {
 	ctx := context.Background()
 	csvCh := make(chan string, 100)
 	factory := newDummyFSWriterFactory(csvCh)
-	collector := newMetricFSCollector(factory, WithFlushInterval(3*time.Second), WithMetricThreshold(4), ExportMultiTable(false))
+	collector := newMetricFSCollector(factory, WithFlushInterval(3*time.Second), WithMetricThreshold(4))
 	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}

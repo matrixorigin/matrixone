@@ -26,14 +26,30 @@ import (
 	"testing"
 )
 
+func TestCreateHashPartitionTable(t *testing.T) {
+	sql := "CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;"
+	//sql := "create table p_hash_table_08(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(ceil(col3)) partitions 2;"
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	outPutPlan(logicPlan, true, t)
+}
+
 // -----------------------Hash Partition-------------------------------------
 func TestHashPartition(t *testing.T) {
 	// HASH(expr) Partition
 	sqls := []string{
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1);",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1) PARTITIONS 4;",
+		//"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col2) PARTITIONS 4;",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));",
+		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3) + col1 % (7*24));",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;",
+		"create table t2 (a date, b datetime) partition by hash (EXTRACT(YEAR_MONTH FROM a)) partitions 7",
+		"create table t3 (a int, b int) partition by hash(ceiling(a-b)) partitions 10",
+		"create table t4 (a int, b int) partition by hash(floor(a-b)) partitions 10",
 		`CREATE TABLE employees (
 				id INT NOT NULL,
 				fname VARCHAR(30),
@@ -130,12 +146,17 @@ func TestHashPartition2(t *testing.T) {
 func TestHashPartitionError(t *testing.T) {
 	// HASH(expr) Partition
 	sqls := []string{
+		// In MySQL, RANGE, LIST, and HASH partitions require that the partitioning key must be of type INT or be returned through an expression.
+		// For the following Partition table test case, in matrixone, when the parameter of ceil function is of decimal type and the return value type is of decimal type,
+		// it cannot be used as the partition expression type, but in MySQL, when the parameter of ceil function is of decimal type and the return
+		// value is of int type, it can be used as the partition expression type
+		"create table p_hash_table_08(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(ceil(col3)) partitions 2;",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col2);",
-		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col2);",
-		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col1+0.5);",
+		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(col2) PARTITIONS 4;",
 		"CREATE TABLE t1 (col1 INT, col2 DECIMAL) PARTITION BY HASH(12);",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3)) PARTITIONS 4 SUBPARTITION BY KEY(col1);",
 		"CREATE TABLE t1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY HASH( YEAR(col3) ) PARTITIONS;",
+		"create table t3 (a int, b int) partition by hash(ceiling(a-b) + 23.5) partitions 10",
 		`CREATE TABLE employees (
 					id INT NOT NULL,
 					fname VARCHAR(30),
@@ -178,6 +199,24 @@ func TestHashPartitionError(t *testing.T) {
 		)
 		PARTITION BY HASH(col1+col3)
 		PARTITIONS 4;`,
+
+		`create table p_hash_table_03(
+			col1 bigint ,
+			col2 date default '1970-01-01',
+			col3 varchar(30)
+		)
+		partition by hash(year(col3))
+		partitions 8;`,
+
+		`CREATE TABLE employees (
+			id INT NOT NULL,
+			fname VARCHAR(30),
+			lname VARCHAR(30),
+			hired DATE NOT NULL DEFAULT '1970-01-01',
+			separated DATE NOT NULL DEFAULT '9999-12-31',
+			job_code INT,
+			store_id INT
+		) PARTITION BY HASH(store_id) PARTITIONS 102400000000;`,
 	}
 
 	mock := NewMockOptimizer(false)

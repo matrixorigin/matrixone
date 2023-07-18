@@ -16,9 +16,9 @@ package export
 
 import (
 	"context"
+	"io"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -65,10 +65,11 @@ func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
 	rw.afters = append(rw.afters, hook)
 }
 
-func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string, enableSqlWriter bool) (factory table.WriterFactory) {
+func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, enableSqlWriter bool) table.WriterFactory {
 
 	var extension = table.CsvExtension
 	var cfg = table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
+	var factory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
 
 	switch extension {
 	case table.CsvExtension:
@@ -84,15 +85,12 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext
 			}
 		}
 	case table.TaeExtension:
-		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)
-		if err != nil {
-			panic(err)
-		}
-		factory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-			filePath := cfg.LogsFilePathFactory(account, tbl, ts)
-			return newWriter(ctx, etl.NewTAEWriter(ctx, tbl, mp, filePath, fs))
-		}
+		// Deprecated
 	}
 
-	return factory
+	bufferWriterFactory := func(ctx context.Context, filepath string) io.WriteCloser {
+		return etl.NewBufWriter(ctx, etl.NewFSWriter(ctx, fs, etl.WithFilePath(filepath)))
+	}
+
+	return table.NewWriterFactoryGetter(factory, bufferWriterFactory)
 }

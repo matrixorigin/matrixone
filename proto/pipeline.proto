@@ -44,17 +44,21 @@ message Connector {
   int32 connector_index = 2;
 }
 
+message Shuffle{
+  int32 ShuffleColIdx=1;
+  int32 ShuffleType = 2;
+  int64 ShuffleColMin = 3;
+  int64 ShuffleColMax = 4;
+  int32 AliveRegCnt = 5;
+}
+
 message Dispatch {
   int32 func_id = 1;
   repeated Connector local_connector = 2;
   repeated WrapNode remote_connector = 3;
-  int32 ShuffleColIdx=4;
-  repeated int32 ShuffleRegIdxLocal=5;
-  repeated int32 ShuffleRegIdxRemote=6;
-  bool  is_sink = 7;
-  int32 ShuffleType = 8;
-  int64 ShuffleColMin = 9;
-  int64 ShuffleColMax = 10;
+  repeated int32 ShuffleRegIdxLocal=4;
+  repeated int32 ShuffleRegIdxRemote=5;
+  bool  is_sink = 6;
 }
 
 message MultiArguemnt{
@@ -92,6 +96,7 @@ message Insert{
   repeated string partition_table_names = 7;
   int32 partition_idx = 8;
   bool is_end         = 9;
+  plan.TableDef table_def = 10;
 }
 
 message Array{
@@ -119,6 +124,7 @@ message Deletion{
   map<string,int32> SegmentMap          = 12;
   bool can_truncate                     = 13;
   bool is_end                           = 14;
+  int32 primary_key_idx                 = 15;
 }
 
 message PreInsert {
@@ -141,6 +147,7 @@ message LockTarget {
 
 message LockOp {
   repeated LockTarget targets = 1;
+  bool                block   = 2;
 }
 
 message PreInsertUnique {
@@ -162,6 +169,7 @@ message Join {
   repeated plan.Type  types = 6;
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
 }
 
 message AntiJoin{
@@ -174,17 +182,6 @@ message AntiJoin{
   repeated plan.Expr right_cond = 7;
 }
 
-message InnerJoin {
-  uint64 ibucket = 1;
-  uint64 nbucket = 2;
-  repeated int32 rel_list = 3;
-  repeated int32 col_list = 4;
-  plan.Expr  expr = 5;
-  repeated plan.Type  types = 6;
-  repeated plan.Expr left_cond = 7;
-  repeated plan.Expr right_cond = 8;
-}
-
 message LeftJoin {
   uint64 ibucket = 1;
   uint64 nbucket = 2;
@@ -194,6 +191,7 @@ message LeftJoin {
   repeated plan.Type  types = 6;
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
 }
 
 message RightJoin {
@@ -206,6 +204,7 @@ message RightJoin {
   repeated plan.Type  right_types = 7;
   repeated plan.Expr left_cond = 8;
   repeated plan.Expr right_cond = 9;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 10;
 }
 
 message RightSemiJoin {
@@ -216,6 +215,7 @@ message RightSemiJoin {
   repeated plan.Type right_types = 5;
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
 }
 
 message RightAntiJoin {
@@ -226,6 +226,7 @@ message RightAntiJoin {
   repeated plan.Type right_types = 5;
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
 }
 
 message SemiJoin {
@@ -236,6 +237,7 @@ message SemiJoin {
   repeated plan.Type  types = 5;
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
 }
 
 message SingleJoin {
@@ -247,6 +249,7 @@ message SingleJoin {
   repeated plan.Type  types = 6;
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
 }
 
 message MarkJoin {
@@ -281,7 +284,6 @@ message HashBuild {
   uint64 nbucket = 4;
   repeated plan.Type types = 5;
   repeated plan.Expr conds = 6;
-  repeated plan.RuntimeFilterSpec runtime_filter_list = 7;
 }
 
 message ExternalName2ColIndex {
@@ -314,7 +316,6 @@ message Instruction{
   Connector   connect = 4;
   Dispatch  dispatch = 5;
   Group     agg = 6;
-  InnerJoin inner_join = 7;
   LeftJoin  left_join = 8;
   SemiJoin  semi_join = 9;
   SingleJoin single_join = 10;
@@ -344,6 +345,8 @@ message Instruction{
 
   Deletion delete = 31;
   LockOp lock_op = 32;
+
+  Shuffle shuffle = 33;
 }
 
 message AnalysisList {
@@ -360,7 +363,7 @@ message Source {
   plan.Expr  expr = 7;
   plan.TableDef tableDef = 8;
   timestamp.Timestamp timestamp = 9;
-  repeated plan.RuntimeFilterSpec runtime_filter_list = 10;
+  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
 }
 
 message NodeInfo {

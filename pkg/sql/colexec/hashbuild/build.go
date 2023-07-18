@@ -60,7 +60,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -71,7 +71,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		case BuildHashMap:
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 				ctr.cleanHashMap()
-				return false, err
+				return process.ExecNext, err
 			}
 			if ap.ctr.mp != nil {
 				anal.Alloc(ap.ctr.mp.Size())
@@ -80,13 +80,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 
 		case HandleRuntimeFilter:
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 		case Eval:
 			if ctr.bat != nil && ctr.bat.Length() != 0 {
 				if ap.NeedHashMap {
-					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
+					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ap.IsDup)
 				}
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
@@ -97,11 +97,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 				proc.SetInputBatch(nil)
 			}
 			ctr.state = End
-			return false, nil
+			return process.ExecNext, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }
@@ -144,7 +144,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		rows := ctr.mp.GroupCount()
+
+		oldRowNumberOfHashTable := ctr.mp.GroupCount()
 		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
@@ -157,14 +158,15 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			if v == 0 {
 				continue
 			}
-			if v > rows {
+
+			for v > oldRowNumberOfHashTable {
 				ctr.sels = append(ctr.sels, make([]int32, 0))
+				oldRowNumberOfHashTable++
 			}
 			ai := int64(v) - 1
 			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
 	}
-
 	return nil
 }
 

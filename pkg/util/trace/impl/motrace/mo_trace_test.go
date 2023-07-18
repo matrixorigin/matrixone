@@ -23,15 +23,22 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/prashantv/gostub"
-	"go.uber.org/zap"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 var _1TxnID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
@@ -248,6 +255,7 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, longTimeSpan.(*MOSpan).needRecord)
 	require.Equal(t, 2, len(longTimeSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, false, longTimeSpan.(*MOSpan).doneProfile)
 	require.Equal(t, extraFields, longTimeSpan.(*MOSpan).ExtraFields)
 
 	// span with deadline context
@@ -265,5 +273,239 @@ func TestMOSpan_End(t *testing.T) {
 	WG.Wait()
 	require.Equal(t, true, deadlineSpan.(*MOSpan).needRecord)
 	require.Equal(t, 1, len(deadlineSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, false, deadlineSpan.(*MOSpan).doneProfile)
 	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan.(*MOSpan).ExtraFields)
+
+	// span with deadline context (plus calling cancel2() before func return)
+	deadlineCtx2, cancel2 := context.WithTimeout(ctx, time.Millisecond)
+	defer cancel()
+	var deadlineSpan2 trace.Span
+	WG.Add(1)
+	go func() {
+		_, deadlineSpan2 = tracer.Start(deadlineCtx2, "deadlineCtx")
+		defer WG.Done()
+		defer deadlineSpan2.End()
+
+		time.Sleep(10 * time.Millisecond)
+		cancel2()
+	}()
+	WG.Wait()
+	require.Equal(t, true, deadlineSpan2.(*MOSpan).needRecord)
+	require.Equal(t, 1, len(deadlineSpan2.(*MOSpan).ExtraFields))
+	require.Equal(t, false, deadlineSpan2.(*MOSpan).doneProfile)
+	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan2.(*MOSpan).ExtraFields)
+
+	// span with hung option, with Deadline situation
+	caseHungOptionWithDeadline := func() {
+		defer cancel()
+		var hungSpan trace.Span
+		WG.Add(1)
+		go func() {
+			_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Millisecond))
+			defer WG.Done()
+			defer hungSpan.End()
+
+			time.Sleep(10 * time.Millisecond)
+		}()
+		WG.Wait()
+		require.Equal(t, true, hungSpan.(*MOHungSpan).needRecord)
+		require.Equal(t, 1, len(hungSpan.(*MOHungSpan).ExtraFields))
+		require.Equal(t, true, hungSpan.(*MOHungSpan).doneProfile)
+		require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, hungSpan.(*MOHungSpan).ExtraFields)
+	}
+	caseHungOptionWithDeadline()
+
+	// span with hung option, with NO Deadline situation
+	caseHungOptionWithoutDeadline := func() {
+		defer cancel()
+		var hungSpan trace.Span
+		WG.Add(1)
+		go func() {
+			_, hungSpan = tracer.Start(ctx, "hungCtx", trace.WithHungThreshold(time.Minute))
+			defer WG.Done()
+			defer hungSpan.End()
+
+			time.Sleep(10 * time.Millisecond)
+		}()
+		WG.Wait()
+		require.Equal(t, false, hungSpan.(*MOHungSpan).needRecord)
+		require.Equal(t, 0, len(hungSpan.(*MOHungSpan).ExtraFields))
+		require.Equal(t, false, hungSpan.(*MOHungSpan).doneProfile)
+	}
+	caseHungOptionWithoutDeadline()
+
+}
+
+type dummyFileWriterFactory struct{}
+
+func (f *dummyFileWriterFactory) GetRowWriter(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+	return &dummyStringWriter{}
+}
+func (f *dummyFileWriterFactory) GetWriter(ctx context.Context, fp string) io.WriteCloser {
+	selfDir, err := filepath.Abs(".")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("root: %s\n", selfDir)
+	dirname := path.Dir(fp)
+	if dirname != "." && dirname != "./" && dirname != "/" {
+		if err := os.Mkdir(dirname, os.ModeType|os.ModePerm); err != nil && !os.IsExist(err) {
+			panic(err)
+		}
+	}
+	fw, err := os.Create(fp)
+	if err != nil {
+		panic(err)
+	}
+	return fw
+}
+
+func TestMOSpan_doProfile(t *testing.T) {
+	type fields struct {
+		opts   []trace.SpanStartOption
+		ctx    context.Context
+		tracer *MOTracer
+	}
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	tests := []struct {
+		name   string
+		fields fields
+		want   bool
+	}{
+		{
+			name: "normal",
+			fields: fields{
+				opts:   nil,
+				ctx:    ctx,
+				tracer: tracer,
+			},
+		},
+		{
+			name: "goroutine",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileGoroutine()}, // it will dump file into ETL folder.
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "heap",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileHeap()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "threadcreate",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileThreadCreate()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "allocs",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileAllocs()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "block",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileBlock()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "mutex",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileMutex()},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "cpu",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileCpuSecs(time.Second)},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+		{
+			name: "trace",
+			fields: fields{
+				opts:   []trace.SpanStartOption{trace.WithProfileTraceSecs(time.Second)},
+				ctx:    ctx,
+				tracer: tracer,
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, s := tt.fields.tracer.Start(tt.fields.ctx, "test", tt.fields.opts...)
+			s.End()
+			require.Equal(t, tt.want, s.(*MOSpan).doneProfile)
+		})
+	}
+}
+
+func TestMOHungSpan_EndBeforeDeadline_doProfile(t *testing.T) {
+
+	defer func() {
+		err := recover()
+		require.Nilf(t, err, "error: %s", err)
+	}()
+
+	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true))
+	tracer := p.Tracer("test").(*MOTracer)
+	ctx := context.TODO()
+
+	var ctrlWG sync.WaitGroup
+	ctrlWG.Add(1)
+
+	_, span := tracer.Start(ctx, "test_loop", trace.WithHungThreshold(100*time.Millisecond))
+	hungSpan := span.(*MOHungSpan)
+
+	hungSpan.mux.Lock()
+	// simulate the act of span.End()
+	// TIPs: remove trigger.Stop()
+	hungSpan.quitCancel()
+	hungSpan.stopped = true
+	hungSpan.MOSpan = nil
+	time.Sleep(300 * time.Millisecond)
+	t.Logf("hungSpan.quitCtx.Err: %s", hungSpan.quitCtx.Err())
+	// END > simulate
+	hungSpan.mux.Unlock()
+
+	// wait for goroutine to finish
+	// should not panic
+	time.Sleep(time.Second)
+}
+
+func TestContextDeadlineAndCancel(t *testing.T) {
+	quitCtx, quitCancel := context.WithCancel(context.TODO())
+	deadlineCtx, deadlineCancel := context.WithTimeout(quitCtx, time.Millisecond)
+	defer deadlineCancel()
+
+	time.Sleep(2 * time.Millisecond)
+	t.Logf("deadlineCtx.Err: %s", deadlineCtx.Err())
+	quitCancel()
+	require.Equal(t, context.DeadlineExceeded, deadlineCtx.Err())
 }

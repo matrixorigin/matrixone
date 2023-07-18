@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -190,17 +191,17 @@ func Test_Call(t *testing.T) {
 			param.FileSize = []int64{1}
 			end, err := Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(end, convey.ShouldBeFalse)
+			convey.So(end == process.ExecStop, convey.ShouldBeFalse)
 
 			param.Fileparam.End = false
 			end, err = Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(end, convey.ShouldBeTrue)
+			convey.So(end == process.ExecStop, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
 			end, err = Call(1, tcs.proc, tcs.arg, false, false)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(end, convey.ShouldBeTrue)
+			convey.So(end == process.ExecStop, convey.ShouldBeTrue)
 		}
 	})
 }
