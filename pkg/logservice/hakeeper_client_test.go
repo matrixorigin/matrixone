@@ -38,13 +38,13 @@ func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	cfg := HAKeeperClientConfig{}
 	cc1, err := NewCNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc1)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 	cc2, err := NewDNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc2)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 	cc3, err := NewLogHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc3)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 }
 
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
