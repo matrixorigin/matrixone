@@ -63,6 +63,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -383,12 +384,13 @@ func (c *Compile) runOnce() error {
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
-	for _, s := range c.scope {
+	for i := range c.scope {
 		wg.Add(1)
-		go func(scope *Scope) {
+		scope := c.scope[i]
+		ants.Submit(func() {
 			errC <- c.run(scope)
 			wg.Done()
-		}(s)
+		})
 	}
 	wg.Wait()
 	c.scope = nil
@@ -1611,7 +1613,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
+		Arg: constructDispatch(0, rs, c.addr, n),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
@@ -2019,12 +2021,8 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	currentIsFirst := c.anal.isFirst
-	c.anal.isFirst = false
-	dop := plan2.GetShuffleDop()
-	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
-
+// shuffle and dispatch must stick together
+func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Node) {
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
@@ -2034,13 +2032,27 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		}
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
+				Op:  vm.Shuffle,
+				Arg: constructShuffleArg(children, n),
+			})
+
+			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, n),
+				Arg: constructDispatch(j, children, ss[i].NodeInfo.Addr, n),
 			})
 			j++
 			ss[i].IsEnd = true
 		}
 	}
+}
+
+func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+	currentIsFirst := c.anal.isFirst
+	c.anal.isFirst = false
+	dop := plan2.GetShuffleDop()
+	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+
+	c.constructShuffleAndDispatch(ss, children, n)
 
 	// saving the last operator of all children to make sure the connector setting in
 	// the right place
@@ -2289,7 +2301,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 	leftMerge := c.newMergeScope(ss)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
+		Arg: constructDispatch(0, rs, c.addr, n),
 	})
 	leftMerge.IsEnd = true
 
@@ -2298,7 +2310,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 	rightMerge := c.newMergeScope(children)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
+		Arg: constructDispatch(1, rs, c.addr, n),
 	})
 	rightMerge.IsEnd = true
 
@@ -2377,9 +2389,13 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	// so we set it to false now
 	c.anal.isFirst = false
 	mergeChildren := c.newMergeScope(children)
+
+	// a hack here to stop shuffle join, delete this in the future
+	n.Stats.Shuffle = false
+
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
+		Arg: constructDispatch(1, rs, c.addr, n),
 	})
 	mergeChildren.IsEnd = true
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)

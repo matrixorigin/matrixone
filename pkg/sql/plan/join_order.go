@@ -122,28 +122,30 @@ func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
 	}
 
 	for _, expr := range node.OnList {
-		if equi, _ := isEquiCond(expr, leftTags, rightTags); equi {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
 			return true
 		}
 	}
 	return false
 }
 
-func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]any) (bool, bool) {
+func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]any) bool {
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
 		if !SupportedJoinCondition(e.F.Func.GetObj()) {
-			return false, false
+			return false
 		}
 
 		lside, rside := getJoinSide(e.F.Args[0], leftTags, rightTags, 0), getJoinSide(e.F.Args[1], leftTags, rightTags, 0)
 		if lside == JoinSideLeft && rside == JoinSideRight {
-			return true, true
+			return true
 		} else if lside == JoinSideRight && rside == JoinSideLeft {
-			return true, false
+			// swap to make sure left and right is in order
+			e.F.Args[0], e.F.Args[1] = e.F.Args[1], e.F.Args[0]
+			return true
 		}
 	}
 
-	return false, false
+	return false
 }
 
 // IsEquiJoin2 Judge whether a join node is equi-join (after column remapping)
