@@ -185,9 +185,6 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 
 	ctx, span := trace.Start(ctx, "S3FS.List")
 	defer span.End()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
@@ -253,9 +250,6 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 
 	ctx, span := trace.Start(ctx, "S3FS.StatFile")
 	defer span.End()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
