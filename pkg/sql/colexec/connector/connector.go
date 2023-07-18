@@ -16,7 +16,6 @@ package connector
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
