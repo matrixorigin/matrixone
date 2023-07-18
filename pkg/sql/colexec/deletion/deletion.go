@@ -63,7 +63,7 @@ func Prepare(_ *process.Process, arg any) error {
 }
 
 // the bool return value means whether it completed its work or not
-func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	p := arg.(*Argument)
 	bat := proc.InputBatch()
 
@@ -91,7 +91,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
 					bytes, err := bat.MarshalBinary()
 					if err != nil {
-						return true, err
+						return process.ExecStop, err
 					}
 					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
 					vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
@@ -106,7 +106,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
 					bytes, err := bat.MarshalBinary()
 					if err != nil {
-						return true, err
+						return process.ExecStop, err
 					}
 					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
 					vector.AppendFixed(resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool())
@@ -123,14 +123,14 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			// do compaction here
 			p.DeleteCtx.Source.Delete(proc.Ctx, nil, catalog.Row_ID)
 		}
-		return true, nil
+		return process.ExecStop, nil
 	}
 
 	// empty batch
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
 
 	defer proc.PutBatch(bat)
@@ -140,7 +140,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		// trigger write s3
 		p.SplitBatch(proc, bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
 
 	var affectedRows uint64
@@ -149,7 +149,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	if len(delCtx.PartitionTableIDs) > 0 {
 		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs))
 		if err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 
 		for i, delBatch := range delBatches {
@@ -159,7 +159,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				err = delCtx.PartitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
 				if err != nil {
 					delBatch.Clean(proc.Mp())
-					return false, err
+					return process.ExecNext, err
 				}
 				delBatch.Clean(proc.Mp())
 			}
@@ -167,14 +167,14 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	} else {
 		delBatch, err := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
 		if err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 		affectedRows = uint64(delBatch.Length())
 		if affectedRows > 0 {
 			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
 			if err != nil {
 				delBatch.Clean(proc.GetMPool())
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 		delBatch.Clean(proc.GetMPool())
@@ -185,6 +185,5 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&p.affectedRows, affectedRows)
 	}
-
-	return false, nil
+	return process.ExecNext, nil
 }

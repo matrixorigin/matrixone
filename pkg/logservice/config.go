@@ -31,8 +31,8 @@ import (
 const (
 	defaultDataDir           = "mo-data/logservice"
 	defaultSnapshotExportDir = "exported-snapshot"
-	defaultServiceAddress    = "0.0.0.0:32000"
-	defaultRaftAddress       = "0.0.0.0:32001"
+	defaultRaftAddress       = "0.0.0.0:32000"
+	defaultServiceAddress    = "0.0.0.0:32001"
 	defaultGossipAddress     = "0.0.0.0:32002"
 	defaultGossipSeedAddress = "127.0.0.1:32002"
 
@@ -372,6 +372,9 @@ func (c *Config) Fill() {
 	} else if len(c.GossipAddress) != 0 && len(c.GossipListenAddress) == 0 {
 		c.GossipListenAddress = c.GossipAddress
 	}
+	if len(c.GossipSeedAddresses) == 0 {
+		c.GossipSeedAddresses = []string{defaultGossipSeedAddress}
+	}
 	if c.HAKeeperConfig.TickPerSecond == 0 {
 		c.HAKeeperConfig.TickPerSecond = hakeeper.DefaultTickPerSecond
 	}
@@ -383,6 +386,12 @@ func (c *Config) Fill() {
 	}
 	if c.HAKeeperConfig.CNStoreTimeout.Duration == 0 {
 		c.HAKeeperConfig.CNStoreTimeout.Duration = hakeeper.DefaultCNStoreTimeout
+	}
+	if c.HAKeeperClientConfig.DiscoveryAddress == "" && len(c.HAKeeperClientConfig.ServiceAddresses) == 0 {
+		c.HAKeeperClientConfig.ServiceAddresses = []string{defaultServiceAddress}
+	}
+	if c.HAKeeperClientConfig.AllocateIDBatch == 0 {
+		c.HAKeeperClientConfig.AllocateIDBatch = 100
 	}
 	if c.HeartbeatInterval.Duration == 0 {
 		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
@@ -423,7 +432,7 @@ type HAKeeperClientConfig struct {
 // Validate validates the HAKeeperClientConfig.
 func (c *HAKeeperClientConfig) Validate() error {
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfigNoCtx("HAKeeperClientConfig not set")
+		c.ServiceAddresses = []string{defaultServiceAddress}
 	}
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
@@ -461,7 +470,7 @@ func (c *ClientConfig) Validate() error {
 		return moerr.NewBadConfigNoCtx("DNReplicaID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfigNoCtx("ServiceAddresses not set")
+		c.ServiceAddresses = []string{defaultServiceAddress}
 	}
 	return nil
 }

@@ -35,8 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -446,8 +445,7 @@ func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 			return moerr.NewNotSupported(proc.Ctx, "no implement sqlExecutor")
 		}
 		exec := v.(executor.SQLExecutor)
-		tables := mometric.GetAllTables()
-		tables = append(tables, motrace.GetAllTables()...)
+		tables := table.GetAllTables()
 		tableNames := strings.Split(util.UnsafeBytesToString(v1), ",")
 		for _, tblName := range tableNames {
 			found := false

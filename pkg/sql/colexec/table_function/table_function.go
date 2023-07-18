@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	tblArg := arg.(*Argument)
 	var (
 		f bool
@@ -43,23 +43,33 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	case "metadata_scan":
 		f, e = metadataScan(idx, proc, tblArg)
 	default:
-		return true, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
+		return process.ExecStop, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
 	if e != nil || f {
-		return f, e
+		if f {
+			return process.ExecStop, e
+		}
+		return process.ExecNext, e
 	}
 	if proc.InputBatch() == nil || len(proc.InputBatch().Zs) == 0 {
-		return f, e
+		if f {
+			return process.ExecStop, e
+		}
+		return process.ExecNext, e
 	}
 	if proc.InputBatch().VectorCount() != len(tblArg.retSchema) {
-		return true, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
+		return process.ExecStop, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
 	}
 	for i := range tblArg.retSchema {
 		if proc.InputBatch().GetVector(int32(i)).GetType().Oid != tblArg.retSchema[i].Oid {
-			return true, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.Name)
+			return process.ExecStop, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.Name)
 		}
 	}
-	return f, e
+
+	if f {
+		return process.ExecStop, e
+	}
+	return process.ExecNext, e
 }
 
 func String(arg any, buf *bytes.Buffer) {
