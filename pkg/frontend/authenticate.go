@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/tidwall/btree"
+	"go.uber.org/zap"
 )
 
 type TenantInfo struct {
@@ -3166,11 +3167,14 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 			return nil, moerr.NewInternalError(newCtx, "the subscribe %s is not valid", pubName)
 		}
 	} else if !isSubscriptionValid(accountList, tenantInfo.GetTenant()) {
-		logErrorf(ses.GetDebugString(),
-			"subName %s , accName %s, pubName %s, databaseName %s accountList %s account %s",
-			subName, accName, pubName,
-			databaseName, accountList,
-			tenantInfo.GetTenant())
+		logError(ses, ses.GetDebugString(),
+			"checkSubscriptionValidCommon",
+			zap.String("subName", subName),
+			zap.String("accName", accName),
+			zap.String("pubName", pubName),
+			zap.String("databaseName", databaseName),
+			zap.String("accountList", accountList),
+			zap.String("tenant", tenantInfo.GetTenant()))
 		return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 	}
 
