@@ -228,11 +228,19 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 		for _, usercol := range node.BaseNode.Schema.ColDefs {
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
+			if len(b.batches[dbDelBatch].Vecs) == 2 {
+				b.batches[dbDelBatch].AddVector(pkgcatalog.SystemColAttr_UniqName, containers.MakeVector(types.T_varchar.ToType()))
+			}
+			b.batches[dbDelBatch].GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", tbl.GetID(), usercol.Name)), false)
 		}
 		if b.batches[tblDelBatch] == nil {
 			b.batches[tblDelBatch] = makeRespBatchFromSchema(DelSchema)
 		}
 		catalogEntry2Batch(b.batches[tblDelBatch], tbl, node, DelSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS())
+		if len(b.batches[dbDelBatch].Vecs) == 2 {
+			b.batches[dbDelBatch].AddVector(pkgcatalog.SystemRelAttr_ID, containers.MakeVector(types.T_uint64.ToType()))
+		}
+		b.batches[dbDelBatch].GetVectorByName(pkgcatalog.SystemRelAttr_ID).Append(tbl.ID, false)
 	}
 	// create table
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
@@ -284,6 +292,10 @@ func (b *TxnLogtailRespBuilder) visitDatabase(idb any) {
 			b.batches[dbDelBatch] = makeRespBatchFromSchema(DelSchema)
 		}
 		catalogEntry2Batch(b.batches[dbDelBatch], db, node, DelSchema, txnimpl.FillDBRow, u64ToRowID(db.GetID()), b.txn.GetPrepareTS())
+		if len(b.batches[dbDelBatch].Vecs) == 2 {
+			b.batches[dbDelBatch].AddVector(pkgcatalog.SystemDBAttr_ID, containers.MakeVector(types.T_uint64.ToType()))
+		}
+		b.batches[dbDelBatch].GetVectorByName(pkgcatalog.SystemDBAttr_ID).Append(db.ID, false)
 	}
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
 		if b.batches[dbInsBatch] == nil {
