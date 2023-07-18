@@ -1,5 +1,6 @@
 -- primary key conflict/insert into values
 create table ct_01(a int primary key,b varchar(25));
+-- @pattern
 insert into ct_01 values(1,'bell'),(2,'app'),(1,'com');
 insert into ct_01 values(1,'bell'),(2,'app');
 begin;
@@ -7,6 +8,7 @@ insert into ct_01 values(3,'oppo'),(3,'zow');
 -- @session:id=1{
 use conflict_transation;
 start transaction ;
+-- @pattern
 insert into ct_01 values(2,'yooo');
 commit;
 -- @session}
@@ -21,11 +23,13 @@ update ct_02 set a=5 where b='app';
 -- @session:id=1{
 begin;
 -- @wait:0:commit
+-- @pattern
 update ct_02 set a=5 where b='bell';
 commit;
 -- @session}
 commit;
 begin;
+-- @pattern
 update ct_02 set a=3 where b='bell';
 commit;
 select * from ct_02;
@@ -53,6 +57,7 @@ create table ct_04_temp(a int,b varchar(25));
 insert into ct_04_temp values (1,'bell'),(2,'app'),(1,'com');
 create table ct_04(a int primary key,b varchar(25));
 begin;
+-- @pattern
 insert into ct_04 select * from ct_04_temp;
 commit;
 select * from ct_04;

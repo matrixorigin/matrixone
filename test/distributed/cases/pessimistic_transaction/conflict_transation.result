@@ -1,6 +1,6 @@
 create table ct_01(a int primary key,b varchar(25));
 insert into ct_01 values(1,'bell'),(2,'app'),(1,'com');
-Duplicate entry '1' for key 'a'
+Duplicate entry '\d' for key 'a'
 insert into ct_01 values(1,'bell'),(2,'app');
 begin;
 insert into ct_01 values(3,'oppo'),(3,'zow');
@@ -9,7 +9,7 @@ Previous DML conflicts with existing constraints or data format. This transactio
 use conflict_transation;
 start transaction ;
 insert into ct_01 values(2,'yooo');
-Duplicate entry '2' for key 'a'
+Duplicate entry '\d' for key 'a'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 commit;
@@ -23,13 +23,13 @@ start transaction ;
 update ct_02 set a=5 where b='app';
 begin;
 update ct_02 set a=5 where b='bell';
-Duplicate entry '5' for key 'a'
+Duplicate entry '\d' for key 'a'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 commit;
 begin;
 update ct_02 set a=3 where b='bell';
-Duplicate entry '3' for key 'a'
+Duplicate entry '\d' for key 'a'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select * from ct_02;
@@ -62,7 +62,7 @@ insert into ct_04_temp values (1,'bell'),(2,'app'),(1,'com');
 create table ct_04(a int primary key,b varchar(25));
 begin;
 insert into ct_04 select * from ct_04_temp;
-Duplicate entry '1' for key 'a'
+Duplicate entry '\d' for key 'a'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select * from ct_04;

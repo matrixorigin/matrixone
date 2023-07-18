@@ -87,6 +87,7 @@ select * from test_11;
 delete from test_11 where c = 1;
 select * from test_11;
 -- @session}
+-- @pattern
 Insert into test_11 values(1,1);
 select * from test_11;
 
@@ -118,6 +119,7 @@ select * from test_11;
 Insert into test_11 values(50,50);
 -- @session:id=1{
 -- @wait:0:commit
+-- @pattern
 Insert into test_11 values(50,50);
 select * from test_11;
 -- @session}
@@ -143,7 +145,7 @@ select * from test_11;
 Insert into test_11 values(50,50);
 select * from test_11;
 -- @session}
-
+-- @pattern
 Insert into test_11 values(50,50);
 select * from test_11;
 commit;
@@ -166,6 +168,7 @@ select * from test_11;
 -- @session:id=1{
 select * from test_11;
 -- @wait:0:commit
+-- @pattern
 Insert into test_11 values(50,50);
 select * from test_11;
 -- @session}
@@ -199,6 +202,7 @@ select * from test_11;
 -- @session:id=1{
 select * from test_11;
 -- @wait:0:commit
+-- @pattern
 Insert into test_11 values(50,50);
 select * from test_11;
 -- @session}
@@ -210,6 +214,7 @@ update test_11 set c = 100 where d = 50;
 select * from test_11;
 -- @session}
 select * from test_11;
+-- @pattern
 Insert into test_11 values(100,50);
 
 commit;
@@ -233,6 +238,7 @@ select * from test_11;
 -- @session:id=1{
 select * from test_11;
 -- @wait:0:commit
+-- @pattern
 Insert into test_11 values(50,50);
 select * from test_11;
 -- @session}
@@ -267,6 +273,7 @@ select * from test_11;
 -- @session:id=1{
 select * from test_11;
 -- @wait:0:commit
+-- @pattern
 Insert into test_11 values(50,50);
 select * from test_11;
 -- @session}
