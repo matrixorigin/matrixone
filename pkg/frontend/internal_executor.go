@@ -275,7 +275,7 @@ func (ip *internalProtocol) ConnectionID() uint32 {
 
 // Peer gets the address [Host:Port] of the client
 func (ip *internalProtocol) Peer() string {
-	return "0.0.0.0"
+	return "0.0.0.0:0"
 }
 
 func (ip *internalProtocol) GetDatabaseName() string {

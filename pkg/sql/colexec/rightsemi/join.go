@@ -55,7 +55,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	analyze := proc.GetAnalyze(idx)
 	analyze.Start()
 	defer analyze.Stop()
@@ -65,7 +65,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, analyze); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			if ctr.mp == nil {
 				ctr.state = End
@@ -76,7 +76,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, analyze)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 			if bat == nil {
@@ -94,7 +94,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 
 			if err := ctr.probe(bat, ap, proc, analyze, isFirst, isLast); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 			continue
@@ -102,7 +102,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		case SendLast:
 			setNil, err := ctr.sendLast(ap, proc, analyze, isFirst, isLast)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 			ctr.state = End
@@ -110,11 +110,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 
-			return false, nil
+			return process.ExecNext, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }

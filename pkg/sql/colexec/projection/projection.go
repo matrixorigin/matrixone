@@ -42,7 +42,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -50,12 +50,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	bat := proc.InputBatch()
 	if bat == nil {
 		proc.SetInputBatch(nil)
-		return true, nil
+		return process.ExecStop, nil
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
@@ -66,7 +66,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	for i := range ap.ctr.projExecutors {
 		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 		rbat.Vecs[i] = vec
 	}
@@ -74,7 +74,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	newAlloc, err := colexec.FixProjectionResult(proc, ap.ctr.projExecutors, rbat, bat)
 	if err != nil {
 		bat.Clean(proc.Mp())
-		return false, err
+		return process.ExecNext, err
 	}
 	anal.Alloc(int64(newAlloc))
 
@@ -82,5 +82,5 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	proc.PutBatch(bat)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
-	return false, nil
+	return process.ExecNext, nil
 }
