@@ -1231,6 +1231,23 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
+
+	// lock table
+	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		if err != nil {
+			panic(err)
+		}
+		rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		err = lockTable(c.e, c.proc, rel)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			return nil, err
+		}
+	}
+
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {

@@ -43,6 +43,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -202,7 +203,10 @@ var _ MysqlProtocol = &MysqlProtocolImpl{}
 func (ses *Session) GetMysqlProtocol() MysqlProtocol {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.protocol.(MysqlProtocol)
+	if ses.protocol != nil {
+		return ses.protocol.(MysqlProtocol)
+	}
+	return nil
 }
 
 type debugStats struct {
@@ -1150,7 +1154,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logInfof(mp.getDebugStringUnsafe(), "check password succeeded")
+				logInfo(mp.ses, "check password succeeded", "")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
@@ -2667,10 +2671,14 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		// TODO(volgariver6): we should change the port of the internal execution from
 		// 6001 to the proxy listen port.
 		if err, ok := err.(net.Error); !ok || err.Timeout() {
-			logErrorf(mp.GetDebugString(), "failed to get salt: %v", err)
+			logError(mp.ses, mp.GetDebugString(),
+				"Failed to get salt",
+				zap.Error(err))
 		}
 	} else if n != saltLen {
-		logErrorf(mp.GetDebugString(), "failed to get salt: %v", err)
+		logError(mp.ses, mp.GetDebugString(),
+			"Failed to get salt",
+			zap.Error(err))
 	} else {
 		mp.SetSalt(data)
 	}
@@ -2679,7 +2687,9 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	label := &proxy.RequestLabel{}
 	reader := bufio.NewReader(rs.RawConn())
 	if err = label.Decode(reader); err != nil {
-		logErrorf(mp.GetDebugString(), "failed to get CN labels: %v", err)
+		logError(mp.ses, mp.GetDebugString(),
+			"Failed to get CN labels",
+			zap.Error(err))
 	} else {
 		mp.GetSession().requestLabel = label.Labels
 		logDebugf(mp.GetDebugString(), "got requested CN labels: %v", *label)

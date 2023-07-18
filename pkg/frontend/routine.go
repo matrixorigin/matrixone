@@ -16,11 +16,13 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -215,12 +217,17 @@ func (rt *Routine) handleRequest(req *Request) error {
 	})
 
 	if resp, err = executor.ExecRequest(tenantCtx, ses, req); err != nil {
-		logErrorf(ses.GetDebugString(), "rt execute request failed. error:%v \n", err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to execute request",
+			zap.Error(err))
 	}
 
 	if resp != nil {
 		if err = rt.getProtocol().SendResponse(tenantCtx, resp); err != nil {
-			logErrorf(ses.GetDebugString(), "rt send response failed %v. error:%v ", resp, err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to send response",
+				zap.String("response", fmt.Sprintf("%v", resp)),
+				zap.Error(err))
 		}
 	}
 
@@ -243,10 +250,12 @@ func (rt *Routine) handleRequest(req *Request) error {
 		})
 
 		//ensure cleaning the transaction
-		logErrorf(ses.GetDebugString(), "rollback the txn.")
+		logError(ses, ses.GetDebugString(), "rollback the txn.")
 		err = ses.TxnRollback()
 		if err != nil {
-			logErrorf(ses.GetDebugString(), "rollback txn failed.error:%v", err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to rollback txn",
+				zap.Error(err))
 		}
 
 		//close the network connection
@@ -323,7 +332,9 @@ func (rt *Routine) cleanup() {
 		if ses != nil {
 			err := ses.TxnRollback()
 			if err != nil {
-				logErrorf(ses.GetDebugString(), "rollback txn failed.error:%v", err)
+				logError(ses, ses.GetDebugString(),
+					"Failed to rollback txn",
+					zap.Error(err))
 			}
 		}
 

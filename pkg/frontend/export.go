@@ -19,17 +19,19 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"io"
-	"os"
-	"strconv"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -491,7 +493,9 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 				val := vector.GetFixedAt[types.Blockid](vec, i)
 				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
 			default:
-				logErrorf(ses.GetDebugString(), "constructByte : unsupported type %d", vec.GetType().Oid)
+				logError(ses, ses.GetDebugString(),
+					"Failed to construct byte due to unsupported type",
+					zap.Int("typeOid", int(vec.GetType().Oid)))
 				ByteChan <- &BatchByte{
 					err: moerr.NewInternalError(ses.requestCtx, "constructByte : unsupported type %d", vec.GetType().Oid),
 				}
