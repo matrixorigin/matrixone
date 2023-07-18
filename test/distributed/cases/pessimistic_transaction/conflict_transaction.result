@@ -6,7 +6,7 @@ begin;
 insert into ct_01 values(3,'oppo'),(3,'zow');
 Duplicate entry '3' for key 'a'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
-use conflict_transation;
+use conflict_transaction;
 start transaction ;
 insert into ct_01 values(2,'yooo');
 Duplicate entry '\d' for key 'a'
