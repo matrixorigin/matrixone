@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1649,6 +1651,10 @@ func (tbl *txnTable) newReader(
 	}
 	readers[0] = partReader
 
+	procPtr := unsafe.Pointer(tbl.proc)
+	procPtr = atomic.LoadPointer(&procPtr)
+	proc := (*process.Process)(procPtr)
+
 	if readerNumber == 1 {
 		for i := range dirtyBlks {
 			readers = append(
@@ -1660,7 +1666,7 @@ func (tbl *txnTable) newReader(
 					[]*catalog.BlockInfo{dirtyBlks[i]},
 					expr,
 					fs,
-					tbl.proc,
+					proc,
 				),
 			)
 		}
@@ -1676,7 +1682,7 @@ func (tbl *txnTable) newReader(
 				[]*catalog.BlockInfo{dirtyBlks[i]},
 				expr,
 				fs,
-				tbl.proc,
+				proc,
 			)
 		}
 		for j := len(dirtyBlks) + 1; j < readerNumber; j++ {
@@ -1693,7 +1699,7 @@ func (tbl *txnTable) newReader(
 		ts,
 		readerNumber-1,
 		expr,
-		tbl.proc)
+		proc)
 	objInfos, steps := groupBlocksToObjects(dirtyBlks, readerNumber-1)
 	blockReaders = distributeBlocksToBlockReaders(
 		blockReaders,
