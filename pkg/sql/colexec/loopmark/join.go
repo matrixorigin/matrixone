@@ -47,7 +47,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -57,7 +57,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			ctr.state = Probe
 
@@ -65,7 +65,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			var err error
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 			if bat == nil {
@@ -82,11 +82,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			}
 			proc.PutBatch(bat)
-			return false, err
+			return process.ExecNext, err
 
 		default:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }

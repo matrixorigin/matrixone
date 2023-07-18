@@ -63,24 +63,11 @@ func Test_initExport(t *testing.T) {
 			empty: true,
 		},
 		{
-			name: "enable_InternalExecutor",
+			name: "enable",
 			args: args{
 				enableTracer: true,
 				config: &tracerProviderConfig{
-					enable: true, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
-					batchProcessor: NoopBatchProcessor{},
-				},
-				needRecover: true,
-				shutdownCtx: context.Background(),
-			},
-			empty: false,
-		},
-		{
-			name: "enable_FileService",
-			args: args{
-				enableTracer: true,
-				config: &tracerProviderConfig{
-					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
+					enable: true, sqlExecutor: newDummyExecutorFactory(ch),
 					batchProcessor: NoopBatchProcessor{},
 				},
 				shutdownCtx: context.Background(),
@@ -88,11 +75,11 @@ func Test_initExport(t *testing.T) {
 			empty: false,
 		},
 		{
-			name: "enable_FileService_with_canceled_ctx",
+			name: "enable_with_canceled_ctx",
 			args: args{
 				enableTracer: true,
 				config: &tracerProviderConfig{
-					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
+					enable: true, sqlExecutor: newDummyExecutorFactory(ch),
 					batchProcessor: NoopBatchProcessor{},
 				},
 				shutdownCtx: cancledCtx,

@@ -2350,6 +2350,90 @@ var (
 		}, {
 			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
 			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
+		}, {
+			input:  "alter table t1 algorithm = DEFAULT",
+			output: "alter table t1 alter algorithm not enforce",
+		}, {
+			input:  "alter table t1 algorithm = INSTANT",
+			output: "alter table t1 alter algorithm not enforce",
+		}, {
+			input:  "alter table t1 algorithm = INPLACE",
+			output: "alter table t1 alter algorithm not enforce",
+		}, {
+			input:  "alter table t1 algorithm = COPY",
+			output: "alter table t1 alter algorithm not enforce",
+		}, {
+			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
+			output: "alter table t1 charset = a",
+		}, {
+			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
+			output: "alter table t1 charset = a",
+		}, {
+			input:  "alter table t1 DISABLE KEYS",
+			output: "alter table t1 charset = DISABLE",
+		}, {
+			input:  "alter table t1 ENABLE KEYS",
+			output: "alter table t1 charset = ENABLE",
+		}, {
+			input:  "alter table t1 DISCARD TABLESPACE",
+			output: "alter table t1 charset = DISCARD",
+		}, {
+			input:  "alter table t1 IMPORT TABLESPACE",
+			output: "alter table t1 charset = IMPORT",
+		}, {
+			input:  "alter table t1 FORCE",
+			output: "alter table t1 charset = FORCE",
+		}, {
+			input:  "alter table t1 LOCK = DEFAULT",
+			output: "alter table t1 charset = LOCK",
+		}, {
+			input:  "alter table t1 LOCK = NONE",
+			output: "alter table t1 charset = LOCK",
+		}, {
+			input:  "alter table t1 LOCK = SHARED",
+			output: "alter table t1 charset = LOCK",
+		}, {
+			input:  "alter table t1 LOCK = EXCLUSIVE",
+			output: "alter table t1 charset = LOCK",
+		}, {
+			input:  "alter table t1 WITHOUT VALIDATION",
+			output: "alter table t1 charset = WITHOUT",
+		}, {
+			input:  "alter table t1 WITH VALIDATION",
+			output: "alter table t1 charset = WITH",
+		}, {
+			input:  "alter table t1 alter CHECK a ENFORCED",
+			output: "alter table t1 alter CHECK enforce",
+		}, {
+			input:  "alter table t1 alter CONSTRAINT a NOT ENFORCED",
+			output: "alter table t1 alter CONSTRAINT not enforce",
+		}, {
+			input:  "create or replace VIEW t2 as select * from t1",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create or replace ALGORITHM = UNDEFINED VIEW t2 as select * from t1",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create or replace ALGORITHM = MERGE VIEW t2 as select * from t1",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create or replace ALGORITHM = TEMPTABLE VIEW t2 as select * from t1",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create or replace ALGORITHM = TEMPTABLE DEFINER = `ucl360`@`%` VIEW t2 as select * from t1",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create SQL SECURITY DEFINER VIEW t2 as select * from t1",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create SQL SECURITY INVOKER VIEW t2 as select * from t1",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create VIEW t2 as select * from t1 WITH CASCADED CHECK OPTION",
+			output: "create view t2 as select * from t1",
+		}, {
+			input:  "create VIEW t2 as select * from t1 WITH LOCAL CHECK OPTION",
+			output: "create view t2 as select * from t1",
 		},
 	}
 )

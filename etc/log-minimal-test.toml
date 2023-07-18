@@ -27,18 +27,3 @@ service-addresses = [
   "127.0.0.1:32000",
 ]
 
-[[fileservice]]
-name = "local"
-backend = "DISK"
-data-dir = "store"
-
-[[fileservice]]
-name = "SHARED"
-backend = "DISK"
-data-dir = "store"
-
-[[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
-data-dir = "store"
-

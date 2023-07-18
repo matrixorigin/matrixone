@@ -183,7 +183,7 @@ func TestLockWithBlocking(t *testing.T) {
 				}
 				n++
 			} else {
-				if !end {
+				if end != process.ExecStop {
 					downstreamBatches = append(downstreamBatches, proc.InputBatch())
 				} else {
 					require.Equal(t, 3, len(downstreamBatches))
@@ -193,7 +193,7 @@ func TestLockWithBlocking(t *testing.T) {
 					}
 				}
 			}
-			return end, nil
+			return end == process.ExecStop, nil
 		},
 		func(a *Argument) {
 		},
@@ -236,7 +236,8 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.rt.hasNewVersionInRange = testFunc
-			return Call(idx, proc, arg, isFirst, isLast)
+			ok, err := Call(idx, proc, arg, isFirst, isLast)
+			return ok == process.ExecStop, err
 		},
 		func(arg *Argument) {
 			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))

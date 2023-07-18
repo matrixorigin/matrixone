@@ -159,8 +159,23 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 
 // cols in one table, return if ndv of  multi column is high enough
 func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
+	if tableDef == nil {
+		return false
+	}
+	// first to check if it is primary key.
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		pks := make([]int32, len(pkNames))
+		for i := range pkNames {
+			pks[i] = tableDef.Name2ColIndex[pkNames[i]]
+		}
+		if containsAllPKs(cols, pks) {
+			return true
+		}
+	}
+
 	sc := builder.compCtx.GetStatsCache()
-	if sc == nil || tableDef == nil {
+	if sc == nil {
 		return false
 	}
 	s := sc.GetStatsInfoMap(tableDef.TblId)
@@ -648,7 +663,7 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error
 	node := qry.Nodes[nodeId]
 	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
 		for i, e := range node.FilterList {
-			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc)
+			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false)
 			if err != nil {
 				return err
 			}
