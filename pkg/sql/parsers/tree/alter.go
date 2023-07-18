@@ -222,6 +222,22 @@ func (node *AlterOptionAlterIndex) Format(ctx *FmtCtx) {
 	}
 }
 
+type AlterOptionAlterCheck struct {
+	alterOptionImpl
+	Type    string
+	Enforce bool
+}
+
+func (node *AlterOptionAlterCheck) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter ")
+	ctx.WriteString(node.Type + " ")
+	if node.Enforce {
+		ctx.WriteString("enforce")
+	} else {
+		ctx.WriteString("not enforce")
+	}
+}
+
 type AlterOptionAdd struct {
 	alterOptionImpl
 	Def TableDef

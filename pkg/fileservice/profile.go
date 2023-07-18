@@ -85,7 +85,7 @@ func (p *ProfileHandler) AddSample(duration time.Duration, tags ...string) {
 	}
 	state := <-p.stateChan
 	for _, profiler := range state.profilers {
-		profiler.addSample(1, duration, tags...)
+		profiler.Add(1, duration, tags...)
 	}
 	p.stateChan <- state
 }
@@ -108,10 +108,8 @@ func (p *ProfileHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 type profiler struct {
-	profile      *profile.Profile
-	functions    map[string]*profile.Function
-	tagFunctions map[string]*profile.Function
-	nextID       atomic.Uint64
+	profile *profile.Profile
+	info    *ProfileInfo
 }
 
 func newProfiler() *profiler {
@@ -128,74 +126,11 @@ func newProfiler() *profiler {
 				},
 			},
 		},
-		functions:    make(map[string]*profile.Function),
-		tagFunctions: make(map[string]*profile.Function),
+		info: NewProfileInfo(),
 	}
 }
 
-func (p *profiler) getFunction(frame runtime.Frame) *profile.Function {
-	if fn, ok := p.functions[frame.Function]; ok {
-		return fn
-	}
-	fn := &profile.Function{
-		ID:         p.nextID.Add(1),
-		Name:       frame.Function,
-		SystemName: frame.Function,
-		Filename:   frame.File,
-		StartLine:  int64(frame.Line),
-	}
-	if frame.Func != nil {
-		file, line := frame.Func.FileLine(frame.Entry)
-		fn.Filename = file
-		fn.StartLine = int64(line)
-	}
-	p.profile.Function = append(p.profile.Function, fn)
-	p.functions[frame.Function] = fn
-	return fn
-}
-
-func (p *profiler) getTagFunction(tag string) *profile.Function {
-	if fn, ok := p.tagFunctions[tag]; ok {
-		return fn
-	}
-	fn := &profile.Function{
-		ID:         p.nextID.Add(1),
-		Name:       tag,
-		SystemName: tag,
-	}
-	p.profile.Function = append(p.profile.Function, fn)
-	p.tagFunctions[tag] = fn
-	return fn
-}
-
-func (p *profiler) getLocation(frame runtime.Frame) *profile.Location {
-	line := profile.Line{
-		Function: p.getFunction(frame),
-		Line:     int64(frame.Line),
-	}
-	loc := &profile.Location{
-		ID:      p.nextID.Add(1),
-		Address: uint64(frame.PC),
-		Line:    []profile.Line{line},
-	}
-	p.profile.Location = append(p.profile.Location, loc)
-	return loc
-}
-
-func (p *profiler) getTagLocation(tag string) *profile.Location {
-	loc := &profile.Location{
-		ID: p.nextID.Add(1),
-		Line: []profile.Line{
-			{
-				Function: p.getTagFunction(tag),
-			},
-		},
-	}
-	p.profile.Location = append(p.profile.Location, loc)
-	return loc
-}
-
-func (p *profiler) addSample(skip int, duration time.Duration, tags ...string) {
+func (p *profiler) Add(skip int, duration time.Duration, tags ...string) {
 	sample := &profile.Sample{
 		Value: []int64{
 			1,
@@ -204,7 +139,7 @@ func (p *profiler) addSample(skip int, duration time.Duration, tags ...string) {
 	}
 
 	for _, tag := range tags {
-		sample.Location = append(sample.Location, p.getTagLocation(tag))
+		sample.Location = append(sample.Location, p.info.getTagLocation(p.profile, tag))
 	}
 
 	var pcs []uintptr
@@ -219,7 +154,7 @@ func (p *profiler) addSample(skip int, duration time.Duration, tags ...string) {
 			// unknown function, ignore
 			continue
 		}
-		location := p.getLocation(frame)
+		location := p.info.getLocation(p.profile, frame)
 		sample.Location = append(sample.Location, location)
 
 		if !more {

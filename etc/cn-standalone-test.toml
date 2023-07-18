@@ -12,19 +12,6 @@ service-addresses = [
     "2"
 ]
 
-[[fileservice]]
-name = "LOCAL"
-backend = "MEM"
-
-[[fileservice]]
-name = "SHARED"
-backend = "MEM"
-
-[[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
-data-dir = "store"
-
 [cn]
 uuid = "cn1"
 

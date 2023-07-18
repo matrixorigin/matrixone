@@ -40,7 +40,7 @@ type FetchLockRowsFunc func(
 	// used to filter rows
 	filter RowsFilter,
 	// used by filter rows func
-	filterCols []int32) ([][]byte, lock.Granularity)
+	filterCols []int32) (bool, [][]byte, lock.Granularity)
 
 // LockOptions lock operation options
 type LockOptions struct {

@@ -106,6 +106,7 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.stepRegs = make(map[int32][]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
+	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 	return c
 }
 
@@ -224,6 +225,8 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
+
+	//fmt.Println(DebugShowScopes([]*Scope{s}))
 
 	switch s.Magic {
 	case Normal:
@@ -1229,6 +1232,23 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
+
+	// lock table
+	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		if err != nil {
+			panic(err)
+		}
+		rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		err = lockTable(c.e, c.proc, rel)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			return nil, err
+		}
+	}
+
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {
@@ -1526,27 +1546,10 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 			SchemaName:             n.ObjRef.SchemaName,
 			AccountId:              n.ObjRef.GetPubInfo(),
 			Expr:                   plan2.DeepCopyExpr(filterExpr),
+			RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-
-	// Register runtime filters
-	// XXX currently we only enable runtime filter on single CN
-	if len(c.cnList) == 1 && len(n.RuntimeFilterProbeList) > 0 {
-		receivers := make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterProbeList))
-		if c.runtimeFilterReceiverMap == nil {
-			c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-		}
-		for i, rfSpec := range n.RuntimeFilterProbeList {
-			ch := make(chan *pipeline.RuntimeFilter, 1)
-			receivers[i] = &colexec.RuntimeFilterChan{
-				Spec: rfSpec,
-				Chan: ch,
-			}
-			c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-		}
-		s.DataSource.RuntimeFilterReceivers = receivers
-	}
 
 	return s
 }
