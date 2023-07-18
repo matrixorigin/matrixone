@@ -27,10 +27,6 @@ disk-evict-target = 0.8
 name = "ETL"
 backend = "DISK-ETL"
 
-[observability]
-statusPort = 7001
-enableTraceDebug = false
-
 [logservice]
 deployment-id = 1
 uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
