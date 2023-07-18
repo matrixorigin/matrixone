@@ -20,7 +20,6 @@ import (
 	"io"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -193,7 +192,7 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 	defer node.chain.Load().mvcc.Unlock()
 	if node.nt == NT_Persisted {
 		if node.chain.Load().Depth() != 1 {
-			return moerr.NewTxnWWConflict(node.Txn.GetContext())
+			return txnif.ErrTxnNeedRetry
 		}
 	}
 	_, err = node.TxnMVCCNode.PrepareCommit()

@@ -195,6 +195,25 @@ func (mgr *TxnManager) StartTxnWithLatestTS(info []byte) (txn txnif.AsyncTxn, er
 	return
 }
 
+func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
+	info []byte,
+	startTS, snapshotTS types.TS,
+) (txn txnif.AsyncTxn, err error) {
+	if exp := mgr.Exception.Load(); exp != nil {
+		err = exp.(error)
+		logutil.Warnf("StartTxn: %v", err)
+		return
+	}
+	mgr.Lock()
+	defer mgr.Unlock()
+	store := mgr.TxnStoreFactory()
+	txnId := mgr.IdAlloc.Alloc()
+	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
+	store.BindTxn(txn)
+	mgr.IDMap[string(txnId)] = txn
+	return
+}
+
 // GetOrCreateTxnWithMeta Get or create a txn initiated by CN
 func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 	info []byte,

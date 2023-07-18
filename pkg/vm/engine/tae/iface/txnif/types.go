@@ -34,6 +34,7 @@ import (
 
 var (
 	ErrTxnWWConflict = moerr.NewTxnWWConflictNoCtx()
+	ErrTxnNeedRetry  = moerr.NewTAENeedRetryNoCtx()
 )
 
 type Txn2PC interface {
