@@ -41,7 +41,7 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 	name string, databaseId uint64, typ string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_DATABASE_DAT_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // dat_id
@@ -95,7 +95,7 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(2)
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema[:2]...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_DATABASE_DAT_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // dat_id
@@ -116,7 +116,7 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 	bat := batch.NewWithSize(5)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
 	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
@@ -151,7 +151,7 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 func genTableAlterTuple(constraint [][]byte, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(1)
 	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	idx := catalog.MO_TABLES_ALTER_TABLE
 	bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
 	for i := 0; i < len(constraint); i++ {
@@ -170,7 +170,7 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 	_ = sql //TODO delete this param if not required
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id
@@ -276,7 +276,7 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 func genCreateColumnTuple(col column, rowid types.Rowid, needRowid bool, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_uniq_name
@@ -413,7 +413,7 @@ func genCreateColumnTuple(col column, rowid types.Rowid, needRowid bool, m *mpoo
 func genDropColumnTuple(rowid types.Rowid, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{catalog.Row_ID}
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 
 	//add the rowid vector as the first one in the batch
 	vec := vector.NewVec(types.T_Rowid.ToType())
@@ -430,7 +430,7 @@ func genDropTableTuple(rowid types.Rowid, id, databaseId uint64, name, databaseN
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id
@@ -469,7 +469,7 @@ func genTruncateTableTuple(rowid types.Rowid, id, databaseId uint64, name, datab
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id

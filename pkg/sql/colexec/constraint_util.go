@@ -50,7 +50,7 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch
 			row++
 		}
 	}
-	retBatch.SetZs(retVec.Length(), proc.Mp())
+	retBatch.SetRowCount(retVec.Length())
 	retBatch.SetVector(0, retVec)
 	return retBatch, nil
 }
@@ -85,7 +85,7 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int,
 	for i := range vecList {
 		// initialize the vectors in each batch, the batch only contains a `row_id` column
 		retBatch := batch.New(true, []string{catalog.Row_ID})
-		retBatch.SetZs(vecList[i].Length(), proc.Mp())
+		retBatch.SetRowCount(vecList[i].Length())
 		retBatch.SetVector(0, vecList[i])
 		batches[i] = retBatch
 	}
@@ -131,7 +131,7 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 
 	for partIdx := range batches {
 		length := batches[partIdx].GetVector(0).Length()
-		batches[partIdx].SetZs(length, proc.Mp())
+		batches[partIdx].SetRowCount(length)
 	}
 	return batches, nil
 }

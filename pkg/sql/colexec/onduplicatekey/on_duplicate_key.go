@@ -249,7 +249,7 @@ func fetchOneRowAsBatch(idx int, originBatch *batch.Batch, proc *process.Process
 		}
 		newBatch.SetVector(int32(i), newVec)
 	}
-	newBatch.SetZs(1, proc.Mp())
+	newBatch.SetRowCount(1)
 	return newBatch, nil
 }
 
@@ -291,7 +291,8 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 			newBatch.SetVector(int32(i), newVec)
 		}
 	}
-	newBatch.SetZs(1, proc.Mp())
+
+	newBatch.SetRowCount(1)
 	evalBatch.Clean(proc.Mp())
 	return newBatch, nil
 }

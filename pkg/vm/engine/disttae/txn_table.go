@@ -1259,17 +1259,17 @@ func (tbl *txnTable) compaction() error {
 		if err != nil {
 			return err
 		}
-		new_bat := batch.NewWithSize(1)
-		new_bat.Attrs = []string{catalog.BlockMeta_BlockInfo}
-		new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		newBat := batch.NewWithSize(1)
+		newBat.Attrs = []string{catalog.BlockMeta_BlockInfo}
+		newBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		for _, blkInfo := range blkInfos {
 			vector.AppendBytes(
-				new_bat.GetVector(0),
+				newBat.GetVector(0),
 				catalog.EncodeBlockInfo(blkInfo),
 				false,
 				tbl.db.txn.proc.GetMPool())
 		}
-		new_bat.SetZs(len(blkInfos), tbl.db.txn.proc.GetMPool())
+		newBat.SetRowCount(len(blkInfos))
 		err = tbl.db.txn.WriteFile(
 			INSERT,
 			tbl.db.databaseId,
@@ -1277,13 +1277,13 @@ func (tbl *txnTable) compaction() error {
 			tbl.db.databaseName,
 			tbl.tableName,
 			name.String(),
-			new_bat,
+			newBat,
 			tbl.db.txn.dnStores[0])
 		if err != nil {
 			return err
 		}
 	}
-	remove_batch := make(map[*batch.Batch]bool)
+	removeBatch := make(map[*batch.Batch]bool)
 	// delete old block info
 	for idx, offsets := range mp {
 		bat := tbl.db.txn.writes[idx].bat
@@ -1292,12 +1292,12 @@ func (tbl *txnTable) compaction() error {
 		// update txn.cnBlkId_Pos
 		tbl.db.txn.updatePosForCNBlock(bat.GetVector(0), idx)
 		if bat.Length() == 0 {
-			remove_batch[bat] = true
+			removeBatch[bat] = true
 		}
 	}
 	tbl.db.txn.Lock()
 	for i := 0; i < len(tbl.db.txn.writes); i++ {
-		if remove_batch[tbl.db.txn.writes[i].bat] {
+		if removeBatch[tbl.db.txn.writes[i].bat] {
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
 			// maybe this will cause that the log imcrements unlimitly.

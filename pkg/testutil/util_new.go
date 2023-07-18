@@ -101,7 +101,7 @@ func NewFS() *fileservice.FileServices {
 
 func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
-	bat.InitZsOne(n)
+	bat.SetRowCount(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
 		// XXX do we need to init nulls here?   can we be lazy?
@@ -112,7 +112,7 @@ func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch 
 
 func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
-	bat.InitZsOne(n)
+	bat.SetRowCount(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
 		bat.Vecs[i].GetNulls().InitWithSize(n)

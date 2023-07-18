@@ -993,7 +993,7 @@ func buildValueScan(
 		projectList[i] = expr
 	}
 
-	bat.SetZs(len(slt.Rows), proc.Mp())
+	bat.SetRowCount(len(slt.Rows))
 	nodeId, _ := uuid.NewUUID()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_VALUE_SCAN,

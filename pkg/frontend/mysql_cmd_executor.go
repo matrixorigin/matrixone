@@ -1530,7 +1530,7 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 	defer vec.Free(session.GetMemPool())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
-	bat.InitZsOne(count)
+	bat.SetRowCount(count)
 
 	err := fill(session, bat)
 	if err != nil {

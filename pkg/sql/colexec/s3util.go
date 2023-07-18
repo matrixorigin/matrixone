@@ -289,7 +289,7 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 		if err := w.SortAndFlush(proc); err != nil {
 			return err
 		}
-		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+		w.metaLocBat.SetRowCount(w.metaLocBat.Vecs[0].Length())
 		return nil
 	}
 	for _, bat := range w.Bats {
@@ -308,7 +308,7 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 			return err
 		}
 	}
-	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+	w.metaLocBat.SetRowCount(w.metaLocBat.Vecs[0].Length())
 	return nil
 }
 
@@ -640,7 +640,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 			return err
 		}
 	}
-	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+	w.metaLocBat.SetRowCount(w.metaLocBat.Vecs[0].Length())
 	return nil
 }
 

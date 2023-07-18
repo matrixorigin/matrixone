@@ -97,7 +97,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-		bat.SetZs(len(cols), m)
+		bat.SetRowCount(len(cols))
 		for _, col := range cols {
 			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
@@ -157,7 +157,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-		bat.SetZs(len(cols), m)
+		bat.SetRowCount(len(cols))
 		for _, col := range cols {
 			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
@@ -217,7 +217,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-		bat.SetZs(len(cols), m)
+		bat.SetRowCount(len(cols))
 		for _, col := range cols {
 			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {

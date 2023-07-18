@@ -90,7 +90,7 @@ func (p *PartitionReader) Read(
 		//		CORNER CASE:
 		//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
 		//		the bat.Length() is not always the right value for the result batch b.
-		b.SetZs(b.Vecs[0].Length(), mp)
+		b.SetRowCount(b.Vecs[0].Length())
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(
 				"partition reader[workspace:memory]",
@@ -161,12 +161,11 @@ func (p *PartitionReader) Read(
 				break
 			}
 		}
-		if rows > 0 {
-			b.SetZs(rows, mp)
-		}
 		if rows == 0 {
 			return nil, nil
 		}
+		b.SetRowCount(rows)
+
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(
 				"partition reader[snapshot: partitionState.rows]",

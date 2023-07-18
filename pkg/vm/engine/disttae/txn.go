@@ -186,7 +186,7 @@ func (txn *Transaction) dumpBatch(offset int) error {
 		// only remain the metaLoc col
 		metaLoc.Vecs = metaLoc.Vecs[lenVecs-1:]
 		metaLoc.Attrs = metaLoc.Attrs[lenVecs-1:]
-		metaLoc.SetZs(metaLoc.Vecs[0].Length(), txn.proc.GetMPool())
+		metaLoc.SetRowCount(metaLoc.Vecs[0].Length())
 		err = tbl.Write(txn.proc.Ctx, metaLoc)
 		if err != nil {
 			return err
@@ -297,7 +297,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 				false,
 				txn.proc.Mp())
 		}
-		newBat.SetZs(bat.Vecs[0].Length(), txn.proc.Mp())
+		newBat.SetRowCount(bat.Vecs[0].Length())
 	}
 	txn.readOnly.Store(false)
 	txn.writes = append(txn.writes, Entry{

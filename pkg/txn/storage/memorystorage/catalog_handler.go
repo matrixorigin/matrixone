@@ -549,7 +549,7 @@ func (c *CatalogHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req *
 		}
 
 		if rows > 0 {
-			b.InitZsOne(rows)
+			b.SetRowCount(rows)
 			for _, vec := range b.Vecs {
 				nulls.TryExpand(vec.GetNulls(), rows)
 			}

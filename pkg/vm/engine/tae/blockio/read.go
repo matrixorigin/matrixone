@@ -142,8 +142,7 @@ func BlockRead(
 		return nil, err
 	}
 
-	columnBatch.SetZs(columnBatch.Vecs[0].Length(), mp)
-
+	columnBatch.SetRowCount(columnBatch.Vecs[0].Length())
 	return columnBatch, nil
 }
 
@@ -182,7 +181,7 @@ func BlockCompactionRead(
 		}
 		return nil, err
 	}
-	result.SetZs(result.Vecs[0].Length(), mp)
+	result.SetRowCount(result.Vecs[0].Length())
 	return result, nil
 }
 
