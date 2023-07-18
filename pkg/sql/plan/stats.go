@@ -468,6 +468,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if !isCrossJoin {
 				outcnt *= selectivity
 			}
+			for _, pred := range node.OnList {
+				pred.Ndv = getExprNdv(pred, builder)
+			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
