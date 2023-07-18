@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/golang/mock/gomock"
@@ -99,7 +100,7 @@ func TestCalculateStorageUsage(t *testing.T) {
 		return frontend.NewInternalExecutor(pu, aicm)
 	}
 
-	err = metric.CalculateStorageUsage(ctx, ieFactory)
+	err = mometric.CalculateStorageUsage(ctx, ieFactory)
 	require.Nil(t, err)
 
 	s := metric.StorageUsage("sys")

@@ -80,7 +80,7 @@ func Call(
 	proc *process.Process,
 	v any,
 	isFirst bool,
-	isLast bool) (bool, error) {
+	isLast bool) (process.ExecStatus, error) {
 	arg, ok := v.(*Argument)
 	if !ok {
 		getLogger().Fatal("invalid argument",
@@ -89,14 +89,21 @@ func Call(
 
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {
-		return false, nil
+		return process.ExecNext, nil
 	}
 
 	if !arg.block {
-		return callNonBlocking(idx, proc, arg)
+		ok, err := callNonBlocking(idx, proc, arg)
+		if ok {
+			return process.ExecStop, err
+		}
+		return process.ExecNext, err
 	}
-
-	return callBlocking(idx, proc, arg, isFirst, isLast)
+	ok, err := callBlocking(idx, proc, arg, isFirst, isLast)
+	if ok {
+		return process.ExecStop, err
+	}
+	return process.ExecNext, err
 }
 
 func callNonBlocking(
@@ -691,7 +698,7 @@ func hasNewVersionInRange(
 	vec *vector.Vector,
 	from, to timestamp.Timestamp) (bool, error) {
 	if vec == nil {
-		return true, nil
+		return false, nil
 	}
 	txnClient := proc.TxnClient
 	txnOp, err := txnClient.New(proc.Ctx, to.Prev())

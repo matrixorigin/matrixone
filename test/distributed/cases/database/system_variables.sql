@@ -147,9 +147,11 @@ set wait_timeout = default;
 show variables like 'wait_timeout';
 
 --string type
+-- @bvt:issue#10473
 show variables like 'character_set_results';
 set character_set_server = default;
 show variables like 'character_set_results';
+-- @bvt:issue
 
 show variables like 'character_set_server';
 set character_set_server = default;
