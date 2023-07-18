@@ -196,6 +196,10 @@ import (
     accountIdentified tree.AccountIdentified
     accountStatus tree.AccountStatus
     accountComment tree.AccountComment
+    stageComment tree.StageComment
+    stageStatus tree.StageStatus
+    stageUrl tree.StageUrl
+    stageCredentials tree.StageCredentials
     accountCommentOrAttribute tree.AccountCommentOrAttribute
     userIdentified *tree.AccountIdentified
     accountRole *tree.Role
@@ -252,7 +256,7 @@ import (
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
-%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS
 %token <item> INTEGRAL HEX BIT_LITERAL FLOAT
 %token <str>  HEXNUM
 %token <str> NULL TRUE FALSE
@@ -473,7 +477,9 @@ import (
 
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
-%type <statement>  create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
+%type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subcription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
@@ -547,7 +553,7 @@ import (
 %type <funcExpr> function_call_window
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params
+%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
 %type <str> charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
@@ -692,6 +698,10 @@ import (
 %type <accountStatus> account_status_option
 %type <accountComment> account_comment_opt
 %type <accountCommentOrAttribute> user_comment_or_attribute_opt
+%type <stageComment> stage_comment_opt
+%type <stageStatus> stage_status_opt
+%type <stageUrl> stage_url_opt
+%type <stageCredentials> stage_credentials_opt
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 
@@ -2567,6 +2577,7 @@ alter_stmt:
 |   alter_view_stmt
 |   alter_table_stmt
 |   alter_publication_stmt
+|   alter_stage_stmt
 // |    alter_ddl_stmt
 
 alter_view_stmt:
@@ -3478,6 +3489,7 @@ drop_ddl_stmt:
 |   drop_sequence_stmt
 |   drop_publication_stmt
 |   drop_procedure_stmt
+|   drop_stage_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -4938,6 +4950,7 @@ create_stmt:
 |   create_user_stmt
 |   create_account_stmt
 |   create_publication_stmt
+|   create_stage_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -5205,11 +5218,11 @@ account_name:
 account_auth_option:
     ADMIN_NAME equal_opt account_admin_name account_identified
     {
-    $$ = tree.AccountAuthOption{
-        Equal:$2,
-        AdminName:$3,
-        IdentifiedType:$4,
-    }
+        $$ = tree.AccountAuthOption{
+            Equal:$2,
+            AdminName:$3,
+            IdentifiedType:$4,
+        }
     }
 
 account_admin_name:
@@ -5225,23 +5238,23 @@ account_admin_name:
 account_identified:
     IDENTIFIED BY STRING
     {
-    $$ = tree.AccountIdentified{
-        Typ: tree.AccountIdentifiedByPassword,
-        Str: $3,
-    }
+        $$ = tree.AccountIdentified{
+            Typ: tree.AccountIdentifiedByPassword,
+            Str: $3,
+        }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
     {
-    $$ = tree.AccountIdentified{
-        Typ: tree.AccountIdentifiedByRandomPassword,
-    }
+        $$ = tree.AccountIdentified{
+            Typ: tree.AccountIdentifiedByRandomPassword,
+        }
     }
 |   IDENTIFIED WITH STRING
     {
-    $$ = tree.AccountIdentified{
-        Typ: tree.AccountIdentifiedWithSSL,
-        Str: $3,
-    }
+        $$ = tree.AccountIdentified{
+            Typ: tree.AccountIdentifiedWithSSL,
+            Str: $3,
+        }
     }
 
 account_status_option:
@@ -5275,15 +5288,15 @@ account_status_option:
 account_comment_opt:
     {
         $$ = tree.AccountComment{
-        Exist: false,
-    }
+            Exist: false,
+        }
     }
 |   COMMENT_KEYWORD STRING
     {
-    $$ = tree.AccountComment{
-        Exist: true,
-        Comment: $2,
-    }
+        $$ = tree.AccountComment{
+            Exist: true,
+            Comment: $2,
+        }
     }
 
 create_user_stmt:
@@ -5301,72 +5314,197 @@ create_user_stmt:
 create_publication_stmt:
     CREATE PUBLICATION not_exists_opt ident DATABASE ident alter_publication_accounts_opt comment_opt
     {
-	$$ = &tree.CreatePublication{
-	    IfNotExists: $3,
-	    Name: tree.Identifier($4.Compare()),
-	    Database: tree.Identifier($6.Compare()),
-	    AccountsSet: $7,
-	    Comment: $8,
-	}
+	    $$ = &tree.CreatePublication{
+	        IfNotExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+	        Database: tree.Identifier($6.Compare()),
+	        AccountsSet: $7,
+	        Comment: $8,
+	    }
+    }
+
+create_stage_stmt:
+    CREATE STAGE not_exists_opt ident urlparams stage_credentials_opt stage_status_opt stage_comment_opt
+    {
+        $$ = &tree.CreateStage{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Url: $5,
+            Credentials: $6,
+            Status: $7,
+            Comment: $8,
+        }
+    }
+
+stage_status_opt:
+    {
+        $$ = tree.StageStatus{
+            Exist: false,
+        }
+    }
+|   ENABLE '=' TRUE
+    {
+        $$ = tree.StageStatus{
+            Exist: true,
+            Option: tree.StageStatusEnabled,
+        }
+    }
+|   ENABLE '=' FALSE
+    {
+        $$ = tree.StageStatus{
+            Exist: true,
+            Option: tree.StageStatusDisabled,
+        }
+    }
+
+stage_comment_opt:
+    {
+        $$ = tree.StageComment{
+            Exist: false,
+        }
+    }
+|   COMMENT_KEYWORD STRING
+    {
+        $$ = tree.StageComment{
+            Exist: true,
+            Comment: $2,
+        }
+    }
+
+stage_url_opt:
+    {
+        $$ = tree.StageUrl{
+            Exist: false,
+        }
+    }
+|   URL '=' STRING
+    {
+        $$ = tree.StageUrl{
+            Exist: true,
+            Url: $3,
+        }
+    }
+
+stage_credentials_opt:
+    {
+        $$ = tree.StageCredentials {
+            Exist:false,
+        }
+    }
+|   CREDENTIALS '=' '{' credentialsparams '}'
+    {
+        $$ = tree.StageCredentials {
+            Exist:true,
+            Credentials:$4,
+        }
+    }
+
+credentialsparams:
+    credentialsparam
+    {
+        $$ = $1
+    }
+|   credentialsparams ',' credentialsparam
+    {
+        $$ = append($1, $3...)
+    }
+
+credentialsparam:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
+    }
+
+urlparams:
+    URL '=' STRING
+    {
+        $$ = $3
     }
 
 comment_opt:
     {
-    	$$ = ""
+        $$ = ""
     }
-    | COMMENT_KEYWORD STRING
+|   COMMENT_KEYWORD STRING
     {
-    	$$ = $2
+        $$ = $2
     }
 
-alter_publication_stmt:
-ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+alter_stage_stmt:
+    ALTER STAGE exists_opt ident SET stage_url_opt stage_credentials_opt stage_status_opt stage_comment_opt
     {
-	$$ = &tree.AlterPublication{
-	    IfExists: $3,
-	    Name: tree.Identifier($4.Compare()),
-	    AccountsSet: $5,
-	    Comment: $6,
-	}
+        $$ = &tree.AlterStage{
+            	IfNotExists: $3,
+	            Name: tree.Identifier($4.Compare()),           
+	            UrlOption: $6,
+	            CredentialsOption: $7,
+	            StatusOption: $8,
+	            Comment: $9,
+        }
+    }
+
+
+alter_publication_stmt:
+    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    {
+	    $$ = &tree.AlterPublication{
+	        IfExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+	        AccountsSet: $5,
+	        Comment: $6,
+	    }
     }
 
 alter_publication_accounts_opt:
     {
-	$$ = nil
+	    $$ = nil
     }
     | ACCOUNT ALL
     {
-	$$ = &tree.AccountsSetOption{
-	    All: true,
-	}
+	    $$ = &tree.AccountsSetOption{
+	        All: true,
+	    }
     }
     | ACCOUNT accounts_list
     {
     	$$ = &tree.AccountsSetOption{
-	    SetAccounts: $2,
-	}
+	        SetAccounts: $2,
+	    }
     }
     | ACCOUNT ADD accounts_list
     {
     	$$ = &tree.AccountsSetOption{
-	    AddAccounts: $3,
-	}
+	        AddAccounts: $3,
+	    }
     }
     | ACCOUNT DROP accounts_list
     {
     	$$ = &tree.AccountsSetOption{
-	    DropAccounts: $3,
-	}
+	        DropAccounts: $3,
+	    }
     }
 
 
 drop_publication_stmt:
 DROP PUBLICATION exists_opt ident
     {
-	$$ = &tree.DropPublication{
-	    IfExists: $3,
-	    Name: tree.Identifier($4.Compare()),
-	}
+	    $$ = &tree.DropPublication{
+	        IfExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+	    }
+    }
+
+drop_stage_stmt:
+DROP STAGE exists_opt ident
+    {
+        $$ = &tree.DropStage{
+            IfNotExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+        }
     }
 
 account_role_name:
@@ -5383,19 +5521,19 @@ user_comment_or_attribute_opt:
     }
 |   COMMENT_KEYWORD STRING
     {
-    $$ = tree.AccountCommentOrAttribute{
-        Exist: true,
-        IsComment: true,
-        Str: $2,
-    }
+        $$ = tree.AccountCommentOrAttribute{
+            Exist: true,
+            IsComment: true,
+            Str: $2,
+        }
     }
 |   ATTRIBUTE STRING
     {
-    $$ = tree.AccountCommentOrAttribute{
-        Exist: true,
-        IsComment: false,
-        Str: $2,
-    }
+        $$ = tree.AccountCommentOrAttribute{
+            Exist: true,
+            IsComment: false,
+            Str: $2,
+        }
     }
 
 //conn_options:
