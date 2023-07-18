@@ -196,6 +196,10 @@ import (
     accountIdentified tree.AccountIdentified
     accountStatus tree.AccountStatus
     accountComment tree.AccountComment
+    stageComment tree.StageComment
+    stageStatus tree.StageStatus
+    stageUrl tree.StageUrl
+    stageCredentials tree.StageCredentials
     accountCommentOrAttribute tree.AccountCommentOrAttribute
     userIdentified *tree.AccountIdentified
     accountRole *tree.Role
@@ -693,6 +697,10 @@ import (
 %type <accountStatus> account_status_option
 %type <accountComment> account_comment_opt
 %type <accountCommentOrAttribute> user_comment_or_attribute_opt
+%type <stageComment> stage_comment_opt
+%type <stageStatus> stage_status_opt
+%type <stageUrl> stage_url_opt
+%type <stageCredentials> stage_credentials_opt
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 
@@ -5181,19 +5189,67 @@ create_stage_stmt:
         }
     }
 
-urlparams:
-    URL '=' STRING
+stage_status_opt:
     {
-        $$ = $3
+        $$ = tree.StageStatus{
+            Exist: false,
+        }
+    }
+|   ENABLE '=' TRUE
+    {
+        $$ = tree.StageStatus{
+            Exist: true,
+            Option: tree.StageStatusEnabled,
+        }
+    }
+|   ENABLE '=' FALSE
+    {
+        $$ = tree.StageStatus{
+            Exist: true,
+            Option: tree.StageStatusDisabled,
+        }
     }
 
-credntialsparams_opt:
+stage_comment_opt:
     {
-        $$ = []string{}
+        $$ = tree.StageComment{
+            Exist: false,
+        }
+    }
+|   COMMENT_KEYWORD STRING
+    {
+        $$ = tree.StageComment{
+            Exist: true,
+            Comment: $2,
+        }
+    }
+
+stage_url_opt:
+    {
+        $$ = tree.StageUrl{
+            Exist: false,
+        }
+    }
+|   URL '=' STRING
+    {
+        $$ = tree.StageUrl{
+            Exist: true,
+            Url: $3,
+        }
+    }
+
+stage_credentials_opt:
+    {
+        $$ = tree.StageCredentials {
+            Exist:false,
+        }
     }
 |   CREDENTIALS '=' '{' credntialsparams '}'
     {
-        $$ = $4
+        $$ = tree.StageCredentials {
+            Exist:true,
+            Credentials:$4,
+        }
     }
 
 credntialsparams:
@@ -5214,28 +5270,6 @@ credntialsparam:
     {
         $$ = append($$, $1)
         $$ = append($$, $3)
-    }
-
-directoryparams_opt:
-    {
-        $$ = "false"
-    }
-|   ENABLE '=' TRUE
-    {
-        $$ = "true"
-    }
-|   ENABLE '=' FALSE
-    {
-        $$ = "false"
-    }
-
-comment_opt:
-    {
-    	$$ = ""
-    }
-    | COMMENT_KEYWORD STRING
-    {
-    	$$ = $2
     }
 
 alter_publication_stmt:
