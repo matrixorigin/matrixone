@@ -33,7 +33,6 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 	procTimeout           = 10000 * time.Second
 	waitNotifyTimeout     = 45 * time.Second
-	shuffleBatchSize      = 1024 * 8 //8k
 
 	// send to all reg functions
 	SendToAllLocalFunc = iota
@@ -73,11 +72,7 @@ type container struct {
 	localRegsCnt  int
 	remoteRegsCnt int
 
-	// for shuffle reuse memory
-	sels         [][]int32
-	remoteToIdx  map[uuid.UUID]int
-	shuffledBats []*batch.Batch
-	batsCount    int
+	remoteToIdx map[uuid.UUID]int
 }
 
 type Argument struct {
@@ -91,11 +86,8 @@ type Argument struct {
 	LocalRegs []*process.WaitRegister
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
-	// for shuffle
-	ShuffleColIdx       int32
-	ShuffleType         int32
-	ShuffleColMin       int64
-	ShuffleColMax       int64
+	// for shuffle dispatch
+
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 }
