@@ -35,7 +35,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -45,11 +45,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	for {
 		bat, end, err := ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
-			return true, nil
+			return process.ExecStop, nil
 		}
 		if end {
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 
 		anal.Input(bat, isFirst)
@@ -62,14 +62,14 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ap.ctr.seen = newSeen
 			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)
-			return false, nil
+			return process.ExecNext, nil
 		} else {
 			num := int(newSeen - ap.Limit)
 			batch.SetLength(bat, bat.Length()-num)
 			ap.ctr.seen = newSeen
 			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)
-			return false, nil
+			return process.ExecNext, nil
 		}
 	}
 }

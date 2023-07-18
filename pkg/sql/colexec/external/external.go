@@ -116,13 +116,13 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	defer span.End()
 	select {
 	case <-proc.Ctx.Done():
 		proc.SetInputBatch(nil)
-		return true, nil
+		return process.ExecStop, nil
 	default:
 	}
 	t1 := time.Now()
@@ -136,12 +136,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	param := arg.(*Argument).Es
 	if param.Fileparam.End {
 		proc.SetInputBatch(nil)
-		return true, nil
+		return process.ExecStop, nil
 	}
 	if param.plh == nil {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
@@ -149,14 +149,14 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	bat, err := scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
-		return false, err
+		return process.ExecNext, err
 	}
 	proc.SetInputBatch(bat)
 	if bat != nil {
 		anal.Output(bat, isLast)
 		anal.Alloc(int64(bat.Size()))
 	}
-	return false, nil
+	return process.ExecNext, nil
 }
 
 func containColname(col string) bool {
