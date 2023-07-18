@@ -102,13 +102,14 @@ type TableItem struct {
 	Rowids []types.Rowid
 
 	// table def
-	Kind        string
-	ViewDef     string
-	Constraint  []byte
-	Comment     string
-	Partitioned int8
-	Partition   string
-	CreateSql   string
+	Kind           string
+	ViewDef        string
+	Constraint     []byte
+	Comment        string
+	Partitioned    int8
+	Partition      string
+	CreateSql      string
+	CatalogVersion uint32
 
 	// primary index
 	PrimaryIdx    int

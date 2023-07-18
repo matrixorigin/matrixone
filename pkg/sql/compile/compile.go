@@ -102,9 +102,11 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.proc = proc
 	c.stmt = stmt
 	c.addr = addr
-	c.stepRegs = make(map[int32][]*process.WaitRegister)
+	c.nodeRegs = make(map[int32]*process.WaitRegister)
+	c.stepRegs = make(map[int32][]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
+	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 	return c
 }
 
@@ -125,6 +127,9 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
+	for k := range c.nodeRegs {
+		delete(c.nodeRegs, k)
+	}
 	for k := range c.stepRegs {
 		delete(c.stepRegs, k)
 	}
@@ -220,6 +225,8 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
+
+	//fmt.Println(DebugShowScopes([]*Scope{s}))
 
 	switch s.Magic {
 	case Normal:
@@ -356,7 +363,12 @@ func (c *Compile) Run(_ uint64) error {
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 				return err
 			}
-			return cc.runOnce()
+			if err := cc.runOnce(); err != nil {
+				return err
+			}
+			// set affectedRows to old compile to return
+			c.setAffectedRows(cc.GetAffectedRows())
+			return nil
 		}
 		return err
 	}
@@ -608,6 +620,14 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 
 	c.initAnalyze(qry)
 
+	//deal with sink scan first.
+	for i := len(qry.Steps) - 1; i >= 0; i-- {
+		err := c.compileSinkScan(qry, qry.Steps[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	steps := make([]*Scope, 0, len(qry.Steps))
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
 		scopes, err := c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
@@ -621,6 +641,34 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		steps = append(steps, scope)
 	}
 	return steps, err
+}
+
+func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
+	n := qry.Nodes[nodeId]
+	for _, childId := range n.Children {
+		err := c.compileSinkScan(qry, childId)
+		if err != nil {
+			return err
+		}
+	}
+
+	if n.NodeType == plan.Node_SINK_SCAN {
+		var wr *process.WaitRegister
+		if c.anal.qry.LoadTag {
+			wr = &process.WaitRegister{
+				Ctx: c.ctx,
+				Ch:  make(chan *batch.Batch, ncpu),
+			}
+		} else {
+			wr = &process.WaitRegister{
+				Ctx: c.ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+
+		}
+		c.appendStepRegs(n.SourceStep, nodeId, wr)
+	}
+	return nil
 }
 
 func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
@@ -1071,6 +1119,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				})
 			}
 		}
+		ss = c.compileProjection(n, ss)
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
@@ -1089,14 +1138,16 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
 			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 		}
-		if c.anal.qry.LoadTag {
-			rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, ncpu) // reset the channel buffer of sink for load
+		receiver, ok := c.getNodeReg(curNodeIdx)
+		if !ok {
+			return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
 		}
-		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
+		receiver.Ctx = rs.Proc.Ctx
+		rs.Proc.Reg.MergeReceivers[0] = receiver
 		return []*Scope{rs}, nil
 	case plan.Node_SINK:
-		receivers, ok := c.getStepRegs(step)
-		if !ok {
+		receivers := c.getStepRegs(step, ns)
+		if len(receivers) == 0 {
 			return nil, moerr.NewInternalError(c.ctx, "no data receiver for sink node")
 		}
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -1115,18 +1166,34 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	}
 }
 
-func (c *Compile) appendStepRegs(step int32, reg *process.WaitRegister) {
-	if _, ok := c.stepRegs[step]; !ok {
-		c.stepRegs[step] = make([]*process.WaitRegister, 0, 1)
+func (c *Compile) appendStepRegs(step int32, nodeId int32, reg *process.WaitRegister) {
+	if _, ok := c.nodeRegs[nodeId]; !ok {
+		c.nodeRegs[nodeId] = reg
 	}
-	c.stepRegs[step] = append(c.stepRegs[step], reg)
+	if _, ok := c.stepRegs[step]; !ok {
+		c.stepRegs[step] = []int32{nodeId}
+	} else {
+		c.stepRegs[step] = append(c.stepRegs[step], nodeId)
+	}
 }
 
-func (c *Compile) getStepRegs(step int32) ([]*process.WaitRegister, bool) {
-	if channels, ok := c.stepRegs[step]; !ok {
+func (c *Compile) getNodeReg(nodeId int32) (*process.WaitRegister, bool) {
+	if channels, ok := c.nodeRegs[nodeId]; !ok {
 		return nil, false
 	} else {
 		return channels, true
+	}
+}
+
+func (c *Compile) getStepRegs(step int32, ns []*plan.Node) []*process.WaitRegister {
+	if _, ok := c.stepRegs[step]; !ok {
+		return nil
+	} else {
+		var wrs []*process.WaitRegister
+		for _, nodeId := range c.stepRegs[step] {
+			wrs = append(wrs, c.nodeRegs[nodeId])
+		}
+		return wrs
 	}
 }
 
@@ -1164,6 +1231,23 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
+
+	// lock table
+	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		if err != nil {
+			panic(err)
+		}
+		rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		err = lockTable(c.e, c.proc, rel)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			return nil, err
+		}
+	}
+
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {
@@ -1341,13 +1425,22 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		return nil, err
 	}
 	ss := make([]*Scope, 0, len(nodes))
+
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
+	if filterExpr != nil {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	for i := range nodes {
-		ss = append(ss, c.compileTableScanWithNode(n, nodes[i]))
+		ss = append(ss, c.compileTableScanWithNode(n, nodes[i], filterExpr))
 	}
 	return ss, nil
 }
 
-func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
+func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filterExpr *plan.Expr) *Scope {
 	var err error
 	var s *Scope
 	var tblDef *plan.TableDef
@@ -1451,28 +1544,11 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			PartitionRelationNames: partitionRelNames,
 			SchemaName:             n.ObjRef.SchemaName,
 			AccountId:              n.ObjRef.GetPubInfo(),
-			Expr:                   colexec.RewriteFilterExprList(n.FilterList),
+			Expr:                   plan2.DeepCopyExpr(filterExpr),
+			RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-
-	// Register runtime filters
-	// XXX currently we only enable runtime filter on single CN
-	if len(c.cnList) == 1 && len(n.RuntimeFilterProbeList) > 0 {
-		receivers := make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterProbeList))
-		if c.runtimeFilterReceiverMap == nil {
-			c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-		}
-		for i, rfSpec := range n.RuntimeFilterProbeList {
-			ch := make(chan *pipeline.RuntimeFilter, 1)
-			receivers[i] = &colexec.RuntimeFilterChan{
-				Spec: rfSpec,
-				Chan: ch,
-			}
-			c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-		}
-		s.DataSource.RuntimeFilterReceivers = receivers
-	}
 
 	return s
 }
@@ -1482,12 +1558,13 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Restrict,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructRestrict(n),
+			Arg:     constructRestrict(n, filterExpr),
 		})
 	}
 	c.anal.isFirst = false
@@ -2334,19 +2411,35 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
 	}
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
+	regTransplant(s, rs, 1, 0)
+
 	rs.appendInstruction(vm.Instruction{
 		Op:      vm.HashBuild,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     constructHashBuild(c, s.Instructions[0], c.proc),
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, ss != nil),
 	})
-	rs.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatchLocal(true, false, extraRegisters(ss, 1)),
-	})
+
+	if ss == nil { // unparallel, send the hashtable to s directly
+		s.Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
+			Ctx: s.Proc.Ctx,
+			Ch:  make(chan *batch.Batch, 1),
+		}
+		rs.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: s.Proc.Reg.MergeReceivers[1],
+			},
+		})
+	} else {
+		rs.appendInstruction(vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: constructDispatchLocal(true, false, extraRegisters(ss, 1)),
+		})
+	}
 	rs.IsEnd = true
-	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
-	regTransplant(s, rs, 1, 0)
+
 	return rs
 }
 
@@ -2386,6 +2479,7 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 	for i := range anals {
 		//anals[i] = new(process.AnalyzeInfo)
 		anals[i] = analPool.Get().(*process.AnalyzeInfo)
+		anals[i].Reset()
 	}
 	c.anal = &anaylze{
 		qry:       qry,

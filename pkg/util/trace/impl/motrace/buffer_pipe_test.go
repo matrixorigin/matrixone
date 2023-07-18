@@ -62,13 +62,12 @@ func init() {
 	SV.TraceExportInterval = 15
 	SV.LongQueryTime = 0
 	SV.EnableTraceDebug = true
-	if err := InitWithConfig(
+	if err, _ := InitWithConfig(
 		context.Background(),
 		&SV,
 		EnableTracer(true),
 		withMOVersion("v0.test.0"),
 		WithNode("node_uuid", trace.NodeTypeStandalone),
-		WithBatchProcessMode(FileService),
 		WithFSWriterFactory(&dummyFSWriterFactory{}),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
@@ -710,7 +709,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 			},
 			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,999999999,Running,0,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0,"[1,0,0,0,0]",,,0,,0,1
 00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,0,,"{""code"":200,""message"":""no exec plan""}",0,0,"[1,0,0,0,0]",,,0,,0,2
-00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,20101,internal error: test error,"{""key"":""val""}",1,1,"[1,1,2,3,4]",,,0,internal,0,3
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,20101,internal error: test error,"{""key"":""val""}",1,1,"[1,1,2.000,3,4]",,,0,internal,0,3
 `,
 		},
 	}

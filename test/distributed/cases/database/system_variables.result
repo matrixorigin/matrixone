@@ -481,8 +481,11 @@ select @@sql_mode;
 @@sql_mode
 ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 set @@sql_mode = default;
-select @@foreign_key_checks;
-@@foreign_key_checks
-1
-SET FOREIGN_KEY_CHECKS = 0;
-SET FOREIGN_KEY_CHECKS = default;
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+create database test_for_navicat;
+create database test_for_navicat;
+SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA where SCHEMA_NAME = 'test_for_navicat';
+schema_name    default_character_set_name    default_collation_name
+test_for_navicat    utf8mb4    utf8mb4_0900_ai_ci
+drop database test_for_navicat;
+drop account acc_idx;

@@ -63,7 +63,9 @@ func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
 	appender.entry.SetAppended(d.getSynced())
 	appender.contextDuration = d.config.NewClientDuration
 	appender.wg.Add(1)
-	go appender.append(d.config.RetryTimeout, d.config.ClientAppendDuration)
+	d.appendPool.Submit(func() {
+		appender.append(d.config.RetryTimeout, d.config.ClientAppendDuration)
+	})
 }
 
 func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {

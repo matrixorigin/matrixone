@@ -62,8 +62,11 @@ const (
 	PartitionStateHandleInsert
 	PartitionStateHandleDel
 	PartitionStateHandleMetaInsert
+	PartitionStateHandleMetaDelete
 	SubscriptionPullLogTail
 	RPCStreamReceive
+	TxnStoreWaitWALFlush
+	TxnTableDoPrecommitDedupByPK
 	RegionTypeMax
 )
 
@@ -72,8 +75,11 @@ var regionTypeStr = [RegionTypeMax]string{
 	"partiton state insert",
 	"partiton state del",
 	"partiton state metainsert",
+	"partiton state meta delete",
 	"subsciption pull logtail",
 	"rpc stream receive",
+	"txnstore wait wal flush",
+	"txntable do precommit dedup by pk",
 }
 
 func WithRegion(ctx context.Context, rt RegionType, fn func()) {

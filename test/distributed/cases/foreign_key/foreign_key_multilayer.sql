@@ -287,7 +287,6 @@ select N_REGIONKEY from NATION_fk;
 
 --delete constraint
 select * from nation_fk;
--- @bvt:issue#10228
 delete from nation_fk where n_nationkey=10;
 select * from SUPPLIER_fk;
 select * from CUSTOMER_fk;
@@ -324,7 +323,7 @@ insert into region_fk values(3,"ASIA","ges. thinly even pinto beans ca");
 select * from region_fk;
 insert into nation_fk values(1,"VIETNAM",2,"hely enticingly express accounts. even, final");
 insert into part_fk values(200,"pink wheat powder burlywood snow","Manufacturer#5","Brand#52","MEDIUM BURNISHED BRASS",49,"LG BOX",2097.99,". special deposits hag");
--- @bvt:issue
+
 insert into supplier_fk values(10000,"Supplier#000009991","RnP1Z uvwftshFtf",14,"23-451-948-8464",6785.10,". furiously pending accounts b");
 insert into PARTSUPP_fk values (200,10000,7872,606.64," according to the final pinto beans: carefully silent requests sleep final");
 insert into customer_fk values(14,"Customer#000149992","iwjVf1MZno1",15,"16-684-999-8810",3417.45,"AUTOMOBILE","luffily final requests integrate slyly. furiously special warhorses are furiously alongside o");

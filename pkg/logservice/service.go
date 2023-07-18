@@ -275,6 +275,12 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetShardInfo(ctx, req), pb.LogRecordResponse{}
 	case pb.UPDATE_CN_LABEL:
 		return s.handleUpdateCNLabel(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_CN_WORK_STATE:
+		return s.handleUpdateCNWorkState(ctx, req), pb.LogRecordResponse{}
+	case pb.PATCH_CN_STORE:
+		return s.handlePatchCNStore(ctx, req), pb.LogRecordResponse{}
+	case pb.DELETE_CN_STORE:
+		return s.handleDeleteCNStore(ctx, req), pb.LogRecordResponse{}
 	default:
 		panic("unknown log service method type")
 	}
@@ -452,6 +458,36 @@ func (s *Service) handleUpdateCNLabel(ctx context.Context, req pb.Request) pb.Re
 	label := req.CNStoreLabel
 	resp := getResponse(req)
 	if err := s.store.updateCNLabel(ctx, *label); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleUpdateCNWorkState(ctx context.Context, req pb.Request) pb.Response {
+	workState := req.CNWorkState
+	resp := getResponse(req)
+	if err := s.store.updateCNWorkState(ctx, *workState); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handlePatchCNStore(ctx context.Context, req pb.Request) pb.Response {
+	stateLabel := req.CNStateLabel
+	resp := getResponse(req)
+	if err := s.store.patchCNStore(ctx, *stateLabel); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleDeleteCNStore(ctx context.Context, req pb.Request) pb.Response {
+	cnStore := req.DeleteCNStore
+	resp := getResponse(req)
+	if err := s.store.deleteCNStore(ctx, *cnStore); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	}

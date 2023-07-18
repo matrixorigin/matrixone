@@ -187,4 +187,22 @@ insert into t1(a) values(1);
 update t1 set a = 2 where a = 1;
 select c is not null from t1;
 
+drop table if exists t1;
+create table t1 (a int primary key, b int);
+insert into t1 values (1,100);
+select b from t1 where a = 1 for update;
+
 drop database if exists db1;
+create database db1;
+use db1;
+create table t1(a int primary key, b int unique key);
+create database db2;
+use db2;
+insert into db1.t1 values (1,1);
+select * from db1.t1;
+update db1.t1 set b = 2 where a = 1;
+select * from db1.t1;
+delete from db1.t1;
+select * from db1.t1;
+drop database if exists db1;
+drop database if exists db2;

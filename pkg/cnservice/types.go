@@ -169,18 +169,30 @@ type Config struct {
 		// by the current CN + 1 is used as the start time of the transaction. But it will
 		// ensure that the transactions of the same database connection can see the writes
 		// of the previous committed transactions.
-		EnableSacrificingFreshness bool `toml:"enable-sacrificing-freshness"`
+		// -1: disable
+		//	0: auto config based on txn mode
+		//  1: enable
+		EnableSacrificingFreshness int `toml:"enable-sacrificing-freshness"`
 		// EnableCNBasedConsistency ensure that all the transactions on a CN can read
 		// the writes of the previous committed transaction
-		EnableCNBasedConsistency bool `toml:"enable-cn-based-consistency"`
+		// -1: disable
+		//	0: auto config based on txn mode
+		//  1: enable
+		EnableCNBasedConsistency int `toml:"enable-cn-based-consistency"`
 		// EnableRefreshExpressionIn RC mode, in the event of a conflict, the later transaction
 		// needs to see the latest data after the previous transaction commits. At this time we
 		// need to re-read the data, re-read the latest data, and re-compute the expression. This
 		// feature was turned off in 0.8 and is not supported for now. The replacement solution is
 		// to return a retry error and let the whole computation re-execute.
-		EnableRefreshExpression bool `toml:"enable-refresh-expression"`
+		// -1: disable
+		//	0: auto config based on txn mode
+		//  1: enable
+		EnableRefreshExpression int `toml:"enable-refresh-expression"`
 		// EnableLeakCheck enable txn leak check
-		EnableLeakCheck bool `toml:"enable-leak-check"`
+		// -1: disable
+		//	0: auto config based on txn mode
+		//  1: enable
+		EnableLeakCheck int `toml:"enable-leak-check"`
 		// MaxActiveAges a txn max active duration
 		MaxActiveAges toml.Duration `toml:"max-active-ages"`
 	} `toml:"txn"`
@@ -263,8 +275,9 @@ func (c *Config) Validate() error {
 	if !txn.ValidTxnMode(c.Txn.Mode) {
 		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
 	}
+
 	if c.Txn.Isolation == "" {
-		if c.Txn.Mode == txn.TxnMode_Pessimistic.String() {
+		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
 			c.Txn.Isolation = txn.TxnIsolation_RC.String()
 		} else {
 			c.Txn.Isolation = txn.TxnIsolation_SI.String()
@@ -274,6 +287,33 @@ func (c *Config) Validate() error {
 		return moerr.NewBadDBNoCtx("not support txn isolation: " + c.Txn.Isolation)
 	}
 
+	// Fix txn mode various config, simply override
+	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = 1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = -1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	} else {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = -1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = -1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	}
+
 	if c.Txn.MaxActiveAges.Duration == 0 {
 		c.Txn.MaxActiveAges.Duration = time.Minute * 2
 	}
@@ -281,7 +321,8 @@ func (c *Config) Validate() error {
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 
-	if c.PrimaryKeyCheck {
+	// pessimistic mode implies primary key check
+	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
 		plan.CNPrimaryCheck = true
 	} else {
 		plan.CNPrimaryCheck = false
@@ -294,7 +335,7 @@ func (c *Config) Validate() error {
 			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
 		}
 	} else {
-		frontend.MaxPrepareNumberInOneSession = 1024
+		frontend.MaxPrepareNumberInOneSession = 100000
 	}
 	return nil
 }

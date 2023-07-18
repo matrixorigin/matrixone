@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
@@ -60,7 +61,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
@@ -76,27 +77,30 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 			if bat.Length() == 0 {
 				bat.Clean(proc.Mp())
-				return false, nil
+				return process.ExecNext, nil
 			}
 			if ap.Limit == 0 {
 				proc.PutBatch(bat)
 				proc.SetInputBatch(nil)
-				return true, nil
+				return process.ExecStop, nil
 			}
 			err := ctr.build(ap, bat, proc, anal)
 			if err != nil {
 				ap.Free(proc, true)
 			}
-			return false, err
+			return process.ExecNext, err
 
 		case Eval:
 			if ctr.bat == nil {
 				proc.SetInputBatch(nil)
-				return true, nil
+				return process.ExecStop, nil
 			}
 			err := ctr.eval(ap.Limit, proc)
 			ap.Free(proc, err != nil)
-			return err == nil, err
+			if err == nil {
+				return process.ExecStop, nil
+			}
+			return process.ExecNext, err
 		}
 	}
 }

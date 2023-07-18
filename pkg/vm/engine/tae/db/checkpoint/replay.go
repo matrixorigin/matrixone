@@ -74,7 +74,12 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
 	t0 := time.Now()
-	for i := range colNames {
+	var isCheckpointVersion1 bool
+	// in version 1, checkpoint metadata doesn't contain 'version'.
+	if len(bats[0].Vecs) < len(colNames) {
+		isCheckpointVersion1 = true
+	}
+	for i := range bats[0].Vecs {
 		if len(bats) == 0 {
 			continue
 		}
@@ -88,17 +93,11 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	}
 	readDuration += time.Since(t0)
 	datas := make([]*logtail.CheckpointData, bat.Length())
-	defer func() {
-		for _, data := range datas {
-			if data != nil {
-				data.Close()
-			}
-		}
-	}()
 
 	entries := make([]*CheckpointEntry, bat.Length())
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
+	closecbs := make([]func(), 0)
 	readfn := func(i int, prefetch bool) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
@@ -108,12 +107,19 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		if isIncremental {
 			typ = ET_Incremental
 		}
+		var version uint32
+		if isCheckpointVersion1 {
+			version = logtail.CheckpointVersion1
+		} else {
+			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
+		}
 		checkpointEntry := &CheckpointEntry{
 			start:     start,
 			end:       end,
 			location:  metaloc,
 			state:     ST_Finished,
 			entryType: typ,
+			version:   version,
 		}
 		var err2 error
 		if prefetch {
@@ -128,9 +134,15 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 				emptyFileMu.Unlock()
 			} else {
 				entries[i] = checkpointEntry
+				closecbs = append(closecbs, func() { datas[i].CloseWhenLoadFromCache(checkpointEntry.version) })
 			}
 		}
 	}
+	defer func() {
+		for _, cb := range closecbs {
+			cb()
+		}
+	}()
 	t0 = time.Now()
 	for i := 0; i < bat.Length(); i++ {
 		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))

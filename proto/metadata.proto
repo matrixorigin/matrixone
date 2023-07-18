@@ -118,8 +118,10 @@ message CNService {
   string SQLAddress             = 4;
   // CtlAddress is used to handle ctl request.
   string CtlAddress             = 5;
-  // Labels lables on service
+  // Labels are labels on CN service.
   map<string, LabelList> Labels = 6 [(gogoproto.nullable) = false];
+  // WorkState is the work state of CN service.
+  WorkState WorkState           = 7;
 }
 
 // DNService dn service metadata
@@ -144,3 +146,12 @@ message DNService {
 message LabelList {
   repeated string Labels = 1;
 }
+
+// WorkState is the work state of CN service.
+enum WorkState {
+  Unknown  = 0;
+  Working  = 1;
+  Draining = 2;
+  Drained  = 3;
+}
+
