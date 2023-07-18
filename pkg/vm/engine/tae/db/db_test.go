@@ -4021,7 +4021,7 @@ func TestLogtailBasic(t *testing.T) {
 
 	delDataEntry := resp.Commands[1]
 	require.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
-	require.Equal(t, fixedColCnt, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
+	require.Equal(t, fixedColCnt+1, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
 	check_same_rows(delDataEntry.Bat, 10)
 
 	// check delete rowids are exactly what we want
