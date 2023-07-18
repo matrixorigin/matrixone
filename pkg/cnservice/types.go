@@ -335,7 +335,7 @@ func (c *Config) Validate() error {
 			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
 		}
 	} else {
-		frontend.MaxPrepareNumberInOneSession = 1024
+		frontend.MaxPrepareNumberInOneSession = 100000
 	}
 	return nil
 }
