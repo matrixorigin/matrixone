@@ -2019,12 +2019,8 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	currentIsFirst := c.anal.isFirst
-	c.anal.isFirst = false
-	dop := plan2.GetShuffleDop()
-	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
-
+// shuffle and dispatch must stick together
+func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Node) {
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
@@ -2034,6 +2030,11 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		}
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
+				Op:  vm.Shuffle,
+				Arg: constructShuffleArg(children, n),
+			})
+
+			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
 				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, n),
 			})
@@ -2041,6 +2042,15 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 			ss[i].IsEnd = true
 		}
 	}
+}
+
+func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+	currentIsFirst := c.anal.isFirst
+	c.anal.isFirst = false
+	dop := plan2.GetShuffleDop()
+	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+
+	c.constructShuffleAndDispatch(ss, children, n)
 
 	// saving the last operator of all children to make sure the connector setting in
 	// the right place
