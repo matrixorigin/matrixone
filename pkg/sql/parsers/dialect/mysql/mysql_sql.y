@@ -553,7 +553,7 @@ import (
 %type <funcExpr> function_call_window
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credntialsparams credntialsparam
+%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
 %type <str> charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
@@ -5391,7 +5391,7 @@ stage_credentials_opt:
             Exist:false,
         }
     }
-|   CREDENTIALS '=' '{' credntialsparams '}'
+|   CREDENTIALS '=' '{' credentialsparams '}'
     {
         $$ = tree.StageCredentials {
             Exist:true,
@@ -5399,17 +5399,17 @@ stage_credentials_opt:
         }
     }
 
-credntialsparams:
-    credntialsparam
+credentialsparams:
+    credentialsparam
     {
         $$ = $1
     }
-|   credntialsparams ',' credntialsparam
+|   credentialsparams ',' credentialsparam
     {
         $$ = append($1, $3...)
     }
 
-credntialsparam:
+credentialsparam:
     {
         $$ = []string{}
     }
