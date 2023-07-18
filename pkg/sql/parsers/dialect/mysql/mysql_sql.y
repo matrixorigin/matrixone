@@ -473,8 +473,8 @@ import (
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
-%type <statement> create_stage_stmt
-%type <str> urlparams crentialsparams_opt directoryparams_opt
+%type <statement> create_stage_stmt drop_stage_stmt
+%type <str> urlparams directoryparams_opt
 %type <str> comment_opt
 %type <subscriptionOption> subcription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
@@ -548,7 +548,7 @@ import (
 %type <funcExpr> function_call_window
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params
+%type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credntialsparams_opt credntialsparams credntialsparam
 %type <str> charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
@@ -3396,6 +3396,7 @@ drop_ddl_stmt:
 |   drop_sequence_stmt
 |   drop_publication_stmt
 |   drop_procedure_stmt
+|   drop_stage_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -5190,7 +5191,7 @@ credntialsparams_opt:
     {
         $$ = []string{}
     }
-|   CREDENTIALS '=' '(' credntialsparams ')'
+|   CREDENTIALS '=' '{' credntialsparams '}'
     {
         $$ = $4
     }
@@ -5285,6 +5286,15 @@ DROP PUBLICATION exists_opt ident
 	        IfExists: $3,
 	        Name: tree.Identifier($4.Compare()),
 	    }
+    }
+
+drop_stage_stmt:
+DROP STAGE exists_opt ident
+    {
+        $$ = &tree.DropStage{
+            IfNotExists: $3,
+	        Name: tree.Identifier($4.Compare()),
+        }
     }
 
 account_role_name:

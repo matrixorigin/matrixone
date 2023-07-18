@@ -33,17 +33,21 @@ func (node *CreateStage) Format(ctx *FmtCtx) {
 	}
 	node.Name.Format(ctx)
 
-	ctx.WriteString("url ")
+	ctx.WriteString(" url=")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.Url))
 
 	if len(node.Credntials) > 0 {
-		ctx.WriteString("crentiasl ")
+		ctx.WriteString(" crentiasl=")
+		ctx.WriteString("{")
 		for i := 0; i < len(node.Credntials)-1; i += 2 {
 			ctx.WriteString(fmt.Sprintf("'%s'", node.Credntials[i]))
 			ctx.WriteString("=")
 			ctx.WriteString(fmt.Sprintf("'%s'", node.Credntials[i+1]))
-			ctx.WriteString(",")
+			if i != len(node.Credntials)-2 {
+				ctx.WriteString(",")
+			}
 		}
+		ctx.WriteString("}")
 	}
 
 	if len(node.Comment) > 0 {
@@ -54,3 +58,20 @@ func (node *CreateStage) Format(ctx *FmtCtx) {
 
 func (node *CreateStage) GetStatementType() string { return "Create Stage" }
 func (node *CreateStage) GetQueryType() string     { return QueryTypeOth }
+
+type DropStage struct {
+	statementImpl
+	IfNotExists bool
+	Name        Identifier
+}
+
+func (node *DropStage) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop stage ")
+	if node.IfNotExists {
+		ctx.WriteString("if not exists ")
+	}
+	node.Name.Format(ctx)
+}
+
+func (node *DropStage) GetStatementType() string { return "Drop Stage" }
+func (node *DropStage) GetQueryType() string     { return QueryTypeOth }
