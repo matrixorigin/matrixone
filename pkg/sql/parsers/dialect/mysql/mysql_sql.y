@@ -5441,7 +5441,7 @@ alter_stage_stmt:
             	IfNotExists: $3,
 	            Name: tree.Identifier($4.Compare()),           
 	            UrlOption: $6,
-	            CredntialsOption: $7,
+	            CredentialsOption: $7,
 	            StatusOption: $8,
 	            Comment: $9,
         }

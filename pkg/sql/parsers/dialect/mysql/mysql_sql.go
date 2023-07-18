@@ -14673,12 +14673,12 @@ yydefault:
 //line mysql_sql.y:5439
 		{
 			yyLOCAL = &tree.AlterStage{
-				IfNotExists:      yyDollar[3].boolValUnion(),
-				Name:             tree.Identifier(yyDollar[4].cstrUnion().Compare()),
-				UrlOption:        yyDollar[6].stageUrlUnion(),
-				CredntialsOption: yyDollar[7].stageCredentialsUnion(),
-				StatusOption:     yyDollar[8].stageStatusUnion(),
-				Comment:          yyDollar[9].stageCommentUnion(),
+				IfNotExists:       yyDollar[3].boolValUnion(),
+				Name:              tree.Identifier(yyDollar[4].cstrUnion().Compare()),
+				UrlOption:         yyDollar[6].stageUrlUnion(),
+				CredentialsOption: yyDollar[7].stageCredentialsUnion(),
+				StatusOption:      yyDollar[8].stageStatusUnion(),
+				Comment:           yyDollar[9].stageCommentUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL

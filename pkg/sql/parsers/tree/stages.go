@@ -63,12 +63,12 @@ func (node *DropStage) GetQueryType() string     { return QueryTypeOth }
 
 type AlterStage struct {
 	statementImpl
-	IfNotExists      bool
-	Name             Identifier
-	UrlOption        StageUrl
-	CredntialsOption StageCredentials
-	StatusOption     StageStatus
-	Comment          StageComment
+	IfNotExists       bool
+	Name              Identifier
+	UrlOption         StageUrl
+	CredentialsOption StageCredentials
+	StatusOption      StageStatus
+	Comment           StageComment
 }
 
 func (node *AlterStage) Format(ctx *FmtCtx) {
@@ -79,7 +79,7 @@ func (node *AlterStage) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 	ctx.WriteString(" set ")
 	node.UrlOption.Format(ctx)
-	node.CredntialsOption.Format(ctx)
+	node.CredentialsOption.Format(ctx)
 	node.StatusOption.Format(ctx)
 	node.Comment.Format(ctx)
 }
