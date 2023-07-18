@@ -425,7 +425,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				continue
 			}
 
-			_, childTableDef := builder.compCtx.ResolveById(tableId)
+			childObjRef, childTableDef := builder.compCtx.ResolveById(tableId)
 			childPosMap := make(map[string]int32)
 			childTypMap := make(map[string]*plan.Type)
 			childId2name := make(map[uint64]string)
@@ -458,11 +458,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				if col.Name == catalog.Row_ID {
 					childRowIdPos = idx
 				}
-			}
-			childObjRef := &plan.ObjectRef{
-				Obj:        int64(childTableDef.TblId),
-				SchemaName: builder.compCtx.DefaultDatabase(),
-				ObjName:    childTableDef.Name,
 			}
 
 			for _, fk := range childTableDef.Fkeys {
@@ -838,7 +833,7 @@ func makeInsertPlan(
 	if updateColLength == 0 {
 		for idx, indexdef := range tableDef.Indexes {
 			if indexdef.Unique {
-				idxRef, idxTableDef := ctx.Resolve(builder.compCtx.DefaultDatabase(), indexdef.IndexTableName)
+				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
 				// remove row_id
 				for i, col := range idxTableDef.Cols {
 					if col.Name == catalog.Row_ID {
