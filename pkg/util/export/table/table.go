@@ -248,6 +248,9 @@ func (col *Column) ToCreateSql(ctx context.Context) string {
 var _ batchpipe.HasName = (*Table)(nil)
 
 var NormalTableEngine = "TABLE"
+
+// ExternalTableEngine
+// Deprecated
 var ExternalTableEngine = "EXTERNAL"
 
 type Table struct {
@@ -843,7 +846,8 @@ func RegisterTableDefine(table *Table) *Table {
 	return old
 }
 
-func GetAllTable() []*Table {
+// GetAllTables holds all tables' Definition which should be handled in ETLMerge
+func GetAllTables() []*Table {
 	mux.Lock()
 	defer mux.Unlock()
 	tables := make([]*Table, 0, len(gTable))
@@ -860,8 +864,11 @@ func GetTable(b string) (*Table, bool) {
 	return tbl, exist
 }
 
+// SetPathBuilder
+//
+// Deprecated. Please init static
 func SetPathBuilder(ctx context.Context, pathBuilder string) error {
-	tables := GetAllTable()
+	tables := GetAllTables()
 	bp := PathBuilderFactory(pathBuilder)
 	if bp == nil {
 		return moerr.NewNotSupported(ctx, "not support PathBuilder: %s", pathBuilder)

@@ -49,8 +49,6 @@ type collectorOpts struct {
 	flushInterval time.Duration
 	// the number of goroutines to execute insert into sql, default is runtime.NumCPU()
 	sqlWorkerNum int
-	// multiTable
-	multiTable bool
 }
 
 func defaultCollectorOpts() collectorOpts {
@@ -88,12 +86,6 @@ type WithFlushInterval time.Duration
 
 func (x WithFlushInterval) ApplyTo(o *collectorOpts) {
 	o.flushInterval = time.Duration(x)
-}
-
-type ExportMultiTable bool
-
-func (x ExportMultiTable) ApplyTo(o *collectorOpts) {
-	o.multiTable = bool(x)
 }
 
 var _ MetricCollector = (*metricCollector)(nil)
@@ -266,13 +258,11 @@ func newMetricFSCollector(writerFactory table.WriterFactory, opts ...collectorOp
 		writerFactory: writerFactory,
 		opts:          initOpts,
 	}
-	pipeOpts := []bp.BaseBatchPipeOpt{bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum)}
-	if !initOpts.multiTable {
-		pipeOpts = append(pipeOpts,
-			bp.PipeWithBufferWorkerNum(1),
-			bp.PipeWithItemNameFormatter(func(bp.HasName) string {
-				return SingleMetricTable.GetName()
-			}))
+	pipeOpts := []bp.BaseBatchPipeOpt{bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum),
+		bp.PipeWithBufferWorkerNum(1), // only one table
+		bp.PipeWithItemNameFormatter(func(bp.HasName) string {
+			return SingleMetricTable.GetName()
+		}),
 	}
 	base := bp.NewBaseBatchPipe[*pb.MetricFamily, table.ExportRequests](c, pipeOpts...)
 	c.BaseBatchPipe = base

@@ -518,7 +518,7 @@ func (fp *FakeProtocol) ConnectionID() uint32 {
 }
 
 func (fp *FakeProtocol) Peer() string {
-	return ""
+	return "0.0.0.0:0"
 }
 
 func (fp *FakeProtocol) GetDatabaseName() string {
