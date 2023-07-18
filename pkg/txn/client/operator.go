@@ -273,10 +273,14 @@ func (tc *txnOperator) UpdateSnapshot(
 	}
 
 	minTS := ts
-	// we need to waiter the latest snapshot ts which is greater than the current snapshot
-	if minTS.IsEmpty() && tc.mu.txn.IsRCIsolation() {
-		minTS, _ = tc.clock.Now()
-	}
+	/*
+		// In rc mode, this logic is not needed to introduce redundant waits,
+		// and should be used to ensure that rc is correct by detecting the
+		// presence of a primary key modification and then reeval.
+			if minTS.IsEmpty() && tc.mu.txn.IsRCIsolation() {
+				minTS, _ = tc.clock.Now()
+			}
+	*/
 
 	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
 		ctx,
