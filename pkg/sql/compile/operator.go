@@ -1127,7 +1127,8 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 
 func constructShuffleArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 	arg := new(shuffle.Argument)
-	arg.ShuffleColIdx = plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx]).ColPos
+	hashCol, _ := plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
+	arg.ShuffleColIdx = hashCol.ColPos
 	arg.ShuffleType = int32(node.Stats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.ShuffleColMax
@@ -1135,17 +1136,11 @@ func constructShuffleArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 	return arg
 }
 
-// ShuffleJoinDispatch is a cross-cn dispath
-// and it will send same batch to all register
-func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node) *dispatch.Argument {
+// cross-cn dispath  will send same batch to all register
+func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
 	if node.Stats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
-		hashCol, _ := plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
-		arg.ShuffleColIdx = hashCol.ColPos
-		arg.ShuffleType = int32(node.Stats.ShuffleType)
-		arg.ShuffleColMin = node.Stats.ShuffleColMin
-		arg.ShuffleColMax = node.Stats.ShuffleColMax
 		return arg
 	}
 	if hasRemote {
