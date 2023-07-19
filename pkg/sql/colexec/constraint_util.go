@@ -95,7 +95,7 @@ func GroupByPartitionForDeleteS3(proc *process.Process, bat *batch.Batch, rowIdI
 	for i := range vecList {
 		// initialize the vectors in each batch, the batch only contains a `row_id` column
 		retBatch := batch.New(true, []string{catalog.Row_ID, "pk"})
-		retBatch.SetZs(vecList[i].Length(), proc.Mp())
+		retBatch.SetRowCount(vecList[i].Length())
 		retBatch.SetVector(0, vecList[i])
 		retBatch.SetVector(1, pkList[i])
 		batches[i] = retBatch
