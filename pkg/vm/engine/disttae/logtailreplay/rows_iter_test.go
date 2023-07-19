@@ -261,6 +261,172 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}
 	}
 
-	//TODO delete and insert at the same time stamp
+}
+
+func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
+	state := NewPartitionState(false)
+	ctx := context.Background()
+	pool := mpool.MustNewZero()
+	packer := types.NewPacker(pool)
+	defer packer.FreeMem()
+
+	const num = 128
+
+	sid := objectio.NewSegmentid()
+	buildRowID := func(i int) types.Rowid {
+		blk := objectio.NewBlockid(sid, uint16(i), 0)
+		return *objectio.NewRowid(blk, uint32(0))
+	}
+
+	{
+		// insert number i at time i with (i+1) row id
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		vec1 := vector.NewVec(types.T_int64.ToType())
+		for i := 0; i < num; i++ {
+			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 0), false, pool)
+			vector.AppendFixed(vec1, int64(i), false, pool)
+		}
+		state.HandleRowsInsert(ctx, &api.Batch{
+			Attrs: []string{"rowid", "time", "a"},
+			Vecs: []*api.Vector{
+				mustVectorToProto(rowIDVec),
+				mustVectorToProto(tsVec),
+				mustVectorToProto(vec1),
+			},
+		}, 0, packer)
+	}
+
+	{
+		// delete number i at the same time
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		for i := 0; i < num; i++ {
+			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
+		}
+		state.HandleRowsDelete(ctx, &api.Batch{
+			Attrs: []string{"rowid", "time"},
+			Vecs: []*api.Vector{
+				mustVectorToProto(rowIDVec),
+				mustVectorToProto(tsVec),
+			},
+		})
+	}
+
+	{
+		// should be deleted
+		iter := state.NewRowsIter(
+			types.BuildTS(num*2, 0),
+			nil,
+			false,
+		)
+		n := 0
+		for iter.Next() {
+			n++
+		}
+		require.Equal(t, 0, n)
+		require.Nil(t, iter.Close())
+	}
+
+	{
+		// iter deleted
+		iter := state.NewRowsIter(
+			types.BuildTS(num*2, 0),
+			nil,
+			true,
+		)
+		n := 0
+		for iter.Next() {
+			n++
+		}
+		require.Equal(t, num, n)
+		require.Nil(t, iter.Close())
+	}
+
+}
+
+func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
+	state := NewPartitionState(false)
+	ctx := context.Background()
+	pool := mpool.MustNewZero()
+	packer := types.NewPacker(pool)
+	defer packer.FreeMem()
+
+	const num = 128
+
+	sid := objectio.NewSegmentid()
+	buildRowID := func(i int) types.Rowid {
+		blk := objectio.NewBlockid(sid, uint16(i), 0)
+		return *objectio.NewRowid(blk, uint32(0))
+	}
+
+	{
+		// delete number i at time i with (i+1) row id
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		for i := 0; i < num; i++ {
+			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
+		}
+		state.HandleRowsDelete(ctx, &api.Batch{
+			Attrs: []string{"rowid", "time"},
+			Vecs: []*api.Vector{
+				mustVectorToProto(rowIDVec),
+				mustVectorToProto(tsVec),
+			},
+		})
+	}
+
+	{
+		// insert number i at time i with (i+1) row id
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		vec1 := vector.NewVec(types.T_int64.ToType())
+		for i := 0; i < num; i++ {
+			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
+			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 0), false, pool)
+			vector.AppendFixed(vec1, int64(i), false, pool)
+		}
+		state.HandleRowsInsert(ctx, &api.Batch{
+			Attrs: []string{"rowid", "time", "a"},
+			Vecs: []*api.Vector{
+				mustVectorToProto(rowIDVec),
+				mustVectorToProto(tsVec),
+				mustVectorToProto(vec1),
+			},
+		}, 0, packer)
+	}
+
+	{
+		// should be deleted
+		iter := state.NewRowsIter(
+			types.BuildTS(num*2, 0),
+			nil,
+			false,
+		)
+		n := 0
+		for iter.Next() {
+			n++
+		}
+		require.Equal(t, 0, n)
+		require.Nil(t, iter.Close())
+	}
+
+	{
+		// iter deleted
+		iter := state.NewRowsIter(
+			types.BuildTS(num*2, 0),
+			nil,
+			true,
+		)
+		n := 0
+		for iter.Next() {
+			n++
+		}
+		require.Equal(t, num, n)
+		require.Nil(t, iter.Close())
+	}
 
 }

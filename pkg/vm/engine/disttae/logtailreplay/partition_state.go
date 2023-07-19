@@ -74,9 +74,9 @@ type RowEntry struct {
 	BlockID types.Blockid // we need to iter by block id, so put it first to allow faster iteration
 	RowID   types.Rowid
 	Time    types.TS
+	Deleted bool
 
 	ID                int64 // a unique version id, for primary index building and validating
-	Deleted           bool
 	Batch             *batch.Batch
 	Offset            int64
 	PrimaryIndexBytes []byte
@@ -103,6 +103,13 @@ func (r RowEntry) Less(than RowEntry) bool {
 		return true
 	}
 	if r.Time.Less(than.Time) {
+		return false
+	}
+	// delete first
+	if r.Deleted && !than.Deleted {
+		return true
+	}
+	if !r.Deleted && than.Deleted {
 		return false
 	}
 	return false
@@ -269,6 +276,7 @@ func (p *PartitionState) HandleRowsInsert(
 				BlockID: blockID,
 				RowID:   rowID,
 				Time:    timeVector[i],
+				Deleted: false,
 			}
 			entry, ok := p.rows.Get(pivot)
 			if !ok {
@@ -335,6 +343,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 				BlockID: blockID,
 				RowID:   rowID,
 				Time:    timeVector[i],
+				Deleted: true,
 			}
 			entry, ok := p.rows.Get(pivot)
 			if !ok {
