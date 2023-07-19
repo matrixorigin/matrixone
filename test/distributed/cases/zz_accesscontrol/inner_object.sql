@@ -94,3 +94,6 @@ drop account if exists inner_account;
 drop account if exists accx11;
 drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
+-- @bvt:issue#8544
+desc mo_catalog.mo_stages;
+-- @bvt:issue#8544
