@@ -65,9 +65,9 @@ func TestPreInsertNormal(t *testing.T) {
 			testutil.MakeScalarVarchar("d", 3),
 			testutil.MakeScalarNull(types.T_int64, 3),
 		},
-		Zs:  []int64{1, 1, 1},
 		Cnt: 1,
 	}
+	batch1.SetRowCount(3)
 	argument1 := Argument{
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
@@ -125,10 +125,10 @@ func TestPreInsertNullCheck(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
 		},
-		Zs:    []int64{1, 1, 1},
 		Attrs: []string{"int64_column_primary"},
 		Cnt:   1,
 	}
+	batch2.SetRowCount(3)
 	argument2 := Argument{
 		SchemaName: "testDb",
 		Attrs:      []string{"int64_column_primary"},

@@ -97,9 +97,10 @@ func TestMergeBlock(t *testing.T) {
 				string(catalog.EncodeBlockInfo(blkInfo3))},
 				nil),
 		},
-		Zs:  []int64{1, 1, 1},
 		Cnt: 1,
 	}
+	batch1.SetRowCount(3)
+
 	argument1 := Argument{
 		Tbl: &mockRelation{},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
