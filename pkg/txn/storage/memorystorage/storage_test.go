@@ -290,7 +290,7 @@ func testDatabase(
 		bat := batch.New(false, []string{"a", "b"})
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
-		bat.InitZsOne(5)
+		bat.SetRowCount(5)
 		resp := &memoryengine.WriteResp{}
 		err := testWrite(
 			ctx, t, s, txnMeta,
@@ -471,7 +471,7 @@ func testDatabase(
 		bat := batch.New(false, []string{"a", "b"})
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 		resp := &memoryengine.WriteResp{}
 		err := testWrite(
 			ctx, t, s, txnMeta,
@@ -572,7 +572,7 @@ func testDatabase(
 		bat := batch.New(false, []string{"a", "b"})
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
-		bat.InitZsOne(5)
+		bat.SetRowCount(5)
 		resp := &memoryengine.WriteResp{}
 		err := testWrite(
 			ctx, t, s, txnMeta,

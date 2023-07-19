@@ -74,7 +74,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 		if err != nil {
 			require.Nil(t, err)
 		}
-		bat.SetZs(bat.GetVector(1).Length(), proc.Mp())
+		bat.SetRowCount(bat.GetVector(1).Length())
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
@@ -166,7 +166,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 		if err != nil {
 			require.Nil(t, err)
 		}
-		bat.SetZs(bat.GetVector(1).Length(), proc.Mp())
+		bat.SetRowCount(bat.GetVector(1).Length())
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()

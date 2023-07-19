@@ -320,22 +320,6 @@ func (bat *Batch) IsEmpty() bool {
 	return bat.rowCount == 0
 }
 
-func (bat *Batch) SetZs(len int, m *mpool.MPool) {
-	// Do nothing. Will remove this function later.
-}
-
-func (bat *Batch) InitZsOne(len int) {
-	// Do nothing. Will remove this function later.
-}
-
-func (bat *Batch) FixedForRemoveZs() {
-	// Do nothing. Will remove this function later.
-}
-
-func (bat *Batch) CheckForRemoveZs(operator string) {
-	// Do nothing. Will remove this function later.
-}
-
 func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
 	jm := bat.AuxData.(*hashmap.JoinMap)
 	if jm.IsDup() {

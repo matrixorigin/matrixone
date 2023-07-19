@@ -257,7 +257,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 	ids := vector.MustFixedCol[uint64](ibat.GetVector(catalog.MO_TABLES_REL_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](ibat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 	bat := batch.NewWithSize(len(typs))
-	bat.SetZs(Rows, mp)
+	bat.SetRowCount(Rows)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.NewVec(typs[i])
 	}
