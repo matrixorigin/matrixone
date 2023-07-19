@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -95,6 +96,7 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
+		logutil.Errorf("internal sql executor error: %v", err)
 		return exec.rollback()
 	}
 	if err = exec.commit(); err != nil {
