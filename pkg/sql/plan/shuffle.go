@@ -261,11 +261,31 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	}
 }
 
+func findShuffleNode(nodeID int32, builder *QueryBuilder) bool {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			if findShuffleNode(child, builder) {
+				return true
+			}
+		}
+	}
+	if node.Stats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+		return true
+	}
+	return false
+}
+
 func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
 			determineShuffleMethod(child, builder)
+			// for now, only one node can go shuffle
+			// will fix this in the future
+			if findShuffleNode(child, builder) {
+				return
+			}
 		}
 	}
 	switch node.NodeType {
