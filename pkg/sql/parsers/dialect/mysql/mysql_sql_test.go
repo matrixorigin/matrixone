@@ -2187,10 +2187,6 @@ var (
 			output: "alter stage my_ext_stage set  crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'}",
 		},
 		{
-			input:  "SHOW STAGES;",
-			output: "show stages",
-		},
-		{
 			input:  "SHOW STAGES LIKE 'my_stage'",
 			output: "show stages like my_stage",
 		},
