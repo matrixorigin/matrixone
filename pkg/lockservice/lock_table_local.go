@@ -265,8 +265,17 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 					// txn1 unlock, notify txn2/op1
 					// txn2/op3 get lock before txn2/op1 get notify
 					// TODO: add more test
-					lock.waiter.add(l.bind.ServiceID, false, c.w.waiters.all()...)
-					c.w.waiters.reset()
+					waiters := c.w.waiters.all()
+					if len(waiters) > 0 {
+						lock.waiter.add(l.bind.ServiceID, false, waiters...)
+						c.w.waiters.reset()
+
+						for _, w := range waiters {
+							if err := l.detector.check(c.w.txnID, w.belongTo); err != nil {
+								panic("BUG: active dead lock check can not fail")
+							}
+						}
+					}
 
 					str := c.w.String()
 					if v := c.w.close(l.bind.ServiceID, notifyValue{}); v != nil {
