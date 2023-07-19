@@ -181,9 +181,13 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
 	case types.T_varchar, types.T_char, types.T_text:
-		// for now, do not support hash shuffle join. will support it in the future
-		//n.Stats.ShuffleColIdx = int32(idx)
-		//n.Stats.Shuffle = true
+		n.Stats.ShuffleColIdx = int32(idx)
+		n.Stats.Shuffle = true
+	}
+
+	// for now, do not support hash shuffle join. will support it in the future
+	if n.Stats.ShuffleType == plan.ShuffleType_Hash {
+		n.Stats.Shuffle = false
 	}
 }
 
