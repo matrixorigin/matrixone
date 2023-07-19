@@ -83,6 +83,8 @@ const (
 	// Operator that encounters a write conflict will block until the previous
 	// transaction has released the lock
 	LockOp
+
+	Shuffle
 )
 
 // Instruction contains relational algebra

@@ -32,22 +32,22 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
 	ap := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
-		return true, nil
+		return process.ExecStop, nil
 	}
 
 	if len(bat.Zs) == 0 {
 		bat.Clean(proc.Mp())
-		return false, nil
+		return process.ExecNext, nil
 	}
 	defer proc.PutBatch(bat)
 
 	if err := ap.Split(proc, bat); err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 
 	if !ap.notFreeBatch {
@@ -65,14 +65,14 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			if ap.container.mp[i].Length() > 0 {
 				// batches in mp will be deeply copied into txn's workspace.
 				if err = ap.PartitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
-					return false, err
+					return process.ExecNext, err
 				}
 			}
 
 			for _, bat := range ap.container.mp2[i] {
 				// batches in mp2 will be deeply copied into txn's workspace.
 				if err = ap.PartitionSources[i].Write(proc.Ctx, bat); err != nil {
-					return false, err
+					return process.ExecNext, err
 				}
 
 			}
@@ -83,19 +83,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if ap.container.mp[0].Length() > 0 {
 			//batches in mp will be deeply copied into txn's workspace.
 			if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 
 		for _, bat := range ap.container.mp2[0] {
 			//batches in mp2 will be deeply copied into txn's workspace.
 			if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
 
 	proc.SetInputBatch(nil)
-	return false, nil
+	return process.ExecNext, nil
 }
