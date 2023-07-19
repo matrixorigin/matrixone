@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
@@ -232,7 +233,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 		_, txn, err = handler.GetTxn()
 		if err != nil {
-			logErrorf(ses.GetDebugString(), "RecordStatement. error:%v", err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to record statement",
+				zap.Error(err))
 			copy(stm.TransactionID[:], motrace.NilTxnID[:])
 		} else {
 			copy(stm.TransactionID[:], txn.Txn().ID)
@@ -315,7 +318,9 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 			_, txn, err = handler.GetTxn()
 			if err != nil {
-				logErrorf(ses.GetDebugString(), "RecordStatementTxnID. error:%v", err)
+				logError(ses, ses.GetDebugString(),
+					"Failed to record statement transaction ID",
+					zap.Error(err))
 			} else {
 				stm.SetTxnID(txn.Txn().ID)
 			}
@@ -348,7 +353,9 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		logErrorf(ses.GetDebugString(), "handleShowTableStatus error %v", err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to handle 'SHOW TABLE STATUS'",
+			zap.Error(err))
 		return err
 	}
 	return nil
@@ -2395,7 +2402,10 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	_, err = writer.Write(packet.Payload)
 	if err != nil {
 		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
-		logErrorf(ses.GetDebugString(), "load local '%s', write error: %v", param.Filepath, err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to load local file",
+			zap.String("path", param.Filepath),
+			zap.Error(err))
 	}
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
@@ -2430,7 +2440,11 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		if !skipWrite {
 			_, err = writer.Write(packet.Payload)
 			if err != nil {
-				logErrorf(ses.GetDebugString(), "load local '%s', epoch: %d, write error: %v", param.Filepath, epoch, err)
+				logError(ses, ses.GetDebugString(),
+					"Failed to load local file",
+					zap.String("path", param.Filepath),
+					zap.Uint64("epoch", epoch),
+					zap.Error(err))
 				skipWrite = true
 			}
 			writeTime := time.Since(writeStart)
@@ -3004,7 +3018,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	// only log if build time is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		logInfo(ses, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 	}
 
 	mrs = ses.GetMysqlResultSet()
@@ -3018,7 +3032,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowCreatePublications:
 		columns, err = cw.GetColumns()
 		if err != nil {
-			logErrorf(ses.GetDebugString(), "GetColumns from Computation handler failed. error: %v", err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to get columns from computation handler",
+				zap.Error(err))
 			return err
 		}
 		if c, ok := cw.(*TxnComputationWrapper); ok {
@@ -3097,7 +3113,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		/*
@@ -3157,11 +3173,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			if loadLocalErrGroup != nil { // release resources
 				err2 = proc.LoadLocalReader.Close()
 				if err2 != nil {
-					logErrorf(ses.GetDebugString(), "processLoadLocal reader close failed: %s", err2.Error())
+					logError(ses, ses.GetDebugString(),
+						"processLoadLocal goroutine failed",
+						zap.Error(err2))
 				}
 				err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
 				if err2 != nil {
-					logErrorf(ses.GetDebugString(), "processLoadLocal goroutine failed: %s", err2.Error())
+					logError(ses, ses.GetDebugString(),
+						"processLoadLocal goroutine failed",
+						zap.Error(err2))
 				}
 			}
 			return err
@@ -3175,13 +3195,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		rspLen = cw.GetAffectedRows()
 		echoTime := time.Now()
 
-		logDebugf(ses.GetDebugString(), "time of SendResponse %s", time.Since(echoTime).String())
+		logDebug(ses, "time of SendResponse %s", time.Since(echoTime).String())
 
 		/*
 			Step 4: Serialize the execution plan by json
@@ -3193,7 +3213,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		explainColName := "QUERY PLAN"
 		columns, err = GetExplainColumns(requestCtx, explainColName)
 		if err != nil {
-			logErrorf(ses.GetDebugString(), "GetColumns from ExplainColumns handler failed, error: %v", err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to get columns from ExplainColumns handler",
+				zap.Error(err))
 			return err
 		}
 		/*
@@ -3238,7 +3260,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {

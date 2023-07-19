@@ -284,6 +284,9 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	return nil
 }
 
+// GetAllTables
+//
+// Deprecated: use table.GetAllTables() instead.
 func GetAllTables() []*table.Table {
 	return tables
 }

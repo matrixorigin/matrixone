@@ -35,19 +35,6 @@ tick-per-second = 1
 log-store-timeout = "20s"
 dn-store-timeout = "10s"
 
-[[fileservice]]
-name = "LOCAL"
-backend = "MEM"
-
-[[fileservice]]
-name = "SHARED"
-backend = "MEM"
-
-[[fileservice]]
-name = "ETL"
-backend = "DISK-ETL"
-data-dir = "mo-data/local/etl"
-
 [observability]
 statusPort = 7001
 
