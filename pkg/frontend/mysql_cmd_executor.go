@@ -2456,6 +2456,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	proto MysqlProtocol,
 	pu *config.ParameterUnit,
 	tenant string,
+	userName string,
 ) (retErr error) {
 	var err error
 	var cmpBegin time.Time
@@ -2937,6 +2938,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.SetTransaction:
 		selfHandle = true
 		//TODO: handle set transaction
+	case *tree.ShowGrants:
+		if len(st.Username) == 0 {
+			st.Username = userName
+		}
+		if len(st.Hostname) == 0 || st.Hostname == "%" {
+			st.Hostname = rootHost
+		}
 	}
 
 	if selfHandle {
@@ -3265,6 +3273,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.SetSql(input.getSql())
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
+	userName := rootName
 	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
@@ -3306,6 +3315,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
 			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
+		userName = ses.GetTenantInfo().GetUser()
 	} else {
 		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
@@ -3386,7 +3396,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 			}
 		}
 
-		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant)
+		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userName)
 		if err != nil {
 			return err
 		}
