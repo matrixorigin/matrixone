@@ -180,6 +180,7 @@ insert into t1 values(1, 1, 1);
 insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
+-- @pattern
 insert into t1 values(NULL, 5, 5);
 
 drop table if exists t1;
@@ -280,6 +281,7 @@ insert into t1 values(1, 1, 1);
 insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
+-- @pattern
 insert into t1 values(NULL, 5, 5);
 
 drop table if exists t1;
