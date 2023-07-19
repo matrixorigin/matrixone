@@ -535,6 +535,10 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 }
 
 func (txn *Transaction) delTransaction() {
+	if txn.removed {
+		return
+	}
+
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
 			continue
@@ -561,4 +565,5 @@ func (txn *Transaction) delTransaction() {
 	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
 	txn.cnBlkId_Pos = nil
 	txn.hasS3Op.Store(false)
+	txn.removed = true
 }
