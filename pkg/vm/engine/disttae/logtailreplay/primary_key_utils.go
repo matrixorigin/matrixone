@@ -15,9 +15,6 @@
 package logtailreplay
 
 import (
-	"bytes"
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -45,85 +42,30 @@ func (p *PartitionState) PrimaryKeyMayBeModified(
 	to types.TS,
 	key []byte,
 ) bool {
+	iter := p.NewPrimaryKeyIter(to, Exact(key))
+	defer iter.Close()
 
 	p.shared.Lock()
 	lastFlushTimestamp := p.shared.lastFlushTimestamp
 	p.shared.Unlock()
 
-	changed := true
+	empty := true
 	if !lastFlushTimestamp.IsEmpty() {
 		if from.Greater(lastFlushTimestamp) {
-			changed = false
+			empty = false
 		}
 	} else {
-		changed = false
+		empty = false
 	}
-	if changed {
+	if empty {
 		return true
 	}
-
-	iter := p.primaryIndex.Copy().Iter()
-	defer iter.Release()
-
-	seek := false
-	for {
-		if !seek {
-			seek = true
-			if !iter.Seek(&PrimaryIndexEntry{
-				Bytes: key,
-			}) {
-				return false
-			}
-		} else {
-			if !iter.Next() {
-				break
-			}
-		}
-
-		entry := iter.Item()
-
-		if !bytes.Equal(entry.Bytes, key) {
-			break
-		}
-
-		if entry.Time.GreaterEq(from) {
+	for iter.Next() {
+		empty = false
+		row := iter.Entry()
+		if row.Time.Greater(from) {
 			return true
 		}
-
-		// deleted entries are not indexed, check all rows for changes
-		pivot := RowEntry{
-			BlockID: entry.BlockID,
-			RowID:   entry.RowID,
-			Time:    types.BuildTS(math.MaxInt64, math.MaxUint32),
-		}
-		iter := p.rows.Copy().Iter()
-		seek := false
-		for {
-			if !seek {
-				seek = true
-				if !iter.Seek(pivot) {
-					break
-				}
-			} else {
-				if !iter.Next() {
-					break
-				}
-			}
-			row := iter.Item()
-			if row.BlockID.Compare(entry.BlockID) != 0 {
-				break
-			}
-			if !row.RowID.Equal(entry.RowID) {
-				break
-			}
-			if row.Time.GreaterEq(from) {
-				iter.Release()
-				return true
-			}
-		}
-		iter.Release()
-
 	}
-
-	return false
+	return empty
 }
