@@ -1657,6 +1657,47 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 }
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	if node.Stats.Shuffle {
+		return c.compileShuffleJoin(ctx, node, left, right, ss, children)
+	}
+	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
+}
+
+func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	var rs []*Scope
+	isEq := plan2.IsEquiJoin2(node.OnList)
+	if !isEq {
+		panic("shuffle join only support equal join for now!")
+	}
+
+	rightTyps := make([]types.Type, len(right.ProjectList))
+	for i, expr := range right.ProjectList {
+		rightTyps[i] = dupType(expr.Typ)
+	}
+
+	leftTyps := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		leftTyps[i] = dupType(expr.Typ)
+	}
+
+	switch node.JoinType {
+	case plan.Node_INNER:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.Join,
+				Idx: c.anal.curr,
+				Arg: constructJoin(node, rightTyps, c.proc),
+			})
+		}
+
+	default:
+		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
+	}
+	return rs
+}
+
+func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
 
@@ -2390,9 +2431,6 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	c.anal.isFirst = false
 	mergeChildren := c.newMergeScope(children)
 
-	// a hack here to stop shuffle join, delete this in the future
-	n.Stats.Shuffle = false
-
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(1, rs, c.addr, n),
@@ -2400,6 +2438,12 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	mergeChildren.IsEnd = true
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 
+	return rs
+}
+
+func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope, n *plan.Node) []*Scope {
+	length := len(ss)
+	rs := make([]*Scope, length)
 	return rs
 }
 
