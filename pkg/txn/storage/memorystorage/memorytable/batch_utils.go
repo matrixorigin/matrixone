@@ -29,6 +29,12 @@ func NewBatchIter(b *batch.Batch) BatchIter {
 	length := b.RowCount()
 	iter := func() (tuple []Nullable) {
 		for attrIdx, vec := range b.Vecs {
+			for {
+				if i >= length {
+					return
+				}
+				break
+			}
 			if vec.Length() < length {
 				panic(fmt.Sprintf(
 					"bad vector length, expecting %d, got %d. vector name: %s",
