@@ -2441,10 +2441,58 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	return rs
 }
 
-func (c *Compile) newShuffleJoinScopeList(ss []*Scope, children []*Scope, n *plan.Node) []*Scope {
-	length := len(ss)
-	rs := make([]*Scope, length)
-	return rs
+func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []*Scope {
+	joinScopes := make([]*Scope, 0, len(c.cnList))
+	idx := 0
+	cnt := 0
+	for _, n := range c.cnList {
+		ss := make([]*Scope, n.Mcpu)
+		for i := range ss {
+			ss[i] = new(Scope)
+			ss[i].Magic = Remote
+			ss[i].IsJoin = true
+			ss[i].NodeInfo.Addr = n.Addr
+			ss[i].NodeInfo.Mcpu = 1
+			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+		}
+		if isSameCN(n.Addr, c.addr) {
+			idx = cnt
+		}
+		joinScopes = append(joinScopes, ss...)
+		cnt += n.Mcpu
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	for i := range left {
+		left[i].appendInstruction(vm.Instruction{
+			Op:  vm.Shuffle,
+			Arg: constructShuffleArg(joinScopes, n),
+		})
+	}
+	leftMerge := c.newMergeScope(left)
+	leftMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(0, joinScopes, c.addr, n),
+	})
+	leftMerge.IsEnd = true
+
+	c.anal.isFirst = currentFirstFlag
+	for i := range right {
+		right[i].appendInstruction(vm.Instruction{
+			Op:  vm.Shuffle,
+			Arg: constructShuffleArg(joinScopes, n),
+		})
+	}
+	rightMerge := c.newMergeScope(right)
+	rightMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(1, joinScopes, c.addr, n),
+	})
+	rightMerge.IsEnd = true
+
+	joinScopes[idx].PreScopes = append(joinScopes[idx].PreScopes, leftMerge, rightMerge)
+
+	return joinScopes
 }
 
 func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
