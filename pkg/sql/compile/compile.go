@@ -2074,7 +2074,7 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Shuffle,
-				Arg: constructShuffleArg(children, n),
+				Arg: constructShuffleGroupArg(children, n),
 			})
 
 			ss[i].appendInstruction(vm.Instruction{
@@ -2466,7 +2466,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 	for i := range left {
 		left[i].appendInstruction(vm.Instruction{
 			Op:  vm.Shuffle,
-			Arg: constructShuffleArg(joinScopes, n),
+			Arg: constructShuffleJoinArg(joinScopes, n, true),
 		})
 	}
 	leftMerge := c.newMergeScope(left)
@@ -2480,7 +2480,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 	for i := range right {
 		right[i].appendInstruction(vm.Instruction{
 			Op:  vm.Shuffle,
-			Arg: constructShuffleArg(joinScopes, n),
+			Arg: constructShuffleJoinArg(joinScopes, n, false),
 		})
 	}
 	rightMerge := c.newMergeScope(right)
