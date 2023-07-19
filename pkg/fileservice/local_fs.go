@@ -232,10 +232,20 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
 	defer put.Put()
 
+	var r io.Reader
+	r = newIOEntriesReader(ctx, vector.Entries)
+	if vector.Hash.Sum != nil && vector.Hash.New != nil {
+		h := vector.Hash.New()
+		r = io.TeeReader(r, h)
+		defer func() {
+			*vector.Hash.Sum = h.Sum(nil)
+		}()
+	}
+
 	var buf []byte
 	putBuf := ioBufferPool.Get(&buf)
 	defer putBuf.Put()
-	n, err := io.CopyBuffer(fileWithChecksum, newIOEntriesReader(ctx, vector.Entries), buf)
+	n, err := io.CopyBuffer(fileWithChecksum, r, buf)
 	if err != nil {
 		return err
 	}
