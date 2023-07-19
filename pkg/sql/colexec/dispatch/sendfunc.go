@@ -24,104 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-func getShuffledSelsByHash(ap *Argument, bat *batch.Batch) [][]int32 {
-	sels := ap.getSels()
-	lenRegs := uint64(ap.ctr.aliveRegCnt)
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
-	switch groupByVec.GetType().Oid {
-	case types.T_int64:
-		groupByCol := vector.MustFixedCol[int64](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_int32:
-		groupByCol := vector.MustFixedCol[int32](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_int16:
-		groupByCol := vector.MustFixedCol[int16](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_uint64:
-		groupByCol := vector.MustFixedCol[uint64](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(v, lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_uint32:
-		groupByCol := vector.MustFixedCol[uint32](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_uint16:
-		groupByCol := vector.MustFixedCol[uint16](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_char, types.T_varchar, types.T_text:
-		groupByCol := vector.MustFixedCol[types.Varlena](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(groupByVec.GetArea()), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	default:
-		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
-	}
-	return sels
-}
-
-func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process) error {
-	//release old bats
-	defer proc.PutBatch(bat)
-
-	lenVecs := len(bat.Vecs)
-	shuffledBats := ap.ctr.shuffledBats
-	if ap.ctr.batsCount == 0 {
-		//initialize shuffled bats
-		for regIndex := range shuffledBats {
-			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
-			for j := range shuffledBats[regIndex].Vecs {
-				shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
-			}
-		}
-	}
-
-	sels := getShuffledSelsByHash(ap, bat)
-
-	//generate new shuffled bats
-	for regIndex := range shuffledBats {
-		lenSels := len(sels[regIndex])
-		if lenSels > 0 {
-			b := shuffledBats[regIndex]
-			for vecIndex := range b.Vecs {
-				v := b.Vecs[vecIndex]
-				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
-				if err != nil {
-					return err
-				}
-			}
-			bat.AddRowCount(lenSels)
-		}
-	}
-
-	ap.ctr.batsCount++
-	return nil
-}
 
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
@@ -180,24 +86,9 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	return false, nil
 }
 
-func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint64) (bool, error) {
-	for _, r := range ap.ctr.remoteReceivers {
-		batIndex := uint64(ap.ctr.remoteToIdx[r.uuid])
-		if regIndex == batIndex {
-			if bat != nil && bat.Length() != 0 {
-				encodeData, errEncode := types.Encode(bat)
-				if errEncode != nil {
-					return false, errEncode
-				}
-				if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
-					return false, err
-				}
-			}
-		}
-	}
-
+func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	for i, reg := range ap.LocalRegs {
-		batIndex := uint64(ap.ShuffleRegIdxLocal[i])
+		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex == batIndex {
 			if bat != nil && bat.Length() != 0 {
 				select {
@@ -208,230 +99,23 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 			}
 		}
 	}
-	return false, nil
-}
-
-func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
-	if ap.ctr.batsCount == 0 {
-		return false, nil
-	}
-
-	// send to remote regs
 	for _, r := range ap.ctr.remoteReceivers {
-		batIndex := ap.ctr.remoteToIdx[r.uuid]
-		batToSend := ap.ctr.shuffledBats[batIndex]
-		if batToSend != nil && batToSend.Length() != 0 {
-			encodeData, errEncode := types.Encode(batToSend)
-			if errEncode != nil {
-				return false, errEncode
-			}
-			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
-				return false, err
-			}
-		}
-	}
-
-	//send to all local regs
-	for i, reg := range ap.LocalRegs {
-		batIndex := ap.ShuffleRegIdxLocal[i]
-		batToSend := ap.ctr.shuffledBats[batIndex]
-		if batToSend != nil && batToSend.Length() != 0 {
-			select {
-			case <-reg.Ctx.Done():
-				logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
-			case reg.Ch <- batToSend:
-			}
-		}
-	}
-
-	ap.ctr.batsCount = 0
-	return false, nil
-}
-
-// accumulate enough batch size
-func needToSendShuffledBats(ap *Argument) bool {
-	if ap.ctr.batsCount > 0 {
-		maxSize := 0
-		for i := range ap.ctr.shuffledBats {
-			if ap.ctr.shuffledBats[i].Length() > maxSize {
-				maxSize = ap.ctr.shuffledBats[i].Length()
-			}
-		}
-		if maxSize > shuffleBatchSize {
-			return true
-		}
-	}
-	return false
-}
-
-func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	err := genShuffledBatsByHash(ap, bat, proc)
-	if err != nil {
-		return false, err
-	}
-
-	if needToSendShuffledBats(ap) {
-		return sendShuffledBats(ap, proc)
-	}
-
-	return false, nil
-}
-
-func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
-	lenRegs := uint64(ap.ctr.aliveRegCnt)
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
-	var regIndexFirst, regIndexLast uint64
-	switch groupByVec.GetType().Oid {
-	case types.T_int64:
-		groupByCol := vector.MustFixedCol[int64](groupByVec)
-		vfirst := groupByCol[0]
-		vlast := groupByCol[groupByVec.Length()-1]
-		regIndexFirst = plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, vfirst, lenRegs)
-		regIndexLast = plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, vlast, lenRegs)
-
-	case types.T_int32:
-		groupByCol := vector.MustFixedCol[int32](groupByVec)
-		vfirst := groupByCol[0]
-		vlast := groupByCol[groupByVec.Length()-1]
-		regIndexFirst = plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(vfirst), lenRegs)
-		regIndexLast = plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(vlast), lenRegs)
-	case types.T_int16:
-		groupByCol := vector.MustFixedCol[int16](groupByVec)
-		vfirst := groupByCol[0]
-		vlast := groupByCol[groupByVec.Length()-1]
-		regIndexFirst = plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(vfirst), lenRegs)
-		regIndexLast = plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(vlast), lenRegs)
-	case types.T_uint64:
-		groupByCol := vector.MustFixedCol[uint64](groupByVec)
-		vfirst := groupByCol[0]
-		vlast := groupByCol[groupByVec.Length()-1]
-		regIndexFirst = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), vfirst, lenRegs)
-		regIndexLast = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), vlast, lenRegs)
-	case types.T_uint32:
-		groupByCol := vector.MustFixedCol[uint32](groupByVec)
-		vfirst := groupByCol[0]
-		vlast := groupByCol[groupByVec.Length()-1]
-		regIndexFirst = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(vfirst), lenRegs)
-		regIndexLast = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(vlast), lenRegs)
-	case types.T_uint16:
-		groupByCol := vector.MustFixedCol[uint16](groupByVec)
-		vfirst := groupByCol[0]
-		vlast := groupByCol[groupByVec.Length()-1]
-		regIndexFirst = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(vfirst), lenRegs)
-		regIndexLast = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(vlast), lenRegs)
-	default:
-		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
-	}
-	if regIndexFirst == regIndexLast {
-		return true, regIndexFirst
-	} else {
-		return false, 0
-	}
-}
-
-func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
-	sels := ap.getSels()
-	lenRegs := uint64(ap.ctr.aliveRegCnt)
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
-	switch groupByVec.GetType().Oid {
-	case types.T_int64:
-		groupByCol := vector.MustFixedCol[int64](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, v, lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_int32:
-		groupByCol := vector.MustFixedCol[int32](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_int16:
-		groupByCol := vector.MustFixedCol[int16](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_uint64:
-		groupByCol := vector.MustFixedCol[uint64](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_uint32:
-		groupByCol := vector.MustFixedCol[uint32](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(v), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	case types.T_uint16:
-		groupByCol := vector.MustFixedCol[uint16](groupByVec)
-		for row, v := range groupByCol {
-			regIndex := plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(v), lenRegs)
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
-	default:
-		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
-	}
-	return sels
-}
-
-func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, proc *process.Process) error {
-	//release old bats
-	defer proc.PutBatch(bat)
-
-	lenVecs := len(bat.Vecs)
-	shuffledBats := ap.ctr.shuffledBats
-	if ap.ctr.batsCount == 0 {
-		//initialize shuffled bats
-		for regIndex := range shuffledBats {
-			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
-			for j := range shuffledBats[regIndex].Vecs {
-				shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
-			}
-		}
-	}
-
-	sels := getShuffledSelsByRange(ap, bat)
-
-	//generate new shuffled bats
-	for regIndex := range shuffledBats {
-		lenSels := len(sels[regIndex])
-		if lenSels > 0 {
-			b := shuffledBats[regIndex]
-			for vecIndex := range b.Vecs {
-				v := b.Vecs[vecIndex]
-				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
-				if err != nil {
+		batIndex := uint32(ap.ctr.remoteToIdx[r.uuid])
+		if regIndex == batIndex {
+			if bat != nil && bat.Length() != 0 {
+				encodeData, errEncode := types.Encode(bat)
+				// in shuffle dispatch, this batch only send to remote CN, we can safely put it back into pool
+				defer proc.PutBatch(bat)
+				if errEncode != nil {
+					return errEncode
+				}
+				if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
 					return err
 				}
 			}
-			b.AddRowCount(lenSels)
 		}
 	}
-
-	ap.ctr.batsCount++
 	return nil
-}
-
-func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
-	if groupByVec.GetSorted() {
-		ok, regIndex := allBatchInOneRange(ap, bat)
-		if ok {
-			//send ap to regIndex
-			return sendBatToIndex(ap, proc, bat, regIndex)
-		}
-	}
-
-	err := genShuffledBatsByRange(ap, bat, proc)
-	if err != nil {
-		return false, err
-	}
-	if needToSendShuffledBats(ap) {
-		return sendShuffledBats(ap, proc)
-	}
-	return false, nil
 }
 
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
@@ -445,12 +129,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 			return true, nil
 		}
 	}
-
-	if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
-		return hashShuffle(bat, ap, proc)
-	} else {
-		return rangeShuffle(bat, ap, proc)
-	}
+	return false, sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX))
 }
 
 // send to all receiver (include LocalReceiver and RemoteReceiver)

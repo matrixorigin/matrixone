@@ -41,7 +41,7 @@ func Prepare(proc *process.Process, argument any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	arg := argument.(*Argument)
 
 	analyze := proc.GetAnalyze(idx)
@@ -52,7 +52,7 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 		switch arg.ctr.state {
 		case build:
 			if err := arg.ctr.buildHashTable(proc, analyze, 1, isFirst); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			if arg.ctr.hashTable != nil {
 				analyze.Alloc(arg.ctr.hashTable.Size())
@@ -63,18 +63,18 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			var err error
 			isLast := false
 			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0, isFirst, isLast); err != nil {
-				return true, err
+				return process.ExecStop, err
 			}
 			if isLast {
 				arg.ctr.state = end
 				continue
 			}
 
-			return false, nil
+			return process.ExecNext, nil
 
 		case end:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }

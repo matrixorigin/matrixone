@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -222,7 +223,9 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err = pro.writePackets(hsV10pkt)
 	if err != nil {
-		logErrorf(pro.GetDebugString(), "failed to handshake with server, quiting routine... %s", err)
+		logError(pro.ses, pro.GetDebugString(),
+			"Failed to handshake with server, quitting routine...",
+			zap.Error(err))
 		routine.killConnection(true)
 		return
 	}
@@ -331,7 +334,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	var seq = protocol.GetSequenceId()
 	if !ok {
 		err = moerr.NewInternalError(ctx, "message is not Packet")
-		logErrorf(protoInfo, "error:%v", err)
+		logError(routine.ses, routine.ses.GetDebugString(),
+			"Error occurred",
+			zap.Error(err))
 		return err
 	}
 
@@ -340,14 +345,18 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	for uint32(length) == MaxPayloadSize {
 		msg, err = protocol.GetTcpConnection().Read(goetty.ReadOptions{})
 		if err != nil {
-			logErrorf(protoInfo, "read message failed. error:%s", err)
+			logError(routine.ses, routine.ses.GetDebugString(),
+				"Failed to read message",
+				zap.Error(err))
 			return err
 		}
 
 		packet, ok = msg.(*Packet)
 		if !ok {
 			err = moerr.NewInternalError(ctx, "message is not Packet")
-			logErrorf(protoInfo, "error:%v", err)
+			logError(routine.ses, routine.ses.GetDebugString(),
+				"An error occurred",
+				zap.Error(err))
 			return err
 		}
 
@@ -370,7 +379,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			logDebugf(protoInfo, "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				logErrorf(protoInfo, "error:%v", err)
+				logError(routine.ses, routine.ses.GetDebugString(),
+					"An error occurred",
+					zap.Error(err))
 				return err
 			}
 			if isTlsHeader {
@@ -380,15 +391,19 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				logDebugf(protoInfo, "get TLS conn ok")
 				newCtx, cancelFun := context.WithTimeout(ctx, 20*time.Second)
 				if err = tlsConn.HandshakeContext(newCtx); err != nil {
-					logErrorf(protoInfo, "before cancel() error:%v", err)
+					logError(routine.ses, routine.ses.GetDebugString(),
+						"Error occurred before cancel()",
+						zap.Error(err))
 					cancelFun()
-					logErrorf(protoInfo, "after cancel() error:%v", err)
+					logError(routine.ses, routine.ses.GetDebugString(),
+						"Error occurred after cancel()",
+						zap.Error(err))
 					return err
 				}
 				cancelFun()
-				logDebugf(protoInfo, "TLS handshake ok")
+				logDebug(routine.ses, protoInfo, "TLS handshake ok")
 				rs.UseConn(tlsConn)
-				logDebugf(protoInfo, "TLS handshake finished")
+				logDebug(routine.ses, protoInfo, "TLS handshake finished")
 
 				// tls upgradeOk
 				protocol.SetTlsEstablished()
@@ -404,7 +419,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			logDebugf(protoInfo, "handleHandshake")
 			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				logErrorf(protoInfo, "error:%v", err)
+				logError(routine.ses, routine.ses.GetDebugString(),
+					"Error occurred",
+					zap.Error(err))
 				return err
 			}
 			if err = protocol.Authenticate(ctx); err != nil {
@@ -426,7 +443,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	//handle request
 	err = routine.handleRequest(req)
 	if err != nil {
-		logErrorf(protoInfo, "error:%v", err)
+		logError(routine.ses, routine.ses.GetDebugString(),
+			"Error occurred",
+			zap.Error(err))
 		return err
 	}
 

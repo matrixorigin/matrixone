@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -333,4 +334,15 @@ func (bat *Batch) FixedForRemoveZs() {
 
 func (bat *Batch) CheckForRemoveZs(operator string) {
 	// Do nothing. Will remove this function later.
+}
+
+func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
+	jm := bat.AuxData.(*hashmap.JoinMap)
+	if jm.IsDup() {
+		ret = jm.Dup()
+	} else {
+		ret = jm
+		bat.AuxData = nil
+	}
+	return
 }

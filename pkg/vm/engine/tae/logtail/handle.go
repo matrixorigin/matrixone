@@ -71,6 +71,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,6 +81,7 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -574,6 +576,9 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.B
 		return
 	}
 	if delBatch != nil && delBatch.Length() > 0 {
+		if len(b.dataDelBatch.Vecs) == 2 {
+			b.dataDelBatch.AddVector(delBatch.Attrs[2], containers.MakeVector(*delBatch.Vecs[2].GetType()))
+		}
 		b.dataDelBatch.Extend(delBatch)
 		// delBatch is freed, don't use anymore
 	}
@@ -673,55 +678,68 @@ func LoadCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	fs fileservice.FileService) ([]*api.Entry, error) {
+	mp *mpool.MPool,
+	fs fileservice.FileService) ([]*api.Entry, []func(), error) {
 	if metLoc == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	now := time.Now()
 	defer func() {
 		logutil.Debugf("LoadCheckpointEntries latency: %v", time.Since(now))
 	}()
-	locations := strings.Split(metLoc, ";")
-	datas := make([]*CNCheckpointData, len(locations))
+	locationsAndVersions := strings.Split(metLoc, ";")
+	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
 
-	readers := make([]*blockio.BlockReader, len(locations))
-	objectLocations := make([]objectio.Location, len(locations))
-	for i, key := range locations {
+	readers := make([]*blockio.BlockReader, len(locationsAndVersions)/2)
+	objectLocations := make([]objectio.Location, len(locationsAndVersions)/2)
+	versions := make([]uint32, len(locationsAndVersions)/2)
+	for i := 0; i < len(locationsAndVersions); i += 2 {
+		key := locationsAndVersions[i]
+		version, err := strconv.ParseUint(locationsAndVersions[i+1], 10, 32)
+		if err != nil {
+			return nil, nil, err
+		}
 		location, err := blockio.EncodeLocationFromString(key)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		reader, err := blockio.NewObjectReader(fs, location)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		readers[i] = reader
+		readers[i/2] = reader
 		err = blockio.PrefetchMeta(fs, location)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		objectLocations[i] = location
+		objectLocations[i/2] = location
+		versions[i/2] = uint32(version)
 	}
 
-	for i := range locations {
+	for i := range objectLocations {
 		data := NewCNCheckpointData()
-		err := data.PrefetchFrom(ctx, fs, objectLocations[i])
+		err := data.PrefetchFrom(ctx, versions[i], fs, objectLocations[i])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		datas[i] = data
 	}
 
+	closeCBs := make([]func(), 0)
 	for i, data := range datas {
-		data.ReadFrom(ctx, readers[i], nil)
+		err := data.ReadFrom(ctx, readers[i], versions[i], mp)
+		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
+		if err != nil {
+			return nil, closeCBs, err
+		}
 	}
 
 	entries := make([]*api.Entry, 0)
-	for i := range locations {
+	for i := range objectLocations {
 		data := datas[i]
 		ins, del, cnIns, segDel, err := data.GetTableData(tableID)
 		if err != nil {
-			return nil, err
+			return nil, closeCBs, err
 		}
 		if tableName != pkgcatalog.MO_DATABASE &&
 			tableName != pkgcatalog.MO_COLUMNS &&
@@ -773,5 +791,5 @@ func LoadCheckpointEntries(
 			entries = append(entries, entry)
 		}
 	}
-	return entries, nil
+	return entries, closeCBs, nil
 }

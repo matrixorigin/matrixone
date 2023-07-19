@@ -16,11 +16,13 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -81,7 +83,7 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 	sql := ui.getSql()
 	ui.sqlSourceType = nil
 	if ui.getStmt() != nil {
-		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
 	tenant := ses.GetTenantInfo()
@@ -89,28 +91,28 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 		if tenant != nil {
 			tenant.SetUser("")
 		}
-		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
 	flag, _, _ := isSpecialUser(tenant.User)
 	if flag {
-		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
 	for len(sql) > 0 {
 		p1 := strings.Index(sql, "/*")
 		p2 := strings.Index(sql, "*/")
 		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
-			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
 			return
 		}
 		source := strings.TrimSpace(sql[p1+2 : p2])
 		if source == cloudUserTag {
-			ui.sqlSourceType = append(ui.sqlSourceType, cloudUserSql)
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
 		} else if source == cloudNoUserTag {
-			ui.sqlSourceType = append(ui.sqlSourceType, cloudNoUserSql)
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudNoUserSql)
 		} else {
-			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
 		}
 		sql = sql[p2+2:]
 	}
@@ -206,7 +208,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of compile is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		logInfo(ses, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 	}
 
 	err = stmtExec.ResponseBeforeExec(ctx, ses)
@@ -223,7 +225,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of run is longer than 1s
 	if time.Since(runBegin) > time.Second {
-		logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+		logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 	}
 
 	_ = stmtExec.RecordExecPlan(ctx)
@@ -379,7 +381,7 @@ func (bse *baseStmtExecutor) ResponseBeforeExec(ctx context.Context, ses *Sessio
 func (bse *baseStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
 	var err, retErr error
 	if bse.GetStatus() == stmtExecSuccess {
-		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, 0, int(COM_QUERY), "")
+		resp := NewOkResponse(bse.GetAffectedRows(), 0, 0, bse.GetServerStatus(), int(COM_QUERY), "")
 		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
 			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 			logStatementStatus(ctx, ses, bse.GetAst(), fail, retErr)

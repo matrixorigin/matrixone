@@ -16,14 +16,17 @@ package plan
 
 import (
 	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 )
 
 // add this code in buildListPartitionItem
@@ -596,7 +599,7 @@ func EvalPlanExpr(ctx context.Context, expr *plan.Expr, process *process.Process
 		return expr, nil
 	default:
 		// try to calculate default value, return err if fails
-		newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, process)
+		newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, process, false)
 		if err != nil {
 			return nil, err
 		}
@@ -709,4 +712,199 @@ func onlyHasHiddenPrimaryKey(tableDef *TableDef) bool {
 	}
 	pk := tableDef.GetPkey()
 	return pk != nil && pk.GetPkeyColName() == catalog.FakePrimaryKeyColName
+}
+
+// checkPartitionByRange Check the validity of each partition definition in range partition.
+func checkPartitionByRange(partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, tbInfo *TableDef) error {
+	if partitionDef.PartitionColumns != nil {
+		return checkRangeColumnsPartitionValue(partitionBinder, partitionDef, tbInfo)
+	}
+	return checkRangePartitionValue(partitionBinder, partitionDef, tbInfo)
+}
+
+// checkRangePartitionValue check if the 'less than value' for each partition is strictly monotonically increasing.
+func checkRangePartitionValue(partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, tbInfo *TableDef) error {
+	ctx := partitionBinder.GetContext()
+
+	partdefs := partitionDef.Partitions
+	if len(partdefs) == 0 {
+		return nil
+	}
+
+	if _, ok := partdefs[len(partdefs)-1].LessThan[0].Expr.(*plan.Expr_Max); ok {
+		partdefs = partdefs[:len(partdefs)-1]
+	}
+	isUnsigned := types.T(partitionDef.PartitionExpr.Expr.Typ.Id).IsUnsignedInt()
+	var prevRangeValue interface{}
+	for i := 0; i < len(partdefs); i++ {
+		if _, isMaxVal := partdefs[i].LessThan[0].Expr.(*plan.Expr_Max); isMaxVal {
+			return moerr.NewErrPartitionMaxvalue(ctx)
+		}
+		currentRangeValue, err := getRangeValue(ctx, partitionDef, partdefs[i].LessThan[0], isUnsigned, partitionBinder.builder.compCtx.GetProcess())
+		if err != nil {
+			return err
+		}
+
+		if i == 0 {
+			prevRangeValue = currentRangeValue
+			continue
+		}
+
+		if isUnsigned {
+			if currentRangeValue.(uint64) <= prevRangeValue.(uint64) {
+				return moerr.NewErrRangeNotIncreasing(ctx)
+			}
+		} else {
+			if currentRangeValue.(int64) <= prevRangeValue.(int64) {
+				return moerr.NewErrRangeNotIncreasing(ctx)
+			}
+		}
+		prevRangeValue = currentRangeValue
+	}
+	return nil
+}
+
+// checkRangeColumnsPartitionValue check whether "less than value" of each partition is strictly increased in Lexicographic order order.
+func checkRangeColumnsPartitionValue(partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, tbInfo *TableDef) error {
+	ctx := partitionBinder.GetContext()
+	partdefs := partitionDef.Partitions
+	if len(partdefs) < 1 {
+		return moerr.NewPartitionsMustBeDefined(ctx, "RANGE")
+	}
+
+	curr := partdefs[0]
+	if len(curr.LessThan) != len(partitionDef.PartitionColumns.PartitionColumns) {
+		return moerr.NewPartitionColumnList(ctx)
+	}
+
+	var prev *plan.PartitionItem
+	for i := 1; i < len(partdefs); i++ {
+		prev, curr = curr, partdefs[i]
+		res, err := compareTwoRangeColumns(ctx, curr, prev, partitionDef, tbInfo, partitionBinder)
+		if err != nil {
+			return err
+		}
+		if !res {
+			return moerr.NewErrRangeNotIncreasing(ctx)
+		}
+	}
+	return nil
+}
+
+// getRangeValue gets an integer value from range value expression
+// The second returned boolean value indicates whether the input string is a constant expression.
+func getRangeValue(ctx context.Context, partitionDef *plan.PartitionByDef, expr *Expr, unsigned bool, process *process.Process) (interface{}, error) {
+	// Unsigned integer was converted to uint64
+	if unsigned {
+		if cExpr, ok := expr.Expr.(*plan.Expr_C); ok {
+			return getIntConstVal[uint64](cExpr), nil
+		}
+		evalExpr, err := EvalPlanExpr(ctx, expr, process)
+		if err != nil {
+			return 0, err
+		}
+		cVal, ok := evalExpr.Expr.(*plan.Expr_C)
+		if ok {
+			return getIntConstVal[uint64](cVal), nil
+		}
+	} else {
+		// signed integer was converted to int64
+		if cExpr, ok := expr.Expr.(*plan.Expr_C); ok {
+			return getIntConstVal[int64](cExpr), nil
+		}
+
+		// The range partition `less than value` may be not an integer, it could be a constant expression.
+		evalExpr, err := EvalPlanExpr(ctx, expr, process)
+		if err != nil {
+			return 0, err
+		}
+		cVal, ok := evalExpr.Expr.(*plan.Expr_C)
+		if ok {
+			return getIntConstVal[int64](cVal), nil
+		}
+	}
+	return 0, moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
+}
+
+// compareTwoRangeColumns Check whether the two range columns partition definition values increase in Lexicographic order order
+func compareTwoRangeColumns(ctx context.Context, curr, prev *plan.PartitionItem, partitionDef *plan.PartitionByDef, tbldef *TableDef, binder *PartitionBinder) (bool, error) {
+	if len(curr.LessThan) != len(partitionDef.PartitionColumns.PartitionColumns) {
+		return false, moerr.NewPartitionColumnList(ctx)
+	}
+
+	for i := 0; i < len(partitionDef.PartitionColumns.Columns); i++ {
+		// handling `MAXVALUE` in partition less than value
+		_, ok1 := curr.LessThan[i].Expr.(*plan.Expr_Max)
+		_, ok2 := prev.LessThan[i].Expr.(*plan.Expr_Max)
+		if ok1 && !ok2 {
+			// If current is maxvalue, then it must be greater than previous, so previous cannot be maxvalue
+			return true, nil
+		}
+
+		if ok2 {
+			// Current is not maxvalue, and  the previous cannot be maxvalue
+			return false, nil
+		}
+
+		// The range columns tuples values are strictly increasing in dictionary order
+		colInfo := findColumnByName(partitionDef.PartitionColumns.PartitionColumns[i], tbldef)
+		res, err := evalPartitionBoolExpr(ctx, curr.LessThan[i], prev.LessThan[i], colInfo, binder)
+		if err != nil {
+			return false, err
+		}
+
+		if res {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// evalPartitionBoolExpr Calculate the bool result of comparing the values of two range partition `less than value`
+func evalPartitionBoolExpr(ctx context.Context, lOriExpr *Expr, rOriExpr *Expr, colInfo *plan.ColDef, binder *PartitionBinder) (bool, error) {
+	lexpr, err := makePlan2CastExpr(ctx, lOriExpr, colInfo.Typ)
+	if err != nil {
+		return false, err
+	}
+
+	rexpr, err := makePlan2CastExpr(ctx, rOriExpr, colInfo.Typ)
+	if err != nil {
+		return false, err
+	}
+
+	retExpr, err := bindFuncExprImplByPlanExpr(ctx, ">", []*Expr{lexpr, rexpr})
+	if err != nil {
+		return false, err
+	}
+
+	vec, err := colexec.EvalExpressionOnce(binder.builder.compCtx.GetProcess(), retExpr, []*batch.Batch{batch.EmptyForConstFoldBatch, batch.EmptyForConstFoldBatch})
+	if err != nil {
+		return false, err
+	}
+	fixedCol := vector.MustFixedCol[bool](vec)
+	return fixedCol[0], nil
+}
+
+// getIntConstVal Get an integer constant value, the `cExpr` must be integral constant expression
+func getIntConstVal[T uint64 | int64](cExpr *plan.Expr_C) T {
+	switch value := cExpr.C.Value.(type) {
+	case *plan.Const_U8Val:
+		return T(value.U8Val)
+	case *plan.Const_U16Val:
+		return T(value.U16Val)
+	case *plan.Const_U32Val:
+		return T(value.U32Val)
+	case *plan.Const_U64Val:
+		return T(value.U64Val)
+	case *plan.Const_I8Val:
+		return T(value.I8Val)
+	case *plan.Const_I16Val:
+		return T(value.I16Val)
+	case *plan.Const_I32Val:
+		return T(value.I32Val)
+	case *plan.Const_I64Val:
+		return T(value.I64Val)
+	default:
+		panic("the `expr` must be integral constant expression")
+	}
 }

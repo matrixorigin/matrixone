@@ -16,6 +16,7 @@ package output
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -27,14 +28,15 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
+	// WTF?   This operator NEVER return ExecStop!!!???
 	ap := arg.(*Argument)
 	if bat := proc.InputBatch(); bat != nil && !bat.IsEmpty() {
 		if err := ap.Func(ap.Data, bat); err != nil {
 			proc.PutBatch(bat)
-			return false, err
+			return process.ExecNext, err
 		}
 		proc.PutBatch(bat)
 	}
-	return false, nil
+	return process.ExecNext, nil
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"go.uber.org/zap"
 )
 
 var _ outputPool = &outputQueue{}
@@ -108,7 +109,9 @@ func (oq *outputQueue) flush() error {
 	}
 	if oq.ep.Outfile {
 		if err := exportDataToCSVFile(oq); err != nil {
-			logErrorf(oq.ses.GetDebugString(), "export to csv file error %v", err)
+			logError(oq.ses, oq.ses.GetDebugString(),
+				"Error occurred while exporting to CSV file",
+				zap.Error(err))
 			return err
 		}
 	} else {
@@ -119,7 +122,9 @@ func (oq *outputQueue) flush() error {
 		}
 
 		if err := oq.proto.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
-			logErrorf(oq.ses.GetDebugString(), "flush error %v", err)
+			logError(oq.ses, oq.ses.GetDebugString(),
+				"Flush error",
+				zap.Error(err))
 			return err
 		}
 	}
@@ -232,7 +237,9 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_TS:
 		row[i] = vector.GetFixedAt[types.TS](vec, rowIndex)
 	default:
-		logErrorf(ses.GetDebugString(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		logError(ses, ses.GetDebugString(),
+			"Failed to extract row from vector, unsupported type",
+			zap.Int("typeID", int(vec.GetType().Oid)))
 		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil

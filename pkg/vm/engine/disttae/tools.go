@@ -257,6 +257,11 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 		if err := vector.AppendFixed(bat.Vecs[idx], uint32(0), false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_CATALOG_VERSION_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // catalog version
+		if err := vector.AppendFixed(bat.Vecs[idx], catalog.CatalogVersion_Curr, false, m); err != nil {
+			return nil, err
+		}
 	}
 	if needRowid {
 		//add the rowid vector as the first one in the batch
@@ -1181,161 +1186,161 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 // 	return false
 // }
 
-func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
+func transferIval[T int32 | int64](v T, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_int8:
-		return true, int8(v)
+		return true, false, int8(v)
 	case types.T_int16:
-		return true, int16(v)
+		return true, false, int16(v)
 	case types.T_int32:
-		return true, int32(v)
+		return true, false, int32(v)
 	case types.T_int64:
-		return true, int64(v)
+		return true, false, int64(v)
 	case types.T_uint8:
-		return true, uint8(v)
+		return true, false, uint8(v)
 	case types.T_uint16:
-		return true, uint16(v)
+		return true, false, uint16(v)
 	case types.T_uint32:
-		return true, uint32(v)
+		return true, false, uint32(v)
 	case types.T_uint64:
-		return true, uint64(v)
+		return true, false, uint64(v)
 	case types.T_float32:
-		return true, float32(v)
+		return true, false, float32(v)
 	case types.T_float64:
-		return true, float64(v)
+		return true, false, float64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferUval[T uint32 | uint64](v T, oid types.T) (bool, any) {
+func transferUval[T uint32 | uint64](v T, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_int8:
-		return true, int8(v)
+		return true, false, int8(v)
 	case types.T_int16:
-		return true, int16(v)
+		return true, false, int16(v)
 	case types.T_int32:
-		return true, int32(v)
+		return true, false, int32(v)
 	case types.T_int64:
-		return true, int64(v)
+		return true, false, int64(v)
 	case types.T_uint8:
-		return true, uint8(v)
+		return true, false, uint8(v)
 	case types.T_uint16:
-		return true, uint16(v)
+		return true, false, uint16(v)
 	case types.T_uint32:
-		return true, uint32(v)
+		return true, false, uint32(v)
 	case types.T_uint64:
-		return true, uint64(v)
+		return true, false, uint64(v)
 	case types.T_float32:
-		return true, float32(v)
+		return true, false, float32(v)
 	case types.T_float64:
-		return true, float64(v)
+		return true, false, float64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferFval(v float32, oid types.T) (bool, any) {
+func transferFval(v float32, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_float32:
-		return true, float32(v)
+		return true, false, float32(v)
 	case types.T_float64:
-		return true, float64(v)
+		return true, false, float64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDval(v float64, oid types.T) (bool, any) {
+func transferDval(v float64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_float32:
-		return true, float32(v)
+		return true, false, float32(v)
 	case types.T_float64:
-		return true, float64(v)
+		return true, false, float64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferSval(v string, oid types.T) (bool, any) {
+func transferSval(v string, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_json:
-		return true, []byte(v)
+		return true, false, []byte(v)
 	case types.T_char, types.T_varchar:
-		return true, []byte(v)
+		return true, false, []byte(v)
 	case types.T_text, types.T_blob:
-		return true, []byte(v)
+		return true, false, []byte(v)
 	case types.T_binary, types.T_varbinary:
-		return true, []byte(v)
+		return true, false, []byte(v)
 	case types.T_uuid:
 		var uv types.Uuid
 		copy(uv[:], []byte(v)[:])
-		return true, uv
+		return true, false, uv
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferBval(v bool, oid types.T) (bool, any) {
+func transferBval(v bool, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_bool:
-		return true, v
+		return true, false, v
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDateval(v int32, oid types.T) (bool, any) {
+func transferDateval(v int32, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_date:
-		return true, types.Date(v)
+		return true, false, types.Date(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferTimeval(v int64, oid types.T) (bool, any) {
+func transferTimeval(v int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_time:
-		return true, types.Time(v)
+		return true, false, types.Time(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDatetimeval(v int64, oid types.T) (bool, any) {
+func transferDatetimeval(v int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_datetime:
-		return true, types.Datetime(v)
+		return true, false, types.Datetime(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferTimestampval(v int64, oid types.T) (bool, any) {
+func transferTimestampval(v int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_timestamp:
-		return true, types.Timestamp(v)
+		return true, false, types.Timestamp(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDecimal64val(v int64, oid types.T) (bool, any) {
+func transferDecimal64val(v int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_decimal64:
-		return true, types.Decimal64(v)
+		return true, false, types.Decimal64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
+func transferDecimal128val(a, b int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_decimal128:
-		return true, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
+		return true, false, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 

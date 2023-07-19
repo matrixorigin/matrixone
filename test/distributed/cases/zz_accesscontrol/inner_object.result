@@ -46,6 +46,7 @@ partition_info    BLOB(0)    YES        null
 viewdef    VARCHAR(5000)    YES        null        
 constraint    VARCHAR(5000)    YES        null        
 rel_version    INT UNSIGNED(0)    YES        null
+catalog_version    INT UNSIGNED(0)    YES        null
 select datname, dat_createsql from mo_database;
 datname    dat_createsql
 system    create database system
@@ -183,3 +184,12 @@ drop account if exists inner_account;
 drop account if exists accx11;
 drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
+desc mo_catalog.mo_stages;
+Field    Type    Null    Key    Default    Extra    Comment
+stage_id    INT UNSIGNED(32)    NO    PRI    null
+stage_name    VARCHAR(64)    YES        null
+url    TEXT(0)    YES        null
+credentials    TEXT(0)    YES        null
+stage_status    VARCHAR(64)    YES        null
+created_time    TIMESTAMP(0)    YES        null
+comment    TEXT(0)    YES        null

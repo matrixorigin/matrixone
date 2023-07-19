@@ -231,6 +231,7 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_stored_procedure
+mo_stages
 mo_mysql_compatibility_mode
 mo_pubs
 mo_database
@@ -238,7 +239,7 @@ mo_columns
 mo_tables
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-13
+15
 show column_number from mo_database;
 Number of columns in mo_database
 9

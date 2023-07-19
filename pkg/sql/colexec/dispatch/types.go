@@ -33,7 +33,6 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 	procTimeout           = 10000 * time.Second
 	waitNotifyTimeout     = 45 * time.Second
-	shuffleBatchSize      = 1024 * 8 //8k
 
 	// send to all reg functions
 	SendToAllLocalFunc = iota
@@ -73,11 +72,7 @@ type container struct {
 	localRegsCnt  int
 	remoteRegsCnt int
 
-	// for shuffle reuse memory
-	sels         [][]int32
-	remoteToIdx  map[uuid.UUID]int
-	shuffledBats []*batch.Batch
-	batsCount    int
+	remoteToIdx map[uuid.UUID]int
 }
 
 type Argument struct {
@@ -91,36 +86,35 @@ type Argument struct {
 	LocalRegs []*process.WaitRegister
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
-	// for shuffle
-	ShuffleColIdx       int32
-	ShuffleType         int32
-	ShuffleColMin       int64
-	ShuffleColMax       int64
+	// for shuffle dispatch
+
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr.isRemote {
-		if !arg.ctr.prepared {
-			arg.waitRemoteRegsReady(proc)
-		}
-		for _, r := range arg.ctr.remoteReceivers {
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
-			_ = cancel
-			message := cnclient.AcquireMessage()
-			{
-				message.Id = r.msgId
-				message.Cmd = pipeline.BatchMessage
-				message.Sid = pipeline.MessageEnd
-				message.Uuid = r.uuid[:]
+	if arg.ctr != nil {
+		if arg.ctr.isRemote {
+			if !arg.ctr.prepared {
+				arg.waitRemoteRegsReady(proc)
 			}
-			if pipelineFailed {
-				err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
-				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+			for _, r := range arg.ctr.remoteReceivers {
+				timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
+				_ = cancel
+				message := cnclient.AcquireMessage()
+				{
+					message.Id = r.msgId
+					message.Cmd = pipeline.BatchMessage
+					message.Sid = pipeline.MessageEnd
+					message.Uuid = r.uuid[:]
+				}
+				if pipelineFailed {
+					err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
+					message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
+				}
+				r.cs.Write(timeoutCtx, message)
+				close(r.doneCh)
 			}
-			r.cs.Write(timeoutCtx, message)
-			close(r.doneCh)
 		}
 	}
 

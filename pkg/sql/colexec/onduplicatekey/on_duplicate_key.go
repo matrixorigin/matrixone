@@ -42,7 +42,7 @@ func Prepare(_ *proc, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
+func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -55,29 +55,29 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 		if arg.ctr.insertBat != nil {
 			newBat, err := arg.ctr.insertBat.Dup(proc.Mp())
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			anal.Output(newBat, isLast)
 			proc.SetInputBatch(newBat)
 		}
-		return true, nil
+		return process.ExecStop, nil
 	}
 
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(arg.ctr.emptyBat)
-		return false, nil
+		return process.ExecNext, nil
 	}
 
 	defer proc.PutBatch(bat)
 	err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
 	if err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 
 	anal.Output(arg.ctr.emptyBat, isLast)
 	proc.SetInputBatch(arg.ctr.emptyBat)
-	return false, nil
+	return process.ExecNext, nil
 }
 
 func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *Argument) error {

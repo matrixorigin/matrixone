@@ -42,15 +42,15 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
-		return true, nil
+		return process.ExecStop, nil
 	}
 	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
@@ -68,15 +68,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if err != nil {
 			bat.Clean(proc.Mp())
 			proc.SetInputBatch(nil)
-			return false, err
+			return process.ExecNext, err
 		}
 
 		if proc.OperatorOutofMemory(int64(vec.Size())) {
-			return false, moerr.NewOOM(proc.Ctx)
+			return process.ExecNext, moerr.NewOOM(proc.Ctx)
 		}
 		anal.Alloc(int64(vec.Size()))
 		if !vec.GetType().IsBoolean() {
-			return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
+			return process.ExecNext, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
 		bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
@@ -121,5 +121,5 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		anal.Output(bat, isLast)
 		proc.SetInputBatch(bat)
 	}
-	return false, nil
+	return process.ExecNext, nil
 }

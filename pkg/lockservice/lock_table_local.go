@@ -41,8 +41,9 @@ type localLockTable struct {
 	events   *waiterEvents
 	mu       struct {
 		sync.RWMutex
-		closed bool
-		store  LockStorage
+		closed          bool
+		store           LockStorage
+		lastCommittedTS timestamp.Timestamp
 	}
 }
 
@@ -60,6 +61,7 @@ func newLocalLockTable(
 		events:   events,
 	}
 	l.mu.store = newBtreeBasedStorage()
+	l.mu.lastCommittedTS, _ = clock.Now()
 	return l
 }
 
@@ -182,6 +184,9 @@ func (l *localLockTable) unlock(
 		}
 		return true
 	})
+	if l.mu.lastCommittedTS.Less(commitTS) {
+		l.mu.lastCommittedTS = commitTS
+	}
 }
 
 func (l *localLockTable) getLock(txnID, key []byte, fn func(Lock)) {
@@ -282,9 +287,9 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 		// lock added, need create new waiter next time
 		c.w = nil
 	}
-	now, _ := l.clock.Now()
+
 	c.offset = 0
-	c.lockedTS = now
+	c.lockedTS = l.mu.lastCommittedTS
 	return c
 }
 
@@ -315,9 +320,8 @@ func (l *localLockTable) acquireRangeLockLocked(c lockContext) lockContext {
 		// lock added, need create new waiter next time
 		c.w = nil
 	}
-	now, _ := l.clock.Now()
 	c.offset = 0
-	c.lockedTS = now
+	c.lockedTS = l.mu.lastCommittedTS
 	return c
 }
 
@@ -346,7 +350,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
 	txn.setBlocked(w.txnID, w)
-	conflictWith.waiter.add(l.bind.ServiceID, w)
+	conflictWith.waiter.add(l.bind.ServiceID, true, w)
 	if err := l.detector.check(
 		conflictWith.txnID,
 		txn.toWaitTxn(

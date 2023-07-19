@@ -163,7 +163,8 @@ type aggInfo struct {
 //	(vecs) 	- columns
 type Batch struct {
 	// Ro if true, Attrs is read only
-	Ro bool
+	Ro         bool
+	ShuffleIDX int //used only in shuffle dispatch
 	// reference count, default is 1
 	Cnt int64
 	// Attrs column name list

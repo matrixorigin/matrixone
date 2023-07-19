@@ -70,7 +70,7 @@ func (rsse *resultSetStmtExecutor) ResponseBeforeExec(ctx context.Context, ses *
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = proto.SendEOFPacketIf(0, 0)
+	err = proto.SendEOFPacketIf(0, ses.GetServerStatus())
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (rsse *resultSetStmtExecutor) ResponseAfterExec(ctx context.Context, ses *S
 		After all row data has been sent, it sends the EOF or OK packet.
 	*/
 	proto := ses.GetMysqlProtocol()
-	return proto.sendEOFOrOkPacket(0, 0)
+	return proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
 }
 
 // TODO: special handle for export
@@ -273,7 +273,7 @@ func (icfle *InternalCmdFieldListExecutor) ResponseAfterExec(ctx context.Context
 			mysql CMD_FIELD_LIST response: End after the column has been sent.
 			send EOF packet
 		*/
-		err = proto.sendEOFOrOkPacket(0, 0)
+		err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
 		if err != nil {
 			return err
 		}

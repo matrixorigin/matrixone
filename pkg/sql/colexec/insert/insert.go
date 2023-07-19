@@ -56,12 +56,12 @@ func Prepare(proc *process.Process, arg any) error {
 
 // first parameter: true represents whether the current pipeline has ended
 // first parameter: false
-func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecStatus, error) {
 	defer analyze(proc, idx)()
 	ap := arg.(*Argument)
 	if ap.ctr.state == End {
 		proc.SetInputBatch(nil)
-		return true, nil
+		return process.ExecStop, nil
 	}
 
 	bat := proc.InputBatch()
@@ -73,13 +73,13 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				for _, writer := range ap.ctr.partitionS3Writers {
 					if err := writer.WriteS3CacheBatch(proc); err != nil {
 						ap.ctr.state = End
-						return false, err
+						return process.ExecNext, err
 					}
 				}
 
 				if err := collectAndOutput(proc, ap.ctr.partitionS3Writers); err != nil {
 					ap.ctr.state = End
-					return false, err
+					return process.ExecNext, err
 				}
 			} else {
 				// Normal non partition table
@@ -88,20 +88,20 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				// for more info, refer to the comments about reSizeBatch
 				if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
 					ap.ctr.state = End
-					return false, err
+					return process.ExecNext, err
 				}
 				err := s3Writer.Output(proc)
 				if err != nil {
-					return false, err
+					return process.ExecNext, err
 				}
 			}
 		}
-		return true, nil
+		return process.ExecStop, nil
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
 	defer proc.PutBatch(bat)
 	insertCtx := ap.InsertCtx
@@ -112,7 +112,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
 			insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 			// write partition data to s3.
@@ -120,7 +120,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				if err = writer.WriteS3Batch(proc, insertBatches[pidx]); err != nil {
 					ap.ctr.state = End
 					insertBatches[pidx].Clean(proc.Mp())
-					return false, err
+					return process.ExecNext, err
 				}
 				insertBatches[pidx].Clean(proc.Mp())
 			}
@@ -131,7 +131,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			bat.Attrs = append(bat.Attrs[:0], ap.InsertCtx.Attrs...)
 			if err := s3Writer.WriteS3Batch(proc, bat); err != nil {
 				ap.ctr.state = End
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 		proc.SetInputBatch(batch.EmptyBatch)
@@ -142,7 +142,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		for i := range insertBat.Attrs {
 			vec := proc.GetVector(*bat.Vecs[i].GetType())
 			if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			insertBat.SetVector(int32(i), vec)
 		}
@@ -151,13 +151,13 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
 			insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			for i, partitionBat := range insertBatches {
 				err = ap.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
 				if err != nil {
 					partitionBat.Clean(proc.Mp())
-					return false, err
+					return process.ExecNext, err
 				}
 				partitionBat.Clean(proc.Mp())
 			}
@@ -167,7 +167,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			if err != nil {
 				proc.SetInputBatch(nil)
 				insertBat.Clean(proc.GetMPool())
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 
@@ -180,7 +180,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		affectedRows := uint64(bat.Vecs[0].Length())
 		atomic.AddUint64(&ap.affectedRows, affectedRows)
 	}
-	return false, nil
+	return process.ExecNext, nil
 }
 
 // Collect all partition subtables' s3writers  metaLoc information and output it

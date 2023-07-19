@@ -216,3 +216,34 @@ drop table if exists t1;
 create table t1 (a int(11) unsigned);
 insert into t1 values (1), (2);
 select * from t1 where a != 2;
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1 (a int primary key, b int);
+insert into t1 values (1,1);
+-- @separator:table
+select mo_ctl('dn', 'flush', 'db1.t1');
+select a from t1 where a = '';
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1 (a int,b int, primary key(a,b));
+insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
+select count(*) from t1 where a is null;
+select count(*) from t1 where a = null;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'db1.t1');
+select count(*) from t1 where a is null;
+select count(*) from t1 where a = null;
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1 (a int,b int, primary key(a));
+insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
+select count(*) from t1 where a is null;
+select count(*) from t1 where a = null;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'db1.t1');
+select count(*) from t1 where a is null;
+select count(*) from t1 where a = null;
+select 1 > 0;

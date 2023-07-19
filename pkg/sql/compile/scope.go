@@ -54,16 +54,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
-
-func DebugPrintScope(prefix []byte, ss []*Scope) {
-	for _, s := range ss {
-		DebugPrintScope(append(prefix, '\t'), s.PreScopes)
-		p := pipeline.NewMerge(s.Instructions, nil)
-		logutil.Debugf("%s:%v %v", prefix, s.Magic, p)
-	}
-}
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
@@ -104,35 +97,28 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 func (s *Scope) MergeRun(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	var wg sync.WaitGroup
-	for _, scope := range s.PreScopes {
+	for i := range s.PreScopes {
+		scope := s.PreScopes[i]
 		wg.Add(1)
-		switch scope.Magic {
-		case Normal:
-			go func(cs *Scope) {
-				errChan <- cs.Run(c)
+		ants.Submit(func() {
+			switch scope.Magic {
+			case Normal:
+				errChan <- scope.Run(c)
 				wg.Done()
-			}(scope)
-		case Merge, MergeInsert:
-			go func(cs *Scope) {
-				errChan <- cs.MergeRun(c)
+			case Merge, MergeInsert:
+				errChan <- scope.MergeRun(c)
 				wg.Done()
-			}(scope)
-		case Remote:
-			go func(cs *Scope) {
-				errChan <- cs.RemoteRun(c)
+			case Remote:
+				errChan <- scope.RemoteRun(c)
 				wg.Done()
-			}(scope)
-		case Parallel:
-			go func(cs *Scope) {
-				errChan <- cs.ParallelRun(c, cs.IsRemote)
+			case Parallel:
+				errChan <- scope.ParallelRun(c, scope.IsRemote)
 				wg.Done()
-			}(scope)
-		case Pushdown:
-			go func(cs *Scope) {
-				errChan <- cs.PushdownRun()
+			case Pushdown:
+				errChan <- scope.PushdownRun()
 				wg.Done()
-			}(scope)
-		}
+			}
+		})
 	}
 	defer wg.Wait()
 
@@ -183,8 +169,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
+	if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
+		return s.ParallelRun(c, s.IsRemote)
+	}
+
+	if !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -201,11 +190,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		logutil.Debugf("---->ParallelRun---> %s", DebugShowScopes([]*Scope{s}))
-	}
-	//fmt.Printf("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
-
 	var rds []engine.Reader
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -218,10 +202,51 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if s.DataSource == nil {
 		return s.MergeRun(c)
 	}
+
 	mcpu := s.NodeInfo.Mcpu
+	var err error
+
+	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
+		exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
+		filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
+
+		for _, spec := range s.DataSource.RuntimeFilterSpecs {
+			c.lock.RLock()
+			ch, ok := c.runtimeFilterReceiverMap[spec.Tag]
+			c.lock.RUnlock()
+			if !ok {
+				continue
+			}
+
+			select {
+			case <-s.Proc.Ctx.Done():
+				return nil
+
+			case filter := <-ch:
+				if filter == nil {
+					exprs = nil
+					s.NodeInfo.Data = s.NodeInfo.Data[:0]
+					break
+				}
+				if filter.Typ == pbpipeline.RuntimeFilter_NO_FILTER {
+					continue
+				}
+
+				exprs = append(exprs, spec.Expr)
+				filters = append(filters, filter)
+			}
+		}
+
+		if len(exprs) > 0 {
+			s.NodeInfo.Data, err = ApplyRuntimeFilters(c.ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	switch {
 	case remote:
-		var err error
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
@@ -237,47 +262,13 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		s.NodeInfo.Data = nil
 
 	case s.NodeInfo.Rel != nil:
-		var err error
-
-		if len(s.DataSource.RuntimeFilterReceivers) > 0 {
-			exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterReceivers))
-			filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
-
-			for _, receiver := range s.DataSource.RuntimeFilterReceivers {
-				select {
-				case <-s.Proc.Ctx.Done():
-					return nil
-
-				case filter := <-receiver.Chan:
-					if filter == nil {
-						exprs = nil
-						s.NodeInfo.Data = s.NodeInfo.Data[:0]
-						break
-					}
-					if filter.Typ == pbpipeline.RuntimeFilter_NO_FILTER {
-						continue
-					}
-
-					exprs = append(exprs, receiver.Spec.Expr)
-					filters = append(filters, filter)
-				}
-			}
-
-			if len(exprs) > 0 {
-				s.NodeInfo.Data, err = s.NodeInfo.Rel.ApplyRuntimeFilters(c.ctx, s.NodeInfo.Data, exprs, filters)
-				if err != nil {
-					return err
-				}
-			}
-		}
-
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
+
 	//FIXME:: s.NodeInfo.Rel == nil, partition table?
 	default:
-		var err error
 		var db engine.Database
 		var rel engine.Relation
 
@@ -422,8 +413,10 @@ func (s *Scope) PushdownRun() error {
 
 func (s *Scope) JoinRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
-	if mcpu < 1 {
-		mcpu = 1
+	if mcpu <= 1 { // no need to parallel
+		buildScope := c.newJoinBuildScope(s, nil)
+		s.PreScopes = append(s.PreScopes, buildScope)
+		return s.MergeRun(c)
 	}
 
 	isRight := s.isRight()
@@ -432,6 +425,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	for i := range chp {
 		chp[i].IsEnd = true
 	}
+
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -472,8 +466,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 		}
 	}
 	s.PreScopes = append(s.PreScopes, chp...)
-	s.PreScopes = append(s.PreScopes, probe_scope)
 	s.PreScopes = append(s.PreScopes, build_scope)
+	s.PreScopes = append(s.PreScopes, probe_scope)
 
 	return s.MergeRun(c)
 }
@@ -681,105 +675,6 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	}
 }
 
-/*
-func dupScopeList(ss []*Scope) []*Scope {
-	rs := make([]*Scope, len(ss))
-	regMap := make(map[*process.WaitRegister]*process.WaitRegister)
-	var err error
-	for i := range ss {
-		rs[i], err = copyScope(ss[i], regMap)
-		if err != nil {
-			return nil
-		}
-	}
-
-	for i := range ss {
-		err = fillInstructionsByCopyScope(rs[i], ss[i], regMap)
-		if err != nil {
-			return nil
-		}
-	}
-	return rs
-}
-
-func copyScope(srcScope *Scope, regMap map[*process.WaitRegister]*process.WaitRegister) (*Scope, error) {
-	var err error
-	newScope := &Scope{
-		Magic:        srcScope.Magic,
-		IsJoin:       srcScope.IsJoin,
-		IsEnd:        srcScope.IsEnd,
-		IsRemote:     srcScope.IsRemote,
-		Plan:         srcScope.Plan,
-		PreScopes:    make([]*Scope, len(srcScope.PreScopes)),
-		Instructions: make([]vm.Instruction, len(srcScope.Instructions)),
-		NodeInfo: engine.Node{
-			Rel:  srcScope.NodeInfo.Rel,
-			Mcpu: srcScope.NodeInfo.Mcpu,
-			Id:   srcScope.NodeInfo.Id,
-			Addr: srcScope.NodeInfo.Addr,
-			Data: make([][]byte, len(srcScope.NodeInfo.Data)),
-		},
-		RemoteReceivRegInfos: srcScope.RemoteReceivRegInfos,
-	}
-
-	// copy node.Data
-	copy(newScope.NodeInfo.Data, srcScope.NodeInfo.Data)
-
-	if srcScope.DataSource != nil {
-		newScope.DataSource = &Source{
-			PushdownId:   srcScope.DataSource.PushdownId,
-			PushdownAddr: srcScope.DataSource.PushdownAddr,
-			SchemaName:   srcScope.DataSource.SchemaName,
-			RelationName: srcScope.DataSource.RelationName,
-			Attributes:   srcScope.DataSource.Attributes,
-			Timestamp: timestamp.Timestamp{
-				PhysicalTime: srcScope.DataSource.Timestamp.PhysicalTime,
-				LogicalTime:  srcScope.DataSource.Timestamp.LogicalTime,
-				NodeID:       srcScope.DataSource.Timestamp.NodeID,
-			},
-			// read only.
-			Expr:     srcScope.DataSource.Expr,
-			TableDef: srcScope.DataSource.TableDef,
-		}
-
-		// IF const run.
-		if srcScope.DataSource.Bat != nil {
-			newScope.DataSource.Bat, _ = constructValueScanBatch(context.TODO(), nil, nil)
-		}
-	}
-
-	newScope.Proc = process.NewFromProc(srcScope.Proc, srcScope.Proc.Ctx, len(srcScope.Proc.Reg.MergeReceivers))
-	for i := range srcScope.Proc.Reg.MergeReceivers {
-		regMap[srcScope.Proc.Reg.MergeReceivers[i]] = newScope.Proc.Reg.MergeReceivers[i]
-	}
-
-	//copy preScopes.
-	for i := range srcScope.PreScopes {
-		newScope.PreScopes[i], err = copyScope(srcScope.PreScopes[i], regMap)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return newScope, nil
-}
-
-func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
-	regMap map[*process.WaitRegister]*process.WaitRegister) error {
-	var err error
-
-	for i := range srcScope.PreScopes {
-		if err = fillInstructionsByCopyScope(targetScope.PreScopes[i], srcScope.PreScopes[i], regMap); err != nil {
-			return err
-		}
-	}
-
-	for i := range srcScope.Instructions {
-		targetScope.Instructions[i] = dupInstruction(&srcScope.Instructions[i], regMap)
-	}
-	return nil
-}
-*/
-
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for i := range s.RemoteReceivRegInfos {
 		op := &s.RemoteReceivRegInfos[i]
@@ -831,6 +726,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 	var dataBuffer []byte
 	var ok bool
 	var m *pbpipeline.Message
+
 	for {
 		select {
 		case <-proc.Ctx.Done():
@@ -858,7 +754,12 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 		}
 
 		// normal receive
-		dataBuffer = append(dataBuffer, m.Data...)
+		if dataBuffer == nil {
+			dataBuffer = m.Data
+		} else {
+			dataBuffer = append(dataBuffer, m.Data...)
+		}
+
 		switch m.GetSid() {
 		case pbpipeline.WaitingNext:
 			continue

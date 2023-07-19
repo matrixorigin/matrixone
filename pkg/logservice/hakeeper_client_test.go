@@ -38,13 +38,13 @@ func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	cfg := HAKeeperClientConfig{}
 	cc1, err := NewCNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc1)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 	cc2, err := NewDNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc2)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 	cc3, err := NewLogHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc3)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 }
 
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
@@ -194,6 +194,7 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		cn := pb.CNStore{
 			UUID:           s.ID(),
 			ServiceAddress: "addr1",
+			WorkState:      metadata.WorkState_Working,
 		}
 		dn := pb.DNStore{
 			UUID:                 s.ID(),
@@ -483,6 +484,217 @@ func TestHAKeeperClientUpdateCNLabel(t *testing.T) {
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})
 		_, ok3 = info.Labels["role"]
 		assert.False(t, ok3)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{testServiceAddress},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c1.Close())
+			assert.NoError(t, c2.Close())
+		}()
+
+		workState := pb.CNWorkState{
+			UUID:  s.ID(),
+			State: metadata.WorkState_Unknown,
+		}
+		err = c1.UpdateCNWorkState(ctx, workState)
+		require.Error(t, err)
+
+		hb := pb.CNStoreHeartbeat{
+			UUID:           s.ID(),
+			ServiceAddress: "addr1",
+		}
+		_, err = c2.SendCNHeartbeat(ctx, hb)
+		require.NoError(t, err)
+
+		workState = pb.CNWorkState{
+			UUID:  s.ID(),
+			State: metadata.WorkState_Working,
+		}
+		err = c1.UpdateCNWorkState(ctx, workState)
+		require.NoError(t, err)
+
+		state, err := c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		info, ok1 := state.CNState.Stores[s.ID()]
+		assert.True(t, ok1)
+		require.Equal(t, metadata.WorkState_Working, info.WorkState)
+
+		workState = pb.CNWorkState{
+			UUID:  s.ID(),
+			State: metadata.WorkState_Draining,
+		}
+		err = c1.UpdateCNWorkState(ctx, workState)
+		require.NoError(t, err)
+
+		state, err = c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		info, ok1 = state.CNState.Stores[s.ID()]
+		assert.True(t, ok1)
+		require.Equal(t, metadata.WorkState_Draining, info.WorkState)
+
+		workState = pb.CNWorkState{
+			UUID:  s.ID(),
+			State: metadata.WorkState_Working,
+		}
+		err = c1.UpdateCNWorkState(ctx, workState)
+		require.NoError(t, err)
+
+		state, err = c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		info, ok1 = state.CNState.Stores[s.ID()]
+		assert.True(t, ok1)
+		require.Equal(t, metadata.WorkState_Draining, info.WorkState)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientPatchCNStore(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{testServiceAddress},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c1.Close())
+			assert.NoError(t, c2.Close())
+		}()
+
+		stateLabel := pb.CNStateLabel{
+			UUID:  s.ID(),
+			State: metadata.WorkState_Unknown,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+				"role":    {Labels: []string{"1", "2"}},
+			},
+		}
+		err = c1.PatchCNStore(ctx, stateLabel)
+		require.Error(t, err)
+
+		hb := pb.CNStoreHeartbeat{
+			UUID:           s.ID(),
+			ServiceAddress: "addr1",
+		}
+		_, err = c2.SendCNHeartbeat(ctx, hb)
+		require.NoError(t, err)
+
+		stateLabel = pb.CNStateLabel{
+			UUID:  s.ID(),
+			State: metadata.WorkState_Working,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+				"role":    {Labels: []string{"1", "2"}},
+			},
+		}
+		err = c1.PatchCNStore(ctx, stateLabel)
+		require.NoError(t, err)
+
+		state, err := c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		info, ok1 := state.CNState.Stores[s.ID()]
+		assert.True(t, ok1)
+		require.Equal(t, metadata.WorkState_Working, info.WorkState)
+		labels1, ok2 := info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 := info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+
+		stateLabel = pb.CNStateLabel{
+			UUID:  s.ID(),
+			State: metadata.WorkState_Draining,
+		}
+		err = c1.PatchCNStore(ctx, stateLabel)
+		require.NoError(t, err)
+
+		state, err = c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		info, ok1 = state.CNState.Stores[s.ID()]
+		assert.True(t, ok1)
+		require.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		labels2, ok3 = info.Labels["role"]
+		assert.True(t, ok3)
+		assert.Equal(t, labels2.Labels, []string{"1", "2"})
+
+		stateLabel = pb.CNStateLabel{
+			UUID: s.ID(),
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"a", "b"}},
+			},
+		}
+		err = c1.PatchCNStore(ctx, stateLabel)
+		require.NoError(t, err)
+
+		state, err = c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		info, ok1 = state.CNState.Stores[s.ID()]
+		assert.True(t, ok1)
+		require.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		labels1, ok2 = info.Labels["account"]
+		assert.True(t, ok2)
+		assert.Equal(t, labels1.Labels, []string{"a", "b"})
+		labels2, ok3 = info.Labels["role"]
+		assert.False(t, ok3)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientDeleteCNStore(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{testServiceAddress},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c1.Close())
+			assert.NoError(t, c2.Close())
+		}()
+
+		hb := pb.CNStoreHeartbeat{
+			UUID:           s.ID(),
+			ServiceAddress: "addr1",
+		}
+		_, err = c2.SendCNHeartbeat(ctx, hb)
+		require.NoError(t, err)
+		state, err := c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		_, ok := state.CNState.Stores[s.ID()]
+		assert.True(t, ok)
+
+		cnStore := pb.DeleteCNStore{
+			StoreID: s.ID(),
+		}
+		err = c1.DeleteCNStore(ctx, cnStore)
+		require.NoError(t, err)
+
+		state, err = c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		_, ok = state.CNState.Stores[s.ID()]
+		assert.False(t, ok)
 	}
 	runServiceTest(t, true, true, fn)
 }

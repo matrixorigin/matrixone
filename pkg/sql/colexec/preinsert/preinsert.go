@@ -24,6 +24,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(_ any, buf *bytes.Buffer) {
@@ -34,7 +35,7 @@ func Prepare(_ *proc, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
+func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 	analy := proc.GetAnalyze(idx)
 	analy.Start()
 	defer analy.Stop()
@@ -45,12 +46,12 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		proc.SetInputBatch(nil)
-		return true, nil
+		return process.ExecStop, nil
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
 	defer proc.PutBatch(bat)
 	newBat := batch.NewWithSize(len(arg.Attrs))
@@ -61,7 +62,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		vec := proc.GetVector(*srcVec.GetType())
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
 			newBat.Clean(proc.Mp())
-			return false, err
+			return process.ExecNext, err
 		}
 		newBat.SetVector(int32(idx), vec)
 	}
@@ -71,26 +72,26 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
 			newBat.Clean(proc.GetMPool())
-			return false, err
+			return process.ExecNext, err
 		}
 	}
 	// check new rows not null
 	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
-		return false, err
+		return process.ExecNext, err
 	}
 
 	// calculate the composite primary key column and append the result vector to batch
 	err = genCompositePrimaryKey(newBat, proc, arg.TableDef)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
-		return false, err
+		return process.ExecNext, err
 	}
 	err = genClusterBy(newBat, proc, arg.TableDef)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
-		return false, err
+		return process.ExecNext, err
 	}
 	if arg.IsUpdate {
 		idx := len(bat.Vecs) - 1
@@ -98,12 +99,12 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		rowIdVec := proc.GetVector(*bat.GetVector(int32(idx)).GetType())
 		err := rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 		if err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 		newBat.Vecs = append(newBat.Vecs, rowIdVec)
 	}
 	proc.SetInputBatch(newBat)
-	return false, nil
+	return process.ExecNext, nil
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {

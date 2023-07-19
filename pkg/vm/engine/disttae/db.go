@@ -276,14 +276,20 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 	state, doneMutate := part.MutateState()
 
 	if err := state.ConsumeCheckpoints(func(checkpoint string) error {
-		entries, err := logtail.LoadCheckpointEntries(
+		entries, closeCBs, err := logtail.LoadCheckpointEntries(
 			ctx,
 			checkpoint,
 			tbl.tableId,
 			tbl.tableName,
 			tbl.db.databaseId,
 			tbl.db.databaseName,
+			tbl.db.txn.engine.mp,
 			tbl.db.txn.engine.fs)
+		defer func() {
+			for _, cb := range closeCBs {
+				cb()
+			}
+		}()
 		if err != nil {
 			return err
 		}

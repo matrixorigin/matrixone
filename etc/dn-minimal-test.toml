@@ -12,30 +12,6 @@ service-addresses = [
     "2"
 ]
 
-[[fileservice]]
-# local fileservice instance, used to store TAE Data and DNStore metadata.
-name = "local"
-# use disk as fileservice backend
-backend = "DISK"
-# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
-# in the data dir
-data-dir = "data dir"
-
-[[fileservice]]
-# s3 fileservice instance, used to store data.
-name = "SHARED"
-# use disk as fileservice backend.
-backend = "DISK"
-# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
-# in the data dir
-data-dir = "data dir"
-
-[[fileservice]]
-name = "ETL"
-# val in [DISK-ETL, S3]. if backend = S3, this config should be mirror of above fileservice(S3) config
-backend = "DISK-ETL"
-data-dir = "data dir"
-
 [dn]
 uuid = "dn uuid"
 

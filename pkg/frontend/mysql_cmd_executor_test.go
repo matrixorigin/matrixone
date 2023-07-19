@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -1064,7 +1065,7 @@ func Test_getSqlType(t *testing.T) {
 		ses := &Session{}
 		ui := &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, internalSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.InternalSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1074,27 +1075,27 @@ func Test_getSqlType(t *testing.T) {
 		SetSpecialUser(user, nil)
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, internalSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.InternalSql)
 
 		tenant.User = "dump"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, externSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.ExternSql)
 
 		sql = "/* cloud_user */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, cloudUserSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.CloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, cloudNoUserSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.CloudNoUserSql)
 
 		sql = "/* json */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, externSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, constant.ExternSql)
 	})
 }
 
@@ -1256,7 +1257,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 		err = mce.handleShowBackendServers(ctx, 0, 1)
 		require.NoError(t, err)
 		rs := ses.GetMysqlResultSet()
-		require.Equal(t, uint64(3), rs.GetColumnCount())
+		require.Equal(t, uint64(4), rs.GetColumnCount())
 		require.Equal(t, uint64(2), rs.GetRowCount())
 	})
 
@@ -1297,7 +1298,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 		err = mce.handleShowBackendServers(ctx, 0, 1)
 		require.NoError(t, err)
 		rs := ses.GetMysqlResultSet()
-		require.Equal(t, uint64(3), rs.GetColumnCount())
+		require.Equal(t, uint64(4), rs.GetColumnCount())
 		require.Equal(t, uint64(1), rs.GetRowCount())
 
 		row, err := rs.GetRow(ctx, 0)
@@ -1322,7 +1323,7 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	si := motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
-	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{externSql, externSql}, moerr.NewInternalErrorNoCtx("test"))
+	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
 	si = motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 

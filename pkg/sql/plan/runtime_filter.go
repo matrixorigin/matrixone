@@ -75,23 +75,14 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	var probeExprs, buildExprs []*plan.Expr
 
 	for _, expr := range node.OnList {
-		if equi, leftFirst := isEquiCond(expr, leftTags, rightTags); equi {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
 			args := expr.GetF().Args
-			if leftFirst {
-				if !CheckExprIsMonotonic(builder.GetContext(), args[0]) {
-					return
-				}
-
-				probeExprs = append(probeExprs, args[0])
-				buildExprs = append(buildExprs, args[1])
-			} else {
-				if !CheckExprIsMonotonic(builder.GetContext(), args[1]) {
-					return
-				}
-
-				probeExprs = append(probeExprs, args[1])
-				buildExprs = append(buildExprs, args[0])
+			if !CheckExprIsMonotonic(builder.GetContext(), args[0]) {
+				return
 			}
+			probeExprs = append(probeExprs, args[0])
+			buildExprs = append(buildExprs, args[1])
+
 		}
 	}
 

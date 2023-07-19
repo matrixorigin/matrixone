@@ -54,7 +54,7 @@ func Prepare(proc *process.Process, arg any) error {
 // use values from left relation to probe and update the array.
 // throw away values that do not exist in the hash table.
 // preserve values that exist in the hash table (the minimum of the number of times that exist in either).
-func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
 	analyzer := proc.GetAnalyze(idx)
 	analyzer.Start()
@@ -65,7 +65,7 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 		case Build:
 			if err = arg.ctr.build(proc, analyzer, isFirst); err != nil {
 				arg.Free(proc, true)
-				return false, err
+				return process.ExecNext, err
 			}
 			if arg.ctr.hashTable != nil {
 				analyzer.Alloc(arg.ctr.hashTable.Size())
@@ -77,18 +77,18 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			last, err = arg.ctr.probe(proc, analyzer, isFirst, isLast)
 			if err != nil {
 				arg.Free(proc, true)
-				return false, err
+				return process.ExecNext, err
 			}
 			if last {
 				arg.ctr.state = End
 				continue
 			}
-			return false, nil
+			return process.ExecNext, nil
 
 		case End:
 			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }

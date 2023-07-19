@@ -113,6 +113,7 @@ func (w *StoreInfo) SetCheckpointed(gid uint32, lsn uint64) {
 	w.checkpointed[gid] = lsn
 	w.checkpointedMu.Unlock()
 }
+
 func (w *StoreInfo) allocateLsn(gid uint32) uint64 {
 	w.lsnmu.Lock()
 	defer w.lsnmu.Unlock()
@@ -197,6 +198,27 @@ func (w *StoreInfo) getDriverLsn(gid uint32, lsn uint64) (driverLsn uint64, err 
 		return 0, ErrLsnNotFount
 	}
 	return
+}
+
+func (w *StoreInfo) gcWalDriverLsnMap(drlsn uint64) {
+	w.lsnMu.Lock()
+	defer w.lsnMu.Unlock()
+	for gid, walDriverLsnMap := range w.walDriverLsnMap {
+		minLsn := w.minLsn[gid]
+		lsnsToDelete := make([]uint64, 0)
+		for storeLSN, driverLSN := range walDriverLsnMap {
+			if driverLSN < drlsn {
+				lsnsToDelete = append(lsnsToDelete, storeLSN)
+				if storeLSN > minLsn {
+					minLsn = storeLSN
+				}
+			}
+		}
+		for _, lsn := range lsnsToDelete {
+			delete(walDriverLsnMap, lsn)
+		}
+		w.minLsn[gid] = minLsn + 1
+	}
 }
 
 func (w *StoreInfo) logCheckpointInfo(info *entry.Info) {

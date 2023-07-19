@@ -53,7 +53,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return &plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
 			}
 			return &plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
-		case defines.MYSQL_TYPE_LONG:
+		case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
 			if n.InternalType.Unsigned {
 				return &plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
 			}
@@ -220,7 +220,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Pr
 	}
 
 	// try to calculate default value, return err if fails
-	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc)
+	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false)
 	if err != nil {
 		return nil, err
 	}

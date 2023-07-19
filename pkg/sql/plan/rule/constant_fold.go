@@ -101,7 +101,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	for i := range ef.F.Args {
 		ef.F.Args[i] = r.constantFold(ef.F.Args[i], proc)
 	}
-	if !IsConstant(e) {
+	if !IsConstant(e, false) {
 		return e
 	}
 
@@ -308,7 +308,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 	}
 }
 
-func IsConstant(e *plan.Expr) bool {
+func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 	switch ef := e.Expr.(type) {
 	case *plan.Expr_C, *plan.Expr_T:
 		return true
@@ -322,18 +322,22 @@ func IsConstant(e *plan.Expr) bool {
 			return false
 		}
 		for i := range ef.F.Args {
-			if !IsConstant(ef.F.Args[i]) {
+			if !IsConstant(ef.F.Args[i], varAndParamIsConst) {
 				return false
 			}
 		}
 		return true
 	case *plan.Expr_List:
 		for _, arg := range ef.List.List {
-			if !IsConstant(arg) {
+			if !IsConstant(arg, varAndParamIsConst) {
 				return false
 			}
 		}
 		return true
+	case *plan.Expr_P:
+		return varAndParamIsConst
+	case *plan.Expr_V:
+		return varAndParamIsConst
 	default:
 		return false
 	}

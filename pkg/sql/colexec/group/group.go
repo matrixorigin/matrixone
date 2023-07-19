@@ -142,7 +142,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (end bool, err error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -181,14 +181,14 @@ func (ctr *container) generateAggStructures(ap *Argument) error {
 	return nil
 }
 
-func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
+func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		// the result of Agg can't be empty but 0 or NULL.
 		if !ctr.hasAggResult {
 			// very bad code.
 			if err := initCtrBatchForProcessWithoutGroup(ap, proc, ctr); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 		if ctr.bat != nil {
@@ -198,12 +198,12 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
-		return true, nil
+		return process.ExecStop, nil
 	}
 
 	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
-		return false, nil
+		return process.ExecNext, nil
 	}
 
 	defer proc.PutBatch(bat)
@@ -211,23 +211,23 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 	proc.SetInputBatch(batch.EmptyBatch)
 
 	if err := ctr.evalAggVector(bat, proc); err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 
 	if err := ctr.evalMultiAggs(bat, proc); err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 
 	if ctr.bat == nil {
 		if err := initCtrBatchForProcessWithoutGroup(ap, proc, ctr); err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 	}
 
 	if err := ctr.processH0(bat); err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
-	return false, nil
+	return process.ExecNext, nil
 }
 
 func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr *container) (err error) {
@@ -246,7 +246,7 @@ func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr
 	return err
 }
 
-func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
+func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
 	bat := proc.InputBatch()
 	if bat == nil {
@@ -255,7 +255,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				for i, ag := range ctr.bat.Aggs {
 					vec, err := ag.Eval(proc.Mp())
 					if err != nil {
-						return false, err
+						return process.ExecNext, err
 					}
 					ctr.bat.Aggs[i] = nil
 					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
@@ -268,12 +268,12 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
-		return true, nil
+		return process.ExecStop, nil
 	}
 
 	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
-		return false, nil
+		return process.ExecNext, nil
 	}
 
 	defer proc.PutBatch(bat)
@@ -281,17 +281,17 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	proc.SetInputBatch(batch.EmptyBatch)
 
 	if err = ctr.evalAggVector(bat, proc); err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 
 	if err = ctr.evalMultiAggs(bat, proc); err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 
 	for i := range ap.Exprs {
 		ctr.groupVecs[i].vec, err = ctr.groupVecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 		ctr.vecs[i] = ctr.groupVecs[i].vec
 	}
@@ -301,11 +301,10 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
-			//ctr.bat.Vecs[i].GetType().SetNotNull(!groupVecsNullable)
 		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
 		if err = ctr.generateAggStructures(ap); err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 		switch {
 		//case ctr.idx != nil:
@@ -313,12 +312,12 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		case ctr.keyWidth <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		default:
 			ctr.typ = HStr
 			if ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 	}
@@ -331,9 +330,9 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	default:
 	}
 	if err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
-	return false, err
+	return process.ExecNext, err
 }
 
 // processH8 use whole batch to fill the aggregation.

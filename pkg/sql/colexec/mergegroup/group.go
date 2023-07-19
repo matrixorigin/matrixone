@@ -35,7 +35,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
@@ -48,7 +48,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 			for {
 				bat, end, err := ctr.ReceiveFromAllRegs(anal)
 				if err != nil {
-					return true, nil
+					return process.ExecStop, nil
 				}
 
 				if end {
@@ -57,7 +57,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 				anal.Input(bat, isFirst)
 				if err = ctr.process(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
-					return false, err
+					return process.ExecNext, err
 				}
 			}
 			ctr.state = Eval
@@ -69,7 +69,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End
-							return false, err
+							return process.ExecNext, err
 						}
 						ctr.bat.Aggs[i] = nil
 						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
@@ -86,7 +86,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 		case End:
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }

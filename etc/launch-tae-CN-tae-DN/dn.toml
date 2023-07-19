@@ -6,11 +6,6 @@ level = "error"
 format = "console"
 max-size = 512
 
-[hakeeper-client]
-service-addresses = [
-  "127.0.0.1:32001",
-]
-
 [metacache]
 memory-capacity = "512MB"
 
@@ -42,7 +37,6 @@ backend = "TAE"
 log-backend = "logservice"
 
 [dn.Txn]
-incremental-dedup = "false"
 
 [dn.Ckp]
 flush-interval = "60s"
