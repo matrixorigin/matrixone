@@ -84,7 +84,7 @@ func TestIntersect(t *testing.T) {
 		}
 		require.NoError(t, err)
 		result := c.proc.InputBatch()
-		if result != nil && len(result.Zs) != 0 {
+		if result != nil && !result.IsEmpty() {
 			cnt += result.Length()
 			require.Equal(t, 3, len(result.Vecs)) // 3 column
 			c.proc.InputBatch().Clean(c.proc.Mp())

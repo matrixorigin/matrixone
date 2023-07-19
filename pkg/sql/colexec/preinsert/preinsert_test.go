@@ -94,7 +94,7 @@ func TestPreInsertNormal(t *testing.T) {
 		// check vector
 		require.Equal(t, len(checkResultBat.Vecs), len(result.Vecs))
 		for i, vec := range result.Vecs {
-			require.Equal(t, len(checkResultBat.Zs), vec.Length(), fmt.Sprintf("column number: %d", i))
+			require.Equal(t, checkResultBat.RowCount(), vec.Length(), fmt.Sprintf("column number: %d", i))
 		}
 	}
 }
