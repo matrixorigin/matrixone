@@ -210,6 +210,7 @@ func (p *primaryKeyIter) Next() bool {
 				// not visible
 				continue
 			}
+			// if a row is deleted, another row entry with true Deleted field will met and invalidate the index entry
 			valid = row.ID == entry.RowEntryID
 			if valid {
 				p.curRow = row
