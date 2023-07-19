@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
@@ -171,6 +172,9 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	default:
 	}
 
+	ctx, span := trace.Start(ctx, "LocalFS.Write")
+	defer span.End()
+
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
@@ -228,10 +232,20 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
 	defer put.Put()
 
+	var r io.Reader
+	r = newIOEntriesReader(ctx, vector.Entries)
+	if vector.Hash.Sum != nil && vector.Hash.New != nil {
+		h := vector.Hash.New()
+		r = io.TeeReader(r, h)
+		defer func() {
+			*vector.Hash.Sum = h.Sum(nil)
+		}()
+	}
+
 	var buf []byte
 	putBuf := ioBufferPool.Get(&buf)
 	defer putBuf.Put()
-	n, err := io.CopyBuffer(fileWithChecksum, newIOEntriesReader(ctx, vector.Entries), buf)
+	n, err := io.CopyBuffer(fileWithChecksum, r, buf)
 	if err != nil {
 		return err
 	}
@@ -279,6 +293,9 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return ctx.Err()
 	default:
 	}
+
+	ctx, span := trace.Start(ctx, "LocalFS.Read")
+	defer span.End()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -498,6 +515,10 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	default:
 	}
 
+	ctx, span := trace.Start(ctx, "LocalFS.List")
+	defer span.End()
+	_ = ctx
+
 	t0 := time.Now()
 	defer func() {
 		FSProfileHandler.AddSample(time.Since(t0))
@@ -562,6 +583,9 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	default:
 	}
 
+	ctx, span := trace.Start(ctx, "LocalFS.StatFile")
+	defer span.End()
+
 	t0 := time.Now()
 	defer func() {
 		FSProfileHandler.AddSample(time.Since(t0))
@@ -599,6 +623,9 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 		return ctx.Err()
 	default:
 	}
+
+	ctx, span := trace.Start(ctx, "LocalFS.Delete")
+	defer span.End()
 
 	t0 := time.Now()
 	defer func() {
@@ -733,10 +760,17 @@ type LocalFSMutator struct {
 }
 
 func (l *LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
+
+	ctx, span := trace.Start(ctx, "LocalFS.Mutate")
+	defer span.End()
+
 	return l.mutate(ctx, 0, entries...)
 }
 
 func (l *LocalFSMutator) Append(ctx context.Context, entries ...IOEntry) error {
+	ctx, span := trace.Start(ctx, "LocalFS.Append")
+	defer span.End()
+
 	offset, err := l.fileWithChecksum.Seek(0, io.SeekEnd)
 	if err != nil {
 		return err
@@ -808,6 +842,8 @@ func (l *LocalFSMutator) Close() error {
 var _ ReplaceableFileService = new(LocalFS)
 
 func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
+	ctx, span := trace.Start(ctx, "LocalFS.Replace")
+	defer span.End()
 	return l.write(ctx, vector)
 }
 
