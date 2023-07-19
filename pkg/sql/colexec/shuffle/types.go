@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const shuffleBatchSize = 2048
+const shuffleBatchSize = 8192
 
 const (
 	input = iota
