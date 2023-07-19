@@ -175,7 +175,17 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
 	})
 
-	r := newIOEntriesReader(ctx, vector.Entries)
+	var r io.Reader
+	r = newIOEntriesReader(ctx, vector.Entries)
+
+	if vector.Hash.Sum != nil && vector.Hash.New != nil {
+		h := vector.Hash.New()
+		r = io.TeeReader(r, h)
+		defer func() {
+			*vector.Hash.Sum = h.Sum(nil)
+		}()
+	}
+
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
