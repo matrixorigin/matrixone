@@ -430,7 +430,7 @@ outter:
 			logutil.Errorf("receiver conctx done during get dispatch process")
 			return nil, nil
 		default:
-			if opProc, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
+			if opProc, ok = colexec.Srv.GetProcByUuid(opUuid); !ok {
 				runtime.Gosched()
 			} else {
 				break outter
