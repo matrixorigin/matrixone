@@ -208,7 +208,7 @@ func consumeLeastSpareStore(working []*util.Store) (string, error) {
 		return working[i].Length < working[j].Length
 	})
 
-	// stores with the same RowCount
+	// stores with the same Length
 	var leastStores []*util.Store
 
 	least := working[0].Length
