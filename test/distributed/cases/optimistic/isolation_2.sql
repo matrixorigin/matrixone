@@ -90,6 +90,7 @@ select * from dis_db_01.dis_table_04;
 drop database dis_db_01;
 drop table isolation_2.dis_table_04;
 ---------------------------------------
+-- @bvt:issue#10778
 begin;
 use isolation_2;
 create external table ex_table_dis(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
@@ -159,6 +160,7 @@ select b, c from dis_table_02;
 use dis_db_02;
 select b, c from dis_table_02;
 insert into dis_table_02(b,c) values ('','1999-06-04');
+-- @bvt:issue
 ------------------------------
 -- @bvt:issue#9124
 create temporary table dis_temp_01(a int,b varchar(100),primary key(a));
@@ -176,6 +178,7 @@ select * from dis_temp_01;
 drop table dis_temp_01;
 -- @bvt:issue
 
+-- @bvt:issue#10778
 start transaction;
 load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02;
 -- @session:id=1{
@@ -203,7 +206,7 @@ select b, c from dis_table_02;
 -- @session}
 select * from dis_view_02;
 drop table dis_view_02;
-
+-- @bvt:issue
 begin ;
 select * from dis_table_01;
 -- @session:id=1{
@@ -220,7 +223,7 @@ commit ;
 -- @session:id=1{
 select * from dis_table_01;
 -- @session}
-
+-- @bvt:issue#10778
 begin ;
 delete from dis_table_02 where a>1;
 select b, c from dis_table_02;
@@ -243,7 +246,6 @@ select b, c from dis_table_02;
 select b, c from dis_table_02;
 -- @session}
 -- @bvt:issue
-
 --------------------------------
 create database if not exists iso_db_02;
 start transaction ;
