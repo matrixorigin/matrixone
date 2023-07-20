@@ -544,7 +544,9 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
 	tbl.writes = tbl.writes[:0]
+	//if tbl.db.txn.statementID > 0 {
 	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
+	//}
 
 	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
 

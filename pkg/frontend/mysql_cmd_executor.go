@@ -998,7 +998,7 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 	return bat, nil
 }
 
-func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt *tree.AnalyzeStmt) error {
+func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, ses *Session, stmt *tree.AnalyzeStmt) error {
 	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
@@ -1016,6 +1016,12 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt 
 	ctx.WriteString(" from ")
 	stmt.Table.Format(ctx)
 	sql := ctx.String()
+	//backup the inside statement
+	prevInsideStmt := ses.ReplaceDerivedStmt(true)
+	defer func() {
+		//restore the inside statement
+		ses.ReplaceDerivedStmt(prevInsideStmt)
+	}()
 	return mce.GetDoQueryFunc()(requestCtx, &UserInput{sql: sql})
 }
 
@@ -2490,6 +2496,23 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var mrs *MysqlResultSet
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
+	var txnOp TxnOperator
+
+	_, txnOp, err = ses.GetTxnHandler().GetTxn()
+	if err != nil {
+		return err
+	}
+	if txnOp != nil /*&& !ses.IsBackgroundSession()*/ && !ses.IsDerivedStmt() {
+		txnOp.GetWorkspace().StartStatement()
+		defer func() {
+			txnOp.GetWorkspace().EndStatement()
+		}()
+
+		retErr = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
+		if retErr != nil {
+			return retErr
+		}
+	}
 
 	// record goroutine info when ddl stmt run timeout
 	switch stmt.(type) {
@@ -2798,7 +2821,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.AnalyzeStmt:
 		selfHandle = true
-		if err = mce.handleAnalyzeStmt(requestCtx, st); err != nil {
+		if err = mce.handleAnalyzeStmt(requestCtx, ses, st); err != nil {
 			return err
 		}
 	case *tree.ExplainStmt:

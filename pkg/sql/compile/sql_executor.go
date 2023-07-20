@@ -176,18 +176,18 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 
 	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
 	// maybe we should fix it.
-	//txnOp := exec.opts.Txn()
-	//if txnOp != nil && !exec.opts.DisableIncrStatement() {
-	//	txnOp.GetWorkspace().StartStatement()
-	//	defer func() {
-	//		txnOp.GetWorkspace().EndStatement()
-	//	}()
-	//
-	//	err := txnOp.GetWorkspace().IncrStatementID(exec.ctx, false)
-	//	if err != nil {
-	//		return executor.Result{}, err
-	//	}
-	//}
+	txnOp := exec.opts.Txn()
+	if txnOp != nil && !exec.opts.DisableIncrStatement() {
+		txnOp.GetWorkspace().StartStatement()
+		defer func() {
+			txnOp.GetWorkspace().EndStatement()
+		}()
+
+		err := txnOp.GetWorkspace().IncrStatementID(exec.ctx, false)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
 
 	proc := process.New(
 		exec.ctx,
