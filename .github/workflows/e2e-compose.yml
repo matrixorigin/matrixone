@@ -139,7 +139,7 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s $GITHUB_WORKSPACE/test/distributed/resources -e optimistic 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e optimistic 2>&1
       - name: export log
         if: ${{ failure() }}
         run: |
