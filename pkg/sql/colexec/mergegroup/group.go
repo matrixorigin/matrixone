@@ -164,7 +164,7 @@ func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 }
 
 func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
-	count := bat.Length()
+	count := bat.RowCount()
 	itr := ctr.intHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
@@ -193,7 +193,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 }
 
 func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
-	count := bat.Length()
+	count := bat.RowCount()
 	itr := ctr.strHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {

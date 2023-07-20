@@ -75,7 +75,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = Eval
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.RowCount() == 0 {
 				bat.Clean(proc.Mp())
 				return process.ExecNext, nil
 			}

@@ -95,7 +95,7 @@ func (txn *Transaction) WriteBatch(
 	if typ == INSERT {
 		if !insertBatchHasRowId {
 			txn.genBlock()
-			len := bat.Length()
+			len := bat.RowCount()
 			vec := txn.proc.GetVector(types.T_Rowid.ToType())
 			for i := 0; i < len; i++ {
 				if err := vector.AppendFixed(vec, txn.genRowId(), false,
@@ -140,7 +140,7 @@ func (txn *Transaction) dumpBatch(offset int) error {
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		// TODO: after shrink, we should update workspace size
-		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
+		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
 			continue
 		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
@@ -355,7 +355,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	}
 	// cn rowId antiShrink
 	bat.AntiShrink(cnRowIdOffsets)
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()

@@ -182,7 +182,7 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
 			}
 			inputSels = mixin.sels
 		}
-		// logutil.Debugf("%s: %d/%d", mixin.tableDef.Name, len(res), vecs[0].Length())
+		// logutil.Debugf("%s: %d/%d", mixin.tableDef.Name, len(res), vecs[0].RowCount())
 
 		return mixin.sels
 	}

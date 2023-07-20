@@ -84,7 +84,7 @@ func TestIntersectAll(t *testing.T) {
 		require.NoError(t, err)
 		result := c.proc.InputBatch()
 		if result != nil && !result.IsEmpty() {
-			cnt += result.Length()
+			cnt += result.RowCount()
 			require.Equal(t, 3, len(result.Vecs))
 			c.proc.InputBatch().Clean(c.proc.Mp())
 		} /*else {

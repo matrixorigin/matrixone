@@ -751,7 +751,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}
-		if e.bat == nil || e.bat.Length() == 0 {
+		if e.bat == nil || e.bat.RowCount() == 0 {
 			continue
 		}
 		if v != nil {
@@ -1072,7 +1072,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 		}
 	}
 	for i := range bats {
-		bats[i].SetZs(bats[i].GetVector(0).Length(), proc.Mp())
+		bats[i].SetZs(bats[i].GetVector(0).RowCount(), proc.Mp())
 	}
 	return bats, nil
 }
@@ -1109,7 +1109,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 		}
 // 	}
 // 	for i := range bats {
-// 		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
+// 		bats[i].SetZs(bats[i].GetVector(0).RowCount(), txn.proc.Mp())
 // 	}
 // 	return bats, nil
 // }
@@ -1139,7 +1139,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 
 	{
 		vec := vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			val := types.RandomRowid()
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				return nil, err
@@ -1152,7 +1152,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 		var val types.TS
 
 		vec := vector.NewVec(types.T_TS.ToType())
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				return nil, err
 			}

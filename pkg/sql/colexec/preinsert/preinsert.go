@@ -48,7 +48,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil

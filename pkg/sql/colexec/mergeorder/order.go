@@ -152,7 +152,7 @@ func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err err
 
 		wholeLength++
 		ctr.indexList[choice]++
-		if ctr.indexList[choice] == int64(ctr.batchList[choice].Length()) {
+		if ctr.indexList[choice] == int64(ctr.batchList[choice].RowCount()) {
 			ctr.removeBatch(proc, choice)
 		}
 

@@ -100,7 +100,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
 		if entry.typ == INSERT {
-			rows = rows + int64(entry.bat.Length())
+			rows = rows + int64(entry.bat.RowCount())
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
 				/*
@@ -643,7 +643,7 @@ func (tbl *txnTable) rangesOnePart(
 	txn := tbl.db.txn
 	for _, entry := range tbl.writes {
 		if entry.typ == INSERT {
-			if entry.bat == nil || entry.bat.Length() == 0 {
+			if entry.bat == nil || entry.bat.RowCount() == 0 {
 				continue
 			}
 			if entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
@@ -968,7 +968,7 @@ func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, erro
 }
 
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
-	if bat == nil || bat.Length() == 0 {
+	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
 	// for writing S3 Block
@@ -1121,7 +1121,7 @@ func (tbl *txnTable) compaction() error {
 			err = e
 			return false
 		}
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			return true
 		}
 		// ToDo: Optimize this logic, we need to control blocks num in one file
@@ -1175,7 +1175,7 @@ func (tbl *txnTable) compaction() error {
 		bat.AntiShrink(offsets)
 		// update txn.cnBlkId_Pos
 		tbl.db.txn.updatePosForCNBlock(bat.GetVector(0), idx)
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			removeBatch[bat] = true
 		}
 	}
@@ -1214,7 +1214,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	bat.SetAttributes([]string{catalog.Row_ID})
 
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		return nil
 	}
 	return tbl.writeDnPartition(ctx, bat)

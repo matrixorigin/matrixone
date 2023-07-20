@@ -112,7 +112,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
-	count := bat.Length()
+	count := bat.RowCount()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -140,7 +140,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
-	if (ctr.bat.Length() == 1 && ctr.hasNull) || ctr.bat.Length() == 0 {
+	if (ctr.bat.RowCount() == 1 && ctr.hasNull) || ctr.bat.RowCount() == 0 {
 		anal.Output(rbat, isLast)
 		proc.SetInputBatch(rbat)
 		return nil
@@ -157,7 +157,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
 	}
 
-	count := bat.Length()
+	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
 	eligible := make([]int32, 0, hashmap.UnitLimit)

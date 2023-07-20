@@ -6376,7 +6376,7 @@ var MysqlErrorMsgRefer = map[uint16]errorMsgItem{
 	ER_BOOST_GEOMETRY_UNKNOWN_EXCEPTION:                 {3043, []string{"HY000"}, "Unknown exception thrown in function %s."},
 	ER_STD_BAD_ALLOC_ERROR:                              {3044, []string{"HY000"}, "Memory allocation error: %-.256s in function %s."},
 	ER_STD_DOMAIN_ERROR:                                 {3045, []string{"HY000"}, "Domain error: %-.256s in function %s."},
-	ER_STD_LENGTH_ERROR:                                 {3046, []string{"HY000"}, "Length error: %-.256s in function %s."},
+	ER_STD_LENGTH_ERROR:                                 {3046, []string{"HY000"}, "RowCount error: %-.256s in function %s."},
 	ER_STD_INVALID_ARGUMENT:                             {3047, []string{"HY000"}, "Invalid argument error: %-.256s in function %s."},
 	ER_STD_OUT_OF_RANGE_ERROR:                           {3048, []string{"HY000"}, "Out of range error: %-.256s in function %s."},
 	ER_STD_OVERFLOW_ERROR:                               {3049, []string{"HY000"}, "Overflow error: %-.256s in function %s."},

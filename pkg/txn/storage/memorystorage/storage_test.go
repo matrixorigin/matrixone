@@ -333,7 +333,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 5, resp.Batch.Length())
+		assert.Equal(t, 5, resp.Batch.RowCount())
 	}
 
 	// delete by primary key
@@ -389,7 +389,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 4, resp.Batch.Length())
+		assert.Equal(t, 4, resp.Batch.RowCount())
 	}
 
 	// delete by non-primary key
@@ -445,7 +445,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 3, resp.Batch.Length())
+		assert.Equal(t, 3, resp.Batch.RowCount())
 	}
 
 	// write after delete
@@ -639,7 +639,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 4, resp.Batch.Length())
+		assert.Equal(t, 4, resp.Batch.RowCount())
 	}
 
 	// delete by non-primary key
@@ -696,7 +696,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 3, resp.Batch.Length())
+		assert.Equal(t, 3, resp.Batch.RowCount())
 		rowIDs = resp.Batch.Vecs[2]
 	}
 

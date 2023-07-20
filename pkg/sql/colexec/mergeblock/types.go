@@ -86,7 +86,7 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 				return err
 			}
 			newBat.Cnt = 1
-			arg.affectedRows += uint64(newBat.Length())
+			arg.affectedRows += uint64(newBat.RowCount())
 			arg.container.mp2[idx] = append(arg.container.mp2[idx], newBat)
 		}
 	}

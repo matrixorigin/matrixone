@@ -254,8 +254,8 @@ func (w *S3Writer) ResetMetaLocBat(proc *process.Process) {
 }
 
 //func (w *S3Writer) WriteEnd(proc *process.Process) {
-//	if w.metaLocBat.Vecs[0].Length() > 0 {
-//		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+//	if w.metaLocBat.Vecs[0].RowCount() > 0 {
+//		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].RowCount(), proc.GetMPool())
 //		proc.SetInputBatch(w.metaLocBat)
 //	}
 //}
@@ -341,10 +341,10 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 		}
 	}
 	res := false
-	start, end := 0, bat.Length()
+	start, end := 0, bat.RowCount()
 	for start < end {
 		n := len(w.Bats)
-		if n == 0 || w.Bats[n-1].Length() >=
+		if n == 0 || w.Bats[n-1].RowCount() >=
 			int(options.DefaultBlockMaxRows) {
 			if len(w.tableBatchBuffers) > 0 {
 				rbat = w.tableBatchBuffers[0]
@@ -362,7 +362,7 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 			rbat = w.Bats[n-1]
 		}
 		rows := end - start
-		if left := int(options.DefaultBlockMaxRows) - rbat.Length(); rows > left {
+		if left := int(options.DefaultBlockMaxRows) - rbat.RowCount(); rows > left {
 			rows = left
 		}
 		for i := 0; i < bat.VectorCount(); i++ {
@@ -616,7 +616,7 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 		logutil.Warnf("CN write s3 table %q: seqnums length not match seqnums: %v, attrs: %v",
 			w.tablename, w.seqnums, bat.Attrs)
 	}
-	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.Vecs[0].Length(), w.tablename, w.seqnums, w.attrs)
+	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.Vecs[0].RowCount(), w.tablename, w.seqnums, w.attrs)
 	_, err := w.writer.WriteBatch(bat)
 	if err != nil {
 		return err

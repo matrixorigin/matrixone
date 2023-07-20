@@ -62,7 +62,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if len(ap.PartitionSources) > 0 {
 		// 'i' aligns with partition number
 		for i := range ap.PartitionSources {
-			if ap.container.mp[i].Length() > 0 {
+			if ap.container.mp[i].RowCount() > 0 {
 				// batches in mp will be deeply copied into txn's workspace.
 				if err = ap.PartitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
 					return process.ExecNext, err
@@ -80,7 +80,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		}
 	} else {
 		// handle origin/main table.
-		if ap.container.mp[0].Length() > 0 {
+		if ap.container.mp[0].RowCount() > 0 {
 			//batches in mp will be deeply copied into txn's workspace.
 			if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
 				return process.ExecNext, err

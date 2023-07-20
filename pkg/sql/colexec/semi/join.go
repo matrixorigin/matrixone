@@ -129,7 +129,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	if ctr.joinBat2 == nil {
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
 	}
-	count := bat.Length()
+	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
 

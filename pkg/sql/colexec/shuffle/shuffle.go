@@ -47,7 +47,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if bat == nil {
 		return sendOneBatch(ap, proc, true), nil
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		return sendOneBatch(ap, proc, false), nil
 	}
@@ -177,7 +177,7 @@ func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) process.Ex
 	}
 	var findOneBatch bool
 	for i := range ap.ctr.shuffledBats {
-		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > threshHold {
+		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].RowCount() > threshHold {
 			if !findOneBatch {
 				findOneBatch = true
 				proc.SetInputBatch(ap.ctr.shuffledBats[i])

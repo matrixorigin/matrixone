@@ -76,11 +76,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = End
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.RowCount() == 0 {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
+			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
 				proc.PutBatch(bat)
 				continue
 			}
@@ -137,7 +137,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 
 	mSels := ctr.mp.Sels()
 
-	count := bat.Length()
+	count := bat.RowCount()
 	itr := ctr.mp.Map().NewIterator()
 	rowCount := 0
 	for i := 0; i < count; i += hashmap.UnitLimit {

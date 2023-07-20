@@ -83,7 +83,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 			}
 
 		case Eval:
-			if ctr.bat != nil && ctr.bat.Length() != 0 {
+			if ctr.bat != nil && ctr.bat.RowCount() != 0 {
 				if ap.NeedHashMap {
 					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ap.IsDup)
 				}
@@ -118,7 +118,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if bat == nil {
 			break
 		}
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -129,7 +129,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		bat.Clean(proc.Mp())
 	}
-	if ctr.bat == nil || ctr.bat.Length() == 0 || !ap.NeedHashMap {
+	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil
 	}
 
@@ -138,7 +138,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	}
 
 	itr := ctr.mp.NewIterator()
-	count := ctr.bat.Length()
+	count := ctr.bat.RowCount()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {

@@ -70,11 +70,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = End
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.RowCount() == 0 {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			if ctr.bat.Length() == 0 {
+			if ctr.bat.RowCount() == 0 {
 				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
@@ -109,7 +109,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp.Pos]
 			bat.Vecs[rp.Pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstNull(ap.Typs[rp.Pos], bat.Length(), proc.Mp())
+			rbat.Vecs[i] = vector.NewConstNull(ap.Typs[rp.Pos], bat.RowCount(), proc.Mp())
 		}
 	}
 	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
@@ -126,9 +126,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = vector.NewVec(ap.Typs[rp.Pos])
 		}
 	}
-	count := bat.Length()
+	count := bat.RowCount()
 	if ctr.expr == nil {
-		switch ctr.bat.Length() {
+		switch ctr.bat.RowCount() {
 		case 0:
 			for i, rp := range ap.Result {
 				if rp.Rel != 0 {
@@ -158,7 +158,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		for i := 0; i < count; i++ {
 			if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
-				ctr.bat.Length(), ctr.cfs); err != nil {
+				ctr.bat.RowCount(), ctr.cfs); err != nil {
 				rbat.Clean(proc.Mp())
 				return err
 			}
@@ -174,7 +174,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if vec.IsConst() {
 				b, null := rs.GetValue(0)
 				if !null && b {
-					if ctr.bat.Length() > 1 {
+					if ctr.bat.RowCount() > 1 {
 						return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 					}
 					unmatched = false

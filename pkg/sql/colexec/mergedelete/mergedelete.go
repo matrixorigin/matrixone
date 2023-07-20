@@ -67,7 +67,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	// If the target table is a partition table, Traverse partition subtables for separate processing
 	if len(ap.PartitionSources) > 0 {
 		partitionIdxs := vector.MustFixedCol[int32](bat.GetVector(3))
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
 			bat := &batch.Batch{}
 			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
@@ -82,7 +82,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		}
 	} else {
 		// If the target table is a general table
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
 			bat := &batch.Batch{}
 			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {

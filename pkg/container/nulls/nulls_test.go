@@ -81,7 +81,7 @@ func TestSize(t *testing.T) {
 }
 
 func TestLength(t *testing.T) {
-	t.Run("Length test", func(t *testing.T) {
+	t.Run("RowCount test", func(t *testing.T) {
 		var n Nulls
 		assert.EqualValues(t, 0, n.Count())
 		n.InitWithSize(16)

@@ -93,14 +93,14 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 		}
 
 		// empty batch
-		if btc.Length() == 0 {
+		if btc.RowCount() == 0 {
 			btc.Clean(proc.Mp())
 			continue
 		}
 
 		analyse.Input(btc, isFirst)
 
-		cnt := btc.Length()
+		cnt := btc.RowCount()
 		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			rowcnt := c.hashTable.GroupCount()
@@ -146,7 +146,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		// empty batch
-		if btc.Length() == 0 {
+		if btc.RowCount() == 0 {
 			btc.Clean(proc.Mp())
 			continue
 		}
@@ -159,7 +159,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
-		cnt := btc.Length()
+		cnt := btc.RowCount()
 		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			n := cnt - i

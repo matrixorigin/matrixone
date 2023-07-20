@@ -112,7 +112,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 		// build hashTable and a counter to record how many times each key appears
 		{
 			itr := ctr.hashTable.NewIterator()
-			count := bat.Length()
+			count := bat.RowCount()
 			for i := 0; i < count; i += hashmap.UnitLimit {
 
 				n := count - i
@@ -178,7 +178,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		// probe hashTable
 		{
 			itr := ctr.hashTable.NewIterator()
-			count := bat.Length()
+			count := bat.RowCount()
 			for i := 0; i < count; i += hashmap.UnitLimit {
 				n := count - i
 				if n > hashmap.UnitLimit {

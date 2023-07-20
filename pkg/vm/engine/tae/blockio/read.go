@@ -270,7 +270,7 @@ func BlockReadInner(
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debugf(
 				"blockread %s read delete %d: base %s filter out %v\n",
-				info.BlockID.String(), deletes.Length(), ts.ToString(), deleteMask.Count())
+				info.BlockID.String(), deletes.RowCount(), ts.ToString(), deleteMask.Count())
 		}
 	}
 
@@ -288,8 +288,8 @@ func BlockReadInner(
 		deletedRows = deleteMask.ToI64Arrary()
 		// logutil.Debugf("deleted/length: %d/%d=%f",
 		// 	len(deletedRows),
-		// 	loaded.Vecs[0].Length(),
-		// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
+		// 	loaded.Vecs[0].RowCount(),
+		// 	float64(len(deletedRows))/float64(loaded.Vecs[0].RowCount()))
 	}
 
 	// build rowid column if needed

@@ -115,7 +115,7 @@ func callNonBlocking(
 	if bat == nil {
 		return true, arg.rt.retryError
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
@@ -158,7 +158,7 @@ func callBlocking(
 		}
 
 		// skip empty batch
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			bat.Clean(proc.Mp())
 			return false, nil
 		}

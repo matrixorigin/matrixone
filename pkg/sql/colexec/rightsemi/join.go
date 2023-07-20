@@ -128,7 +128,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(bat.Length())
+		ctr.matched.InitWithSize(bat.RowCount())
 		analyze.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
@@ -194,7 +194,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	if ctr.joinBat2 == nil {
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
 	}
-	count := bat.Length()
+	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {

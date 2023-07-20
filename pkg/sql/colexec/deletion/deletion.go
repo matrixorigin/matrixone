@@ -115,7 +115,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 			}
 
 			resBat.SetRowCount(resBat.Vecs[0].Length())
-			resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))
+			resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.RowCount(), proc.GetMPool()))
 
 			proc.SetInputBatch(resBat)
 		} else {
@@ -128,7 +128,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 	}
 
 	// empty batch
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
@@ -154,7 +154,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 		}
 
 		for i, delBatch := range delBatches {
-			tempRows := uint64(delBatch.Length())
+			tempRows := uint64(delBatch.RowCount())
 			if tempRows > 0 {
 				affectedRows += tempRows
 				err = delCtx.PartitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
@@ -170,7 +170,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 		if err != nil {
 			return process.ExecNext, err
 		}
-		affectedRows = uint64(delBatch.Length())
+		affectedRows = uint64(delBatch.RowCount())
 		if affectedRows > 0 {
 			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
 			if err != nil {

@@ -401,7 +401,7 @@ func (s *Scope) PushdownRun() error {
 			s.Proc.Cancel()
 			return err
 		}
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			continue
 		}
 		s.Proc.Reg.InputBatch = bat

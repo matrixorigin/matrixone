@@ -141,7 +141,7 @@ func MergeSortedColumn(
 }
 
 //func MergeBlocksToSegment(blks []*batch.Batch, pk int) error {
-//	n := len(blks) * blks[0].Vecs[pk].Length()
+//	n := len(blks) * blks[0].Vecs[pk].RowCount()
 //	mergedSrc := make([]uint16, n)
 //
 //	col := make([]*vector.Vector, len(blks))

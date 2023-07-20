@@ -152,10 +152,6 @@ func (bat *Batch) Size() int {
 	return size
 }
 
-func (bat *Batch) Length() int {
-	return bat.rowCount
-}
-
 func (bat *Batch) RowCount() int {
 	return bat.rowCount
 }

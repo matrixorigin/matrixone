@@ -63,7 +63,7 @@ func (p *PartitionReader) prepare() error {
 		deletes = make(map[types.Rowid]uint8)
 		for _, entry := range p.table.writes {
 			if entry.typ == INSERT {
-				if entry.bat == nil || entry.bat.Length() == 0 {
+				if entry.bat == nil || entry.bat.RowCount() == 0 {
 					continue
 				}
 				if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
@@ -133,7 +133,7 @@ func (p *PartitionReader) Read(
 		for i, vec := range b.Vecs {
 			srcVec := bat.Vecs[i]
 			uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
-			for j := 0; j < bat.Length(); j++ {
+			for j := 0; j < bat.RowCount(); j++ {
 				if _, ok := p.deletes[rowIds[j]]; ok {
 					continue
 				}
@@ -145,7 +145,7 @@ func (p *PartitionReader) Read(
 		logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
 		//		CORNER CASE:
 		//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
-		//		the bat.Length() is not always the right value for the result batch b.
+		//		the bat.RowCount() is not always the right value for the result batch b.
 		b.SetRowCount(b.Vecs[0].Length())
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(

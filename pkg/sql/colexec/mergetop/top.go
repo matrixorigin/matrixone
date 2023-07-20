@@ -167,7 +167,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
 	var start int64
 
-	length := int64(bat.Length())
+	length := int64(bat.RowCount())
 	if n := int64(len(ctr.sels)); n < limit {
 		start = limit - n
 		if start > length {

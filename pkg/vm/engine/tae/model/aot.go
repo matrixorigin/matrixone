@@ -230,7 +230,7 @@ func (aot *AOT[B, R]) Append(rows R) (err error) {
 				return
 			}
 		}
-		// logutil.Infof("Appended=%d, ToAppend=%d, done=%v, AllRows=%d", appended, toAppend, done, rows.Length())
+		// logutil.Infof("Appended=%d, ToAppend=%d, done=%v, AllRows=%d", appended, toAppend, done, rows.RowCount())
 		appended += toAppend
 	}
 	return
