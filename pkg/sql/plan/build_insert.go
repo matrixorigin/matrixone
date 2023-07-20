@@ -142,8 +142,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 
 		// append sink node
-		// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-		// sourceStep = builder.appendStep(lastNodeId)
+		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+		sourceStep = builder.appendStep(lastNodeId)
 
 		// append plans like update
 		updateBindCtx := NewBindContext(builder, nil)
@@ -151,7 +151,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.objRef = objRef
 		upPlanCtx.tableDef = tableDef
 		upPlanCtx.beginIdx = 0
-		upPlanCtx.sourceStep = -1
+		upPlanCtx.sourceStep = sourceStep
 		upPlanCtx.isMulti = false
 		upPlanCtx.updateColLength = updateColLength
 		upPlanCtx.rowIdPos = rowIdPos
@@ -159,7 +159,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.checkInsertPkDup = checkInsertPkDup
 
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, lastNodeId)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -173,6 +173,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 		query.StmtType = plan.Query_INSERT
 	}
+	reduceSinkSinkScanNodes(query)
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -233,6 +234,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		for insertRowIdx, pkColIdx := range pkPosInValues {
 			if pkValueExprs[pkColIdx] == nil {
 				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true)
+				if constExpr == nil {
+					return nil
+				}
 				typ := makePlan2Type(bat.Vecs[insertRowIdx].GetType())
 
 				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{

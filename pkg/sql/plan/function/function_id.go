@@ -242,6 +242,7 @@ const (
 	USER
 	CONNECTION_ID
 	CHARSET
+	CONVERT
 	CURRENT_ROLE
 	FOUND_ROWS
 	ICULIBVERSION
@@ -477,6 +478,7 @@ var functionIdRegister = map[string]int32{
 	"current_user":                   USER,
 	"connection_id":                  CONNECTION_ID,
 	"charset":                        CHARSET,
+	"convert":                        CONVERT,
 	"current_account_id":             CURRENT_ACCOUNT_ID,
 	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,

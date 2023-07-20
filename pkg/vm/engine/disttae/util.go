@@ -66,7 +66,7 @@ func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *p
 	}
 
 	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+	bat.SetRowCount(1)
 
 	ret, err := colexec.EvalExpressionOnce(proc, funExpr, []*batch.Batch{bat})
 	if err != nil {
@@ -108,40 +108,53 @@ func getValidCompositePKCnt(vals []*plan.Const) int {
 	return cnt
 }
 
-func getCompositPKVals(expr *plan.Expr, pks []string, vals []*plan.Const, proc *process.Process) bool {
+func getCompositPKVals(
+	expr *plan.Expr,
+	pks []string,
+	vals []*plan.Const,
+	proc *process.Process,
+) (ok bool, hasNull bool) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		fname := exprImpl.F.Func.ObjName
 		switch fname {
 		case "and":
-			getCompositPKVals(exprImpl.F.Args[0], pks, vals, proc)
+			_, hasNull = getCompositPKVals(exprImpl.F.Args[0], pks, vals, proc)
+			if hasNull {
+				return false, true
+			}
 			return getCompositPKVals(exprImpl.F.Args[1], pks, vals, proc)
 		case "=":
 			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
 				if pos := getPosInCompositPK(leftExpr.Col.Name, pks); pos != -1 {
 					_, ret := getConstValueByExpr(exprImpl.F.Args[1], proc)
 					if ret == nil {
-						return false
+						return false, false
+					} else if ret.Isnull {
+						return false, true
 					}
 					vals[pos] = ret
-					return true
+					return true, false
 				}
-				return false
+				return false, false
 			}
 			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
 				if pos := getPosInCompositPK(rightExpr.Col.Name, pks); pos != -1 {
 					_, ret := getConstValueByExpr(exprImpl.F.Args[0], proc)
 					if ret == nil {
-						return false
+						return false, false
+					} else if ret.Isnull {
+						return false, true
 					}
 					vals[pos] = ret
+					return true, false
 				}
-				return false
+				return false, false
 			}
-			return false
+			return false, false
 		}
 	}
-	return false
+	return false, false
 }
 
 func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) (bool, *plan.Const) {
@@ -179,59 +192,72 @@ func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) (bool, *pl
 	return false, nil
 }
 
-func getNonCompositePKSearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T,
-	proc *process.Process) (bool, func(*vector.Vector) int) {
+func getNonCompositePKSearchFuncByExpr(
+	expr *plan.Expr, pkName string, oid types.T, proc *process.Process,
+) (bool, bool, func(*vector.Vector) int) {
 	canCompute, valExpr := getPkExpr(expr, pkName, proc)
 	if !canCompute {
-		return canCompute, nil
+		return false, false, nil
+	}
+
+	if valExpr.Isnull {
+		return false, true, nil
 	}
 
 	switch val := valExpr.Value.(type) {
 	case *plan.Const_I8Val:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(int8(val.I8Val))
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(int8(val.I8Val))
 	case *plan.Const_I16Val:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(int16(val.I16Val))
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(int16(val.I16Val))
 	case *plan.Const_I32Val:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(int32(val.I32Val))
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(int32(val.I32Val))
 	case *plan.Const_I64Val:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(int64(val.I64Val))
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(int64(val.I64Val))
 	case *plan.Const_Fval:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Fval)
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(val.Fval)
 	case *plan.Const_Dval:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Dval)
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(val.Dval)
 	case *plan.Const_U8Val:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(uint8(val.U8Val))
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(uint8(val.U8Val))
 	case *plan.Const_U16Val:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(uint16(val.U16Val))
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(uint16(val.U16Val))
 	case *plan.Const_U32Val:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(uint32(val.U32Val))
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(uint32(val.U32Val))
 	case *plan.Const_U64Val:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(val.U64Val)
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(val.U64Val)
 	case *plan.Const_Dateval:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Dateval)
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(val.Dateval)
 	case *plan.Const_Timeval:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Timeval)
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(val.Timeval)
 	case *plan.Const_Datetimeval:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Datetimeval)
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(val.Datetimeval)
 	case *plan.Const_Timestampval:
-		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Timestampval)
+		return true, false, vector.OrderedBinarySearchOffsetByValFactory(val.Timestampval)
 	case *plan.Const_Decimal64Val:
-		return true, vector.FixSizedBinarySearchOffsetByValFactory(types.Decimal64(val.Decimal64Val.A), types.CompareDecimal64)
+		return true, false, vector.FixSizedBinarySearchOffsetByValFactory(types.Decimal64(val.Decimal64Val.A), types.CompareDecimal64)
 	case *plan.Const_Decimal128Val:
 		v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
-		return true, vector.FixSizedBinarySearchOffsetByValFactory(v, types.CompareDecimal128)
+		return true, false, vector.FixSizedBinarySearchOffsetByValFactory(v, types.CompareDecimal128)
 	case *plan.Const_Sval:
-		return true, vector.VarlenBinarySearchOffsetByValFactory(util.UnsafeStringToBytes(val.Sval))
+		return true, false, vector.VarlenBinarySearchOffsetByValFactory(util.UnsafeStringToBytes(val.Sval))
 	case *plan.Const_Jsonval:
-		return true, vector.VarlenBinarySearchOffsetByValFactory(util.UnsafeStringToBytes(val.Jsonval))
+		return true, false, vector.VarlenBinarySearchOffsetByValFactory(util.UnsafeStringToBytes(val.Jsonval))
 	}
-	return false, nil
+	return false, false, nil
 }
 
-func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T, proc *process.Process) (bool, any) {
+func getPkValueByExpr(
+	expr *plan.Expr,
+	pkName string,
+	oid types.T,
+	proc *process.Process,
+) (bool, bool, any) {
 	canCompute, valExpr := getPkExpr(expr, pkName, proc)
 	if !canCompute {
-		return canCompute, nil
+		return false, false, nil
+	}
+	if valExpr.Isnull {
+		return false, true, nil
 	}
 	switch val := valExpr.Value.(type) {
 	case *plan.Const_I8Val:
@@ -273,7 +299,7 @@ func getPkValueByExpr(expr *plan.Expr, pkName string, oid types.T, proc *process
 	case *plan.Const_Jsonval:
 		return transferSval(val.Jsonval, oid)
 	}
-	return false, nil
+	return false, false, nil
 }
 
 // computeRangeByNonIntPk compute NonIntPk range Expr

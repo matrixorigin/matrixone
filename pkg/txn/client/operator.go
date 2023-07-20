@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -273,10 +274,6 @@ func (tc *txnOperator) UpdateSnapshot(
 	}
 
 	minTS := ts
-	// we need to waiter the latest snapshot ts which is greater than the current snapshot
-	if minTS.IsEmpty() && tc.mu.txn.IsRCIsolation() {
-		minTS, _ = tc.clock.Now()
-	}
 
 	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
 		ctx,
@@ -382,10 +379,12 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
-	util.LogTxnRollback(tc.getTxnMeta(false))
+	txnMeta := tc.getTxnMeta(false)
+	util.LogTxnRollback(txnMeta)
 	if tc.workspace != nil {
 		if err := tc.workspace.Rollback(ctx); err != nil {
-			return err
+			util.GetLogger().Error("rollback workspace failed",
+				util.TxnIDField(txnMeta), zap.Error(err))
 		}
 	}
 
@@ -492,7 +491,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	if commit {
 		if tc.workspace != nil {
 			if err := tc.workspace.Commit(ctx); err != nil {
-				return nil, err
+				return nil, multierr.Append(err, tc.Rollback(ctx))
 			}
 		}
 		tc.mu.Lock()

@@ -16,6 +16,7 @@ package mergeorder
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -151,7 +152,7 @@ func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err err
 
 		wholeLength++
 		ctr.indexList[choice]++
-		if ctr.indexList[choice] == int64(ctr.batchList[choice].Length()) {
+		if ctr.indexList[choice] == int64(ctr.batchList[choice].RowCount()) {
 			ctr.removeBatch(proc, choice)
 		}
 
@@ -163,8 +164,7 @@ func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err err
 			break
 		}
 	}
-	bat.SetZs(wholeLength, mp)
-
+	bat.SetRowCount(wholeLength)
 	proc.SetInputBatch(bat)
 	return sendOver, nil
 }
@@ -214,8 +214,6 @@ func (ctr *container) removeBatch(proc *process.Process, index int) {
 		proc.PutVector(cols[i])
 	}
 	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
-
-	proc.Mp().PutSels(bat.Zs)
 }
 
 func String(arg any, buf *bytes.Buffer) {
@@ -250,7 +248,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 
@@ -263,7 +261,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		case receiving:
 			bat, end, err := ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			if end {
 				// if number of block is less than 2, no need to do merge sort.
@@ -274,7 +272,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 					// evaluate the first batch's order column.
 					if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
-						return false, err
+						return process.ExecNext, err
 					}
 					ctr.generateCompares(ap.OrderBySpecs)
 					ctr.indexList = make([]int64, len(ctr.batchList))
@@ -283,24 +281,28 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 		case normalSending:
 			if len(ctr.batchList) == 0 {
 				proc.SetInputBatch(nil)
-				return true, nil
+				return process.ExecStop, nil
 			}
 
 			// If only one batch, no need to sort. just send it.
 			if len(ctr.batchList) == 1 {
 				proc.SetInputBatch(ctr.batchList[0])
 				ctr.batchList[0] = nil
-				return true, nil
+				return process.ExecStop, nil
 			}
 
 		case pickUpSending:
-			return ctr.pickAndSend(proc)
+			ok, err := ctr.pickAndSend(proc)
+			if ok {
+				return process.ExecStop, err
+			}
+			return process.ExecNext, err
 		}
 	}
 }

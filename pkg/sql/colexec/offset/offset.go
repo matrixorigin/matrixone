@@ -31,15 +31,15 @@ func Prepare(_ *process.Process, _ any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
-		return true, nil
+		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
+		return process.ExecNext, nil
 	}
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
@@ -48,21 +48,21 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Input(bat, isFirst)
 
 	if ap.Seen > ap.Offset {
-		return false, nil
+		return process.ExecNext, nil
 	}
-	length := bat.Length()
+	length := bat.RowCount()
 	if ap.Seen+uint64(length) > ap.Offset {
 		sels := newSels(int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen), proc)
 		ap.Seen += uint64(length)
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 		proc.SetInputBatch(bat)
-		return false, nil
+		return process.ExecNext, nil
 	}
 	ap.Seen += uint64(length)
 	proc.PutBatch(bat)
 	proc.SetInputBatch(batch.EmptyBatch)
-	return false, nil
+	return process.ExecNext, nil
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {

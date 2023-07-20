@@ -41,6 +41,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Product:      "product",
 	vm.Restrict:     "restrict",
 	vm.Dispatch:     "dispatch",
+	vm.Shuffle:      "shuffle",
 	vm.Connector:    "connect",
 	vm.Projection:   "projection",
 	vm.Anti:         "anti",

@@ -114,7 +114,6 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	bat := &batch.Batch{
 		Attrs: make([]string, num),
 		Vecs:  make([]*vector.Vector, num),
-		Zs:    make([]int64, len(fileList)),
 		Cnt:   1,
 	}
 	for i := 0; i < num; i++ {
@@ -137,9 +136,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 			bat.Vecs[i] = vec
 		}
 	}
-	for k := 0; k < len(fileList); k++ {
-		bat.Zs[k] = 1
-	}
+	bat.SetRowCount(len(fileList))
 	return bat
 }
 

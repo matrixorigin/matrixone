@@ -186,7 +186,8 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 	}
 	node := vnode.(*updates.DeleteNode)
 	meta := node.GetMeta()
-	pkDef := meta.GetSchema().GetPrimaryKey()
+	schema := meta.GetSchema()
+	pkDef := schema.GetPrimaryKey()
 	deletes := node.GetRowMaskRefLocked()
 
 	batch := b.batches[dataDelBatch]
@@ -211,6 +212,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 	}
 	_ = meta.GetBlockData().Foreach(
 		ctx,
+		schema,
 		pkDef.Idx,
 		func(v any, isNull bool, row int) error {
 			pkVec.Append(v, false)
@@ -226,16 +228,17 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 	// delete table
 	if node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[columnDelBatch] == nil {
-			b.batches[columnDelBatch] = makeRespBatchFromSchema(DelSchema)
+			b.batches[columnDelBatch] = makeRespBatchFromSchema(ColumnDelSchema)
 		}
 		for _, usercol := range node.BaseNode.Schema.ColDefs {
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, usercol.Name))), false)
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
+			b.batches[columnDelBatch].GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", tbl.GetID(), usercol.Name)), false)
 		}
 		if b.batches[tblDelBatch] == nil {
-			b.batches[tblDelBatch] = makeRespBatchFromSchema(DelSchema)
+			b.batches[tblDelBatch] = makeRespBatchFromSchema(TblDelSchema)
 		}
-		catalogEntry2Batch(b.batches[tblDelBatch], tbl, node, DelSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[tblDelBatch], tbl, node, TblDelSchema, txnimpl.FillTableRow, u64ToRowID(tbl.GetID()), b.txn.GetPrepareTS())
 	}
 	// create table
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
@@ -260,7 +263,7 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 			b.batches[columnInsBatch] = makeRespBatchFromSchema(catalog.SystemColumnSchema)
 		}
 		if b.batches[columnDelBatch] == nil {
-			b.batches[columnDelBatch] = makeRespBatchFromSchema(DelSchema)
+			b.batches[columnDelBatch] = makeRespBatchFromSchema(ColumnDelSchema)
 		}
 		for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 			txnimpl.FillColumnRow(tbl, node, syscol.Name, b.batches[columnInsBatch].GetVectorByName(syscol.Name))
@@ -272,6 +275,7 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 		for _, name := range node.BaseNode.Schema.Extra.DroppedAttrs {
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tbl.ID, name))), false)
 			b.batches[columnDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(b.txn.GetPrepareTS(), false)
+			b.batches[columnDelBatch].GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", tbl.GetID(), name)), false)
 		}
 		if b.batches[tblInsBatch] == nil {
 			b.batches[tblInsBatch] = makeRespBatchFromSchema(catalog.SystemTableSchema)
@@ -284,9 +288,9 @@ func (b *TxnLogtailRespBuilder) visitDatabase(idb any) {
 	node := db.GetLatestNodeLocked()
 	if node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[dbDelBatch] == nil {
-			b.batches[dbDelBatch] = makeRespBatchFromSchema(DelSchema)
+			b.batches[dbDelBatch] = makeRespBatchFromSchema(DBDelSchema)
 		}
-		catalogEntry2Batch(b.batches[dbDelBatch], db, node, DelSchema, txnimpl.FillDBRow, u64ToRowID(db.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[dbDelBatch], db, node, DBDelSchema, txnimpl.FillDBRow, u64ToRowID(db.GetID()), b.txn.GetPrepareTS())
 	}
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
 		if b.batches[dbInsBatch] == nil {

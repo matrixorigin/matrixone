@@ -21,7 +21,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -168,6 +171,9 @@ type Transaction struct {
 	rollbackCount int
 	statementID   int
 	statements    []int
+
+	hasS3Op atomic.Bool
+	removed bool
 }
 
 type Pos struct {
@@ -244,6 +250,8 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 			}
 		}
 		txn.writes = append(txn.writes[:start], writes...)
+		// restore the scope of the statement
+		txn.statements[txn.statementID-1] = len(txn.writes)
 	}
 	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
@@ -263,6 +271,11 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+	// If has s3 operation, can not rollback.
+	if txn.hasS3Op.Load() {
+		return moerr.NewTxnWWConflict(ctx)
+	}
+
 	txn.Lock()
 	defer txn.Unlock()
 
@@ -451,6 +464,7 @@ type withFilterMixin struct {
 		filter   blockio.ReadFilter
 		seqnums  []uint16 // seqnums of the columns in the filter
 		colTypes []types.Type
+		hasNull  bool
 	}
 
 	sels []int32
@@ -473,6 +487,11 @@ type blockReader struct {
 type blockMergeReader struct {
 	*blockReader
 	table *txnTable
+
+	//for perfetch deletes
+	loaded     bool
+	pkidx      int
+	deletaLocs map[string][]objectio.Location
 }
 
 type mergeReader struct {

@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -3957,7 +3958,7 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, "db", datname.GetStringAt(1))
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
-	require.Equal(t, fixedColCnt, len(resp.Commands[1].Bat.Vecs))
+	require.Equal(t, fixedColCnt+1, len(resp.Commands[1].Bat.Vecs))
 	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
 	close()
@@ -4021,7 +4022,7 @@ func TestLogtailBasic(t *testing.T) {
 
 	delDataEntry := resp.Commands[1]
 	require.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
-	require.Equal(t, fixedColCnt, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
+	require.Equal(t, fixedColCnt+1, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
 	check_same_rows(delDataEntry.Bat, 10)
 
 	// check delete rowids are exactly what we want
@@ -5955,6 +5956,109 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	close()
+}
+
+func TestAlterFakePk(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, -1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bats := catalog.MockBatch(schema, 12).Split(3)
+	tae.createRelAndAppend(bats[0], true)
+
+	var did, tid uint64
+	var blkFp *common.ID
+	{
+		// add two cloumns
+		txn, rel := tae.getRelation()
+		tid = rel.ID()
+		d, _ := rel.GetDB()
+		did = d.GetID()
+		blkFp = getOneBlock(rel).Fingerprint()
+		tblEntry := rel.GetMeta().(*catalog.TableEntry)
+		err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "add1", types.NewProtoType(types.T_int32), 1))
+		require.NoError(t, err)
+		err = rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "add2", types.NewProtoType(types.T_int64), 2))
+		require.NoError(t, err)
+		t.Log(tblEntry.StringWithLevel(common.PPL2))
+		require.NoError(t, txn.Commit(context.Background()))
+		require.Equal(t, 2, tblEntry.MVCC.Depth())
+	}
+
+	{
+		txn, rel := tae.getRelation()
+		seg, err := rel.GetSegment(blkFp.SegmentID())
+		require.NoError(t, err)
+		blk, err := seg.GetBlock(blkFp.BlockID)
+		require.NoError(t, err)
+		err = blk.RangeDelete(1, 1, handle.DT_Normal)
+		require.NoError(t, err)
+		err = blk.RangeDelete(3, 3, handle.DT_Normal)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	{
+		txn, rel := tae.getRelation()
+		seg, err := rel.GetSegment(blkFp.SegmentID())
+		require.NoError(t, err)
+		blk, err := seg.GetBlock(blkFp.BlockID)
+		require.NoError(t, err)
+		// check non-exist column foreach
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		newSchema := meta.GetSchema()
+		blkdata := meta.GetBlockData()
+		sels := nulls.NewWithSize(4)
+		sels.Add(1, 3)
+		rows := make([]int, 0, 4)
+		blkdata.Foreach(context.Background(), newSchema, 1 /*"add1" column*/, func(v any, isnull bool, row int) error {
+			require.True(t, true)
+			rows = append(rows, row)
+			return nil
+		}, sels)
+		require.Equal(t, []int{1, 3}, rows)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	resp, close, _ := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+		CnHave: tots(types.BuildTS(0, 0)),
+		CnWant: tots(types.MaxTs()),
+		Table:  &api.TableID{DbId: did, TbId: tid},
+	}, true)
+
+	defer close()
+	require.Equal(t, 2, len(resp.Commands)) // first blk 4 insert; first blk 2 dels
+	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
+
+	insBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
+	require.NoError(t, err)
+	dnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat)
+	t.Log(dnInsBat.Attrs)
+	require.Equal(t, 6, len(dnInsBat.Vecs)) // 3 col + 1 fake pk + 1 rowid + 1 committs
+	for _, v := range dnInsBat.Vecs {
+		require.Equal(t, 4, v.Length())
+	}
+	t.Log(dnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+
+	delBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat)
+	require.NoError(t, err)
+	dnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat)
+	t.Log(dnDelBat.Attrs)
+	require.Equal(t, 3, len(dnDelBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
+	for _, v := range dnDelBat.Vecs {
+		require.Equal(t, 2, v.Length())
+	}
+	t.Log(dnDelBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+
 }
 
 func TestAlterColumnAndFreeze(t *testing.T) {

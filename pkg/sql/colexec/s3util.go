@@ -121,7 +121,7 @@ func (w *S3Writer) SetTableName(name string) {
 
 func (w *S3Writer) SetSeqnums(seqnums []uint16) {
 	w.seqnums = seqnums
-	logutil.Infof("s3 table set directly %q seqnums: %+v", w.tablename, w.seqnums)
+	logutil.Debugf("s3 table set directly %q seqnums: %+v", w.tablename, w.seqnums)
 }
 
 func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, error) {
@@ -145,16 +145,23 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 			}
 		}
 	}
-	logutil.Infof("s3 table set from AllocS3Writer %q seqnums: %+v", writer.tablename, writer.seqnums)
+	logutil.Debugf("s3 table set from AllocS3Writer %q seqnums: %+v", writer.tablename, writer.seqnums)
 
 	// Get Single Col pk index
 	for idx, colDef := range tableDef.Cols {
-		if colDef.Name == tableDef.Pkey.PkeyColName {
-			if colDef.Name != catalog.FakePrimaryKeyColName {
+		// Maybe current table are `mo_cloumns`, `mo_tables` or `mo_databases`, these table's `TableDef.Pkey` is NULL
+		if tableDef.Pkey == nil {
+			if colDef.Primary {
 				writer.sortIndex = idx
 				writer.pk = idx
+				break
 			}
-			break
+		} else {
+			if colDef.Name == tableDef.Pkey.PkeyColName && colDef.Name != catalog.FakePrimaryKeyColName {
+				writer.sortIndex = idx
+				writer.pk = idx
+				break
+			}
 		}
 	}
 
@@ -200,7 +207,7 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 				}
 			}
 		}
-		logutil.Infof("s3 table set from AllocS3WriterP%d %q seqnums: %+v", i, writers[i].tablename, writers[i].seqnums)
+		logutil.Debugf("s3 table set from AllocS3WriterP%d %q seqnums: %+v", i, writers[i].tablename, writers[i].seqnums)
 
 		// Get Single Col pk index
 		for idx, colDef := range tableDef.Cols {
@@ -247,8 +254,8 @@ func (w *S3Writer) ResetMetaLocBat(proc *process.Process) {
 }
 
 //func (w *S3Writer) WriteEnd(proc *process.Process) {
-//	if w.metaLocBat.Vecs[0].Length() > 0 {
-//		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+//	if w.metaLocBat.vecs[0].Length() > 0 {
+//		w.metaLocBat.SetZs(w.metaLocBat.vecs[0].Length(), proc.GetMPool())
 //		proc.SetInputBatch(w.metaLocBat)
 //	}
 //}
@@ -264,7 +271,7 @@ func (w *S3Writer) Output(proc *process.Process) error {
 		}
 		bat.SetVector(int32(i), vec)
 	}
-	bat.Zs = append(bat.Zs, w.metaLocBat.Zs...)
+	bat.SetRowCount(w.metaLocBat.RowCount())
 	w.ResetMetaLocBat(proc)
 	proc.SetInputBatch(bat)
 	return nil
@@ -289,7 +296,7 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 		if err := w.SortAndFlush(proc); err != nil {
 			return err
 		}
-		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+		w.metaLocBat.SetRowCount(w.metaLocBat.Vecs[0].Length())
 		return nil
 	}
 	for _, bat := range w.Bats {
@@ -308,7 +315,7 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 			return err
 		}
 	}
-	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+	w.metaLocBat.SetRowCount(w.metaLocBat.Vecs[0].Length())
 	return nil
 }
 
@@ -334,10 +341,10 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 		}
 	}
 	res := false
-	start, end := 0, bat.Length()
+	start, end := 0, bat.RowCount()
 	for start < end {
 		n := len(w.Bats)
-		if n == 0 || w.Bats[n-1].Length() >=
+		if n == 0 || w.Bats[n-1].RowCount() >=
 			int(options.DefaultBlockMaxRows) {
 			if len(w.tableBatchBuffers) > 0 {
 				rbat = w.tableBatchBuffers[0]
@@ -355,7 +362,7 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 			rbat = w.Bats[n-1]
 		}
 		rows := end - start
-		if left := int(options.DefaultBlockMaxRows) - rbat.Length(); rows > left {
+		if left := int(options.DefaultBlockMaxRows) - rbat.RowCount(); rows > left {
 			rows = left
 		}
 		for i := 0; i < bat.VectorCount(); i++ {
@@ -367,9 +374,7 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 				}
 			}
 		}
-		for j := 0; j < rows; j++ {
-			rbat.Zs = append(rbat.Zs, bat.Zs[j+start])
-		}
+		rbat.AddRowCount(rows)
 		start += rows
 		if w.batSize = w.batSize + uint64(rbat.Size()); w.batSize > WriteS3Threshold {
 			res = true
@@ -577,8 +582,9 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 		}
 	}
 	var strCol []string
-	sels := make([]int64, len(bat.Zs))
-	for i := 0; i < len(bat.Zs); i++ {
+	rowCount := bat.RowCount()
+	sels := make([]int64, rowCount)
+	for i := 0; i < rowCount; i++ {
 		sels[i] = int64(i)
 	}
 	ovec := bat.GetVector(int32(sortIndex))
@@ -610,7 +616,7 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 		logutil.Warnf("CN write s3 table %q: seqnums length not match seqnums: %v, attrs: %v",
 			w.tablename, w.seqnums, bat.Attrs)
 	}
-	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.Vecs[0].Length(), w.tablename, w.seqnums, w.attrs)
+	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.vecs[0].Length(), w.tablename, w.seqnums, w.attrs)
 	_, err := w.writer.WriteBatch(bat)
 	if err != nil {
 		return err
@@ -641,7 +647,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 			return err
 		}
 	}
-	w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+	w.metaLocBat.SetRowCount(w.metaLocBat.Vecs[0].Length())
 	return nil
 }
 
@@ -649,7 +655,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 // For more information, please refer to the comment about func WriteEnd in Writer interface
 func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
-	logutil.Infof("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
+	logutil.Debugf("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
 	if err != nil {
 		return nil, err
 	}

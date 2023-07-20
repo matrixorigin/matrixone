@@ -54,15 +54,18 @@ const (
 
 var (
 	// for blk meta response
-	BlkMetaSchema *catalog.Schema
-	DelSchema     *catalog.Schema
-	SegSchema     *catalog.Schema
-	TxnNodeSchema *catalog.Schema
-	DBDNSchema    *catalog.Schema
-	TblDNSchema   *catalog.Schema
-	SegDNSchema   *catalog.Schema
-	BlkDNSchema   *catalog.Schema
-	MetaSchema    *catalog.Schema
+	BlkMetaSchema   *catalog.Schema
+	DelSchema       *catalog.Schema
+	SegSchema       *catalog.Schema
+	TxnNodeSchema   *catalog.Schema
+	DBDNSchema      *catalog.Schema
+	TblDNSchema     *catalog.Schema
+	SegDNSchema     *catalog.Schema
+	BlkDNSchema     *catalog.Schema
+	MetaSchema      *catalog.Schema
+	DBDelSchema     *catalog.Schema
+	TblDelSchema    *catalog.Schema
+	ColumnDelSchema *catalog.Schema
 )
 
 var (
@@ -200,6 +203,25 @@ var (
 		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),
 	}
+	DBDelSchemaAttr = []string{
+		pkgcatalog.SystemDBAttr_ID,
+	}
+	DBDelSchemaTypes = []types.Type{
+		types.T_uint64.ToType(),
+	}
+	TblDelSchemaAttr = []string{
+		pkgcatalog.SystemRelAttr_ID,
+	}
+	TblDelSchemaTypes = []types.Type{
+		types.T_uint64.ToType(),
+	}
+	ColumnDelSchemaAttr = []string{
+		pkgcatalog.SystemColAttr_UniqName,
+	}
+	ColumnDelSchemaTypes = []types.Type{
+		types.T_varchar.ToType(),
+	}
+
 	BaseAttr = []string{
 		catalog.AttrRowID,
 		catalog.AttrCommitTs,
@@ -337,6 +359,45 @@ func init() {
 			}
 		} else {
 			if err := MetaSchema.AppendCol(colname, MetaShcemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	DBDelSchema = catalog.NewEmptySchema("meta")
+	for i, colname := range DBDelSchemaAttr {
+		if i == 0 {
+			if err := DBDelSchema.AppendPKCol(colname, DBDelSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := DBDelSchema.AppendCol(colname, DBDelSchemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	TblDelSchema = catalog.NewEmptySchema("meta")
+	for i, colname := range TblDelSchemaAttr {
+		if i == 0 {
+			if err := TblDelSchema.AppendPKCol(colname, TblDelSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := TblDelSchema.AppendCol(colname, TblDelSchemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	ColumnDelSchema = catalog.NewEmptySchema("meta")
+	for i, colname := range ColumnDelSchemaAttr {
+		if i == 0 {
+			if err := ColumnDelSchema.AppendPKCol(colname, ColumnDelSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := ColumnDelSchema.AppendCol(colname, ColumnDelSchemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}

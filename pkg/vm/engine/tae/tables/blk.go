@@ -238,6 +238,7 @@ func (blk *block) getPersistedRowByFilter(
 	}
 	if deleted {
 		err = moerr.NewNotFoundNoCtx()
+		return
 	}
 	deletes, err := blk.persistedCollectDeleteMaskInRange(ctx, types.TS{}, txn.GetStartTS())
 	if err != nil {

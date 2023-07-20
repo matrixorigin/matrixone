@@ -18,46 +18,47 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/clockobjcache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type MemCache struct {
-	objCache    ObjectCache
-	ch          chan func()
-	counterSets []*perfcounter.CounterSet
+	objCache             ObjectCache
+	counterSets          []*perfcounter.CounterSet
+	overlapChecker       *interval.OverlapChecker
+	enableOverlapChecker bool
 }
 
 func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
-	ch := make(chan func(), 65536)
-	go func() {
-		for fn := range ch {
-			fn()
-		}
-	}()
-
 	initOpts := defaultMemCacheOptions()
 	for _, optFunc := range opts {
 		optFunc(&initOpts)
 	}
 
 	return &MemCache{
-		objCache:    initOpts.objCache,
-		ch:          ch,
-		counterSets: initOpts.counterSets,
+		overlapChecker:       initOpts.overlapChecker,
+		enableOverlapChecker: initOpts.enableOverlapChecker,
+		objCache:             initOpts.objCache,
+		counterSets:          initOpts.counterSets,
 	}
 }
 
 func WithLRU(capacity int64) MemCacheOptionFunc {
 	return func(o *memCacheOptions) {
-		o.objCache = lruobjcache.New(capacity)
-	}
-}
+		o.overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
+		o.enableOverlapChecker = true
 
-func WithClock(capacity int64) MemCacheOptionFunc {
-	return func(o *memCacheOptions) {
-		o.objCache = clockobjcache.New(capacity)
+		postEvictFn := func(key any, value []byte, _ int64) {
+			if o.enableOverlapChecker {
+				_key := key.(IOVectorCacheKey)
+				if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
+					panic(err)
+				}
+			}
+		}
+
+		o.objCache = lruobjcache.New(capacity, postEvictFn)
 	}
 }
 
@@ -70,8 +71,10 @@ func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) MemCacheOptionFu
 type MemCacheOptionFunc func(*memCacheOptions)
 
 type memCacheOptions struct {
-	objCache    ObjectCache
-	counterSets []*perfcounter.CounterSet
+	objCache             ObjectCache
+	overlapChecker       *interval.OverlapChecker
+	counterSets          []*perfcounter.CounterSet
+	enableOverlapChecker bool
 }
 
 func defaultMemCacheOptions() memCacheOptions {
@@ -161,15 +164,17 @@ func (m *MemCache) Update(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		if async {
-			obj := entry.ObjectBytes // copy from loop variable
-			objSize := entry.ObjectSize
-			m.ch <- func() {
-				m.objCache.Set(key, obj, objSize, vector.Preloading)
+
+		isNewEntry := m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
+
+		// Update overlap checker when new key-interval is inserted into the cache.
+		// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
+		if m.enableOverlapChecker && isNewEntry {
+			if err := m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
+				panic(err)
 			}
-		} else {
-			m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
 		}
+
 	}
 	return nil
 }

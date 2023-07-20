@@ -300,9 +300,10 @@ type ColumnExpressionExecutor struct {
 }
 
 type ParamExpressionExecutor struct {
-	vec *vector.Vector
-	pos int
-	typ types.Type
+	null *vector.Vector
+	vec  *vector.Vector
+	pos  int
+	typ  types.Type
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
@@ -310,6 +311,14 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	if err != nil {
 		return nil, err
 	}
+
+	if val == nil {
+		if expr.null == nil {
+			expr.null = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+		}
+		return expr.null, nil
+	}
+
 	if expr.vec == nil {
 		expr.vec = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
 	} else {
@@ -319,8 +328,6 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		}
 	}
 	return expr.vec, nil
-
-	// return proc.GetPrepareParamsAt(int(expr.pos))
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
@@ -397,12 +404,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	if err = expr.resultVector.PreExtendAndReset(batches[0].Length()); err != nil {
+	if err = expr.resultVector.PreExtendAndReset(batches[0].RowCount()); err != nil {
 		return nil, err
 	}
 
 	if err = expr.evalFn(
-		expr.parameterResults, expr.resultVector, proc, batches[0].Length()); err != nil {
+		expr.parameterResults, expr.resultVector, proc, batches[0].RowCount()); err != nil {
 		return nil, err
 	}
 	return expr.resultVector.GetResultVector(), nil
@@ -477,7 +484,7 @@ func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
 	if !expr.fixed {
-		expr.resultVector.SetLength(batches[0].Length())
+		expr.resultVector.SetLength(batches[0].RowCount())
 	}
 	return expr.resultVector, nil
 }
@@ -770,7 +777,6 @@ func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,
 		rbat.Vecs[i] = vector.NewConstNull(typ, 0, nil)
 		cfs[i] = vector.GetConstSetFunction(typ, mp)
 	}
-	rbat.Zs = mp.GetSels()
 	return rbat, cfs
 }
 
@@ -781,13 +787,7 @@ func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
 			return err
 		}
 	}
-	if n := cap(joinBat.Zs); n < length {
-		joinBat.Zs = joinBat.Zs[:n]
-		for ; n < length; n++ {
-			joinBat.Zs = append(joinBat.Zs, 1)
-		}
-	}
-	joinBat.Zs = joinBat.Zs[:length]
+	joinBat.SetRowCount(length)
 	return nil
 }
 
