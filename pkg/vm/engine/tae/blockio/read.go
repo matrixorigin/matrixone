@@ -288,8 +288,8 @@ func BlockReadInner(
 		deletedRows = deleteMask.ToI64Arrary()
 		// logutil.Debugf("deleted/length: %d/%d=%f",
 		// 	len(deletedRows),
-		// 	loaded.Vecs[0].RowCount(),
-		// 	float64(len(deletedRows))/float64(loaded.Vecs[0].RowCount()))
+		// 	loaded.Vecs[0].Length(),
+		// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
 	}
 
 	// build rowid column if needed

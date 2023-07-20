@@ -643,7 +643,7 @@ func (tbl *txnTable) rangesOnePart(
 	txn := tbl.db.txn
 	for _, entry := range tbl.writes {
 		if entry.typ == INSERT {
-			if entry.bat == nil || entry.bat.RowCount() == 0 {
+			if entry.bat == nil || entry.bat.IsEmpty() {
 				continue
 			}
 			if entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {

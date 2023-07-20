@@ -751,7 +751,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}
-		if e.bat == nil || e.bat.RowCount() == 0 {
+		if e.bat == nil || e.bat.IsEmpty() {
 			continue
 		}
 		if v != nil {
@@ -1072,7 +1072,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 		}
 	}
 	for i := range bats {
-		bats[i].SetZs(bats[i].GetVector(0).RowCount(), proc.Mp())
+		bats[i].SetZs(bats[i].GetVector(0).Length(), proc.Mp())
 	}
 	return bats, nil
 }

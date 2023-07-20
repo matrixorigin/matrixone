@@ -254,8 +254,8 @@ func (w *S3Writer) ResetMetaLocBat(proc *process.Process) {
 }
 
 //func (w *S3Writer) WriteEnd(proc *process.Process) {
-//	if w.metaLocBat.Vecs[0].RowCount() > 0 {
-//		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].RowCount(), proc.GetMPool())
+//	if w.metaLocBat.vecs[0].Length() > 0 {
+//		w.metaLocBat.SetZs(w.metaLocBat.vecs[0].Length(), proc.GetMPool())
 //		proc.SetInputBatch(w.metaLocBat)
 //	}
 //}
@@ -616,7 +616,7 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 		logutil.Warnf("CN write s3 table %q: seqnums length not match seqnums: %v, attrs: %v",
 			w.tablename, w.seqnums, bat.Attrs)
 	}
-	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.Vecs[0].RowCount(), w.tablename, w.seqnums, w.attrs)
+	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.vecs[0].Length(), w.tablename, w.seqnums, w.attrs)
 	_, err := w.writer.WriteBatch(bat)
 	if err != nil {
 		return err

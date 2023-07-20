@@ -63,7 +63,7 @@ func (p *PartitionReader) prepare() error {
 		deletes = make(map[types.Rowid]uint8)
 		for _, entry := range p.table.writes {
 			if entry.typ == INSERT {
-				if entry.bat == nil || entry.bat.RowCount() == 0 {
+				if entry.bat == nil || entry.bat.IsEmpty() {
 					continue
 				}
 				if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {

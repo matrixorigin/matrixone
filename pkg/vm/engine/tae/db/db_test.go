@@ -87,7 +87,7 @@ func TestAppend(t *testing.T) {
 	err := rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 	// FIXME
-	// checkAllColRowsByScan(t, rel, bats[0].RowCount()+bats[1].RowCount(), false)
+	// checkAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
 	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -304,7 +304,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	//compactSegs(t, tae, schema)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	//checkAllColRowsByScan(t, rel, bat.RowCount()-2, false)
+	//checkAllColRowsByScan(t, rel, bat.Length()-2, false)
 	checkAllColRowsByScan(t, rel, bat.Length()-1, false)
 	assert.NoError(t, txn.Commit(context.Background()))
 
