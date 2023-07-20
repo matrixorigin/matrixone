@@ -16,13 +16,13 @@ package proxy
 
 import (
 	"context"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
 var statsFamilyName = "proxy counter"
@@ -49,6 +49,9 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+
+	frontend.InitServerVersion(version.Version)
+
 	s := &Server{
 		config:     config,
 		counterSet: newCounterSet(),
