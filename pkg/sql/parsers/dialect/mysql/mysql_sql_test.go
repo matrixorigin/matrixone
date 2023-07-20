@@ -2187,6 +2187,10 @@ var (
 			output: "alter stage my_ext_stage set  crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'}",
 		},
 		{
+			input:  "SHOW STAGES LIKE 'my_stage'",
+			output: "show stages like my_stage",
+		},
+		{
 			input: "create database db1 from acc0 publication pub1",
 		},
 		{
@@ -2434,6 +2438,9 @@ var (
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH LOCAL CHECK OPTION",
 			output: "create view t2 as select * from t1",
+		}, {
+			input:  "insert into t1 values(_binary 0x123)",
+			output: "insert into t1 values (123)",
 		},
 	}
 )

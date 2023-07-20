@@ -38,21 +38,18 @@ func Prepare(proc *process.Process, arg any) error {
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
+
+	if ap.ctr.state == outPut {
+		return sendOneBatch(ap, proc, false), nil
+	}
+
 	bat := proc.InputBatch()
 	if bat == nil {
-		for i := range ap.ctr.shuffledBats {
-			if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > 0 {
-				proc.SetInputBatch(ap.ctr.shuffledBats[i])
-				ap.ctr.shuffledBats[i] = nil
-				return process.ExecHasMore, nil
-			}
-		}
-		return process.ExecStop, nil
+		return sendOneBatch(ap, proc, true), nil
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
-		sendOneBatch(ap, proc)
-		return process.ExecNext, nil
+		return sendOneBatch(ap, proc, false), nil
 	}
 	if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
 		return hashShuffle(bat, ap, proc)
@@ -176,26 +173,32 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 	return nil
 }
 
-func findBatchToSend(ap *Argument) int {
-	maxSize := 0
-	maxIndex := -1
+func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) process.ExecStatus {
+	threshHold := shuffleBatchSize
+	if isEnding {
+		threshHold = 0
+	}
+	var findOneBatch bool
 	for i := range ap.ctr.shuffledBats {
-		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > maxSize {
-			maxSize = ap.ctr.shuffledBats[i].Length()
-			maxIndex = i
+		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > threshHold {
+			if !findOneBatch {
+				findOneBatch = true
+				proc.SetInputBatch(ap.ctr.shuffledBats[i])
+				ap.ctr.shuffledBats[i] = nil
+			} else {
+				ap.ctr.state = outPut
+				return process.ExecHasMore
+			}
 		}
 	}
-	return maxIndex
-}
-
-func sendOneBatch(ap *Argument, proc *process.Process) {
-	regIndex := findBatchToSend(ap)
-	if regIndex >= 0 {
-		proc.SetInputBatch(ap.ctr.shuffledBats[regIndex])
-		ap.ctr.shuffledBats[regIndex] = nil
-	} else {
+	if !findOneBatch {
 		proc.SetInputBatch(batch.EmptyBatch)
 	}
+	ap.ctr.state = input
+	if isEnding {
+		return process.ExecStop
+	}
+	return process.ExecNext
 }
 
 func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (process.ExecStatus, error) {
@@ -203,8 +206,7 @@ func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (process
 	if err != nil {
 		return process.ExecNext, err
 	}
-	sendOneBatch(ap, proc)
-	return process.ExecNext, nil
+	return sendOneBatch(ap, proc, false), nil
 }
 
 func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
@@ -353,6 +355,5 @@ func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (proces
 	if err != nil {
 		return process.ExecNext, err
 	}
-	sendOneBatch(ap, proc)
-	return process.ExecNext, nil
+	return sendOneBatch(ap, proc, false), nil
 }

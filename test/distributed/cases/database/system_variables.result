@@ -1,8 +1,10 @@
 show variables like 'auto%';
 Variable_name    Value
+auto_generate_certs    off
 auto_increment_increment    1
 auto_increment_offset    1
 autocommit    on
+automatic_sp_privileges    off
 show variables like 'auto_increment_increment';
 Variable_name    Value
 auto_increment_increment    1
@@ -21,6 +23,7 @@ auto_increment_increment    6
 show variables like 'init%';
 Variable_name    Value
 init_connect
+init_file
 show variables like 'init_connect';
 Variable_name    Value
 init_connect
@@ -44,6 +47,7 @@ Variable_name    Value
 interactive_timeout    30100
 show variables like 'lower%';
 Variable_name    Value
+lower_case_file_system    off
 lower_case_table_names    1
 show variables like 'lower_case_table_names';
 Variable_name    Value
@@ -70,7 +74,9 @@ select @@system_time_zone != '';
 true
 show variables like 'trans%';
 Variable_name    Value
+transaction_alloc_block_size    8192
 transaction_isolation    REPEATABLE-READ
+transaction_prealloc_size    4096
 transaction_read_only    0
 show variables like 'transaction_isolation';
 Variable_name    Value
@@ -439,11 +445,11 @@ Variable_name    Value
 wait_timeout    28800
 show variables like 'character_set_results';
 Variable_name    Value
-character_set_results    utf8
+character_set_results    utf8mb4
 set character_set_server = default;
 show variables like 'character_set_results';
 Variable_name    Value
-character_set_results    utf8
+character_set_results    utf8mb4
 show variables like 'character_set_server';
 Variable_name    Value
 character_set_server    utf8mb4
