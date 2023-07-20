@@ -1468,15 +1468,15 @@ func getsqlForUpdateStageUrl(stageName, url string) string {
 }
 
 func getsqlForUpdateStageCredentials(stageName, credentials string) string {
-	return fmt.Sprintf(updateStageUrlFotmat, credentials, stageName)
+	return fmt.Sprintf(updateStageCredentialsFotmat, credentials, stageName)
 }
 
 func getsqlForUpdateStageStatus(stageName, status string) string {
-	return fmt.Sprintf(updateStageUrlFotmat, status, stageName)
+	return fmt.Sprintf(updateStageStatusFotmat, status, stageName)
 }
 
 func getsqlForUpdateStageComment(stageName, comment string) string {
-	return fmt.Sprintf(updateStageUrlFotmat, comment, stageName)
+	return fmt.Sprintf(updateStageCommentFotmat, comment, stageName)
 }
 
 func getSqlForGetAccountName(tenantId uint32) string {

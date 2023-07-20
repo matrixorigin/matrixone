@@ -2861,7 +2861,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.AlterStage:
 		selfHandle = true
-		selfHandle = true
 		if err = mce.handleAlterStage(requestCtx, st); err != nil {
 			return err
 		}
