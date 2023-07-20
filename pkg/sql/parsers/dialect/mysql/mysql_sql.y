@@ -2367,7 +2367,7 @@ table_lock_list:
 table_lock_elem:
     table_name table_lock_type
     {
-        $$ = tree.TableLock{*$1, $2}
+        $$ = tree.TableLock{Table: *$1, LockType: $2}
     }
 
 table_lock_type:  
