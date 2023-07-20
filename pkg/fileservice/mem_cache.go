@@ -16,29 +16,21 @@ package fileservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type MemCache struct {
 	objCache             ObjectCache
-	ch                   chan func()
 	counterSets          []*perfcounter.CounterSet
 	overlapChecker       *interval.OverlapChecker
 	enableOverlapChecker bool
 }
 
 func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
-	ch := make(chan func(), 65536)
-	go func() {
-		for fn := range ch {
-			fn()
-		}
-	}()
-
 	initOpts := defaultMemCacheOptions()
 	for _, optFunc := range opts {
 		optFunc(&initOpts)
@@ -48,7 +40,6 @@ func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
 		overlapChecker:       initOpts.overlapChecker,
 		enableOverlapChecker: initOpts.enableOverlapChecker,
 		objCache:             initOpts.objCache,
-		ch:                   ch,
 		counterSets:          initOpts.counterSets,
 	}
 }
@@ -174,29 +165,13 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		if async {
-			obj := entry.ObjectBytes // copy from loop variable
-			objSize := entry.ObjectSize
-			m.ch <- func() {
-				isNewEntry := m.objCache.Set(key, obj, objSize, vector.Preloading)
+		isNewEntry := m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
 
-				// Update overlap checker when new key-interval is inserted into the cache.
-				// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
-				if m.enableOverlapChecker && isNewEntry {
-					if err = m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
-						panic(err)
-					}
-				}
-			}
-		} else {
-			isNewEntry := m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
-
-			// Update overlap checker when new key-interval is inserted into the cache.
-			// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
-			if m.enableOverlapChecker && isNewEntry {
-				if err = m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
-					panic(err)
-				}
+		// Update overlap checker when new key-interval is inserted into the cache.
+		// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
+		if m.enableOverlapChecker && isNewEntry {
+			if err := m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
+				panic(err)
 			}
 		}
 

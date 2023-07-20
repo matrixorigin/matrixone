@@ -220,12 +220,14 @@ func NewCatalogLogtailRespBuilder(ctx context.Context, scope Scope, ckp string, 
 	switch scope {
 	case ScopeDatabases:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemDBSchema)
+		b.delBatch = makeRespBatchFromSchema(DBDelSchema)
 	case ScopeTables:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemTableSchema)
+		b.delBatch = makeRespBatchFromSchema(TblDelSchema)
 	case ScopeColumns:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema)
+		b.delBatch = makeRespBatchFromSchema(ColumnDelSchema)
 	}
-	b.delBatch = makeRespBatchFromSchema(DelSchema)
 	b.DatabaseFn = b.VisitDB
 	b.TableFn = b.VisitTbl
 
@@ -259,7 +261,7 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		dbNode := node
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
-			catalogEntry2Batch(b.delBatch, entry, dbNode, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
+			catalogEntry2Batch(b.delBatch, entry, dbNode, DBDelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 		} else {
 			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
 		}
@@ -292,6 +294,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 				for _, name := range node.BaseNode.Schema.Extra.DroppedAttrs {
 					b.delBatch.GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
 					b.delBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.GetEnd(), false)
+					b.delBatch.GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name)), false)
 				}
 			} else {
 				dstBatch = b.delBatch
@@ -308,7 +311,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			}
 		} else {
 			if node.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, node, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), node.GetEnd())
+				catalogEntry2Batch(b.delBatch, entry, node, TblDelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), node.GetEnd())
 			} else {
 				catalogEntry2Batch(b.insBatch, entry, node, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), node.GetEnd())
 			}
