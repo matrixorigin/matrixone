@@ -25,6 +25,10 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
+var (
+	maxWaitingCheckCount = 10240
+)
+
 type detector struct {
 	serviceID         string
 	c                 chan deadlockTxn
@@ -33,8 +37,9 @@ type detector struct {
 	ignoreTxns        sync.Map // txnID -> any
 	stopper           *stopper.Stopper
 	mu                struct {
-		sync.RWMutex
-		closed bool
+		sync.Mutex
+		closed         bool
+		activeCheckTxn map[string]struct{}
 	}
 }
 
@@ -48,12 +53,13 @@ func newDeadlockDetector(
 	waitTxnAbortFunc func(pb.WaitTxn)) *detector {
 	d := &detector{
 		serviceID:         serviceID,
-		c:                 make(chan deadlockTxn, 1024),
+		c:                 make(chan deadlockTxn, maxWaitingCheckCount),
 		waitTxnsFetchFunc: waitTxnsFetchFunc,
 		waitTxnAbortFunc:  waitTxnAbortFunc,
 		stopper: stopper.NewStopper("deadlock-detector",
 			stopper.WithLogger(getLogger().RawLogger())),
 	}
+	d.mu.activeCheckTxn = make(map[string]struct{}, maxWaitingCheckCount)
 	err := d.stopper.RunTask(d.doCheck)
 	if err != nil {
 		panic("impossible")
@@ -77,15 +83,26 @@ func (d *detector) txnClosed(txnID []byte) {
 func (d *detector) check(
 	holdTxnID []byte,
 	txn pb.WaitTxn) error {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.mu.closed {
 		return ErrDeadlockDetectorClosed
 	}
 
-	d.c <- deadlockTxn{
+	key := util.UnsafeBytesToString(txn.TxnID)
+	if _, ok := d.mu.activeCheckTxn[key]; ok {
+		return nil
+	}
+	d.mu.activeCheckTxn[key] = struct{}{}
+
+	select {
+	case d.c <- deadlockTxn{
 		holdTxnID: holdTxnID,
 		waitTxn:   txn,
+	}:
+	default:
+		// too many txns waiting for deadlock check, just return error
+		return ErrDeadlockDetectorClosed
 	}
 	return nil
 }
@@ -108,6 +125,9 @@ func (d *detector) doCheck(ctx context.Context) {
 				d.ignoreTxns.Store(v, struct{}{})
 				d.waitTxnAbortFunc(txn.waitTxn)
 			}
+			d.mu.Lock()
+			delete(d.mu.activeCheckTxn, util.UnsafeBytesToString(txn.waitTxn.TxnID))
+			d.mu.Unlock()
 		}
 	}
 }
