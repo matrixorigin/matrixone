@@ -213,12 +213,16 @@ func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
 }
 
 func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
-	it := deleteNode.mask.Iterator()
-	for it.HasNext() {
-		row := it.Next()
-		chain.InsertInDeleteView(row, deleteNode)
-	}
 	deleteNode.AttachTo(chain)
+	switch deleteNode.nt {
+	case NT_Persisted:
+	case NT_Merge, NT_Normal:
+		it := deleteNode.mask.Iterator()
+		for it.HasNext() {
+			row := it.Next()
+			chain.InsertInDeleteView(row, deleteNode)
+		}
+	}
 	chain.AddDeleteCnt(uint32(deleteNode.mask.GetCardinality()))
 	chain.insertInMaskByNode(deleteNode)
 	chain.mvcc.IncChangeIntentionCnt()

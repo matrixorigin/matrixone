@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/google/shlex"
 	"go.uber.org/zap"
@@ -940,7 +941,7 @@ func (h *Handle) HandleWrite(
 				if ok {
 					continue
 				}
-				logutil.Warnf("try delete by deltaloc failed")
+				logutil.Warnf("blk %v try delete by deltaloc failed", id.BlockID.String())
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}

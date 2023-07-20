@@ -191,7 +191,7 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
 	if node.nt == NT_Persisted {
-		if node.chain.Load().Depth() != 1 {
+		if node.chain.Load().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()) {
 			return txnif.ErrTxnNeedRetry
 		}
 	}
@@ -355,20 +355,23 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += int64(cn)
 	var buf []byte
-	switch node.nt {
-	case NT_Merge, NT_Normal:
-		buf, err = node.mask.ToBytes()
-		if err != nil {
-			return
-		}
-	case NT_Persisted:
-		buf = node.deltaloc
-	}
 	var sn int64
+	buf, err = node.mask.ToBytes()
+	if err != nil {
+		return
+	}
 	if sn, err = objectio.WriteBytes(buf, w); err != nil {
 		return
 	}
 	n += int64(sn)
+	switch node.nt {
+	case NT_Merge, NT_Normal:
+	case NT_Persisted:
+		if sn, err = objectio.WriteBytes(node.deltaloc, w); err != nil {
+			return
+		}
+		n += int64(sn)
+	}
 	var sn2 int64
 	if sn2, err = node.TxnMVCCNode.WriteTo(w); err != nil {
 		return
@@ -392,14 +395,18 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn2
+	node.mask = roaring.New()
+	err = node.mask.UnmarshalBinary(buf)
+	if err != nil {
+		return
+	}
 	switch node.nt {
 	case NT_Merge, NT_Normal:
-		node.mask = roaring.New()
-		err = node.mask.UnmarshalBinary(buf)
-		if err != nil {
+	case NT_Persisted:
+		if buf, sn2, err = objectio.ReadBytes(r); err != nil {
 			return
 		}
-	case NT_Persisted:
+		n += sn2
 		node.deltaloc = buf
 	}
 	if sn2, err = node.TxnMVCCNode.ReadFrom(r); err != nil {
@@ -431,12 +438,7 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 		node.chain.Load().RemoveNodeLocked(node)
 		node.chain.Load().DeleteInDeleteView(node)
 	case NT_Persisted:
-		mask := node.mask
-		it := mask.Iterator()
-		for it.HasNext() {
-			row := it.Next()
-			node.chain.Load().mask.Del(uint64(row))
-		}
+		node.chain.Load().RemoveNodeLocked(node)
 	}
 	node.TxnMVCCNode.PrepareRollback()
 	return

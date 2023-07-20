@@ -751,6 +751,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 	}
 	blkData := blk.GetBlockData()
 	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, dt)
+	logutil.Infof("range delete in memory blk %v, row [%d,%d] %p", id.BlockID.String(), start, end, node2)
 	if err == nil {
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
 			return
