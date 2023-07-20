@@ -900,6 +900,14 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 					row[1] = "off"
 				}
 			}
+			_, ok = value.(int64)
+			if ok {
+				if v == 1 {
+					row[1] = "on"
+				} else {
+					row[1] = "off"
+				}
+			}
 		}
 		rows = append(rows, row)
 	}

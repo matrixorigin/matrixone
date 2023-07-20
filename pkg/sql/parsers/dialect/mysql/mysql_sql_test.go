@@ -2438,6 +2438,9 @@ var (
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH LOCAL CHECK OPTION",
 			output: "create view t2 as select * from t1",
+		}, {
+			input:  "insert into t1 values(_binary 0x123)",
+			output: "insert into t1 values (123)",
 		},
 	}
 )
