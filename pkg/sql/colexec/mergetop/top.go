@@ -61,7 +61,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -71,24 +71,27 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	if ap.Limit == 0 {
 		ap.Free(proc, false)
 		proc.SetInputBatch(nil)
-		return true, nil
+		return process.ExecStop, nil
 	}
 
 	if end, err := ctr.build(ap, proc, anal, isFirst); err != nil {
 		ap.Free(proc, true)
-		return false, err
+		return process.ExecNext, err
 	} else if end {
-		return end, nil
+		return process.ExecStop, nil
 	}
 
 	if ctr.bat == nil {
 		ap.Free(proc, false)
 		proc.SetInputBatch(nil)
-		return true, nil
+		return process.ExecStop, nil
 	}
 	err := ctr.eval(ap.Limit, proc, anal, isLast)
 	ap.Free(proc, err != nil)
-	return err == nil, err
+	if err == nil {
+		return process.ExecStop, nil
+	}
+	return process.ExecNext, err
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {

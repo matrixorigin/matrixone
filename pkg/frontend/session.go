@@ -48,7 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var MaxPrepareNumberInOneSession int = 1024
+var MaxPrepareNumberInOneSession int = 100000
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -1228,7 +1228,11 @@ func (ses *Session) SetUserName(uname string) {
 }
 
 func (ses *Session) GetConnectionID() uint32 {
-	return ses.GetMysqlProtocol().ConnectionID()
+	protocol := ses.GetMysqlProtocol()
+	if protocol != nil {
+		return ses.GetMysqlProtocol().ConnectionID()
+	}
+	return 0
 }
 
 func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {

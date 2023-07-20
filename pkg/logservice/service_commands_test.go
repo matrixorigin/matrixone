@@ -32,18 +32,17 @@ import (
 
 func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := Config{
-		UUID:           uuid.New().String(),
-		FS:             vfs.NewStrictMem(),
-		DeploymentID:   1,
-		RTTMillisecond: 5,
-		DataDir:        "data-1",
-		ServiceAddress: "127.0.0.1:9002",
-		RaftAddress:    "127.0.0.1:9000",
-		GossipAddress:  "127.0.0.1:9001",
-		// below is an unreachable address intentionally set
-		GossipSeedAddresses: []string{"127.0.0.1:9010"},
-	}
+	cfg := DefaultConfig()
+	cfg.UUID = uuid.New().String()
+	cfg.FS = vfs.NewStrictMem()
+	cfg.DeploymentID = 1
+	cfg.RTTMillisecond = 5
+	cfg.DataDir = "data-1"
+	cfg.ServiceAddress = "127.0.0.1:9002"
+	cfg.RaftAddress = "127.0.0.1:9000"
+	cfg.GossipAddress = "127.0.0.1:9001"
+	// below is an unreachable address intentionally set
+	cfg.GossipSeedAddresses = []string{"127.0.0.1:9010"}
 	cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
 	cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
 	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}

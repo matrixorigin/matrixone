@@ -26,11 +26,6 @@ import (
 )
 
 const (
-	InternalExecutor = "InternalExecutor"
-	FileService      = "FileService"
-)
-
-const (
 	MOStatementType = "statement"
 	MOSpanType      = "span"
 	MOLogType       = "log"
@@ -60,16 +55,12 @@ type tracerProviderConfig struct {
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
-	batchProcessMode string         // WithBatchProcessMode
-	batchProcessor   BatchProcessor // WithBatchProcessor
+	batchProcessor BatchProcessor // WithBatchProcessor
 
 	// writerFactory gen writer for CSV output
 	writerFactory table.WriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
 	// disableSqlWriter
 	disableSqlWriter bool // set by WithSQLWriterDisable
-
-	// skipRunningStmt
-	skipRunningStmt bool // set by WithSkipRunningStmt
 
 	// stmt aggregation
 	disableStmtAggregation bool          // set by WithStmtAggregationDisable
@@ -86,6 +77,8 @@ type tracerProviderConfig struct {
 	longQueryTime int64 //  WithLongQueryTime
 	// longSpanTime
 	longSpanTime time.Duration
+	// skipRunningStmt
+	skipRunningStmt bool // set by WithSkipRunningStmt
 
 	bufferSizeThreshold int64 // WithBufferSizeThreshold
 
@@ -231,11 +224,6 @@ func DebugMode(debug bool) tracerProviderOption {
 	}
 }
 
-func WithBatchProcessMode(mode string) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		cfg.batchProcessMode = mode
-	}
-}
 func WithBatchProcessor(p BatchProcessor) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.batchProcessor = p

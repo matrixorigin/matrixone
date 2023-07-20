@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -185,17 +186,30 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 }
 
 // receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
+func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, lastInstruction vm.Instruction) error {
 	var val morpc.Message
 	var err error
 	var dataBuffer []byte
 	var sequence uint64
 
+	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx)
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 		if err != nil {
 			return err
 		}
+	}
+
+	var isConnector bool
+	var lastArg vm.InstructionArgument
+	switch arg := lastInstruction.Arg.(type) {
+	case *connector.Argument:
+		isConnector = true
+		lastArg = arg
+	case *dispatch.Argument:
+		lastArg = arg
+	default:
+		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
 	for {
@@ -243,8 +257,14 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 		if err != nil {
 			return err
 		}
-		nextAnalyze.Network(bat)
-		sendToConnectOperator(nextOperator, bat)
+		lastAnalyze.Network(bat)
+		c.proc.SetInputBatch(bat)
+
+		if isConnector {
+			connector.Call(-1, c.proc, lastArg, false, false)
+		} else {
+			dispatch.Call(-1, c.proc, lastArg, false, false)
+		}
 
 		dataBuffer = nil
 	}
@@ -257,14 +277,28 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 // 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
 	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
-	n := len(s.Instructions) - 1
-	con := s.Instructions[n]
-	s.Instructions = s.Instructions[:n]
+	lastIdx := len(s.Instructions) - 1
+	lastInstruction := s.Instructions[lastIdx]
+	s.Instructions = s.Instructions[:lastIdx]
+
+	// The current logic is a bit hacky, the last operator doesn't go in the pipeline frame
+	// i.e. we need to call the corresponding Perpare, Call and Free manually.
+	// Prepare and Free are called in this func, and Call in receiveMessageFromCnServer
+	lastArg := lastInstruction.Arg
+	switch arg := lastArg.(type) {
+	case *connector.Argument:
+		connector.Prepare(c.proc, arg)
+	case *dispatch.Argument:
+		dispatch.Prepare(c.proc, arg)
+	default:
+		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
+	}
+
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
 		return errEncode
 	}
-	s.Instructions = append(s.Instructions, con)
+	s.Instructions = append(s.Instructions, lastInstruction)
 
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc)
@@ -283,10 +317,11 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return err
 	}
 
-	nextInstruction := s.Instructions[len(s.Instructions)-1]
-	nextAnalyze := c.proc.GetAnalyze(nextInstruction.Idx)
-	nextArg := nextInstruction.Arg.(*connector.Argument)
-	err = receiveMessageFromCnServer(c, sender, nextAnalyze, nextArg)
+	err = receiveMessageFromCnServer(c, sender, lastInstruction)
+
+	// tell the connector or dispatch is over
+	lastArg.Free(s.Proc, err != nil)
+
 	sender.close()
 	return err
 }
@@ -677,12 +712,15 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond: t.Conditions[1],
 			Result:    t.Result,
 		}
+	case *shuffle.Argument:
+		in.Shuffle = &pipeline.Shuffle{}
+		in.Shuffle.ShuffleColIdx = t.ShuffleColIdx
+		in.Shuffle.ShuffleType = t.ShuffleType
+		in.Shuffle.ShuffleColMax = t.ShuffleColMax
+		in.Shuffle.ShuffleColMin = t.ShuffleColMin
+		in.Shuffle.AliveRegCnt = t.AliveRegCnt
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, FuncId: int32(t.FuncId)}
-		in.Dispatch.ShuffleColIdx = t.ShuffleColIdx
-		in.Dispatch.ShuffleType = t.ShuffleType
-		in.Dispatch.ShuffleColMax = t.ShuffleColMax
-		in.Dispatch.ShuffleColMin = t.ShuffleColMin
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
 		for i := range t.ShuffleRegIdxLocal {
 			in.Dispatch.ShuffleRegIdxLocal[i] = int32(t.ShuffleRegIdxLocal[i])
@@ -1052,6 +1090,15 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			},
 			Result: t.Result,
 		}
+	case vm.Shuffle:
+		t := opr.GetShuffle()
+		v.Arg = &shuffle.Argument{
+			ShuffleColIdx: t.ShuffleColIdx,
+			ShuffleType:   t.ShuffleType,
+			ShuffleColMin: t.ShuffleColMin,
+			ShuffleColMax: t.ShuffleColMax,
+			AliveRegCnt:   t.AliveRegCnt,
+		}
 	case vm.Dispatch:
 		t := opr.GetDispatch()
 		regs := make([]*process.WaitRegister, len(t.LocalConnector))
@@ -1086,10 +1133,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			FuncId:              int(t.FuncId),
 			LocalRegs:           regs,
 			RemoteRegs:          rrs,
-			ShuffleColIdx:       t.ShuffleColIdx,
-			ShuffleType:         t.ShuffleType,
-			ShuffleColMin:       t.ShuffleColMin,
-			ShuffleColMax:       t.ShuffleColMax,
 			ShuffleRegIdxLocal:  shuffleRegIdxLocal,
 			ShuffleRegIdxRemote: shuffleRegIdxRemote,
 		}
@@ -1569,13 +1612,6 @@ func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Bat
 		}
 	}
 	return bat, err
-}
-
-func sendToConnectOperator(arg *connector.Argument, bat *batch.Batch) {
-	select {
-	case <-arg.Reg.Ctx.Done():
-	case arg.Reg.Ch <- bat:
-	}
 }
 
 func (ctx *scopeContext) getRegister(id, idx int32) *process.WaitRegister {

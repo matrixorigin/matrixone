@@ -100,21 +100,21 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, tableDef)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
+	builder.qry.LoadTag = true
 
 	//append lock node
-	builder.qry.LoadTag = true
-	if lockNodeId, ok := appendLockNode(
-		builder,
-		bindCtx,
-		lastNodeId,
-		tableDef,
-		true,
-		true,
-		-1,
-		nil,
-	); ok {
-		lastNodeId = lockNodeId
-	}
+	// if lockNodeId, ok := appendLockNode(
+	// 	builder,
+	// 	bindCtx,
+	// 	lastNodeId,
+	// 	tableDef,
+	// 	true,
+	// 	true,
+	// 	-1,
+	// 	nil,
+	// ); ok {
+	// 	lastNodeId = lockNodeId
+	// }
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef)
@@ -124,6 +124,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 	query := builder.qry
+	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT
 
 	pn := &Plan{

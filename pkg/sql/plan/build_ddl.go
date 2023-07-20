@@ -474,6 +474,12 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
+		// Foreign keys are not yet supported in conjunction with partitioning
+		// see: https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-14.html
+		if len(createTable.TableDef.Fkeys) > 0 {
+			return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
+		}
+
 		nodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_TABLE_SCAN,
 			Stats:       nil,

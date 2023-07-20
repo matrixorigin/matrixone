@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/mohae/deepcopy"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -245,12 +246,15 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 
 		// TODO check if schema change, obj.Obj is zero all the time in 0.6
-		// for _, obj := range preparePlan.GetSchemas() {
-		// 	newObj, _ := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
-		// 	if newObj == nil || newObj.Obj != obj.Obj {
-		// 		return nil, moerr.NewInternalError("", fmt.Sprintf(ctx, "table '%s' has been changed, please reset Prepare statement '%s'", obj.ObjName, stmtName))
-		// 	}
-		// }
+		for _, obj := range preparePlan.GetSchemas() {
+			newObj, newTableDef := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
+			if newObj == nil {
+				return nil, moerr.NewInternalError(requestCtx, "table '%s' in prepare statement '%s' does not exist anymore", obj.ObjName, stmtName)
+			}
+			if newObj.Obj != obj.Obj || newTableDef.Version != uint32(obj.Server) {
+				return nil, moerr.NewInternalError(requestCtx, "table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName)
+			}
+		}
 
 		// The default count is 1. Setting it to 2 ensures that memory will not be reclaimed.
 		//  Convenient to reuse memory next time
@@ -336,7 +340,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.proc,
 		cwft.stmt,
 		cwft.ses.isInternal,
-		cwft.ses.getCNLabels(),
+		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
 	)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
@@ -402,9 +406,9 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
-	logDebugf(cwft.ses.GetDebugString(), "compile.Run begin")
+	logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run begin")
 	defer func() {
-		logDebugf(cwft.ses.GetDebugString(), "compile.Run end")
+		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
 	err := cwft.compile.Run(ts)
 	return err
