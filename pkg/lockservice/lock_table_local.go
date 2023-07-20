@@ -265,22 +265,19 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 					// txn1 unlock, notify txn2/op1
 					// txn2/op3 get lock before txn2/op1 get notify
 					// TODO: add more test
-					waiters := c.w.waiters.all()
-					if len(waiters) > 0 {
-						lock.waiter.add(l.bind.ServiceID, false, waiters...)
-						c.w.waiters.reset()
+					for _, w := range c.w.waiters.all() {
+						if bytes.Equal(lock.txnID, w.txnID) {
+							w.close(l.bind.ServiceID, notifyValue{})
+							continue
+						}
 
-						for _, w := range waiters {
-							if err := l.detector.check(c.w.txnID, w.belongTo); err != nil {
-								panic("BUG: active dead lock check can not fail")
-							}
+						lock.waiter.add(l.bind.ServiceID, false, w)
+						if err := l.detector.check(c.w.txnID, w.belongTo); err != nil {
+							panic("BUG: active dead lock check can not fail")
 						}
 					}
-
-					str := c.w.String()
-					if v := c.w.close(l.bind.ServiceID, notifyValue{}); v != nil {
-						panic("BUG: waiters should be empty, " + str + "," + v.String() + ", " + fmt.Sprintf("table(%d)  %+v", l.bind.Table, key))
-					}
+					c.w.waiters.reset()
+					c.w.close(l.bind.ServiceID, notifyValue{})
 					c.w = nil
 				}
 				continue
@@ -357,6 +354,9 @@ func (l *localLockTable) handleLockConflictLocked(
 	w *waiter,
 	key []byte,
 	conflictWith Lock) {
+	childWaiters := w.waiters.all()
+	w.waiters.reset()
+
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
 	txn.setBlocked(w.txnID, w)
@@ -367,6 +367,19 @@ func (l *localLockTable) handleLockConflictLocked(
 			l.bind.ServiceID,
 			true)); err != nil {
 		panic("BUG: active dead lock check can not fail")
+	}
+
+	// add child waiters into current locks waiting list
+	for _, v := range childWaiters {
+		if bytes.Equal(v.txnID, conflictWith.txnID) {
+			v.notify(l.bind.ServiceID, notifyValue{})
+			continue
+		}
+
+		conflictWith.waiter.add(l.bind.ServiceID, false, v)
+		if err := l.detector.check(conflictWith.txnID, v.belongTo); err != nil {
+			panic("BUG: active dead lock check can not fail")
+		}
 	}
 	logLocalLockWaitOn(l.bind.ServiceID, txn, l.bind.Table, w, key, conflictWith)
 }
