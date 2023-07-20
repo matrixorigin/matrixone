@@ -53,11 +53,10 @@ var (
 )
 
 func TestNodeHostConfig(t *testing.T) {
-	cfg := Config{
-		DeploymentID: 1234,
-		DataDir:      "lalala",
-	}
+	cfg := DefaultConfig()
 	cfg.Fill()
+	cfg.DeploymentID = 1234
+	cfg.DataDir = "lalala"
 	nhConfig := getNodeHostConfig(cfg)
 	assert.Equal(t, cfg.DeploymentID, nhConfig.DeploymentID)
 	assert.Equal(t, cfg.DataDir, nhConfig.NodeHostDir)
@@ -71,15 +70,16 @@ func TestRaftConfig(t *testing.T) {
 }
 
 func getStoreTestConfig() Config {
-	cfg := Config{
-		UUID:                uuid.New().String(),
-		RTTMillisecond:      10,
-		GossipAddress:       testGossipAddress,
-		GossipSeedAddresses: []string{testGossipAddress, dummyGossipSeedAddress},
-		DeploymentID:        1,
-		FS:                  vfs.NewStrictMem(),
-		UseTeeLogDB:         true,
-	}
+	cfg := DefaultConfig()
+	cfg.UUID = uuid.New().String()
+	cfg.RTTMillisecond = 10
+	cfg.GossipAddress = testGossipAddress
+	cfg.GossipAddressV2 = testGossipAddress
+	cfg.GossipListenAddress = testGossipAddress
+	cfg.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
+	cfg.DeploymentID = 1
+	cfg.FS = vfs.NewStrictMem()
+	cfg.UseTeeLogDB = true
 	cfg.Fill()
 	return cfg
 }
@@ -524,31 +524,31 @@ func TestAddReplica(t *testing.T) {
 }
 
 func getTestStores() (*store, *store, error) {
-	cfg1 := Config{
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9001",
-		RaftAddress:         "127.0.0.1:9002",
-		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
-	}
+	cfg1 := DefaultConfig()
+	cfg1.UUID = uuid.NewString()
+	cfg1.FS = vfs.NewStrictMem()
+	cfg1.DeploymentID = 1
+	cfg1.RTTMillisecond = 5
+	cfg1.DataDir = "data-1"
+	cfg1.ServiceAddress = "127.0.0.1:9001"
+	cfg1.RaftAddress = "127.0.0.1:9002"
+	cfg1.GossipAddress = "127.0.0.1:9011"
+	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
 	cfg1.Fill()
 	store1, err := newLogStore(cfg1, nil, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, nil, err
 	}
-	cfg2 := Config{
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9006",
-		RaftAddress:         "127.0.0.1:9007",
-		GossipAddress:       "127.0.0.1:9012",
-		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
-	}
+	cfg2 := DefaultConfig()
+	cfg2.UUID = uuid.NewString()
+	cfg2.FS = vfs.NewStrictMem()
+	cfg2.DeploymentID = 1
+	cfg2.RTTMillisecond = 5
+	cfg2.DataDir = "data-1"
+	cfg2.ServiceAddress = "127.0.0.1:9006"
+	cfg2.RaftAddress = "127.0.0.1:9007"
+	cfg2.GossipAddress = "127.0.0.1:9012"
+	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
 	cfg2.Fill()
 	store2, err := newLogStore(cfg2, nil, runtime.DefaultRuntime())
 	if err != nil {
