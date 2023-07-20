@@ -26,7 +26,7 @@ init_connect
 init_file
 show variables like 'init_connect';
 Variable_name    Value
-init_connect
+init_connect    
 show variables like 'interactive%';
 Variable_name    Value
 interactive_timeout    30100
@@ -70,7 +70,7 @@ net_write_timeout    60
 show variables where variable_name like 'system%' and variable_name != 'system_time_zone';
 Variable_name    Value
 select @@system_time_zone != '';
-@@system_time_zone !=
+@@system_time_zone != 
 true
 show variables like 'trans%';
 Variable_name    Value
@@ -139,18 +139,18 @@ parameters
 keywords
 desc key_column_usage;
 Field    Type    Null    Key    Default    Extra    Comment
-constraint_name    VARCHAR(64)    YES        null
-constraint_schema    VARCHAR(64)    YES        null
-table_catalog    VARCHAR(64)    YES        null
-referenced_table_name    VARCHAR(64)    YES        null
-referenced_table_schema    VARCHAR(64)    YES        null
-table_name    VARCHAR(64)    YES        null
-table_schema    VARCHAR(64)    YES        null
-referenced_column_name    VARCHAR(64)    YES        null
-column_name    VARCHAR(64)    YES        null
-constraint_catalog    VARCHAR(64)    YES        null
-ordinal_position    INT UNSIGNED(32)    YES        null
-position_in_unique_constraint    INT UNSIGNED(32)    YES        null
+constraint_catalog    VARCHAR(64)    YES        null        
+constraint_schema    VARCHAR(64)    YES        null        
+constraint_name    VARCHAR(64)    YES        null        
+table_catalog    VARCHAR(64)    YES        null        
+table_schema    VARCHAR(64)    YES        null        
+table_name    VARCHAR(64)    YES        null        
+column_name    VARCHAR(64)    YES        null        
+ordinal_position    INT UNSIGNED(32)    YES        null        
+position_in_unique_constraint    INT UNSIGNED(32)    YES        null        
+referenced_table_schema    VARCHAR(64)    YES        null        
+referenced_table_name    VARCHAR(64)    YES        null        
+referenced_column_name    VARCHAR(64)    YES        null        
 select table_name, column_name from key_column_usage limit 2;
 table_name    column_name
 desc columns;
@@ -203,44 +203,32 @@ system    log_info    root@localhost
 system    span_info    root@localhost
 desc profiling;
 Field    Type    Null    Key    Default    Extra    Comment
-messages_sent    INT(32)    YES        null
-messages_received    INT(32)    YES        null
-cpu_user    DECIMAL64(9)    YES        null
-duration    DECIMAL64(9)    NO        '0.000000'
-query_id    INT(32)    NO        '0'
-seq    INT(32)    NO        '0'
-state    VARCHAR(30)    NO        ''
-swaps    INT(32)    YES        null
-cpu_system    DECIMAL64(9)    YES        null
-context_involuntary    INT(32)    YES        null
-source_function    VARCHAR(30)    YES        null
-block_ops_in    INT(32)    YES        null
-page_faults_minor    INT(32)    YES        null
-page_faults_major    INT(32)    YES        null
-source_line    INT(32)    YES        null
-source_file    VARCHAR(20)    YES        null
-context_voluntary    INT(32)    YES        null
-block_ops_out    INT(32)    YES        null
+query_id    INT(32)    NO        '0'        
+seq    INT(32)    NO        '0'        
+state    VARCHAR(30)    NO        ''        
+duration    DECIMAL64(9)    NO        '0.000000'        
+cpu_user    DECIMAL64(9)    YES        null        
+cpu_system    DECIMAL64(9)    YES        null        
+context_voluntary    INT(32)    YES        null        
+context_involuntary    INT(32)    YES        null        
+block_ops_in    INT(32)    YES        null        
+block_ops_out    INT(32)    YES        null        
+messages_sent    INT(32)    YES        null        
+messages_received    INT(32)    YES        null        
+page_faults_major    INT(32)    YES        null        
+page_faults_minor    INT(32)    YES        null        
+swaps    INT(32)    YES        null        
+source_function    VARCHAR(30)    YES        null        
+source_file    VARCHAR(20)    YES        null        
+source_line    INT(32)    YES        null        
 select seq, state from profiling;
 seq    state
-desc `PROCESSLIST`;
-Field    Type    Null    Key    Default    Extra    Comment
-command    VARCHAR(16)    NO        ''
-db    VARCHAR(64)    YES        null
-host    VARCHAR(261)    NO        ''
-id    BIGINT UNSIGNED(64)    NO        '0'
-info    TEXT(0)    YES        null
-state    VARCHAR(64)    YES        null
-time    INT(32)    NO        '0'
-user    VARCHAR(32)    NO        ''
-select * from `PROCESSLIST` limit 2;
-id    user    host    db    command    time    state    info
 desc user_privileges;
 Field    Type    Null    Key    Default    Extra    Comment
-table_catalog    VARCHAR(512)    NO        ''
-grantee    VARCHAR(292)    NO        ''
-is_grantable    VARCHAR(3)    NO        ''
-privilege_type    VARCHAR(64)    NO        ''
+grantee    VARCHAR(292)    NO        ''        
+table_catalog    VARCHAR(512)    NO        ''        
+privilege_type    VARCHAR(64)    NO        ''        
+is_grantable    VARCHAR(3)    NO        ''        
 select grantee, table_catalog from user_privileges limit 2;
 grantee    table_catalog
 desc schemata;
@@ -257,153 +245,153 @@ def    mo_task
 mo_catalog    mo_catalog
 desc character_sets;
 Field    Type    Null    Key    Default    Extra    Comment
-maxlen    INT UNSIGNED(32)    YES        null
-character_set_name    VARCHAR(64)    YES        null
-description    VARCHAR(2048)    YES        null
-default_collate_name    VARCHAR(64)    YES        null
+character_set_name    VARCHAR(64)    YES        null        
+default_collate_name    VARCHAR(64)    YES        null        
+description    VARCHAR(2048)    YES        null        
+maxlen    INT UNSIGNED(32)    YES        null        
 select character_set_name, description, maxlen from character_sets limit 5;
 character_set_name    description    maxlen
 desc triggers;
 Field    Type    Null    Key    Default    Extra    Comment
-action_statement    TEXT(0)    YES        null
-action_condition    BINARY(0)    YES        null
-trigger_schema    VARCHAR(64)    YES        null
-action_reference_new_table    BINARY(0)    YES        null
-created    TIMESTAMP(0)    YES        null
-definer    VARCHAR(288)    YES        null
-sql_mode    VARCHAR(10)    YES        null
-action_reference_old_row    VARCHAR(3)    YES        null
-event_manipulation    VARCHAR(10)    YES        null
-character_set_client    VARCHAR(64)    YES        null
-action_orientation    VARCHAR(3)    YES        null
-action_reference_old_table    BINARY(0)    YES        null
-trigger_name    VARCHAR(64)    YES        null
-action_order    INT UNSIGNED(32)    YES        null
-event_object_table    VARCHAR(64)    YES        null
-trigger_catalog    VARCHAR(64)    YES        null
-collation_connection    VARCHAR(64)    YES        null
-database_collation    VARCHAR(64)    YES        null
-event_object_schema    VARCHAR(64)    YES        null
-action_timing    VARCHAR(10)    YES        null
-action_reference_new_row    VARCHAR(3)    YES        null
-event_object_catalog    VARCHAR(64)    YES        null
+trigger_catalog    VARCHAR(64)    YES        null        
+trigger_schema    VARCHAR(64)    YES        null        
+trigger_name    VARCHAR(64)    YES        null        
+event_manipulation    VARCHAR(10)    YES        null        
+event_object_catalog    VARCHAR(64)    YES        null        
+event_object_schema    VARCHAR(64)    YES        null        
+event_object_table    VARCHAR(64)    YES        null        
+action_order    INT UNSIGNED(32)    YES        null        
+action_condition    BINARY(0)    YES        null        
+action_statement    TEXT(0)    YES        null        
+action_orientation    VARCHAR(3)    YES        null        
+action_timing    VARCHAR(10)    YES        null        
+action_reference_old_table    BINARY(0)    YES        null        
+action_reference_new_table    BINARY(0)    YES        null        
+action_reference_old_row    VARCHAR(3)    YES        null        
+action_reference_new_row    VARCHAR(3)    YES        null        
+created    TIMESTAMP(0)    YES        null        
+sql_mode    VARCHAR(10)    YES        null        
+definer    VARCHAR(288)    YES        null        
+character_set_client    VARCHAR(64)    YES        null        
+collation_connection    VARCHAR(64)    YES        null        
+database_collation    VARCHAR(64)    YES        null        
 select trigger_name, action_order from triggers limit 3;
 trigger_name    action_order
 use mysql;
 desc user;
 Field    Type    Null    Key    Default    Extra    Comment
-select_priv    VARCHAR(10)    NO        'N'
-password_reuse_time    SMALLINT UNSIGNED(16)    YES        null
-password_require_current    VARCHAR(10)    YES        null
-password_reuse_history    SMALLINT UNSIGNED(16)    YES        null
-user_attributes    JSON(0)    YES        null
-x509_subject    BLOB(0)    NO        null
-password_expired    VARCHAR(10)    NO        'N'
-create_priv    VARCHAR(10)    NO        'N'
-repl_client_priv    VARCHAR(10)    NO        'N'
-password_lifetime    SMALLINT UNSIGNED(16)    YES        null
-execute_priv    VARCHAR(10)    NO        'N'
-drop_priv    VARCHAR(10)    NO        'N'
-file_priv    VARCHAR(10)    NO        'N'
-host    CHAR(255)    NO    PRI    ''
-plugin    CHAR(64)    NO        'caching_sha2_password'
-ssl_type    VARCHAR(10)    NO        ''
-user    CHAR(32)    NO    PRI    ''
-max_questions    INT UNSIGNED(32)    NO        '0'
-max_updates    INT UNSIGNED(32)    NO        '0'
-insert_priv    VARCHAR(10)    NO        'N'
-process_priv    VARCHAR(10)    NO        'N'
-max_user_connections    INT UNSIGNED(32)    NO        '0'
-x509_issuer    BLOB(0)    NO        null
-alter_routine_priv    VARCHAR(10)    NO        'N'
-authentication_string    TEXT(0)    YES        null
-ssl_cipher    BLOB(0)    NO        null
-shutdown_priv    VARCHAR(10)    NO        'N'
-create_tmp_table_priv    VARCHAR(10)    NO        'N'
-show_view_priv    VARCHAR(10)    NO        'N'
-max_connections    INT UNSIGNED(32)    NO        '0'
-drop_role_priv    VARCHAR(10)    NO        'N'
-grant_priv    VARCHAR(10)    NO        'N'
-create_user_priv    VARCHAR(10)    NO        'N'
-create_role_priv    VARCHAR(10)    NO        'N'
-update_priv    VARCHAR(10)    NO        'N'
-delete_priv    VARCHAR(10)    NO        'N'
-trigger_priv    VARCHAR(10)    NO        'N'
-show_db_priv    VARCHAR(10)    NO        'N'
-index_priv    VARCHAR(10)    NO        'N'
-account_locked    VARCHAR(10)    NO        'N'
-lock_tables_priv    VARCHAR(10)    NO        'N'
-password_last_changed    TIMESTAMP(0)    YES        null
-create_routine_priv    VARCHAR(10)    NO        'N'
-references_priv    VARCHAR(10)    NO        'N'
-reload_priv    VARCHAR(10)    NO        'N'
-event_priv    VARCHAR(10)    NO        'N'
-repl_slave_priv    VARCHAR(10)    NO        'N'
-alter_priv    VARCHAR(10)    NO        'N'
-create_view_priv    VARCHAR(10)    NO        'N'
-create_tablespace_priv    VARCHAR(10)    NO        'N'
-super_priv    VARCHAR(10)    NO        'N'
+host    CHAR(255)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+select_priv    VARCHAR(10)    NO        'N'        
+insert_priv    VARCHAR(10)    NO        'N'        
+update_priv    VARCHAR(10)    NO        'N'        
+delete_priv    VARCHAR(10)    NO        'N'        
+create_priv    VARCHAR(10)    NO        'N'        
+drop_priv    VARCHAR(10)    NO        'N'        
+reload_priv    VARCHAR(10)    NO        'N'        
+shutdown_priv    VARCHAR(10)    NO        'N'        
+process_priv    VARCHAR(10)    NO        'N'        
+file_priv    VARCHAR(10)    NO        'N'        
+grant_priv    VARCHAR(10)    NO        'N'        
+references_priv    VARCHAR(10)    NO        'N'        
+index_priv    VARCHAR(10)    NO        'N'        
+alter_priv    VARCHAR(10)    NO        'N'        
+show_db_priv    VARCHAR(10)    NO        'N'        
+super_priv    VARCHAR(10)    NO        'N'        
+create_tmp_table_priv    VARCHAR(10)    NO        'N'        
+lock_tables_priv    VARCHAR(10)    NO        'N'        
+execute_priv    VARCHAR(10)    NO        'N'        
+repl_slave_priv    VARCHAR(10)    NO        'N'        
+repl_client_priv    VARCHAR(10)    NO        'N'        
+create_view_priv    VARCHAR(10)    NO        'N'        
+show_view_priv    VARCHAR(10)    NO        'N'        
+create_routine_priv    VARCHAR(10)    NO        'N'        
+alter_routine_priv    VARCHAR(10)    NO        'N'        
+create_user_priv    VARCHAR(10)    NO        'N'        
+event_priv    VARCHAR(10)    NO        'N'        
+trigger_priv    VARCHAR(10)    NO        'N'        
+create_tablespace_priv    VARCHAR(10)    NO        'N'        
+ssl_type    VARCHAR(10)    NO        ''        
+ssl_cipher    BLOB(0)    NO        null        
+x509_issuer    BLOB(0)    NO        null        
+x509_subject    BLOB(0)    NO        null        
+max_questions    INT UNSIGNED(32)    NO        '0'        
+max_updates    INT UNSIGNED(32)    NO        '0'        
+max_connections    INT UNSIGNED(32)    NO        '0'        
+max_user_connections    INT UNSIGNED(32)    NO        '0'        
+plugin    CHAR(64)    NO        'caching_sha2_password'        
+authentication_string    TEXT(0)    YES        null        
+password_expired    VARCHAR(10)    NO        'N'        
+password_last_changed    TIMESTAMP(0)    YES        null        
+password_lifetime    SMALLINT UNSIGNED(16)    YES        null        
+account_locked    VARCHAR(10)    NO        'N'        
+create_role_priv    VARCHAR(10)    NO        'N'        
+drop_role_priv    VARCHAR(10)    NO        'N'        
+password_reuse_history    SMALLINT UNSIGNED(16)    YES        null        
+password_reuse_time    SMALLINT UNSIGNED(16)    YES        null        
+password_require_current    VARCHAR(10)    YES        null        
+user_attributes    JSON(0)    YES        null        
 select host, user from user limit 2;
 host    user
 desc db;
 Field    Type    Null    Key    Default    Extra    Comment
-host    CHAR(255)    NO    PRI    ''
-db    CHAR(64)    NO    PRI    ''
-user    CHAR(32)    NO    PRI    ''
-select_priv    VARCHAR(10)    NO        'N'
-insert_priv    VARCHAR(10)    NO        'N'
-update_priv    VARCHAR(10)    NO        'N'
-delete_priv    VARCHAR(10)    NO        'N'
-create_priv    VARCHAR(10)    NO        'N'
-drop_priv    VARCHAR(10)    NO        'N'
-grant_priv    VARCHAR(10)    NO        'N'
-references_priv    VARCHAR(10)    NO        'N'
-index_priv    VARCHAR(10)    NO        'N'
-alter_priv    VARCHAR(10)    NO        'N'
-create_tmp_table_priv    VARCHAR(10)    NO        'N'
-lock_tables_priv    VARCHAR(10)    NO        'N'
-create_view_priv    VARCHAR(10)    NO        'N'
-show_view_priv    VARCHAR(10)    NO        'N'
-create_routine_priv    VARCHAR(10)    NO        'N'
-alter_routine_priv    VARCHAR(10)    NO        'N'
-execute_priv    VARCHAR(10)    NO        'N'
-event_priv    VARCHAR(10)    NO        'N'
-trigger_priv    VARCHAR(10)    NO        'N'
+host    CHAR(255)    NO    PRI    ''        
+db    CHAR(64)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+select_priv    VARCHAR(10)    NO        'N'        
+insert_priv    VARCHAR(10)    NO        'N'        
+update_priv    VARCHAR(10)    NO        'N'        
+delete_priv    VARCHAR(10)    NO        'N'        
+create_priv    VARCHAR(10)    NO        'N'        
+drop_priv    VARCHAR(10)    NO        'N'        
+grant_priv    VARCHAR(10)    NO        'N'        
+references_priv    VARCHAR(10)    NO        'N'        
+index_priv    VARCHAR(10)    NO        'N'        
+alter_priv    VARCHAR(10)    NO        'N'        
+create_tmp_table_priv    VARCHAR(10)    NO        'N'        
+lock_tables_priv    VARCHAR(10)    NO        'N'        
+create_view_priv    VARCHAR(10)    NO        'N'        
+show_view_priv    VARCHAR(10)    NO        'N'        
+create_routine_priv    VARCHAR(10)    NO        'N'        
+alter_routine_priv    VARCHAR(10)    NO        'N'        
+execute_priv    VARCHAR(10)    NO        'N'        
+event_priv    VARCHAR(10)    NO        'N'        
+trigger_priv    VARCHAR(10)    NO        'N'        
 select db, user from db limit 5;
 db    user
 desc procs_priv;
 Field    Type    Null    Key    Default    Extra    Comment
-db    CHAR(64)    NO    PRI    ''
-grantor    VARCHAR(288)    NO        ''
-host    CHAR(255)    NO    PRI    ''
-proc_priv    VARCHAR(10)    NO        ''
-timestamp    TIMESTAMP(0)    NO        current_timestamp()
-user    CHAR(32)    NO    PRI    ''
-routine_type    VARCHAR(10)    NO    PRI    null
-routine_name    CHAR(64)    NO    PRI    ''
+host    CHAR(255)    NO    PRI    ''        
+db    CHAR(64)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+routine_name    CHAR(64)    NO    PRI    ''        
+routine_type    VARCHAR(10)    NO    PRI    null        
+grantor    VARCHAR(288)    NO        ''        
+proc_priv    VARCHAR(10)    NO        ''        
+timestamp    TIMESTAMP(0)    NO        current_timestamp()        
 select routine_name, routine_type from procs_priv limit 5;
 routine_name    routine_type
 desc columns_priv;
 Field    Type    Null    Key    Default    Extra    Comment
-db    CHAR(64)    NO    PRI    ''
-host    CHAR(255)    NO    PRI    ''
-timestamp    TIMESTAMP(0)    NO        current_timestamp()
-user    CHAR(32)    NO    PRI    ''
-table_name    CHAR(64)    NO    PRI    ''
-column_name    CHAR(64)    NO    PRI    ''
-column_priv    VARCHAR(10)    NO        ''
+host    CHAR(255)    NO    PRI    ''        
+db    CHAR(64)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+table_name    CHAR(64)    NO    PRI    ''        
+column_name    CHAR(64)    NO    PRI    ''        
+timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+column_priv    VARCHAR(10)    NO        ''        
 select table_name, column_name from columns_priv limit 5;
 table_name    column_name
 desc tables_priv;
 Field    Type    Null    Key    Default    Extra    Comment
-table_priv    VARCHAR(10)    NO        ''
-table_name    CHAR(64)    NO    PRI    ''
-db    CHAR(64)    NO    PRI    ''
-grantor    VARCHAR(288)    NO        ''
-host    CHAR(255)    NO    PRI    ''
-timestamp    TIMESTAMP(0)    NO        current_timestamp()
-user    CHAR(32)    NO    PRI    ''
-column_priv    VARCHAR(10)    NO        ''
+host    CHAR(255)    NO    PRI    ''        
+db    CHAR(64)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+table_name    CHAR(64)    NO    PRI    ''        
+grantor    VARCHAR(288)    NO        ''        
+timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+table_priv    VARCHAR(10)    NO        ''        
+column_priv    VARCHAR(10)    NO        ''        
 select host, table_name from tables_priv limit 5;
 host    table_name
 show variables like 'sql_select_limit';

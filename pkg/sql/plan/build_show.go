@@ -1036,9 +1036,10 @@ func buildShowCollation(stmt *tree.ShowCollation, ctx CompilerContext) (*Plan, e
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
-func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Plan, error) {
+func buildShowProcessList(ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_PROCESSLIST
-	sql := "select '' as `Id`, '' as `User`, '' as `Host`, '' as `db` , '' as `Command`, '' as `Time` , '' as `State`, '' as `Info` where 0"
+	// "show processlist" is implemented by table function processlist().
+	sql := "select * from processlist() a"
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
