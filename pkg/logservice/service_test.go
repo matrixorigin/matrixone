@@ -43,19 +43,18 @@ const (
 )
 
 func getServiceTestConfig() Config {
-	c := Config{
-		UUID:                 uuid.New().String(),
-		RTTMillisecond:       10,
-		GossipAddress:        testGossipAddress,
-		GossipListenAddress:  testGossipAddress,
-		GossipSeedAddresses:  []string{testGossipAddress, dummyGossipSeedAddress},
-		DeploymentID:         1,
-		FS:                   vfs.NewStrictMem(),
-		ServiceListenAddress: testServiceAddress,
-		ServiceAddress:       testServiceAddress,
-		DisableWorkers:       true,
-		UseTeeLogDB:          true,
-	}
+	c := DefaultConfig()
+	c.UUID = uuid.New().String()
+	c.RTTMillisecond = 10
+	c.GossipAddress = testGossipAddress
+	c.GossipListenAddress = testGossipAddress
+	c.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
+	c.DeploymentID = 1
+	c.FS = vfs.NewStrictMem()
+	c.ServiceListenAddress = testServiceAddress
+	c.ServiceAddress = testServiceAddress
+	c.DisableWorkers = true
+	c.UseTeeLogDB = true
 	c.RPC.MaxMessageSize = testServerMaxMsgSize
 	c.Fill()
 	return c
@@ -514,30 +513,29 @@ func TestServiceCheckHAKeeper(t *testing.T) {
 
 func TestShardInfoCanBeQueried(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg1 := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9002",
-		RaftAddress:         "127.0.0.1:9000",
-		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: []string{"127.0.0.1:9011"},
-		DisableWorkers:      true,
-	}
-	cfg2 := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-2",
-		ServiceAddress:      "127.0.0.1:9012",
-		RaftAddress:         "127.0.0.1:9010",
-		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: []string{"127.0.0.1:9001"},
-		DisableWorkers:      true,
-	}
+	cfg1 := DefaultConfig()
+	cfg1.UUID = uuid.New().String()
+	cfg1.FS = vfs.NewStrictMem()
+	cfg1.DeploymentID = 1
+	cfg1.RTTMillisecond = 5
+	cfg1.DataDir = "data-1"
+	cfg1.ServiceAddress = "127.0.0.1:9002"
+	cfg1.RaftAddress = "127.0.0.1:9000"
+	cfg1.GossipAddress = "127.0.0.1:9001"
+	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011"}
+	cfg1.DisableWorkers = true
+	cfg1.Fill()
+	cfg2 := DefaultConfig()
+	cfg2.UUID = uuid.New().String()
+	cfg2.FS = vfs.NewStrictMem()
+	cfg2.DeploymentID = 1
+	cfg2.RTTMillisecond = 5
+	cfg2.DataDir = "data-2"
+	cfg2.ServiceAddress = "127.0.0.1:9012"
+	cfg2.RaftAddress = "127.0.0.1:9010"
+	cfg2.GossipAddress = "127.0.0.1:9011"
+	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
+	cfg2.DisableWorkers = true
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		newFS(),
@@ -552,7 +550,6 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = service1.ID()
 	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
-	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -644,30 +641,29 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	configs := make([]Config, 0)
 	services := make([]*Service, 0)
 	for i := 0; i < nodeCount; i++ {
-		cfg := Config{
-			FS:             vfs.NewStrictMem(),
-			UUID:           uuid.New().String(),
-			DeploymentID:   1,
-			RTTMillisecond: 200,
-			DataDir:        fmt.Sprintf("data-%d", i),
-			ServiceAddress: fmt.Sprintf("127.0.0.1:%d", 26000+10*i),
-			RaftAddress:    fmt.Sprintf("127.0.0.1:%d", 26000+10*i+1),
-			GossipAddress:  fmt.Sprintf("127.0.0.1:%d", 26000+10*i+2),
-			GossipSeedAddresses: []string{
-				"127.0.0.1:26002",
-				"127.0.0.1:26012",
-				"127.0.0.1:26022",
-				"127.0.0.1:26032",
-				"127.0.0.1:26042",
-				"127.0.0.1:26052",
-				"127.0.0.1:26062",
-				"127.0.0.1:26072",
-				"127.0.0.1:26082",
-				"127.0.0.1:26092",
-			},
-			DisableWorkers:  true,
-			LogDBBufferSize: 1024 * 16,
+		cfg := DefaultConfig()
+		cfg.FS = vfs.NewStrictMem()
+		cfg.UUID = uuid.New().String()
+		cfg.DeploymentID = 1
+		cfg.RTTMillisecond = 200
+		cfg.DataDir = fmt.Sprintf("data-%d", i)
+		cfg.ServiceAddress = fmt.Sprintf("127.0.0.1:%d", 26000+10*i)
+		cfg.RaftAddress = fmt.Sprintf("127.0.0.1:%d", 26000+10*i+1)
+		cfg.GossipAddress = fmt.Sprintf("127.0.0.1:%d", 26000+10*i+2)
+		cfg.GossipSeedAddresses = []string{
+			"127.0.0.1:26002",
+			"127.0.0.1:26012",
+			"127.0.0.1:26022",
+			"127.0.0.1:26032",
+			"127.0.0.1:26042",
+			"127.0.0.1:26052",
+			"127.0.0.1:26062",
+			"127.0.0.1:26072",
+			"127.0.0.1:26082",
+			"127.0.0.1:26092",
 		}
+		cfg.DisableWorkers = true
+		cfg.LogDBBufferSize = 1024 * 16
 		cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
 		configs = append(configs, cfg)
 		service, err := NewService(cfg,
