@@ -112,8 +112,11 @@ type txnWithLogtails struct {
 
 func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 	for _, item := range items {
-		builder := NewTxnLogtailRespBuilder(mgr.rt)
 		txn := item.(txnif.AsyncTxn)
+		if txn.IsReplay() {
+			continue
+		}
+		builder := NewTxnLogtailRespBuilder(mgr.rt)
 		entries, closeCB := builder.CollectLogtail(txn)
 		txn.GetStore().DoneWaitEvent(1)
 		txnWithLogtails := &txnWithLogtails{
