@@ -3957,7 +3957,7 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, "db", datname.GetStringAt(1))
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
-	require.Equal(t, fixedColCnt, len(resp.Commands[1].Bat.Vecs))
+	require.Equal(t, fixedColCnt+1, len(resp.Commands[1].Bat.Vecs))
 	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
 	close()
@@ -4021,7 +4021,7 @@ func TestLogtailBasic(t *testing.T) {
 
 	delDataEntry := resp.Commands[1]
 	require.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
-	require.Equal(t, fixedColCnt, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
+	require.Equal(t, fixedColCnt+1, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
 	check_same_rows(delDataEntry.Bat, 10)
 
 	// check delete rowids are exactly what we want

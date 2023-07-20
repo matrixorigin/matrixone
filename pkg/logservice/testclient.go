@@ -25,16 +25,15 @@ import (
 
 func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	addr := []string{"localhost:9000"}
-	cfg := Config{
-		UUID:                 uuid.New().String(),
-		RTTMillisecond:       10,
-		GossipSeedAddresses:  []string{defaultGossipSeedAddress},
-		DeploymentID:         1,
-		FS:                   fs,
-		ServiceListenAddress: addr[0],
-		ServiceAddress:       addr[0],
-		DisableWorkers:       true,
-	}
+	cfg := DefaultConfig()
+	cfg.UUID = uuid.New().String()
+	cfg.RTTMillisecond = 10
+	cfg.GossipSeedAddresses = []string{defaultGossipSeedAddress}
+	cfg.DeploymentID = 1
+	cfg.FS = fs
+	cfg.ServiceListenAddress = addr[0]
+	cfg.ServiceAddress = addr[0]
+	cfg.DisableWorkers = true
 	cfg.Fill()
 	service, err := NewService(cfg,
 		newFS(),
