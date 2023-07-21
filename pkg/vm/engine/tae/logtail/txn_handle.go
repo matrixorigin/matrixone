@@ -183,7 +183,8 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 	}
 	node := vnode.(*updates.DeleteNode)
 	meta := node.GetMeta()
-	pkDef := meta.GetSchema().GetPrimaryKey()
+	schema := meta.GetSchema()
+	pkDef := schema.GetPrimaryKey()
 	deletes := node.GetRowMaskRefLocked()
 
 	batch := b.batches[dataDelBatch]
@@ -208,6 +209,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 	}
 	_ = meta.GetBlockData().Foreach(
 		ctx,
+		schema,
 		pkDef.Idx,
 		func(v any, isNull bool, row int) error {
 			pkVec.Append(v, false)

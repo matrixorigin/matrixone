@@ -398,7 +398,7 @@ func (s *Scope) PushdownRun() error {
 			s.Proc.Cancel()
 			return err
 		}
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			continue
 		}
 		s.Proc.Reg.InputBatch = bat
@@ -479,7 +479,7 @@ func (s *Scope) LoadRun(c *Compile) error {
 	bat := batch.NewWithSize(1)
 	{
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 	}
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{

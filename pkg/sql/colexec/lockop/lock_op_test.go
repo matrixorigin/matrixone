@@ -294,7 +294,7 @@ func runLockNonBlockingOpTest(
 		t,
 		func(proc *process.Process) {
 			bat := batch.NewWithSize(len(tables) * 2)
-			bat.Zs = make([]int64, len(tables)*2)
+			bat.SetRowCount(len(tables) * 2)
 
 			defer func() {
 				bat.Clean(proc.Mp())
@@ -344,7 +344,7 @@ func runLockBlockingOpTest(
 			var batches []*batch.Batch
 			for _, vs := range values {
 				bat := batch.NewWithSize(2)
-				bat.Zs = make([]int64, 2)
+				bat.SetRowCount(2)
 
 				vec := vector.NewVec(pkType)
 				vector.AppendFixedList(vec, vs, nil, proc.Mp())
@@ -418,6 +418,7 @@ func runLockOpTest(
 				txnOp,
 				nil,
 				services[0],
+				nil,
 				nil)
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 			defer func() {

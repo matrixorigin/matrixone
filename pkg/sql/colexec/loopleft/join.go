@@ -34,7 +34,6 @@ func Prepare(proc *process.Process, arg any) error {
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
@@ -70,11 +69,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = End
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.RowCount() == 0 {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			if ctr.bat.Length() == 0 {
+			if ctr.bat.RowCount() == 0 {
 				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
@@ -114,10 +113,10 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 				return err
 			}
 		} else {
-			rbat.Vecs[i] = vector.NewConstNull(ap.Typs[rp.Pos], bat.Length(), proc.Mp())
+			rbat.Vecs[i] = vector.NewConstNull(ap.Typs[rp.Pos], bat.RowCount(), proc.Mp())
 		}
 	}
-	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.AddRowCount(bat.RowCount())
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -126,7 +125,6 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = proc.GetVector(*bat.Vecs[rp.Pos].GetType())
@@ -134,23 +132,25 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = proc.GetVector(ap.Typs[rp.Pos])
 		}
 	}
-	count := bat.Length()
+
+	count := bat.RowCount()
+	rowCountIncrese := 0
 	if ctr.expr == nil {
 		for i := 0; i < count; i++ {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {
-					if err := rbat.Vecs[k].UnionMulti(bat.Vecs[rp.Pos], int64(i), ctr.bat.Length(), proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionMulti(bat.Vecs[rp.Pos], int64(i), ctr.bat.RowCount(), proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}
 				} else {
-					if err := rbat.Vecs[k].UnionBatch(ctr.bat.Vecs[rp.Pos], 0, ctr.bat.Length(), nil, proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionBatch(ctr.bat.Vecs[rp.Pos], 0, ctr.bat.RowCount(), nil, proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}
 				}
 			}
-			rbat.Zs = append(rbat.Zs, ctr.bat.Zs...)
+			rowCountIncrese += ctr.bat.RowCount()
 		}
 	} else {
 		if ctr.joinBat == nil {
@@ -159,7 +159,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		for i := 0; i < count; i++ {
 			matched := false
 			if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
-				ctr.bat.Length(), ctr.cfs); err != nil {
+				ctr.bat.RowCount(), ctr.cfs); err != nil {
 				rbat.Clean(proc.Mp())
 				return err
 			}
@@ -168,7 +168,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				rbat.Clean(proc.Mp())
 				return err
 			}
-			defer vec.Free(proc.Mp())
 
 			rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 			if vec.IsConst() {
@@ -177,18 +176,18 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					matched = true
 					for k, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := rbat.Vecs[k].UnionMulti(bat.Vecs[rp.Pos], int64(i), ctr.bat.Length(), proc.Mp()); err != nil {
+							if err := rbat.Vecs[k].UnionMulti(bat.Vecs[rp.Pos], int64(i), ctr.bat.RowCount(), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
 								return err
 							}
 						} else {
-							if err := rbat.Vecs[k].UnionBatch(ctr.bat.Vecs[rp.Pos], 0, ctr.bat.Length(), nil, proc.Mp()); err != nil {
+							if err := rbat.Vecs[k].UnionBatch(ctr.bat.Vecs[rp.Pos], 0, ctr.bat.RowCount(), nil, proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
 								return err
 							}
 						}
 					}
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs...)
+					rowCountIncrese += ctr.bat.RowCount()
 				}
 			} else {
 				l := vec.Length()
@@ -209,7 +208,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 								}
 							}
 						}
-						rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+						rowCountIncrese++
 					}
 				}
 			}
@@ -227,10 +226,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						}
 					}
 				}
-				rbat.Zs = append(rbat.Zs, bat.Zs[i])
+				rowCountIncrese++
 			}
 		}
 	}
+	rbat.SetRowCount(rbat.RowCount() + rowCountIncrese)
+
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil

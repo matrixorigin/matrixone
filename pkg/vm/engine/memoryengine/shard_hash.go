@@ -107,17 +107,20 @@ func (*HashShard) Batch(
 	sort.Slice(shards, func(i, j int) bool {
 		return shards[i].ShardID < shards[j].ShardID
 	})
-	m := make(map[*Shard]*batch.Batch)
+
+	type batValue struct {
+		bat   *batch.Batch
+		empty bool
+	}
+	m := make(map[*Shard]batValue)
+
 	for _, shard := range shards {
 		batchCopy := *bat
-		for i := range batchCopy.Zs {
-			batchCopy.Zs[i] = 0
-		}
-		m[shard] = &batchCopy
+		m[shard] = batValue{&batchCopy, true}
 	}
 
 	// shard batch
-	for i := 0; i < bat.Length(); i++ {
+	for i := 0; i < bat.RowCount(); i++ {
 		hasher := fnv.New32()
 		for _, info := range infos {
 			vec := bat.Vecs[info.Index]
@@ -132,23 +135,16 @@ func (*HashShard) Batch(
 		}
 		n := int(hasher.Sum32())
 		shard := shards[n%len(shards)]
-		m[shard].Zs[i] = 1
+		m[shard] = batValue{m[shard].bat, false}
 	}
 
-	for shard, bat := range m {
-		isEmpty := true
-		for _, i := range bat.Zs {
-			if i > 0 {
-				isEmpty = false
-				break
-			}
-		}
-		if isEmpty {
+	for shard, value := range m {
+		if value.empty {
 			continue
 		}
 		sharded = append(sharded, &ShardedBatch{
 			Shard: *shard,
-			Batch: bat,
+			Batch: value.bat,
 		})
 	}
 

@@ -69,8 +69,8 @@ func TestMergeDelete(t *testing.T) {
 			testutil.MakeInt32Vector([]int32{0}, nil),
 			vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool()),
 		},
-		Zs: []int64{1},
 	}
+	batch1.SetRowCount(1)
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
 	metaLocBat1 := &batch.Batch{
@@ -136,8 +136,8 @@ func TestMergeDelete(t *testing.T) {
 			testutil.MakeInt32Vector([]int32{0, 0, 0}, nil),
 			vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool()),
 		},
-		Zs: []int64{1, 1, 1},
 	}
+	batch2.SetRowCount(3)
 
 	argument1 := Argument{
 		DelSource:    &mockRelation{},

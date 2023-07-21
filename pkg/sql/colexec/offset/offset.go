@@ -36,7 +36,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if bat == nil {
 		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
@@ -50,7 +50,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if ap.Seen > ap.Offset {
 		return process.ExecNext, nil
 	}
-	length := bat.Length()
+	length := bat.RowCount()
 	if ap.Seen+uint64(length) > ap.Offset {
 		sels := newSels(int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen), proc)
 		ap.Seen += uint64(length)

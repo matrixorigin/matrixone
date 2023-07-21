@@ -49,6 +49,7 @@ func LoadColumns(ctx context.Context,
 			return
 		}
 		bat.Vecs[i] = obj.(*vector.Vector)
+		bat.SetRowCount(bat.Vecs[i].Length())
 	}
 	return
 }

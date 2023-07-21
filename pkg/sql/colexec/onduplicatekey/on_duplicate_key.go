@@ -63,7 +63,7 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus,
 		return process.ExecStop, nil
 	}
 
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(arg.ctr.emptyBat)
 		return process.ExecNext, nil
@@ -143,7 +143,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	updateExpr := insertArg.OnDuplicateExpr
 	oldRowIdVec := vector.MustFixedCol[types.Rowid](originBatch.Vecs[rowIdIdx])
 
-	for i := 0; i < originBatch.Length(); i++ {
+	for i := 0; i < originBatch.RowCount(); i++ {
 		newBatch, err := fetchOneRowAsBatch(i, originBatch, proc, attrs)
 		if err != nil {
 			return err
@@ -249,7 +249,7 @@ func fetchOneRowAsBatch(idx int, originBatch *batch.Batch, proc *process.Process
 		}
 		newBatch.SetVector(int32(i), newVec)
 	}
-	newBatch.SetZs(1, proc.Mp())
+	newBatch.SetRowCount(1)
 	return newBatch, nil
 }
 
@@ -291,20 +291,21 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 			newBatch.SetVector(int32(i), newVec)
 		}
 	}
-	newBatch.SetZs(1, proc.Mp())
+
+	newBatch.SetRowCount(1)
 	evalBatch.Clean(proc.Mp())
 	return newBatch, nil
 }
 
 func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBatch *batch.Batch,
 	checkExpr []*plan2.Expr, uniqueCols []map[string]int, colCount int) (int, string, error) {
-	if checkConflictBatch.Length() == 0 {
+	if checkConflictBatch.RowCount() == 0 {
 		return -1, "", nil
 	}
 	for j := 0; j < colCount; j++ {
 		fromVec := newBatch.Vecs[j]
 		toVec := checkConflictBatch.Vecs[j+colCount]
-		for i := 0; i < checkConflictBatch.Length(); i++ {
+		for i := 0; i < checkConflictBatch.RowCount(); i++ {
 			err := toVec.Copy(fromVec, int64(i), 0, proc.Mp())
 			if err != nil {
 				return 0, "", err

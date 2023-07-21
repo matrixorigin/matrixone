@@ -86,12 +86,12 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 				return err
 			}
 			newBat.Cnt = 1
-			arg.affectedRows += uint64(newBat.Length())
+			arg.affectedRows += uint64(newBat.RowCount())
 			arg.container.mp2[idx] = append(arg.container.mp2[idx], newBat)
 		}
 	}
-	for _, bat := range arg.container.mp {
-		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())
+	for _, b := range arg.container.mp {
+		b.SetRowCount(b.Vecs[0].Length())
 	}
 	return nil
 }

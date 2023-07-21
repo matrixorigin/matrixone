@@ -308,8 +308,8 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 }
 
 func GenRows(bat *batch.Batch) [][]any {
-	rows := make([][]any, bat.Length())
-	for i := 0; i < bat.Length(); i++ {
+	rows := make([][]any, bat.RowCount())
+	for i := 0; i < bat.RowCount(); i++ {
 		rows[i] = make([]any, bat.VectorCount())
 	}
 	for i := 0; i < bat.VectorCount(); i++ {

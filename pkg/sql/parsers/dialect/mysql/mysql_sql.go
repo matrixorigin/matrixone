@@ -10484,7 +10484,7 @@ yydefault:
 		var yyLOCAL tree.TableLock
 //line mysql_sql.y:2369
 		{
-			yyLOCAL = tree.TableLock{*yyDollar[1].tableNameUnion(), yyDollar[2].tableLockTypeUnion()}
+			yyLOCAL = tree.TableLock{Table: *yyDollar[1].tableNameUnion(), LockType: yyDollar[2].tableLockTypeUnion()}
 		}
 		yyVAL.union = yyLOCAL
 	case 298:
@@ -11129,7 +11129,7 @@ yydefault:
 //line mysql_sql.y:2861
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				&tree.VarAssignmentExpr{
+				{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
