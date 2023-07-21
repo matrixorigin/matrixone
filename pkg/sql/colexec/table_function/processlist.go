@@ -139,7 +139,7 @@ func processlist(_ int, proc *process.Process, arg *Argument) (bool, error) {
 				}
 			}
 		}
-		bat.Zs = append(bat.Zs, 1)
+		bat.AddRowCount(len(arg.Attrs))
 	}
 	proc.SetInputBatch(bat)
 	return true, nil
