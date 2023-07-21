@@ -152,7 +152,7 @@ func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err err
 
 		wholeLength++
 		ctr.indexList[choice]++
-		if ctr.indexList[choice] == int64(ctr.batchList[choice].Length()) {
+		if ctr.indexList[choice] == int64(ctr.batchList[choice].RowCount()) {
 			ctr.removeBatch(proc, choice)
 		}
 
@@ -164,8 +164,7 @@ func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err err
 			break
 		}
 	}
-	bat.SetZs(wholeLength, mp)
-
+	bat.SetRowCount(wholeLength)
 	proc.SetInputBatch(bat)
 	return sendOver, nil
 }
@@ -215,8 +214,6 @@ func (ctr *container) removeBatch(proc *process.Process, index int) {
 		proc.PutVector(cols[i])
 	}
 	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
-
-	proc.Mp().PutSels(bat.Zs)
 }
 
 func String(arg any, buf *bytes.Buffer) {

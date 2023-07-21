@@ -1581,7 +1581,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				Typ:   strTyp,
 			}
 		}
-		bat.SetZs(rowCount, proc.Mp())
+		bat.SetRowCount(rowCount)
 		nodeUUID, _ := uuid.NewUUID()
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_VALUE_SCAN,

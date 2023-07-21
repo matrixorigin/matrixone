@@ -258,12 +258,9 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 			agg.Free(proc.Mp())
 		}
 	}
-	if bat.Zs != nil {
-		proc.GetMPool().PutSels(bat.Zs)
-	}
-	bat.Zs = nil
 	bat.Vecs = nil
 	bat.Attrs = nil
+	bat.SetRowCount(0)
 }
 
 func (proc *Process) FreeVectors() {
