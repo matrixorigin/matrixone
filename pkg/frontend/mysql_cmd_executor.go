@@ -1568,6 +1568,13 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 				return nil, err
 			}
 		}
+	} else if s, ok := stmt.(*tree.Replace); ok {
+		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
+			ret, err = plan2.BuildPlan(ctx, stmt, false)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
@@ -1580,7 +1587,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-		*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.Update, *tree.Delete, *tree.Insert, *tree.Replace,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:
@@ -2151,6 +2158,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			i: st,
 		}
+	case *tree.Replace:
+		ret = &ReplaceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			r: st,
+		}
 	case *tree.Load:
 		ret = &LoadExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
@@ -2523,7 +2537,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				}
 				ses.SetSeqLastValue(proc)
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
-				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
+				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update, *tree.Replace,
 				*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
 				*tree.CreateSequence, *tree.DropSequence,
 				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
@@ -3139,7 +3153,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.CreateIndex, *tree.DropIndex,
 		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
 		*tree.CreateSequence, *tree.DropSequence,
-		*tree.Insert, *tree.Update,
+		*tree.Insert, *tree.Update, *tree.Replace,
 		*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 		*tree.SetVar,
 		*tree.Load,

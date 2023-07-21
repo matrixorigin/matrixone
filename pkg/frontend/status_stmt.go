@@ -466,6 +466,25 @@ func (ie *InsertExecutor) ResponseAfterExec(ctx context.Context, ses *Session) e
 	return nil
 }
 
+type ReplaceExecutor struct {
+	*statusStmtExecutor
+	r *tree.Replace
+}
+
+func (re *ReplaceExecutor) ResponseAfterExec(ctx context.Context, ses *Session) error {
+	var err, retErr error
+	if re.GetStatus() == stmtExecSuccess {
+		resp := NewOkResponse(re.GetAffectedRows(), 0, 0, re.GetServerStatus(), int(COM_QUERY), "")
+		resp.lastInsertId = 1
+		if err = ses.GetMysqlProtocol().SendResponse(ctx, resp); err != nil {
+			retErr = moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
+			logStatementStatus(ctx, ses, re.GetAst(), fail, retErr)
+			return retErr
+		}
+	}
+	return nil
+}
+
 type LoadExecutor struct {
 	*statusStmtExecutor
 	l *tree.Load
