@@ -148,8 +148,6 @@ truncate table columns;
 no such table information_schema.columns
 truncate table profiling;
 internal error: do not have privilege to execute the statement
-truncate table `PROCESSLIST`;
-internal error: do not have privilege to execute the statement
 truncate table user_privileges;
 internal error: do not have privilege to execute the statement
 truncate table schemata;

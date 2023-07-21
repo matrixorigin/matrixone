@@ -122,6 +122,8 @@ message CNService {
   map<string, LabelList> Labels = 6 [(gogoproto.nullable) = false];
   // WorkState is the work state of CN service.
   WorkState WorkState           = 7;
+  // QueryAddress is the address of queryservice.QueryService.
+  string QueryAddress           = 8;
 }
 
 // DNService dn service metadata
