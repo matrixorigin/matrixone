@@ -980,6 +980,20 @@ func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("SELECT role_name as `ROLE_NAME`, creator as `CREATOR`, created_time as `CREATED_TIME`, comments as `COMMENTS` FROM %s.mo_role;", MO_CATALOG_DB_NAME)
+
+	if stmt.Like != nil {
+		// append filter [AND mo_role.role_name like stmt.Like] to WHERE clause
+		likeExpr := stmt.Like
+		likeExpr.Left = tree.SetUnresolvedName("role_name")
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
 	showVariables := &plan.ShowVariables{
 		Global: stmt.Global,
