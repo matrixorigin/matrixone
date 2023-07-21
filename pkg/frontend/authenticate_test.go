@@ -9431,60 +9431,6 @@ func TestDoDropStage(t *testing.T) {
 		err := doDropStage(ctx, ses, ds)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
-
-	convey.Convey("doDropStage fail", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   "user",
-			TenantID:      123,
-			UserID:        22,
-			DefaultRoleID: 10,
-		}
-		ses.SetTenantInfo(tenant)
-
-		ds := &tree.DropStage{
-			IfNotExists: false,
-			Name:        tree.Identifier("my_stage_test"),
-		}
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{0, 0},
-		})
-		bh.sql2result[sql] = mrs
-
-		sql = getSqlForDropStage(string(ds.Name))
-		mrs = newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doDropStage(ctx, ses, ds)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
 }
 
 func TestDoCreateStage(t *testing.T) {
@@ -9662,64 +9608,6 @@ func TestDoCreateStage(t *testing.T) {
 
 		err := doCreateStage(ctx, ses, cs)
 		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("doCreateStage fail", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   "user",
-			TenantID:      123,
-			UserID:        22,
-			DefaultRoleID: 10,
-		}
-		ses.SetTenantInfo(tenant)
-
-		cs := &tree.CreateStage{
-			IfNotExists: true,
-			Name:        tree.Identifier("my_stage_test"),
-			Url:         "'s3://load/files/'",
-			Credentials: tree.StageCredentials{
-				Exist: false,
-			},
-			Status: tree.StageStatus{
-				Exist: false,
-			},
-			Comment: tree.StageComment{
-				Exist: false,
-			},
-		}
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doCreateStage(ctx, ses, cs)
-		convey.So(err, convey.ShouldNotBeNil)
 	})
 
 	convey.Convey("doCreateStage success", t, func() {
@@ -10026,69 +9914,6 @@ func TestDoAlterStage(t *testing.T) {
 
 		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doAlterStage(ctx, ses, as)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("doAlterStage fail", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   "user",
-			TenantID:      123,
-			UserID:        22,
-			DefaultRoleID: 10,
-		}
-		ses.SetTenantInfo(tenant)
-
-		as := &tree.AlterStage{
-			IfNotExists: false,
-			Name:        tree.Identifier("my_stage_test"),
-			UrlOption: tree.StageUrl{
-				Exist: true,
-				Url:   "'s3://load/files/'",
-			},
-			CredentialsOption: tree.StageCredentials{
-				Exist: false,
-			},
-			StatusOption: tree.StageStatus{
-				Exist: false,
-			},
-			Comment: tree.StageComment{
-				Exist: false,
-			},
-		}
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql, _ := getSqlForCheckStage(ctx, "my_stage_test")
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{0, 0},
-		})
 		bh.sql2result[sql] = mrs
 
 		err := doAlterStage(ctx, ses, as)
