@@ -1185,6 +1185,18 @@ func (mce *MysqlCmdExecutor) handleDropPublication(ctx context.Context, dp *tree
 	return doDropPublication(ctx, mce.GetSession(), dp)
 }
 
+func (mce *MysqlCmdExecutor) handleCreateStage(ctx context.Context, cs *tree.CreateStage) error {
+	return doCreateStage(ctx, mce.GetSession(), cs)
+}
+
+func (mce *MysqlCmdExecutor) handleAlterStage(ctx context.Context, as *tree.AlterStage) error {
+	return doAlterStage(ctx, mce.GetSession(), as)
+}
+
+func (mce *MysqlCmdExecutor) handleDropStage(ctx context.Context, ds *tree.DropStage) error {
+	return doDropStage(ctx, mce.GetSession(), ds)
+}
+
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
@@ -2557,7 +2569,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
-				*tree.LockTableStmt, *tree.UnLockTableStmt:
+				*tree.LockTableStmt, *tree.UnLockTableStmt,
+				*tree.CreateStage, *tree.DropStage, *tree.AlterStage:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -2860,6 +2873,21 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.ShowSubscriptions:
 		selfHandle = true
 		if err = mce.handleShowSubscriptions(requestCtx, st, i, len(cws)); err != nil {
+			return err
+		}
+	case *tree.CreateStage:
+		selfHandle = true
+		if err = mce.handleCreateStage(requestCtx, st); err != nil {
+			return err
+		}
+	case *tree.DropStage:
+		selfHandle = true
+		if err = mce.handleDropStage(requestCtx, st); err != nil {
+			return err
+		}
+	case *tree.AlterStage:
+		selfHandle = true
+		if err = mce.handleAlterStage(requestCtx, st); err != nil {
 			return err
 		}
 	case *tree.CreateAccount:
