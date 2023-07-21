@@ -30,12 +30,12 @@ var metaCache *lruobjcache.LRU
 var onceInit sync.Once
 
 func init() {
-	metaCache = lruobjcache.New(512*1024*1024, nil)
+	metaCache = lruobjcache.New(512*1024*1024, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = lruobjcache.New(size, nil)
+		metaCache = lruobjcache.New(size, nil, nil)
 	})
 }
 
@@ -53,7 +53,7 @@ func LoadObjectMetaByExtent(
 	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
 		return
 	}
-	metaCache.Set(*name.Short(), meta, int64(len(meta[:])), false, nil)
+	metaCache.Set(*name.Short(), meta, int64(len(meta[:])), false)
 	return
 }
 

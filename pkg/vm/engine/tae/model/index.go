@@ -28,7 +28,7 @@ type simpleLRU struct {
 
 func NewSimpleLRU(capacity int64) LRUCache {
 	return &simpleLRU{
-		impl: *lruobjcache.New(capacity, nil),
+		impl: *lruobjcache.New(capacity, nil, nil),
 	}
 }
 
@@ -42,5 +42,5 @@ func (lru *simpleLRU) Get(k any) (v []byte, ok bool) {
 }
 
 func (lru *simpleLRU) Set(k any, v []byte, size int64) {
-	lru.impl.Set(k, v, size, false, nil)
+	lru.impl.Set(k, v, size, false)
 }
