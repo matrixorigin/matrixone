@@ -30,8 +30,7 @@ type ConstantFold struct {
 }
 
 func NewConstantFold(isPrepared bool) *ConstantFold {
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+	bat := batch.EmptyForConstFoldBatch
 	return &ConstantFold{
 		bat:        bat,
 		isPrepared: isPrepared,

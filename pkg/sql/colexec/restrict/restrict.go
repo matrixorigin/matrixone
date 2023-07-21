@@ -47,7 +47,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if bat == nil {
 		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
@@ -60,7 +60,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 
 	var sels []int64
 	for i := range ap.ctr.executors {
-		if bat.Length() == 0 {
+		if bat.IsEmpty() {
 			break
 		}
 

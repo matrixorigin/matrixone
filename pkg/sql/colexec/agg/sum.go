@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/sum"
 )
 
 // if input type is int8/int16/int32/int64, the return type is int64
@@ -132,8 +131,20 @@ func (s *Decimal64Sum) Merge(_ int64, _ int64, x types.Decimal64, y types.Decima
 	return x, xEmpty, nil
 }
 
-func (s *Decimal64Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
-	return sum.Decimal64Sum(rs.([]types.Decimal64), vs.([]types.Decimal64), start, count, vps, zs, nsp)
+func (s *Decimal64Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, nsp *nulls.Nulls) (err error) {
+	rrs := rs.([]types.Decimal64)
+	vvs := vs.([]types.Decimal64)
+
+	for i := int64(0); i < count; i++ {
+		if vps[i] == 0 {
+			continue
+		}
+		rrs[vps[i]-1], _, err = rrs[vps[i]-1].Add(vvs[i+start], 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Decimal64Sum) MarshalBinary() ([]byte, error) {
@@ -179,8 +190,20 @@ func (s *Decimal128Sum) Merge(_ int64, _ int64, x types.Decimal128, y types.Deci
 	return x, xEmpty, nil
 }
 
-func (s *Decimal128Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
-	return sum.Decimal128Sum(rs.([]types.Decimal128), vs.([]types.Decimal128), start, count, vps, zs, nsp)
+func (s *Decimal128Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, nsp *nulls.Nulls) (err error) {
+	rrs := rs.([]types.Decimal128)
+	vvs := vs.([]types.Decimal128)
+
+	for i := int64(0); i < count; i++ {
+		if vps[i] == 0 {
+			continue
+		}
+		rrs[vps[i]-1], _, err = rrs[vps[i]-1].Add(vvs[i+start], 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Decimal128Sum) MarshalBinary() ([]byte, error) {

@@ -87,7 +87,7 @@ var constBat *batch.Batch
 
 func init() {
 	constBat = batch.NewWithSize(0)
-	constBat.Zs = []int64{1}
+	constBat.SetRowCount(1)
 }
 
 func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
