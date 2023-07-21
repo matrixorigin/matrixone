@@ -101,6 +101,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 		scope := s.PreScopes[i]
 		wg.Add(1)
 		ants.Submit(func() {
+			defer func() {
+				if e := recover(); e != nil {
+					errChan <- moerr.ConvertPanicError(c.ctx, e)
+				}
+			}()
 			switch scope.Magic {
 			case Normal:
 				errChan <- scope.Run(c)
