@@ -1268,7 +1268,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	ctx.aggregateTag = builder.genNewTag()
 	ctx.projectTag = builder.genNewTag()
 	for i, v := range ctx.headings {
-		ctx.aliasMap[v] = int32(i)
+		ctx.aliasMap[v] = &aliasItem{
+			idx: int32(i),
+		}
 		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = v
 	}
 	for i, expr := range firstSelectProjectNode.ProjectList {
@@ -1637,7 +1639,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 						ctx.headings = append(ctx.headings, expr.Parts[0])
 					}
 
-					newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+					newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
 					if err != nil {
 						return 0, err
 					}
@@ -1657,12 +1659,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				} else {
 					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 				}
-				newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
-				if err != nil {
-					return 0, err
-				}
+
 				selectList = append(selectList, tree.SelectExpr{
-					Expr: newExpr,
+					Expr: expr,
 					As:   selectExpr.As,
 				})
 			default:
@@ -1679,7 +1678,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 				}
 
-				newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
+				newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
 				if err != nil {
 					return 0, err
 				}
@@ -1723,7 +1722,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		builder.rewriteRightJoinToLeftJoin(nodeID)
 
 		if clause.Where != nil {
-			whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
+			whereList, err := splitAndBindCondition(clause.Where.Expr, NoAlias, ctx)
 			if err != nil {
 				return 0, err
 			}
@@ -1747,6 +1746,23 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}, ctx)
 		}
 
+		// Preprocess aliases
+		for i := range selectList {
+			selectList[i].Expr, err = ctx.qualifyColumnNames(selectList[i].Expr, NoAlias)
+			if err != nil {
+				return 0, err
+			}
+
+			builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(selectList[i].Expr, dialect.MYSQL)
+
+			if selectList[i].As != nil && !selectList[i].As.Empty() {
+				ctx.aliasMap[selectList[i].As.ToLower()] = &aliasItem{
+					idx:     int32(i),
+					astExpr: selectList[i].Expr,
+				}
+			}
+		}
+
 		ctx.groupTag = builder.genNewTag()
 		ctx.aggregateTag = builder.genNewTag()
 		ctx.projectTag = builder.genNewTag()
@@ -1756,7 +1772,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if clause.GroupBy != nil {
 			groupBinder := NewGroupBinder(builder, ctx)
 			for _, group := range clause.GroupBy {
-				group, err = ctx.qualifyColumnNames(group, nil, false)
+				group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
 				if err != nil {
 					return 0, err
 				}
@@ -1772,7 +1788,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		havingBinder = NewHavingBinder(builder, ctx)
 		if clause.Having != nil {
 			ctx.binder = havingBinder
-			havingList, err = splitAndBindCondition(clause.Having.Expr, ctx)
+			havingList, err = splitAndBindCondition(clause.Having.Expr, AliasAfterColumn, ctx)
 			if err != nil {
 				return 0, err
 			}
@@ -1784,22 +1800,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	// bind SELECT clause (Projection List)
 	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
 	ctx.binder = projectionBinder
-	for i, selectExpr := range selectList {
-		astExpr, err := ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
+	for i := range selectList {
+		expr, err := projectionBinder.BindExpr(selectList[i].Expr, 0, true)
 		if err != nil {
 			return 0, err
 		}
 
-		expr, err := projectionBinder.BindExpr(astExpr, 0, true)
-		if err != nil {
-			return 0, err
-		}
-
-		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = tree.String(astExpr, dialect.MYSQL)
-
-		if selectExpr.As != nil && !selectExpr.As.Empty() {
-			ctx.aliasMap[selectExpr.As.ToLower()] = int32(len(ctx.projects))
-		}
 		ctx.projects = append(ctx.projects, expr)
 	}
 
@@ -2334,7 +2340,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
 					modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
+					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, NoAlias, ctx)
 					if err != nil {
 						return 0, err
 					}
@@ -2342,7 +2348,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				} else if dbName == catalog.MO_SYSTEM_METRICS && tableName == catalog.MO_METRIC {
 					motablesFilter := util.BuildSysMetricFilter(acctName)
 					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {
 						return 0, err
 					}
@@ -2350,7 +2356,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
 					motablesFilter := util.BuildSysStatementInfoFilter(acctName)
 					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {
 						return 0, err
 					}
@@ -2358,7 +2364,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
 					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {
 						return 0, err
 					}
@@ -2366,7 +2372,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
 					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, ctx)
+					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, NoAlias, ctx)
 					if err != nil {
 						return 0, err
 					}
@@ -2386,7 +2392,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						Left:  left,
 						Right: right,
 					}
-					accountFilterExprs, err := splitAndBindCondition(accountFilter, ctx)
+					accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
 					if err != nil {
 						return 0, err
 					}
@@ -2574,7 +2580,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
-		joinConds, err := splitAndBindCondition(cond.Expr, ctx)
+		joinConds, err := splitAndBindCondition(cond.Expr, NoAlias, ctx)
 		if err != nil {
 			return 0, err
 		}
