@@ -58,20 +58,20 @@ func (c *Count[T1]) Fill(_ int64, _ T1, v int64, z int64, _ bool, hasNull bool) 
 	return v + z, false, nil
 }
 
-func (c *Count[T1]) BatchFill(rs, _ any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
+func (c *Count[T1]) BatchFill(rs, _ any, start, count int64, vps []uint64, nsp *nulls.Nulls) error {
 	resultVs := rs.([]int64)
 	// count(*) will count the null
 	if c.IsStar || !nsp.Any() {
 		for i := int64(0); i < count; i++ {
 			if vps[i] != 0 {
-				resultVs[vps[i]-1] += zs[i+start]
+				resultVs[vps[i]-1]++
 			}
 		}
 	} else {
 		for i := int64(0); i < count; i++ {
 			index := uint64(i + start)
 			if !nsp.Contains(index) && vps[i] != 0 {
-				resultVs[vps[i]-1] += zs[index]
+				resultVs[vps[i]-1]++
 			}
 		}
 	}

@@ -96,7 +96,6 @@ use information_schema;
 truncate table key_column_usage ;
 truncate table columns;
 truncate table profiling;
-truncate table `PROCESSLIST`;
 truncate table user_privileges;
 truncate table schemata;
 truncate table character_sets;

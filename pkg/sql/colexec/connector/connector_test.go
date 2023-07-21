@@ -86,7 +86,7 @@ func TestConnector(t *testing.T) {
 			if bat == nil {
 				break
 			}
-			if len(bat.Zs) == 0 {
+			if bat.IsEmpty() {
 				continue
 			}
 			bat.Clean(tc.proc.Mp())

@@ -68,7 +68,7 @@ func newTestProxyHandler(t *testing.T) *testProxyHandler {
 		hc:     hc,
 		mc:     mc,
 		re:     re,
-		ru:     newRouter(mc, re, false),
+		ru:     newRouter(mc, re, re.connManager, false),
 		closeFn: func() {
 			mc.Close()
 			st.Stop()
@@ -422,7 +422,7 @@ func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
 
 	// start proxy.
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
-		WithHAKeeperClient(hc))
+		WithHAKeeperClient(hc), WithTest())
 	defer func() {
 		err := s.Close()
 		require.NoError(t, err)

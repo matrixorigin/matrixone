@@ -117,7 +117,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if bat == nil {
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.IsEmpty() {
 		return false, nil
 	}
 	jsonVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
@@ -194,7 +194,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 		if err != nil {
 			return nil, err
 		}
-		rbat.InitZsOne(len(ures))
+		rbat.SetRowCount(len(ures))
 		return rbat, nil
 	}
 	jsonSlice := vector.ExpandBytesCol(jsonVec)
@@ -214,7 +214,7 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 		}
 		rows += len(ures)
 	}
-	rbat.InitZsOne(rows)
+	rbat.SetRowCount(rows)
 	return rbat, nil
 }
 

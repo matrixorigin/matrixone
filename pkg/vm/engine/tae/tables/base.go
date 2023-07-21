@@ -103,16 +103,16 @@ func (blk *baseBlock) Rows() int {
 		return int(node.Rows())
 	}
 }
-
-func (blk *baseBlock) Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	node := blk.PinNode()
 	defer node.Unref()
+	schema := readSchema.(*catalog.Schema)
 	if !node.IsPersisted() {
 		blk.RLock()
 		defer blk.RUnlock()
-		return node.MustMNode().Foreach(colIdx, op, sels)
+		return node.MustMNode().Foreach(schema, colIdx, op, sels)
 	} else {
-		return node.MustPNode().Foreach(ctx, blk.meta.GetSchema(), colIdx, op, sels)
+		return node.MustPNode().Foreach(ctx, schema, colIdx, op, sels)
 	}
 }
 
@@ -568,10 +568,11 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	if rowID == nil {
 		return
 	}
-	pkDef := blk.meta.GetSchema().GetPrimaryKey()
+	schema := blk.meta.GetSchema()
+	pkDef := schema.GetPrimaryKey()
 	pkVec := containers.MakeVector(pkDef.Type)
 	pkIdx := pkDef.Idx
-	blk.Foreach(ctx, pkIdx, func(v any, isNull bool, row int) error {
+	blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
 		pkVec.Append(v, false)
 		return nil
 	}, deletes)

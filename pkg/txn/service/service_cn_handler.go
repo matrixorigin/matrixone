@@ -29,11 +29,11 @@ import (
 )
 
 var (
-	rollbackIngoreErrorCodes = map[uint16]struct{}{
+	rollbackIgnoreErrorCodes = map[uint16]struct{}{
 		moerr.ErrTxnNotFound: {},
 	}
 
-	prepareIngoreErrorCodes = map[uint16]struct{}{
+	prepareIgnoreErrorCodes = map[uint16]struct{}{
 		moerr.ErrTxnNotFound: {},
 	}
 )
@@ -69,7 +69,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 		waiters := make([]*waiter, 0, len(result.WaitTxns()))
 		for _, txnID := range result.WaitTxns() {
 			txnCtx := s.getTxnContext(txnID)
-			// The transaction can not found, it means the concurrent transaction to be waited for has already
+			// The transaction can not be found, it means the concurrent transaction to be waited for has already
 			// been committed or aborted.
 			if txnCtx == nil {
 				continue
@@ -375,7 +375,7 @@ func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
 			})
 		}
 
-		s.parallelSendWithRetry(ctx, txnMeta, requests, rollbackIngoreErrorCodes)
+		s.parallelSendWithRetry(ctx, requests, rollbackIgnoreErrorCodes)
 		util.LogTxnRollbackCompleted(txnMeta)
 	})
 	if err != nil {
@@ -433,7 +433,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 		ctx, cancel := context.WithTimeout(ctx, time.Duration(math.MaxInt64))
 		defer cancel()
 
-		if result := s.parallelSendWithRetry(ctx, txnMeta, requests, rollbackIngoreErrorCodes); result != nil {
+		if result := s.parallelSendWithRetry(ctx, requests, rollbackIgnoreErrorCodes); result != nil {
 			result.Release()
 			if s.logger.Enabled(zap.DebugLevel) {
 				s.logger.Debug("other dnshards committed",
