@@ -26,8 +26,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"go.uber.org/zap"
 
@@ -2492,6 +2494,28 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var mrs *MysqlResultSet
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
+
+	// per statement profiler
+	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
+	if endStmtProfile != nil {
+		defer endStmtProfile(func() string {
+			// use sql string as file name suffix
+			formatCtx := tree.NewFmtCtx(dialect.MYSQL)
+			stmt.Format(formatCtx)
+			sql := formatCtx.String()
+			if len(sql) > 128 {
+				sql = sql[:128]
+			}
+			sql = strings.TrimSpace(sql)
+			sql = strings.Map(func(r rune) rune {
+				if unicode.IsSpace(r) {
+					return '-'
+				}
+				return r
+			}, sql)
+			return sql
+		})
+	}
 
 	// record goroutine info when ddl stmt run timeout
 	switch stmt.(type) {
