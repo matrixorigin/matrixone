@@ -135,6 +135,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	case *plan.Expr_Col:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		return &ColumnExpressionExecutor{
+			mp:       proc.Mp(),
 			relIndex: int(t.Col.RelPos),
 			colIndex: int(t.Col.ColPos),
 			typ:      typ,
@@ -293,10 +294,14 @@ type FunctionExpressionExecutor struct {
 }
 
 type ColumnExpressionExecutor struct {
+	mp       *mpool.MPool
 	relIndex int
 	colIndex int
+
 	// result type.
 	typ types.Type
+	// we should cache a null vector here. because we may change its type but other process may read its type.
+	nullVecCache *vector.Vector
 }
 
 type ParamExpressionExecutor struct {
@@ -461,9 +466,19 @@ func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*bat
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
-		vec.SetType(expr.typ)
+		vec = expr.getConstNullVec(expr.typ, batches[relIndex].Length())
 	}
 	return vec, nil
+}
+
+func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int) *vector.Vector {
+	if expr.nullVecCache != nil {
+		expr.nullVecCache.SetType(typ)
+		expr.nullVecCache.SetLength(length)
+	} else {
+		expr.nullVecCache = vector.NewConstNull(typ, 1, expr.mp)
+	}
+	return expr.nullVecCache
 }
 
 func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
@@ -471,7 +486,10 @@ func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Pro
 }
 
 func (expr *ColumnExpressionExecutor) Free() {
-	// Nothing should do.
+	if expr.nullVecCache != nil {
+		expr.nullVecCache.Free(expr.mp)
+		expr.nullVecCache = nil
+	}
 }
 
 func (expr *ColumnExpressionExecutor) ifResultMemoryReuse() bool {
