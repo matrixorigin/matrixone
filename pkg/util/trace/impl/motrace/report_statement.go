@@ -25,9 +25,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
