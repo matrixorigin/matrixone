@@ -141,6 +141,7 @@ func (c *Compile) clear() {
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
+	c.s3CounterSet.FileService.ResetS3()
 }
 
 // helper function to judge if init temporary engine is needed
