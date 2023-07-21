@@ -88,7 +88,7 @@ func (c *cluster) Env() service.Cluster {
 }
 
 func (c *cluster) NewClient() Client {
-	cli, err := newSQLClient(c.logger, c.env)
+	cli, err := newSQLClient(c.env)
 	require.NoError(c.t, err)
 	return cli
 }

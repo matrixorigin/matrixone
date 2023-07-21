@@ -91,6 +91,7 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 		if cmd.CreateTaskService != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
+			s.createProxyUser(cmd.CreateTaskService)
 		}
 	}
 }
