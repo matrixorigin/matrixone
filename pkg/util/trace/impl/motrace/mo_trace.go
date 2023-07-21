@@ -29,6 +29,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
@@ -69,7 +70,20 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 	if !t.IsEnable() {
 		return ctx, trace.NoopSpan{}
 	}
+
 	span := newMOSpan()
+
+	// per statement profiler
+	v := ctx.Value(fileservice.CtxKeyStatementProfiler)
+	if v != nil {
+		profiler := v.(*fileservice.SpanProfiler)
+		newProfiler, end := profiler.Begin(2)
+		if newProfiler != profiler {
+			ctx = context.WithValue(ctx, fileservice.CtxKeyStatementProfiler, newProfiler)
+		}
+		span.onEnd = append(span.onEnd, end)
+	}
+
 	span.tracer = t
 	span.ctx = ctx
 	span.init(name, opts...)
@@ -175,6 +189,7 @@ type MOSpan struct {
 	needRecord bool
 
 	doneProfile bool
+	onEnd       []func()
 }
 
 var spanPool = &sync.Pool{New: func() any {
@@ -256,6 +271,9 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 // 1. If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the Deadline.
 // 2. If NOT set Deadline, then check condition: Span.Duration > span.GetLongTimeThreshold().
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
+	for _, fn := range s.onEnd {
+		fn()
+	}
 	var err error
 	s.EndTime = time.Now()
 	deadline, hasDeadline := s.ctx.Deadline()
