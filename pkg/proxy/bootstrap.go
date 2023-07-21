@@ -43,6 +43,7 @@ func (h *handler) bootstrap(ctx context.Context) {
 		case <-ticker.C:
 			if state.TaskTableUser.GetUsername() != "" && state.TaskTableUser.GetPassword() != "" {
 				db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, state.TaskTableUser.GetPassword())
+				h.sqlWorker.SetSQLUser(SQLUserName, state.TaskTableUser.GetPassword())
 
 				addressFunc := func(ctx context.Context, _ bool) (string, error) {
 					ctx, cancel := context.WithTimeout(ctx, time.Second*3)
@@ -60,6 +61,7 @@ func (h *handler) bootstrap(ctx context.Context) {
 					return "", nil
 				}
 				db_holder.SetSQLWriterDBAddressFunc(addressFunc)
+				h.sqlWorker.SetAddressFn(addressFunc)
 
 				h.logger.Info("proxy bootstrap succeeded")
 				return

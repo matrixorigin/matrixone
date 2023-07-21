@@ -270,6 +270,8 @@ func testHandle(h *testHandler) {
 				h.handleStopTxn()
 			} else if strings.HasPrefix(string(packet.Payload[1:]), "kill connection") {
 				h.handleKillConn()
+			} else if strings.Contains(string(packet.Payload[1:]), "processlist") {
+				h.handleShowProcesslist()
 			} else {
 				h.handleCommon()
 			}
@@ -403,6 +405,54 @@ func (h *testHandler) handleStartTxn() {
 func (h *testHandler) handleStopTxn() {
 	h.status &= ^frontend.SERVER_STATUS_IN_TRANS
 	h.handleCommon()
+}
+
+func (h *testHandler) handleShowProcesslist() {
+	h.mysqlProto.SetSequenceID(1)
+	err := h.mysqlProto.SendColumnCountPacket(3)
+	if err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	cols := []*plan.ColDef{
+		{Typ: &plan.Type{Id: int32(types.T_varchar)}, Name: "node_id"},
+		{Typ: &plan.Type{Id: int32(types.T_int32)}, Name: "conn_id"},
+		{Typ: &plan.Type{Id: int32(types.T_varchar)}, Name: "host"},
+	}
+	columns := make([]interface{}, len(cols))
+	res := &frontend.MysqlResultSet{}
+	for i, col := range cols {
+		c := new(frontend.MysqlColumn)
+		c.SetName(col.Name)
+		c.SetOrgName(col.Name)
+		c.SetTable(col.Typ.Table)
+		c.SetOrgTable(col.Typ.Table)
+		c.SetAutoIncr(col.Typ.AutoIncr)
+		c.SetSchema("")
+		c.SetDecimal(col.Typ.Scale)
+		columns[i] = c
+		res.AddColumn(c)
+	}
+	for _, c := range columns {
+		if err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
+			_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+			return
+		}
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
+	row := make([]interface{}, 3)
+	row[0] = "node1"
+	row[1] = 100
+	row[2] = "host1"
+	res.AddRow(row)
+	ses := &frontend.Session{}
+	ses.SetRequestContext(context.Background())
+	h.mysqlProto.SetSession(ses)
+	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
 }
 
 func (s *testCNServer) Stop() error {
