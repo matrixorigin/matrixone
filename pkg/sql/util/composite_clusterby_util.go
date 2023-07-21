@@ -103,7 +103,7 @@ func FillCompositeKeyBatch(bat *batch.Batch, ckeyName string, keyParts []string,
 		v := cCBVectorMap[elem]
 		vs = append(vs, v)
 	}
-	vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, vs, bat.Length())
+	vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, vs, bat.RowCount())
 	if err != nil {
 		return err
 	}

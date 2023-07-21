@@ -61,14 +61,14 @@ func (a *analyze) Alloc(size int64) {
 func (a *analyze) Input(bat *batch.Batch, isFirst bool) {
 	if a.analInfo != nil && bat != nil && isFirst {
 		atomic.AddInt64(&a.analInfo.InputSize, int64(bat.Size()))
-		atomic.AddInt64(&a.analInfo.InputRows, int64(bat.Length()))
+		atomic.AddInt64(&a.analInfo.InputRows, int64(bat.RowCount()))
 	}
 }
 
 func (a *analyze) Output(bat *batch.Batch, isLast bool) {
 	if a.analInfo != nil && bat != nil && isLast {
 		atomic.AddInt64(&a.analInfo.OutputSize, int64(bat.Size()))
-		atomic.AddInt64(&a.analInfo.OutputRows, int64(bat.Length()))
+		atomic.AddInt64(&a.analInfo.OutputRows, int64(bat.RowCount()))
 	}
 }
 

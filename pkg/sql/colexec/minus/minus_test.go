@@ -84,8 +84,8 @@ func TestMinus(t *testing.T) {
 		}
 		require.NoError(t, err)
 		result := c.proc.InputBatch()
-		if result != nil && len(result.Zs) != 0 {
-			cnt += result.Length()
+		if result != nil && !result.IsEmpty() {
+			cnt += result.RowCount()
 			require.Equal(t, 3, len(result.Vecs))
 			c.proc.InputBatch().Clean(c.proc.Mp())
 		}
