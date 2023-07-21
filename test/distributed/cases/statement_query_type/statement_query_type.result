@@ -37,8 +37,6 @@ show profiles;
 1
 show privileges;
 1
-show processlist;
-Id    User    Host    db    Command    Time    State    Info
 show tables;
 Tables_in_test_db
 test_table
@@ -143,8 +141,6 @@ show profiles;
 1
 show privileges;
 1
-show processlist;
-Id    User    Host    db    Command    Time    State    Info
 show tables;
 Tables_in_test_db
 test_table
@@ -211,7 +207,7 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 99;
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 97;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    external_sql
 use system    Other    external_sql
@@ -240,7 +236,6 @@ create account test_account admin_name = 'test_name' identified by '******' open
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    external_sql
 show index from test_table    Other    external_sql
 show tables    Other    external_sql
-show processlist    Other    external_sql
 show privileges    Other    external_sql
 show profiles    Other    external_sql
 show plugins    Other    external_sql
@@ -289,7 +284,6 @@ show index from test_table    Other    external_sql
 show collation like '%'    Other    external_sql
 show collation    Other    external_sql
 show tables    Other    external_sql
-show processlist    Other    external_sql
 show privileges    Other    external_sql
 show profiles    Other    external_sql
 show plugins    Other    external_sql
@@ -346,8 +340,6 @@ Db    Name    Type    Definer    Modified    Created    Security_type    Comment
 1
 /* cloud_user */ show privileges;
 1
-/* cloud_user */ show processlist;
-Id    User    Host    db    Command    Time    State    Info
 /* cloud_user */ show tables;
 Tables_in_test_db
 test_table
@@ -425,7 +417,7 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-/* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
+/* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 67;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    cloud_user_sql
 drop database test_db    DDL    cloud_user_sql
@@ -473,7 +465,6 @@ show index from test_table    Other    cloud_user_sql
 show collation like '%'    Other    cloud_user_sql
 show collation    Other    cloud_user_sql
 show tables    Other    cloud_user_sql
-show processlist    Other    cloud_user_sql
 show privileges    Other    cloud_user_sql
 show profiles    Other    cloud_user_sql
 show plugins    Other    cloud_user_sql
@@ -529,8 +520,6 @@ Db    Name    Type    Definer    Modified    Created    Security_type    Comment
 1
 /* cloud_nonuser */ show privileges;
 1
-/* cloud_nonuser */ show processlist;
-Id    User    Host    db    Command    Time    State    Info
 /* cloud_nonuser */ show tables;
 Tables_in_test_db
 test_table
@@ -608,7 +597,7 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 67;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    cloud_nonuser_sql
 drop database test_db    DDL    cloud_nonuser_sql
@@ -645,7 +634,6 @@ show index from test_table    Other    cloud_nonuser_sql
 show collation like '%'    Other    cloud_nonuser_sql
 show collation    Other    cloud_nonuser_sql
 show tables    Other    cloud_nonuser_sql
-show processlist    Other    cloud_nonuser_sql
 show privileges    Other    cloud_nonuser_sql
 show profiles    Other    cloud_nonuser_sql
 show plugins    Other    cloud_nonuser_sql

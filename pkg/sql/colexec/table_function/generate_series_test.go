@@ -505,7 +505,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 func makeGenerateSeriesBatch(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
-	bat.InitZsOne(1)
+	bat.SetRowCount(1)
 	return bat
 }
 

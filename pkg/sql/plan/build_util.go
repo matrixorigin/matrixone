@@ -260,14 +260,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 	}
 
 	// try to calculate on update value, return err if fails
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-
 	executor, err := colexec.NewExpressionExecutor(proc, onUpdateExpr)
 	if err != nil {
 		return nil, err
 	}
-	_, err = executor.Eval(proc, []*batch.Batch{bat})
+	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return nil, err
 	}

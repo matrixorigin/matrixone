@@ -968,6 +968,14 @@ var (
 		variable_name,
 		variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
 
+	insertIntoMoStages = `insert into mo_catalog.mo_stages(
+		stage_name,
+		url,
+		stage_credentials,
+		stage_status,
+		created_time,
+		comment) values ('%s','%s', '%s', '%s','%s', '%s');`
+
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
 			owner,
@@ -1365,6 +1373,18 @@ const (
 
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
+	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s";`
+
+	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s';`
+
+	updateStageUrlFotmat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s';`
+
+	updateStageCredentialsFotmat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s';`
+
+	updateStageStatusFotmat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s';`
+
+	updateStageCommentFotmat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s';`
+
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
@@ -1425,6 +1445,38 @@ func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(checkTenantFormat, tenant), nil
+}
+
+func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
+	err := inputNameIsInvalid(ctx, stage)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkStageFormat, stage), nil
+}
+
+func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) string {
+	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment)
+}
+
+func getSqlForDropStage(stageName string) string {
+	return fmt.Sprintf(dropStageFormat, stageName)
+}
+
+func getsqlForUpdateStageUrl(stageName, url string) string {
+	return fmt.Sprintf(updateStageUrlFotmat, url, stageName)
+}
+
+func getsqlForUpdateStageCredentials(stageName, credentials string) string {
+	return fmt.Sprintf(updateStageCredentialsFotmat, credentials, stageName)
+}
+
+func getsqlForUpdateStageStatus(stageName, status string) string {
+	return fmt.Sprintf(updateStageStatusFotmat, status, stageName)
+}
+
+func getsqlForUpdateStageComment(stageName, comment string) string {
+	return fmt.Sprintf(updateStageCommentFotmat, comment, stageName)
 }
 
 func getSqlForGetAccountName(tenantId uint32) string {
@@ -1690,6 +1742,7 @@ func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string
 	}
 	return fmt.Sprintf(insertIntoMoPubsFormat, pubName, databaseName, databaseId, allTable, tableList, accountList, owner, creator, comment), nil
 }
+
 func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, pubName)
@@ -3252,6 +3305,243 @@ func isDbPublishing(ctx context.Context, dbName string, ses *Session) (ok bool, 
 	}
 
 	return count > 0, err
+}
+
+func checkStageExistOrNot(ctx context.Context, bh BackgroundExec, stageName string) (bool, error) {
+	var sql string
+	var erArray []ExecResult
+	var err error
+	sql, err = getSqlForCheckStage(ctx, stageName)
+	if err != nil {
+		return false, err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
+}
+
+func formatCredentials(credentials tree.StageCredentials) string {
+	var rstr string
+	if credentials.Exist {
+		for i := 0; i < len(credentials.Credentials)-1; i += 2 {
+			rstr += fmt.Sprintf("%s=%s", credentials.Credentials[i], credentials.Credentials[i+1])
+			if i != len(credentials.Credentials)-2 {
+				rstr += ","
+			}
+		}
+	}
+	return rstr
+}
+
+func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) error {
+	var sql string
+	var err error
+	var stageExist bool
+	var credentials string
+	var StageStatus string
+	var comment string
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// check create stage priv
+	err = doCheckRole(ctx, ses)
+	if err != nil {
+		return nil
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	// check stage
+	stageExist, err = checkStageExistOrNot(ctx, bh, string(cs.Name))
+	if err != nil {
+		return err
+	}
+
+	if stageExist {
+		if !cs.IfNotExists {
+			return moerr.NewInternalError(ctx, "the satge %s exists", cs.Name)
+		} else {
+			// do nothing
+			return err
+		}
+	} else {
+		// format credentials and hash it
+		credentials = HashPassWord(formatCredentials(cs.Credentials))
+
+		if !cs.Status.Exist {
+			StageStatus = "disabled"
+		} else {
+			StageStatus = cs.Status.Option.String()
+		}
+
+		if cs.Comment.Exist {
+			comment = cs.Comment.Comment
+		}
+
+		sql = getSqlForInsertIntoMoStages(ctx, string(cs.Name), cs.Url, credentials, StageStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
+
+	return err
+}
+
+func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error {
+	var sql string
+	var err error
+	var stageExist bool
+	var credentials string
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// check create stage priv
+	err = doCheckRole(ctx, ses)
+	if err != nil {
+		return nil
+	}
+
+	optionBits := uint8(0)
+	if as.UrlOption.Exist {
+		optionBits |= 1
+	}
+	if as.CredentialsOption.Exist {
+		optionBits |= 1 << 1
+	}
+	if as.StatusOption.Exist {
+		optionBits |= 1 << 2
+	}
+	if as.Comment.Exist {
+		optionBits |= 1 << 3
+	}
+	optionCount := bits.OnesCount8(optionBits)
+	if optionCount == 0 {
+		return moerr.NewInternalError(ctx, "at least one option at a time")
+	}
+	if optionCount > 1 {
+		return moerr.NewInternalError(ctx, "at most one option at a time")
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	// check stage
+	stageExist, err = checkStageExistOrNot(ctx, bh, string(as.Name))
+	if err != nil {
+		return err
+	}
+
+	if !stageExist {
+		if !as.IfNotExists {
+			return moerr.NewInternalError(ctx, "the satge %s not exists", as.Name)
+		} else {
+			// do nothing
+			return err
+		}
+	} else {
+		if as.UrlOption.Exist {
+			sql = getsqlForUpdateStageUrl(string(as.Name), as.UrlOption.Url)
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+		}
+
+		if as.CredentialsOption.Exist {
+			credentials = HashPassWord(formatCredentials(as.CredentialsOption))
+			sql = getsqlForUpdateStageCredentials(string(as.Name), credentials)
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+		}
+
+		if as.StatusOption.Exist {
+			sql = getsqlForUpdateStageStatus(string(as.Name), as.StatusOption.Option.String())
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+		}
+
+		if as.Comment.Exist {
+			sql = getsqlForUpdateStageComment(string(as.Name), as.Comment.Comment)
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return err
+}
+
+func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) error {
+	var sql string
+	var err error
+	var stageExist bool
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// check create stage priv
+	err = doCheckRole(ctx, ses)
+	if err != nil {
+		return nil
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	// check stage
+	stageExist, err = checkStageExistOrNot(ctx, bh, string(ds.Name))
+	if err != nil {
+		return err
+	}
+
+	if !stageExist {
+		if !ds.IfNotExists {
+			return moerr.NewInternalError(ctx, "the satge %s not exists", ds.Name)
+		} else {
+			// do nothing
+			return err
+		}
+	} else {
+		sql = getSqlForDropStage(string(ds.Name))
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
+	return err
 }
 
 func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) (err error) {
@@ -5150,6 +5440,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
 	case *tree.SetTransaction:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	default:
@@ -8436,10 +8729,8 @@ func doCheckRole(ctx context.Context, ses *Session) error {
 		if currentRole != moAdminRoleName {
 			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
 		}
-	} else {
-		if currentRole != accountAdminRoleName {
-			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
-		}
+	} else if currentRole != accountAdminRoleName {
+		err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
 	}
 	return err
 }

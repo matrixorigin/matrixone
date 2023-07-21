@@ -1581,7 +1581,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				Typ:   strTyp,
 			}
 		}
-		bat.SetZs(rowCount, proc.Mp())
+		bat.SetRowCount(rowCount)
 		nodeUUID, _ := uuid.NewUUID()
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_VALUE_SCAN,
@@ -2664,6 +2664,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
 	case "metadata_scan":
 		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
+	case "processlist":
+		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

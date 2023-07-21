@@ -65,9 +65,9 @@ func TestPreInsertUnique(t *testing.T) {
 			testutil.MakeInt64Vector([]int64{11, 22, 33}, nil),
 			testutil.MakeInt64Vector([]int64{23, 23, 23}, nil),
 		},
-		Zs:  []int64{1, 1, 1},
 		Cnt: 1,
 	}
+	inputBatch.SetRowCount(3)
 
 	argument := Argument{
 		PreInsertCtx: &plan.PreInsertUkCtx{

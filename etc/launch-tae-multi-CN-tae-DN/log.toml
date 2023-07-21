@@ -29,28 +29,3 @@ backend = "DISK-ETL"
 
 [observability]
 statusPort = 7001
-
-[hakeeper-client]
-service-addresses = [
-  "127.0.0.1:32001",
-]
-
-[logservice]
-deployment-id = 1
-uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
-raft-address = "127.0.0.1:32000"
-logservice-address = "127.0.0.1:32001"
-gossip-address = "127.0.0.1:32002"
-gossip-seed-addresses = [
-  "127.0.0.1:32002",
-]
-gossip-allow-self-as-seed = true
-
-[logservice.BootstrapConfig]
-bootstrap-cluster = true
-num-of-log-shards = 1
-num-of-dn-shards = 1
-num-of-log-shard-replicas = 1
-init-hakeeper-members = [
-  "131072:7c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
-]

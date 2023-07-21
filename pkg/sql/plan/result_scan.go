@@ -56,11 +56,9 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	if err != nil {
 		return 0, err
 	}
-	// calculate uuid
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
 
-	vec, err := colexec.EvalExpressionOnce(builder.compCtx.GetProcess(), exprs[0], []*batch.Batch{bat})
+	// calculate uuid
+	vec, err := colexec.EvalExpressionOnce(builder.compCtx.GetProcess(), exprs[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return 0, err
 	}

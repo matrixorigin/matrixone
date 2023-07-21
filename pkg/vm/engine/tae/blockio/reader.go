@@ -124,6 +124,7 @@ func (r *BlockReader) LoadColumns(
 			return
 		}
 		bat.Vecs[i] = obj.(*vector.Vector)
+		bat.SetRowCount(bat.Vecs[i].Length())
 	}
 	return
 }
@@ -163,6 +164,7 @@ func (r *BlockReader) LoadAllColumns(
 				return nil, err
 			}
 			bat.Vecs[i] = obj.(*vector.Vector)
+			bat.SetRowCount(bat.Vecs[i].Length())
 		}
 		bats = append(bats, bat)
 	}

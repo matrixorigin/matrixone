@@ -98,7 +98,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 		}
 		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
@@ -138,7 +138,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 
 	} else {
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
-		insertBat.Zs = proc.GetMPool().GetSels()
 		insertBat.Attrs = ap.InsertCtx.Attrs
 		for i := range insertBat.Attrs {
 			vec := proc.GetVector(*bat.Vecs[i].GetType())
@@ -147,7 +146,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 			}
 			insertBat.SetVector(int32(i), vec)
 		}
-		insertBat.Zs = append(insertBat.Zs, bat.Zs...)
+		insertBat.SetRowCount(insertBat.RowCount() + bat.RowCount())
 
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
 			insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
@@ -155,7 +154,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 				return process.ExecNext, err
 			}
 			for i, partitionBat := range insertBatches {
-				err := ap.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
+				err = ap.InsertCtx.PartitionSources[i].Write(proc.Ctx, partitionBat)
 				if err != nil {
 					partitionBat.Clean(proc.Mp())
 					return process.ExecNext, err
@@ -193,11 +192,12 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 	res.Vecs[1] = proc.GetVector(types.T_text.ToType())
 	for _, w := range s3Writers {
 		//deep copy.
-		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
+		bat := w.GetMetaLocBat()
+		res, err = res.Append(proc.Ctx, proc.GetMPool(), bat)
 		if err != nil {
 			return
 		}
-		res.Zs = append(res.Zs, w.GetMetaLocBat().Zs...)
+		res.SetRowCount(res.RowCount() + bat.RowCount())
 		w.ResetMetaLocBat(proc)
 	}
 	proc.SetInputBatch(res)
