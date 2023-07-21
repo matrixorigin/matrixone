@@ -466,7 +466,7 @@ func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*bat
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
-		vec = expr.getConstNullVec(expr.typ, batches[relIndex].Length())
+		vec = expr.getConstNullVec(expr.typ, vec.Length())
 	}
 	return vec, nil
 }
@@ -476,7 +476,7 @@ func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int
 		expr.nullVecCache.SetType(typ)
 		expr.nullVecCache.SetLength(length)
 	} else {
-		expr.nullVecCache = vector.NewConstNull(typ, 1, expr.mp)
+		expr.nullVecCache = vector.NewConstNull(typ, length, expr.mp)
 	}
 	return expr.nullVecCache
 }
