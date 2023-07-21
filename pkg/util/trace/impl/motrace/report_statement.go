@@ -82,7 +82,7 @@ func StatementInfoUpdate(existing, new Item) {
 
 	if err != nil {
 		// handle error
-		logutil.Errorf("Failed to merge stats: %v", err)
+		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
 	}
 }
 

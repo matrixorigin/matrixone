@@ -582,3 +582,18 @@ func TestHandler_HandleEventDropAccount(t *testing.T) {
 		require.Equal(t, int64(2), s.counterSet.connAccepted.Load())
 	})
 }
+
+func TestHandler_HandleTxn(t *testing.T) {
+	testWithServer(t, func(t *testing.T, addr string, s *Server) {
+		db1, err := sql.Open("mysql", fmt.Sprintf("a1#root:111@unix(%s)/db1", addr))
+		// connect to server.
+		require.NoError(t, err)
+		require.NotNil(t, db1)
+		defer func() {
+			_ = db1.Close()
+		}()
+		_, err = db1.Exec("select 1")
+		require.NoError(t, err)
+
+	})
+}
