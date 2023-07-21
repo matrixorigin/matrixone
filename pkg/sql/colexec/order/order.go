@@ -65,7 +65,7 @@ func (arg *Argument) Free(proc *process.Process, _ bool) {
 }
 
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
@@ -138,10 +138,10 @@ func (ctr *container) sortAndSend(proc *process.Process) (err error) {
 		var strCol []string
 
 		firstVec := ctr.sortVectors[0]
-		if cap(ctr.resultOrderList) >= ctr.batWaitForSort.Length() {
-			ctr.resultOrderList = ctr.resultOrderList[:ctr.batWaitForSort.Length()]
+		if cap(ctr.resultOrderList) >= ctr.batWaitForSort.RowCount() {
+			ctr.resultOrderList = ctr.resultOrderList[:ctr.batWaitForSort.RowCount()]
 		} else {
-			ctr.resultOrderList = make([]int64, ctr.batWaitForSort.Length())
+			ctr.resultOrderList = make([]int64, ctr.batWaitForSort.RowCount())
 		}
 
 		for i := range ctr.resultOrderList {

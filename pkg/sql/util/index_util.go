@@ -107,8 +107,8 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 		b.Vecs[1] = compactPrimaryCol(vec, bitMap, proc)
 	}
 
-	b.SetZs(b.Vecs[0].Length(), proc.Mp())
-	return b, b.Vecs[0].Length()
+	b.SetRowCount(b.Vecs[0].Length())
+	return b, b.RowCount()
 }
 
 // SerialWithCompacted have a similar function named Serial

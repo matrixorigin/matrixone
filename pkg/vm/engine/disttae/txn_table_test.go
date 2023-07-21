@@ -68,7 +68,7 @@ func makeBatchForTest(
 		vector.AppendFixed(vec, n, false, mp)
 	}
 	bat.SetVector(0, vec)
-	bat.SetZs(len(ints), mp)
+	bat.SetRowCount(len(ints))
 	return bat
 }
 

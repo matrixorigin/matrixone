@@ -681,11 +681,7 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 		batchData.Vecs[i] = vec
 	}
 
-	batchData.Zs = make([]int64, batchSize)
-	for i := 0; i < batchSize; i++ {
-		batchData.Zs[i] = 2
-	}
-
+	batchData.SetRowCount(batchSize)
 	return batchData
 }
 

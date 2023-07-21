@@ -87,7 +87,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	}
 	rbat.SetAttributes(catalog.MetaColNames)
 	rbat.Cnt = 1
-	rbat.InitZsOne(1)
+	rbat.SetRowCount(1)
 	proc.SetInputBatch(rbat)
 	return false, nil
 }

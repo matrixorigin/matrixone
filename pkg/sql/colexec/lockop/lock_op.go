@@ -111,10 +111,11 @@ func callNonBlocking(
 	proc *process.Process,
 	arg *Argument) (bool, error) {
 	bat := proc.InputBatch()
+
 	if bat == nil {
 		return true, arg.rt.retryError
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
@@ -157,7 +158,7 @@ func callBlocking(
 		}
 
 		// skip empty batch
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			bat.Clean(proc.Mp())
 			return false, nil
 		}
@@ -181,6 +182,7 @@ func callBlocking(
 		if len(arg.rt.cachedBatches) == 0 {
 			arg.rt.step = stepEnd
 		}
+
 		proc.SetInputBatch(bat)
 		return false, nil
 	case stepEnd:

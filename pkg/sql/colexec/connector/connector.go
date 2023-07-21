@@ -35,7 +35,7 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 	if bat == nil {
 		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		return process.ExecNext, nil
 	}

@@ -2367,7 +2367,7 @@ table_lock_list:
 table_lock_elem:
     table_name table_lock_type
     {
-        $$ = tree.TableLock{*$1, $2}
+        $$ = tree.TableLock{Table: *$1, LockType: $2}
     }
 
 table_lock_type:  
@@ -8774,6 +8774,13 @@ literal:
 |   HEXNUM
     {
         $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_hexnum)
+    }
+|   UNDERSCORE_BINARY HEXNUM
+    {
+        if strings.HasPrefix($2, "0x") {
+            $2 = $2[2:]
+        }
+        $$ = tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_bit)
     }
 |   DECIMAL_VALUE
     {
