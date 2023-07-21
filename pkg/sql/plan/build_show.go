@@ -982,7 +982,7 @@ func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error
 
 func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := fmt.Sprintf("SELECT stage_name as `STAGE_NAME`, url as `URL`, case stage_status when 'enabled' then 'ENABLED' else 'DISABLED',comments as `COMMENTS` FROM %s.mo_stages;", MO_CATALOG_DB_NAME)
+	sql := fmt.Sprintf("SELECT stage_name as `STAGE_NAME`, url as `URL`, case stage_status when 'enabled' then 'ENABLED' else 'DISABLED' end as `STATUS`,  comment as `COMMENT` FROM %s.mo_stages;", MO_CATALOG_DB_NAME)
 
 	if stmt.Like != nil {
 		// append filter [AND mo_role.role_name like stmt.Like] to WHERE clause
