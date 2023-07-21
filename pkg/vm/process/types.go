@@ -304,7 +304,8 @@ func (si *SessionInfo) GetHost() string {
 }
 
 func (si *SessionInfo) GetUserHost() string {
-	return si.User + "@" + si.Host
+	//currently, the host_name is 'localhost'
+	return si.User + "@localhost"
 }
 
 func (si *SessionInfo) GetRole() string {
