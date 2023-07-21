@@ -57,7 +57,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			proc.PutBatch(bat)
 			continue
 		}
-		newSeen := ap.ctr.seen + uint64(bat.Length())
+		newSeen := ap.ctr.seen + uint64(bat.RowCount())
 		if newSeen < ap.Limit {
 			ap.ctr.seen = newSeen
 			anal.Output(bat, isLast)
@@ -65,7 +65,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			return process.ExecNext, nil
 		} else {
 			num := int(newSeen - ap.Limit)
-			batch.SetLength(bat, bat.Length()-num)
+			batch.SetLength(bat, bat.RowCount()-num)
 			ap.ctr.seen = newSeen
 			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)

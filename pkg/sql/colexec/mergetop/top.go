@@ -167,7 +167,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
 	var start int64
 
-	length := int64(len(bat.Zs))
+	length := int64(bat.RowCount())
 	if n := int64(len(ctr.sels)); n < limit {
 		start = limit - n
 		if start > length {
@@ -180,9 +180,9 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				}
 			}
 			ctr.sels = append(ctr.sels, n)
-			ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs[i])
 			n++
 		}
+		ctr.bat.SetRowCount(ctr.bat.RowCount() + bat.RowCount())
 		if n == limit {
 			ctr.sort()
 		}
@@ -201,7 +201,6 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
 					return err
 				}
-				ctr.bat.Zs[0] = bat.Zs[i]
 			}
 			heap.Fix(ctr, 0)
 		}

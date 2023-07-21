@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -50,25 +51,71 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch
 			row++
 		}
 	}
-	retBatch.SetZs(retVec.Length(), proc.Mp())
+	retBatch.SetRowCount(retVec.Length())
 	retBatch.SetVector(0, retVec)
 	return retBatch, nil
 }
 
-// GroupByPartitionForDelete: Group data based on partition and return batch array with the same length as the number of partitions.
+// GroupByPartitionForDeleteS3: Group data based on partition and return batch array with the same length as the number of partitions.
 // Data from the same partition is placed in the same batch
-func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int, pIdx int, partitionNum int) ([]*batch.Batch, error) {
+func GroupByPartitionForDeleteS3(proc *process.Process, bat *batch.Batch, rowIdIdx int, partitionIdx int, partitionNum int, pkIdx int) ([]*batch.Batch, error) {
 	vecList := make([]*vector.Vector, partitionNum)
+	pkList := make([]*vector.Vector, partitionNum)
+	pkTyp := bat.Vecs[pkIdx].GetType()
+	fun := vector.GetUnionOneFunction(*pkTyp, proc.Mp())
 	for i := 0; i < partitionNum; i++ {
 		//retVec := vector.NewVec(types.T_Rowid.ToType())
+		retVec := proc.GetVector(types.T_Rowid.ToType())
+		pkVec := proc.GetVector(*pkTyp)
+		vecList[i] = retVec
+		pkList[i] = pkVec
+	}
+
+	// Fill the data into the corresponding batch based on the different partitions to which the current `row_id` data
+	for i, rowid := range vector.MustFixedCol[types.Rowid](bat.Vecs[rowIdIdx]) {
+		if !bat.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
+			partition := vector.MustFixedCol[int32](bat.Vecs[partitionIdx])[i]
+			if partition == -1 {
+				for _, vecElem := range vecList {
+					vecElem.Free(proc.Mp())
+				}
+				//panic("partiton number is -1, the partition number is incorrect")
+				return nil, moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+			} else {
+				vector.AppendFixed(vecList[partition], rowid, false, proc.Mp())
+				err := fun(pkList[partition], bat.Vecs[pkIdx], int64(i))
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	// create a batch array equal to the number of partitions
+	batches := make([]*batch.Batch, partitionNum)
+	for i := range vecList {
+		// initialize the vectors in each batch, the batch only contains a `row_id` column
+		retBatch := batch.New(true, []string{catalog.Row_ID, "pk"})
+		retBatch.SetRowCount(vecList[i].Length())
+		retBatch.SetVector(0, vecList[i])
+		retBatch.SetVector(1, pkList[i])
+		batches[i] = retBatch
+	}
+	return batches, nil
+}
+
+// GroupByPartitionForDelete: Group data based on partition and return batch array with the same length as the number of partitions.
+// Data from the same partition is placed in the same batch
+func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, rowIdIdx int, partitionIdx int, partitionNum int) ([]*batch.Batch, error) {
+	vecList := make([]*vector.Vector, partitionNum)
+	for i := 0; i < partitionNum; i++ {
 		retVec := proc.GetVector(types.T_Rowid.ToType())
 		vecList[i] = retVec
 	}
 
 	// Fill the data into the corresponding batch based on the different partitions to which the current `row_id` data
-	for i, rowid := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
-		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
-			partition := vector.MustFixedCol[int32](bat.Vecs[pIdx])[i]
+	for i, rowid := range vector.MustFixedCol[types.Rowid](bat.Vecs[rowIdIdx]) {
+		if !bat.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
+			partition := vector.MustFixedCol[int32](bat.Vecs[partitionIdx])[i]
 			if partition == -1 {
 				for _, vecElem := range vecList {
 					vecElem.Free(proc.Mp())
@@ -85,7 +132,7 @@ func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int,
 	for i := range vecList {
 		// initialize the vectors in each batch, the batch only contains a `row_id` column
 		retBatch := batch.New(true, []string{catalog.Row_ID})
-		retBatch.SetZs(vecList[i].Length(), proc.Mp())
+		retBatch.SetRowCount(vecList[i].Length())
 		retBatch.SetVector(0, vecList[i])
 		batches[i] = retBatch
 	}
@@ -131,7 +178,7 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 
 	for partIdx := range batches {
 		length := batches[partIdx].GetVector(0).Length()
-		batches[partIdx].SetZs(length, proc.Mp())
+		batches[partIdx].SetRowCount(length)
 	}
 	return batches, nil
 }

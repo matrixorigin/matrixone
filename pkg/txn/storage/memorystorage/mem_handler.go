@@ -1141,7 +1141,7 @@ func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req *memo
 	}
 
 	if len(rows) > 0 {
-		b.InitZsOne(len(rows))
+		b.SetRowCount(len(rows))
 		for _, vec := range b.Vecs {
 			nulls.TryExpand(vec.GetNulls(), len(rows))
 		}

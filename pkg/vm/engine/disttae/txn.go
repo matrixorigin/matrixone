@@ -95,7 +95,7 @@ func (txn *Transaction) WriteBatch(
 	if typ == INSERT {
 		if !insertBatchHasRowId {
 			txn.genBlock()
-			len := bat.Length()
+			len := bat.RowCount()
 			vec := txn.proc.GetVector(types.T_Rowid.ToType())
 			for i := 0; i < len; i++ {
 				if err := vector.AppendFixed(vec, txn.genRowId(), false,
@@ -140,7 +140,7 @@ func (txn *Transaction) dumpBatch(offset int) error {
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		// TODO: after shrink, we should update workspace size
-		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
+		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
 			continue
 		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
@@ -187,7 +187,7 @@ func (txn *Transaction) dumpBatch(offset int) error {
 		// only remain the metaLoc col
 		metaLoc.Vecs = metaLoc.Vecs[lenVecs-1:]
 		metaLoc.Attrs = metaLoc.Attrs[lenVecs-1:]
-		metaLoc.SetZs(metaLoc.Vecs[0].Length(), txn.proc.GetMPool())
+		metaLoc.SetRowCount(metaLoc.Vecs[0].Length())
 		err = tbl.Write(txn.proc.Ctx, metaLoc)
 		if err != nil {
 			return err
@@ -299,7 +299,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 				false,
 				txn.proc.Mp())
 		}
-		newBat.SetZs(bat.Vecs[0].Length(), txn.proc.Mp())
+		newBat.SetRowCount(bat.Vecs[0].Length())
 	}
 	txn.readOnly.Store(false)
 	txn.writes = append(txn.writes, Entry{
@@ -355,7 +355,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	}
 	// cn rowId antiShrink
 	bat.AntiShrink(cnRowIdOffsets)
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
@@ -535,6 +535,10 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 }
 
 func (txn *Transaction) delTransaction() {
+	if txn.removed {
+		return
+	}
+
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
 			continue
@@ -561,4 +565,5 @@ func (txn *Transaction) delTransaction() {
 	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
 	txn.cnBlkId_Pos = nil
 	txn.hasS3Op.Store(false)
+	txn.removed = true
 }

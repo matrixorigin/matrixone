@@ -256,7 +256,7 @@ import (
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
-%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES
 %token <item> INTEGRAL HEX BIT_LITERAL FLOAT
 %token <str>  HEXNUM
 %token <str> NULL TRUE FALSE
@@ -435,7 +435,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
@@ -2367,7 +2367,7 @@ table_lock_list:
 table_lock_elem:
     table_name table_lock_type
     {
-        $$ = tree.TableLock{*$1, $2}
+        $$ = tree.TableLock{Table: *$1, LockType: $2}
     }
 
 table_lock_type:  
@@ -3044,12 +3044,22 @@ show_stmt:
 |   show_publications_stmt
 |   show_subscriptions_stmt
 |   show_servers_stmt
+|   show_stages_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
     {
         $$ = &tree.ShowCollation{}
     }
+
+show_stages_stmt:
+    SHOW STAGES like_opt
+    {
+        $$ = &tree.ShowStagse{
+            Like: $3,
+        }
+    }
+
 show_grants_stmt:
     SHOW GRANTS
     {
@@ -8764,6 +8774,13 @@ literal:
 |   HEXNUM
     {
         $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_hexnum)
+    }
+|   UNDERSCORE_BINARY HEXNUM
+    {
+        if strings.HasPrefix($2, "0x") {
+            $2 = $2[2:]
+        }
+        $$ = tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_bit)
     }
 |   DECIMAL_VALUE
     {

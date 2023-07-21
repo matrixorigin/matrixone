@@ -24,7 +24,9 @@ grant connect on account * to r1;
 
 -- @session:id=2&user=sys:u1:r1&password=111
 use mo_catalog;
+-- @bvt:issue#8544
 show tables;
+-- @bvt:issue
 create database t;
 -- @session
 
