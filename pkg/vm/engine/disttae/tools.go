@@ -817,9 +817,12 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	typ := api.Entry_Insert
 	if e.typ == DELETE {
 		typ = api.Entry_Delete
-		ebat = batch.NewWithSize(0)
-		ebat.Vecs = e.bat.Vecs[:1]
-		ebat.Attrs = e.bat.Attrs[:1]
+		if e.tableId != catalog.MO_TABLES_ID &&
+			e.tableId != catalog.MO_DATABASE_ID {
+			ebat = batch.NewWithSize(0)
+			ebat.Vecs = e.bat.Vecs[:1]
+			ebat.Attrs = e.bat.Attrs[:1]
+		}
 	} else if e.typ == UPDATE {
 		typ = api.Entry_Update
 	} else if e.typ == ALTER {
