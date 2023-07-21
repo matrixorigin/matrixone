@@ -83,7 +83,6 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool, postSet fu
 	}
 
 	l.evict()
-	return
 }
 
 func (l *LRU) evict() {
