@@ -29,10 +29,9 @@ type LRU struct {
 }
 
 type lruItem struct {
-	Key      any
-	Value    []byte
-	Size     int64
-	callback func()
+	Key   any
+	Value []byte
+	Size  int64
 }
 
 func New(capacity int64, postEvict func(key any, value []byte, sz int64)) *LRU {
