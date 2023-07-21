@@ -47,6 +47,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 			// WTF, nil?
 			return process.ExecStop, nil
 		}
+
 		if end {
 			proc.SetInputBatch(nil)
 			return process.ExecStop, nil
@@ -58,7 +59,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 			proc.SetInputBatch(bat)
 			return process.ExecNext, nil
 		}
-		length := len(bat.Zs)
+		length := bat.RowCount()
 		// bat = PartOne + PartTwo, and PartTwo is required.
 		if ap.ctr.seen+uint64(length) > ap.Offset {
 			sels := newSels(int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen), proc)

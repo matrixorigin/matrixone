@@ -238,7 +238,7 @@ func MoVectorToString(v *vector.Vector, printN int) string {
 }
 
 func MoBatchToString(moBat *batch.Batch, printN int) string {
-	n := moBat.Length()
+	n := moBat.RowCount()
 	if n > printN {
 		n = printN
 	}

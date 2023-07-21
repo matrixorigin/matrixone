@@ -39,7 +39,7 @@ func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 		}
 		rbat.SetVector(int32(i), vec)
 	}
-	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.SetRowCount(bat.RowCount())
 	return rbat, nil
 }
 

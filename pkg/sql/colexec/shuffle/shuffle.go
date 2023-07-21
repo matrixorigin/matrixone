@@ -47,7 +47,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if bat == nil {
 		return sendOneBatch(ap, proc, true), nil
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		return sendOneBatch(ap, proc, false), nil
 	}
@@ -136,7 +136,6 @@ func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, reg
 
 	shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
 	shuffledBats[regIndex].ShuffleIDX = regIndex
-	shuffledBats[regIndex].Zs = proc.Mp().GetSels()
 	for j := range shuffledBats[regIndex].Vecs {
 		shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
 	}
@@ -164,9 +163,7 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 					return err
 				}
 			}
-			for i := 0; i < lenSels; i++ {
-				b.Zs = append(b.Zs, bat.Zs[sels[regIndex][i]])
-			}
+			b.AddRowCount(lenSels)
 		}
 	}
 
@@ -180,7 +177,7 @@ func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) process.Ex
 	}
 	var findOneBatch bool
 	for i := range ap.ctr.shuffledBats {
-		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > threshHold {
+		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].RowCount() > threshHold {
 			if !findOneBatch {
 				findOneBatch = true
 				proc.SetInputBatch(ap.ctr.shuffledBats[i])
@@ -331,9 +328,7 @@ func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, proc *process.Proces
 					return err
 				}
 			}
-			for i := 0; i < lenSels; i++ {
-				b.Zs = append(b.Zs, bat.Zs[sels[regIndex][i]])
-			}
+			b.AddRowCount(lenSels)
 		}
 	}
 

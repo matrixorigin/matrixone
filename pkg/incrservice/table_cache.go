@@ -95,7 +95,7 @@ func (c *tableCache) insertAutoValues(
 		if cc == nil {
 			panic("column cache should not be nil, " + col.ColName)
 		}
-		rows := bat.Length()
+		rows := bat.RowCount()
 		vec := bat.GetVector(int32(col.ColIndex))
 		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {
 			return 0, err

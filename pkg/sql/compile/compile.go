@@ -704,7 +704,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 		return bat, nil
 	}
 	// select * from (values row(1,1), row(2,2), row(3,3)) a;
@@ -1211,7 +1211,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	bat := batch.NewWithSize(1)
 	{
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
 	return ds

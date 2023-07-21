@@ -303,7 +303,7 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 			return err
 		}
 	}
-	rbat.InitZsOne(len(res))
+	rbat.SetRowCount(len(res))
 	return nil
 }
 
@@ -336,7 +336,7 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, scale int32, proc 
 			return err
 		}
 	}
-	rbat.InitZsOne(len(res))
+	rbat.SetRowCount(len(res))
 	return nil
 }
 

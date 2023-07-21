@@ -370,17 +370,11 @@ func appendBytes(writeByte, tmp, symbol []byte, enclosed byte, flag bool) []byte
 
 func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
 	ses := obj.(*Session)
-	bat2 := &batch.Batch{}
-	for _, vec := range bat.Vecs {
-		// XXX should we free the old vec here ?
-		tmp, _ := vec.Dup(ses.GetMemPool())
-		bat2.Vecs = append(bat2.Vecs, tmp)
+	bat2 := batch.NewWithSize(len(bat.Vecs))
+	for i, vec := range bat.Vecs {
+		bat2.Vecs[i], _ = vec.Dup(ses.GetMemPool())
 	}
-	bat2.Zs = make([]int64, bat.Vecs[0].Length())
-	for k := 0; k < bat.Vecs[0].Length(); k++ {
-		bat2.Zs[k] = 1
-	}
-	bat2.Cnt = 1
+	bat2.SetRowCount(bat.RowCount())
 	return bat2
 }
 
@@ -401,7 +395,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 	closeby := oq.ep.Fields.EnclosedBy
 	flag := oq.ep.ColumnFlag
 	writeByte := make([]byte, 0)
-	for i := 0; i < bat.Length(); i++ {
+	for i := 0; i < bat.RowCount(); i++ {
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
 				writeByte = appendBytes(writeByte, []byte("\\N"), symbol[j], closeby, flag[j])

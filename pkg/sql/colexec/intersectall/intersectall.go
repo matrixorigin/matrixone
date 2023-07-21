@@ -103,7 +103,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 		if bat == nil {
 			break
 		}
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -112,7 +112,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 		// build hashTable and a counter to record how many times each key appears
 		{
 			itr := ctr.hashTable.NewIterator()
-			count := bat.Length()
+			count := bat.RowCount()
 			for i := 0; i < count; i += hashmap.UnitLimit {
 
 				n := count - i
@@ -156,7 +156,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		if bat == nil {
 			return true, nil
 		}
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -178,7 +178,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		// probe hashTable
 		{
 			itr := ctr.hashTable.NewIterator()
-			count := bat.Length()
+			count := bat.RowCount()
 			for i := 0; i < count; i += hashmap.UnitLimit {
 				n := count - i
 				if n > hashmap.UnitLimit {
@@ -209,10 +209,11 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 
 					ctr.inserted[j] = 1
 					ctr.counter[v-1]--
-					outputBat.Zs = append(outputBat.Zs, 1)
 					cnt++
 
 				}
+				outputBat.AddRowCount(cnt)
+
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
 						if err := outputBat.Vecs[colNum].UnionBatch(bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
@@ -226,6 +227,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		}
 		analyzer.Alloc(int64(outputBat.Size()))
 		analyzer.Output(outputBat, isLast)
+
 		proc.SetInputBatch(outputBat)
 		bat.Clean(proc.Mp())
 		return false, nil
