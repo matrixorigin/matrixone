@@ -25,12 +25,12 @@ import (
 func TestSpanProfiler(t *testing.T) {
 	profiler := NewSpanProfiler()
 
-	newProfiler, end := profiler.Begin()
+	newProfiler, end := profiler.Begin(0)
 	assert.True(t, newProfiler == profiler)
 
 	done := make(chan struct{})
 	go func() {
-		_, end := newProfiler.Begin()
+		_, end := newProfiler.Begin(0)
 		time.Sleep(time.Millisecond * 500)
 		end()
 		close(done)

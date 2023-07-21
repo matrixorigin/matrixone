@@ -2910,6 +2910,9 @@ func (s *Scope) affectedRows() uint64 {
 }
 
 func (c *Compile) runSql(sql string) error {
+	if sql == "" {
+		return nil
+	}
 	res, err := c.runSqlWithResult(sql)
 	if err != nil {
 		return err
