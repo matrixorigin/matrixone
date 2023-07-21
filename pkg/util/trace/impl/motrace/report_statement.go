@@ -19,13 +19,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -82,7 +82,7 @@ func StatementInfoUpdate(existing, new Item) {
 
 	if err != nil {
 		// handle error
-		log.Printf("Failed to merge stats: %v", err)
+		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
 	}
 }
 
