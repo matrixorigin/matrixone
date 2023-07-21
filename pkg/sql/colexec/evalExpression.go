@@ -300,7 +300,9 @@ type ColumnExpressionExecutor struct {
 
 	// result type.
 	typ types.Type
-	// we should cache a null vector here. because we may change its type but other process may read its type.
+	// we should new and cache a null vector here.
+	// because we need to change its type when doing the execution for const null vector.
+	// but other process may using its type at the same time.
 	nullVecCache *vector.Vector
 }
 
