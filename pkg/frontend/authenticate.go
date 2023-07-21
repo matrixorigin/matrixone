@@ -1379,7 +1379,7 @@ const (
 
 	updateStageUrlFotmat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s';`
 
-	updateStageCredentialsFotmat = `update mo_catalog.mo_stages set stage_credential = '%s'  where stage_name = '%s';`
+	updateStageCredentialsFotmat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s';`
 
 	updateStageStatusFotmat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s';`
 
@@ -3356,9 +3356,9 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 	defer bh.Close()
 
 	// check create stage priv
-	tenant := ses.GetTenantInfo()
-	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
-		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
+	err = doCheckRole(ctx, ses)
+	if err != nil {
+		return nil
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -3416,9 +3416,9 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error 
 	defer bh.Close()
 
 	// check create stage priv
-	tenant := ses.GetTenantInfo()
-	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
-		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
+	err = doCheckRole(ctx, ses)
+	if err != nil {
+		return nil
 	}
 
 	optionBits := uint8(0)
@@ -3508,9 +3508,9 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) error {
 	defer bh.Close()
 
 	// check create stage priv
-	tenant := ses.GetTenantInfo()
-	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
-		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
+	err = doCheckRole(ctx, ses)
+	if err != nil {
+		return nil
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -8729,10 +8729,8 @@ func doCheckRole(ctx context.Context, ses *Session) error {
 		if currentRole != moAdminRoleName {
 			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
 		}
-	} else {
-		if currentRole != accountAdminRoleName {
-			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
-		}
+	} else if currentRole != accountAdminRoleName {
+		err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
 	}
 	return err
 }
