@@ -58,7 +58,7 @@ func NewSpanProfiler() *SpanProfiler {
 // Begin begins a new span
 // If the calling goroutine does not match s.goID, a new profiler for the calling goroutine will be created
 // The newly created profiler will share the same profile to s.profile
-func (s *SpanProfiler) Begin() (profiler *SpanProfiler, end func()) {
+func (s *SpanProfiler) Begin(skip int) (profiler *SpanProfiler, end func()) {
 	t0 := time.Now()
 	goID := goid.Get()
 
@@ -75,7 +75,7 @@ func (s *SpanProfiler) Begin() (profiler *SpanProfiler, end func()) {
 	var pcs []uintptr
 	put := pcsPool.Get(&pcs)
 	defer put.Put()
-	pcs = pcs[:runtime.Callers(2, pcs)]
+	pcs = pcs[:runtime.Callers(2+skip, pcs)]
 	frames := runtime.CallersFrames(pcs)
 	for {
 		frame, more := frames.Next()

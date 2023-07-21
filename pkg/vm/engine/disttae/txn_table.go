@@ -1485,6 +1485,11 @@ func (tbl *txnTable) newReader(
 		seqnumMp: seqnumMp,
 		typsMap:  mp,
 	}
+
+	tbl.Lock()
+	proc := tbl.proc
+	tbl.Unlock()
+
 	readers[0] = partReader
 
 	if readerNumber == 1 {
@@ -1498,7 +1503,7 @@ func (tbl *txnTable) newReader(
 					[]*catalog.BlockInfo{dirtyBlks[i]},
 					expr,
 					fs,
-					tbl.proc,
+					proc,
 				),
 			)
 		}
@@ -1514,7 +1519,7 @@ func (tbl *txnTable) newReader(
 				[]*catalog.BlockInfo{dirtyBlks[i]},
 				expr,
 				fs,
-				tbl.proc,
+				proc,
 			)
 		}
 		for j := len(dirtyBlks) + 1; j < readerNumber; j++ {
@@ -1531,7 +1536,7 @@ func (tbl *txnTable) newReader(
 		ts,
 		readerNumber-1,
 		expr,
-		tbl.proc)
+		proc)
 	objInfos, steps := groupBlocksToObjects(dirtyBlks, readerNumber-1)
 	blockReaders = distributeBlocksToBlockReaders(
 		blockReaders,

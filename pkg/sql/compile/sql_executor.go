@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/multierr"
 )
 
 type sqlExecutor struct {
@@ -97,7 +97,7 @@ func (s *sqlExecutor) ExecTxn(
 	err = execFunc(exec)
 	if err != nil {
 		logutil.Errorf("internal sql executor error: %v", err)
-		return exec.rollback()
+		return exec.rollback(err)
 	}
 	if err = exec.commit(); err != nil {
 		return err
@@ -254,10 +254,9 @@ func (exec *txnExecutor) commit() error {
 	return exec.opts.Txn().Commit(exec.ctx)
 }
 
-func (exec *txnExecutor) rollback() error {
+func (exec *txnExecutor) rollback(err error) error {
 	if exec.opts.ExistsTxn() {
-		return nil
+		return err
 	}
-	return multierr.Append(nil,
-		exec.opts.Txn().Rollback(exec.ctx))
+	return errors.Join(err, exec.opts.Txn().Rollback(exec.ctx))
 }
