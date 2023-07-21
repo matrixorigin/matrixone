@@ -42,5 +42,5 @@ func (lru *simpleLRU) Get(k any) (v []byte, ok bool) {
 }
 
 func (lru *simpleLRU) Set(k any, v []byte, size int64) {
-	lru.impl.Set(k, v, size, false)
+	lru.impl.Set(k, v, size, false, nil)
 }

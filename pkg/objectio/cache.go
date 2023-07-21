@@ -53,7 +53,7 @@ func LoadObjectMetaByExtent(
 	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
 		return
 	}
-	metaCache.Set(*name.Short(), meta, int64(len(meta[:])), false)
+	metaCache.Set(*name.Short(), meta, int64(len(meta[:])), false, nil)
 	return
 }
 
