@@ -729,6 +729,8 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, true),
 	}
+	//the statement execute in a shared transaction in background session can be considered as the derived statement.
+	bh.ses.ReplaceDerivedStmt(true)
 	if newRawBatch {
 		bh.ses.SetOutputCallback(batchFetcher)
 	}
