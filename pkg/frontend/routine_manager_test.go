@@ -40,7 +40,7 @@ func create_test_server() *MOServer {
 
 	// A mock autoincrcache manager.
 	aicm := &defines.AutoIncrCacheManager{}
-	return NewMOServer(moServerCtx, address, pu, aicm)
+	return NewMOServer(moServerCtx, address, pu, aicm, nil)
 }
 
 func Test_Closed(t *testing.T) {

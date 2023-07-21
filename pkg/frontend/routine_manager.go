@@ -26,15 +26,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"go.uber.org/zap"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 type RoutineManager struct {
@@ -45,6 +45,8 @@ type RoutineManager struct {
 	tlsConfig      *tls.Config
 	aicm           *defines.AutoIncrCacheManager
 	accountRoutine *AccountRoutineManager
+	baseService    BaseService
+	sessionManager *queryservice.SessionManager
 }
 
 type AccountRoutineManager struct {
@@ -185,6 +187,18 @@ func (rm *RoutineManager) getConnID() (uint32, error) {
 	return uint32(connID), nil
 }
 
+func (rm *RoutineManager) setBaseService(baseService BaseService) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.baseService = baseService
+}
+
+func (rm *RoutineManager) setSessionMgr(sessionMgr *queryservice.SessionManager) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.sessionManager = sessionMgr
+}
+
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	pu := rm.getParameterUnit()
@@ -256,6 +270,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 				metric.ConnectionCounter(accountName).Dec()
 				rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
 			})
+			rm.sessionManager.RemoveSession(ses)
 			logDebugf(ses.GetDebugString(), "the io session was closed.")
 		}
 		rt.cleanup()
@@ -434,6 +449,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		if ses != nil && dbName != "" {
 			ses.SetDatabaseName(dbName)
 		}
+		rm.sessionManager.AddSession(ses)
 		return nil
 	}
 

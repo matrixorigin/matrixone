@@ -130,7 +130,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.ShowStatus:
 		return buildShowStatus(stmt, ctx)
 	case *tree.ShowProcessList:
-		return buildShowProcessList(stmt, ctx)
+		return buildShowProcessList(ctx)
 	case *tree.ShowLocks:
 		return buildShowLocks(stmt, ctx)
 	case *tree.ShowNodeList:
