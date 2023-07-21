@@ -165,15 +165,15 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		isNewEntry := m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
-
-		// Update overlap checker when new key-interval is inserted into the cache.
-		// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
-		if m.enableOverlapChecker && isNewEntry {
-			if err := m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
-				panic(err)
+		m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading, func(isNewEntry bool) {
+			// Update overlap checker when new key-interval is inserted into the cache.
+			// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
+			if m.enableOverlapChecker && isNewEntry {
+				if err := m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
+					panic(err)
+				}
 			}
-		}
+		})
 
 	}
 	return nil

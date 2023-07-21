@@ -29,9 +29,10 @@ type LRU struct {
 }
 
 type lruItem struct {
-	Key   any
-	Value []byte
-	Size  int64
+	Key      any
+	Value    []byte
+	Size     int64
+	callback func()
 }
 
 func New(capacity int64, postEvict func(key any, value []byte, sz int64)) *LRU {
@@ -43,10 +44,11 @@ func New(capacity int64, postEvict func(key any, value []byte, sz int64)) *LRU {
 	}
 }
 
-func (l *LRU) Set(key any, value []byte, size int64, preloading bool) (isNewEntry bool) {
+func (l *LRU) Set(key any, value []byte, size int64, preloading bool, postSet func(bool)) {
 	l.Lock()
 	defer l.Unlock()
 
+	var isNewEntry bool
 	if elem, ok := l.kv[key]; ok {
 		// replace
 		isNewEntry = false
@@ -76,6 +78,9 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) (isNewEntr
 		}
 		l.kv[key] = elem
 		l.size += size
+	}
+	if postSet != nil {
+		postSet(isNewEntry)
 	}
 
 	l.evict()
