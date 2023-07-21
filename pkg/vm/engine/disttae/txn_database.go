@@ -125,6 +125,8 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	rel := db.txn.getCachedTable(ctx, genTableKey(ctx, name, db.databaseId),
 		db.txn.meta.SnapshotTS)
 	if rel != nil {
+		rel.Lock()
+		defer rel.Unlock()
 		rel.proc = p
 		return rel, nil
 	}
