@@ -1658,7 +1658,12 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	if node.Stats.Shuffle {
-		return c.compileShuffleJoin(ctx, node, left, right, ss, children)
+		if len(c.cnList) == 1 {
+			return c.compileShuffleJoin(ctx, node, left, right, ss, children)
+		} else {
+			// only support shuffle join on standalone for now. will fix this in the future
+			node.Stats.Shuffle = false
+		}
 	}
 	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
 }
