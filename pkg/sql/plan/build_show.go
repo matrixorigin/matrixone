@@ -985,7 +985,7 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 	sql := fmt.Sprintf("SELECT stage_name as `STAGE_NAME`, url as `URL`, case stage_status when 'enabled' then 'ENABLED' else 'DISABLED' end as `STATUS`,  comment as `COMMENT` FROM %s.mo_stages;", MO_CATALOG_DB_NAME)
 
 	if stmt.Like != nil {
-		// append filter [AND mo_role.role_name like stmt.Like] to WHERE clause
+		// append filter [AND mo_stages.stage_name like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("stage_name")
 		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
