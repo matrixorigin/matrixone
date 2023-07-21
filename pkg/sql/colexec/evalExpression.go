@@ -486,7 +486,7 @@ func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int
 func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
 	vec, err := expr.Eval(proc, batches)
 	if vec == expr.nullVecCache {
-		return vec.Dup(expr.mp)
+		expr.nullVecCache = nil
 	}
 	return vec, err
 }
