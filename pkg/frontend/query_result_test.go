@@ -78,7 +78,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 
 func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
-	bat.InitZsOne(rows)
+	bat.SetRowCount(rows)
 	for i, typ := range ts {
 		switch typ.Oid {
 		case types.T_int8:

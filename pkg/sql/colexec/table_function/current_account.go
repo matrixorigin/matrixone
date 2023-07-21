@@ -74,7 +74,7 @@ func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 			return false, moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
 		}
 	}
-	rbat.InitZsOne(1)
+	rbat.SetRowCount(1)
 	proc.SetInputBatch(rbat)
 	return true, nil
 }

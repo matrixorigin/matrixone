@@ -212,7 +212,7 @@ func makeUnnestBatch(jsons []string, typ types.T, fn func(str string) ([]byte, e
 			return nil, err
 		}
 	}
-	bat.InitZsOne(len(jsons))
+	bat.SetRowCount(len(jsons))
 	return bat, nil
 }
 

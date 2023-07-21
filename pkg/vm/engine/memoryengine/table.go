@@ -271,7 +271,7 @@ func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, constra
 }
 
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
-	data.InitZsOne(data.Length())
+	data.SetRowCount(data.RowCount())
 	shards, err := t.engine.shardPolicy.Batch(
 		ctx,
 		t.id,
@@ -306,7 +306,7 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 }
 
 func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
-	data.InitZsOne(data.Length())
+	data.SetRowCount(data.RowCount())
 	shards, err := t.engine.shardPolicy.Batch(
 		ctx,
 		t.id,

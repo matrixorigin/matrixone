@@ -52,7 +52,6 @@ func Prepare(proc *process.Process, arg any) (err error) {
 		}
 	}
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
@@ -84,10 +83,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 			}
 
 		case Eval:
-			if ctr.bat != nil && ctr.bat.Length() != 0 {
+			if ctr.bat != nil && ctr.bat.RowCount() != 0 {
 				if ap.NeedHashMap {
 					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ap.IsDup)
 				}
+
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
 				ctr.bat = nil
@@ -118,7 +118,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if bat == nil {
 			break
 		}
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -129,7 +129,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		bat.Clean(proc.Mp())
 	}
-	if ctr.bat == nil || ctr.bat.Length() == 0 || !ap.NeedHashMap {
+	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil
 	}
 
@@ -138,7 +138,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	}
 
 	itr := ctr.mp.NewIterator()
-	count := ctr.bat.Length()
+	count := ctr.bat.RowCount()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -201,7 +201,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	// Composite primary key
 	if len(ctr.vecs) > 1 && len(ctr.sels) <= plan.BloomFilterCardLimit {
 		bat := batch.NewWithSize(len(ctr.vecs))
-		bat.Zs = make([]int64, ctr.vecs[0].Length())
+		bat.SetRowCount(ctr.vecs[0].Length())
 		copy(bat.Vecs, ctr.vecs)
 
 		newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSenders[0].Spec.Expr, []*batch.Batch{bat})

@@ -335,10 +335,10 @@ func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}
 	count := 0
 	var resultVec *vector.Vector
 	for _, b := range batches {
-		if b.Length() == 0 {
+		if b.RowCount() == 0 {
 			continue
 		}
-		count += b.Length()
+		count += b.RowCount()
 		if count > 1 {
 			return nil, moerr.NewInternalError(ctx, "the expr %s generates multi rows value", e.String())
 		}
