@@ -1706,6 +1706,10 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		return rowid, false, err
 	}
 	for _, blk := range blks {
+		// only new blocks are detected
+		if blk.CommitTs.ToTimestamp().Less(tbl.db.txn.lastTS) {
+			continue
+		}
 		// rowid + pk
 		bat, err := blockio.BlockRead(
 			tbl.proc.Ctx, &blk, nil, columns, colTypes, tbl.db.txn.meta.SnapshotTS,
