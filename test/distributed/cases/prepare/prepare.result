@@ -346,3 +346,4 @@ a    b
 drop table t1;
 execute stmt1;
 internal error: table 't1' in prepare statement 'stmt1' does not exist anymore
+deallocate prepare stmt1;
