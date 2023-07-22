@@ -181,9 +181,13 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
 	case types.T_varchar, types.T_char, types.T_text:
-		// for now, do not support hash shuffle join. will support it in the future
-		//n.Stats.ShuffleColIdx = int32(idx)
-		//n.Stats.Shuffle = true
+		n.Stats.ShuffleColIdx = int32(idx)
+		n.Stats.Shuffle = true
+	}
+
+	// for now, do not support hash shuffle join. will support it in the future
+	if n.Stats.ShuffleType == plan.ShuffleType_Hash {
+		n.Stats.Shuffle = false
 	}
 }
 
@@ -261,6 +265,22 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	}
 }
 
+func findShuffleNode(rootID, nodeID int32, builder *QueryBuilder) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			shuffleID := findShuffleNode(rootID, child, builder)
+			if shuffleID != -1 {
+				return shuffleID
+			}
+		}
+	}
+	if node.NodeId != rootID && node.Stats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+		return node.NodeId
+	}
+	return -1
+}
+
 func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
@@ -278,4 +298,19 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	default:
 		node.Stats.ShuffleColIdx = -1
 	}
+
+	// for now, only one node can go shuffle, choose the biggest one
+	// will fix this in the future
+	if node.Stats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+		shuffleID := findShuffleNode(nodeID, nodeID, builder)
+		if shuffleID != -1 {
+			shuffleNode := builder.qry.Nodes[shuffleID]
+			if node.Stats.HashmapSize > shuffleNode.Stats.HashmapSize {
+				shuffleNode.Stats.Shuffle = false
+			} else {
+				node.Stats.Shuffle = false
+			}
+		}
+	}
+
 }
