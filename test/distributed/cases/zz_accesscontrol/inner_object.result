@@ -22,7 +22,38 @@ information_schema
 mysql
 mo_catalog
 show grants;
-Grants for account1:admin@localhost
+Grants for admin@localhost
+GRANT create user ON account  `admin`@`localhost`
+GRANT drop user ON account  `admin`@`localhost`
+GRANT alter user ON account  `admin`@`localhost`
+GRANT create role ON account  `admin`@`localhost`
+GRANT drop role ON account  `admin`@`localhost`
+GRANT create database ON account  `admin`@`localhost`
+GRANT drop database ON account  `admin`@`localhost`
+GRANT show databases ON account  `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+GRANT manage grants ON account  `admin`@`localhost`
+GRANT account all ON account  `admin`@`localhost`
+GRANT show tables ON database * `admin`@`localhost`
+GRANT create table ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
+GRANT create view ON database * `admin`@`localhost`
+GRANT drop view ON database * `admin`@`localhost`
+GRANT alter view ON database * `admin`@`localhost`
+GRANT database all ON database * `admin`@`localhost`
+GRANT database ownership ON database * `admin`@`localhost`
+GRANT select ON table *.* `admin`@`localhost`
+GRANT insert ON table *.* `admin`@`localhost`
+GRANT update ON table *.* `admin`@`localhost`
+GRANT truncate ON table *.* `admin`@`localhost`
+GRANT delete ON table *.* `admin`@`localhost`
+GRANT reference ON table *.* `admin`@`localhost`
+GRANT index ON table *.* `admin`@`localhost`
+GRANT table all ON table *.* `admin`@`localhost`
+GRANT table ownership ON table *.* `admin`@`localhost`
+GRANT values ON table *.* `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
 use system;
 show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
