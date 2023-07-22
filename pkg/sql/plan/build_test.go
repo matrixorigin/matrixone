@@ -874,6 +874,8 @@ func TestShow(t *testing.T) {
 		// "show procedure status like '%ff'",
 		"show roles",
 		"show roles like '%ff'",
+		"show stages",
+		"show stages like 'my_stage%'",
 		// "show grants",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
