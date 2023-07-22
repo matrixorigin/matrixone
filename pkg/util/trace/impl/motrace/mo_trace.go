@@ -74,15 +74,8 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 	span := newMOSpan()
 
 	// per statement profiler
-	v := ctx.Value(fileservice.CtxKeyStatementProfiler)
-	if v != nil {
-		profiler := v.(*fileservice.SpanProfiler)
-		newProfiler, end := profiler.Begin(2)
-		if newProfiler != profiler {
-			ctx = context.WithValue(ctx, fileservice.CtxKeyStatementProfiler, newProfiler)
-		}
-		span.onEnd = append(span.onEnd, end)
-	}
+	ctx, end := fileservice.StatementProfileNewSpan(ctx)
+	span.onEnd = append(span.onEnd, end)
 
 	span.tracer = t
 	span.ctx = ctx
