@@ -51,7 +51,10 @@ type PartitionState struct {
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
 	dirtyBlocks *btree.BTreeG[BlockEntry]
-	checkpoints []string
+	//index for blocks by timestamp.
+	//TODO:: reuse blocks btree.
+	blockIndexByTS *btree.BTreeG[BlockIndexByTSEntry]
+	checkpoints    []string
 	// noData indicates whether to retain data batch
 	// for primary key dedup, reading data is not required
 	noData bool
@@ -142,28 +145,48 @@ func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
 	return p.RowEntryID < than.RowEntryID
 }
 
+type BlockIndexByTSEntry struct {
+	//create time or delete time of block
+	Time  types.TS
+	Block BlockEntry
+	//true for delete block, false for create block.
+	IsDelete bool
+}
+
+func (b BlockIndexByTSEntry) Less(than BlockIndexByTSEntry) bool {
+	//asc
+	if b.Time.Less(than.Time) {
+		return true
+	}
+	//asc
+	cmp := b.Block.BlockID.Compare(than.Block.BlockID)
+	return cmp < 0
+}
+
 func NewPartitionState(noData bool) *PartitionState {
 	opts := btree.Options{
 		Degree: 4,
 	}
 	return &PartitionState{
-		noData:       noData,
-		rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
-		blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
-		primaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
-		dirtyBlocks:  btree.NewBTreeGOptions((BlockEntry).Less, opts),
-		shared:       new(sharedStates),
+		noData:         noData,
+		rows:           btree.NewBTreeGOptions((RowEntry).Less, opts),
+		blocks:         btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		primaryIndex:   btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		dirtyBlocks:    btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		blockIndexByTS: btree.NewBTreeGOptions((BlockIndexByTSEntry).Less, opts),
+		shared:         new(sharedStates),
 	}
 }
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		rows:         p.rows.Copy(),
-		blocks:       p.blocks.Copy(),
-		primaryIndex: p.primaryIndex.Copy(),
-		noData:       p.noData,
-		dirtyBlocks:  p.dirtyBlocks.Copy(),
-		shared:       p.shared,
+		rows:           p.rows.Copy(),
+		blocks:         p.blocks.Copy(),
+		primaryIndex:   p.primaryIndex.Copy(),
+		noData:         p.noData,
+		dirtyBlocks:    p.dirtyBlocks.Copy(),
+		blockIndexByTS: p.blockIndexByTS.Copy(),
+		shared:         p.shared,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -427,6 +450,23 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			p.blocks.Set(blockEntry)
 
 			{
+				pivot := BlockIndexByTSEntry{
+					Block: BlockEntry{
+						BlockInfo: catalog.BlockInfo{
+							BlockID: blockID,
+						},
+					},
+					Time: blockEntry.CreateTime,
+				}
+				e, ok := p.blockIndexByTS.Get(pivot)
+				if !ok {
+					e = pivot
+				}
+				e.Block = blockEntry
+				p.blockIndexByTS.Set(e)
+			}
+
+			{
 				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
 					BlockID: blockID,
@@ -511,6 +551,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 				},
 			}
 			entry, ok := p.blocks.Get(pivot)
+			//FIXME:: non-appendable block' delete maybe arrive before its insert?
 			if !ok {
 				panic(fmt.Sprintf("invalid block id. %x", rowID))
 			}
@@ -518,6 +559,25 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 			entry.DeleteTime = deleteTimeVector[i]
 
 			p.blocks.Set(entry)
+
+			{
+				pivot := BlockIndexByTSEntry{
+					Block: BlockEntry{
+						BlockInfo: catalog.BlockInfo{
+							BlockID: blockID,
+						},
+					},
+					Time: entry.CreateTime,
+				}
+				e, ok := p.blockIndexByTS.Get(pivot)
+				//FIXME:: non-appendable block' delete maybe arrive before its insert?
+				if !ok {
+					panic(fmt.Sprintf("invalid block id. %x", rowID))
+				}
+				e.IsDelete = true
+				e.Time = entry.DeleteTime
+				p.blockIndexByTS.Set(e)
+			}
 		})
 	}
 

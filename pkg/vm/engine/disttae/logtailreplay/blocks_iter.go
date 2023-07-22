@@ -110,3 +110,22 @@ func (b *dirtyBlocksIter) Close() error {
 	b.iter.Release()
 	return nil
 }
+
+// GetBlksBetween get changed blocks between (startTS, endTS]
+func (p *PartitionState) GetBlksBetween(
+	startTS types.TS,
+	endTS types.TS) (
+	deletedBlks []BlockEntry,
+	createdBlks []BlockEntry) {
+	iter := p.blockIndexByTS.Iter()
+	defer iter.Release()
+
+	for ok := iter.Seek(
+		BlockIndexByTSEntry{
+			Time: startTS,
+		}); ok; ok = iter.Next() {
+		//TODO::
+
+	}
+	return deletedBlks, createdBlks
+}
