@@ -151,7 +151,8 @@ func (c *testHAKeeperClient) addCN(serviceIDs ...string) {
 	defer c.Unlock()
 	for _, id := range serviceIDs {
 		c.value.CNStores = append(c.value.CNStores, logpb.CNStore{
-			UUID: id,
+			UUID:      id,
+			WorkState: metadata.WorkState_Working,
 		})
 	}
 }

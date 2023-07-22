@@ -167,6 +167,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildShowPublication(stmt, ctx)
 	case *tree.ShowCreatePublications:
 		return buildShowCreatePublications(stmt, ctx)
+	case *tree.ShowStages:
+		return buildShowStages(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
