@@ -99,3 +99,4 @@ DROP STAGE my_ext_stage;
 DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
+DROP STAGE my_ext_stage4;
