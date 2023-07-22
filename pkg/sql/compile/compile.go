@@ -369,11 +369,11 @@ func (c *Compile) Run(_ uint64) error {
 			}
 			// set affectedRows to old compile to return
 			c.setAffectedRows(cc.GetAffectedRows())
-			return nil
+			return c.proc.TxnOperator.GetWorkspace().Adjust()
 		}
 		return err
 	}
-	return nil
+	return c.proc.TxnOperator.GetWorkspace().Adjust()
 }
 
 // run once
