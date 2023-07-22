@@ -153,11 +153,14 @@ INSERT INTO t8 SELECT a, b+8192    FROM t8;
 INSERT INTO t8 SELECT a, b+16384   FROM t8;
 INSERT INTO t8 SELECT a, b+32768   FROM t8;
 SELECT a,COUNT(DISTINCT b) AS cnt FROM t8 GROUP BY a HAVING cnt > 50;
-SQL syntax error: column "cnt" must appear in the GROUP BY clause or be used in an aggregate function
+a    cnt
+1    65536
 SELECT a,SUM(DISTINCT b) AS sumation FROM t8 GROUP BY a HAVING sumation > 50;
-SQL syntax error: column "sumation" must appear in the GROUP BY clause or be used in an aggregate function
+a    sumation
+1    2147516416
 SELECT a,AVG(DISTINCT b) AS average FROM t8 GROUP BY a HAVING average > 50;
-SQL syntax error: column "average" must appear in the GROUP BY clause or be used in an aggregate function
+a    average
+1    32768.5
 DROP TABLE t8;
 drop table if exists t9;
 CREATE TABLE t9 (a INT);

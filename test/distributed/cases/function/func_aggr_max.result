@@ -121,7 +121,9 @@ drop table t2;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select distinct Fld1,  max( Fld2) as q from t1 group by Fld1 having q is not null;
-SQL syntax error: column "q" must appear in the GROUP BY clause or be used in an aggregate function
+fld1    q
+1    20
+3    50
 select Fld1, max(Fld2) from t1 group by Fld1 having max(Fld2) is not null;
 Fld1	max(Fld2)
 1	20
@@ -404,7 +406,8 @@ drop table t2;
 create table t1 (a int);
 insert into t1 values (1);
 select max(a) as b from t1 having b=1;
-SQL syntax error: column "b" must appear in the GROUP BY clause or be used in an aggregate function
+b
+1
 select a from t1 having a=1;
 SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;

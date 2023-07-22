@@ -130,7 +130,7 @@ func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 			})
 		}
 
-		result := s.parallelSendWithRetry(ctx, txnMeta, requests, prepareIngoreErrorCodes)
+		result := s.parallelSendWithRetry(ctx, requests, prepareIgnoreErrorCodes)
 		if result == nil {
 			return
 		}

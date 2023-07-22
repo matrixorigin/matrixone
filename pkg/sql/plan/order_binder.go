@@ -31,13 +31,13 @@ func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectEx
 
 func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	if colRef, ok := astExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
-		if colPos, ok := b.ctx.aliasMap[colRef.Parts[0]]; ok {
+		if selectItem, ok := b.ctx.aliasMap[colRef.Parts[0]]; ok {
 			return &plan.Expr{
-				Typ: b.ctx.projects[colPos].Typ,
+				Typ: b.ctx.projects[selectItem.idx].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: b.ctx.projectTag,
-						ColPos: colPos,
+						ColPos: selectItem.idx,
 					},
 				},
 			}, nil
@@ -71,7 +71,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		}
 	}
 
-	astExpr, err := b.ctx.qualifyColumnNames(astExpr, b.selectList, true)
+	astExpr, err := b.ctx.qualifyColumnNames(astExpr, AliasBeforeColumn)
 	if err != nil {
 		return nil, err
 	}

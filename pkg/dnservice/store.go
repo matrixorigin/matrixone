@@ -16,6 +16,7 @@ package dnservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -39,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -200,27 +200,18 @@ func (s *store) Start() error {
 
 func (s *store) Close() error {
 	s.stopper.Stop()
-	var err error
 	s.moCluster.Close()
-	if e := s.ctlservice.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
-	if e := s.hakeeperClient.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
-	if e := s.sender.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
-	if e := s.server.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
-	if e := s.lockTableAllocator.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
+	err := errors.Join(
+		s.ctlservice.Close(),
+		s.hakeeperClient.Close(),
+		s.sender.Close(),
+		s.server.Close(),
+		s.lockTableAllocator.Close(),
+	)
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
 		if e := r.close(false); e != nil {
-			err = multierr.Append(e, err)
+			err = errors.Join(e, err)
 		}
 		return true
 	})
@@ -228,7 +219,7 @@ func (s *store) Close() error {
 	ts := s.task.serviceHolder
 	s.task.RUnlock()
 	if ts != nil {
-		err = ts.Close()
+		err = errors.Join(err, ts.Close())
 	}
 	// stop I/O pipeline
 	blockio.Stop()
@@ -293,13 +284,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 					continue
 				}
 
-				err = r.start(service.NewTxnService(
-					r.rt,
-					shard,
-					storage,
-					s.sender,
-					s.cfg.Txn.ZombieTimeout.Duration,
-					s.lockTableAllocator))
+				err = r.start(service.NewTxnService(shard, storage, s.sender, s.cfg.Txn.ZombieTimeout.Duration, s.lockTableAllocator))
 				if err != nil {
 					r.logger.Fatal("start DNShard failed",
 						zap.Error(err))
