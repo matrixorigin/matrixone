@@ -462,14 +462,17 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.5))
 		selectivity_out := math.Min(math.Pow(leftStats.Selectivity, math.Pow(rightStats.Selectivity, 0.5)), selectivity)
 
+		for _, pred := range node.OnList {
+			if pred.Ndv <= 0 {
+				pred.Ndv = getExprNdv(pred, builder)
+			}
+		}
+
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if !isCrossJoin {
 				outcnt *= selectivity
-			}
-			for _, pred := range node.OnList {
-				pred.Ndv = getExprNdv(pred, builder)
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
@@ -514,7 +517,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		case plan.Node_ANTI:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity),
+				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
 				Selectivity: selectivity_out,

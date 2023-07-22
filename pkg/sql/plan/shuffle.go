@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	HashMapSizeForBucket = 500000
-	MAXShuffleDOP        = 64
-	ShuffleThreshHold    = 50000
+	HashMapSizeForShuffle = 500000
+	MAXShuffleDOP         = 64
+	ShuffleThreshHold     = 50000
 )
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
@@ -156,18 +156,30 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	default:
 		return
 	}
-	// for now ,only support one join condition
-	if len(n.OnList) != 1 {
+
+	if n.Stats.HashmapSize < HashMapSizeForShuffle {
 		return
 	}
+	idx := 0
 	if !builder.IsEquiJoin(n) {
 		return
 	}
-	if n.Stats.HashmapSize < HashMapSizeForBucket {
-		return
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(n.Children[0]) {
+		leftTags[tag] = nil
+	}
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(n.Children[1]) {
+		rightTags[tag] = nil
+	}
+	// for now ,only support the first join condition
+	for i := range n.OnList {
+		if isEquiCond(n.OnList[i], leftTags, rightTags) {
+			idx = i
+			break
+		}
 	}
 
-	idx := 0
 	//find the highest ndv
 	highestNDV := n.OnList[idx].Ndv
 	if highestNDV < ShuffleThreshHold {
@@ -207,7 +219,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	if len(n.GroupBy) == 0 {
 		return
 	}
-	if n.Stats.HashmapSize < HashMapSizeForBucket {
+	if n.Stats.HashmapSize < HashMapSizeForShuffle {
 		return
 	}
 	//find the highest ndv
