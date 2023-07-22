@@ -30,23 +30,40 @@ import (
 
 func FilterRowIdForDel(proc *process.Process, bat *batch.Batch,
 	idx int, primaryKeyIdx int) (*batch.Batch, error) {
+	sels := proc.Mp().GetSels()
+	defer proc.Mp().PutSels(sels)
 	retBat := batch.NewWithSize(2)
 	retBat.SetAttributes([]string{catalog.Row_ID, "pk"})
 	rowidVec := proc.GetVector(types.T_Rowid.ToType())
 	primaryVec := proc.GetVector(*bat.GetVector(int32(primaryKeyIdx)).GetType())
 	retBat.SetVector(0, rowidVec)
 	retBat.SetVector(1, primaryVec)
-	if err := vector.GetUnionAllFunction(types.T_Rowid.ToType(),
-		proc.Mp())(rowidVec, bat.Vecs[idx]); err != nil {
-		retBat.Clean(proc.Mp())
-		return nil, err
+	rowIdMap := make(map[types.Rowid]bool)
+	nulls := bat.Vecs[idx].GetNulls()
+	for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
+		if !nulls.Contains(uint64(i)) {
+			if rowIdMap[r] {
+				continue
+			}
+			rowIdMap[r] = true
+			sels = append(sels, int64(i))
+		}
 	}
-	if err := vector.GetUnionAllFunction(*bat.GetVector(int32(primaryKeyIdx)).GetType(),
-		proc.Mp())(primaryVec, bat.Vecs[primaryKeyIdx]); err != nil {
-		retBat.Clean(proc.Mp())
-		return nil, err
+	uf := vector.GetUnionOneFunction(types.T_Rowid.ToType(), proc.Mp())
+	for _, sel := range sels {
+		if err := uf(rowidVec, bat.Vecs[idx], sel); err != nil {
+			retBat.Clean(proc.Mp())
+			return nil, err
+		}
 	}
-	retBat.SetRowCount(rowidVec.Length())
+	uf = vector.GetUnionOneFunction(*bat.GetVector(int32(primaryKeyIdx)).GetType(), proc.Mp())
+	for _, sel := range sels {
+		if err := uf(primaryVec, bat.Vecs[primaryKeyIdx], sel); err != nil {
+			retBat.Clean(proc.Mp())
+			return nil, err
+		}
+	}
+	retBat.SetRowCount(len(sels))
 	return retBat, nil
 }
 
