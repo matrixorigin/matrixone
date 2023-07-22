@@ -6,11 +6,6 @@ level = "info"
 format = "console"
 max-size = 512
 
-[hakeeper-client]
-service-addresses = [
-  "127.0.0.1:32001",
-]
-
 [metacache]
 memory-capacity = "512MB"
 
@@ -35,8 +30,8 @@ name = "ETL"
 backend = "DISK-ETL"
 
 [observability]
-disableTrace = true
-disableMetric = true
+disableTrace = false
+disableMetric = false
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"

@@ -17,7 +17,6 @@ package agg
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/sum"
 )
 
 type Numeric interface {
@@ -190,10 +189,9 @@ func (a *Decimal64Avg) Merge(xIndex int64, yIndex int64, x types.Decimal128, y t
 	return x, xEmpty, nil
 }
 
-func (a *Decimal64Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
-	if err := sum.Decimal64Sum128(rs.([]types.Decimal128), vs.([]types.Decimal64), start, count, vps, zs, nsp); err != nil {
-		return err
-	}
+func (a *Decimal64Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, nsp *nulls.Nulls) (err error) {
+	rrs := rs.([]types.Decimal128)
+	vvs := vs.([]types.Decimal64)
 	for i := int64(0); i < count; i++ {
 		if nsp.Contains(uint64(i + start)) {
 			continue
@@ -201,8 +199,17 @@ func (a *Decimal64Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, z
 		if vps[i] == 0 {
 			continue
 		}
+
+		dec := types.Decimal128{B0_63: uint64(vvs[i+start]), B64_127: 0}
+		if dec.B0_63>>63 != 0 {
+			dec.B64_127 = ^dec.B64_127
+		}
+		rrs[vps[i]-1], _, err = rrs[vps[i]-1].Add(dec, 0, 0)
+		if err != nil {
+			return err
+		}
 		j := vps[i] - 1
-		a.Cnts[j] += zs[i+start]
+		a.Cnts[j]++
 	}
 	return nil
 }
@@ -277,10 +284,10 @@ func (a *Decimal128Avg) Merge(xIndex int64, yIndex int64, x types.Decimal128, y 
 	return x, xEmpty, nil
 }
 
-func (a *Decimal128Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
-	if err := sum.Decimal128Sum(rs.([]types.Decimal128), vs.([]types.Decimal128), start, count, vps, zs, nsp); err != nil {
-		return err
-	}
+func (a *Decimal128Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, nsp *nulls.Nulls) (err error) {
+	rrs := rs.([]types.Decimal128)
+	vvs := vs.([]types.Decimal128)
+
 	for i := int64(0); i < count; i++ {
 		if nsp.Contains(uint64(i + start)) {
 			continue
@@ -288,8 +295,14 @@ func (a *Decimal128Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, 
 		if vps[i] == 0 {
 			continue
 		}
+
+		rrs[vps[i]-1], _, err = rrs[vps[i]-1].Add(vvs[i+start], 0, 0)
+		if err != nil {
+			return err
+		}
+
 		j := vps[i] - 1
-		a.Cnts[j] += zs[i+start]
+		a.Cnts[j]++
 	}
 	return nil
 }

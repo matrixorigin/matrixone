@@ -57,7 +57,7 @@ func NewGetParamRule() *GetParamRule {
 func (rule *GetParamRule) MatchNode(node *Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		rule.schemas = append(rule.schemas, &plan.ObjectRef{
-			Server:     node.ObjRef.Server,
+			Server:     int64(node.TableDef.Version), //we use this unused field to store table's version
 			Db:         node.ObjRef.Db,
 			Schema:     node.ObjRef.Schema,
 			Obj:        node.ObjRef.Obj,
@@ -221,7 +221,7 @@ type ResetVarRefRule struct {
 
 func NewResetVarRefRule(compCtx CompilerContext, proc *process.Process) *ResetVarRefRule {
 	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+	bat.SetRowCount(1)
 	return &ResetVarRefRule{
 		compCtx: compCtx,
 		proc:    proc,
@@ -407,7 +407,7 @@ type RecomputeRealTimeRelatedFuncRule struct {
 
 func NewRecomputeRealTimeRelatedFuncRule(proc *process.Process) *RecomputeRealTimeRelatedFuncRule {
 	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+	bat.SetRowCount(1)
 	return &RecomputeRealTimeRelatedFuncRule{bat, proc}
 }
 

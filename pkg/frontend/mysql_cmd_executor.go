@@ -26,9 +26,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
@@ -214,6 +217,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
+	ses.sqlType = sqlType
 	if sqlType != constant.InternalSql {
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
@@ -232,7 +236,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 		_, txn, err = handler.GetTxn()
 		if err != nil {
-			logErrorf(ses.GetDebugString(), "RecordStatement. error:%v", err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to record statement",
+				zap.Error(err))
 			copy(stm.TransactionID[:], motrace.NilTxnID[:])
 		} else {
 			copy(stm.TransactionID[:], txn.Txn().ID)
@@ -315,7 +321,9 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 			_, txn, err = handler.GetTxn()
 			if err != nil {
-				logErrorf(ses.GetDebugString(), "RecordStatementTxnID. error:%v", err)
+				logError(ses, ses.GetDebugString(),
+					"Failed to record statement transaction ID",
+					zap.Error(err))
 			} else {
 				stm.SetTxnID(txn.Txn().ID)
 			}
@@ -348,7 +356,9 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		logErrorf(ses.GetDebugString(), "handleShowTableStatus error %v", err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to handle 'SHOW TABLE STATUS'",
+			zap.Error(err))
 		return err
 	}
 	return nil
@@ -401,9 +411,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			continue
 		}
 
-		if bat.Zs[j] <= 0 {
-			continue
-		}
 		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
 		if err != nil {
 			return err
@@ -893,6 +900,14 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 					row[1] = "off"
 				}
 			}
+			_, ok = value.(int64)
+			if ok {
+				if v == 1 {
+					row[1] = "on"
+				} else {
+					row[1] = "off"
+				}
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -974,10 +989,7 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 	bat := batch.New(true, []string{"Variable_name", "Value"})
 	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
 	cnt := len(rows)
-	bat.Zs = make([]int64, cnt)
-	for i := range bat.Zs {
-		bat.Zs[i] = 1
-	}
+	bat.SetRowCount(cnt)
 	v0 := make([]string, cnt)
 	v1 := make([]string, cnt)
 	for i, row := range rows {
@@ -1172,6 +1184,18 @@ func (mce *MysqlCmdExecutor) handleAlterPublication(ctx context.Context, ap *tre
 
 func (mce *MysqlCmdExecutor) handleDropPublication(ctx context.Context, dp *tree.DropPublication) error {
 	return doDropPublication(ctx, mce.GetSession(), dp)
+}
+
+func (mce *MysqlCmdExecutor) handleCreateStage(ctx context.Context, cs *tree.CreateStage) error {
+	return doCreateStage(ctx, mce.GetSession(), cs)
+}
+
+func (mce *MysqlCmdExecutor) handleAlterStage(ctx context.Context, as *tree.AlterStage) error {
+	return doAlterStage(ctx, mce.GetSession(), as)
+}
+
+func (mce *MysqlCmdExecutor) handleDropStage(ctx context.Context, ds *tree.DropStage) error {
+	return doDropStage(ctx, mce.GetSession(), ds)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -1535,7 +1559,7 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 	defer vec.Free(session.GetMemPool())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
-	bat.InitZsOne(count)
+	bat.SetRowCount(count)
 
 	err := fill(session, bat)
 	if err != nil {
@@ -2395,7 +2419,10 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	_, err = writer.Write(packet.Payload)
 	if err != nil {
 		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
-		logErrorf(ses.GetDebugString(), "load local '%s', write error: %v", param.Filepath, err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to load local file",
+			zap.String("path", param.Filepath),
+			zap.Error(err))
 	}
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
@@ -2430,7 +2457,11 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		if !skipWrite {
 			_, err = writer.Write(packet.Payload)
 			if err != nil {
-				logErrorf(ses.GetDebugString(), "load local '%s', epoch: %d, write error: %v", param.Filepath, epoch, err)
+				logError(ses, ses.GetDebugString(),
+					"Failed to load local file",
+					zap.String("path", param.Filepath),
+					zap.Uint64("epoch", epoch),
+					zap.Error(err))
 				skipWrite = true
 			}
 			writeTime := time.Since(writeStart)
@@ -2477,6 +2508,28 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
 
+	// per statement profiler
+	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
+	if endStmtProfile != nil {
+		defer endStmtProfile(func() string {
+			// use sql string as file name suffix
+			formatCtx := tree.NewFmtCtx(dialect.MYSQL)
+			stmt.Format(formatCtx)
+			sql := formatCtx.String()
+			if len(sql) > 128 {
+				sql = sql[:128]
+			}
+			sql = strings.TrimSpace(sql)
+			sql = strings.Map(func(r rune) rune {
+				if unicode.IsSpace(r) {
+					return '-'
+				}
+				return r
+			}, sql)
+			return sql
+		})
+	}
+
 	// record goroutine info when ddl stmt run timeout
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
@@ -2517,7 +2570,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
-				*tree.LockTableStmt, *tree.UnLockTableStmt:
+				*tree.LockTableStmt, *tree.UnLockTableStmt,
+				*tree.CreateStage, *tree.DropStage, *tree.AlterStage:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -2822,6 +2876,21 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleShowSubscriptions(requestCtx, st, i, len(cws)); err != nil {
 			return err
 		}
+	case *tree.CreateStage:
+		selfHandle = true
+		if err = mce.handleCreateStage(requestCtx, st); err != nil {
+			return err
+		}
+	case *tree.DropStage:
+		selfHandle = true
+		if err = mce.handleDropStage(requestCtx, st); err != nil {
+			return err
+		}
+	case *tree.AlterStage:
+		selfHandle = true
+		if err = mce.handleAlterStage(requestCtx, st); err != nil {
+			return err
+		}
 	case *tree.CreateAccount:
 		selfHandle = true
 		ses.InvalidatePrivilegeCache()
@@ -3004,7 +3073,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	// only log if build time is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		logInfo(ses, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 	}
 
 	mrs = ses.GetMysqlResultSet()
@@ -3015,10 +3084,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
-		*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowCreatePublications:
+		*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
+		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages:
 		columns, err = cw.GetColumns()
 		if err != nil {
-			logErrorf(ses.GetDebugString(), "GetColumns from Computation handler failed. error: %v", err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to get columns from computation handler",
+				zap.Error(err))
 			return err
 		}
 		if c, ok := cw.(*TxnComputationWrapper); ok {
@@ -3097,7 +3169,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		/*
@@ -3157,11 +3229,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			if loadLocalErrGroup != nil { // release resources
 				err2 = proc.LoadLocalReader.Close()
 				if err2 != nil {
-					logErrorf(ses.GetDebugString(), "processLoadLocal reader close failed: %s", err2.Error())
+					logError(ses, ses.GetDebugString(),
+						"processLoadLocal goroutine failed",
+						zap.Error(err2))
 				}
 				err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
 				if err2 != nil {
-					logErrorf(ses.GetDebugString(), "processLoadLocal goroutine failed: %s", err2.Error())
+					logError(ses, ses.GetDebugString(),
+						"processLoadLocal goroutine failed",
+						zap.Error(err2))
 				}
 			}
 			return err
@@ -3175,13 +3251,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		rspLen = cw.GetAffectedRows()
 		echoTime := time.Now()
 
-		logDebugf(ses.GetDebugString(), "time of SendResponse %s", time.Since(echoTime).String())
+		logDebug(ses, "time of SendResponse %s", time.Since(echoTime).String())
 
 		/*
 			Step 4: Serialize the execution plan by json
@@ -3193,7 +3269,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		explainColName := "QUERY PLAN"
 		columns, err = GetExplainColumns(requestCtx, explainColName)
 		if err != nil {
-			logErrorf(ses.GetDebugString(), "GetColumns from ExplainColumns handler failed, error: %v", err)
+			logError(ses, ses.GetDebugString(),
+				"Failed to get columns from ExplainColumns handler",
+				zap.Error(err))
 			return err
 		}
 		/*
@@ -3238,7 +3316,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
@@ -3295,6 +3373,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		nil,
 		pu.FileService,
 		pu.LockService,
+		pu.QueryService,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -3378,7 +3457,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
-		tenant := ses.GetTenantName(stmt)
+		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
 			err = authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
@@ -3467,6 +3546,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		nil,
 		pu.FileService,
 		pu.LockService,
+		pu.QueryService,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)

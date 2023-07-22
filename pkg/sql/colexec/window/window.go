@@ -16,6 +16,8 @@ package window
 
 import (
 	"bytes"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"time"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -56,7 +57,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (process.ExecStatus, error) {
 	var err error
 	ap := arg.(*Argument)
 	ctr := ap.ctr
@@ -67,8 +68,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 	for {
 		bat, end, err := ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
+
 		if end {
 			break
 		}
@@ -82,29 +84,29 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 			n := bat.Vecs[i].Length()
 			err = ctr.bat.Vecs[i].UnionBatch(bat.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		}
-		ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs...)
+		ctr.bat.AddRowCount(bat.RowCount())
 	}
 
 	// init agg frame
 	if ctr.bat == nil {
 		proc.SetInputBatch(ctr.bat)
-		return true, nil
+		return process.ExecStop, nil
 	}
 	n := ctr.bat.Vecs[0].Length()
 	if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 
 	ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 	for i, ag := range ap.Aggs {
 		if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, ap.Types[i]); err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 		if err = ctr.bat.Aggs[i].Grows(n, proc.Mp()); err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 	}
 
@@ -116,18 +118,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 			for j := range ctr.orderVecs {
 				ctr.orderVecs[j].executor, err = colexec.NewExpressionExecutor(proc, ap.Fs[j].Expr)
 				if err != nil {
-					return false, err
+					return process.ExecNext, err
 				}
 			}
 			_, err = ctr.processOrder(i, ap, ctr.bat, proc)
 			if err != nil {
 				ap.Free(proc, true)
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 		// evaluate func
 		if err = ctr.processFunc(i, ap, proc, anal); err != nil {
-			return false, err
+			return process.ExecNext, err
 		}
 
 		// clean
@@ -135,8 +137,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (bool, 
 	}
 
 	anal.Output(ctr.bat, isLast)
+
 	proc.SetInputBatch(ctr.bat)
-	return true, nil
+	return process.ExecStop, nil
 }
 
 func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, anal process.Analyze) error {
@@ -168,7 +171,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 
 				if ctr.os[o] <= ctr.ps[p] {
 
-					if err = ctr.bat.Aggs[idx].Fill(int64(p-1), int64(o), 1, []*vector.Vector{vec}); err != nil {
+					if err = ctr.bat.Aggs[idx].Fill(int64(p-1), int64(o), []*vector.Vector{vec}); err != nil {
 						return err
 					}
 
@@ -198,7 +201,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			if right < start || left > end || left >= right {
-				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(0), 1, []*vector.Vector{nullVec}); err != nil {
+				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(0), []*vector.Vector{nullVec}); err != nil {
 					return err
 				}
 				continue
@@ -212,7 +215,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			for k := left; k < right; k++ {
-				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(k), 1, []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
+				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(k), []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
 					return err
 				}
 			}
@@ -407,10 +410,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	ovec := ctr.orderVecs[0].vec
 	var strCol []string
 
+	rowCount := bat.RowCount()
 	if ctr.sels == nil {
-		ctr.sels = make([]int64, len(bat.Zs))
+		ctr.sels = make([]int64, rowCount)
 	}
-	for i := 0; i < len(bat.Zs); i++ {
+	for i := 0; i < rowCount; i++ {
 		ctr.sels[i] = int64(i)
 	}
 

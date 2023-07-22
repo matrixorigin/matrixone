@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -47,8 +48,9 @@ import (
 )
 
 var (
-	defaultListenAddress    = "127.0.0.1:6002"
-	defaultCtlListenAddress = "127.0.0.1:19958"
+	defaultListenAddress             = "127.0.0.1:6002"
+	defaultCtlListenAddress          = "127.0.0.1:19958"
+	defaultQueryServiceListenAddress = "127.0.0.1:19998"
 	// defaultTxnIsolation     = txn.TxnIsolation_SI
 	defaultTxnMode             = txn.TxnMode_Optimistic
 	maxForMaxPreparedStmtCount = 1000000
@@ -57,7 +59,8 @@ var (
 type Service interface {
 	Start() error
 	Close() error
-
+	// ID returns UUID of the service.
+	ID() string
 	GetTaskRunner() taskservice.TaskRunner
 	GetTaskService() (taskservice.TaskService, bool)
 	WaitSystemInitCompleted(ctx context.Context) error
@@ -207,6 +210,9 @@ type Config struct {
 	// AutoIncrement auto increment config
 	AutoIncrement incrservice.Config `toml:"auto-increment"`
 
+	// QueryServiceConfig is the config for query service.
+	QueryServiceConfig queryservice.Config `toml:"query-service"`
+
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
 
@@ -339,8 +345,9 @@ func (c *Config) Validate() error {
 			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
 		}
 	} else {
-		frontend.MaxPrepareNumberInOneSession = 1024
+		frontend.MaxPrepareNumberInOneSession = 100000
 	}
+	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
 	// TODO: remove this if rc is stable
 	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
@@ -367,6 +374,7 @@ type service struct {
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
+		queryService queryservice.QueryService,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
@@ -387,6 +395,9 @@ type service struct {
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
 	ctlservice             ctlservice.CtlService
+	sessionMgr             *queryservice.SessionManager
+	// queryService is used to send query request between CN services.
+	queryService queryservice.QueryService
 
 	stopper *stopper.Stopper
 	aicm    *defines.AutoIncrCacheManager

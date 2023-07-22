@@ -113,6 +113,20 @@ type Config struct {
 	MetaCache objectio.CacheConfig `toml:"metacache"`
 }
 
+// NewConfig return Config with default values.
+func NewConfig() *Config {
+	return &Config{
+		HAKeeperClient: logservice.HAKeeperClientConfig{
+			DiscoveryAddress: "",
+			ServiceAddresses: []string{logservice.DefaultServiceAddress},
+			AllocateIDBatch:  100,
+			EnableCompress:   false,
+		},
+		Observability: *config.NewObservabilityParameters(),
+		LogService:    logservice.DefaultConfig(),
+	}
+}
+
 func parseConfigFromFile(file string, cfg any) error {
 	if file == "" {
 		return moerr.NewInternalError(context.Background(), "toml config file not set")
@@ -151,6 +165,10 @@ func (c *Config) validate() error {
 		c.Clock.MaxClockOffset.Duration = 0
 	}
 	for i, config := range c.FileServices {
+		// rename 's3' to 'shared'
+		if strings.EqualFold(config.Name, "s3") {
+			c.FileServices[i].Name = defines.SharedFileServiceName
+		}
 		// set default data dir
 		if config.DataDir == "" {
 			c.FileServices[i].DataDir = c.defaultFileServiceDataDir(config.Name)
@@ -240,11 +258,6 @@ func (c *Config) createFileService(ctx context.Context, defaultName string, perf
 	}
 
 	for _, config := range c.FileServices {
-
-		// for old config compatibility
-		if strings.EqualFold(config.Name, "s3") {
-			config.Name = defines.SharedFileServiceName
-		}
 
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(

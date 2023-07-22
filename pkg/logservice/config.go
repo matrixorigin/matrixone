@@ -29,10 +29,11 @@ import (
 )
 
 const (
+	defaultDeploymentID      = 1
 	defaultDataDir           = "mo-data/logservice"
 	defaultSnapshotExportDir = "exported-snapshot"
-	defaultServiceAddress    = "0.0.0.0:32000"
-	defaultRaftAddress       = "0.0.0.0:32001"
+	defaultRaftAddress       = "0.0.0.0:32000"
+	defaultServiceAddress    = "0.0.0.0:32001"
 	defaultGossipAddress     = "0.0.0.0:32002"
 	defaultGossipSeedAddress = "127.0.0.1:32002"
 
@@ -44,6 +45,9 @@ const (
 	defaultMaxMessageSize      = 1024 * 1024 * 100
 	// The default value for HAKeeper truncate interval.
 	defaultHAKeeperTruncateInterval = 24 * time.Hour
+
+	// DefaultServiceAddress is exported.
+	DefaultServiceAddress = defaultServiceAddress
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -330,22 +334,93 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func DefaultConfig() Config {
+	uid := "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+	return Config{
+		FS:                       vfs.Default,
+		DeploymentID:             defaultDeploymentID,
+		UUID:                     uid,
+		RTTMillisecond:           200,
+		DataDir:                  defaultDataDir,
+		SnapshotExportDir:        defaultSnapshotExportDir,
+		MaxExportedSnapshot:      defaultMaxExportedSnapshot,
+		ServiceAddress:           defaultServiceAddress,
+		RaftAddress:              defaultRaftAddress,
+		UseTeeLogDB:              false,
+		LogDBBufferSize:          defaultLogDBBufferSize,
+		GossipAddress:            defaultGossipAddress,
+		GossipSeedAddresses:      []string{defaultGossipSeedAddress},
+		GossipProbeInterval:      toml.Duration{Duration: defaultGossipProbeInterval},
+		GossipAllowSelfAsSeed:    true,
+		HeartbeatInterval:        toml.Duration{Duration: defaultHeartbeatInterval},
+		HAKeeperTickInterval:     toml.Duration{Duration: time.Second / hakeeper.DefaultTickPerSecond},
+		HAKeeperCheckInterval:    toml.Duration{Duration: hakeeper.CheckDuration},
+		TruncateInterval:         toml.Duration{Duration: defaultTruncateInterval},
+		HAKeeperTruncateInterval: toml.Duration{Duration: defaultHAKeeperTruncateInterval},
+		RPC: struct {
+			MaxMessageSize toml.ByteSize `toml:"max-message-size"`
+			EnableCompress bool          `toml:"enable-compress"`
+		}(struct {
+			MaxMessageSize toml.ByteSize
+			EnableCompress bool
+		}{
+			MaxMessageSize: toml.ByteSize(defaultMaxMessageSize),
+			EnableCompress: false,
+		}),
+		BootstrapConfig: struct {
+			BootstrapCluster      bool     `toml:"bootstrap-cluster"`
+			NumOfLogShards        uint64   `toml:"num-of-log-shards"`
+			NumOfDNShards         uint64   `toml:"num-of-dn-shards"`
+			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
+			InitHAKeeperMembers   []string `toml:"init-hakeeper-members"`
+		}(struct {
+			BootstrapCluster      bool
+			NumOfLogShards        uint64
+			NumOfDNShards         uint64
+			NumOfLogShardReplicas uint64
+			InitHAKeeperMembers   []string
+		}{
+			BootstrapCluster:      true,
+			NumOfLogShards:        1,
+			NumOfDNShards:         1,
+			NumOfLogShardReplicas: 1,
+			InitHAKeeperMembers:   []string{"131072:" + uid}}),
+		HAKeeperConfig: struct {
+			TickPerSecond   int           `toml:"tick-per-second"`
+			LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
+			DNStoreTimeout  toml.Duration `toml:"dn-store-timeout"`
+			CNStoreTimeout  toml.Duration `toml:"cn-store-timeout"`
+		}(struct {
+			TickPerSecond   int
+			LogStoreTimeout toml.Duration
+			DNStoreTimeout  toml.Duration
+			CNStoreTimeout  toml.Duration
+		}{
+			TickPerSecond:   hakeeper.DefaultTickPerSecond,
+			LogStoreTimeout: toml.Duration{Duration: hakeeper.DefaultLogStoreTimeout},
+			DNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultDNStoreTimeout},
+			CNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultCNStoreTimeout},
+		}),
+		HAKeeperClientConfig: HAKeeperClientConfig{
+			DiscoveryAddress: "",
+			ServiceAddresses: []string{defaultServiceAddress},
+			AllocateIDBatch:  100,
+			EnableCompress:   false,
+		},
+		DisableWorkers: false,
+		// Not used for now.
+		Ctl: struct {
+			ListenAddress  string `toml:"listen-address"`
+			ServiceAddress string `toml:"service-address"`
+		}(struct {
+			ListenAddress  string
+			ServiceAddress string
+		}{ListenAddress: "", ServiceAddress: ""}),
+	}
+}
+
+// Fill just fills the listen addresses.
 func (c *Config) Fill() {
-	if c.FS == nil {
-		c.FS = vfs.Default
-	}
-	if c.RTTMillisecond == 0 {
-		c.RTTMillisecond = 200
-	}
-	if len(c.DataDir) == 0 {
-		c.DataDir = defaultDataDir
-	}
-	if len(c.SnapshotExportDir) == 0 {
-		c.SnapshotExportDir = defaultSnapshotExportDir
-	}
-	if c.MaxExportedSnapshot == 0 {
-		c.MaxExportedSnapshot = defaultMaxExportedSnapshot
-	}
 	if len(c.ServiceAddress) == 0 {
 		c.ServiceAddress = defaultServiceAddress
 		c.ServiceListenAddress = defaultServiceAddress
@@ -358,9 +433,6 @@ func (c *Config) Fill() {
 	} else if len(c.RaftAddress) != 0 && len(c.RaftListenAddress) == 0 {
 		c.RaftListenAddress = c.RaftAddress
 	}
-	if c.LogDBBufferSize == 0 {
-		c.LogDBBufferSize = defaultLogDBBufferSize
-	}
 	// If GossipAddressV2 is set, we use it as gossip address, and GossipAddress
 	// will be overridden by it.
 	if len(c.GossipAddressV2) != 0 {
@@ -372,38 +444,8 @@ func (c *Config) Fill() {
 	} else if len(c.GossipAddress) != 0 && len(c.GossipListenAddress) == 0 {
 		c.GossipListenAddress = c.GossipAddress
 	}
-	if c.HAKeeperConfig.TickPerSecond == 0 {
-		c.HAKeeperConfig.TickPerSecond = hakeeper.DefaultTickPerSecond
-	}
-	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
-		c.HAKeeperConfig.LogStoreTimeout.Duration = hakeeper.DefaultLogStoreTimeout
-	}
-	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
-		c.HAKeeperConfig.DNStoreTimeout.Duration = hakeeper.DefaultDNStoreTimeout
-	}
-	if c.HAKeeperConfig.CNStoreTimeout.Duration == 0 {
-		c.HAKeeperConfig.CNStoreTimeout.Duration = hakeeper.DefaultCNStoreTimeout
-	}
-	if c.HeartbeatInterval.Duration == 0 {
-		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
-	}
-	if c.HAKeeperTickInterval.Duration == 0 {
-		c.HAKeeperTickInterval.Duration = time.Second / time.Duration(c.HAKeeperConfig.TickPerSecond)
-	}
-	if c.HAKeeperCheckInterval.Duration == 0 {
-		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
-	}
-	if c.GossipProbeInterval.Duration == 0 {
-		c.GossipProbeInterval.Duration = defaultGossipProbeInterval
-	}
-	if c.TruncateInterval.Duration == 0 {
-		c.TruncateInterval.Duration = defaultTruncateInterval
-	}
-	if c.HAKeeperTruncateInterval.Duration == 0 {
-		c.HAKeeperTruncateInterval.Duration = defaultHAKeeperTruncateInterval
-	}
-	if c.RPC.MaxMessageSize == 0 {
-		c.RPC.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
+	if len(c.GossipSeedAddresses) == 0 {
+		c.GossipSeedAddresses = []string{defaultGossipSeedAddress}
 	}
 }
 
@@ -423,7 +465,7 @@ type HAKeeperClientConfig struct {
 // Validate validates the HAKeeperClientConfig.
 func (c *HAKeeperClientConfig) Validate() error {
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfigNoCtx("HAKeeperClientConfig not set")
+		c.ServiceAddresses = []string{defaultServiceAddress}
 	}
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
@@ -461,7 +503,7 @@ func (c *ClientConfig) Validate() error {
 		return moerr.NewBadConfigNoCtx("DNReplicaID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return moerr.NewBadConfigNoCtx("ServiceAddresses not set")
+		c.ServiceAddresses = []string{defaultServiceAddress}
 	}
 	return nil
 }

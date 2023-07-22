@@ -87,11 +87,9 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	go traceMemStats(ctx)
 
-	SV := &config.ObservabilityParameters{}
+	SV := config.NewObservabilityParameters()
 	SV.SetDefaultValues("test")
 	SV.MergeCycle.Duration = 5 * time.Minute
-	SV.MergeMaxFileSize = 128
-	SV.MergedExtension = "tae"
 	if err := export.InitMerge(ctx, SV); err != nil {
 		panic(err)
 	}
@@ -103,7 +101,7 @@ func main() {
 			return time.Now().UTC().UnixNano()
 		}, 0)))
 	morun.SetupProcessLevelRuntime(dr)
-	err = motrace.Init(ctx, motrace.EnableTracer(true))
+	err, _ = motrace.Init(ctx, motrace.EnableTracer(true))
 	if err != nil {
 		panic(err)
 	}
@@ -128,7 +126,7 @@ func mergeAll(ctx context.Context, fs *fileservice.LocalETLFS) {
 	if err != nil {
 		logutil.Infof("[%v] failed to NewMerge: %v", "All", err)
 	}
-	err = merge.ListRange(ctx)
+	err = merge.Main(ctx)
 	if err != nil {
 		logutil.Infof("[%v] failed to merge: %v", "All", err)
 	} else {
@@ -147,7 +145,7 @@ func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Ta
 	logutil.Infof("[%v] create merge task, err: %v", table.GetName(), err)
 	ts, err := time.Parse("2006-01-02 15:04:05", "2023-01-03 00:00:00")
 	logutil.Infof("[%v] create ts: %v, err: %v", table.GetName(), ts, err)
-	err = merge.Main(ctx, ts)
+	err = merge.Main(ctx)
 	if err != nil {
 		logutil.Infof("[%v] failed to merge: %v", table.GetName(), err)
 	} else {

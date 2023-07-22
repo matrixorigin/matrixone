@@ -41,7 +41,7 @@ func Prepare(proc *process.Process, argument any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	arg := argument.(*Argument)
 
 	analyze := proc.GetAnalyze(idx)
@@ -52,7 +52,7 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 		switch arg.ctr.state {
 		case build:
 			if err := arg.ctr.buildHashTable(proc, analyze, 1, isFirst); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			if arg.ctr.hashTable != nil {
 				analyze.Alloc(arg.ctr.hashTable.Size())
@@ -63,18 +63,18 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			var err error
 			isLast := false
 			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0, isFirst, isLast); err != nil {
-				return true, err
+				return process.ExecStop, err
 			}
 			if isLast {
 				arg.ctr.state = end
 				continue
 			}
 
-			return false, nil
+			return process.ExecNext, nil
 
 		case end:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }
@@ -93,14 +93,14 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 		}
 
 		// empty batch
-		if btc.Length() == 0 {
+		if btc.RowCount() == 0 {
 			btc.Clean(proc.Mp())
 			continue
 		}
 
 		analyse.Input(btc, isFirst)
 
-		cnt := btc.Length()
+		cnt := btc.RowCount()
 		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			rowcnt := c.hashTable.GroupCount()
@@ -146,7 +146,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		// empty batch
-		if btc.Length() == 0 {
+		if btc.RowCount() == 0 {
 			btc.Clean(proc.Mp())
 			continue
 		}
@@ -159,7 +159,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
-		cnt := btc.Length()
+		cnt := btc.RowCount()
 		itr := c.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			n := cnt - i
@@ -196,9 +196,9 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 				needInsert[j] = 1
 				c.cnts[v-1][0] = 0
-				c.btc.Zs = append(c.btc.Zs, 1)
 				insertcnt++
 			}
+			c.btc.AddRowCount(insertcnt)
 
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
@@ -213,6 +213,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		btc.Clean(proc.Mp())
 		analyze.Alloc(int64(c.btc.Size()))
 		analyze.Output(c.btc, isLast)
+
 		proc.SetInputBatch(c.btc)
 		return false, nil
 	}

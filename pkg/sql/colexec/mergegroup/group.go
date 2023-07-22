@@ -35,7 +35,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
@@ -45,12 +45,23 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 	for {
 		switch ctr.state {
 		case Build:
-			if end, err := ctr.build(proc, anal, isFirst); err != nil {
-				return false, err
-			} else if end {
-				return true, nil
+			for {
+				bat, end, err := ctr.ReceiveFromAllRegs(anal)
+				if err != nil {
+					return process.ExecStop, nil
+				}
+
+				if end {
+					break
+				}
+				anal.Input(bat, isFirst)
+				if err = ctr.process(bat, proc); err != nil {
+					bat.Clean(proc.Mp())
+					return process.ExecNext, err
+				}
 			}
 			ctr.state = Eval
+
 		case Eval:
 			if ctr.bat != nil {
 				if ap.NeedEval {
@@ -58,7 +69,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End
-							return false, err
+							return process.ExecNext, err
 						}
 						ctr.bat.Aggs[i] = nil
 						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
@@ -67,37 +78,15 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 						}
 					}
 					ctr.bat.Aggs = nil
-					for i := range ctr.bat.Zs { // reset zs
-						ctr.bat.Zs[i] = 1
-					}
 				}
 				anal.Output(ctr.bat, isLast)
 			}
 			ctr.state = End
+
 		case End:
 			proc.SetInputBatch(ctr.bat)
 			ctr.bat = nil
-			ap.Free(proc, false)
-			return true, nil
-		}
-	}
-}
-
-func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
-	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
-		if err != nil {
-			return true, nil
-		}
-
-		if end {
-			return false, nil
-		}
-
-		anal.Input(bat, isFirst)
-		if err = ctr.process(bat, proc); err != nil {
-			bat.Clean(proc.Mp())
-			return false, err
+			return process.ExecStop, nil
 		}
 	}
 }
@@ -130,7 +119,9 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 
 		switch {
 		case keyWidth == 0:
+			// no group by.
 			ctr.typ = H0
+
 		case keyWidth <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
@@ -143,6 +134,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 			}
 		}
 	}
+
 	switch ctr.typ {
 	case H0:
 		err = ctr.processH0(bat, proc)
@@ -151,10 +143,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 	default:
 		err = ctr.processHStr(bat, proc)
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
@@ -163,9 +152,8 @@ func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 		return nil
 	}
 	defer proc.PutBatch(bat)
-	for _, z := range bat.Zs {
-		ctr.bat.Zs[0] += z
-	}
+	ctr.bat.SetRowCount(1)
+
 	for i, agg := range ctr.bat.Aggs {
 		err := agg.Merge(bat.Aggs[i], 0, 0)
 		if err != nil {
@@ -176,7 +164,7 @@ func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 }
 
 func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
-	count := bat.Length()
+	count := bat.RowCount()
 	itr := ctr.intHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
@@ -205,7 +193,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 }
 
 func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error {
-	count := bat.Length()
+	count := bat.RowCount()
 	itr := ctr.strHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
@@ -241,11 +229,10 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			ctr.inserted[k] = 1
 			hashRows++
 			cnt++
-			ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		}
-		ai := int64(v) - 1
-		ctr.bat.Zs[ai] += bat.Zs[i+k]
 	}
+	ctr.bat.AddRowCount(cnt)
+
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {
 			if err := vec.UnionBatch(bat.Vecs[j], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
