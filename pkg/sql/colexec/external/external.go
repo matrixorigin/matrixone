@@ -116,13 +116,13 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	defer span.End()
 	select {
 	case <-proc.Ctx.Done():
 		proc.SetInputBatch(nil)
-		return true, nil
+		return process.ExecStop, nil
 	default:
 	}
 	t1 := time.Now()
@@ -136,12 +136,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	param := arg.(*Argument).Es
 	if param.Fileparam.End {
 		proc.SetInputBatch(nil)
-		return true, nil
+		return process.ExecStop, nil
 	}
 	if param.plh == nil {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
@@ -149,14 +149,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	bat, err := scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
-		return false, err
+		return process.ExecNext, err
 	}
+
 	proc.SetInputBatch(bat)
 	if bat != nil {
 		anal.Output(bat, isLast)
 		anal.Alloc(int64(bat.Size()))
 	}
-	return false, nil
+	return process.ExecNext, nil
 }
 
 func containColname(col string) bool {
@@ -200,9 +201,9 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	bat := &batch.Batch{
 		Attrs: make([]string, num),
 		Vecs:  make([]*vector.Vector, num),
-		Zs:    make([]int64, len(fileList)),
 		Cnt:   1,
 	}
+	var buf bytes.Buffer
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
 		if bat.Attrs[i] == STATEMENT_ACCOUNT {
@@ -210,7 +211,10 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
-				vector.SetStringAt(vec, j, getAccountCol(fileList[j]), proc.GetMPool())
+				buf.WriteString(getAccountCol(fileList[j]))
+				bs := buf.Bytes()
+				vector.SetBytesAt(vec, j, bs, proc.GetMPool())
+				buf.Reset()
 			}
 			bat.Vecs[i] = vec
 		} else if bat.Attrs[i] == catalog.ExternalFilePath {
@@ -218,14 +222,15 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
 			for j := 0; j < len(fileList); j++ {
-				vector.SetStringAt(vec, j, fileList[j], proc.GetMPool())
+				buf.WriteString(fileList[j])
+				bs := buf.Bytes()
+				vector.SetBytesAt(vec, j, bs, proc.GetMPool())
+				buf.Reset()
 			}
 			bat.Vecs[i] = vec
 		}
 	}
-	for k := 0; k < len(fileList); k++ {
-		bat.Zs[k] = 1
-	}
+	bat.SetRowCount(len(fileList))
 	return bat
 }
 
@@ -490,7 +495,7 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			vec.SetLength(n)
 		}
 	}
-	bat.SetZs(n, proc.GetMPool())
+	bat.SetRowCount(n)
 	return bat, nil
 }
 
@@ -601,6 +606,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	if err != nil {
 		return nil, err
 	}
+	filepathBytes := []byte(param.Fileparam.Filepath)
 	for i := 0; i < len(param.Attrs); i++ {
 		var vecTmp *vector.Vector
 		if param.Extern.SysTable && uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
@@ -624,7 +630,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 				return nil, err
 			}
 			for j := 0; j < rows; j++ {
-				err := vector.SetStringAt(vecTmp, j, param.Fileparam.Filepath, proc.GetMPool())
+				err := vector.SetBytesAt(vecTmp, j, filepathBytes, proc.GetMPool())
 				if err != nil {
 					return nil, err
 				}
@@ -644,7 +650,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	}
 
 	n := bat.Vecs[0].Length()
-	bat.SetZs(n, proc.GetMPool())
+	bat.SetRowCount(n)
 	return bat, nil
 }
 
@@ -839,9 +845,12 @@ func transJsonArray2Lines(ctx context.Context, str string, attrs []string, cols 
 	return res, nil
 }
 
-func getNullFlag(param *ExternalParam, attr, field string) bool {
+func getNullFlag(nullMap map[string]([]string), attr, field string) bool {
+	if nullMap == nil || len(nullMap[attr]) == 0 {
+		return false
+	}
 	field = strings.ToLower(field)
-	for _, v := range param.Extern.NullMap[attr] {
+	for _, v := range nullMap[attr] {
 		if v == field {
 			return true
 		}
@@ -866,6 +875,7 @@ func getStrFromLine(line []string, colIdx int, param *ExternalParam) string {
 }
 
 func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
+	var buf bytes.Buffer
 	for colIdx := range param.Attrs {
 		vec := bat.Vecs[colIdx]
 		if param.Cols[colIdx].Hidden {
@@ -883,16 +893,19 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text {
 			isNullOrEmpty = isNullOrEmpty || len(field) == 0
 		}
-		isNullOrEmpty = isNullOrEmpty || (getNullFlag(param, param.Attrs[colIdx], field))
+		isNullOrEmpty = isNullOrEmpty || (getNullFlag(param.Extern.NullMap, param.Attrs[colIdx], field))
 		if isNullOrEmpty {
 			nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			continue
 		}
 		if param.ParallelLoad {
-			err := vector.SetStringAt(vec, rowIdx, field, mp)
+			buf.WriteString(field)
+			bs := buf.Bytes()
+			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
 			if err != nil {
 				return err
 			}
+			buf.Reset()
 			continue
 		}
 
@@ -1109,10 +1122,13 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 			}
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			// XXX Memory accounting?
-			err := vector.SetStringAt(vec, rowIdx, field, mp)
+			buf.WriteString(field)
+			bs := buf.Bytes()
+			err := vector.SetBytesAt(vec, rowIdx, bs, mp)
 			if err != nil {
 				return err
 			}
+			buf.Reset()
 		case types.T_json:
 			var jsonBytes []byte
 			if param.Extern.Format != tree.CSV {

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -119,6 +120,10 @@ func (s *service) initSqlWriterFactory() {
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
 	frontend.SetSpecialUser(db_holder.MOLoggerUser, []byte(command.User.Password))
 	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
+}
+
+func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
+	frontend.SetSpecialUser(proxy.SQLUserName, []byte(command.User.Password))
 }
 
 func (s *service) startTaskRunner() {

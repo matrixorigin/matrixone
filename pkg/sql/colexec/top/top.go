@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
@@ -60,7 +61,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
@@ -74,29 +75,32 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				ctr.state = Eval
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.RowCount() == 0 {
 				bat.Clean(proc.Mp())
-				return false, nil
+				return process.ExecNext, nil
 			}
 			if ap.Limit == 0 {
 				proc.PutBatch(bat)
 				proc.SetInputBatch(nil)
-				return true, nil
+				return process.ExecStop, nil
 			}
 			err := ctr.build(ap, bat, proc, anal)
 			if err != nil {
 				ap.Free(proc, true)
 			}
-			return false, err
+			return process.ExecNext, err
 
 		case Eval:
 			if ctr.bat == nil {
 				proc.SetInputBatch(nil)
-				return true, nil
+				return process.ExecStop, nil
 			}
 			err := ctr.eval(ap.Limit, proc)
 			ap.Free(proc, err != nil)
-			return err == nil, err
+			if err == nil {
+				return process.ExecStop, nil
+			}
+			return process.ExecNext, err
 		}
 	}
 }
@@ -160,7 +164,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
 	var start int64
 
-	length := int64(len(bat.Zs))
+	length := int64(bat.RowCount())
 	if n := int64(len(ctr.sels)); n < limit {
 		start = limit - n
 		if start > length {
@@ -173,9 +177,10 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				}
 			}
 			ctr.sels = append(ctr.sels, n)
-			ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs[i])
 			n++
 		}
+		ctr.bat.AddRowCount(int(start))
+
 		if n == limit {
 			ctr.sort()
 		}
@@ -194,7 +199,6 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
 					return err
 				}
-				ctr.bat.Zs[0] = bat.Zs[i]
 			}
 			heap.Fix(ctr, 0)
 		}
@@ -220,7 +224,7 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-	proc.Reg.InputBatch = ctr.bat
+	proc.SetInputBatch(ctr.bat)
 	ctr.bat = nil
 	return nil
 }

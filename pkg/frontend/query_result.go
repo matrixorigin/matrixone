@@ -525,11 +525,10 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				return err
 			}
 			tmpBatch = bat
-			tmpBatch.InitZsOne(tmpBatch.Vecs[0].Length())
 
 			//step2.1: converts it into the csv string
 			//step2.2: writes the csv string into the outfile
-			n := tmpBatch.Vecs[0].Length()
+			n := tmpBatch.RowCount()
 			for j := 0; j < n; j++ { //row index
 				select {
 				case <-ctx.Done():
@@ -541,9 +540,6 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				if tmpBatch.Zs[j] <= 0 {
-					continue
-				}
 				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq, false)
 				if err != nil {
 					return err

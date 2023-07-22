@@ -93,7 +93,10 @@ type TxnManager struct {
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
 
-	prevPrepareTS types.TS // for debug
+	// for debug
+	prevPrepareTS             types.TS
+	prevPrepareTSInPreparing  types.TS
+	prevPrepareTSInPrepareWAL types.TS
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -475,6 +478,14 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		} else {
 			mgr.onPrepare1PC(op, ts)
 		}
+		if !op.Txn.IsReplay() {
+			if !mgr.prevPrepareTSInPreparing.IsEmpty() {
+				if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPreparing) {
+					panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPreparing.ToString()))
+				}
+			}
+			mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
+		}
 
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
@@ -495,6 +506,14 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
 			if err := op.Txn.PrepareWAL(); err != nil {
 				panic(err)
+			}
+			if !op.Txn.IsReplay() {
+				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
+					if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPrepareWAL) {
+						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
+					}
+				}
+				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
 			}
 			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
 		}

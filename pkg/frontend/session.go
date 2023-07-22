@@ -17,15 +17,13 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,9 +34,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -48,7 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var MaxPrepareNumberInOneSession int = 1024
+var MaxPrepareNumberInOneSession int = 100000
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -219,6 +220,10 @@ type Session struct {
 	//	set @a = 1+1;
 	//the expression '1+1' will be formed into an internal statement.
 	derivedStmt bool
+
+	sqlType string
+	// startedAt is the session start time.
+	startedAt time.Time
 }
 
 func (ses *Session) IsDerivedStmt() bool {
@@ -408,6 +413,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		cache:     &privilegeCache{},
 		blockIdx:  0,
 		planCache: newPlanCache(100),
+		startedAt: time.Now(),
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -448,6 +454,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		nil,
 		pu.FileService,
 		pu.LockService,
+		pu.QueryService,
 		ses.GetAutoIncrCacheManager())
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
@@ -980,12 +987,16 @@ func (ses *Session) GetTenantInfo() *TenantInfo {
 // GetTenantName return tenant name according to GetTenantInfo and stmt.
 //
 // With stmt = nil, should be only called in TxnHandler.NewTxn, TxnHandler.CommitTxn, TxnHandler.RollbackTxn
-func (ses *Session) GetTenantName(stmt tree.Statement) string {
+func (ses *Session) GetTenantNameWithStmt(stmt tree.Statement) string {
 	tenant := sysAccountName
 	if ses.GetTenantInfo() != nil && (stmt == nil || !IsPrepareStatement(stmt)) {
 		tenant = ses.GetTenantInfo().GetTenant()
 	}
 	return tenant
+}
+
+func (ses *Session) GetTenantName() string {
+	return ses.GetTenantNameWithStmt(nil)
 }
 
 func (ses *Session) GetUUID() []byte {
@@ -1646,11 +1657,8 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 }
 
 func fillResultSet(oq outputPool, dataSet *batch.Batch, ses *Session) error {
-	n := dataSet.Vecs[0].Length()
+	n := dataSet.RowCount()
 	for j := 0; j < n; j++ { //row index
-		if dataSet.Zs[j] <= 0 {
-			continue
-		}
 		//needCopyBytes = true. we need to copy the bytes from the batch.Batch
 		//to avoid the data being changed after the batch.Batch returned to the
 		//pipeline.
@@ -1992,6 +2000,48 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 		resp = NewResponse(category, affectedRows, 0, 0, ses.GetServerStatus(), cmd, d)
 	}
 	return resp
+}
+
+// StatusSession implements the queryservice.Session interface.
+func (ses *Session) StatusSession() *status.Session {
+	var (
+		txnID         string
+		statementID   string
+		statementType string
+		queryType     string
+		sqlSourceType string
+		queryStart    time.Time
+	)
+	if ses.txnHandler != nil && ses.txnHandler.txnOperator != nil {
+		txn := ses.txnHandler.txnOperator.Txn()
+		txnID = hex.EncodeToString(txn.GetID())
+	}
+	stmtInfo := ses.tStmt
+	if stmtInfo != nil {
+		statementID = uuid.UUID(stmtInfo.StatementID).String()
+		statementType = stmtInfo.StatementType
+		queryType = stmtInfo.QueryType
+		sqlSourceType = stmtInfo.SqlSourceType
+		queryStart = stmtInfo.RequestAt
+	}
+	return &status.Session{
+		NodeID:        ses.getRoutineManager().baseService.ID(),
+		ConnID:        ses.GetConnectionID(),
+		SessionID:     ses.GetUUIDString(),
+		Account:       ses.GetTenantName(),
+		User:          ses.GetUserName(),
+		Host:          ses.getRoutineManager().baseService.SQLAddress(),
+		DB:            ses.GetDatabaseName(),
+		SessionStart:  ses.startedAt,
+		Command:       ses.GetCmd().String(),
+		Info:          ses.GetSql(),
+		TxnID:         txnID,
+		StatementID:   statementID,
+		StatementType: statementType,
+		QueryType:     queryType,
+		SQLSourceType: sqlSourceType,
+		QueryStart:    queryStart,
+	}
 }
 
 func checkPlanIsInsertValues(proc *process.Process,

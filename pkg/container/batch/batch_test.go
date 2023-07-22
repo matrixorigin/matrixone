@@ -99,7 +99,7 @@ func newTestCase(ts []types.Type) batchTestCase {
 func newBatch(ts []types.Type, rows int) *Batch {
 	mp := mpool.MustNewZero()
 	bat := NewWithSize(len(ts))
-	bat.InitZsOne(rows)
+	bat.SetRowCount(rows)
 	for i, typ := range ts {
 		switch typ.Oid {
 		case types.T_int8:

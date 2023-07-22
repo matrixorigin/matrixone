@@ -200,6 +200,9 @@ type Workspace interface {
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 
+	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
+	Adjust() error
+
 	Commit(ctx context.Context) error
 	Rollback(ctx context.Context) error
 }

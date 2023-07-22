@@ -76,16 +76,16 @@ func TestMinus(t *testing.T) {
 	err := Prepare(c.proc, c.arg)
 	require.NoError(t, err)
 	cnt := 0
-	end := false
+	var end process.ExecStatus
 	for {
 		end, err = Call(0, c.proc, c.arg, false, false)
-		if end {
+		if end == process.ExecStop {
 			break
 		}
 		require.NoError(t, err)
 		result := c.proc.InputBatch()
-		if result != nil && len(result.Zs) != 0 {
-			cnt += result.Length()
+		if result != nil && !result.IsEmpty() {
+			cnt += result.RowCount()
 			require.Equal(t, 3, len(result.Vecs))
 			c.proc.InputBatch().Clean(c.proc.Mp())
 		}

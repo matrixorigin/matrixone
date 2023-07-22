@@ -102,6 +102,16 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 		size = int64(last.Offset + last.Size)
 	}
 
+	var r io.Reader
+	r = newIOEntriesReader(ctx, vector.Entries)
+	if vector.Hash.Sum != nil && vector.Hash.New != nil {
+		h := vector.Hash.New()
+		r = io.TeeReader(r, h)
+		defer func() {
+			*vector.Hash.Sum = h.Sum(nil)
+		}()
+	}
+
 	// write
 	if err := l.ensureTempDir(); err != nil {
 		return err
@@ -116,7 +126,7 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
-	n, err := io.CopyBuffer(f, newIOEntriesReader(ctx, vector.Entries), buf)
+	n, err := io.CopyBuffer(f, r, buf)
 	if err != nil {
 		return err
 	}

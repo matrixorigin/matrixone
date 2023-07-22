@@ -1670,7 +1670,7 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 	//for i, ct := range colType {
 	//	fmt.Printf("column %d\n",i)
 	//	fmt.Printf("name %v \n",ct.Name())
-	//	l,o := ct.Length()
+	//	l,o := ct.RowCount()
 	//	fmt.Printf("length %v %v \n",l,o)
 	//	p,s,o := ct.DecimalSize()
 	//	fmt.Printf("decimalsize %v %v %v \n",p,s,o)
