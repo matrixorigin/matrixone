@@ -20,28 +20,67 @@ import (
 )
 
 func TestLRU(t *testing.T) {
-	kv := make(map[int][]byte)
-	l := New(1, func(key any, value []byte, _ int64) {
-		kv[key.(int)] = value
-	})
+	l := New(1, nil, nil)
 
 	l.Set(1, []byte{42}, 1, false)
 	_, ok := l.kv[1]
 	assert.True(t, ok)
 	_, ok = l.kv[2]
 	assert.False(t, ok)
+	val, _, _ := l.Get(1, false)
+	assert.Equal(t, []byte{42}, val)
 
-	l.Set(2, []byte{42}, 1, false)
+	l.Set(2, []byte{43}, 1, false)
 	_, ok = l.kv[1]
 	assert.False(t, ok)
 	_, ok = l.kv[2]
 	assert.True(t, ok)
-	assert.Equal(t, []byte{42}, kv[1])
+	val, _, _ = l.Get(2, false)
+	assert.Equal(t, []byte{43}, val)
+}
+
+func TestLRUCallbacks(t *testing.T) {
+
+	isNewEntryMap := make(map[int]bool)
+	postSetInvokedMap := make(map[int]bool)
+
+	evictEntryMap := make(map[int][]byte)
+	postEvictInvokedMap := make(map[int]bool)
+
+	l := New(1,
+		func(key any, value []byte, sz int64, isNewEntry bool) {
+			_key := key.(int)
+			isNewEntryMap[_key] = isNewEntry
+			postSetInvokedMap[_key] = true
+		},
+		func(key any, value []byte, _ int64) {
+			_key := key.(int)
+			evictEntryMap[_key] = value
+			postEvictInvokedMap[_key] = true
+		})
+
+	// PostSet
+	l.Set(1, []byte{42}, 1, false)
+	assert.True(t, postSetInvokedMap[1])
+	postSetInvokedMap[1] = false // resetting
+	assert.False(t, postEvictInvokedMap[1])
+	assert.True(t, isNewEntryMap[1])
+
+	l.Set(1, []byte{43}, 1, false)
+	assert.True(t, postSetInvokedMap[1])
+	assert.False(t, postEvictInvokedMap[1])
+	assert.False(t, isNewEntryMap[1])
+
+	// PostSet and PostEvict
+	l.Set(2, []byte{44}, 1, false)
+	assert.True(t, isNewEntryMap[2])              // isNewEntryMap is updated by PostSet
+	assert.True(t, postEvictInvokedMap[1])        //postEvictInvokedMap is updated by PostEvict
+	assert.Equal(t, []byte{43}, evictEntryMap[1]) //evictEntryMap is updated by PostEvict
 }
 
 func BenchmarkLRUSet(b *testing.B) {
 	const capacity = 1024
-	l := New(capacity, nil)
+	l := New(capacity, nil, nil)
 	for i := 0; i < b.N; i++ {
 		l.Set(i%capacity, []byte{byte(i)}, 1, false)
 	}
@@ -49,7 +88,7 @@ func BenchmarkLRUSet(b *testing.B) {
 
 func BenchmarkLRUParallelSet(b *testing.B) {
 	const capacity = 1024
-	l := New(capacity, nil)
+	l := New(capacity, nil, nil)
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
 			l.Set(i%capacity, []byte{byte(i)}, 1, false)
@@ -59,7 +98,7 @@ func BenchmarkLRUParallelSet(b *testing.B) {
 
 func BenchmarkLRUParallelSetOrGet(b *testing.B) {
 	const capacity = 1024
-	l := New(capacity, nil)
+	l := New(capacity, nil, nil)
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
 			l.Set(i%capacity, []byte{byte(i)}, 1, false)
