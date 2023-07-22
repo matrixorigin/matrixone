@@ -1670,11 +1670,13 @@ func (tbl *txnTable) updateDeleteInfo(blks []catalog.BlockInfo) error {
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
 				if _, ok := blkidMap[blkid]; !ok {
-					newId, err := tbl.readNewRowid(pkVec, i, blks)
+					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
 						return err
 					}
-					rowids[i] = newId
+					if ok {
+						rowids[i] = newId
+					}
 				}
 			}
 		}
@@ -1683,7 +1685,7 @@ func (tbl *txnTable) updateDeleteInfo(blks []catalog.BlockInfo) error {
 }
 
 func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
-	blks []catalog.BlockInfo) (types.Rowid, error) {
+	blks []catalog.BlockInfo) (types.Rowid, bool, error) {
 	var typ *plan.Type
 	var rowid types.Rowid
 
@@ -1701,7 +1703,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		rule.GetConstantValue(vec, true, uint64(row)))
 	filter, err := tbl.newPkFilter(newColumnExpr(1, typ, tableDef.Pkey.PkeyColName), constExpr)
 	if err != nil {
-		return rowid, err
+		return rowid, false, err
 	}
 	for _, blk := range blks {
 		// rowid + pk
@@ -1710,9 +1712,12 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 			nil, nil, nil,
 			tbl.db.txn.engine.fs, tbl.proc.Mp(), tbl.proc,
 		)
+		if err != nil {
+			return rowid, false, err
+		}
 		vec, err := colexec.EvalExpressionOnce(tbl.db.txn.proc, filter, []*batch.Batch{bat})
 		if err != nil {
-			return rowid, err
+			return rowid, false, err
 		}
 		bs := vector.MustFixedCol[bool](vec)
 		for i, b := range bs {
@@ -1720,13 +1725,13 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 				rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
 				vec.Free(tbl.proc.Mp())
 				bat.Clean(tbl.proc.Mp())
-				return rowids[i], nil
+				return rowids[i], true, nil
 			}
 		}
 		vec.Free(tbl.proc.Mp())
 		bat.Clean(tbl.proc.Mp())
 	}
-	return rowid, nil
+	return rowid, false, nil
 }
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
