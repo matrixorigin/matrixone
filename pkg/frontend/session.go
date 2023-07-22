@@ -213,7 +213,7 @@ type Session struct {
 	// requestLabel is the CN label info requested from client.
 	requestLabel map[string]string
 
-	sqlType string
+	sqlType atomic.Value
 	// startedAt is the session start time.
 	startedAt time.Time
 }
@@ -1982,7 +1982,6 @@ func (ses *Session) StatusSession() *status.Session {
 		statementID   string
 		statementType string
 		queryType     string
-		sqlSourceType string
 		queryStart    time.Time
 	)
 	if ses.txnHandler != nil && ses.txnHandler.txnOperator != nil {
@@ -1994,7 +1993,6 @@ func (ses *Session) StatusSession() *status.Session {
 		statementID = uuid.UUID(stmtInfo.StatementID).String()
 		statementType = stmtInfo.StatementType
 		queryType = stmtInfo.QueryType
-		sqlSourceType = stmtInfo.SqlSourceType
 		queryStart = stmtInfo.RequestAt
 	}
 	return &status.Session{
@@ -2012,7 +2010,7 @@ func (ses *Session) StatusSession() *status.Session {
 		StatementID:   statementID,
 		StatementType: statementType,
 		QueryType:     queryType,
-		SQLSourceType: sqlSourceType,
+		SQLSourceType: ses.sqlType.Load().(string),
 		QueryStart:    queryStart,
 	}
 }

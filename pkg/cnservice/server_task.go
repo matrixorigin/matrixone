@@ -17,7 +17,6 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
@@ -60,16 +60,20 @@ func (s *service) adjustSQLAddress() {
 func (s *service) initTaskServiceHolder() {
 	s.adjustSQLAddress()
 
+	getClient := func() util.HAKeeperClient {
+		client, _ := s.getHAKeeperClient()
+		return client
+	}
 	s.task.Lock()
 	defer s.task.Unlock()
 	if s.task.storageFactory == nil {
 		s.task.holder = taskservice.NewTaskServiceHolder(
 			runtime.ProcessLevelRuntime(),
-			func(context.Context) (string, error) { return s.cfg.SQLAddress, nil })
+			util.AddressFunc(getClient))
 	} else {
 		s.task.holder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
 			runtime.ProcessLevelRuntime(),
-			func(context.Context) (string, error) { return s.cfg.SQLAddress, nil },
+			util.AddressFunc(getClient),
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
 			})
@@ -93,28 +97,11 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 }
 
 func (s *service) initSqlWriterFactory() {
-	addressFunc := func(ctx context.Context, randomCN bool) (string, error) {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-		defer cancel()
-		haKeeperClient, err := s.getHAKeeperClient()
-		if err != nil {
-			return "", err
-		}
-		details, err := haKeeperClient.GetClusterDetails(ctx)
-		if err != nil {
-			return "", err
-		}
-		if len(details.CNStores) == 0 {
-			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
-		}
-		if randomCN {
-			n := rand.Intn(len(details.CNStores))
-			return details.CNStores[n].SQLAddress, nil
-		}
-		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
+	getClient := func() util.HAKeeperClient {
+		client, _ := s.getHAKeeperClient()
+		return client
 	}
-
-	db_holder.SetSQLWriterDBAddressFunc(addressFunc)
+	db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(getClient))
 }
 
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
