@@ -52,7 +52,6 @@ drop table if exists t1;
 create table t1 (a int);
 insert into t1 values(1),(2),(3),(4);
 select case a when 1 then 2 when 2 then 3 else 0 end as fcase, count(*) from t1 group by fcase;
-select case a when 1 then 2 when 2 then 3 else 0 end as fcase, count(*) from t1 group by fcase;
 select case a when 1 then "one" when 2 then "two" else "nothing" end as fcase, count(*) from t1 group by fcase;
 drop table if exists t1;
 

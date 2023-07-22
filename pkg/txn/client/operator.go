@@ -17,6 +17,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
-	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -491,7 +491,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	if commit {
 		if tc.workspace != nil {
 			if err := tc.workspace.Commit(ctx); err != nil {
-				return nil, multierr.Append(err, tc.Rollback(ctx))
+				return nil, errors.Join(err, tc.Rollback(ctx))
 			}
 		}
 		tc.mu.Lock()
