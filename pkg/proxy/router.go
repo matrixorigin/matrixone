@@ -141,7 +141,7 @@ func newRouter(
 func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	cn := r.rebalancer.connManager.getCNServerByConnID(connID)
 	if cn == nil {
-		return nil, moerr.NewInternalErrorNoCtx("no available CN server.")
+		return nil, noCNServerErr
 	}
 	// Return a new CNServer instance for temporary connection.
 	return &CNServer{
@@ -201,16 +201,17 @@ func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bo
 		cns = r.selectForCommonTenant(c, filter)
 	}
 
-	if len(cns) == 0 {
-		return nil, noCNServerErr
-	} else if len(cns) == 1 {
-		return cns[0], nil
-	}
-
 	// getHash returns same hash for same labels.
 	hash, err := c.labelInfo.getHash()
 	if err != nil {
 		return nil, err
+	}
+
+	if len(cns) == 0 {
+		return nil, noCNServerErr
+	} else if len(cns) == 1 {
+		cns[0].hash = hash
+		return cns[0], nil
 	}
 
 	s := r.rebalancer.connManager.selectOne(hash, cns)
