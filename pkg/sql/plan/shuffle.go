@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	HashMapSizeForShuffle = 500000
+	HashMapSizeForShuffle = 250000
 	MAXShuffleDOP         = 64
 	ShuffleThreshHold     = 50000
 )
