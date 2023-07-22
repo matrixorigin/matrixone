@@ -54,16 +54,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
-
-func DebugPrintScope(prefix []byte, ss []*Scope) {
-	for _, s := range ss {
-		DebugPrintScope(append(prefix, '\t'), s.PreScopes)
-		p := pipeline.NewMerge(s.Instructions, nil)
-		logutil.Debugf("%s:%v %v", prefix, s.Magic, p)
-	}
-}
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
@@ -104,35 +97,28 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 func (s *Scope) MergeRun(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
 	var wg sync.WaitGroup
-	for _, scope := range s.PreScopes {
+	for i := range s.PreScopes {
+		scope := s.PreScopes[i]
 		wg.Add(1)
-		switch scope.Magic {
-		case Normal:
-			go func(cs *Scope) {
-				errChan <- cs.Run(c)
+		ants.Submit(func() {
+			switch scope.Magic {
+			case Normal:
+				errChan <- scope.Run(c)
 				wg.Done()
-			}(scope)
-		case Merge, MergeInsert:
-			go func(cs *Scope) {
-				errChan <- cs.MergeRun(c)
+			case Merge, MergeInsert:
+				errChan <- scope.MergeRun(c)
 				wg.Done()
-			}(scope)
-		case Remote:
-			go func(cs *Scope) {
-				errChan <- cs.RemoteRun(c)
+			case Remote:
+				errChan <- scope.RemoteRun(c)
 				wg.Done()
-			}(scope)
-		case Parallel:
-			go func(cs *Scope) {
-				errChan <- cs.ParallelRun(c, cs.IsRemote)
+			case Parallel:
+				errChan <- scope.ParallelRun(c, scope.IsRemote)
 				wg.Done()
-			}(scope)
-		case Pushdown:
-			go func(cs *Scope) {
-				errChan <- cs.PushdownRun()
+			case Pushdown:
+				errChan <- scope.PushdownRun()
 				wg.Done()
-			}(scope)
-		}
+			}
+		})
 	}
 	defer wg.Wait()
 
@@ -183,8 +169,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if send to itself, just run it parallel at local.
-	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() ||
-		len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
+	if len(s.NodeInfo.Addr) == 0 || len(c.addr) == 0 || isSameCN(c.addr, s.NodeInfo.Addr) {
+		return s.ParallelRun(c, s.IsRemote)
+	}
+
+	if !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c, s.IsRemote)
 	}
 
@@ -222,7 +211,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
 
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
+			c.lock.RLock()
 			ch, ok := c.runtimeFilterReceiverMap[spec.Tag]
+			c.lock.RUnlock()
 			if !ok {
 				continue
 			}
@@ -410,7 +401,7 @@ func (s *Scope) PushdownRun() error {
 			s.Proc.Cancel()
 			return err
 		}
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			continue
 		}
 		s.Proc.Reg.InputBatch = bat
@@ -491,7 +482,7 @@ func (s *Scope) LoadRun(c *Compile) error {
 	bat := batch.NewWithSize(1)
 	{
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 	}
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{

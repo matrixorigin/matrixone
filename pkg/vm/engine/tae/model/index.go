@@ -28,7 +28,7 @@ type simpleLRU struct {
 
 func NewSimpleLRU(capacity int64) LRUCache {
 	return &simpleLRU{
-		impl: *lruobjcache.New(capacity),
+		impl: *lruobjcache.New(capacity, nil, nil),
 	}
 }
 

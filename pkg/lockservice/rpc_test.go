@@ -40,10 +40,11 @@ func TestRPCSend(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -66,10 +67,11 @@ func TestMOErrorCanHandled(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
+					writeResponse(ctx, cancel, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -92,10 +94,11 @@ func TestRequestCanBeFilter(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -119,11 +122,12 @@ func TestLockTableBindChanged(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &lock.LockTable{ServiceID: "s1"}
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)

@@ -52,7 +52,6 @@ func Prepare(proc *process.Process, arg any) (err error) {
 		}
 	}
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
@@ -60,7 +59,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -71,7 +70,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		case BuildHashMap:
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 				ctr.cleanHashMap()
-				return false, err
+				return process.ExecNext, err
 			}
 			if ap.ctr.mp != nil {
 				anal.Alloc(ap.ctr.mp.Size())
@@ -80,14 +79,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 
 		case HandleRuntimeFilter:
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 
 		case Eval:
-			if ctr.bat != nil && ctr.bat.Length() != 0 {
+			if ctr.bat != nil && ctr.bat.RowCount() != 0 {
 				if ap.NeedHashMap {
 					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ap.IsDup)
 				}
+
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
 				ctr.bat = nil
@@ -97,11 +97,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 				proc.SetInputBatch(nil)
 			}
 			ctr.state = End
-			return false, nil
+			return process.ExecNext, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }
@@ -118,7 +118,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if bat == nil {
 			break
 		}
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -129,7 +129,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		bat.Clean(proc.Mp())
 	}
-	if ctr.bat == nil || ctr.bat.Length() == 0 || !ap.NeedHashMap {
+	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil
 	}
 
@@ -138,7 +138,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	}
 
 	itr := ctr.mp.NewIterator()
-	count := ctr.bat.Length()
+	count := ctr.bat.RowCount()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -201,7 +201,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	// Composite primary key
 	if len(ctr.vecs) > 1 && len(ctr.sels) <= plan.BloomFilterCardLimit {
 		bat := batch.NewWithSize(len(ctr.vecs))
-		bat.Zs = make([]int64, ctr.vecs[0].Length())
+		bat.SetRowCount(ctr.vecs[0].Length())
 		copy(bat.Vecs, ctr.vecs)
 
 		newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSenders[0].Spec.Expr, []*batch.Batch{bat})

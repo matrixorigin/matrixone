@@ -116,6 +116,7 @@ func (s *CNServer) Connect() (goetty.IOSession, error) {
 type router struct {
 	rebalancer *rebalancer
 	moCluster  clusterservice.MOCluster
+	sqlRouter  SQLRouter
 	test       bool
 }
 
@@ -125,11 +126,13 @@ var _ Router = (*router)(nil)
 func newRouter(
 	mc clusterservice.MOCluster,
 	r *rebalancer,
+	sqlRouter SQLRouter,
 	test bool,
 ) Router {
 	return &router{
 		rebalancer: r,
 		moCluster:  mc,
+		sqlRouter:  sqlRouter,
 		test:       test,
 	}
 }
@@ -151,7 +154,11 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 
 // SelectByTenant implements the Router interface.
 func (r *router) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
-	return r.rebalancer.connManager.getCNServersByTenant(tenant), nil
+	cns, err := r.sqlRouter.GetCNServersByTenant(string(tenant))
+	if err != nil {
+		return nil, err
+	}
+	return cns, nil
 }
 
 // selectForSuperTenant is used to select CN servers for sys tenant.

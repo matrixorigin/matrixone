@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -104,9 +105,6 @@ var (
 	//statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
 	defaultStatusPort = 7001
 
-	// defaultBatchProcessor default is FileService. if InternalExecutor, use internal sql executor, FileService will implement soon.
-	defaultBatchProcessor = "FileService"
-
 	// defaultTraceExportInterval default: 15 sec.
 	defaultTraceExportInterval = 15
 
@@ -127,23 +125,11 @@ var (
 	// defaultMetricStorageUsageCheckNewInterval default: 1 min
 	defaultMetricStorageUsageCheckNewInterval = time.Minute
 
-	// defaultMergeCycle default: 15 minute
-	defaultMergeCycle = 15 * time.Minute
-
-	// defaultMaxFileSize default: 10 MB
-	defaultMaxFileSize = 10
-
-	// defaultPathBuilder, val in [DBTable, AccountDate]
-	defaultPathBuilder = "AccountDate"
+	// defaultMergeCycle default: 5 minute
+	defaultMergeCycle = 5 * time.Minute
 
 	// defaultSessionTimeout default: 24 hour
 	defaultSessionTimeout = 24 * time.Hour
-
-	// defaultLogsExtension default: tae. Support val in [csv, tae]
-	defaultLogsExtension = "csv"
-
-	// defaultMergedExtension default: tae. Support val in [csv, tae]
-	defaultMergedExtension = "csv"
 
 	// defaultOBShowStatsInterval default: 1min
 	defaultOBShowStatsInterval = time.Minute
@@ -169,6 +155,11 @@ var (
 	defaultAggregationWindow = 5 * time.Second
 
 	defaultSelectThreshold = 200 * time.Millisecond
+
+	// defaultLongQueryTime
+	defaultLongQueryTime = 1.0
+	// defaultSkipRunningStmt
+	defaultSkipRunningStmt = true
 )
 
 // FrontendParameters of the frontend
@@ -536,7 +527,7 @@ type ObservabilityParameters struct {
 
 	// StatusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
 	// Start listen with EnableMetricToProm is true.
-	StatusPort int64 `toml:"statusPort"`
+	StatusPort int `toml:"statusPort"`
 
 	// EnableMetricToProm default is false. if true, metrics can be scraped through host:status/metrics endpoint
 	EnableMetricToProm bool `toml:"enableMetricToProm"`
@@ -547,9 +538,6 @@ type ObservabilityParameters struct {
 	// DisableTrace default is false. if false, enable trace at booting
 	DisableTrace bool `toml:"disableTrace"`
 
-	// EnableTraceDebug default is FileService. if InternalExecutor, use internal sql executor, FileService will implement soon.
-	BatchProcessor string `toml:"batchProcessor"`
-
 	// EnableTraceDebug default is false. With true, system will check all the children span is ended, which belong to the closing span.
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
 
@@ -558,9 +546,6 @@ type ObservabilityParameters struct {
 
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
 	LongQueryTime float64 `toml:"longQueryTime"`
-
-	// MetricMultiTable default is false. With true, save all metric data in one table.
-	MetricMultiTable bool `toml:"metricMultiTable"`
 
 	// MetricExportInterval default is 15 sec.
 	MetricExportInterval int `toml:"metricExportInterval"`
@@ -574,21 +559,9 @@ type ObservabilityParameters struct {
 	// MetricStorageUsageCheckNewInterval, default: 1 min
 	MetricStorageUsageCheckNewInterval toml.Duration `toml:"metricStorageUsageCheckNewInterval"`
 
-	// MergeCycle default: 900 sec (15 minutes).
+	// MergeCycle default: 300 sec (5 minutes).
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
-
-	// MergeMaxFileSize default: 128 (MB)
-	MergeMaxFileSize int `toml:"mergeMaxFileSize"`
-
-	// PathBuilder default: DBTable. Support val in [DBTable, AccountDate]
-	PathBuilder string `toml:"pathBuilder"`
-
-	// LogsExtension default: tae. Support val in [csv, tae]
-	LogsExtension string `toml:"logsExtension"`
-
-	// MergedExtension default: tae. Support val in [csv, tae]
-	MergedExtension string `toml:"mergedExtension"`
 
 	// DisableSpan default: false. Disable span collection
 	DisableSpan bool `toml:"disableSpan"`
@@ -618,6 +591,41 @@ type ObservabilityParameters struct {
 	OBCollectorConfig
 }
 
+func NewObservabilityParameters() *ObservabilityParameters {
+	op := &ObservabilityParameters{
+		MoVersion:                          "",
+		Host:                               defaultHost,
+		StatusPort:                         defaultStatusPort,
+		EnableMetricToProm:                 false,
+		DisableMetric:                      false,
+		DisableTrace:                       false,
+		EnableTraceDebug:                   false,
+		TraceExportInterval:                defaultTraceExportInterval,
+		LongQueryTime:                      defaultLongQueryTime,
+		MetricExportInterval:               defaultMetricExportInterval,
+		MetricGatherInterval:               defaultMetricGatherInterval,
+		MetricStorageUsageUpdateInterval:   toml.Duration{},
+		MetricStorageUsageCheckNewInterval: toml.Duration{},
+		MergeCycle:                         toml.Duration{},
+		DisableSpan:                        false,
+		LongSpanTime:                       toml.Duration{},
+		SkipRunningStmt:                    defaultSkipRunningStmt,
+		DisableSqlWriter:                   false,
+		DisableStmtAggregation:             false,
+		AggregationWindow:                  toml.Duration{},
+		SelectAggrThreshold:                toml.Duration{},
+		EnableStmtMerge:                    false,
+		OBCollectorConfig:                  *NewOBCollectorConfig(),
+	}
+	op.MetricStorageUsageUpdateInterval.Duration = defaultMetricUpdateStorageUsageInterval
+	op.MetricStorageUsageCheckNewInterval.Duration = defaultMetricStorageUsageCheckNewInterval
+	op.MergeCycle.Duration = defaultMergeCycle
+	op.LongSpanTime.Duration = defaultLongSpanTime
+	op.AggregationWindow.Duration = defaultAggregationWindow
+	op.SelectAggrThreshold.Duration = defaultSelectThreshold
+	return op
+}
+
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
 	op.OBCollectorConfig.SetDefaultValues()
 
@@ -628,11 +636,7 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 	}
 
 	if op.StatusPort == 0 {
-		op.StatusPort = int64(defaultStatusPort)
-	}
-
-	if op.BatchProcessor == "" {
-		op.BatchProcessor = defaultBatchProcessor
+		op.StatusPort = defaultStatusPort
 	}
 
 	if op.TraceExportInterval <= 0 {
@@ -657,22 +661,6 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MergeCycle.Duration <= 0 {
 		op.MergeCycle.Duration = defaultMergeCycle
-	}
-
-	if op.PathBuilder == "" {
-		op.PathBuilder = defaultPathBuilder
-	}
-
-	if op.MergeMaxFileSize <= 0 {
-		op.MergeMaxFileSize = defaultMaxFileSize
-	}
-
-	if op.LogsExtension == "" {
-		op.LogsExtension = defaultLogsExtension
-	}
-
-	if op.MergedExtension == "" {
-		op.MergedExtension = defaultMergedExtension
 	}
 
 	if op.LongSpanTime.Duration <= 0 {
@@ -701,6 +689,16 @@ type OBCollectorConfig struct {
 	// BufferCnt
 	BufferCnt  int32 `toml:"bufferCnt"`
 	BufferSize int64 `toml:"bufferSize"`
+}
+
+func NewOBCollectorConfig() *OBCollectorConfig {
+	cfg := &OBCollectorConfig{
+		ShowStatsInterval: toml.Duration{},
+		BufferCnt:         defaultOBBufferCnt,
+		BufferSize:        defaultOBBufferSize,
+	}
+	cfg.ShowStatsInterval.Duration = defaultOBShowStatsInterval
+	return cfg
 }
 
 func (c *OBCollectorConfig) SetDefaultValues() {
@@ -732,6 +730,9 @@ type ParameterUnit struct {
 
 	// LockService instance
 	LockService lockservice.LockService
+
+	// QueryService instance
+	QueryService queryservice.QueryService
 
 	// HAKeeper client, which is used to get connection ID
 	// from HAKeeper currently.

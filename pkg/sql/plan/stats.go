@@ -159,8 +159,23 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 
 // cols in one table, return if ndv of  multi column is high enough
 func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
+	if tableDef == nil {
+		return false
+	}
+	// first to check if it is primary key.
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		pks := make([]int32, len(pkNames))
+		for i := range pkNames {
+			pks[i] = tableDef.Name2ColIndex[pkNames[i]]
+		}
+		if containsAllPKs(cols, pks) {
+			return true
+		}
+	}
+
 	sc := builder.compCtx.GetStatsCache()
-	if sc == nil || tableDef == nil {
+	if sc == nil {
 		return false
 	}
 	s := sc.GetStatsInfoMap(tableDef.TblId)
@@ -452,6 +467,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if !isCrossJoin {
 				outcnt *= selectivity
+			}
+			for _, pred := range node.OnList {
+				pred.Ndv = getExprNdv(pred, builder)
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,

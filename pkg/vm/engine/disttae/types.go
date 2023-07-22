@@ -29,10 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -90,6 +92,7 @@ type Engine struct {
 	mp         *mpool.MPool
 	fs         fileservice.FileService
 	ls         lockservice.LockService
+	qs         queryservice.QueryService
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
@@ -172,6 +175,7 @@ type Transaction struct {
 	statements    []int
 
 	hasS3Op              atomic.Bool
+	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
 }
@@ -277,6 +281,8 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 			}
 		}
 		txn.writes = append(txn.writes[:start], writes...)
+		// restore the scope of the statement
+		txn.statements[txn.statementID-1] = len(txn.writes)
 	}
 	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
@@ -512,6 +518,11 @@ type blockReader struct {
 type blockMergeReader struct {
 	*blockReader
 	table *txnTable
+
+	//for perfetch deletes
+	loaded     bool
+	pkidx      int
+	deletaLocs map[string][]objectio.Location
 }
 
 type mergeReader struct {

@@ -23,16 +23,17 @@ import (
 )
 
 var (
-	EmptyBatch             = &Batch{}
-	EmptyForConstFoldBatch = NewWithSize(0)
+	EmptyBatch = &Batch{rowCount: 0}
+
+	EmptyForConstFoldBatch = &Batch{
+		Cnt:      1,
+		Vecs:     make([]*vector.Vector, 0),
+		rowCount: 1,
+	}
 )
 
-func init() {
-	EmptyForConstFoldBatch.Zs = []int64{1}
-}
-
 type EncodeBatch struct {
-	Zs       []int64
+	rowCount int64
 	Vecs     []*vector.Vector
 	Attrs    []string
 	AggInfos []aggInfo
@@ -44,18 +45,12 @@ func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
 	// --------------------------------------------------------------------
 	var buf bytes.Buffer
 
-	// Zs
-	l := int32(len(m.Zs))
-	buf.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		n, _ := buf.Write(types.EncodeInt64(&m.Zs[i]))
-		if n != 8 {
-			panic("unexpected length for int64")
-		}
-	}
+	// row count.
+	rl := int64(m.rowCount)
+	buf.Write(types.EncodeInt64(&rl))
 
 	// Vecs
-	l = int32(len(m.Vecs))
+	l := int32(len(m.Vecs))
 	buf.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		data, err := m.Vecs[i].MarshalBinary()
@@ -100,18 +95,12 @@ func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
 	buf := make([]byte, len(data))
 	copy(buf, data)
 
-	// Zs
-	l := types.DecodeInt32(buf[:4])
-	buf = buf[4:]
-	zs := make([]int64, l)
-	for i := 0; i < int(l); i++ {
-		zs[i] = types.DecodeInt64(buf[:8])
-		buf = buf[8:]
-	}
-	m.Zs = zs
+	// row count
+	m.rowCount = types.DecodeInt64(buf[:8])
+	buf = buf[8:]
 
 	// Vecs
-	l = types.DecodeInt32(buf[:4])
+	l := types.DecodeInt32(buf[:4])
 	buf = buf[4:]
 	vecs := make([]*vector.Vector, l)
 	for i := 0; i < int(l); i++ {
@@ -174,7 +163,8 @@ type aggInfo struct {
 //	(vecs) 	- columns
 type Batch struct {
 	// Ro if true, Attrs is read only
-	Ro bool
+	Ro         bool
+	ShuffleIDX int //used only in shuffle dispatch
 	// reference count, default is 1
 	Cnt int64
 	// Attrs column name list
@@ -182,8 +172,10 @@ type Batch struct {
 	// Vecs col data
 	Vecs []*vector.Vector
 	// ring
-	Zs   []int64
 	Aggs []agg.Agg[any]
+
+	// row count of batch, to instead of old len(Zs).
+	rowCount int
 
 	AuxData any // hash table, runtime filter, etc.
 }

@@ -80,7 +80,7 @@ func Call(
 	proc *process.Process,
 	v any,
 	isFirst bool,
-	isLast bool) (bool, error) {
+	isLast bool) (process.ExecStatus, error) {
 	arg, ok := v.(*Argument)
 	if !ok {
 		getLogger().Fatal("invalid argument",
@@ -89,14 +89,21 @@ func Call(
 
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {
-		return false, nil
+		return process.ExecNext, nil
 	}
 
 	if !arg.block {
-		return callNonBlocking(idx, proc, arg)
+		ok, err := callNonBlocking(idx, proc, arg)
+		if ok {
+			return process.ExecStop, err
+		}
+		return process.ExecNext, err
 	}
-
-	return callBlocking(idx, proc, arg, isFirst, isLast)
+	ok, err := callBlocking(idx, proc, arg, isFirst, isLast)
+	if ok {
+		return process.ExecStop, err
+	}
+	return process.ExecNext, err
 }
 
 func callNonBlocking(
@@ -104,10 +111,11 @@ func callNonBlocking(
 	proc *process.Process,
 	arg *Argument) (bool, error) {
 	bat := proc.InputBatch()
+
 	if bat == nil {
 		return true, arg.rt.retryError
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
@@ -150,7 +158,7 @@ func callBlocking(
 		}
 
 		// skip empty batch
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			bat.Clean(proc.Mp())
 			return false, nil
 		}
@@ -174,6 +182,7 @@ func callBlocking(
 		if len(arg.rt.cachedBatches) == 0 {
 			arg.rt.step = stepEnd
 		}
+
 		proc.SetInputBatch(bat)
 		return false, nil
 	case stepEnd:
@@ -407,15 +416,18 @@ func doLock(
 		return false, timestamp.Timestamp{}, err
 	}
 
+	snapshotTS := txnOp.Txn().SnapshotTS
+	// if has no conflict, lockedTS means the latest commit ts of this table
+	lockedTS := result.Timestamp
+
 	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
 	if !result.HasConflict &&
+		snapshotTS.LessEq(lockedTS) && // only retry when snapshotTS <= lockedTS, means lost some update in rc mode.
 		!txnOp.IsRetry() &&
 		txnOp.Txn().IsRCIsolation() {
-		snapshotTS := txnOp.Txn().SnapshotTS
-		lockedTS := result.Timestamp
 
-		// wait logtail applied at lockedTS - 1
-		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS.Prev())
+		// wait last committed logtail applied
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {
 			return false, timestamp.Timestamp{}, err
 		}
@@ -425,7 +437,7 @@ func doLock(
 			fn = hasNewVersionInRange
 		}
 
-		// if [snapshotTS, lockedTS) has been modified, need retry at new snapshot ts
+		// if [snapshotTS, lockedTS] has been modified, need retry at new snapshot ts
 		changed, err := fn(proc, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
 		if err != nil {
 			return false, timestamp.Timestamp{}, err
@@ -461,7 +473,7 @@ func doLock(
 	}
 
 	// forward rc's snapshot ts
-	snapshotTS := result.Timestamp.Next()
+	snapshotTS = result.Timestamp.Next()
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, timestamp.Timestamp{}, err
 	}
@@ -678,7 +690,7 @@ func getRowsFilter(
 	}
 }
 
-// [from, to).
+// [from, to].
 // 1. if has a mvcc record <= from, return false, means no changed
 // 2. otherwise return true, changed
 func hasNewVersionInRange(
@@ -688,7 +700,7 @@ func hasNewVersionInRange(
 	vec *vector.Vector,
 	from, to timestamp.Timestamp) (bool, error) {
 	if vec == nil {
-		return true, nil
+		return false, nil
 	}
 	txnClient := proc.TxnClient
 	txnOp, err := txnClient.New(proc.Ctx, to.Prev())

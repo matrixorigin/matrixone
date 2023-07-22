@@ -32,11 +32,10 @@ type MOTracerProvider struct {
 func defaultMOTracerProvider() *MOTracerProvider {
 	pTracer := &MOTracerProvider{
 		tracerProviderConfig{
-			enable:           false,
-			resource:         trace.NewResource(),
-			idGenerator:      &moIDGenerator{},
-			batchProcessMode: FileService,
-			batchProcessor:   NoopBatchProcessor{},
+			enable:         false,
+			resource:       trace.NewResource(),
+			idGenerator:    &moIDGenerator{},
+			batchProcessor: NoopBatchProcessor{},
 		},
 	}
 	WithNode("node_uuid", trace.NodeTypeStandalone).apply(&pTracer.tracerProviderConfig)

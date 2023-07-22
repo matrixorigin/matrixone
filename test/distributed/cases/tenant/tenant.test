@@ -5,5 +5,7 @@ create account tenant_test admin_name = 'root' identified by '111' open comment 
 create account if not exists tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account tenant_test admin_name = 'root' open comment 'tenant_test';
 drop account if exists tenant_test;
+-- @bvt:issue#8544
 select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' order by relname;
+-- @bvt:issue
 set global enable_privilege_cache = on;

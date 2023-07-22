@@ -46,7 +46,7 @@ func Prepare(proc *process.Process, argument any) error {
 // it built a hash table for right relation first.
 // use values from left relation to probe and update the hash table.
 // and preserve values that do not exist in the hash table.
-func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
 	arg := argument.(*Argument)
 
@@ -60,7 +60,7 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
 			if err = arg.ctr.buildHashTable(proc, analyze, 1, isFirst); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			if arg.ctr.hashTable != nil {
 				analyze.Alloc(arg.ctr.hashTable.Size())
@@ -75,18 +75,18 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			last := false
 			last, err = arg.ctr.probeHashTable(proc, analyze, 0, isFirst, isLast)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			if last {
 				arg.ctr.state = operatorEnd
 				continue
 			}
-			return false, nil
+			return process.ExecNext, nil
 
 		case operatorEnd:
 			// operator over.
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }
@@ -105,7 +105,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 		}
 
 		// just an empty batch.
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -147,7 +147,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			return true, nil
 		}
 		// just an empty batch.
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -179,9 +179,9 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 					// ensure that the same value will only be inserted once.
 					rows++
 					inserted[j] = 1
-					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}
 			}
+			ctr.bat.AddRowCount(int(rows - oldHashGroup))
 
 			newHashGroup := ctr.hashTable.GroupCount()
 			insertCount := int(newHashGroup - oldHashGroup)

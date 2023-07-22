@@ -41,8 +41,9 @@ import (
 const (
 	CheckpointVersion1 uint32 = 1
 	CheckpointVersion2 uint32 = 2
+	CheckpointVersion3 uint32 = 3
 
-	CheckpointCurrentVersion = CheckpointVersion2
+	CheckpointCurrentVersion = CheckpointVersion3
 )
 
 const (
@@ -93,10 +94,12 @@ type checkpointDataItem struct {
 
 var checkpointDataSchemas_V1 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V2 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V3 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataRefer_V1 [MaxIDX]*checkpointDataItem
 var checkpointDataRefer_V2 [MaxIDX]*checkpointDataItem
+var checkpointDataRefer_V3 [MaxIDX]*checkpointDataItem
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
 
 func init() {
@@ -152,8 +155,34 @@ func init() {
 		BlkDNSchema,
 		BlkMetaSchema, // 23
 	}
+	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
+		MetaSchema,
+		catalog.SystemDBSchema,
+		TxnNodeSchema,
+		DBDelSchema, // 3
+		DBDNSchema,
+		catalog.SystemTableSchema,
+		TblDNSchema,
+		TblDelSchema, // 7
+		TblDNSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
+		SegSchema, // 11
+		SegDNSchema,
+		DelSchema,
+		SegDNSchema,
+		BlkMetaSchema, // 15
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 19
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 23
+	}
 
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V2
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V3
 	checkpointDataReferVersions = make(map[uint32][24]*checkpointDataItem)
 
 	for idx, schema := range checkpointDataSchemas_V1 {
@@ -172,6 +201,14 @@ func init() {
 		}
 	}
 	checkpointDataReferVersions[CheckpointVersion2] = checkpointDataRefer_V2
+	for idx, schema := range checkpointDataSchemas_V3 {
+		checkpointDataRefer_V3[idx] = &checkpointDataItem{
+			schema,
+			append(BaseTypes, schema.Types()...),
+			append(BaseAttr, schema.AllNames()...),
+		}
+	}
+	checkpointDataReferVersions[CheckpointVersion3] = checkpointDataRefer_V3
 }
 
 func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (*CheckpointData, error) {
@@ -396,25 +433,65 @@ func (data *CNCheckpointData) ReadFrom(
 		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_CatalogVersion)
 		bat.Vecs = append(bat.Vecs, vec)
 	}
+	if version <= CheckpointVersion2 {
+		bat := data.bats[DBDeleteIDX]
+		if bat == nil {
+			return
+		}
+		rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+		length := len(rowIDVec)
+		pkVec := vector.NewVec(types.T_uint64.ToType())
+		for i := 0; i < length; i++ {
+			err := vector.AppendFixed(pkVec, rowIDToU64(rowIDVec[i]), false, m)
+			if err != nil {
+				return err
+			}
+		}
+		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
+		bat.Vecs = append(bat.Vecs, pkVec)
 
+		bat = data.bats[TBLDeleteIDX]
+		if bat == nil {
+			return
+		}
+		rowIDVec = vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+		length = len(rowIDVec)
+		pkVec2 := vector.NewVec(types.T_uint64.ToType())
+		for i := 0; i < length; i++ {
+			err := vector.AppendFixed(pkVec2, rowIDToU64(rowIDVec[i]), false, m)
+			if err != nil {
+				return err
+			}
+		}
+		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
+		bat.Vecs = append(bat.Vecs, pkVec2)
+	}
 	return
 }
 
 func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() {
 	return func() {
-		switch version {
-		case CheckpointVersion1:
-			bat := data.bats[TBLInsertIDX]
-			if bat == nil {
-				return
-			}
-			if len(bat.Vecs) <= pkgcatalog.MO_TABLES_CATALOG_VERSION_IDX+2 {
-				return
-			}
-			vec := data.bats[TBLInsertIDX].Vecs[pkgcatalog.MO_TABLES_CATALOG_VERSION_IDX+2] // 2 for rowid and committs
-			vec.Free(m)
+		if version == CheckpointVersion1 {
+			data.closeVector(TBLInsertIDX, pkgcatalog.MO_TABLES_CATALOG_VERSION_IDX+2, m) // 2 for rowid and committs
+		}
+		if version <= CheckpointVersion2 {
+			data.closeVector(DBDeleteIDX, 2, m)
+			data.closeVector(TBLDeleteIDX, 2, m)
 		}
 	}
+}
+
+func (data *CNCheckpointData) closeVector(batIdx uint16, colIdx int, m *mpool.MPool) {
+	bat := data.bats[batIdx]
+	if bat == nil {
+		return
+	}
+	if len(bat.Vecs) <= colIdx {
+		return
+	}
+	vec := data.bats[TBLInsertIDX].Vecs[colIdx]
+	vec.Free(m)
+
 }
 
 func (data *CNCheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
@@ -679,14 +756,7 @@ func LoadCNBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames
 			maxLength = length
 		}
 	}
-	if m == nil {
-		ioResult.Zs = make([]int64, maxLength)
-		for i := range ioResult.Zs {
-			ioResult.Zs[i] = 1
-		}
-	} else {
-		ioResult.SetZs(maxLength, m)
-	}
+	ioResult.SetRowCount(maxLength)
 	return ioResult, nil
 }
 
@@ -851,7 +921,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				collector.data.bats[DBDeleteIDX],
 				entry,
 				node,
-				DelSchema,
+				DBDelSchema,
 				txnimpl.FillDBRow,
 				u64ToRowID(entry.GetID()),
 				dbNode.GetEnd())
@@ -952,16 +1022,18 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 			rowidVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID)
 			commitVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrCommitTs)
+			pkVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(pkgcatalog.SystemColAttr_UniqName)
 			for _, usercol := range tblNode.BaseNode.Schema.ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))), false)
 				commitVec.Append(tblNode.GetEnd(), false)
+				pkVec.Append([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name)), false)
 			}
 
 			catalogEntry2Batch(
 				collector.data.bats[TBLDeleteIDX],
 				entry,
 				tblNode,
-				DelSchema,
+				TblDelSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
 				tblNode.GetEnd(),

@@ -278,17 +278,17 @@ func (m *connManager) getCNServerByConnID(connID uint32) *CNServer {
 	return nil
 }
 
-// getCNServersByTenant returns a CN server list by tenant.
-func (m *connManager) getCNServersByTenant(tenant Tenant) []*CNServer {
+// GetCNServersByTenant returns a CN server list by tenant.
+func (m *connManager) GetCNServersByTenant(tenant string) ([]*CNServer, error) {
 	m.Lock()
 	defer m.Unlock()
-	cns, ok := m.tenantConns[tenant]
+	cns, ok := m.tenantConns[Tenant(tenant)]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	cnList := make([]*CNServer, 0, len(cns))
 	for cn := range cns {
 		cnList = append(cnList, cn)
 	}
-	return cnList
+	return cnList, nil
 }
