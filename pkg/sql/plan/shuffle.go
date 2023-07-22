@@ -148,7 +148,12 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	// do not shuffle by default
 	n.Stats.ShuffleColIdx = -1
-	if n.NodeType != plan.Node_JOIN || n.JoinType != plan.Node_INNER {
+	if n.NodeType != plan.Node_JOIN {
+		return
+	}
+	switch n.JoinType {
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI:
+	default:
 		return
 	}
 	// for now ,only support one join condition

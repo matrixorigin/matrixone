@@ -1696,6 +1696,44 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 				Arg: constructJoin(node, rightTyps, c.proc),
 			})
 		}
+	case plan.Node_ANTI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightAnti,
+					Idx: c.anal.curr,
+					Arg: constructRightAnti(node, rightTyps, uint64(i), uint64(len(rs)), c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Anti,
+					Idx: c.anal.curr,
+					Arg: constructAnti(node, rightTyps, c.proc),
+				})
+			}
+		}
+
+	case plan.Node_SEMI:
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightSemi,
+					Idx: c.anal.curr,
+					Arg: constructRightSemi(node, rightTyps, uint64(i), uint64(len(rs)), c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Semi,
+					Idx: c.anal.curr,
+					Arg: constructSemi(node, rightTyps, c.proc),
+				})
+			}
+		}
 
 	default:
 		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
