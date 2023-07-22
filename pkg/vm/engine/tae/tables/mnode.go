@@ -133,11 +133,16 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 	return vec.Get(row), vec.IsNull(row)
 }
 
-func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (node *memoryNode) Foreach(readSchema *catalog.Schema, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	if node.data == nil {
 		return nil
 	}
-	return node.data.Vecs[colIdx].Foreach(op, sels)
+	idx, ok := node.writeSchema.SeqnumMap[readSchema.ColDefs[colIdx].SeqNum]
+	if !ok {
+		v := containers.FillConstVector(int(node.data.Length()), readSchema.ColDefs[colIdx].Type, nil)
+		return v.Foreach(op, sels)
+	}
+	return node.data.Vecs[idx].Foreach(op, sels)
 }
 
 func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {

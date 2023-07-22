@@ -54,7 +54,7 @@ func Prepare(proc *process.Process, arg any) error {
 // use values from left relation to probe and update the array.
 // throw away values that do not exist in the hash table.
 // preserve values that exist in the hash table (the minimum of the number of times that exist in either).
-func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
 	analyzer := proc.GetAnalyze(idx)
 	analyzer.Start()
@@ -65,7 +65,7 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 		case Build:
 			if err = arg.ctr.build(proc, analyzer, isFirst); err != nil {
 				arg.Free(proc, true)
-				return false, err
+				return process.ExecNext, err
 			}
 			if arg.ctr.hashTable != nil {
 				analyzer.Alloc(arg.ctr.hashTable.Size())
@@ -77,18 +77,18 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			last, err = arg.ctr.probe(proc, analyzer, isFirst, isLast)
 			if err != nil {
 				arg.Free(proc, true)
-				return false, err
+				return process.ExecNext, err
 			}
 			if last {
 				arg.ctr.state = End
 				continue
 			}
-			return false, nil
+			return process.ExecNext, nil
 
 		case End:
 			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 	}
 }
@@ -103,7 +103,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 		if bat == nil {
 			break
 		}
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -112,7 +112,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 		// build hashTable and a counter to record how many times each key appears
 		{
 			itr := ctr.hashTable.NewIterator()
-			count := bat.Length()
+			count := bat.RowCount()
 			for i := 0; i < count; i += hashmap.UnitLimit {
 
 				n := count - i
@@ -156,7 +156,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		if bat == nil {
 			return true, nil
 		}
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -178,7 +178,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		// probe hashTable
 		{
 			itr := ctr.hashTable.NewIterator()
-			count := bat.Length()
+			count := bat.RowCount()
 			for i := 0; i < count; i += hashmap.UnitLimit {
 				n := count - i
 				if n > hashmap.UnitLimit {
@@ -209,10 +209,11 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 
 					ctr.inserted[j] = 1
 					ctr.counter[v-1]--
-					outputBat.Zs = append(outputBat.Zs, 1)
 					cnt++
 
 				}
+				outputBat.AddRowCount(cnt)
+
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
 						if err := outputBat.Vecs[colNum].UnionBatch(bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
@@ -226,6 +227,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		}
 		analyzer.Alloc(int64(outputBat.Size()))
 		analyzer.Output(outputBat, isLast)
+
 		proc.SetInputBatch(outputBat)
 		bat.Clean(proc.Mp())
 		return false, nil

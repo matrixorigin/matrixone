@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -91,6 +92,7 @@ type Engine struct {
 	mp         *mpool.MPool
 	fs         fileservice.FileService
 	ls         lockservice.LockService
+	qs         queryservice.QueryService
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
@@ -173,6 +175,7 @@ type Transaction struct {
 	statements    []int
 
 	hasS3Op              atomic.Bool
+	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
 }
@@ -256,14 +259,47 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 		txn.incrStatementCalled = true
 	}
 
-	if err := txn.mergeTxnWorkspace(); err != nil {
-		return err
-	}
-	if err := txn.dumpBatch(0); err != nil {
-		return err
-	}
 	txn.Lock()
 	defer txn.Unlock()
+	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+		return err
+	}
+	if err := txn.dumpBatchLocked(0); err != nil {
+		return err
+	}
+	txn.statements = append(txn.statements, len(txn.writes))
+	txn.statementID++
+
+	// For RC isolation, update the snapshot TS of transaction for each statement including
+	// the first one. Means that, the timestamp of the first statement is not the transaction's
+	// begin timestamp, but its own timestamp.
+	if !commit && txn.meta.IsRCIsolation() {
+		if err := txn.op.UpdateSnapshot(
+			ctx,
+			timestamp.Timestamp{}); err != nil {
+			return err
+		}
+		txn.resetSnapshot()
+	}
+	return nil
+}
+
+// Adjust
+func (txn *Transaction) Adjust() error {
+	txn.Lock()
+	defer txn.Unlock()
+	if err := txn.adjustUpdateOrderLocked(); err != nil {
+		return err
+	}
+	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// The current implementation, update's delete and insert are executed concurrently, inside workspace it
+// may be the order of insert+delete that needs to be adjusted.
+func (txn *Transaction) adjustUpdateOrderLocked() error {
 	if txn.statementID > 0 {
 		start := txn.statements[txn.statementID-1]
 		writes := make([]Entry, 0, len(txn.writes[start:]))
@@ -280,20 +316,6 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 		txn.writes = append(txn.writes[:start], writes...)
 		// restore the scope of the statement
 		txn.statements[txn.statementID-1] = len(txn.writes)
-	}
-	txn.statements = append(txn.statements, len(txn.writes))
-	txn.statementID++
-
-	// For RC isolation, update the snapshot TS of transaction for each statement including
-	// the first one. Means that, the timestamp of the first statement is not the transaction's
-	// begin timestamp, but its own timestamp.
-	if !commit && txn.meta.IsRCIsolation() {
-		if err := txn.op.UpdateSnapshot(
-			ctx,
-			timestamp.Timestamp{}); err != nil {
-			return err
-		}
-		txn.resetSnapshot()
 	}
 	return nil
 }

@@ -43,6 +43,6 @@ func ProtoBatchToBatch(bat *api.Batch) (*Batch, error) {
 		}
 		rbat.SetVector(int32(i), vec)
 	}
-	rbat.InitZsOne(rbat.GetVector(0).Length())
+	rbat.SetRowCount(rbat.GetVector(0).Length())
 	return rbat, nil
 }
