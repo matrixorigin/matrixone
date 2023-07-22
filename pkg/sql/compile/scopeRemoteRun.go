@@ -188,30 +188,17 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 }
 
 // receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, lastInstruction vm.Instruction) error {
+func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var err error
 	var dataBuffer []byte
 	var sequence uint64
 
-	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx)
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 		if err != nil {
 			return err
 		}
-	}
-
-	var isConnector bool
-	var lastArg vm.InstructionArgument
-	switch arg := lastInstruction.Arg.(type) {
-	case *connector.Argument:
-		isConnector = true
-		lastArg = arg
-	case *dispatch.Argument:
-		lastArg = arg
-	default:
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
 	for {
@@ -259,14 +246,8 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, lastI
 		if err != nil {
 			return err
 		}
-		lastAnalyze.Network(bat)
-		c.proc.SetInputBatch(bat)
-
-		if isConnector {
-			connector.Call(-1, c.proc, lastArg, false, false)
-		} else {
-			dispatch.Call(-1, c.proc, lastArg, false, false)
-		}
+		nextAnalyze.Network(bat)
+		sendToConnectOperator(nextOperator, bat)
 
 		dataBuffer = nil
 	}
@@ -279,28 +260,14 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, lastI
 // 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
 	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
-	lastIdx := len(s.Instructions) - 1
-	lastInstruction := s.Instructions[lastIdx]
-	s.Instructions = s.Instructions[:lastIdx]
-
-	// The current logic is a bit hacky, the last operator doesn't go in the pipeline frame
-	// i.e. we need to call the corresponding Perpare, Call and Free manually.
-	// Prepare and Free are called in this func, and Call in receiveMessageFromCnServer
-	lastArg := lastInstruction.Arg
-	switch arg := lastArg.(type) {
-	case *connector.Argument:
-		connector.Prepare(c.proc, arg)
-	case *dispatch.Argument:
-		dispatch.Prepare(c.proc, arg)
-	default:
-		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
-	}
-
+	n := len(s.Instructions) - 1
+	con := s.Instructions[n]
+	s.Instructions = s.Instructions[:n]
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
 		return errEncode
 	}
-	s.Instructions = append(s.Instructions, lastInstruction)
+	s.Instructions = append(s.Instructions, con)
 
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc)
@@ -319,11 +286,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return err
 	}
 
-	err = receiveMessageFromCnServer(c, sender, lastInstruction)
-
-	// tell the connector or dispatch is over
-	lastArg.Free(s.Proc, err != nil)
-
+	nextInstruction := s.Instructions[len(s.Instructions)-1]
+	nextAnalyze := c.proc.GetAnalyze(nextInstruction.Idx)
+	nextArg := nextInstruction.Arg.(*connector.Argument)
+	err = receiveMessageFromCnServer(c, sender, nextAnalyze, nextArg)
 	sender.close()
 	return err
 }
@@ -1614,6 +1580,13 @@ func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Bat
 		}
 	}
 	return bat, err
+}
+
+func sendToConnectOperator(arg *connector.Argument, bat *batch.Batch) {
+	select {
+	case <-arg.Reg.Ctx.Done():
+	case arg.Reg.Ch <- bat:
+	}
 }
 
 func (ctx *scopeContext) getRegister(id, idx int32) *process.WaitRegister {
