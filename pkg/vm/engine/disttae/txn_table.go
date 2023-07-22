@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -618,6 +619,11 @@ func (tbl *txnTable) rangesOnePart(
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
+	if tbl.db.txn.meta.IsRCIsolation() {
+		if err := tbl.updateDeleteInfo(committedblocks); err != nil {
+			return err
+		}
+	}
 
 	//blks contains all visible blocks to this txn, namely
 	//includes committed blocks and uncommitted blocks by CN writing S3.
@@ -1647,4 +1653,82 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 		return false, err
 	}
 	return part.PrimaryKeysMayBeModified(from, to, keysVector, packer), nil
+}
+
+func (tbl *txnTable) updateDeleteInfo(blks []catalog.BlockInfo) error {
+	blkidMap := make(map[types.Blockid]struct{})
+	for _, blk := range blks {
+		blkidMap[blk.BlockID] = struct{}{}
+	}
+	for _, entry := range tbl.db.txn.writes {
+		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
+			continue
+		}
+		if entry.typ == DELETE && entry.fileName == "" {
+			pkVec := entry.bat.GetVector(1)
+			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+			for i, rowid := range rowids {
+				blkid, _ := rowid.Decode()
+				if _, ok := blkidMap[blkid]; !ok {
+					newId, err := tbl.readNewRowid(pkVec, i, blks)
+					if err != nil {
+						return err
+					}
+					rowids[i] = newId
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
+	blks []catalog.BlockInfo) (types.Rowid, error) {
+	var typ *plan.Type
+	var rowid types.Rowid
+
+	columns := []uint16{objectio.SEQNUM_ROWID}
+	colTypes := []types.Type{objectio.RowidType}
+	tableDef := tbl.getTableDef()
+	for _, col := range tableDef.Cols {
+		if col.Name == tableDef.Pkey.PkeyColName {
+			typ = col.Typ
+			columns = append(columns, uint16(col.Seqnum))
+			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
+		}
+	}
+	constExpr := getConstExpr(int32(vec.GetType().Oid),
+		rule.GetConstantValue(vec, true, uint64(row)))
+	filter, err := tbl.newPkFilter(newColumnExpr(1, typ, tableDef.Pkey.PkeyColName), constExpr)
+	if err != nil {
+		return rowid, err
+	}
+	for _, blk := range blks {
+		// rowid + pk
+		bat, err := blockio.BlockRead(
+			tbl.proc.Ctx, &blk, nil, columns, colTypes, tbl.db.txn.meta.SnapshotTS,
+			nil, nil, nil,
+			tbl.db.txn.engine.fs, tbl.proc.Mp(), tbl.proc,
+		)
+		vec, err := colexec.EvalExpressionOnce(tbl.db.txn.proc, filter, []*batch.Batch{bat})
+		if err != nil {
+			return rowid, err
+		}
+		bs := vector.MustFixedCol[bool](vec)
+		for i, b := range bs {
+			if b {
+				rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+				vec.Free(tbl.proc.Mp())
+				bat.Clean(tbl.proc.Mp())
+				return rowids[i], nil
+			}
+		}
+		vec.Free(tbl.proc.Mp())
+		bat.Clean(tbl.proc.Mp())
+	}
+	return rowid, nil
+}
+
+func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
+	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }

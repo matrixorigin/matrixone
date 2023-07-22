@@ -721,10 +721,11 @@ func newStringConstVal(v string) *plan.Expr {
 		},
 	}
 }
+*/
 
-func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
+func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
-		Typ: types.NewProtoType(oid),
+		Typ: typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				Name:   name,
@@ -733,7 +734,6 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 		},
 	}
 }
-*/
 
 func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
