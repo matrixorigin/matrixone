@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -41,6 +42,7 @@ func New(
 	txnOperator client.TxnOperator,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
+	queryService queryservice.QueryService,
 	aicm *defines.AutoIncrCacheManager) *Process {
 	return &Process{
 		mp:           m,
@@ -57,6 +59,7 @@ func New(
 			vecs: make(map[uint8][]*vector.Vector),
 		},
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
+		QueryService:   queryService,
 	}
 }
 
@@ -83,6 +86,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
 	proc.IncrService = p.IncrService
+	proc.QueryService = p.QueryService
 	proc.UnixTime = p.UnixTime
 	proc.LastInsertID = p.LastInsertID
 	proc.LockService = p.LockService

@@ -664,6 +664,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			State:              state,
 			WorkState:          info.WorkState,
 			Labels:             info.Labels,
+			QueryAddress:       info.QueryAddress,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
