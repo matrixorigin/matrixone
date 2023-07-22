@@ -3055,7 +3055,7 @@ show_collation_stmt:
 show_stages_stmt:
     SHOW STAGES like_opt
     {
-        $$ = &tree.ShowStagse{
+        $$ = &tree.ShowStages{
             Like: $3,
         }
     }
