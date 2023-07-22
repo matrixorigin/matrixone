@@ -1781,7 +1781,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 						return -1
 					}
 					return 0
-				}); ok {
+				}); !ok {
 					rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
 					vec.Free(tbl.proc.Mp())
 					bat.Clean(tbl.proc.Mp())
