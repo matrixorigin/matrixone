@@ -1686,8 +1686,10 @@ func (tbl *txnTable) updateDeleteInfo(blks []catalog.BlockInfo) error {
 
 func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	blks []catalog.BlockInfo) (types.Rowid, bool, error) {
+	var auxIdCnt int32
 	var typ *plan.Type
 	var rowid types.Rowid
+	var objMeta objectio.ObjectMeta
 
 	columns := []uint16{objectio.SEQNUM_ROWID}
 	colTypes := []types.Type{objectio.RowidType}
@@ -1705,9 +1707,36 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	if err != nil {
 		return rowid, false, err
 	}
+	columnMap := make(map[int]int)
+	auxIdCnt += plan2.AssignAuxIdForExpr(filter, auxIdCnt)
+	zms := make([]objectio.ZoneMap, auxIdCnt)
+	vecs := make([]*vector.Vector, auxIdCnt)
+	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, &columnMap)
+	objFilterMap := make(map[objectio.ObjectNameShort]bool)
 	for _, blk := range blks {
 		// only new blocks are detected
 		if blk.CommitTs.ToTimestamp().Less(tbl.db.txn.lastTS) {
+			continue
+		}
+		location := blk.MetaLocation()
+		if hit, ok := objFilterMap[*location.ShortName()]; !ok {
+			if objMeta, err = objectio.FastLoadObjectMeta(tbl.proc.Ctx, &location,
+				tbl.db.txn.engine.fs); err != nil {
+				return rowid, false, err
+			}
+			hit = colexec.EvaluateFilterByZoneMap(tbl.proc.Ctx, tbl.proc, filter,
+				objMeta, columnMap, zms, vecs)
+			objFilterMap[*location.ShortName()] = hit
+			if !hit {
+				continue
+			}
+		} else if !hit {
+			continue
+		}
+		// eval filter expr on the block
+		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+		if !colexec.EvaluateFilterByZoneMap(tbl.proc.Ctx, tbl.proc, filter,
+			blkMeta, columnMap, zms, vecs) {
 			continue
 		}
 		// rowid + pk
