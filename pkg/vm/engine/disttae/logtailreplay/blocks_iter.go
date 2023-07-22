@@ -115,17 +115,29 @@ func (b *dirtyBlocksIter) Close() error {
 func (p *PartitionState) GetBlksBetween(
 	startTS types.TS,
 	endTS types.TS) (
-	deletedBlks []BlockEntry,
-	createdBlks []BlockEntry) {
+	deletedBlks []types.Blockid,
+	createdBlks []types.Blockid) {
 	iter := p.blockIndexByTS.Iter()
 	defer iter.Release()
 
+	var minBlockid types.Blockid
 	for ok := iter.Seek(
 		BlockIndexByTSEntry{
-			Time: startTS,
+			Time:    startTS,
+			BlockID: minBlockid,
 		}); ok; ok = iter.Next() {
-		//TODO::
-
+		entry := iter.Item()
+		if entry.Time.Equal(startTS) {
+			continue
+		}
+		if entry.Time.Greater(endTS) {
+			break
+		}
+		if entry.IsDelete {
+			deletedBlks = append(deletedBlks, entry.BlockID)
+		} else {
+			createdBlks = append(createdBlks, entry.BlockID)
+		}
 	}
 	return deletedBlks, createdBlks
 }

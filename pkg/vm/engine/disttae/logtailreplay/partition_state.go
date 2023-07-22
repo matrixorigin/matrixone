@@ -52,7 +52,7 @@ type PartitionState struct {
 	// non-appendable blocks quickly.
 	dirtyBlocks *btree.BTreeG[BlockEntry]
 	//index for blocks by timestamp.
-	//TODO:: reuse blocks btree.
+	//TODO:: 1. to reuse blocks btree. 2.how to gc?
 	blockIndexByTS *btree.BTreeG[BlockIndexByTSEntry]
 	checkpoints    []string
 	// noData indicates whether to retain data batch
@@ -147,8 +147,9 @@ func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
 
 type BlockIndexByTSEntry struct {
 	//create time or delete time of block
-	Time  types.TS
-	Block BlockEntry
+	Time    types.TS
+	BlockID types.Blockid
+
 	//true for delete block, false for create block.
 	IsDelete bool
 }
@@ -158,9 +159,26 @@ func (b BlockIndexByTSEntry) Less(than BlockIndexByTSEntry) bool {
 	if b.Time.Less(than.Time) {
 		return true
 	}
-	//asc
-	cmp := b.Block.BlockID.Compare(than.Block.BlockID)
-	return cmp < 0
+	if than.Time.Less(b.Time) {
+		return false
+	}
+
+	//if b.Time equals than.Time , then compare block id.
+	cmp := b.BlockID.Compare(than.BlockID)
+	if cmp < 0 {
+		return true
+	}
+	if cmp > 0 {
+		return false
+	}
+
+	//if b.IsDelete && !than.IsDelete {
+	//	return true
+	//}
+	//if !b.IsDelete && than.IsDelete {
+	//	return false
+	//}
+	return false
 }
 
 func NewPartitionState(noData bool) *PartitionState {
@@ -450,19 +468,11 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			p.blocks.Set(blockEntry)
 
 			{
-				pivot := BlockIndexByTSEntry{
-					Block: BlockEntry{
-						BlockInfo: catalog.BlockInfo{
-							BlockID: blockID,
-						},
-					},
-					Time: blockEntry.CreateTime,
+				e := BlockIndexByTSEntry{
+					Time:     blockEntry.CreateTime,
+					BlockID:  blockID,
+					IsDelete: false,
 				}
-				e, ok := p.blockIndexByTS.Get(pivot)
-				if !ok {
-					e = pivot
-				}
-				e.Block = blockEntry
 				p.blockIndexByTS.Set(e)
 			}
 
@@ -561,23 +571,14 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 			p.blocks.Set(entry)
 
 			{
-				pivot := BlockIndexByTSEntry{
-					Block: BlockEntry{
-						BlockInfo: catalog.BlockInfo{
-							BlockID: blockID,
-						},
-					},
-					Time: entry.CreateTime,
+				e := BlockIndexByTSEntry{
+					Time:     entry.DeleteTime,
+					BlockID:  blockID,
+					IsDelete: true,
 				}
-				e, ok := p.blockIndexByTS.Get(pivot)
-				//FIXME:: non-appendable block' delete maybe arrive before its insert?
-				if !ok {
-					panic(fmt.Sprintf("invalid block id. %x", rowID))
-				}
-				e.IsDelete = true
-				e.Time = entry.DeleteTime
 				p.blockIndexByTS.Set(e)
 			}
+
 		})
 	}
 
