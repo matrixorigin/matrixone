@@ -1219,6 +1219,7 @@ func (ses *Session) DatabaseNameIsEmpty() bool {
 	return len(ses.GetDatabaseName()) == 0
 }
 
+// GetUserName returns the user_ame and the account_name
 func (ses *Session) GetUserName() string {
 	return ses.GetMysqlProtocol().GetUserName()
 }
