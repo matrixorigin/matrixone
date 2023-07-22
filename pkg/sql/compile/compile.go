@@ -1717,6 +1717,7 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 		}
 
 	case plan.Node_SEMI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
 		if node.BuildOnLeft {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
