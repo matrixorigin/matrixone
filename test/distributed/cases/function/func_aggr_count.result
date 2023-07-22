@@ -384,11 +384,14 @@ INSERT INTO t1 SELECT a, b+8192    FROM t1;
 INSERT INTO t1 SELECT a, b+16384   FROM t1;
 INSERT INTO t1 SELECT a, b+32768   FROM t1;
 SELECT a,COUNT(DISTINCT b) AS cnt FROM t1 GROUP BY a HAVING cnt > 50;
-SQL syntax error: column "cnt" must appear in the GROUP BY clause or be used in an aggregate function
+a    cnt
+1    65536
 SELECT a, SUM( b) AS sumation FROM t1 GROUP BY a HAVING sumation > 50;
-SQL syntax error: column "sumation" must appear in the GROUP BY clause or be used in an aggregate function
+a    sumation
+1    2147516416
 SELECT a, AVG( b) AS average FROM t1 GROUP BY a HAVING average > 50;
-SQL syntax error: column "average" must appear in the GROUP BY clause or be used in an aggregate function
+a    average
+1    32768.5
 SELECT a,COUNT(DISTINCT b) FROM t1 GROUP BY a HAVING COUNT(DISTINCT b) > 50;
 a	COUNT(DISTINCT b)
 1	65536

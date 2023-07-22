@@ -74,11 +74,15 @@ drop table if exists t1;
 create table t1 (a int);
 insert into t1 values(1),(2),(3),(4);
 select case a when 1 then 2 when 2 then 3 else 0 end as fcase, count(*) from t1 group by fcase;
-invalid input: column fcase does not exist
-select case a when 1 then 2 when 2 then 3 else 0 end as fcase, count(*) from t1 group by fcase;
-invalid input: column fcase does not exist
+fcase    count(*)
+2    1
+3    1
+0    2
 select case a when 1 then "one" when 2 then "two" else "nothing" end as fcase, count(*) from t1 group by fcase;
-invalid input: column fcase does not exist
+fcase    count(*)
+one    1
+two    1
+nothing    2
 drop table if exists t1;
 create table t1 (`row` int not null, col int not null, val varchar(255) not null);
 insert into t1 values (1,1,'orange'),(1,2,'large'),(2,1,'yellow'),(2,2,'medium'),(3,1,'green'),(3,2,'small');
