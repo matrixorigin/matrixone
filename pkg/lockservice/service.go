@@ -30,6 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
+var (
+	taskCount = 4
+)
+
 type service struct {
 	cfg                  Config
 	tables               sync.Map // tableid -> locktable
@@ -68,7 +72,9 @@ func NewLockService(cfg Config) LockService {
 	s.clock = runtime.ProcessLevelRuntime().Clock()
 	s.initRemote()
 	s.events.start()
-	_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
+	for i := 0; i < taskCount; i++ {
+		_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
+	}
 	return s
 }
 
