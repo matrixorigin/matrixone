@@ -2491,7 +2491,8 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 	idx := 0
 	cnt := 0
 	for _, n := range c.cnList {
-		ss := make([]*Scope, n.Mcpu)
+		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+		ss := make([]*Scope, dop)
 		for i := range ss {
 			ss[i] = new(Scope)
 			ss[i].Magic = Remote
@@ -2504,7 +2505,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 			idx = cnt
 		}
 		joinScopes = append(joinScopes, ss...)
-		cnt += n.Mcpu
+		cnt += dop
 	}
 
 	currentFirstFlag := c.anal.isFirst
