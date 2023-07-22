@@ -16,7 +16,9 @@ package fileservice
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -88,4 +90,46 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Equal(t, int64(3), counter.FileService.Cache.Memory.Available.Load())
 	assert.Equal(t, int64(1), counter.FileService.Cache.Memory.Used.Load())
 
+}
+
+// TestHighConcurrency this test is to mainly test concurrency issue in objectCache
+// and dataOverlap-checker.
+func TestHighConcurrency(t *testing.T) {
+	m := NewMemCache(WithLRU(2))
+	ctx := context.Background()
+
+	n := 10
+
+	var vecArr []*IOVector
+	for i := 0; i < n; i++ {
+		vecArr = append(vecArr,
+			&IOVector{
+				FilePath: fmt.Sprintf("key%d", i),
+				Entries: []IOEntry{
+					{
+						Size: 4,
+						Data: []byte(fmt.Sprintf("val%d", i)),
+					},
+				},
+			},
+		)
+	}
+
+	// n go-routines are spun.
+	wg := sync.WaitGroup{}
+	wg.Add(n)
+
+	for i := 0; i < n; i++ {
+		// each go-routine tries to insert vecArr[i] for 10 times
+		// these updates should invoke postSet and postEvict inside objectCache.
+		// Since postSet and postEvict are guarded by objectCache mutex, this test
+		// should not throw concurrency related panics.
+		go func(idx int) {
+			for j := 0; j < 10; j++ {
+				_ = m.Update(ctx, vecArr[idx], false)
+			}
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
 }

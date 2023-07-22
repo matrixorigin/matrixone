@@ -49,16 +49,24 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 		o.overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
 		o.enableOverlapChecker = true
 
-		postEvictFn := func(key any, value []byte, _ int64) {
+		postSetFn := func(keySet any, valSet []byte, szSet int64, isNewEntry bool) {
+			if o.enableOverlapChecker && isNewEntry {
+				_key := keySet.(IOVectorCacheKey)
+				if err := o.overlapChecker.Insert(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
+					panic(err)
+				}
+			}
+		}
+		postEvictFn := func(keyEvicted any, valEvicted []byte, _ int64) {
 			if o.enableOverlapChecker {
-				_key := key.(IOVectorCacheKey)
+				_key := keyEvicted.(IOVectorCacheKey)
 				if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
 					panic(err)
 				}
 			}
 		}
 
-		o.objCache = lruobjcache.New(capacity, postEvictFn)
+		o.objCache = lruobjcache.New(capacity, postSetFn, postEvictFn)
 	}
 }
 
@@ -165,15 +173,7 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		isNewEntry := m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
-
-		// Update overlap checker when new key-interval is inserted into the cache.
-		// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
-		if m.enableOverlapChecker && isNewEntry {
-			if err := m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
-				panic(err)
-			}
-		}
+		m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
 
 	}
 	return nil
