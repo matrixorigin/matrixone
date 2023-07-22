@@ -1,0 +1,79 @@
+/*
+ * Copyright 2021 - 2023 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+package status;
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/status";
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
+
+enum SessionField {
+	NODE_ID = 0;
+	CONN_ID = 1;
+	SESSION_ID = 2;
+	ACCOUNT = 3;
+	USER = 4;
+	HOST = 5;
+	DB = 6;
+	SESSION_START = 7;
+	COMMAND = 8;
+	INFO = 9;
+	TXN_ID = 10;
+	STATEMENT_ID = 11;
+	STATEMENT_TYPE = 12;
+	QUERY_TYPE = 13;
+	SQL_SOURCE_TYPE = 14;
+	QUERY_START = 15;
+}
+
+// Session is the information of a session.
+message Session {
+	// NodeID is the ID of CN node/service.
+	string NodeID = 1;
+	// ConnID is the connection ID of backend server.
+	uint32 ConnID = 2;
+	// SessionID is the session ID.
+	string SessionID = 3;
+	// Account is the tenant name.
+	string Account = 4;
+	// User is the username.
+	string User = 5;
+	// Host is the host name/address and port.
+	string Host = 6;
+	// DB is the database name.
+	string DB = 7;
+	// SessionStart is the start time of this session.
+	google.protobuf.Timestamp SessionStart = 8
+	  [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+	// Command is the command type.
+	string Command = 9;
+	// Info is the current SQL statement.
+	string Info = 10;
+	// TxnID is the current transaction ID of the session.
+	string TxnID = 11;
+	// StatementID is the last statement ID of the session.
+	string StatementID = 12;
+	// StatementType is the type of the statement: Insert, Update, Delete, Execute, Select.
+	string StatementType = 13;
+	// QueryType is the type of the query: DDL, DML, DQL ...
+	string QueryType = 14;
+	// SQLSourceType is the SQL source type: internal_sql, cloud_nonuser_sql, external_sql, cloud_user_sql.
+	string SQLSourceType = 15;
+	// QueryStart is the start time of query.
+	google.protobuf.Timestamp QueryStart = 16
+		[ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+}

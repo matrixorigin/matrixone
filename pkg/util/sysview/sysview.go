@@ -232,16 +232,7 @@ var (
 			"SOURCE_FILE varchar(20) DEFAULT NULL," +
 			"SOURCE_LINE int DEFAULT NULL" +
 			");",
-		"CREATE TABLE IF NOT EXISTS `PROCESSLIST` (" +
-			"ID bigint unsigned NOT NULL DEFAULT '0'," +
-			"USER varchar(32) NOT NULL DEFAULT ''," +
-			"HOST varchar(261) NOT NULL DEFAULT ''," +
-			"DB varchar(64) DEFAULT NULL," +
-			"COMMAND varchar(16) NOT NULL DEFAULT ''," +
-			"TIME int NOT NULL DEFAULT '0'," +
-			"STATE varchar(64) DEFAULT NULL," +
-			"INFO longtext" +
-			");",
+		"CREATE VIEW IF NOT EXISTS `PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
 		"CREATE TABLE IF NOT EXISTS USER_PRIVILEGES (" +
 			"GRANTEE varchar(292) NOT NULL DEFAULT ''," +
 			"TABLE_CATALOG varchar(512) NOT NULL DEFAULT ''," +

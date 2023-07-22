@@ -15,10 +15,10 @@ new
 1413006<---->idlfmv
 SELECT any_value(number), any_value(alpha), CONCAT_WS('<->',any_value(number),any_value(alpha)) AS new
 FROM t1 GROUP BY new LIMIT 1;
-invalid input: column new does not exist
+invalid input: GROUP BY clause cannot contain aggregate functions
 SELECT any_value(number), any_value(alpha), CONCAT_WS('-',any_value(number),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha)) AS new
 FROM t1 GROUP BY new LIMIT 1;
-invalid input: column new does not exist
+invalid input: GROUP BY clause cannot contain aggregate functions
 SELECT any_value(number), any_value(alpha), CONCAT_WS('<------------------>',any_value(number),any_value(alpha))
 FROM t1 GROUP BY CONCAT_WS('<------------------>',any_value(number),any_value(alpha)) LIMIT 1;
 invalid input: GROUP BY clause cannot contain aggregate functions
