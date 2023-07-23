@@ -152,6 +152,8 @@ type BlockIndexByTSEntry struct {
 
 	//true for delete block, false for create block.
 	IsDelete bool
+	//false for non-appendable block, true for appendable block.
+	EntryState bool
 }
 
 func (b BlockIndexByTSEntry) Less(than BlockIndexByTSEntry) bool {
@@ -469,9 +471,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			{
 				e := BlockIndexByTSEntry{
-					Time:     blockEntry.CreateTime,
-					BlockID:  blockID,
-					IsDelete: false,
+					Time:       blockEntry.CreateTime,
+					BlockID:    blockID,
+					IsDelete:   false,
+					EntryState: blockEntry.EntryState,
 				}
 				p.blockIndexByTS.Set(e)
 			}
@@ -572,9 +575,10 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 
 			{
 				e := BlockIndexByTSEntry{
-					Time:     entry.DeleteTime,
-					BlockID:  blockID,
-					IsDelete: true,
+					Time:       entry.DeleteTime,
+					BlockID:    blockID,
+					IsDelete:   true,
+					EntryState: entry.EntryState,
 				}
 				p.blockIndexByTS.Set(e)
 			}

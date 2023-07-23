@@ -127,6 +127,7 @@ func (p *PartitionState) GetBlksBetween(
 			BlockID: minBlockid,
 		}); ok; ok = iter.Next() {
 		entry := iter.Item()
+
 		if entry.Time.Equal(startTS) {
 			continue
 		}
@@ -135,7 +136,8 @@ func (p *PartitionState) GetBlksBetween(
 		}
 		if entry.IsDelete {
 			deletedBlks = append(deletedBlks, entry.BlockID)
-		} else {
+		}
+		if !entry.IsDelete && !entry.EntryState {
 			createdBlks = append(createdBlks, entry.BlockID)
 		}
 	}
