@@ -34,7 +34,7 @@ var (
 
 type taskServiceHolder struct {
 	rt                         runtime.Runtime
-	addressFactory             func(context.Context) (string, error)
+	addressFactory             func(context.Context, bool) (string, error)
 	taskStorageFactorySelector func(string, string, string) TaskStorageFactory
 	mu                         struct {
 		sync.RWMutex
@@ -47,7 +47,7 @@ type taskServiceHolder struct {
 // NewTaskServiceHolder create a task service hold, it will create task storage and task service from the hakeeper's schedule command.
 func NewTaskServiceHolder(
 	rt runtime.Runtime,
-	addressFactory func(context.Context) (string, error)) TaskServiceHolder {
+	addressFactory func(context.Context, bool) (string, error)) TaskServiceHolder {
 	return NewTaskServiceHolderWithTaskStorageFactorySelector(rt, addressFactory, func(username, password, database string) TaskStorageFactory {
 		return NewMySQLBasedTaskStorageFactory(username, password, database)
 	})
@@ -57,7 +57,7 @@ func NewTaskServiceHolder(
 // task storage facroty selector
 func NewTaskServiceHolderWithTaskStorageFactorySelector(
 	rt runtime.Runtime,
-	addressFactory func(context.Context) (string, error),
+	addressFactory func(context.Context, bool) (string, error),
 	selector func(string, string, string) TaskStorageFactory) TaskServiceHolder {
 	return &taskServiceHolder{
 		rt:                         rt,
@@ -121,7 +121,7 @@ type refreshableTaskStorage struct {
 	rt             runtime.Runtime
 	refreshC       chan string
 	stopper        *stopper.Stopper
-	addressFactory func(context.Context) (string, error)
+	addressFactory func(context.Context, bool) (string, error)
 	storeFactory   TaskStorageFactory
 	mu             struct {
 		sync.RWMutex
@@ -133,7 +133,7 @@ type refreshableTaskStorage struct {
 
 func newRefreshableTaskStorage(
 	rt runtime.Runtime,
-	addressFactory func(context.Context) (string, error),
+	addressFactory func(context.Context, bool) (string, error),
 	storeFactory TaskStorageFactory) TaskStorage {
 	s := &refreshableTaskStorage{
 		rt:             rt,
@@ -338,7 +338,7 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 	if lastAddress != "" && lastAddress != s.mu.lastAddress {
 		return
 	}
-	connectAddress, err := s.addressFactory(ctx)
+	connectAddress, err := s.addressFactory(ctx, true)
 	if err != nil {
 		s.rt.Logger().Error("failed to refresh task storage",
 			zap.Error(err))
