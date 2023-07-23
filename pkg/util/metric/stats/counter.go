@@ -47,3 +47,9 @@ func (c *Counter) SwapW(new int64) int64 {
 func (c *Counter) LoadW() int64 {
 	return c.window.Load()
 }
+
+// Reset reset the global and window counter to 0
+func (c *Counter) Reset() {
+	c.global.Store(0)
+	c.window.Store(0)
+}

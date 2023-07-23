@@ -681,11 +681,7 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 		batchData.Vecs[i] = vec
 	}
 
-	batchData.Zs = make([]int64, batchSize)
-	for i := 0; i < batchSize; i++ {
-		batchData.Zs[i] = 2
-	}
-
+	batchData.SetRowCount(batchSize)
 	return batchData
 }
 
@@ -1241,10 +1237,12 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 					{
 						ServiceID:  "s1",
 						SQLAddress: "addr1",
+						WorkState:  metadata.WorkState_Working,
 					},
 					{
 						ServiceID:  "s2",
 						SQLAddress: "addr2",
+						WorkState:  metadata.WorkState_Working,
 					},
 				},
 				nil,
@@ -1275,6 +1273,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 						Labels: map[string]metadata.LabelList{
 							"account": {Labels: []string{"t1"}},
 						},
+						WorkState: metadata.WorkState_Working,
 					},
 					{
 						ServiceID:  "s2",
@@ -1282,10 +1281,12 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 						Labels: map[string]metadata.LabelList{
 							"account": {Labels: []string{"t2"}},
 						},
+						WorkState: metadata.WorkState_Working,
 					},
 					{
 						ServiceID:  "s3",
 						SQLAddress: "addr3",
+						WorkState:  metadata.WorkState_Working,
 					},
 				},
 				nil,

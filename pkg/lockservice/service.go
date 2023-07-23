@@ -31,15 +31,16 @@ import (
 )
 
 type service struct {
-	cfg              Config
-	tables           sync.Map // tableid -> locktable
-	activeTxnHolder  activeTxnHolder
-	fsp              *fixedSlicePool
-	deadlockDetector *detector
-	events           *waiterEvents
-	clock            clock.Clock
-	stopper          *stopper.Stopper
-	stopOnce         sync.Once
+	cfg                  Config
+	tables               sync.Map // table id -> locktable
+	activeTxnHolder      activeTxnHolder
+	fsp                  *fixedSlicePool
+	deadlockDetector     *detector
+	events               *waiterEvents
+	clock                clock.Clock
+	stopper              *stopper.Stopper
+	stopOnce             sync.Once
+	fetchWhoWaitingListC chan who
 
 	remote struct {
 		client Client
@@ -57,6 +58,7 @@ func NewLockService(cfg Config) LockService {
 		events: newWaiterEvents(eventsWorkers),
 		stopper: stopper.NewStopper("lock-service",
 			stopper.WithLogger(getLogger().RawLogger())),
+		fetchWhoWaitingListC: make(chan who, 10240),
 	}
 	s.activeTxnHolder = newMapBasedTxnHandler(s.cfg.ServiceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
@@ -66,6 +68,9 @@ func NewLockService(cfg Config) LockService {
 	s.clock = runtime.ProcessLevelRuntime().Clock()
 	s.initRemote()
 	s.events.start()
+	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
+		_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
+	}
 	return s
 }
 
@@ -168,6 +173,7 @@ func (s *service) Close() error {
 			return
 		}
 		s.events.close()
+		close(s.fetchWhoWaitingListC)
 	})
 	return err
 }

@@ -166,3 +166,17 @@ func (node *StageUrl) Format(ctx *FmtCtx) {
 		ctx.WriteString(fmt.Sprintf("'%s'", node.Url))
 	}
 }
+
+type ShowStages struct {
+	showImpl
+	Like *ComparisonExpr
+}
+
+func (node *ShowStages) Format(ctx *FmtCtx) {
+	ctx.WriteString("show stages ")
+	if node.Like != nil {
+		node.Like.Format(ctx)
+	}
+}
+func (node *ShowStages) GetStatementType() string { return "Show Stages" }
+func (node *ShowStages) GetQueryType() string     { return QueryTypeOth }

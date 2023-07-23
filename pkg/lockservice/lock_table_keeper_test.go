@@ -38,6 +38,7 @@ func TestKeeper(t *testing.T) {
 				pb.Method_KeepLockTableBind,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -45,12 +46,13 @@ func TestKeeper(t *testing.T) {
 					if n1 == 10 {
 						close(c1)
 					}
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 			s.RegisterMethodHandler(
 				pb.Method_KeepRemoteLock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -58,7 +60,7 @@ func TestKeeper(t *testing.T) {
 					if n2 == 10 {
 						close(c2)
 					}
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 			m := &sync.Map{}
 			m.Store(0,
@@ -93,21 +95,23 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 				pb.Method_KeepLockTableBind,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.KeepLockTableBind.OK = false
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
 			s.RegisterMethodHandler(
 				pb.Method_KeepRemoteLock,
 				func(
 					ctx context.Context,
+					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, resp, nil, cs)
+					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
 			m := &sync.Map{}

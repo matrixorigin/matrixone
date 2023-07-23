@@ -756,14 +756,7 @@ func LoadCNBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames
 			maxLength = length
 		}
 	}
-	if m == nil {
-		ioResult.Zs = make([]int64, maxLength)
-		for i := range ioResult.Zs {
-			ioResult.Zs[i] = 1
-		}
-	} else {
-		ioResult.SetZs(maxLength, m)
-	}
+	ioResult.SetRowCount(maxLength)
 	return ioResult, nil
 }
 

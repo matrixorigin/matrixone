@@ -206,3 +206,4 @@ select * from indup_07;
 set @a_var = 23;
 execute stmt1 using @a_var;
 select * from indup_07;
+deallocate prepare stmt1;

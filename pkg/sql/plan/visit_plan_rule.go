@@ -221,7 +221,7 @@ type ResetVarRefRule struct {
 
 func NewResetVarRefRule(compCtx CompilerContext, proc *process.Process) *ResetVarRefRule {
 	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+	bat.SetRowCount(1)
 	return &ResetVarRefRule{
 		compCtx: compCtx,
 		proc:    proc,
@@ -407,7 +407,7 @@ type RecomputeRealTimeRelatedFuncRule struct {
 
 func NewRecomputeRealTimeRelatedFuncRule(proc *process.Process) *RecomputeRealTimeRelatedFuncRule {
 	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+	bat.SetRowCount(1)
 	return &RecomputeRealTimeRelatedFuncRule{bat, proc}
 }
 

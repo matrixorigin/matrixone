@@ -153,3 +153,5 @@ prepare stmt2 from 'insert into blob_05 values(4, load_file("$resources/blob_fil
 execute stmt2 ;
 prepare stmt2 from 'select length(b) from blob_05';
 execute stmt2 ;
+deallocate prepare stmt1;
+deallocate prepare stmt2;
