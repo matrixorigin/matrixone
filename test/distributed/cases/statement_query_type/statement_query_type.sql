@@ -160,7 +160,6 @@ select sleep(1);
 
 -- RESULT CHECK: part 1
 select sleep(15);
--- @bvt:issue#10793
 select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 96;
 -- @bvt:issue
 
