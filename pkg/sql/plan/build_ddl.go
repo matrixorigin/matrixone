@@ -1581,7 +1581,7 @@ func getTableComment(tableDef *plan.TableDef) string {
 	return comment
 }
 
-func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
+func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
 	alterTable := &plan.AlterTable{
 		Actions:       make([]*plan.AlterTable_Action, len(stmt.Options)),

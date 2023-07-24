@@ -472,7 +472,7 @@ func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, erro
 	return replicaTableDef, nil
 }
 
-func buildAlterTableEntry(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
+func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	// ALTER TABLE tbl_name
 	//		[alter_option [, alter_option] ...]
 	//		[partition_options]
@@ -503,7 +503,7 @@ func buildAlterTableEntry(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, er
 	if algorithm == plan.AlterTable_COPY {
 		return buildAlterTableCopy(stmt, ctx)
 	} else {
-		return buildAlterTable(stmt, ctx)
+		return buildAlterTableInplace(stmt, ctx)
 	}
 }
 

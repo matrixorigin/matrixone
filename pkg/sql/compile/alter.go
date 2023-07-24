@@ -34,7 +34,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	//databaseId := dbSource.GetDatabaseId(c.ctx)
 
 	originRel, err := dbSource.Relation(c.ctx, tblName, nil)
 	if err != nil {
@@ -52,7 +51,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 3. copy the original table data to the replica table
-	// "insert into db1.t1_copy(a, b) select a, b from db1.t1;"
 	err = c.runSql(qry.InsertDataSql)
 	if err != nil {
 		return err
@@ -108,15 +106,14 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
-func (s *Scope) AlterTableEntry(c *Compile) error {
+func (s *Scope) AlterTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		return s.AlterTableCopy(c)
 	} else {
-		return s.AlterTable(c)
+		return s.AlterTableInplace(c)
 	}
 }

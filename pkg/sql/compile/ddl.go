@@ -175,7 +175,7 @@ func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int
 	return nil, 0, moerr.NewInvalidInputNoCtx("column '%s' doesn't exist in table", colName)
 }
 
-func (s *Scope) AlterTable(c *Compile) error {
+func (s *Scope) AlterTableInplace(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
