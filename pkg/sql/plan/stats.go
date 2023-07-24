@@ -517,10 +517,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		case plan.Node_ANTI:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5,
+				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.3,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Selectivity: selectivity_out * 0.3,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
