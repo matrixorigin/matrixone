@@ -1702,6 +1702,45 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 				Arg: constructJoin(node, rightTyps, c.proc),
 			})
 		}
+	case plan.Node_ANTI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightAnti,
+					Idx: c.anal.curr,
+					Arg: constructRightAnti(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Anti,
+					Idx: c.anal.curr,
+					Arg: constructAnti(node, rightTyps, c.proc),
+				})
+			}
+		}
+
+	case plan.Node_SEMI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightSemi,
+					Idx: c.anal.curr,
+					Arg: constructRightSemi(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Semi,
+					Idx: c.anal.curr,
+					Arg: constructSemi(node, rightTyps, c.proc),
+				})
+			}
+		}
 
 	default:
 		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
@@ -2458,7 +2497,8 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 	idx := 0
 	cnt := 0
 	for _, n := range c.cnList {
-		ss := make([]*Scope, n.Mcpu)
+		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+		ss := make([]*Scope, dop)
 		for i := range ss {
 			ss[i] = new(Scope)
 			ss[i].Magic = Remote
@@ -2474,7 +2514,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 			idx = cnt
 		}
 		joinScopes = append(joinScopes, ss...)
-		cnt += n.Mcpu
+		cnt += dop
 	}
 
 	currentFirstFlag := c.anal.isFirst
