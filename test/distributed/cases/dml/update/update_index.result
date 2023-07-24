@@ -38,7 +38,7 @@ update t1 set a = 6 where a = 1;
 insert into t1 values(1, 1, 1);
 update t1 set a = 7 where a is null;
 insert into t1 values(7, 7, 7);
-Duplicate entry '3a15073a1507' for key '__mo_index_idx_col'
+Duplicate entry ('\(\d\,\d\)'|'\d\w\d{5}\w\d{4}') for key '__mo_index_idx_col'
 update t1 set a = null where a = 7;
 insert into t1 values(7, 7, 7);
 insert into t1 values(null, 8, 8);
@@ -77,7 +77,7 @@ insert into t1 values(1, 1, 1);
 insert into t2 values(1, 1, 1);
 update t1, t2 set t1.a = 7, t2.a = 7 where t1.a is null and t2.a is null;
 insert into t1 values(7, 7, 7);
-Duplicate entry '3a15073a1507' for key '__mo_index_idx_col'
+Duplicate entry ('\(\d\,\d\)'|'\d\w\d{5}\w\d{4}') for key '__mo_index_idx_col'
 insert into t2 values(7, 7, 7);
 Duplicate entry '7' for key '__mo_index_idx_col'
 update t1, t2 set t1.a = null, t2.a = null where t1.a = 7 and t1.a = t2.a;
@@ -146,7 +146,7 @@ insert into t1 values(null, 7, 7);
 update t1 set a = 6 where a = 1;
 update t1 set a = 7 where a is null;
 insert into t1 values(7, 7, 8);
-Duplicate entry '3a15073a1507' for key '__mo_index_idx_col'
+Duplicate entry ('\(\d\,\d\)'|'\d\w\d{5}\w\d{4}') for key '__mo_index_idx_col'
 update t1 set a = null where a = 7;
 insert into t1 values(7, 7, 9);
 insert into t1 values(null, 8, 10);
