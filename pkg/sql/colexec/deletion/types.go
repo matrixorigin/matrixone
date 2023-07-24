@@ -121,12 +121,12 @@ func (arg *Argument) SplitBatch(proc *process.Process, srcBat *batch.Batch) erro
 	delCtx := arg.DeleteCtx
 	// If the target table is a partition table, group and split the batch data
 	if len(delCtx.PartitionSources) > 0 {
-		delBatches, err := colexec.GroupByPartitionForDelete(proc, srcBat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs))
+		delBatches, err := colexec.GroupByPartitionForDeleteS3(proc, srcBat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs), delCtx.PrimaryKeyIdx)
 		if err != nil {
 			return err
 		}
 		for i, delBatch := range delBatches {
-			collectBatchInfo(proc, arg, delBatch, 0, i, delCtx.PrimaryKeyIdx)
+			collectBatchInfo(proc, arg, delBatch, 0, i, 1)
 			delBatch.Clean(proc.Mp())
 		}
 	} else {

@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -29,10 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -90,6 +91,7 @@ type Engine struct {
 	mp         *mpool.MPool
 	fs         fileservice.FileService
 	ls         lockservice.LockService
+	qs         queryservice.QueryService
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
@@ -172,6 +174,7 @@ type Transaction struct {
 	statements    []int
 
 	hasS3Op atomic.Bool
+	removed bool
 }
 
 type Pos struct {

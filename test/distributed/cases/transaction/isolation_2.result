@@ -231,6 +231,8 @@ Previous DML conflicts with existing constraints or data format. This transactio
 execute stmt2;
 invalid state prepared statement 'stmt2' does not exist
 commit;
+deallocate prepare stmt1;
+deallocate prepare stmt2;
 select b, c from dis_table_02;
 b    c
 aaaa    2020-09-08 00:00:00

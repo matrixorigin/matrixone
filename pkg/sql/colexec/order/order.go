@@ -16,6 +16,7 @@ package order
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,7 +65,7 @@ func (arg *Argument) Free(proc *process.Process, _ bool) {
 }
 
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
@@ -137,10 +138,10 @@ func (ctr *container) sortAndSend(proc *process.Process) (err error) {
 		var strCol []string
 
 		firstVec := ctr.sortVectors[0]
-		if cap(ctr.resultOrderList) >= ctr.batWaitForSort.Length() {
-			ctr.resultOrderList = ctr.resultOrderList[:ctr.batWaitForSort.Length()]
+		if cap(ctr.resultOrderList) >= ctr.batWaitForSort.RowCount() {
+			ctr.resultOrderList = ctr.resultOrderList[:ctr.batWaitForSort.RowCount()]
 		} else {
-			ctr.resultOrderList = make([]int64, ctr.batWaitForSort.Length())
+			ctr.resultOrderList = make([]int64, ctr.batWaitForSort.RowCount())
 		}
 
 		for i := range ctr.resultOrderList {
@@ -246,22 +247,22 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ctr := arg.(*Argument).ctr
 
 	bat := proc.InputBatch()
 	if bat == nil {
-		return true, ctr.sortAndSend(proc)
+		return process.ExecStop, ctr.sortAndSend(proc)
 	}
 
 	enoughToSend, err := ctr.appendBatch(proc, bat)
 	if err != nil {
-		return false, err
+		return process.ExecNext, err
 	}
 	if enoughToSend {
-		return false, ctr.sortAndSend(proc)
+		return process.ExecNext, ctr.sortAndSend(proc)
 	}
 
 	proc.SetInputBatch(batch.EmptyBatch)
-	return false, nil
+	return process.ExecNext, nil
 }

@@ -145,6 +145,10 @@ create table pt_table_52(col1 tinyint,col2 smallint,col3 int,col4 bigint,col11 v
 create table pt_table_53(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4,col3,col11))partition by list(col3) (PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),PARTITION r1 VALUES IN (2, 6, 10, 14*2, 18, 22),PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
 create table pt_table_54(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col4,col3,col11))partition by list(col3) (PARTITION r0 VALUES IN (1, 5*2, 9, 13, 17-20, 21),PARTITION r1 VALUES IN (2, 6, 11, 14*2, 18, 22),PARTITION r2 VALUES IN (3, 7, 11+6, 15, 19, 23),PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24));
 
+--异常：兼容mysql,外键不支持与分区结合使用
+create table dept(deptno int unsigned auto_increment, dname varchar(15), loc varchar(50), primary key(deptno));
+create table emp(empno int unsigned auto_increment, ename varchar(15), job varchar(10), mgr int unsigned, hiredate date, sal decimal(7,2), comm decimal(7,2), deptno int unsigned, primary key(empno), foreign key (deptno) references dept(deptno)) partition by key(empno) partitions 2;
+
 --该测试用例在mysql中是合法，在mo中不合法，原因是ceiling函数造成的，如下：
 --在MySQL中，HASH分区要求分区键必须是INT类型，或者通过表达式返回INT类型。
 --在matrixone中，当ceil函数的参数为decimal类型，返回值为decimal类型，不能作为分区表达式类型

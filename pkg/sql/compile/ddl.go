@@ -101,10 +101,6 @@ func (s *Scope) AlterView(c *Compile) error {
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
-
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
@@ -116,6 +112,10 @@ func (s *Scope) AlterView(c *Compile) error {
 		if qry.GetIfExists() {
 			return nil
 		}
+		return err
+	}
+
+	if err := lockMoTable(c, dbName, tblName); err != nil {
 		return err
 	}
 
@@ -180,10 +180,6 @@ func (s *Scope) AlterTable(c *Compile) error {
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
-
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -198,6 +194,10 @@ func (s *Scope) AlterTable(c *Compile) error {
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef)
 	oldDefs, err := rel.TableDefs(c.ctx)
 	if err != nil {
+		return err
+	}
+
+	if err := lockMoTable(c, dbName, tblName); err != nil {
 		return err
 	}
 
@@ -515,10 +515,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
-
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
@@ -542,6 +538,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
 		}
+	}
+
+	if err := lockMoTable(c, dbName, tblName); err != nil {
+		return err
 	}
 
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
@@ -1037,10 +1037,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	tblName := tqry.GetTable()
 	oldId := tqry.GetTableId()
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
-
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -1060,6 +1056,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	if !isTemp {
+		if err := lockMoTable(c, dbName, tblName); err != nil {
+			return err
+		}
+
 		// before dropping table, lock it. It only works on pessimistic mode.
 		if err := lockTable(c.e, c.proc, rel); err != nil {
 			return err
@@ -1171,11 +1171,6 @@ func (s *Scope) DropSequence(c *Compile) error {
 	var err error
 
 	tblName := qry.GetTable()
-
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
-
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
@@ -1189,6 +1184,10 @@ func (s *Scope) DropSequence(c *Compile) error {
 		if qry.GetIfExists() {
 			return nil
 		}
+		return err
+	}
+
+	if err := lockMoTable(c, dbName, tblName); err != nil {
 		return err
 	}
 
@@ -1208,10 +1207,6 @@ func (s *Scope) DropTable(c *Compile) error {
 	var rel engine.Relation
 	var err error
 	var isTemp bool
-
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
 
 	tblId := qry.GetTableId()
 
@@ -1243,6 +1238,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	if !isTemp && !isView {
+		if err := lockMoTable(c, dbName, tblName); err != nil {
+			return err
+		}
+
 		// before dropping table, lock it. It only works on pessimistic mode.
 		if err := lockTable(c.e, c.proc, rel); err != nil {
 			return err
@@ -1447,10 +1446,6 @@ func (s *Scope) CreateSequence(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
-
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
@@ -1465,6 +1460,10 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		}
 		// Just report table exists error.
 		return moerr.NewTableAlreadyExists(c.ctx, tblName)
+	}
+
+	if err := lockMoTable(c, dbName, tblName); err != nil {
+		return err
 	}
 
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
@@ -1505,8 +1504,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	var bat batch.Batch
 	bat.Ro = true
 	bat.Cnt = 0
-	bat.Zs = make([]int64, 1)
-	bat.Zs[0] = 1
+	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
 	for i := range attrs {
 		attrs[i] = plan2.Sequence_cols_name[i]

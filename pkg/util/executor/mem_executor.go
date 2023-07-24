@@ -93,7 +93,7 @@ func AppendFixedRows[T any](m *MemResult, col int, values []T) error {
 
 func newBatch(cols int) *batch.Batch {
 	bat := batch.NewWithSize(cols)
-	bat.InitZsOne(cols)
+	bat.SetRowCount(cols)
 	return bat
 }
 

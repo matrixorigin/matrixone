@@ -29,7 +29,7 @@ import (
 
 type lockTableAllocator struct {
 	logger          *log.MOLogger
-	stoper          *stopper.Stopper
+	stopper         *stopper.Stopper
 	keepBindTimeout time.Duration
 	address         string
 	server          Server
@@ -55,13 +55,13 @@ func NewLockTableAllocator(
 	la := &lockTableAllocator{
 		address: address,
 		logger:  logger.Named(tag),
-		stoper: stopper.NewStopper(tag,
+		stopper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
 	}
 	la.mu.lockTables = make(map[uint64]pb.LockTable, 10240)
 	la.mu.services = make(map[string]*serviceBinds)
-	if err := la.stoper.RunTask(la.checkInvalidBinds); err != nil {
+	if err := la.stopper.RunTask(la.checkInvalidBinds); err != nil {
 		panic(err)
 	}
 
@@ -110,7 +110,7 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) bool {
 }
 
 func (l *lockTableAllocator) Close() error {
-	l.stoper.Stop()
+	l.stopper.Stop()
 	err := l.server.Close()
 	l.logger.Debug("lock service allocator closed",
 		zap.Error(err))
@@ -337,19 +337,21 @@ func (l *lockTableAllocator) initHandler() {
 
 func (l *lockTableAllocator) handleGetBind(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.GetBind.LockTable = l.Get(req.GetBind.ServiceID,
 		req.GetBind.Table)
-	writeResponse(ctx, resp, nil, cs)
+	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleKeepLockTableBind(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
-	writeResponse(ctx, resp, nil, cs)
+	writeResponse(ctx, cancel, resp, nil, cs)
 }

@@ -38,6 +38,8 @@ type rebalancer struct {
 	mc clusterservice.MOCluster
 	// connManager is used to track the connections on the CN servers.
 	connManager *connManager
+	// scaling is used to scale in the CN servers gracefully.
+	scaling *scaling
 	// queue takes the tunnels which need to do migration.
 	queue chan *tunnel
 	// If disabled is true, rebalance does nothing.
@@ -89,6 +91,7 @@ func newRebalancer(
 	for _, opt := range opts {
 		opt(r)
 	}
+	r.scaling = newScaling(r.connManager, r.queue, mc, logger, r.disabled)
 
 	// Starts the transfer go-routine to handle the transfer request.
 	if err := r.stopper.RunNamedTask("rebalaner-transfer", r.handleTransfer); err != nil {
@@ -96,6 +99,10 @@ func newRebalancer(
 	}
 	// Starts the runner go-routine to check the tunnels that need to transfer.
 	if err := r.stopper.RunNamedTask("rebalancer-runner", r.run); err != nil {
+		return nil, err
+	}
+	// Starts the scaling go-routine to check the CN service that need to do scaling.
+	if err := r.stopper.RunNamedTask("scaling", r.scaling.run); err != nil {
 		return nil, err
 	}
 	return r, nil

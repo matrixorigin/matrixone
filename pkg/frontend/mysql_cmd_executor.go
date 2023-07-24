@@ -26,8 +26,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"go.uber.org/zap"
 
@@ -215,6 +217,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
+	ses.sqlType.Store(sqlType)
 	if sqlType != constant.InternalSql {
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
@@ -408,9 +411,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			continue
 		}
 
-		if bat.Zs[j] <= 0 {
-			continue
-		}
 		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
 		if err != nil {
 			return err
@@ -900,6 +900,14 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 					row[1] = "off"
 				}
 			}
+			_, ok = value.(int64)
+			if ok {
+				if v == 1 {
+					row[1] = "on"
+				} else {
+					row[1] = "off"
+				}
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -981,10 +989,7 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 	bat := batch.New(true, []string{"Variable_name", "Value"})
 	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
 	cnt := len(rows)
-	bat.Zs = make([]int64, cnt)
-	for i := range bat.Zs {
-		bat.Zs[i] = 1
-	}
+	bat.SetRowCount(cnt)
 	v0 := make([]string, cnt)
 	v1 := make([]string, cnt)
 	for i, row := range rows {
@@ -1179,6 +1184,18 @@ func (mce *MysqlCmdExecutor) handleAlterPublication(ctx context.Context, ap *tre
 
 func (mce *MysqlCmdExecutor) handleDropPublication(ctx context.Context, dp *tree.DropPublication) error {
 	return doDropPublication(ctx, mce.GetSession(), dp)
+}
+
+func (mce *MysqlCmdExecutor) handleCreateStage(ctx context.Context, cs *tree.CreateStage) error {
+	return doCreateStage(ctx, mce.GetSession(), cs)
+}
+
+func (mce *MysqlCmdExecutor) handleAlterStage(ctx context.Context, as *tree.AlterStage) error {
+	return doAlterStage(ctx, mce.GetSession(), as)
+}
+
+func (mce *MysqlCmdExecutor) handleDropStage(ctx context.Context, ds *tree.DropStage) error {
+	return doDropStage(ctx, mce.GetSession(), ds)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -1542,7 +1559,7 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 	defer vec.Free(session.GetMemPool())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
-	bat.InitZsOne(count)
+	bat.SetRowCount(count)
 
 	err := fill(session, bat)
 	if err != nil {
@@ -2491,6 +2508,28 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
 
+	// per statement profiler
+	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
+	if endStmtProfile != nil {
+		defer endStmtProfile(func() string {
+			// use sql string as file name suffix
+			formatCtx := tree.NewFmtCtx(dialect.MYSQL)
+			stmt.Format(formatCtx)
+			sql := formatCtx.String()
+			if len(sql) > 128 {
+				sql = sql[:128]
+			}
+			sql = strings.TrimSpace(sql)
+			sql = strings.Map(func(r rune) rune {
+				if unicode.IsSpace(r) {
+					return '-'
+				}
+				return r
+			}, sql)
+			return sql
+		})
+	}
+
 	// record goroutine info when ddl stmt run timeout
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase:
@@ -2531,7 +2570,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
-				*tree.LockTableStmt, *tree.UnLockTableStmt:
+				*tree.LockTableStmt, *tree.UnLockTableStmt,
+				*tree.CreateStage, *tree.DropStage, *tree.AlterStage:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -2836,6 +2876,21 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleShowSubscriptions(requestCtx, st, i, len(cws)); err != nil {
 			return err
 		}
+	case *tree.CreateStage:
+		selfHandle = true
+		if err = mce.handleCreateStage(requestCtx, st); err != nil {
+			return err
+		}
+	case *tree.DropStage:
+		selfHandle = true
+		if err = mce.handleDropStage(requestCtx, st); err != nil {
+			return err
+		}
+	case *tree.AlterStage:
+		selfHandle = true
+		if err = mce.handleAlterStage(requestCtx, st); err != nil {
+			return err
+		}
 	case *tree.CreateAccount:
 		selfHandle = true
 		ses.InvalidatePrivilegeCache()
@@ -3029,7 +3084,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
-		*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowCreatePublications:
+		*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
+		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages:
 		columns, err = cw.GetColumns()
 		if err != nil {
 			logError(ses, ses.GetDebugString(),
@@ -3317,6 +3373,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		nil,
 		pu.FileService,
 		pu.LockService,
+		pu.QueryService,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -3400,7 +3457,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
-		tenant := ses.GetTenantName(stmt)
+		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
 			err = authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
@@ -3489,6 +3546,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		nil,
 		pu.FileService,
 		pu.LockService,
+		pu.QueryService,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)

@@ -17,9 +17,12 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -378,10 +381,12 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
-	util.LogTxnRollback(tc.getTxnMeta(false))
+	txnMeta := tc.getTxnMeta(false)
+	util.LogTxnRollback(txnMeta)
 	if tc.workspace != nil {
 		if err := tc.workspace.Rollback(ctx); err != nil {
-			return err
+			util.GetLogger().Error("rollback workspace failed",
+				util.TxnIDField(txnMeta), zap.Error(err))
 		}
 	}
 
@@ -488,7 +493,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	if commit {
 		if tc.workspace != nil {
 			if err := tc.workspace.Commit(ctx); err != nil {
-				return nil, err
+				return nil, errors.Join(err, tc.Rollback(ctx))
 			}
 		}
 		tc.mu.Lock()
@@ -710,7 +715,21 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		if err := tc.checkResponseTxnStatusForCommit(resp); err != nil {
 			return err
 		}
-		return tc.checkTxnError(resp.TxnError, commitTxnErrors)
+		err := tc.checkTxnError(resp.TxnError, commitTxnErrors)
+		if err == nil || !tc.mu.txn.IsPessimistic() {
+			return err
+		}
+
+		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+		if ok && v.(bool) {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				util.GetLogger().Fatal("failed",
+					zap.Error(err),
+					zap.String("txn", hex.EncodeToString(tc.txnID)))
+			}
+		}
+		return err
 	case txn.TxnMethod_Rollback:
 		if err := tc.checkResponseTxnStatusForRollback(resp); err != nil {
 			return err

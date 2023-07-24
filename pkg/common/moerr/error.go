@@ -138,6 +138,7 @@ const (
 	ErrFKIncompatibleColumns             uint16 = 20455
 	ErrForeignKeyColumnCannotChangeChild uint16 = 20456
 	ErrForeignKeyColumnCannotChange      uint16 = 20457
+	ErrForeignKeyOnPartitioned           uint16 = 20458
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -328,6 +329,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFKIncompatibleColumns:             {ER_FK_INCOMPATIBLE_COLUMNS, []string{MySQLDefaultSqlState}, "Referencing column '%s' and referenced column '%s' in foreign key constraint '%s' are incompatible."},
 	ErrForeignKeyColumnCannotChangeChild: {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrForeignKeyColumnCannotChange:      {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
+	ErrForeignKeyOnPartitioned:           {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1079,6 +1081,10 @@ func NewErrPartitionMaxvalue(ctx context.Context) *Error {
 
 func NewErrRangeNotIncreasing(ctx context.Context) *Error {
 	return newError(ctx, ErrRangeNotIncreasing)
+}
+
+func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
+	return newError(ctx, ErrForeignKeyOnPartitioned)
 }
 
 func NewErrTooManyFields(ctx context.Context) *Error {

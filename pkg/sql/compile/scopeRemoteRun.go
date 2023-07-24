@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -78,6 +79,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -98,6 +100,7 @@ func CnServerMessageHandler(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
+	queryService queryservice.QueryService,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
@@ -109,7 +112,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
+		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(&receiver)
@@ -677,12 +680,15 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond: t.Conditions[1],
 			Result:    t.Result,
 		}
+	case *shuffle.Argument:
+		in.Shuffle = &pipeline.Shuffle{}
+		in.Shuffle.ShuffleColIdx = t.ShuffleColIdx
+		in.Shuffle.ShuffleType = t.ShuffleType
+		in.Shuffle.ShuffleColMax = t.ShuffleColMax
+		in.Shuffle.ShuffleColMin = t.ShuffleColMin
+		in.Shuffle.AliveRegCnt = t.AliveRegCnt
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, FuncId: int32(t.FuncId)}
-		in.Dispatch.ShuffleColIdx = t.ShuffleColIdx
-		in.Dispatch.ShuffleType = t.ShuffleType
-		in.Dispatch.ShuffleColMax = t.ShuffleColMax
-		in.Dispatch.ShuffleColMin = t.ShuffleColMin
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
 		for i := range t.ShuffleRegIdxLocal {
 			in.Dispatch.ShuffleRegIdxLocal[i] = int32(t.ShuffleRegIdxLocal[i])
@@ -1052,6 +1058,15 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			},
 			Result: t.Result,
 		}
+	case vm.Shuffle:
+		t := opr.GetShuffle()
+		v.Arg = &shuffle.Argument{
+			ShuffleColIdx: t.ShuffleColIdx,
+			ShuffleType:   t.ShuffleType,
+			ShuffleColMin: t.ShuffleColMin,
+			ShuffleColMax: t.ShuffleColMax,
+			AliveRegCnt:   t.AliveRegCnt,
+		}
 	case vm.Dispatch:
 		t := opr.GetDispatch()
 		regs := make([]*process.WaitRegister, len(t.LocalConnector))
@@ -1086,10 +1101,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			FuncId:              int(t.FuncId),
 			LocalRegs:           regs,
 			RemoteRegs:          rrs,
-			ShuffleColIdx:       t.ShuffleColIdx,
-			ShuffleType:         t.ShuffleType,
-			ShuffleColMin:       t.ShuffleColMin,
-			ShuffleColMax:       t.ShuffleColMax,
 			ShuffleRegIdxLocal:  shuffleRegIdxLocal,
 			ShuffleRegIdxRemote: shuffleRegIdxRemote,
 		}

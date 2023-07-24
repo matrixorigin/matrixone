@@ -106,14 +106,11 @@ type Agg[T any] interface {
 	// Eval method calculates and returns the final result of the aggregate function.
 	Eval(_ *mpool.MPool) (*vector.Vector, error)
 
-	// Fill use the rowIndex-rows of vector to update the data of groupIndex-group.
-	// rowCount indicates the number of times the rowIndex-row is repeated.
-	Fill(groupIndex int64, rowIndex int64, rowCount int64, vecs []*vector.Vector) error
+	// Fill use the one row of vector to update the data of groupIndex-group's agg.
+	Fill(groupIndex int64, rowIndex int64, vecs []*vector.Vector) error
 
-	// BulkFill use a whole vector to update the data of agg's group
-	// groupIndex is the index number of the group
-	// rowCounts is the count number of each row.
-	BulkFill(groupIndex int64, rowCounts []int64, vecs []*vector.Vector) error
+	// BulkFill use whole vector to update the data of groupIndex-group's agg.
+	BulkFill(groupIndex int64, rowCount int, vecs []*vector.Vector) error
 
 	// BatchFill use part of the vector to update the data of agg's group
 	//      os(origin-s) records information about which groups need to be updated
@@ -125,7 +122,7 @@ type Agg[T any] interface {
 	//      agg's (vps[i]-1)th group is related to vector's (offset+i)th row.
 	//      rowCounts[i] is count number of the row[i]
 	// For a more detailed introduction of rowCounts, please refer to comments of Function Fill.
-	BatchFill(offset int64, os []uint8, vps []uint64, rowCounts []int64, vecs []*vector.Vector) error
+	BatchFill(offset int64, os []uint8, vps []uint64, vecs []*vector.Vector) error
 
 	// Merge will merge a couple of group between 2 aggregate function structures.
 	// It merges the groupIndex1-group of agg1 and
@@ -199,7 +196,7 @@ type UnaryAgg[T1, T2 any] struct {
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)
 
 	// Optional optimisation function for functions where cgo is used in a single pass.
-	batchFill func(any, any, int64, int64, []uint64, []int64, *nulls.Nulls) error
+	batchFill func(any, any, int64, int64, []uint64, *nulls.Nulls) error
 
 	err error
 }

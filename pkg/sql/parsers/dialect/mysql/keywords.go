@@ -581,5 +581,8 @@ func init() {
 		"roles":                      ROLES,
 		"backend":                    BACKEND,
 		"servers":                    SERVERS,
+		"stage":                      STAGE,
+		"stages":                     STAGES,
+		"credentials":                CREDENTIALS,
 	}
 }

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/mohae/deepcopy"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -339,7 +340,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.proc,
 		cwft.stmt,
 		cwft.ses.isInternal,
-		cwft.ses.getCNLabels(),
+		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
 	)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
