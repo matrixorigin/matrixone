@@ -351,7 +351,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.TableNode = cmd.node
 		tbl.TableNode.schema.Store(un.BaseNode.Schema)
 		tbl.Insert(un)
-		err = db.AddEntryLocked(tbl, un.GetTxn(), false)
+		err = db.AddEntryLocked(tbl, un.GetTxn(), true)
 		if err != nil {
 			logutil.Warn(catalog.SimplePPString(common.PPL3))
 			panic(err)
