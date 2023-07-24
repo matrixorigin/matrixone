@@ -797,7 +797,9 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ: DeepCopyType(expr.Typ),
+		Typ:         DeepCopyType(expr.Typ),
+		Ndv:         expr.Ndv,
+		Selectivity: expr.Selectivity,
 	}
 
 	switch item := expr.Expr.(type) {
