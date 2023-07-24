@@ -621,8 +621,16 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
 	if tbl.db.txn.meta.IsRCIsolation() {
-		if err := tbl.updateDeleteInfo(committedblocks); err != nil {
+		state, err := tbl.getPartitionState(tbl.proc.Ctx)
+		if err != nil {
 			return err
+		}
+		deleteBlks, createBlks := state.Copy().GetBlksBetween(types.TimestampToTS(tbl.db.txn.lastTS),
+			types.TimestampToTS(tbl.db.txn.meta.SnapshotTS))
+		if len(deleteBlks) > 0 {
+			if err := tbl.updateDeleteInfo(deleteBlks, createBlks, committedblocks); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1656,10 +1664,24 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	return part.PrimaryKeysMayBeModified(from, to, keysVector, packer), nil
 }
 
-func (tbl *txnTable) updateDeleteInfo(blks []catalog.BlockInfo) error {
-	blkidMap := make(map[types.Blockid]struct{})
-	for _, blk := range blks {
-		blkidMap[blk.BlockID] = struct{}{}
+func (tbl *txnTable) updateDeleteInfo(deleteBlks, createBlks []types.Blockid,
+	commitedblocks []catalog.BlockInfo) error {
+	var blks []catalog.BlockInfo
+
+	deleteBlksMap := make(map[types.Blockid]struct{})
+	for _, id := range deleteBlks {
+		deleteBlksMap[id] = struct{}{}
+	}
+	{ // Filtering is not a new block
+		createBlksMap := make(map[types.Blockid]struct{})
+		for _, id := range createBlks {
+			createBlksMap[id] = struct{}{}
+		}
+		for i, blk := range commitedblocks {
+			if _, ok := createBlksMap[blk.BlockID]; ok {
+				blks = append(blks, commitedblocks[i])
+			}
+		}
 	}
 	for _, entry := range tbl.db.txn.writes {
 		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
@@ -1670,7 +1692,7 @@ func (tbl *txnTable) updateDeleteInfo(blks []catalog.BlockInfo) error {
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
-				if _, ok := blkidMap[blkid]; !ok {
+				if _, ok := deleteBlksMap[blkid]; ok {
 					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
 						return err
@@ -1716,10 +1738,6 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, &columnMap)
 	objFilterMap := make(map[objectio.ObjectNameShort]bool)
 	for _, blk := range blks {
-		// only new blocks are detected
-		if blk.CommitTs.ToTimestamp().Less(tbl.db.txn.lastTS) {
-			continue
-		}
 		location := blk.MetaLocation()
 		if hit, ok := objFilterMap[*location.ShortName()]; !ok {
 			if objMeta, err = objectio.FastLoadObjectMeta(tbl.proc.Ctx, &location,
