@@ -290,7 +290,7 @@ func testDatabase(
 		bat := batch.New(false, []string{"a", "b"})
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
-		bat.InitZsOne(5)
+		bat.SetRowCount(5)
 		resp := &memoryengine.WriteResp{}
 		err := testWrite(
 			ctx, t, s, txnMeta,
@@ -333,7 +333,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 5, resp.Batch.Length())
+		assert.Equal(t, 5, resp.Batch.RowCount())
 	}
 
 	// delete by primary key
@@ -389,7 +389,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 4, resp.Batch.Length())
+		assert.Equal(t, 4, resp.Batch.RowCount())
 	}
 
 	// delete by non-primary key
@@ -445,7 +445,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 3, resp.Batch.Length())
+		assert.Equal(t, 3, resp.Batch.RowCount())
 	}
 
 	// write after delete
@@ -471,7 +471,7 @@ func testDatabase(
 		bat := batch.New(false, []string{"a", "b"})
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 		resp := &memoryengine.WriteResp{}
 		err := testWrite(
 			ctx, t, s, txnMeta,
@@ -572,7 +572,7 @@ func testDatabase(
 		bat := batch.New(false, []string{"a", "b"})
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
-		bat.InitZsOne(5)
+		bat.SetRowCount(5)
 		resp := &memoryengine.WriteResp{}
 		err := testWrite(
 			ctx, t, s, txnMeta,
@@ -639,7 +639,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 4, resp.Batch.Length())
+		assert.Equal(t, 4, resp.Batch.RowCount())
 	}
 
 	// delete by non-primary key
@@ -696,7 +696,7 @@ func testDatabase(
 		)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
-		assert.Equal(t, 3, resp.Batch.Length())
+		assert.Equal(t, 3, resp.Batch.RowCount())
 		rowIDs = resp.Batch.Vecs[2]
 	}
 

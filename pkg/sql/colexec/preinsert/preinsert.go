@@ -48,14 +48,13 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
 	defer proc.PutBatch(bat)
 	newBat := batch.NewWithSize(len(arg.Attrs))
-	newBat.Zs = proc.GetMPool().GetSels()
 	newBat.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
 		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
@@ -67,7 +66,8 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 		}
 		newBat.SetVector(int32(idx), vec)
 	}
-	newBat.Zs = append(newBat.Zs, bat.Zs...)
+	newBat.AddRowCount(bat.RowCount())
+
 	if arg.HasAutoCol {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {

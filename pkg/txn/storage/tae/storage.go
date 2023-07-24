@@ -16,8 +16,7 @@ package taestorage
 
 import (
 	"context"
-
-	"go.uber.org/multierr"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -91,10 +90,7 @@ func (s *taeStorage) Start() error {
 
 // Close implements storage.TxnTAEStorage
 func (s *taeStorage) Close(ctx context.Context) error {
-	if err := s.logtailServer.Close(); err != nil {
-		return multierr.Append(err, s.taeHandler.HandleClose(ctx))
-	}
-	return s.taeHandler.HandleClose(ctx)
+	return errors.Join(s.logtailServer.Close(), s.taeHandler.HandleClose(ctx))
 }
 
 // Commit implements storage.TxnTAEStorage

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
 var statsFamilyName = "proxy counter"
@@ -39,6 +40,7 @@ type Server struct {
 	counterSet *counterSet
 	// for test.
 	testHAKeeperClient logservice.ClusterHAKeeperClient
+	test               bool
 }
 
 // NewServer creates the proxy server.
@@ -49,6 +51,9 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+
+	frontend.InitServerVersion(version.Version)
+
 	s := &Server{
 		config:     config,
 		counterSet: newCounterSet(),
@@ -64,7 +69,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	stats.Register(statsFamilyName, stats.WithLogExporter(logExporter))
 
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))
-	h, err := newProxyHandler(ctx, s.runtime, s.config, s.stopper, s.counterSet, s.testHAKeeperClient)
+	h, err := newProxyHandler(ctx, s.runtime, s.config, s.stopper, s.counterSet, s.testHAKeeperClient, s.test)
 	if err != nil {
 		return nil, err
 	}

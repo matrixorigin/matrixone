@@ -26,7 +26,7 @@ import (
 func NewUnaryAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
 	eval func([]T2, error) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error),
-	batchFill func(any, any, int64, int64, []uint64, []int64, *nulls.Nulls) error) Agg[*UnaryAgg[T1, T2]] {
+	batchFill func(any, any, int64, int64, []uint64, *nulls.Nulls) error) Agg[*UnaryAgg[T1, T2]] {
 	return &UnaryAgg[T1, T2]{
 		op:        op,
 		priv:      priv,
@@ -120,13 +120,13 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) error {
+func (a *UnaryAgg[T1, T2]) Fill(i int64, sel int64, vecs []*vector.Vector) error {
 	var err error
 	vec := vecs[0]
 
 	if vec.IsConstNull() {
 		var v T1
-		a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], z, a.es[i], true)
+		a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], 1, a.es[i], true)
 		if a.err == nil {
 			a.err = err
 		}
@@ -139,17 +139,17 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 	}
 	if vec.IsConstNull() {
 		var v T1
-		a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], z, a.es[i], true)
+		a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], 1, a.es[i], true)
 		if a.err == nil {
 			a.err = err
 		}
 	} else if vec.GetType().IsVarlen() {
-		a.vs[i], a.es[i], err = a.fill(i, (any)(vec.GetBytesAt(int(sel))).(T1), a.vs[i], z, a.es[i], hasNull)
+		a.vs[i], a.es[i], err = a.fill(i, (any)(vec.GetBytesAt(int(sel))).(T1), a.vs[i], 1, a.es[i], hasNull)
 		if a.err == nil {
 			a.err = err
 		}
 	} else {
-		a.vs[i], a.es[i], err = a.fill(i, vector.MustFixedCol[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
+		a.vs[i], a.es[i], err = a.fill(i, vector.MustFixedCol[T1](vec)[sel], a.vs[i], 1, a.es[i], hasNull)
 		if a.err == nil {
 			a.err = err
 		}
@@ -157,7 +157,7 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vecs []*vector.Vector) error {
+func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, vecs []*vector.Vector) error {
 	var err error
 	vec := vecs[0]
 	constNull := vec.IsConstNull()
@@ -169,12 +169,12 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 			}
 			j := vps[i] - 1
 			if !vec.IsConst() {
-				a.vs[j], a.es[j], err = a.fill(int64(j), (any)(vec.GetBytesAt(i+int(start))).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				a.vs[j], a.es[j], err = a.fill(int64(j), (any)(vec.GetBytesAt(i+int(start))).(T1), a.vs[j], 1, a.es[j], hasNull)
 				if a.err == nil {
 					a.err = err
 				}
 			} else {
-				a.vs[j], a.es[j], err = a.fill(int64(j), (any)(vec.GetBytesAt(0)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				a.vs[j], a.es[j], err = a.fill(int64(j), (any)(vec.GetBytesAt(0)).(T1), a.vs[j], 1, a.es[j], hasNull)
 				if a.err == nil {
 					a.err = err
 				}
@@ -186,7 +186,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 	vs := vector.MustFixedCol[T1](vec)
 	// I do these bad hack here because the batchFill method can't know the vector is const null or not.
 	if a.batchFill != nil && !constNull {
-		if a.err = a.batchFill(a.vs, vs, start, int64(len(os)), vps, zs, vec.GetNulls()); a.err != nil {
+		if a.err = a.batchFill(a.vs, vs, start, int64(len(os)), vps, vec.GetNulls()); a.err != nil {
 			return a.err
 		}
 
@@ -225,7 +225,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 					continue
 				}
 				j := vps[i] - 1
-				a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], true)
+				a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], 1, a.es[j], true)
 				if a.err == nil {
 					a.err = err
 				}
@@ -243,7 +243,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 		if a.err != nil {
 			return nil
 		}
-		a.vs[j], a.es[j], err = a.fill(int64(j), vs[vi], a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+		a.vs[j], a.es[j], err = a.fill(int64(j), vs[vi], a.vs[j], 1, a.es[j], hasNull)
 		if a.err == nil {
 			a.err = err
 		}
@@ -252,27 +252,23 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) error {
+func (a *UnaryAgg[T1, T2]) BulkFill(i int64, rowCount int, vecs []*vector.Vector) error {
 	var err error
 	vec := vecs[0]
 	if vec.IsConst() {
-		var zsum int64
-		for j := range zs {
-			zsum += zs[j]
-		}
 		if vec.IsConstNull() {
 			var v T1
-			a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], zsum, a.es[i], true)
+			a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], int64(rowCount), a.es[i], true)
 			if a.err == nil {
 				a.err = err
 			}
 		} else if vec.GetType().IsVarlen() {
-			a.vs[i], a.es[i], err = a.fill(i, (any)(vec.GetBytesAt(0)).(T1), a.vs[i], zsum, a.es[i], false)
+			a.vs[i], a.es[i], err = a.fill(i, (any)(vec.GetBytesAt(0)).(T1), a.vs[i], int64(rowCount), a.es[i], false)
 			if a.err == nil {
 				a.err = err
 			}
 		} else {
-			a.vs[i], a.es[i], err = a.fill(i, vector.GetFixedAt[T1](vec, 0), a.vs[i], zsum, a.es[i], false)
+			a.vs[i], a.es[i], err = a.fill(i, vector.GetFixedAt[T1](vec, 0), a.vs[i], int64(rowCount), a.es[i], false)
 			if a.err == nil {
 				a.err = err
 			}
@@ -282,7 +278,7 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 		length := vec.Length()
 		for j := 0; j < length; j++ {
 			hasNull := vec.GetNulls().Contains(uint64(j))
-			a.vs[i], a.es[i], err = a.fill(i, (any)(vec.GetBytesAt(j)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
+			a.vs[i], a.es[i], err = a.fill(i, (any)(vec.GetBytesAt(j)).(T1), a.vs[i], 1, a.es[i], hasNull)
 			if a.err == nil {
 				a.err = err
 			}
@@ -293,7 +289,7 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 		vs := vector.MustFixedCol[T1](vec)
 		for j, v := range vs {
 			hasNull := vec.GetNulls().Contains(uint64(j))
-			a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
+			a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], 1, a.es[i], hasNull)
 			if a.err == nil {
 				a.err = err
 			}

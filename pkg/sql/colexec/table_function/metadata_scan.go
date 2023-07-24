@@ -228,7 +228,6 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 		default:
 		}
 	}
-	opBat.Zs = append(opBat.Zs, 1)
-
+	opBat.AddRowCount(len(arg.Attrs))
 	return nil
 }

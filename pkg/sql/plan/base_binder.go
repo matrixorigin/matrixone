@@ -1024,9 +1024,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	switch name {
 	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in":
 		if err == nil && proc != nil {
-			bat := batch.NewWithSize(0)
-			bat.Zs = []int64{1}
-			tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(retExpr), proc, false)
+			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}

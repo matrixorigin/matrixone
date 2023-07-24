@@ -165,3 +165,12 @@ func iterFields(v reflect.Value, path []string, fn IterFieldsFunc) error {
 
 	return nil
 }
+
+func (cs *FileServiceCounterSet) ResetS3() {
+	cs.S3.List.Reset()
+	cs.S3.Head.Reset()
+	cs.S3.Put.Reset()
+	cs.S3.Get.Reset()
+	cs.S3.Delete.Reset()
+	cs.S3.DeleteMulti.Reset()
+}

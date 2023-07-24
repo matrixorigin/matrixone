@@ -30,7 +30,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		aggregateByAst: make(map[string]int32),
 		projectByExpr:  make(map[string]int32),
 		windowByAst:    make(map[string]int32),
-		aliasMap:       make(map[string]int32),
+		aliasMap:       make(map[string]*aliasItem),
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),
 		bindingByCol:   make(map[string]*Binding),
@@ -263,67 +263,67 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 	}
 }
 
-func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, selectList tree.SelectExprs, expandAlias bool) (tree.Expr, error) {
+func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandAliasMode) (tree.Expr, error) {
 	var err error
 
 	switch exprImpl := astExpr.(type) {
 	case *tree.ParenExpr:
-		astExpr, err = bc.qualifyColumnNames(exprImpl.Expr, selectList, expandAlias)
+		astExpr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
 
 	case *tree.OrExpr:
-		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, selectList, expandAlias)
+		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, expandAlias)
 		if err != nil {
 			return nil, err
 		}
 
-		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, selectList, expandAlias)
+		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, expandAlias)
 
 	case *tree.NotExpr:
-		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, selectList, expandAlias)
+		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
 
 	case *tree.AndExpr:
-		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, selectList, expandAlias)
+		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, expandAlias)
 		if err != nil {
 			return nil, err
 		}
 
-		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, selectList, expandAlias)
+		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, expandAlias)
 
 	case *tree.UnaryExpr:
-		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, selectList, expandAlias)
+		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
 
 	case *tree.BinaryExpr:
-		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, selectList, expandAlias)
+		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, expandAlias)
 		if err != nil {
 			return nil, err
 		}
 
-		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, selectList, expandAlias)
+		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, expandAlias)
 
 	case *tree.ComparisonExpr:
-		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, selectList, expandAlias)
+		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, expandAlias)
 		if err != nil {
 			return nil, err
 		}
 
-		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, selectList, expandAlias)
+		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, expandAlias)
 
 	case *tree.FuncExpr:
 		for i := range exprImpl.Exprs {
-			exprImpl.Exprs[i], err = bc.qualifyColumnNames(exprImpl.Exprs[i], selectList, expandAlias)
+			exprImpl.Exprs[i], err = bc.qualifyColumnNames(exprImpl.Exprs[i], expandAlias)
 			if err != nil {
 				return nil, err
 			}
 		}
 		if exprImpl.WindowSpec != nil {
 			for i := range exprImpl.WindowSpec.PartitionBy {
-				exprImpl.WindowSpec.PartitionBy[i], err = bc.qualifyColumnNames(exprImpl.WindowSpec.PartitionBy[i], selectList, expandAlias)
+				exprImpl.WindowSpec.PartitionBy[i], err = bc.qualifyColumnNames(exprImpl.WindowSpec.PartitionBy[i], expandAlias)
 				if err != nil {
 					return nil, err
 				}
 			}
 			for i := range exprImpl.WindowSpec.OrderBy {
-				exprImpl.WindowSpec.OrderBy[i].Expr, err = bc.qualifyColumnNames(exprImpl.WindowSpec.OrderBy[i].Expr, selectList, expandAlias)
+				exprImpl.WindowSpec.OrderBy[i].Expr, err = bc.qualifyColumnNames(exprImpl.WindowSpec.OrderBy[i].Expr, expandAlias)
 				if err != nil {
 					return nil, err
 				}
@@ -331,25 +331,24 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, selectList tree.Sel
 		}
 
 	case *tree.RangeCond:
-		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, selectList, expandAlias)
+		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, expandAlias)
 		if err != nil {
 			return nil, err
 		}
 
-		exprImpl.From, err = bc.qualifyColumnNames(exprImpl.From, selectList, expandAlias)
+		exprImpl.From, err = bc.qualifyColumnNames(exprImpl.From, expandAlias)
 		if err != nil {
 			return nil, err
 		}
 
-		exprImpl.To, err = bc.qualifyColumnNames(exprImpl.To, selectList, expandAlias)
+		exprImpl.To, err = bc.qualifyColumnNames(exprImpl.To, expandAlias)
 
 	case *tree.UnresolvedName:
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.Parts[0]
-			if expandAlias {
-				if colPos, ok := bc.aliasMap[col]; ok {
-					astExpr = selectList[colPos].Expr
-					break
+			if expandAlias == AliasBeforeColumn {
+				if selectItem, ok := bc.aliasMap[col]; ok {
+					return selectItem.astExpr, nil
 				}
 			}
 
@@ -357,56 +356,63 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, selectList tree.Sel
 				if binding != nil {
 					exprImpl.NumParts = 2
 					exprImpl.Parts[1] = binding.table
+					return astExpr, nil
 				} else {
 					return nil, moerr.NewInvalidInput(bc.binder.GetContext(), "ambiguouse column reference to '%s'", col)
+				}
+			}
+
+			if expandAlias == AliasAfterColumn {
+				if selectItem, ok := bc.aliasMap[col]; ok {
+					return selectItem.astExpr, nil
 				}
 			}
 		}
 
 	case *tree.CastExpr:
-		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, selectList, expandAlias)
+		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
 
 	case *tree.IsNullExpr:
-		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, selectList, expandAlias)
+		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
 
 	case *tree.IsNotNullExpr:
-		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, selectList, expandAlias)
+		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
 
 	case *tree.Tuple:
 		for i := range exprImpl.Exprs {
-			exprImpl.Exprs[i], err = bc.qualifyColumnNames(exprImpl.Exprs[i], selectList, expandAlias)
+			exprImpl.Exprs[i], err = bc.qualifyColumnNames(exprImpl.Exprs[i], expandAlias)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 	case *tree.CaseExpr:
-		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, selectList, expandAlias)
+		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
 		if err != nil {
 			return nil, err
 		}
 
 		for _, when := range exprImpl.Whens {
-			when.Cond, err = bc.qualifyColumnNames(when.Cond, selectList, expandAlias)
+			when.Cond, err = bc.qualifyColumnNames(when.Cond, expandAlias)
 			if err != nil {
 				return nil, err
 			}
 
-			when.Val, err = bc.qualifyColumnNames(when.Val, selectList, expandAlias)
+			when.Val, err = bc.qualifyColumnNames(when.Val, expandAlias)
 			if err != nil {
 				return nil, err
 			}
 		}
 
-		exprImpl.Else, err = bc.qualifyColumnNames(exprImpl.Else, selectList, expandAlias)
+		exprImpl.Else, err = bc.qualifyColumnNames(exprImpl.Else, expandAlias)
 
 	case *tree.XorExpr:
-		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, selectList, expandAlias)
+		exprImpl.Left, err = bc.qualifyColumnNames(exprImpl.Left, expandAlias)
 		if err != nil {
 			return nil, err
 		}
 
-		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, selectList, expandAlias)
+		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, expandAlias)
 	}
 
 	return astExpr, err

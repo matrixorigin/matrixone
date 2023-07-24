@@ -156,6 +156,8 @@ select b, c from dis_table_02;
 prepare stmt2 from "update dis_table_02 set a=null";
 execute stmt2;
 commit;
+deallocate prepare stmt1;
+deallocate prepare stmt2;
 select b, c from dis_table_02;
 use dis_db_02;
 select b, c from dis_table_02;

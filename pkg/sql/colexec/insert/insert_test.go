@@ -70,9 +70,9 @@ func TestInsertOperator(t *testing.T) {
 			testutil.MakeScalarNull(types.T_int64, 3),
 		},
 		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
-		Zs:    []int64{1, 1, 1},
 		Cnt:   1,
 	}
+	batch1.SetRowCount(3)
 	argument1 := Argument{
 		InsertCtx: &InsertCtx{
 			Rel: &mockRelation{},

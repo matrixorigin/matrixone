@@ -46,6 +46,7 @@ message CNStore {
   NodeState       State              = 8;
   map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
   metadata.WorkState WorkState       = 10;
+  string          QueryAddress       = 11;
 }
 
 message DNStore {
@@ -107,6 +108,7 @@ message CNStoreHeartbeat {
   string          CtlAddress         = 5;
   metadata.CNRole Role               = 6;
   bool            TaskServiceCreated = 7;
+  string          QueryAddress       = 8;
 }
 
 
@@ -453,6 +455,7 @@ message CNStoreInfo {
   bool            TaskServiceCreated = 7;
   map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
   metadata.WorkState WorkState       = 9;
+  string          QueryAddress       = 10;
 }
 
 // CNState contains all CN details known to the HAKeeper.

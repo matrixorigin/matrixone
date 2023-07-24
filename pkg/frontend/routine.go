@@ -21,13 +21,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"go.uber.org/zap"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 // Routine handles requests.
@@ -210,7 +209,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 	tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
 	ses.SetRequestContext(tenantCtx)
-	executor.SetSession(rt.getSession())
+	executor.SetSession(ses)
 
 	rt.increaseCount(func() {
 		metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Inc()

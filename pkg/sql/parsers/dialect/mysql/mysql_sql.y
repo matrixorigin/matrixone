@@ -2367,7 +2367,7 @@ table_lock_list:
 table_lock_elem:
     table_name table_lock_type
     {
-        $$ = tree.TableLock{*$1, $2}
+        $$ = tree.TableLock{Table: *$1, LockType: $2}
     }
 
 table_lock_type:  
@@ -3055,7 +3055,7 @@ show_collation_stmt:
 show_stages_stmt:
     SHOW STAGES like_opt
     {
-        $$ = &tree.ShowStagse{
+        $$ = &tree.ShowStages{
             Like: $3,
         }
     }
