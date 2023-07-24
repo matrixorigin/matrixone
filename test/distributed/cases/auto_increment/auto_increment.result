@@ -333,7 +333,7 @@ Drop table if exists auto_increment16;
 Create table auto_increment16(col1 int auto_increment)auto_increment < 0;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 70 near " < 0;";
 Drop table auto_increment16;
-no such table template.auto_increment16
+no such table auto_increment16
 drop table if exists auto_increment01;
 create temporary table auto_increment01(col1 int auto_increment primary key)auto_increment = 0;
 select * from auto_increment01;
@@ -675,4 +675,4 @@ Drop table if exists auto_increment16;
 Create temporary table auto_increment16(col1 int auto_increment)auto_increment < 0;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 80 near " < 0;";
 Drop table auto_increment16;
-no such table template.auto_increment16
+no such table auto_increment16
