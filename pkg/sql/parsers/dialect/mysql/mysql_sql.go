@@ -11377,7 +11377,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:3057
 		{
-			yyLOCAL = &tree.ShowStagse{
+			yyLOCAL = &tree.ShowStages{
 				Like: yyDollar[3].comparisionExprUnion(),
 			}
 		}
