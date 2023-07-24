@@ -10118,6 +10118,8 @@ non_reserved_keyword:
 |	WEEK
 |   DEFINER
 |   SQL
+|   STAGE
+|   STAGES
 
 func_not_keyword:
     DATE_ADD
