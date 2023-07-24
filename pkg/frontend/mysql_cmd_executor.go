@@ -2725,11 +2725,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			ses.SetExportParam(st.Ep)
 			err = doCheckFilePath(requestCtx, ses, st)
 			if err != nil {
 				return err
 			}
+			ses.SetExportParam(st.Ep)
 		}
 	}
 
