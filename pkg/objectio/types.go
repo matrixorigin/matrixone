@@ -102,10 +102,10 @@ type Reader interface {
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta
-	ReadMeta(ctx context.Context, extent *Extent, m *mpool.MPool) (ObjectMeta, error)
+	ReadMeta(ctx context.Context, extent *Extent, m *mpool.MPool) (ObjectDataMeta, error)
 
 	// ReadAllMeta is read the meta of all blocks in an object
-	ReadAllMeta(ctx context.Context, m *mpool.MPool) (ObjectMeta, error)
+	ReadAllMeta(ctx context.Context, m *mpool.MPool) (ObjectDataMeta, error)
 
 	GetObject() *Object
 }

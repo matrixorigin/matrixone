@@ -180,7 +180,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	tableTypes := make([]uint8, dataLength)
 	zms := make([]objectio.ZoneMap, dataLength)
 
-	var meta objectio.ObjectMeta
+	var meta objectio.ObjectDataMeta
 	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, nil, err
@@ -290,7 +290,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	// to record the batch which we have already handled to avoid
 	// repetitive computation
 	handled := make(map[*batch.Batch]struct{})
-	var meta objectio.ObjectMeta
+	var meta objectio.ObjectDataMeta
 	// Calculate the in mem size
 	// TODO: It might includ some deleted row size
 	iter := part.NewRowsIter(ts, nil, false)
@@ -369,7 +369,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	if err != nil {
 		return nil, err
 	}
-	var meta objectio.ObjectMeta
+	var meta objectio.ObjectDataMeta
 	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.blockInfos))
 	eachBlkFn := func(blk logtailreplay.BlockEntry) error {
 		var err error
@@ -689,7 +689,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		objMeta  objectio.ObjectMeta
+		objMeta  objectio.ObjectDataMeta
 		zms      []objectio.ZoneMap
 		vecs     []*vector.Vector
 		skipObj  bool

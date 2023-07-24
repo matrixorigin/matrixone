@@ -84,7 +84,7 @@ func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDe
 	lenCols := len(tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 
-	var objectMeta objectio.ObjectMeta
+	var objectMeta objectio.ObjectDataMeta
 	lenobjs := 0
 
 	var init bool

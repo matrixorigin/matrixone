@@ -180,7 +180,7 @@ func (r *BlockReader) LoadZoneMaps(
 	return r.reader.ReadZM(ctx, id, seqnums, m)
 }
 
-func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
+func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectDataMeta, error) {
 	return r.reader.ReadMeta(ctx, m)
 }
 

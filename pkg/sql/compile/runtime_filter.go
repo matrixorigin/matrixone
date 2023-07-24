@@ -82,7 +82,7 @@ func ApplyRuntimeFilters(
 	}
 
 	var (
-		objMeta  objectio.ObjectMeta
+		objMeta  objectio.ObjectDataMeta
 		skipObj  bool
 		auxIdCnt int32
 	)

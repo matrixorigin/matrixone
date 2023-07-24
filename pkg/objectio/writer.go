@@ -174,7 +174,6 @@ func (w *objectWriterV1) prepareDataMeta() ([]byte, []byte, []byte, Extent, erro
 
 	offset := w.prepareBlockMeta(HeaderSize)
 
-	logutil.Infof("off set is %d", offset)
 	// prepare bloom filter
 	bloomFilterData, bloomFilterExtent, err := w.prepareBloomFilter(blockCount, offset)
 	if err != nil {
@@ -197,7 +196,6 @@ func (w *objectWriterV1) prepareDataMeta() ([]byte, []byte, []byte, Extent, erro
 
 	metaHeader.SetDataMetaCount(uint16(len(w.blocks)))
 	metaHeader.SetDataMetaOffset(metaHeader.Length())
-	logutil.Infof("metaHeader is %v", metaHeader)
 	var buf bytes.Buffer
 	h := IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_CurrVer}
 	buf.Write(EncodeIOEntryHeader(&h))

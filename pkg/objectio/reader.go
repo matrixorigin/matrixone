@@ -30,7 +30,7 @@ type objectReaderV1 struct {
 	ReaderOptions
 	oname     *ObjectName
 	metaExt   *Extent
-	metaCache atomic.Pointer[MetaHeader]
+	metaCache atomic.Pointer[ObjectMeta]
 }
 
 func newObjectReaderWithStrV1(name string, fs fileservice.FileService, opts ...ReaderOptionFunc) (*objectReaderV1, error) {
@@ -109,7 +109,7 @@ func (r *objectReaderV1) ReadZM(
 	seqnums []uint16,
 	m *mpool.MPool,
 ) (zms []ZoneMap, err error) {
-	var metaHeader MetaHeader
+	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
@@ -122,7 +122,7 @@ func (r *objectReaderV1) ReadZM(
 func (r *objectReaderV1) ReadMeta(
 	ctx context.Context,
 	m *mpool.MPool,
-) (meta MetaHeader, err error) {
+) (meta ObjectMeta, err error) {
 	if r.withMetaCache {
 		cache := r.metaCache.Load()
 		if cache != nil {
@@ -154,7 +154,7 @@ func (r *objectReaderV1) ReadOneBlock(
 	blk uint16,
 	m *mpool.MPool,
 ) (ioVec *fileservice.IOVector, err error) {
-	var metaHeader MetaHeader
+	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
@@ -167,7 +167,7 @@ func (r *objectReaderV1) ReadAll(
 	idxs []uint16,
 	m *mpool.MPool,
 ) (ioVec *fileservice.IOVector, err error) {
-	var metaHeader MetaHeader
+	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
@@ -180,7 +180,7 @@ func (r *objectReaderV1) ReadOneBF(
 	ctx context.Context,
 	blk uint16,
 ) (bf StaticFilter, size uint32, err error) {
-	var metaHeader MetaHeader
+	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, nil); err != nil {
 		return
 	}
@@ -203,7 +203,7 @@ func (r *objectReaderV1) ReadOneBF(
 func (r *objectReaderV1) ReadAllBF(
 	ctx context.Context,
 ) (bfs BloomFilter, size uint32, err error) {
-	var metaHeader MetaHeader
+	var metaHeader ObjectMeta
 	var buf []byte
 	if metaHeader, err = r.ReadMeta(ctx, nil); err != nil {
 		return
@@ -245,7 +245,7 @@ func (r *objectReaderV1) ReadMultiBlocks(
 	opts map[uint16]*ReadBlockOptions,
 	m *mpool.MPool,
 ) (ioVec *fileservice.IOVector, err error) {
-	var metaHeader MetaHeader
+	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
@@ -264,7 +264,7 @@ func (r *objectReaderV1) ReadMultiBlocks(
 func (r *objectReaderV1) ReadAllMeta(
 	ctx context.Context,
 	m *mpool.MPool,
-) (MetaHeader, error) {
+) (ObjectMeta, error) {
 	if r.metaExt == nil {
 		header, err := r.ReadHeader(ctx, m)
 		if err != nil {

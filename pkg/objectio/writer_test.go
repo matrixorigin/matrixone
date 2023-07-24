@@ -17,7 +17,6 @@ package objectio
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -190,7 +189,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0xa), buf[63])
 }
 
-func getObjectMeta(ctx context.Context, t *testing.B) ObjectMeta {
+func getObjectMeta(ctx context.Context, t *testing.B) ObjectDataMeta {
 	dir := InitTestEnv(ModuleName, t.Name())
 	dir = path.Join(dir, "/local")
 	id := 1
@@ -306,7 +305,7 @@ func TestNewObjectReader(t *testing.T) {
 	metaHeader, err := objectReader.ReadMeta(context.Background(), nil)
 	assert.Nil(t, err)
 	meta, _ := metaHeader.DataMeta()
-	logutil.Infof("fsdfsdf %v", meta.BlockCount())
+	assert.Equal(t, 2, meta.BlockCount())
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {
