@@ -4,6 +4,7 @@ desc t1;
 show create table t1;
 drop table t1;
 -- test uuid type as primary key
+-- @bvt:issue#10703
 create table t2(
 a uuid primary key,
 b int,
@@ -24,6 +25,7 @@ select * from t2 where a <= '6d1b1f732dbf11ed940f000c29847904';
 select * from t2 where a < '6d1b1f732dbf11ed940f000c29847904';
 select * from t2 order by a;
 drop table t2;
+-- @bvt:issue
 -- uuid type in DQL
 create table t3(a int, b uuid);
 insert into t3 values(10, "f6355110-2d0c-11ed-940f-000c29847904");
