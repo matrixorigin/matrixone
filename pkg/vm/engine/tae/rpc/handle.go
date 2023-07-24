@@ -160,7 +160,10 @@ func (h *Handle) HandleCommit(
 		if err != nil {
 			return
 		}
-		h.handleRequests(ctx, txn, txnCtx)
+		err = h.handleRequests(ctx, txn, txnCtx)
+		if err != nil {
+			return
+		}
 	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {

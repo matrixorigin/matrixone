@@ -7815,6 +7815,7 @@ func TestApplyDeltalocation3(t *testing.T) {
 	txn, rel := tae.getRelation()
 	_, _, err = rel.GetByFilter(context.Background(), filter3)
 	assert.Error(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 
 }
 

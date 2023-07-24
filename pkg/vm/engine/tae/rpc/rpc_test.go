@@ -1784,6 +1784,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	dbID := db.GetID()
 	assert.NoError(t, err)
 	rel, err := db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
 	tid := rel.GetMeta().(*catalog.TableEntry).GetID()
 	assert.NoError(t, rel.Append(context.Background(), taeBat))
 	assert.NoError(t, txn0.Commit(context.Background()))
@@ -1794,6 +1795,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	db, err = txn0.GetDatabase("db")
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
 	var metas []*catalog.BlockEntry
 	it := rel.MakeBlockIt()
 	for it.Valid() {
@@ -1822,6 +1824,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	db, err = txn0.GetDatabase("db")
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
 	inMemoryDeleteTxns := make([]*txn.TxnMeta, 0)
 	blkIDOffsetsMap := make(map[common.ID][]uint32)
 	makeDeleteTxnFn := func(val any) {
@@ -1868,6 +1871,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	db, err = txn0.GetDatabase("db")
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
 	attrs := []string{catalog2.BlockMeta_DeltaLoc}
 	vecTypes := []types.Type{types.New(types.T_varchar, types.MaxVarcharLen, 0)}
 
@@ -1884,6 +1888,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		delLocBat.Vecs[0].Append([]byte(deltaLoc.String()), false)
 	}
 	deleteS3Entry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "file", containers.ToCNBatch(delLocBat))
+	assert.NoError(t, err)
 	deleteS3Txn := mock1PCTxn(h.db)
 	err = h.HandlePreCommit(context.Background(), deleteS3Txn, &api.PrecommitWriteCmd{EntryList: []*api.Entry{deleteS3Entry}}, new(api.SyncLogTailResp))
 	assert.NoError(t, err)
@@ -1918,6 +1923,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	db, err = txn0.GetDatabase("db")
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
 	it = rel.MakeBlockIt()
 	for _, def := range schema.ColDefs {
 		length := 0
@@ -1927,15 +1933,10 @@ func TestApplyDeltaloc(t *testing.T) {
 			view, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn0, schema, def.Idx)
 			assert.NoError(t, err)
 			view.ApplyDeletes()
-			blkLength := view.GetData().Length()
-			if blkLength != 0 {
-			}
 			length += view.GetData().Length()
 			it.Next()
 		}
 		assert.Equal(t, 0, length)
 	}
 	assert.NoError(t, txn0.Commit(context.Background()))
-
-	return
 }

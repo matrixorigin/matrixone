@@ -251,6 +251,9 @@ func (node *DeleteNode) setPersistedRows() {
 				node.deltaloc,
 				nil,
 			)
+			if err == nil {
+				break
+			}
 		}
 	}
 	node.mask = roaring.NewBitmap()
@@ -263,7 +266,6 @@ func (node *DeleteNode) setPersistedRows() {
 	if err != nil {
 		panic(err)
 	}
-	return
 }
 
 func LoadPersistedDeletes(
