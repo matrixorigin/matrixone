@@ -42,6 +42,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		f, e = currentAccountCall(idx, proc, tblArg)
 	case "metadata_scan":
 		f, e = metadataScan(idx, proc, tblArg)
+	case "processlist":
+		f, e = processlist(idx, proc, tblArg)
 	default:
 		return process.ExecStop, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
@@ -51,13 +53,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		}
 		return process.ExecNext, e
 	}
-	if proc.InputBatch() == nil || len(proc.InputBatch().Zs) == 0 {
-		if f {
-			return process.ExecStop, e
-		}
+
+	bat := proc.InputBatch()
+	if bat == nil {
+		return process.ExecStop, e
+	}
+	if bat.IsEmpty() {
 		return process.ExecNext, e
 	}
-	if proc.InputBatch().VectorCount() != len(tblArg.retSchema) {
+
+	if bat.VectorCount() != len(tblArg.retSchema) {
 		return process.ExecStop, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
 	}
 	for i := range tblArg.retSchema {
@@ -96,6 +101,8 @@ func Prepare(proc *process.Process, arg any) error {
 		return currentAccountPrepare(proc, tblArg)
 	case "metadata_scan":
 		return metadataScanPrepare(proc, tblArg)
+	case "processlist":
+		return processlistPrepare(proc, tblArg)
 	default:
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}

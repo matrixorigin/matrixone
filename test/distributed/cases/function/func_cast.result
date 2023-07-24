@@ -237,7 +237,9 @@ a - b	a - b < 0
 1	false
 4294967294	false
 select any_value(a)-b as d, (any_value(a)-b >= 0), b from t1 group by b having d >= 0;
-SQL syntax error: column "d" must appear in the GROUP BY clause or be used in an aggregate function
+d    any_value(a) - b >= 0    b
+1    true    0
+0    true    1
 select cast((a - b) as unsigned) from t1 order by 1;
 cast((a - b) as unsigned)
 0

@@ -290,3 +290,5 @@ prepare stmt2 from 'select length(b) from blob_05';
 execute stmt2 ;
 length(b)
 55886
+deallocate prepare stmt1;
+deallocate prepare stmt2;

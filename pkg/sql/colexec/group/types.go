@@ -52,8 +52,10 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	//idx        *index.LowCardinalityIndex
 
-	aggVecs   []evalVector
-	groupVecs []evalVector
+	aggVecs           []evalVector
+	groupVecs         []evalVector
+	keyWidth          int // keyWidth is the width of group by columns, it determines which hash map to use.
+	groupVecsNullable bool
 
 	// multiVecs are used for group_concat,
 	// cause that group_concat can have many cols like group(a,b,c)
@@ -66,7 +68,7 @@ type container struct {
 
 	bat *batch.Batch
 
-	alreadyGetAgg bool
+	hasAggResult bool
 }
 
 type Argument struct {

@@ -389,3 +389,4 @@ col1    col2    col3    col4
 25    99    88    1
 33    11    33    1
 230    22    55    2
+deallocate prepare stmt1;

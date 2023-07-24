@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 )
 
 // RelationName counter for the new connection
@@ -37,6 +38,17 @@ type MOServer struct {
 	uaddr string
 	app   goetty.NetApplication
 	rm    *RoutineManager
+}
+
+// BaseService is an interface which indicates that the instance is
+// the base CN service and should implements the following methods.
+type BaseService interface {
+	// ID returns the ID of the service.
+	ID() string
+	// SQLAddress returns the SQL listen address of the service.
+	SQLAddress() string
+	// SessionMgr returns the session manager instance of the service.
+	SessionMgr() *queryservice.SessionManager
 }
 
 func (mo *MOServer) GetRoutineManager() *RoutineManager {
@@ -56,11 +68,21 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) *MOServer {
+func NewMOServer(
+	ctx context.Context,
+	addr string,
+	pu *config.ParameterUnit,
+	aicm *defines.AutoIncrCacheManager,
+	baseService BaseService,
+) *MOServer {
 	codec := NewSqlCodec()
 	rm, err := NewRoutineManager(ctx, pu, aicm)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
+	}
+	rm.setBaseService(baseService)
+	if baseService != nil {
+		rm.setSessionMgr(baseService.SessionMgr())
 	}
 	// TODO asyncFlushBatch
 	addresses := []string{addr}

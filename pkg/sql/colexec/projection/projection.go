@@ -52,15 +52,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+
+	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
+
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
-	rbat.Zs = proc.GetMPool().GetSels()
 
 	// do projection.
 	for i := range ap.ctr.projExecutors {
@@ -78,7 +79,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 	anal.Alloc(int64(newAlloc))
 
-	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.SetRowCount(bat.RowCount())
+
 	proc.PutBatch(bat)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)

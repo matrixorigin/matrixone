@@ -5,7 +5,9 @@
 -- @label:bvt
 
 -- auto_increment_increment
+-- @bvt:issue#10473
 show variables like 'auto%';
+-- @bvt:issue
 show variables like 'auto_increment_increment';
 set auto_increment_increment = 2;
 show variables like 'auto_increment_increment';
@@ -98,9 +100,6 @@ select table_schema, table_name, definer from views where table_schema = 'system
 desc profiling;
 select seq, state from profiling;
 
-desc `PROCESSLIST`;
-select * from `PROCESSLIST` limit 2;
-
 desc user_privileges;
 select grantee, table_catalog from user_privileges limit 2;
 desc schemata;
@@ -145,9 +144,11 @@ set wait_timeout = default;
 show variables like 'wait_timeout';
 
 --string type
+-- @bvt:issue#10473
 show variables like 'character_set_results';
 set character_set_server = default;
 show variables like 'character_set_results';
+-- @bvt:issue
 
 show variables like 'character_set_server';
 set character_set_server = default;

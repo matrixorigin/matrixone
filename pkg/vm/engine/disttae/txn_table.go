@@ -100,7 +100,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
 		if entry.typ == INSERT {
-			rows = rows + int64(entry.bat.Length())
+			rows = rows + int64(entry.bat.RowCount())
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
 				/*
@@ -569,11 +569,10 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
 	// temporary solution, will fix it in the future
 	newExprs := make([]*plan.Expr, len(exprs))
-	bat := batch.EmptyForConstFoldBatch
 	for i := range exprs {
 		newExprs[i] = plan2.DeepCopyExpr(exprs[i])
 		// newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
-		foldedExpr, _ := plan2.ConstantFold(bat, newExprs[i], tbl.proc, true)
+		foldedExpr, _ := plan2.ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], tbl.proc, true)
 		if foldedExpr != nil {
 			newExprs[i] = foldedExpr
 		}
@@ -644,7 +643,7 @@ func (tbl *txnTable) rangesOnePart(
 	txn := tbl.db.txn
 	for _, entry := range tbl.writes {
 		if entry.typ == INSERT {
-			if entry.bat == nil || entry.bat.Length() == 0 {
+			if entry.bat == nil || entry.bat.IsEmpty() {
 				continue
 			}
 			if entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
@@ -969,7 +968,7 @@ func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, erro
 }
 
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
-	if bat == nil || bat.Length() == 0 {
+	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
 	// for writing S3 Block
@@ -1122,7 +1121,7 @@ func (tbl *txnTable) compaction() error {
 			err = e
 			return false
 		}
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			return true
 		}
 		// ToDo: Optimize this logic, we need to control blocks num in one file
@@ -1144,17 +1143,17 @@ func (tbl *txnTable) compaction() error {
 		if err != nil {
 			return err
 		}
-		new_bat := batch.NewWithSize(1)
-		new_bat.Attrs = []string{catalog.BlockMeta_BlockInfo}
-		new_bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		newBat := batch.NewWithSize(1)
+		newBat.Attrs = []string{catalog.BlockMeta_BlockInfo}
+		newBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 		for _, blkInfo := range blkInfos {
 			vector.AppendBytes(
-				new_bat.GetVector(0),
+				newBat.GetVector(0),
 				catalog.EncodeBlockInfo(blkInfo),
 				false,
 				tbl.db.txn.proc.GetMPool())
 		}
-		new_bat.SetZs(len(blkInfos), tbl.db.txn.proc.GetMPool())
+		newBat.SetRowCount(len(blkInfos))
 		err = tbl.db.txn.WriteFile(
 			INSERT,
 			tbl.db.databaseId,
@@ -1162,13 +1161,13 @@ func (tbl *txnTable) compaction() error {
 			tbl.db.databaseName,
 			tbl.tableName,
 			name.String(),
-			new_bat,
+			newBat,
 			tbl.db.txn.dnStores[0])
 		if err != nil {
 			return err
 		}
 	}
-	remove_batch := make(map[*batch.Batch]bool)
+	removeBatch := make(map[*batch.Batch]bool)
 	// delete old block info
 	for idx, offsets := range mp {
 		bat := tbl.db.txn.writes[idx].bat
@@ -1176,13 +1175,13 @@ func (tbl *txnTable) compaction() error {
 		bat.AntiShrink(offsets)
 		// update txn.cnBlkId_Pos
 		tbl.db.txn.updatePosForCNBlock(bat.GetVector(0), idx)
-		if bat.Length() == 0 {
-			remove_batch[bat] = true
+		if bat.RowCount() == 0 {
+			removeBatch[bat] = true
 		}
 	}
 	tbl.db.txn.Lock()
 	for i := 0; i < len(tbl.db.txn.writes); i++ {
-		if remove_batch[tbl.db.txn.writes[i].bat] {
+		if removeBatch[tbl.db.txn.writes[i].bat] {
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
 			// maybe this will cause that the log imcrements unlimitly.
@@ -1215,7 +1214,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	bat.SetAttributes([]string{catalog.Row_ID})
 
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		return nil
 	}
 	return tbl.writeDnPartition(ctx, bat)
@@ -1486,6 +1485,11 @@ func (tbl *txnTable) newReader(
 		seqnumMp: seqnumMp,
 		typsMap:  mp,
 	}
+
+	tbl.Lock()
+	proc := tbl.proc
+	tbl.Unlock()
+
 	readers[0] = partReader
 
 	if readerNumber == 1 {
@@ -1499,7 +1503,7 @@ func (tbl *txnTable) newReader(
 					[]*catalog.BlockInfo{dirtyBlks[i]},
 					expr,
 					fs,
-					tbl.proc,
+					proc,
 				),
 			)
 		}
@@ -1515,7 +1519,7 @@ func (tbl *txnTable) newReader(
 				[]*catalog.BlockInfo{dirtyBlks[i]},
 				expr,
 				fs,
-				tbl.proc,
+				proc,
 			)
 		}
 		for j := len(dirtyBlks) + 1; j < readerNumber; j++ {
@@ -1532,7 +1536,7 @@ func (tbl *txnTable) newReader(
 		ts,
 		readerNumber-1,
 		expr,
-		tbl.proc)
+		proc)
 	objInfos, steps := groupBlocksToObjects(dirtyBlks, readerNumber-1)
 	blockReaders = distributeBlocksToBlockReaders(
 		blockReaders,
