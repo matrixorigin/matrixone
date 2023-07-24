@@ -1103,8 +1103,15 @@ func getConstValueByExpr(expr *plan.Expr,
 		return false, nil
 	}
 	defer exec.Free()
-	if ret := rule.GetConstantValue(vec, true); ret != nil {
+	if ret := rule.GetConstantValue(vec, true, 0); ret != nil {
 		return true, ret
 	}
 	return false, nil
+}
+
+func getConstExpr(oid int32, c *plan.Const) *plan.Expr {
+	return &plan.Expr{
+		Typ:  &plan.Type{Id: oid},
+		Expr: &plan.Expr_C{C: c},
+	}
 }

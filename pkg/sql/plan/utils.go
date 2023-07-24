@@ -1147,7 +1147,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		return nil, err
 	}
 	defer vec.Free(proc.Mp())
-	c := rule.GetConstantValue(vec, false)
+	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
 		return e, nil
 	}
