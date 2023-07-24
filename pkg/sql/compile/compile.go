@@ -1708,7 +1708,7 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.RightAnti,
 					Idx: c.anal.curr,
-					Arg: constructRightAnti(node, rightTyps, uint64(i), uint64(len(rs)), c.proc),
+					Arg: constructRightAnti(node, rightTyps, 0, 0, c.proc),
 				})
 			}
 		} else {
@@ -1728,7 +1728,7 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.RightSemi,
 					Idx: c.anal.curr,
-					Arg: constructRightSemi(node, rightTyps, uint64(i), uint64(len(rs)), c.proc),
+					Arg: constructRightSemi(node, rightTyps, 0, 0, c.proc),
 				})
 			}
 		} else {
