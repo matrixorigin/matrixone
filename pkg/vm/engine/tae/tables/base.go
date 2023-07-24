@@ -535,6 +535,10 @@ func (blk *baseBlock) TryDeleteByDeltaloc(
 	if blk.meta.IsAppendable() {
 		return
 	}
+	err2 := blk.meta.CheckConflict(txn)
+	if err2 != nil {
+		return
+	}
 	blk.Lock()
 	defer blk.Unlock()
 	if !blk.mvcc.GetDeleteChain().IsEmpty() {

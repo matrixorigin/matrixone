@@ -776,13 +776,14 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 	blkData := blk.GetBlockData()
 	node2, ok, err := blkData.TryDeleteByDeltaloc(tbl.store.txn, deltaloc)
 	if err == nil && ok {
+		if err = tbl.UpdateDeltaLoc(id, deltaloc); err != nil {
+			err = node2.PrepareRollback()
+			return false, err
+		}
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
 			return
 		}
 		tbl.store.warChecker.Insert(blk)
-		if err = tbl.UpdateDeltaLoc(id, deltaloc); err != nil {
-			return
-		}
 	}
 	return
 }
