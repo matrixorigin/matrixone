@@ -120,6 +120,7 @@ func runCtlServiceTest(
 			cns = append(cns, metadata.CNService{
 				ServiceID:  v.serviceID,
 				CtlAddress: address,
+				WorkState:  metadata.WorkState_Working,
 			})
 		} else if v.serviceType == metadata.ServiceType_DN {
 			dns = append(dns, metadata.DNService{

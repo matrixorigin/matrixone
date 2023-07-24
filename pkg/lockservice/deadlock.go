@@ -26,7 +26,9 @@ import (
 )
 
 var (
-	maxWaitingCheckCount = 10240
+	maxWaitingCheckCount         = 10240
+	deadlockCheckTaskCount       = 4
+	fetchWhoWaitingListTaskCount = 4
 )
 
 type detector struct {
@@ -60,9 +62,11 @@ func newDeadlockDetector(
 			stopper.WithLogger(getLogger().RawLogger())),
 	}
 	d.mu.activeCheckTxn = make(map[string]struct{}, maxWaitingCheckCount)
-	err := d.stopper.RunTask(d.doCheck)
-	if err != nil {
-		panic("impossible")
+	for i := 0; i < deadlockCheckTaskCount; i++ {
+		err := d.stopper.RunTask(d.doCheck)
+		if err != nil {
+			panic("impossible")
+		}
 	}
 	return d
 }

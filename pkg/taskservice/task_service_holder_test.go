@@ -30,7 +30,7 @@ func TestTaskHolderCanCreateTaskService(t *testing.T) {
 	store := NewMemTaskStorage()
 	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
 		runtime.DefaultRuntime(),
-		func(ctx context.Context) (string, error) { return "", nil },
+		func(ctx context.Context, random bool) (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
 		})
@@ -51,7 +51,7 @@ func TestTaskHolderCreateWithEmptyCommandReturnError(t *testing.T) {
 	store := NewMemTaskStorage()
 	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
 		runtime.DefaultRuntime(),
-		func(context.Context) (string, error) { return "", nil },
+		func(context.Context, bool) (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
 		})
@@ -62,7 +62,7 @@ func TestTaskHolderNotCreatedCanClose(t *testing.T) {
 	store := NewMemTaskStorage()
 	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
 		runtime.DefaultRuntime(),
-		func(context.Context) (string, error) { return "", nil },
+		func(context.Context, bool) (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
 		})
@@ -73,7 +73,7 @@ func TestTaskHolderCanClose(t *testing.T) {
 	store := NewMemTaskStorage()
 	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
 		runtime.DefaultRuntime(),
-		func(context.Context) (string, error) { return "", nil },
+		func(context.Context, bool) (string, error) { return "", nil },
 		func(s1, s2, s3 string) TaskStorageFactory {
 			return NewFixedTaskStorageFactory(store)
 		})
@@ -95,7 +95,7 @@ func TestRefreshTaskStorageCanRefresh(t *testing.T) {
 	address := "s1"
 	s := newRefreshableTaskStorage(
 		runtime.DefaultRuntime(),
-		func(context.Context) (string, error) { return address, nil },
+		func(context.Context, bool) (string, error) { return address, nil },
 		&testStorageFactory{stores: stores}).(*refreshableTaskStorage)
 	defer func() {
 		require.NoError(t, s.Close())
@@ -128,7 +128,7 @@ func TestRefreshTaskStorageCanClose(t *testing.T) {
 	address := "s1"
 	s := newRefreshableTaskStorage(
 		runtime.DefaultRuntime(),
-		func(context.Context) (string, error) { return address, nil },
+		func(context.Context, bool) (string, error) { return address, nil },
 		&testStorageFactory{stores: stores}).(*refreshableTaskStorage)
 	address = "s2"
 	require.True(t, s.maybeRefresh("s1"))

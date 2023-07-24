@@ -100,9 +100,6 @@ select table_schema, table_name, definer from views where table_schema = 'system
 desc profiling;
 select seq, state from profiling;
 
-desc `PROCESSLIST`;
-select * from `PROCESSLIST` limit 2;
-
 desc user_privileges;
 select grantee, table_catalog from user_privileges limit 2;
 desc schemata;

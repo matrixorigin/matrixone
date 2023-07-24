@@ -114,8 +114,7 @@ func NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
 		logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
 		runtime.WithClock(clock))
 	runtime.SetupProcessLevelRuntime(rt)
-	return NewTxnService(rt,
-		NewTestDNShard(shard),
+	return NewTxnService(NewTestDNShard(shard),
 		NewTestTxnStorage(log, clock),
 		sender,
 		zombie,
