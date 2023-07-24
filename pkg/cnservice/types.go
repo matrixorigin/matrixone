@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/ctlservice"
@@ -198,6 +199,9 @@ type Config struct {
 		EnableLeakCheck int `toml:"enable-leak-check"`
 		// MaxActiveAges a txn max active duration
 		MaxActiveAges toml.Duration `toml:"max-active-ages"`
+		// EnableCheckRCInvalidError this config is used to check and find RC bugs in pessimistic mode.
+		// Will remove it later version.
+		EnableCheckRCInvalidError bool `toml:"enable-check-rc-invalid-error"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
@@ -344,6 +348,10 @@ func (c *Config) Validate() error {
 		frontend.MaxPrepareNumberInOneSession = 100000
 	}
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
+
+	// TODO: remove this if rc is stable
+	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
+		c.Txn.EnableCheckRCInvalidError)
 	return nil
 }
 
