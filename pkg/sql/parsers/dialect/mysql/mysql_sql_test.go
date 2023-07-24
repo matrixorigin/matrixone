@@ -27,8 +27,34 @@ var (
 		input  string
 		output string
 	}{
-		input:  "ALTER TABLE t1 MODIFY c INT",
-		output: "ALTER TABLE t1 MODIFY c INT",
+		//input:  "alter table t1 modify column b int",
+		//output: "alter table t1 modify column b int",
+		//input:  "alter table t1 modify column b VARCHAR(20) first",
+		//output: "alter table t1 modify column b varchar(20) first",
+		//input:  "alter table t1 modify column b VARCHAR(20) after a",
+		//output: "alter table t1 modify column b varchar(20) after a",
+		//input:  "alter table t1 modify db1.b VARCHAR(20) after a",
+		//output: "alter table t1 modify column b varchar(20) after a",
+		//input:  "alter table emp modify deptno varchar(25)",
+		//output: "alter table emp modify column deptno varchar(25)",
+		//------------------------------------------------------------------------
+		//input:  "alter table t1 change column a b int",
+		//output: "alter table t1 change column a b int",
+		//input:  "alter table t1 change column a b int first",
+		//output: "alter table t1 change column a b int first",
+		//input:  "alter table t1 change a x varchar(20) after b",
+		//output: "alter table t1 change column a x varchar(20) after b",
+		//input:  "alter table t1 change column a x varchar(20) after b",
+		//output: "alter table t1 change column a x varchar(20) after b",
+		//------------------------------------------------------------------------
+		//input:  "alter table emp rename column deptno to deptid",
+		//output: "alter table emp rename column deptno to deptid",
+		//input:  "alter table t1 alter a set default 100",
+		//output: "alter table t1 alter column a set default 100",
+		//input:  "alter table t1 alter column a drop default",
+		//output: "alter table t1 alter column a drop default",
+		input:  "alter table t1 alter column b set visible",
+		output: "alter table t1 alter column b set visible",
 	}
 )
 
@@ -2056,6 +2082,54 @@ var (
 		{
 			input:  "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
 			output: "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
+		},
+		{
+			input:  "alter table t1 modify column b int",
+			output: "alter table t1 modify column b int",
+		},
+		{
+			input:  "alter table t1 modify column b VARCHAR(20) first",
+			output: "alter table t1 modify column b varchar(20) first",
+		},
+		{
+			input:  "alter table t1 modify column b VARCHAR(20) after a",
+			output: "alter table t1 modify column b varchar(20) after a",
+		},
+		{
+			input:  "alter table t1 modify b VARCHAR(20) after a",
+			output: "alter table t1 modify column b varchar(20) after a",
+		},
+		{
+			input:  "alter table t1 change column a b int",
+			output: "alter table t1 change column a b int",
+		},
+		{
+			input:  "alter table t1 change column a b int first",
+			output: "alter table t1 change column a b int first",
+		},
+		{
+			input:  "alter table t1 change a x varchar(20) after b",
+			output: "alter table t1 change column a x varchar(20) after b",
+		},
+		{
+			input:  "alter table t1 change column a x varchar(20) after b",
+			output: "alter table t1 change column a x varchar(20) after b",
+		},
+		{
+			input:  "alter table emp rename column deptno to deptid",
+			output: "alter table emp rename column deptno to deptid",
+		},
+		{
+			input:  "alter table t1 alter a set default 100",
+			output: "alter table t1 alter column a set default 100",
+		},
+		{
+			input:  "alter table t1 alter column a drop default",
+			output: "alter table t1 alter column a drop default",
+		},
+		{
+			input:  "alter table t1 alter column b set visible",
+			output: "alter table t1 alter column b set visible",
 		},
 		{
 			input: "alter table tbl1 drop column col1",

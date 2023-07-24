@@ -282,7 +282,7 @@ func (c *Compile) run(s *Scope) error {
 	case AlterView:
 		return s.AlterView(c)
 	case AlterTable:
-		return s.AlterTable3(c)
+		return s.AlterTableEntry(c)
 		//return s.AlterTable(c)
 	case DropTable:
 		return s.DropTable(c)
@@ -2911,7 +2911,8 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		WithTxn(c.proc.TxnOperator).
-		WithDatabase(c.db)
+		WithDatabase(c.db).
+		WithTimeZone(c.proc.SessionInfo.TimeZone)
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 

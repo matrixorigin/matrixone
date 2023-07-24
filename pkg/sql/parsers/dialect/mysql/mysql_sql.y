@@ -40,6 +40,7 @@ import (
     alterTableOptions tree.AlterTableOptions
     alterTableOption tree.AlterTableOption
     alterColpos *tree.AlterColPos
+    alterColPosition *tree.ColumnPosition
 
     tableDef tree.TableDef
     tableDefs tree.TableDefs
@@ -328,6 +329,7 @@ import (
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
+%token <str> MODIFY CHANGE
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -529,6 +531,7 @@ import (
 %type <alterTableOptions> alter_option_list
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
 %type <alterColpos> pos_info
+%type <alterColPosition> column_position
 %type <indexVisibility> visibility
 
 %type <tableOption> table_option
@@ -551,7 +554,7 @@ import (
 %type <str> charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
-%type <str> equal_opt
+%type <str> equal_opt column_keyword_opt
 %type <str> as_opt_id name_string
 %type <cstr> ident as_name_opt
 %type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
@@ -2607,6 +2610,63 @@ alter_option:
         }
         $$ = tree.AlterTableOption(opt)
     }
+|    MODIFY column_keyword_opt column_def column_position
+    {
+	opt := &tree.AlterTableModifyColumnClause{
+             Typ:           tree.AlterTableModifyColumn,
+             NewColumn:    $3,
+             Position:      $4,
+	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|   CHANGE column_keyword_opt column_name column_def column_position
+    {
+	opt := &tree.AlterTableChangeColumnClause{
+		Typ:          tree.AlterTableChangeColumn,
+		OldColumnName: $3,
+		NewColumn:    $4,
+		Position:      $5,
+	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|  RENAME COLUMN column_name TO column_name
+    {
+    	opt := &tree.AlterTableRenameColumnClause{
+    		Typ:            tree.AlterTableRenameColumn,
+		OldColumnName: $3,
+		NewColumnName: $5,
+    	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|  ALTER column_keyword_opt column_name SET DEFAULT bit_expr
+    {
+	opt := &tree.AlterTableAlterColumnClause{
+		Typ:            tree.AlterTableAlterColumn,
+		ColumnName:    $3,
+		DefalutExpr:   tree.NewAttributeDefault($6),
+		OptionType:    tree.AlterColumnOptionSetDefault,
+	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|  ALTER column_keyword_opt column_name SET visibility
+    {
+	opt := &tree.AlterTableAlterColumnClause{
+		Typ:         tree.AlterTableAlterColumn,
+		ColumnName:  $3,
+		Visibility:  $5,
+		OptionType: tree.AlterColumnOptionSetVisibility,
+	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|  ALTER column_keyword_opt column_name DROP DEFAULT
+    {
+	opt := &tree.AlterTableAlterColumnClause{
+		Typ:         	tree.AlterTableAlterColumn,
+		ColumnName:     $3,
+		OptionType:     tree.AlterColumnOptionDropDefault,
+        }
+	$$ = tree.AlterTableOption(opt)
+    }
 |   DROP alter_table_drop
     {
         $$ = tree.AlterTableOption($2)
@@ -2729,6 +2789,36 @@ pos_info:
             PreColName: $2,
             Pos: -2,
         }
+    }
+
+
+column_keyword_opt:
+    {
+	$$ = ""
+    }
+|   COLUMN
+    {
+        $$ = string("COLUMN")
+    }
+
+column_position:
+    {
+	$$ = &tree.ColumnPosition{
+	    Typ: tree.ColumnPositionNone,
+	}
+    }
+|   FIRST
+    {
+	$$ = &tree.ColumnPosition{
+	    Typ: tree.ColumnPositionFirst,
+	}
+    }
+|   AFTER column_name
+    {
+	$$ = &tree.ColumnPosition{
+            Typ:            tree.ColumnPositionAfter,
+            RelativeColumn: $2,
+	}
     }
 
 

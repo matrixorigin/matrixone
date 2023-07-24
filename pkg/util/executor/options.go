@@ -17,6 +17,7 @@ package executor
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"time"
 )
 
 // WithTxn exec sql in a exists txn
@@ -34,6 +35,11 @@ func (opts Options) WithDatabase(database string) Options {
 // WithAccountID execute sql in account
 func (opts Options) WithAccountID(accountID uint32) Options {
 	opts.accountID = accountID
+	return opts
+}
+
+func (opts Options) WithTimeZone(timeZone *time.Location) Options {
+	opts.TimeZone = timeZone
 	return opts
 }
 

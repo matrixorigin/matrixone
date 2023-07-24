@@ -137,6 +137,7 @@ const (
 	ErrDropIndexNeededInForeignKey       uint16 = 20454
 	ErrFKIncompatibleColumns             uint16 = 20455
 	ErrForeignKeyColumnCannotChangeChild uint16 = 20456
+	ErrForeignKeyColumnCannotChange      uint16 = 20457
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -326,6 +327,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDropIndexNeededInForeignKey:       {ER_DROP_INDEX_FK, []string{MySQLDefaultSqlState}, "Cannot drop index '%-.192s': needed in a foreign key constraint"},
 	ErrFKIncompatibleColumns:             {ER_FK_INCOMPATIBLE_COLUMNS, []string{MySQLDefaultSqlState}, "Referencing column '%s' and referenced column '%s' in foreign key constraint '%s' are incompatible."},
 	ErrForeignKeyColumnCannotChangeChild: {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
+	ErrForeignKeyColumnCannotChange:      {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1115,12 +1117,16 @@ func NewErrDropIndexNeededInForeignKey(ctx context.Context, args1 any) *Error {
 	return newError(ctx, ErrDropIndexNeededInForeignKey, args1)
 }
 
-func NewErrFKIncompatibleColumns(ctx context.Context, args1 any, args2 any) *Error {
-	return newError(ctx, ErrFKIncompatibleColumns, args1, args2)
+func NewErrFKIncompatibleColumns(ctx context.Context, oriColName any, refColName any, fkName any) *Error {
+	return newError(ctx, ErrFKIncompatibleColumns, oriColName, refColName, fkName)
 }
 
 func NewErrForeignKeyColumnCannotChangeChild(ctx context.Context, args1 any, args2 any, args3 any) *Error {
 	return newError(ctx, ErrForeignKeyColumnCannotChangeChild, args1, args2, args3)
+}
+
+func NewErrForeignKeyColumnCannotChange(ctx context.Context, oriColName any, fkName any) *Error {
+	return newError(ctx, ErrForeignKeyColumnCannotChange, oriColName, fkName)
 }
 
 var contextFunc atomic.Value

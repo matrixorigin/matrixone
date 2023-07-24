@@ -1067,12 +1067,12 @@ message AlterTable {
 	}
 	string database			      = 1;
 	TableDef table_def 		    = 2;
-	TableDef replica_table_def 	= 3;
+	TableDef copy_table_def 	= 3;
 	bool is_cluster_table	    = 4;
 	repeated Action actions   = 5;
 	AlgorithmType algorithm_type = 6;
-	string new_ddl_sql = 7;
-	string remove_data_sql = 8;
+	string create_table_sql = 7;
+	string insert_data_sql = 8;
 	string drop_original_table_sql = 9;
 }
 

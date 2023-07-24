@@ -1578,7 +1578,8 @@ func getTableComment(tableDef *plan.TableDef) string {
 func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
 	alterTable := &plan.AlterTable{
-		Actions: make([]*plan.AlterTable_Action, len(stmt.Options)),
+		Actions:       make([]*plan.AlterTable_Action, len(stmt.Options)),
+		AlgorithmType: plan.AlterTable_INPLACE,
 	}
 
 	databaseName := string(stmt.Table.SchemaName)

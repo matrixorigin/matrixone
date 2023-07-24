@@ -193,6 +193,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.s.ls,
 		exec.s.aicm,
 	)
+	proc.SessionInfo.TimeZone = exec.opts.TimeZone
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
