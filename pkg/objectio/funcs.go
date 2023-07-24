@@ -180,6 +180,7 @@ func ReadOneBlockWithMeta(
 		// read written normal column
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
+		logutil.Infof("read column %v", ext)
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 			Offset:        int64(ext.Offset()),
 			Size:          int64(ext.Length()),

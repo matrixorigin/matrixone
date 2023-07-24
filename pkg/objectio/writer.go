@@ -152,7 +152,7 @@ func (w *objectWriterV1) WriteObjectMeta(ctx context.Context, totalrow uint32, m
 	w.colmeta = metas
 }
 
-func (w *objectWriterV1) prepareDataMeta() ([]byte, Extent, error) {
+func (w *objectWriterV1) prepareDataMeta() ([]byte, []byte, []byte, Extent, error) {
 	var columnCount uint16
 	columnCount = 0
 	metaColCnt := uint16(0)
@@ -174,10 +174,11 @@ func (w *objectWriterV1) prepareDataMeta() ([]byte, Extent, error) {
 
 	offset := w.prepareBlockMeta(HeaderSize)
 
+	logutil.Infof("off set is %d", offset)
 	// prepare bloom filter
 	bloomFilterData, bloomFilterExtent, err := w.prepareBloomFilter(blockCount, offset)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	objectMeta.BlockHeader().SetBFExtent(bloomFilterExtent)
 	offset += bloomFilterExtent.Length()
@@ -185,19 +186,25 @@ func (w *objectWriterV1) prepareDataMeta() ([]byte, Extent, error) {
 	// prepare zone map area
 	zoneMapAreaData, zoneMapAreaExtent, err := w.prepareZoneMapArea(blockCount, offset)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	objectMeta.BlockHeader().SetZoneMapArea(zoneMapAreaExtent)
 	offset += zoneMapAreaExtent.Length()
 
-	// writer bloom filter
-	w.buffer.Write(bloomFilterData)
-
-	w.buffer.Write(zoneMapAreaData)
-
 	// prepare object meta and block index
-	meta, metaExtent, err := w.prepareObjectMeta(objectMeta, offset, seqnums)
-	return meta, metaExtent, err
+	meta, _, err := w.prepareObjectMeta(objectMeta, offset, seqnums)
+	metaHeader := buildMetaHeaderV1()
+
+	metaHeader.SetDataMetaCount(uint16(len(w.blocks)))
+	metaHeader.SetDataMetaOffset(metaHeader.Length())
+	logutil.Infof("metaHeader is %v", metaHeader)
+	var buf bytes.Buffer
+	h := IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_CurrVer}
+	buf.Write(EncodeIOEntryHeader(&h))
+	buf.Write(metaHeader)
+	buf.Write(meta)
+	b, ex, err := w.WriteWithCompress(offset, buf.Bytes())
+	return bloomFilterData, zoneMapAreaData, b, ex, err
 }
 
 func (w *objectWriterV1) prepareObjectMeta(objectMeta objectMetaV1, offset uint32, seqnums *Seqnums) ([]byte, Extent, error) {
@@ -342,38 +349,13 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	var err error
 	w.RLock()
 	defer w.RUnlock()
-	var columnCount uint16
-	columnCount = 0
-	metaColCnt := uint16(0)
-	maxSeqnum := uint16(0)
-	var seqnums *Seqnums
-	if len(w.blocks) == 0 {
-		logutil.Warn("object io: no block needs to be written")
-	} else {
-		columnCount = w.blocks[0].meta.GetColumnCount()
-		metaColCnt = w.blocks[0].meta.GetMetaColumnCount()
-		maxSeqnum = w.blocks[0].meta.GetMaxSeqnum()
-		seqnums = w.blocks[0].seqnums
-	}
 
 	objectHeader := BuildHeader()
 	objectHeader.SetSchemaVersion(w.schemaVer)
 
-	blockCount := uint32(len(w.blocks))
-	objectMeta := BuildObjectMeta(metaColCnt)
-	objectMeta.BlockHeader().SetColumnCount(columnCount)
-	objectMeta.BlockHeader().SetMetaColumnCount(metaColCnt)
-	objectMeta.BlockHeader().SetMaxSeqnum(maxSeqnum)
-
-	offset := w.prepareBlockMeta(HeaderSize)
-
 	// prepare object meta and block index
-	meta, metaExtent, err := w.prepareObjectMeta(objectMeta, offset, seqnums)
+	bloomFilterData, zoneMapAreaData, meta, metaExtent, err := w.prepareDataMeta()
 	objectHeader.SetExtent(metaExtent)
-
-	metaHeader := buildMetaHeaderV1()
-	metaHeader.SetDataMetaCount(uint16(blockCount))
-	metaHeader.SetDataMetaOffset(metaExtent.Offset())
 
 	// begin write
 
@@ -382,12 +364,10 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 
 	// writer data
 	w.writerBlocks()
+	// writer bloom filter
+	w.buffer.Write(bloomFilterData)
 
-	h := IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_CurrVer}
-	w.buffer.Write(EncodeIOEntryHeader(&h))
-
-	w.buffer.Write(metaHeader)
-
+	w.buffer.Write(zoneMapAreaData)
 	// writer object metadata
 	w.buffer.Write(meta)
 

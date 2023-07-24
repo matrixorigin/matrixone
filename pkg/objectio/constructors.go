@@ -44,6 +44,7 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 			decompressed := make([]byte, size)
 			decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
 			if err != nil {
+				panic(err.Error())
 				return nil, 0, err
 			}
 			return decompressed, int64(len(decompressed)), nil
