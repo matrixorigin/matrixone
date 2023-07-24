@@ -131,6 +131,7 @@ type PrimaryIndexEntry struct {
 	// fields for validating
 	BlockID types.Blockid
 	RowID   types.Rowid
+	Time    types.TS
 }
 
 func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
@@ -222,7 +223,7 @@ func (p *PartitionState) HandleLogtailEntry(
 		} else if IsSegTable(entry.TableName) {
 			// TODO p.HandleSegDelete(ctx, entry.Bat)
 		} else {
-			p.HandleRowsDelete(ctx, entry.Bat)
+			p.HandleRowsDelete(ctx, entry.Bat, packer)
 		}
 	default:
 		panic("unknown entry type")
@@ -293,6 +294,7 @@ func (p *PartitionState) HandleRowsInsert(
 					RowEntryID: entry.ID,
 					BlockID:    blockID,
 					RowID:      rowID,
+					Time:       entry.Time,
 				}
 				p.primaryIndex.Set(entry)
 			}
@@ -310,7 +312,11 @@ func (p *PartitionState) HandleRowsInsert(
 	return
 }
 
-func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch) {
+func (p *PartitionState) HandleRowsDelete(
+	ctx context.Context,
+	input *api.Batch,
+	packer *types.Packer,
+) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
@@ -324,6 +330,15 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
+	}
+
+	var primaryKeys [][]byte
+	if len(input.Vecs) > 2 {
+		// has primary key
+		primaryKeys = EncodePrimaryKeyVector(
+			batch.Vecs[2],
+			packer,
+		)
 	}
 
 	for i, rowID := range rowIDVector {
@@ -358,6 +373,19 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 			if ok && !be.EntryState {
 				p.dirtyBlocks.Set(be)
 			}
+
+			// primary key
+			if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
+				entry := &PrimaryIndexEntry{
+					Bytes:      primaryKeys[i],
+					RowEntryID: entry.ID,
+					BlockID:    blockID,
+					RowID:      rowID,
+					Time:       entry.Time,
+				}
+				p.primaryIndex.Set(entry)
+			}
+
 		})
 	}
 
