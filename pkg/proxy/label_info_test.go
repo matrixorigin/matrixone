@@ -53,6 +53,7 @@ func (c *mockHAKeeperClient) updateCN(uuid string, addr string, labels map[strin
 		UUID:       uuid,
 		SQLAddress: addr,
 		Labels:     labels,
+		WorkState:  metadata.WorkState_Working,
 	}
 	c.value.CNStores = append(c.value.CNStores, *cs)
 }
@@ -77,6 +78,17 @@ func (c *mockHAKeeperClient) GetClusterState(ctx context.Context) (logpb.Checker
 			Password: "p1",
 		},
 	}, nil
+}
+
+func (c *mockHAKeeperClient) updateCNWorkState(ctx context.Context, state logpb.CNWorkState) error {
+	c.Lock()
+	defer c.Unlock()
+	for i := range c.value.CNStores {
+		if c.value.CNStores[i].UUID == state.UUID {
+			c.value.CNStores[i].WorkState = state.State
+		}
+	}
+	return nil
 }
 
 func TestLabelInfoReserved(t *testing.T) {

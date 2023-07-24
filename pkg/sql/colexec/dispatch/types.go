@@ -115,6 +115,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 				r.cs.Write(timeoutCtx, message)
 				close(r.doneCh)
 			}
+
+			uuids := make([]uuid.UUID, 0, len(arg.RemoteRegs))
+			for i := range arg.RemoteRegs {
+				uuids = append(uuids, arg.RemoteRegs[i].Uuid)
+			}
+			colexec.Srv.DeleteUuids(uuids)
 		}
 	}
 

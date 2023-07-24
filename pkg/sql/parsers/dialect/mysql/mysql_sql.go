@@ -11129,7 +11129,7 @@ yydefault:
 //line mysql_sql.y:2861
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				&tree.VarAssignmentExpr{
+				{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
@@ -11377,7 +11377,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:3057
 		{
-			yyLOCAL = &tree.ShowStagse{
+			yyLOCAL = &tree.ShowStages{
 				Like: yyDollar[3].comparisionExprUnion(),
 			}
 		}

@@ -135,6 +135,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	case *plan.Expr_Col:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		return &ColumnExpressionExecutor{
+			mp:       proc.Mp(),
 			relIndex: int(t.Col.RelPos),
 			colIndex: int(t.Col.ColPos),
 			typ:      typ,
@@ -293,10 +294,16 @@ type FunctionExpressionExecutor struct {
 }
 
 type ColumnExpressionExecutor struct {
+	mp       *mpool.MPool
 	relIndex int
 	colIndex int
+
 	// result type.
 	typ types.Type
+	// we should new and cache a null vector here.
+	// because we need to change its type when doing the execution for const null vector.
+	// but other process may using its type at the same time.
+	nullVecCache *vector.Vector
 }
 
 type ParamExpressionExecutor struct {
@@ -461,17 +468,34 @@ func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*bat
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
-		vec.SetType(expr.typ)
+		vec = expr.getConstNullVec(expr.typ, vec.Length())
 	}
 	return vec, nil
 }
 
+func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int) *vector.Vector {
+	if expr.nullVecCache != nil {
+		expr.nullVecCache.SetType(typ)
+		expr.nullVecCache.SetLength(length)
+	} else {
+		expr.nullVecCache = vector.NewConstNull(typ, length, expr.mp)
+	}
+	return expr.nullVecCache
+}
+
 func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
-	return expr.Eval(proc, batches)
+	vec, err := expr.Eval(proc, batches)
+	if vec == expr.nullVecCache {
+		expr.nullVecCache = nil
+	}
+	return vec, err
 }
 
 func (expr *ColumnExpressionExecutor) Free() {
-	// Nothing should do.
+	if expr.nullVecCache != nil {
+		expr.nullVecCache.Free(expr.mp)
+		expr.nullVecCache = nil
+	}
 }
 
 func (expr *ColumnExpressionExecutor) ifResultMemoryReuse() bool {
@@ -690,41 +714,38 @@ func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 	for i, oldVec := range rbat.Vecs {
 		if alreadySet[i] < 0 {
 			newVec := (*vector.Vector)(nil)
-			if oldVec.GetType().Oid == types.T_any {
-				newVec = vector.NewConstNull(types.T_any.ToType(), oldVec.Length(), proc.Mp())
-			} else {
-				if executors[i].ifResultMemoryReuse() {
-					if e, ok := executors[i].(*FunctionExpressionExecutor); ok {
-						// if projection, we can get the result directly
-						newVec = e.resultVector.GetResultVector()
-						e.resultVector.SetResultVector(nil)
-
-					} else {
-						newVec, err = oldVec.Dup(proc.Mp())
-						if err != nil {
-							for j := range finalVectors {
-								finalVectors[j].Free(proc.Mp())
-							}
-							return 0, err
-						}
+			if columnExpr, ok := executors[i].(*ColumnExpressionExecutor); ok {
+				if sbat.GetCnt() == 1 {
+					newVec = oldVec
+					if columnExpr.nullVecCache != nil && oldVec == columnExpr.nullVecCache {
+						newVec = vector.NewConstNull(columnExpr.typ, oldVec.Length(), proc.Mp())
 						dupSize += newVec.Size()
 					}
+					sbat.ReplaceVector(oldVec, nil)
 				} else {
-					if sbat.GetCnt() == 1 {
-						newVec = oldVec
-						sbat.ReplaceVector(oldVec, nil)
-					} else {
-						newVec = proc.GetVector(*oldVec.GetType())
-						err = vector.GetUnionAllFunction(*oldVec.GetType(), proc.Mp())(newVec, oldVec)
-						if err != nil {
-							for j := range finalVectors {
-								finalVectors[j].Free(proc.Mp())
-							}
-							return 0, err
+					newVec = proc.GetVector(*oldVec.GetType())
+					err = vector.GetUnionAllFunction(*oldVec.GetType(), proc.Mp())(newVec, oldVec)
+					if err != nil {
+						for j := range finalVectors {
+							finalVectors[j].Free(proc.Mp())
 						}
-						dupSize += newVec.Size()
+						return 0, err
 					}
+					dupSize += newVec.Size()
 				}
+			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok {
+				// if projection, we can get the result directly
+				newVec = functionExpr.resultVector.GetResultVector()
+				functionExpr.resultVector.SetResultVector(nil)
+			} else {
+				newVec, err = oldVec.Dup(proc.Mp())
+				if err != nil {
+					for j := range finalVectors {
+						finalVectors[j].Free(proc.Mp())
+					}
+					return 0, err
+				}
+				dupSize += newVec.Size()
 			}
 
 			finalVectors = append(finalVectors, newVec)

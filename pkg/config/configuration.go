@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -729,6 +730,9 @@ type ParameterUnit struct {
 
 	// LockService instance
 	LockService lockservice.LockService
+
+	// QueryService instance
+	QueryService queryservice.QueryService
 
 	// HAKeeper client, which is used to get connection ID
 	// from HAKeeper currently.

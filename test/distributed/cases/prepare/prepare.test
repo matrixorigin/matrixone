@@ -240,3 +240,4 @@ prepare stmt1 from select * from t1;
 execute stmt1;
 drop table t1;
 execute stmt1;
+deallocate prepare stmt1;

@@ -181,7 +181,7 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 	th.SetTxnOperatorInvalid()
 	defer func() {
 		if err != nil {
-			tenant := th.ses.GetTenantName(nil)
+			tenant := th.ses.GetTenantName()
 			incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
 		}
 	}()
@@ -269,7 +269,7 @@ func (th *TxnHandler) CommitTxn() error {
 	var err error
 	defer func() {
 		// metric count
-		tenant := ses.GetTenantName(nil)
+		tenant := ses.GetTenantName()
 		incTransactionCounter(tenant)
 		if err != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
@@ -329,7 +329,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	var err error
 	defer func() {
 		// metric count
-		tenant := ses.GetTenantName(nil)
+		tenant := ses.GetTenantName()
 		incTransactionCounter(tenant)
 		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
 		if err != nil {

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -41,6 +42,7 @@ type sqlExecutor struct {
 	txnClient client.TxnClient
 	fs        fileservice.FileService
 	ls        lockservice.LockService
+	qs        queryservice.QueryService
 	aicm      *defines.AutoIncrCacheManager
 }
 
@@ -51,6 +53,7 @@ func NewSQLExecutor(
 	mp *mpool.MPool,
 	txnClient client.TxnClient,
 	fs fileservice.FileService,
+	qs queryservice.QueryService,
 	aicm *defines.AutoIncrCacheManager) executor.SQLExecutor {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService)
 	if !ok {
@@ -62,6 +65,7 @@ func NewSQLExecutor(
 		txnClient: txnClient,
 		fs:        fs,
 		ls:        v.(lockservice.LockService),
+		qs:        qs,
 		aicm:      aicm,
 		mp:        mp,
 	}
@@ -193,6 +197,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.opts.Txn(),
 		exec.s.fs,
 		exec.s.ls,
+		exec.s.qs,
 		exec.s.aicm,
 	)
 
