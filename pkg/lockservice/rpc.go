@@ -39,7 +39,7 @@ var (
 		},
 	}
 
-	defaultRPCTimeout = time.Second * 10
+	defaultRPCTimeout = time.Second * 3
 )
 
 type client struct {
@@ -217,6 +217,9 @@ func (s *server) onMessage(
 			getLogger().Debug("skip request by filter",
 				zap.String("request", req.DebugString()))
 		}
+		if msg.Cancel != nil {
+			msg.Cancel()
+		}
 		releaseRequest(req)
 		return nil
 	}
@@ -243,7 +246,7 @@ func (s *server) onMessage(
 		resp := acquireResponse()
 		resp.RequestID = req.RequestID
 		resp.Method = req.Method
-		handler(ctx, req, resp, cs)
+		handler(ctx, msg.Cancel, req, resp, cs)
 		return nil
 	}
 	return fn(req)
@@ -251,9 +254,14 @@ func (s *server) onMessage(
 
 func writeResponse(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	resp *pb.Response,
 	err error,
 	cs morpc.ClientSession) {
+	if cancel != nil {
+		defer cancel()
+	}
+
 	if err != nil {
 		resp.WrapError(err)
 	}

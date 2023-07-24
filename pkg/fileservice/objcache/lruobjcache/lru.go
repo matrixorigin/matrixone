@@ -25,6 +25,7 @@ type LRU struct {
 	size      int64
 	evicts    *list.List
 	kv        map[any]*list.Element
+	postSet   func(key any, value []byte, sz int64, isNewEntry bool)
 	postEvict func(key any, value []byte, sz int64)
 }
 
@@ -34,19 +35,23 @@ type lruItem struct {
 	Size  int64
 }
 
-func New(capacity int64, postEvict func(key any, value []byte, sz int64)) *LRU {
+func New(capacity int64,
+	postSet func(keySet any, valSet []byte, szSet int64, isNewEntry bool),
+	postEvict func(keyEvicted any, valEvicted []byte, szEvicted int64)) *LRU {
 	return &LRU{
 		capacity:  capacity,
 		evicts:    list.New(),
 		kv:        make(map[any]*list.Element),
+		postSet:   postSet,
 		postEvict: postEvict,
 	}
 }
 
-func (l *LRU) Set(key any, value []byte, size int64, preloading bool) (isNewEntry bool) {
+func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
 	l.Lock()
 	defer l.Unlock()
 
+	var isNewEntry bool
 	if elem, ok := l.kv[key]; ok {
 		// replace
 		isNewEntry = false
@@ -78,8 +83,11 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) (isNewEntr
 		l.size += size
 	}
 
+	if l.postSet != nil {
+		l.postSet(key, value, size, isNewEntry)
+	}
+
 	l.evict()
-	return
 }
 
 func (l *LRU) evict() {

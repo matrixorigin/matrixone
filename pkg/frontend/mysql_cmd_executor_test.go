@@ -1237,10 +1237,12 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 					{
 						ServiceID:  "s1",
 						SQLAddress: "addr1",
+						WorkState:  metadata.WorkState_Working,
 					},
 					{
 						ServiceID:  "s2",
 						SQLAddress: "addr2",
+						WorkState:  metadata.WorkState_Working,
 					},
 				},
 				nil,
@@ -1271,6 +1273,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 						Labels: map[string]metadata.LabelList{
 							"account": {Labels: []string{"t1"}},
 						},
+						WorkState: metadata.WorkState_Working,
 					},
 					{
 						ServiceID:  "s2",
@@ -1278,10 +1281,12 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 						Labels: map[string]metadata.LabelList{
 							"account": {Labels: []string{"t2"}},
 						},
+						WorkState: metadata.WorkState_Working,
 					},
 					{
 						ServiceID:  "s3",
 						SQLAddress: "addr3",
+						WorkState:  metadata.WorkState_Working,
 					},
 				},
 				nil,

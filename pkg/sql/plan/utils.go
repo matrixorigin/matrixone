@@ -267,12 +267,12 @@ func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
 	return expr
 }
 
-func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
+func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *BindContext) ([]*plan.Expr, error) {
 	conds := splitAstConjunction(astExpr)
 	exprs := make([]*plan.Expr, len(conds))
 
 	for i, cond := range conds {
-		cond, err := ctx.qualifyColumnNames(cond, nil, false)
+		cond, err := ctx.qualifyColumnNames(cond, expandAlias)
 		if err != nil {
 			return nil, err
 		}
