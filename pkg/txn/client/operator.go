@@ -17,10 +17,12 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -713,7 +715,21 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		if err := tc.checkResponseTxnStatusForCommit(resp); err != nil {
 			return err
 		}
-		return tc.checkTxnError(resp.TxnError, commitTxnErrors)
+		err := tc.checkTxnError(resp.TxnError, commitTxnErrors)
+		if err == nil || !tc.mu.txn.IsPessimistic() {
+			return err
+		}
+
+		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+		if ok && !v.(bool) {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				util.GetLogger().Fatal("failed",
+					zap.Error(err),
+					zap.String("txn", hex.EncodeToString(tc.txnID)))
+			}
+		}
+		return err
 	case txn.TxnMethod_Rollback:
 		if err := tc.checkResponseTxnStatusForRollback(resp); err != nil {
 			return err
