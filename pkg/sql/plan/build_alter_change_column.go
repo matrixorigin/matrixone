@@ -79,7 +79,7 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	if err = checkModifyGeneratedColumn(ctx.GetContext(), tableDef, col, newCol, spec.Position); err != nil {
+	if err = checkModifyNewColumn(ctx.GetContext(), tableDef, col, newCol, spec.Position); err != nil {
 		return err
 	}
 

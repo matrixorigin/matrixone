@@ -65,7 +65,7 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	if err = checkModifyGeneratedColumn(ctx.GetContext(), tableDef, col, newCol, spec.Position); err != nil {
+	if err = checkModifyNewColumn(ctx.GetContext(), tableDef, col, newCol, spec.Position); err != nil {
 		return err
 	}
 
@@ -73,7 +73,8 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	return nil
 }
 
-func checkModifyGeneratedColumn(ctx context.Context, tableDef *TableDef, oldCol, newCol *ColDef, pos *tree.ColumnPosition) error {
+// checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
+func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCol *ColDef, pos *tree.ColumnPosition) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
 		newCol.ColId = oldCol.ColId
 		newCol.Primary = oldCol.Primary

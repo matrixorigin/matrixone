@@ -304,12 +304,10 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 	return indexDef, nil
 }
 
-// findPositionRelativeColumn returns a pos relative to added generated column position.
+// findPositionRelativeColumn returns a position relative to the position of the add/modify/change column.
 func findPositionRelativeColumn(ctx context.Context, cols []*ColDef, pos *tree.ColumnPosition) (int, error) {
 	position := len(cols)
-	// Get the column position, default is cols's length means appending.
-	// For "alter table ... add column(...)", the position will be nil.
-	// For "alter table ... add column ... ", the position will be default one.
+	// gets the position of the column, which defaults to the length of the column indicating appending.
 	if pos == nil {
 		return position, nil
 	}
@@ -324,9 +322,9 @@ func findPositionRelativeColumn(ctx context.Context, cols []*ColDef, pos *tree.C
 			}
 		}
 		if relcolIndex == -1 {
-			return -1, moerr.NewBadFieldError(ctx, pos.RelativeColumn.Parts[0], "generated column function")
+			return -1, moerr.NewBadFieldError(ctx, pos.RelativeColumn.Parts[0], "Columns Set")
 		}
-		// Inserted position is after the mentioned column.
+		// the insertion position is after the above column.
 		position = int(relcolIndex + 1)
 	}
 	return position, nil
