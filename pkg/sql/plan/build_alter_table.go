@@ -138,11 +138,13 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		return nil, err
 	}
 	alterTablePlan.CreateTableSql = createDdl
-	fmt.Printf("--------------------->restore alter table ddl:\n %s \n", createDdl)
 
 	insertDml, err := buildAlterInsertDataSQL(ctx, alterTableCtx)
+	if err != nil {
+		return nil, err
+	}
 	alterTablePlan.InsertDataSql = insertDml
-	fmt.Printf("---------------------------------------------------------------")
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -414,11 +416,8 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	insertBuffer := bytes.NewBufferString("")
 	selectBuffer := bytes.NewBufferString("")
 
-	//fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 	isFirst := true
 	for key, value := range alterCtx.alterColMap {
-		//fmtCtx.Reset()
-		//value.Format(fmtCtx)
 		if isFirst {
 			insertBuffer.WriteString(key)
 			selectBuffer.WriteString(value)
@@ -432,13 +431,12 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) SELECT %s FROM `%s`.`%s`",
 		formatStr(schemaName), formatStr(copyTableName), insertBuffer.String(),
 		selectBuffer.String(), formatStr(schemaName), formatStr(originTableName))
-	fmt.Printf("------wuxiliang-----alter table insert SQL----> [%s]\n", insertSQL)
 	return insertSQL, nil
 }
 
 type AlterTableContext struct {
-	// key   --> 副本表列名，
-	// value --> 变换方式
+	// key   --> Replica Table Column Names
+	// value --> Original Table Column Name
 	alterColMap     map[string]string
 	schemaName      string
 	originTableName string
@@ -484,7 +482,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
-	//-----------------------------------------<<<<<< Abstract a function ------------------------------------------
+
 	if tableDef.ViewSql != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
 	}
