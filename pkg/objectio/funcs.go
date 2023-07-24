@@ -85,7 +85,7 @@ func ReadObjectMetaWithLocation(
 	location *Location,
 	noLRUCache bool,
 	fs fileservice.FileService,
-) (meta ObjectMeta, err error) {
+) (meta MetaHeader, err error) {
 	name := location.Name().String()
 	extent := location.Extent()
 	return ReadObjectMeta(ctx, name, &extent, noLRUCache, fs)
@@ -97,7 +97,7 @@ func ReadObjectMeta(
 	extent *Extent,
 	noLRUCache bool,
 	fs fileservice.FileService,
-) (meta ObjectMeta, err error) {
+) (meta MetaHeader, err error) {
 	var v []byte
 	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, constructorFactory); err != nil {
 		return
@@ -109,7 +109,7 @@ func ReadObjectMeta(
 		return
 	}
 
-	meta = ObjectMeta(obj.([]byte))
+	meta = MetaHeader(obj.([]byte))
 	return
 }
 

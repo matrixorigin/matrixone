@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 	"path"
 	"path/filepath"
@@ -110,8 +111,9 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.NoError(t, err)
 	nb0 := pool.CurrNB()
 	objectReader.CacheMetaExtent(&extents[0])
-	meta, err := objectReader.ReadMeta(context.Background(), pool)
+	metaHeader, err := objectReader.ReadMeta(context.Background(), pool)
 	assert.Nil(t, err)
+	meta, _ := metaHeader.DataMeta()
 	assert.Equal(t, uint32(3), meta.BlockCount())
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
@@ -148,8 +150,9 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReaderWithStr(name, service)
 	assert.Nil(t, err)
-	meta, err = objectReader.ReadAllMeta(context.Background(), pool)
+	metaHeader, err = objectReader.ReadAllMeta(context.Background(), pool)
 	assert.Nil(t, err)
+	meta, _ = metaHeader.DataMeta()
 	assert.Equal(t, uint32(3), meta.BlockCount())
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(3), meta.BlockCount())
@@ -227,8 +230,9 @@ func getObjectMeta(ctx context.Context, t *testing.B) ObjectMeta {
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	ext := blocks[0].BlockHeader().MetaLocation()
 	objectReader.CacheMetaExtent(&ext)
-	meta, err := objectReader.ReadMeta(context.Background(), nil)
+	metaHeader, err := objectReader.ReadMeta(context.Background(), nil)
 	assert.Nil(t, err)
+	meta, _ := metaHeader.DataMeta()
 	return meta
 }
 
@@ -258,7 +262,6 @@ func BenchmarkMetadata(b *testing.B) {
 }
 
 func TestNewObjectReader(t *testing.T) {
-	t.Skip("use debug")
 	ctx := context.Background()
 
 	dir := InitTestEnv(ModuleName, t.Name())
@@ -297,6 +300,13 @@ func TestNewObjectReader(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
+	objectReader, _ := NewObjectReaderWithStr(name, service)
+	ext := blocks[0].BlockHeader().MetaLocation()
+	objectReader.CacheMetaExtent(&ext)
+	metaHeader, err := objectReader.ReadMeta(context.Background(), nil)
+	assert.Nil(t, err)
+	meta, _ := metaHeader.DataMeta()
+	logutil.Infof("fsdfsdf %v", meta.BlockCount())
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {
