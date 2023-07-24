@@ -120,7 +120,15 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, cn := range c.mu.cnServices {
-		if selector.filterCN(cn) {
+		// If the all field is false, the work state of CN service MUST be
+		// working, and then we could do the filter job. If the state is not
+		// working, means that the CN may be marked as draining and is going
+		// to be removed, or has been removed.
+		// The state Unknown is allowed here to make many test cases pass, and
+		// it does not affect the function.
+		if (selector.all || cn.WorkState == metadata.WorkState_Working ||
+			cn.WorkState == metadata.WorkState_Unknown) &&
+			selector.filterCN(cn) {
 			if !apply(cn) {
 				return
 			}

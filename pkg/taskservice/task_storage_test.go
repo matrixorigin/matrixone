@@ -39,7 +39,7 @@ func createMem(t *testing.T) TaskStorage {
 func createRefresh(t *testing.T) TaskStorage {
 	return newRefreshableTaskStorage(
 		runtime.DefaultRuntime(),
-		func(context.Context) (string, error) { return "", nil },
+		func(context.Context, bool) (string, error) { return "", nil },
 		NewFixedTaskStorageFactory(NewMemTaskStorage()))
 }
 
