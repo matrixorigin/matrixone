@@ -233,7 +233,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	if bat != nil {
 		for insertRowIdx, pkColIdx := range pkPosInValues {
 			if pkValueExprs[pkColIdx] == nil {
-				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true)
+				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, 0)
 				if constExpr == nil {
 					return nil
 				}
