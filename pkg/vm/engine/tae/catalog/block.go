@@ -465,8 +465,7 @@ func (entry *BlockEntry) GetPKZoneMap(
 		return
 	}
 	seqnum := entry.GetSchema().GetSingleSortKeyIdx()
-	dataMeta, _ := meta.DataMeta()
-	cloned := dataMeta.GetBlockMeta(uint32(location.ID())).MustGetColumn(uint16(seqnum)).ZoneMap().Clone()
+	cloned := meta.MustDataMeta().GetBlockMeta(uint32(location.ID())).MustGetColumn(uint16(seqnum)).ZoneMap().Clone()
 	zm = &cloned
 	entry.pkZM.Store(zm)
 	return

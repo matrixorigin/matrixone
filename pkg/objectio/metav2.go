@@ -87,6 +87,13 @@ func (mh metaHeaderV1) DataMeta() (objectMetaV1, bool) {
 	offset := types.DecodeUint32(mh[dataMetaCount:tombstoneMetaCountOff])
 	return objectMetaV1(mh[offset:]), true
 }
+func (mh metaHeaderV1) MustDataMeta() objectMetaV1 {
+	meta, ok := mh.DataMeta()
+	if !ok {
+		panic("no data meta")
+	}
+	return meta
+}
 
 func (mh metaHeaderV1) TombstoneMeta() (objectMetaV1, bool) {
 	if mh.TombstoneMetaCount() == 0 {
