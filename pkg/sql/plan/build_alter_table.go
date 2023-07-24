@@ -494,7 +494,7 @@ func buildAlterTableEntry(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, er
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
 	if tableDef.Partition != nil {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "Currently, partition table does not support alter table")
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for partition table now")
 	}
 
 	algorithm := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options)
@@ -538,7 +538,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
-			algorithm = plan.AlterTable_COPY
+			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableChangeColumnClause:
