@@ -2513,23 +2513,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var mrs *MysqlResultSet
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
-	//var txnOp TxnOperator
-	//
-	//_, txnOp, err = ses.GetTxnHandler().GetTxn()
-	//if err != nil {
-	//	return err
-	//}
-	//if txnOp != nil /*&& !ses.IsBackgroundSession()*/ && !ses.IsDerivedStmt() {
-	//	txnOp.GetWorkspace().StartStatement()
-	//	defer func() {
-	//		txnOp.GetWorkspace().EndStatement()
-	//	}()
-	//
-	//	retErr = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
-	//	if retErr != nil {
-	//		return retErr
-	//	}
-	//}
 
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
