@@ -91,3 +91,37 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	alterCtx.alterColMap[newColName] = originalCol.Name
 	return nil
 }
+
+func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.AlterTableAlterColumnClause, alterCtx *AlterTableContext) error {
+	tableDef := alterPlan.CopyTableDef
+
+	// get the original column name
+	originalColName := spec.ColumnName.Parts[0]
+
+	// Check whether original column has existed.
+	originalCol := FindColumn(tableDef.Cols, originalColName)
+	if originalCol == nil || originalCol.Hidden {
+		return moerr.NewBadFieldError(ctx.GetContext(), tableDef.Name, originalColName)
+	}
+
+	for i, col := range tableDef.Cols {
+		if strings.EqualFold(col.Name, originalCol.Name) {
+			colDef := DeepCopyColDef(col)
+			if spec.OptionType == tree.AlterColumnOptionSetDefault {
+				tmpColumnDef := tree.NewColumnTableDef(spec.ColumnName, nil, []tree.ColumnAttribute{spec.DefalutExpr})
+				defaultValue, err := buildDefaultExpr(tmpColumnDef, colDef.Typ, ctx.GetProcess())
+				if err != nil {
+					return err
+				}
+				defaultValue.NullAbility = colDef.Default.NullAbility
+				colDef.Default = defaultValue
+			} else if spec.OptionType == tree.AlterColumnOptionDropDefault {
+				colDef.Default.Expr = nil
+				colDef.Default.OriginString = ""
+			}
+			tableDef.Cols[i] = colDef
+			break
+		}
+	}
+	return nil
+}

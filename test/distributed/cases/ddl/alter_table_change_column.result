@@ -626,3 +626,137 @@ empno    ename    job    mgr    hiredate    sal    comm    deptid
 7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
 7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
 7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+drop table if exists t1;
+CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+insert into t1 values(1, 'ab', '1980-12-17', 800);
+insert into t1 values(2, 'ac', '1981-02-20', 1600);
+insert into t1 values(3, 'ad', '1981-02-22', 500);
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 alter column a set default 100;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    a    1    a    A    0    NULL    NULL                    YES    NULL
+t1    0    a    2    b    A    0    NULL    NULL    YES                YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    100        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 alter column a drop default;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    a    1    a    A    0    NULL    NULL                    YES    NULL
+t1    0    a    2    b    A    0    NULL    NULL    YES                YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 alter column b set visible;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    a    1    a    A    0    NULL    NULL                    YES    NULL
+t1    0    a    2    b    A    0    NULL    NULL    YES                YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+drop table if exists t1;
+CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date default '1990-12-17', d decimal(7,2), UNIQUE KEY(a, b));
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        '1990-12-17'        
+d    DECIMAL64(7)    YES        null        
+insert into t1 values(1, 'ab', '1980-12-17', 800);
+insert into t1 values(2, 'ac', '1981-02-20', 1600);
+insert into t1 values(3, 'ad', '1981-02-22', 500);
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 alter column c set default '2003-12-17';
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    a    1    a    A    0    NULL    NULL                    YES    NULL
+t1    0    a    2    b    A    0    NULL    NULL    YES                YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        '2003-12-17'        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 alter column c drop default;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    a    1    a    A    0    NULL    NULL                    YES    NULL
+t1    0    a    2    b    A    0    NULL    NULL    YES                YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 alter column b set invisible;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    a    1    a    A    0    NULL    NULL                    YES    NULL
+t1    0    a    2    b    A    0    NULL    NULL    YES                YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
