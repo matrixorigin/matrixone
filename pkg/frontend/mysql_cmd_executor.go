@@ -2718,7 +2718,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		_, txnOp := ses.GetTxnHandler().GetTxnOperator()
 		if txnOp != nil && !ses.IsDerivedStmt() {
 			ok, id := ses.GetTxnHandler().calledStartStmt()
-			if ok && bytes.Compare(txnOp.Txn().ID, id) == 0 {
+			if ok && bytes.Equal(txnOp.Txn().ID, id) {
 				txnOp.GetWorkspace().EndStatement()
 			}
 		}
