@@ -197,7 +197,7 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 	arg.ctr.debug_len += uint32(len(vs))
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
-		segid := rowId.CloneSegmentID()
+		//		segid := rowId.CloneSegmentID()
 		blkOffset := rowId.GetBlockOffset()
 		rowOffset := rowId.GetRowOffset()
 		if blkOffset%uint16(arg.Nbucket) != uint16(arg.IBucket) {
@@ -217,6 +217,8 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 			bitmap.Add(uint64(rowOffset))
 		}
 
+		arg.ctr.blockId_type[str] = RawRowIdBatch
+		/* XXX why not only send the batch
 		// FIXME: string(segid[:]) means heap allocation, just take the id type itself
 		if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
 			arg.ctr.blockId_type[str] = RawBatchOffset
@@ -227,6 +229,7 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 		} else {
 			arg.ctr.blockId_type[str] = RawRowIdBatch
 		}
+		*/
 
 		if _, ok := arg.ctr.partitionId_blockId_rowIdBatch[pIdx]; !ok {
 			blockIdRowIdBatchMap := make(map[string]*batch.Batch)
