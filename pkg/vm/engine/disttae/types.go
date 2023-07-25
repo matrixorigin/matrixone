@@ -349,6 +349,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
 	}
+	// current statement has been rolled back, make can call IncrStatementID again.
+	txn.incrStatementCalled = false
 	return nil
 }
 func (txn *Transaction) resetSnapshot() error {
