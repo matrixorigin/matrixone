@@ -305,7 +305,7 @@ func TestNewObjectReader(t *testing.T) {
 	metaHeader, err := objectReader.ReadMeta(context.Background(), nil)
 	assert.Nil(t, err)
 	meta, _ := metaHeader.DataMeta()
-	assert.Equal(t, 2, meta.BlockCount())
+	assert.Equal(t, uint32(2), meta.BlockCount())
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {
