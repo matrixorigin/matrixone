@@ -462,7 +462,38 @@ func (node *AlterTableAlterColumnClause) Format(ctx *FmtCtx) {
 	}
 }
 
-// AlterTableType is the type for AlterTableSpec.
+// --------------------------------------------------------------------------------------
+type AlterTableOrderByColumnClause struct {
+	alterOptionImpl
+	Typ              AlterTableOptionType
+	AlterOrderByList []*AlterColumnOrder
+}
+
+func (node *AlterTableOrderByColumnClause) Format(ctx *FmtCtx) {
+	prefix := "order by "
+	for _, columnOrder := range node.AlterOrderByList {
+		ctx.WriteString(prefix)
+		columnOrder.Format(ctx)
+		prefix = ", "
+	}
+}
+
+type AlterColumnOrder struct {
+	Column    *UnresolvedName
+	Direction Direction
+}
+
+func (node *AlterColumnOrder) Format(ctx *FmtCtx) {
+	node.Column.Format(ctx)
+	if node.Direction != DefaultDirection {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.Direction.String())
+	}
+}
+
+//--------------------------------------------------------------------------------------
+
+// AlterTableType is the type for AlterTableOptionType.
 type AlterTableOptionType int
 
 // AlterTable types.
@@ -471,6 +502,7 @@ const (
 	AlterTableChangeColumn
 	AlterTableRenameColumn
 	AlterTableAlterColumn
+	AlterTableOrderByColumn
 	AlterTableAddColumn
 )
 

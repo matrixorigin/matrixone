@@ -127,3 +127,19 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 	}
 	return nil
 }
+
+// OrderByColumn Currently, Mo only performs semantic checks on alter table order by
+// and does not implement the function of changing the physical storage order of data in the table
+func OrderByColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.AlterTableOrderByColumnClause, alterCtx *AlterTableContext) error {
+	tableDef := alterPlan.CopyTableDef
+	for _, order := range spec.AlterOrderByList {
+		// get the original column name
+		originalColName := order.Column.Parts[0]
+		// Check whether original column has existed.
+		originalCol := FindColumn(tableDef.Cols, originalColName)
+		if originalCol == nil || originalCol.Hidden {
+			return moerr.NewBadFieldError(ctx.GetContext(), tableDef.Name, originalColName)
+		}
+	}
+	return nil
+}

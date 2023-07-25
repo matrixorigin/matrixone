@@ -53,8 +53,13 @@ var (
 		//output: "alter table t1 alter column a set default 100",
 		//input:  "alter table t1 alter column a drop default",
 		//output: "alter table t1 alter column a drop default",
-		input:  "alter table t1 alter column b set visible",
-		output: "alter table t1 alter column b set visible",
+		//input:  "alter table t1 alter column b set visible",
+		//output: "alter table t1 alter column b set visible",
+		//------------------------------------------------------------------------
+		//input:  "alter table t1 order by a ASC, b DESC",
+		//output: "alter table t1 order by a asc, b desc",
+		input:  "alter table t1 order by a, b DESC",
+		output: "alter table t1 order by a, b desc",
 	}
 )
 
@@ -2130,6 +2135,14 @@ var (
 		{
 			input:  "alter table t1 alter column b set visible",
 			output: "alter table t1 alter column b set visible",
+		},
+		{
+			input:  "alter table t1 order by a ASC, b DESC",
+			output: "alter table t1 order by a asc, b desc",
+		},
+		{
+			input:  "alter table t1 order by a, b DESC",
+			output: "alter table t1 order by a, b desc",
 		},
 		{
 			input: "alter table tbl1 drop column col1",

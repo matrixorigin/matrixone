@@ -342,3 +342,22 @@ alter table t1 alter column b set invisible;
 show index from t1;
 desc t1;
 select * from t1;
+----------------------------------------------------------------------------------------
+drop table if exists t1;
+CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
+desc t1;
+
+insert into t1 values(1, 'ab', '1980-12-17', 800);
+insert into t1 values(2, 'ac', '1981-02-20', 1600);
+insert into t1 values(3, 'ad', '1981-02-22', 500);
+select * from t1;
+
+alter table t1 order by a DESC, b ASC;
+desc t1;
+select * from t1;
+
+alter table t1 order by a DESC, c;
+desc t1;
+select * from t1;
+
+drop table t1;

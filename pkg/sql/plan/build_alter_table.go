@@ -123,6 +123,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			err = RenameColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableAlterColumnClause:
 			err = AlterColumn(ctx, alterTablePlan, option, alterTableCtx)
+		case *tree.AlterTableOrderByColumnClause:
+			err = OrderByColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.TableOptionAutoIncrement:
 			// TODO
 		default:
@@ -546,6 +548,8 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterTableRenameColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableAlterColumnClause:
+			algorithm = plan.AlterTable_COPY
+		case *tree.AlterTableOrderByColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.TableOptionAutoIncrement:
 			algorithm = plan.AlterTable_INPLACE

@@ -41,6 +41,8 @@ import (
     alterTableOption tree.AlterTableOption
     alterColpos *tree.AlterColPos
     alterColPosition *tree.ColumnPosition
+    alterColumnOrderBy []*tree.AlterColumnOrder
+    alterColumnOrder *tree.AlterColumnOrder
 
     tableDef tree.TableDef
     tableDefs tree.TableDefs
@@ -222,8 +224,8 @@ import (
     cstr *tree.CStr
     incrementByOption *tree.IncrementByOption
     minValueOption  *tree.MinValueOption
-    maxValueOption  *tree.MaxValueOption 
-    startWithOption *tree.StartWithOption 
+    maxValueOption  *tree.MaxValueOption
+    startWithOption *tree.StartWithOption
 
     whenClause2 *tree.WhenStmt
     whenClauseList2 []*tree.WhenStmt
@@ -242,10 +244,12 @@ import (
 %token LEX_ERROR
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
-%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
+%nonassoc LOWER_THAN_ORDER
+%nonassoc ORDER
+%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER 
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
 %token <str> INSTANT INPLACE COPY DISABLE ENABLE UNDEFINED MERGE TEMPTABLE DEFINER INVOKER SQL SECURITY CASCADED
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
@@ -538,6 +542,8 @@ import (
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
 %type <alterColpos> pos_info
 %type <alterColPosition> column_position
+%type <alterColumnOrder> alter_column_order
+%type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
 
 %type <tableOption> table_option
@@ -1015,7 +1021,7 @@ case_stmt:
     {
         $$ = &tree.CaseStmt{
             Expr: $2,
-            Whens: $3,  
+            Whens: $3,
             Else: $4,
         }
     }
@@ -2373,7 +2379,7 @@ table_lock_elem:
         $$ = tree.TableLock{Table: *$1, LockType: $2}
     }
 
-table_lock_type:  
+table_lock_type:
     READ
     {
         $$ = tree.TableLockRead
@@ -2678,6 +2684,14 @@ alter_option:
         }
 	$$ = tree.AlterTableOption(opt)
     }
+|  ORDER BY alter_column_order_list %prec LOWER_THAN_ORDER
+    {
+    	opt := &tree.AlterTableOrderByColumnClause{
+                Typ:         	  tree.AlterTableOrderByColumn,
+        	AlterOrderByList: $3,
+        }
+	$$ = tree.AlterTableOption(opt)
+    }
 |   DROP alter_table_drop
     {
         $$ = tree.AlterTableOption($2)
@@ -2780,7 +2794,7 @@ lock_type:
 
 with_type:
     WITHOUT
-|   WITH   
+|   WITH
 
 pos_info:
     {
@@ -2832,6 +2846,22 @@ column_position:
 	}
     }
 
+alter_column_order_list:
+     alter_column_order
+     {
+	 $$ = []*tree.AlterColumnOrder{$1}
+     }
+|   alter_column_order_list ',' alter_column_order
+    {
+	 $$ = append($1, $3)
+    }
+
+alter_column_order:
+    column_name asc_desc_opt
+    {
+	$$ = &tree.AlterColumnOrder{Column: $1, Direction: $2}
+    }
+
 
 alter_table_rename:
     table_name_unresolved
@@ -2842,7 +2872,7 @@ alter_table_rename:
     }
 
 alter_table_drop:
-    INDEX ident 
+    INDEX ident
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropIndex,
@@ -2856,28 +2886,28 @@ alter_table_drop:
             Name: tree.Identifier($2.Compare()),
         }
     }
-|   ident 
+|   ident
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropColumn,
             Name: tree.Identifier($1.Compare()),
         }
     }
-|   COLUMN ident 
+|   COLUMN ident
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropColumn,
             Name: tree.Identifier($2.Compare()),
         }
     }
-|   FOREIGN KEY ident 
+|   FOREIGN KEY ident
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropForeignKey,
             Name: tree.Identifier($3.Compare()),
         }
     }
-|   PRIMARY KEY 
+|   PRIMARY KEY
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropPrimaryKey,
@@ -2957,9 +2987,9 @@ alter_database_config_stmt:
                 Value: $8,
             },
         }
-        $$ = &tree.SetVar{Assignments: assignments} 
+        $$ = &tree.SetVar{Assignments: assignments}
     }
-    
+
 alter_account_auth_option:
 {
     $$ = tree.AlterAccountAuthOption{
@@ -3381,7 +3411,7 @@ show_sequences_stmt:
     SHOW SEQUENCES database_name_opt where_expression_opt
     {
         $$ = &tree.ShowSequences{
-           DBName: $3, 
+           DBName: $3,
            Where: $4,
         }
     }
@@ -5153,7 +5183,7 @@ proc_arg_in_out_type:
 
 
 create_function_stmt:
-    CREATE FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING 
+    CREATE FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING
     {
         $$ = &tree.CreateFunction{
             Name: $3,
@@ -5539,7 +5569,7 @@ alter_stage_stmt:
     {
         $$ = &tree.AlterStage{
             	IfNotExists: $3,
-	            Name: tree.Identifier($4.Compare()),           
+	            Name: tree.Identifier($4.Compare()),
 	            UrlOption: $6,
 	            CredentialsOption: $7,
 	            StatusOption: $8,
@@ -6084,7 +6114,7 @@ create_table_stmt:
             Defs: $7,
             Options: $9,
             PartitionOption: $10,
-            ClusterByOption: $11, 
+            ClusterByOption: $11,
         }
     }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt_2
@@ -6186,7 +6216,7 @@ create_sequence_stmt:
             MinValue: $7,
             MaxValue: $8,
             StartWith: $9,
-            Cycle: $10, 
+            Cycle: $10,
         }
     }
 as_datatype_opt:
@@ -6211,7 +6241,7 @@ increment_by_opt:
     {
         $$ = nil
     }
-|   INCREMENT BY INTEGRAL 
+|   INCREMENT BY INTEGRAL
     {
         $$ = &tree.IncrementByOption{
             Minus: false,
@@ -6255,7 +6285,7 @@ min_value_opt:
     {
         $$ = nil
     }
-|   MINVALUE INTEGRAL 
+|   MINVALUE INTEGRAL
     {
         $$ = &tree.MinValueOption{
             Minus: false,
@@ -8386,8 +8416,8 @@ function_call_keyword:
         exprs := make([]tree.Expr, 1)
         exprs[0] = $2
         $$ = &tree.FuncExpr{
-           Func: tree.FuncName2ResolvableFunctionReference(name), 
-           Exprs: exprs, 
+           Func: tree.FuncName2ResolvableFunctionReference(name),
+           Exprs: exprs,
         }
     }
 |   BINARY column_name
@@ -8396,7 +8426,7 @@ function_call_keyword:
         exprs := make([]tree.Expr, 1)
         exprs[0] = $2
         $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name), 
+            Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: exprs,
         }
     }
