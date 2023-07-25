@@ -106,7 +106,6 @@ func TestAggregator(t *testing.T) {
 			ResponseAt:    fixedTime,
 			RequestAt:     fixedTime.Add(-10 * time.Millisecond),
 			Duration:      10 * time.Millisecond,
-			RowsRead:      1,
 			TransactionID: _1TxnID,
 			StatementID:   _1TxnID,
 			Status:        StatementStatusSuccess,
@@ -192,7 +191,6 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, aggrWindow, results[1].(*StatementInfo).Duration)
 	assert.Equal(t, aggrWindow, results[2].(*StatementInfo).Duration)
 	assert.Equal(t, aggrWindow, results[3].(*StatementInfo).Duration)
-	assert.Equal(t, int64(5), results[0].(*StatementInfo).RowsRead)
 	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
 	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
@@ -354,5 +352,7 @@ func TestAggregatorWithStmtMerge(t *testing.T) {
 	res := "/*" + strconv.FormatInt(results[0].(*StatementInfo).AggrCount, 10) + " queries */ \n" + results[0].(*StatementInfo).StmtBuilder.String()
 
 	assert.Equal(t, "/*2 queries */ \nSELECT 11\nSELECT 11", res)
+
+	assert.Equal(t, int64(2), results[0].(*StatementInfo).RowsRead)
 
 }
