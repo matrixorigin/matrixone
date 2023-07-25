@@ -125,7 +125,7 @@ func (mh metaHeaderV1) SetTombstoneMetaCount(count uint16) {
 }
 
 func (mh metaHeaderV1) SetTombstoneMetaOffset(offset uint32) {
-	copy(mh[tombstoneMetaCountOff:tombstoneMetaCountOff+tombstoneMetaCount], types.EncodeUint32(&offset))
+	copy(mh[tombstoneMetaCountOff+tombstoneMetaCount:tombstoneMetaCountOff+tombstoneMetaCount+tombstoneMetaOffset], types.EncodeUint32(&offset))
 }
 
 func (mh metaHeaderV1) SubMetaIndex() SubMetaIndex {

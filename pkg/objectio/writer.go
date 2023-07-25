@@ -132,7 +132,7 @@ func (w *objectWriterV1) WriteTombstone(batch *batch.Batch) (BlockObject, error)
 	denseSeqnums := NewSeqnums(nil)
 	denseSeqnums.InitWithColCnt(len(batch.Vecs))
 	block := NewBlock(denseSeqnums)
-	w.AddTombstone(block, batch)
+	w.AddTombstone(block, batch, denseSeqnums)
 	return block, nil
 }
 
@@ -182,16 +182,16 @@ func (w *objectWriterV1) prepareDataMeta(objectMeta objectMetaV1, blocks []block
 	objectMeta.BlockHeader().SetMaxSeqnum(maxSeqnum)
 
 	// prepare object meta and block index
-	meta, extent, err := w.prepareObjectMeta(objectMeta, offset, seqnums)
+	meta, extent, err := w.prepareObjectMeta(blocks, objectMeta, offset, seqnums)
 	if err != nil {
 		return nil, nil, err
 	}
 	return meta, extent, err
 }
 
-func (w *objectWriterV1) prepareObjectMeta(objectMeta objectMetaV1, offset uint32, seqnums *Seqnums) ([]byte, Extent, error) {
+func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta objectMetaV1, offset uint32, seqnums *Seqnums) ([]byte, Extent, error) {
 	length := uint32(0)
-	blockCount := uint32(len(w.blocks))
+	blockCount := uint32(len(blocks))
 	objectMeta.BlockHeader().SetSequence(uint16(blockCount))
 	sid := w.name.SegmentId()
 	blockId := NewBlockid(&sid, w.name.Num(), uint16(blockCount))
@@ -205,7 +205,7 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta objectMetaV1, offset uint3
 	blockIndex := BuildBlockIndex(blockCount)
 	blockIndex.SetBlockCount(blockCount)
 	length += blockIndex.Length()
-	for i, block := range w.blocks {
+	for i, block := range blocks {
 		n := uint32(len(block.meta))
 		blockIndex.SetBlockMetaPos(uint32(i), length, n)
 		length += n
@@ -217,7 +217,7 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta objectMetaV1, offset uint3
 	buf.Write(objectMeta)
 	buf.Write(blockIndex)
 	// writer block metadata
-	for _, block := range w.blocks {
+	for _, block := range blocks {
 		buf.Write(block.meta)
 	}
 	return buf.Bytes(), extent, nil
@@ -384,7 +384,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	metaHeader.SetDataMetaOffset(metaHeader.Length())
 	tmeta, _, err := w.prepareDataMeta(tObjectMeta, w.tombstones, metaExtent.End())
 	metaHeader.SetTombstoneMetaCount(uint16(len(w.tombstones)))
-	metaHeader.SetTombstoneMetaOffset(metaHeader.Length() + metaExtent.Length())
+	metaHeader.SetTombstoneMetaOffset(metaHeader.Length() + metaExtent.OriginSize())
 	var buf bytes.Buffer
 	h := IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_CurrVer}
 	buf.Write(EncodeIOEntryHeader(&h))
@@ -524,12 +524,12 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 	return nil
 }
 
-func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch) error {
+func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) error {
 	w.Lock()
 	defer w.Unlock()
 	blockMeta.BlockHeader().SetSequence(uint16(w.lastId))
 
-	block := blockData{meta: blockMeta}
+	block := blockData{meta: blockMeta, seqnums: seqnums}
 	var data []byte
 	var buf bytes.Buffer
 	var rows int

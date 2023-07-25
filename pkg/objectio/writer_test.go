@@ -290,6 +290,8 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
+	_, err = objectWriter.WriteTombstone(bat)
+	assert.Nil(t, err)
 	ts := time.Now()
 	option := WriteOptions{
 		Type: WriteTS,
@@ -297,7 +299,7 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(blocks))
+	assert.Equal(t, 3, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	ext := blocks[0].BlockHeader().MetaLocation()
@@ -307,7 +309,7 @@ func TestNewObjectReader(t *testing.T) {
 	meta, _ := metaHeader.DataMeta()
 	assert.Equal(t, uint32(2), meta.BlockCount())
 	meta, _ = metaHeader.TombstoneMeta()
-	assert.Equal(t, uint32(0), meta.BlockCount())
+	assert.Equal(t, uint32(1), meta.BlockCount())
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {
