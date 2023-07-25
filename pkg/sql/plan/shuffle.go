@@ -152,7 +152,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 	switch n.JoinType {
-	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI:
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT:
 	default:
 		return
 	}
