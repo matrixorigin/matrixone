@@ -2141,6 +2141,10 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
 
+	if len(c.cnList) > 1 {
+		n.Stats.ShuffleMethod = plan.ShuffleMethod_Noraml
+	}
+
 	if n.Stats.ShuffleMethod == plan.ShuffleMethod_Follow {
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
