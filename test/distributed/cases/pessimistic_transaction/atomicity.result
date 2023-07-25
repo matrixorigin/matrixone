@@ -1,0 +1,243 @@
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+begin;
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+Rollback;
+select * from test_11 ;
+c    d
+begin;
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+commit;
+select * from test_11 ;
+c    d
+1    1
+2    2
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+begin;
+delete from test_11 where c < 3;
+update test_11 set d = c + 1 where c >= 3;
+rollback;
+select * from test_11 ;
+c    d
+1    1
+2    2
+3    1
+4    2
+begin;
+delete from test_11 where c <3;
+update test_11 set d = c + 1 where c >= 3;
+commit;
+select * from test_11 ;
+c    d
+3    4
+4    5
+drop table if exists test_11;
+begin;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+rollback;
+select * from test_11 ;
+SQL parser error: table "test_11" does not exist
+begin;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+delete from test_11 where c <3;
+update test_11 set d = c + 1 where c >= 3;
+commit;
+select * from test_11;
+c    d
+3    4
+4    5
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+rollback;
+select * from test_11;
+c    d
+1    1
+2    2
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+begin;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+commit;
+drop table if exists test_11;
+select * from test_11 ;
+SQL parser error: table "test_11" does not exist
+begin;
+create table test_12(col1 int primary key,col2 varchar(25));
+create unique index id_01 on test_12(col2);
+select * from test_12;
+col1    col2
+show create table test_12;
+Table    Create Table
+test_12    CREATE TABLE `test_12` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `id_01` (`col2`)\n)
+show create table test_12;
+no such table .test_12
+rollback ;
+show create table test_12;
+no such table atomicity.test_12
+select * from test_12;
+SQL parser error: table "test_12" does not exist
+start transaction;
+create table test_12(col1 int primary key,col2 varchar(25));
+insert into test_12 values(1,'a'),(2,'b');
+use atomicity;
+select * from test_12;
+SQL parser error: table "test_12" does not exist
+create table test_12(col1 int,col2 varchar(25));
+insert into test_12 values (90,'tt');
+select * from test_12;
+col1    col2
+1    a
+2    b
+show create table test_12;
+Table    Create Table
+test_12    CREATE TABLE `test_12` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
+commit;
+ExpectedDup
+show create table test_12;
+Table    Create Table
+test_12    CREATE TABLE `test_12` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(25) DEFAULT NULL\n)
+select * from test_12;
+col1    col2
+90    tt
+drop table test_12;
+start transaction;
+create table test_12(col1 int primary key auto_increment,col2 varchar(25));
+insert into test_12(col2) values('c'),('d'),('e');
+create index id_01 on test_12(col2);
+select * from test_12;
+col1    col2
+1    c
+2    d
+3    e
+show create table test_12;
+Table    Create Table
+test_12    CREATE TABLE `test_12` (\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nKEY `id_01` (`col2`)\n)
+commit;
+show create table test_12;
+Table    Create Table
+test_12    CREATE TABLE `test_12` (\n`col1` INT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nKEY `id_01` (`col2`)\n)
+select * from test_12;
+col1    col2
+1    c
+2    d
+3    e
+create database s_db_1;
+begin;
+use s_db_1;
+create table test_13(col1 int primary key,col2 varchar(25));
+rollback;
+drop database s_db_1;
+use s_db_1;
+invalid database s_db_1
+select * from test_13;
+SQL parser error: table "test_13" does not exist
+create database s_db_1;
+start transaction ;
+use s_db_1;
+create table test_13(col1 int primary key,col2 varchar(25));
+create database s_db_1;
+database s_db_1 already exists
+commit;
+drop database s_db_1;
+begin;
+use atomicity;
+create table test_14(col1 int primary key,col2 varchar(25), unique key col2(col2));
+insert into test_14 values(1,'a'),(2,'b');
+create view test_view_1 as select * from test_14;
+use atomicity;
+select * from test_view_1;
+SQL parser error: table "test_view_1" does not exist
+show create table test_14;
+Table    Create Table
+test_14    CREATE TABLE `test_14` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`)\n)
+select  * from test_view_1;
+col1    col2
+1    a
+2    b
+rollback ;
+select * from test_14;
+SQL parser error: table "test_14" does not exist
+select  * from test_view_1;
+SQL parser error: table "test_view_1" does not exist
+show create table test_14;
+no such table atomicity.test_14
+start transaction ;
+use atomicity;
+create temporary table test_15(col1 int,col2 float);
+insert into test_15 values(1,20.98),(2,30.34);
+use atomicity;
+select * from test_15;
+SQL parser error: table "test_15" does not exist
+select * from test_15;
+col1    col2
+1    20.98
+2    30.34
+rollback ;
+select * from test_15;
+SQL parser error: table "test_15" does not exist
+start transaction ;
+use atomicity;
+create external table test_ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select num_col1 ,num_col2 from test_ex_table_1;
+num_col1    num_col2
+60    -1000
+-128    -32768
+127    32767
+null    null
+create table test_16(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19));
+insert into test_16 select * from test_ex_table_1;
+rollback ;
+select num_col1 ,num_col2  from test_ex_table_1;
+SQL parser error: table "test_ex_table_1" does not exist
+select num_col1 ,num_col2  from test_16;
+SQL parser error: table "test_16" does not exist
+begin;
+use atomicity;
+create external table test_ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select num_col1 ,num_col2 from test_ex_table_1;
+num_col1    num_col2
+60    -1000
+-128    -32768
+127    32767
+null    null
+create table test_16(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19));
+insert into test_16 select * from test_ex_table_1;
+use atomicity;
+select num_col1 ,num_col2 from test_ex_table_1;
+SQL parser error: table "test_ex_table_1" does not exist
+commit;
+select num_col1 ,num_col2 from test_ex_table_1;
+num_col1    num_col2
+60    -1000
+-128    -32768
+127    32767
+null    null
+select num_col1 ,num_col2 from test_16;
+num_col1    num_col2
+60    -1000
+-128    -32768
+127    32767
+null    null
