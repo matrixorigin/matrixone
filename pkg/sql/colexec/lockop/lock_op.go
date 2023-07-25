@@ -707,16 +707,17 @@ func hasNewVersionInRange(
 	if err != nil {
 		return false, err
 	}
-	//txnOp is a new transaction, so we need to start a new statement
-	txnOp.GetWorkspace().StartStatement()
 	defer func() {
 		_ = txnOp.Rollback(proc.Ctx)
-		txnOp.GetWorkspace().EndStatement()
 	}()
 	if err := eng.New(proc.Ctx, txnOp); err != nil {
 		return false, err
 	}
-
+	//txnOp is a new transaction, so we need to start a new statement
+	txnOp.GetWorkspace().StartStatement()
+	defer func() {
+		txnOp.GetWorkspace().EndStatement()
+	}()
 	dbName, tableName, _, err := eng.GetRelationById(proc.Ctx, txnOp, tableID)
 	if err != nil {
 		if strings.Contains(err.Error(), "can not find table by id") {
