@@ -16,7 +16,11 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,8 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -180,6 +182,7 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
+	prevCallStack        []byte
 }
 
 type Pos struct {
@@ -235,8 +238,12 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 
 func (txn *Transaction) StartStatement() {
 	if txn.startStatementCalled {
+		if txn.prevCallStack != nil {
+			fmt.Println("===>", string(txn.prevCallStack))
+		}
 		logutil.Fatal("BUG: StartStatement called twice")
 	}
+	txn.prevCallStack = debug.Stack()
 	txn.startStatementCalled = true
 	txn.incrStatementCalled = false
 }

@@ -212,14 +212,15 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// NB: In internal executor, we should also do the same action, which is increasing
 	// statement ID and updating snapshot TS.
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
-	txnOp := cwft.GetProcess().TxnOperator
-	if txnOp != nil && !cwft.ses.IsBackgroundSession() {
-		txnOp.GetWorkspace().StartStatement()
-		defer func() {
-			txnOp.GetWorkspace().EndStatement()
-		}()
+	txnOp := cwft.proc.TxnOperator
+	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
+		ok, _ := cwft.ses.GetTxnHandler().calledStartStmt()
+		if !ok {
+			txnOp.GetWorkspace().StartStatement()
+			cwft.ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		}
 
-		err := txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
+		err = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
 		if err != nil {
 			return nil, err
 		}
