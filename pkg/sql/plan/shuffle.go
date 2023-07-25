@@ -316,6 +316,21 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 		node.Stats.ShuffleColIdx = -1
 	}
 
+	//join->group ,if they use the same hask key, the group can use follow shuffle method
+	if node.NodeType == plan.Node_AGG {
+		child := builder.qry.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_JOIN {
+			if node.Stats.Shuffle && child.Stats.Shuffle {
+				groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
+				joinHashCol, _ := GetHashColumn(child.OnList[node.Stats.ShuffleColIdx])
+				if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
+					node.Stats.ShuffleMethod = plan.ShuffleMethod_Follow
+					return
+				}
+			}
+		}
+	}
+
 	// for now, only one node can go shuffle, choose the biggest one
 	// will fix this in the future
 	if node.Stats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {

@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -625,13 +624,14 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return err
 		}
-		deleteBlks, createBlks := state.Copy().GetBlksBetween(types.TimestampToTS(tbl.db.txn.lastTS),
+		deleteBlks, createBlks := state.Copy().GetBlksBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.meta.SnapshotTS))
 		if len(deleteBlks) > 0 {
 			if err := tbl.updateDeleteInfo(deleteBlks, createBlks, committedblocks); err != nil {
 				return err
 			}
 		}
+		tbl.lastTS = tbl.db.txn.meta.SnapshotTS
 	}
 
 	//blks contains all visible blocks to this txn, namely
@@ -1063,15 +1063,8 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
 	case deletion.RawRowIdBatch:
 		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
-	case deletion.RawBatchOffset:
-		vs := vector.MustFixedCol[int64](bat.GetVector(0))
-		entry_bat := tbl.db.txn.blockId_raw_batch[*blkId]
-		entry_bat.AntiShrink(vs)
-		// reset rowId offset
-		rowIds := vector.MustFixedCol[types.Rowid](entry_bat.GetVector(0))
-		for i := range rowIds {
-			(&rowIds[i]).SetRowOffset(uint32(i))
-		}
+	default:
+		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
 	}
 	return nil
 }
@@ -1730,7 +1723,6 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	var rowid types.Rowid
 	var objMeta objectio.ObjectMeta
 
-	sels := make([]int, 0, 8192)
 	columns := []uint16{objectio.SEQNUM_ROWID}
 	colTypes := []types.Type{objectio.RowidType}
 	tableDef := tbl.getTableDef()
@@ -1784,22 +1776,6 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		if err != nil {
 			return rowid, false, err
 		}
-		{
-			sels = sels[:0]
-			state, err := tbl.getPartitionState(tbl.proc.Ctx)
-			if err != nil {
-				return rowid, false, err
-			}
-			ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-			iter := state.NewRowsIter(ts, &blk.BlockID, true)
-			for iter.Next() {
-				entry := iter.Entry()
-				_, offset := entry.RowID.Decode()
-				sels = append(sels, int(offset))
-			}
-			iter.Close()
-			sort.Ints(sels)
-		}
 		vec, err := colexec.EvalExpressionOnce(tbl.db.txn.proc, filter, []*batch.Batch{bat})
 		if err != nil {
 			return rowid, false, err
@@ -1807,20 +1783,10 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		bs := vector.MustFixedCol[bool](vec)
 		for i, b := range bs {
 			if b {
-				if _, ok := sort.Find(len(sels), func(j int) int {
-					if i > sels[j] {
-						return 1
-					}
-					if i < sels[j] {
-						return -1
-					}
-					return 0
-				}); !ok {
-					rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-					vec.Free(tbl.proc.Mp())
-					bat.Clean(tbl.proc.Mp())
-					return rowids[i], true, nil
-				}
+				rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+				vec.Free(tbl.proc.Mp())
+				bat.Clean(tbl.proc.Mp())
+				return rowids[i], true, nil
 			}
 		}
 		vec.Free(tbl.proc.Mp())
