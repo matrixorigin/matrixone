@@ -52,6 +52,7 @@ type TxnHandler struct {
 	mu                 sync.Mutex
 	entryMu            sync.Mutex
 	hasCalledStartStmt bool
+	prevTxnId          []byte
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -156,22 +157,24 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	return txnCtx, th.txnOperator, err
 }
 
-func (th *TxnHandler) enableStartStmt() {
+func (th *TxnHandler) enableStartStmt(txnId []byte) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	th.hasCalledStartStmt = true
+	th.prevTxnId = txnId
 }
 
 func (th *TxnHandler) disableStartStmt() {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	th.hasCalledStartStmt = false
+	th.prevTxnId = nil
 }
 
-func (th *TxnHandler) calledStartStmt() bool {
+func (th *TxnHandler) calledStartStmt() (bool, []byte) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	return th.hasCalledStartStmt
+	return th.hasCalledStartStmt, th.prevTxnId
 }
 
 // NewTxn commits the old transaction if it existed.

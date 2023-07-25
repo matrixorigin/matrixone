@@ -2709,7 +2709,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if txnOp != nil && !ses.IsDerivedStmt() {
 		fmt.Println("===> start statement 2", txnOp.Txn().DebugString())
 		txnOp.GetWorkspace().StartStatement()
-		ses.GetTxnHandler().enableStartStmt()
+		ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
 	}
 
 	defer func() {
@@ -2717,11 +2717,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		_, txnOp := ses.GetTxnHandler().GetTxnOperator()
 		if txnOp != nil && !ses.IsDerivedStmt() {
-			if ses.GetTxnHandler().calledStartStmt() {
-				ses.GetTxnHandler().disableStartStmt()
+			ok, id := ses.GetTxnHandler().calledStartStmt()
+			if ok && bytes.Compare(txnOp.Txn().ID, id) == 0 {
 				txnOp.GetWorkspace().EndStatement()
 			}
 		}
+		ses.GetTxnHandler().disableStartStmt()
 	}()
 
 	//check transaction states
