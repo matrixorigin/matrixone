@@ -46,11 +46,12 @@ type TxnHandler struct {
 	// the lifetime of txnCtx is longer than the requestCtx.
 	// the timeout of txnCtx is from the FrontendParameters.SessionTimeout with
 	// default 24 hours.
-	txnCtx       context.Context
-	txnCtxCancel context.CancelFunc
-	shareTxn     bool
-	mu           sync.Mutex
-	entryMu      sync.Mutex
+	txnCtx             context.Context
+	txnCtxCancel       context.CancelFunc
+	shareTxn           bool
+	mu                 sync.Mutex
+	entryMu            sync.Mutex
+	hasCalledStartStmt bool
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -155,6 +156,24 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	return txnCtx, th.txnOperator, err
 }
 
+func (th *TxnHandler) enableStartStmt() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledStartStmt = true
+}
+
+func (th *TxnHandler) disableStartStmt() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledStartStmt = false
+}
+
+func (th *TxnHandler) calledStartStmt() bool {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.hasCalledStartStmt
+}
+
 // NewTxn commits the old transaction if it existed.
 // Then it creates the new transaction by Engin.New.
 func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
@@ -194,6 +213,11 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 	}
 	storage := th.GetStorage()
 	err = storage.New(txnCtx, txnOp)
+	//if txnOp != nil && !th.GetSession().IsDerivedStmt() {
+	//	fmt.Println("===> start statement 1", txnOp.Txn().DebugString())
+	//	txnOp.GetWorkspace().StartStatement()
+	//	th.enableStartStmt()
+	//}
 	return txnCtx, txnOp, err
 }
 

@@ -214,12 +214,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
 	txnOp := cwft.proc.TxnOperator
 	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
-		txnOp.GetWorkspace().StartStatement()
-		defer func() {
-			txnOp.GetWorkspace().EndStatement()
-		}()
+		if !cwft.ses.GetTxnHandler().calledStartStmt() {
+			txnOp.GetWorkspace().StartStatement()
+		}
 
-		err := txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
+		err = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
 		if err != nil {
 			return nil, err
 		}

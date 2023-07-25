@@ -16,9 +16,11 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -178,6 +180,7 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
+	prevCallStack        []byte
 }
 
 type Pos struct {
@@ -233,8 +236,12 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 
 func (txn *Transaction) StartStatement() {
 	if txn.startStatementCalled {
+		if txn.prevCallStack != nil {
+			fmt.Println("===>", string(txn.prevCallStack))
+		}
 		logutil.Fatal("BUG: StartStatement called twice")
 	}
+	txn.prevCallStack = debug.Stack()
 	txn.startStatementCalled = true
 	txn.incrStatementCalled = false
 }

@@ -2704,8 +2704,23 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return retErr
 	}
 
+	_, txnOp := ses.GetTxnHandler().GetTxnOperator()
+	ses.GetTxnHandler().disableStartStmt()
+	if txnOp != nil && !ses.IsDerivedStmt() {
+		fmt.Println("===> start statement 2", txnOp.Txn().DebugString())
+		txnOp.GetWorkspace().StartStatement()
+		ses.GetTxnHandler().enableStartStmt()
+	}
+
 	defer func() {
 		retErr = finishTxnFunc()
+
+		_, txnOp := ses.GetTxnHandler().GetTxnOperator()
+		if txnOp != nil && !ses.IsDerivedStmt() {
+			if ses.GetTxnHandler().calledStartStmt() {
+				txnOp.GetWorkspace().EndStatement()
+			}
+		}
 	}()
 
 	//check transaction states
