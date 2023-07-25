@@ -198,8 +198,10 @@ func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta object
 	objectMeta.BlockHeader().SetBlockID(blockId)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	// write column meta
-	for i, colMeta := range w.colmeta {
-		objectMeta.AddColumnMeta(seqnums.Seqs[i], colMeta)
+	if seqnums != nil && len(seqnums.Seqs) > 0 {
+		for i, colMeta := range w.colmeta {
+			objectMeta.AddColumnMeta(seqnums.Seqs[i], colMeta)
+		}
 	}
 	length += objectMeta.Length()
 	blockIndex := BuildBlockIndex(blockCount)
