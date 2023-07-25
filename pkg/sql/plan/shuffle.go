@@ -101,6 +101,7 @@ func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
 	return nil, -1
 }
 
+/*
 func maybeSorted(n *plan.Node, builder *QueryBuilder, tag int32) bool {
 	// for scan node, primary key and cluster by may be sorted
 	if n.NodeType == plan.Node_TABLE_SCAN {
@@ -113,6 +114,7 @@ func maybeSorted(n *plan.Node, builder *QueryBuilder, tag int32) bool {
 	}
 	return false
 }
+*/
 
 func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
 	// hash by default
@@ -130,9 +132,9 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	if GetSortOrder(tableDef, colName) != 0 {
 		return
 	}
-	if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
-		return
-	}
+	//if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
+	//	return
+	//}
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
 		return
@@ -320,7 +322,7 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	if node.NodeType == plan.Node_AGG {
 		child := builder.qry.Nodes[node.Children[0]]
 		if child.NodeType == plan.Node_JOIN {
-			if node.Stats.Shuffle && child.Stats.Shuffle {
+			if node.Stats.Shuffle && child.Stats.Shuffle && node.Stats.ShuffleType == child.Stats.ShuffleType {
 				groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
 				joinHashCol, _ := GetHashColumn(child.OnList[node.Stats.ShuffleColIdx])
 				if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
