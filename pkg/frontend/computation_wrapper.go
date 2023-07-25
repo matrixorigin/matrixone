@@ -216,6 +216,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
 		if !cwft.ses.GetTxnHandler().calledStartStmt() {
 			txnOp.GetWorkspace().StartStatement()
+			cwft.ses.GetTxnHandler().enableStartStmt()
 		}
 
 		err = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
