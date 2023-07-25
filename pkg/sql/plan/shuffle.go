@@ -326,10 +326,15 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 		if child.NodeType == plan.Node_JOIN {
 			if node.Stats.Shuffle && child.Stats.Shuffle && node.Stats.ShuffleType == child.Stats.ShuffleType {
 				groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
-				joinHashCol, _ := GetHashColumn(child.OnList[node.Stats.ShuffleColIdx])
-				if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
-					node.Stats.ShuffleMethod = plan.ShuffleMethod_Follow
-					return
+				switch exprImpl := child.OnList[node.Stats.ShuffleColIdx].Expr.(type) {
+				case *plan.Expr_F:
+					for _, arg := range exprImpl.F.Args {
+						joinHashCol, _ := GetHashColumn(arg)
+						if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
+							node.Stats.ShuffleMethod = plan.ShuffleMethod_Follow
+							return
+						}
+					}
 				}
 			}
 		}
