@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -389,6 +390,17 @@ func initExportFirst(oq *outputQueue) {
 	oq.ep.Index++
 }
 
+func formatJsonString(str string, flag bool) string {
+	if len(str) < 2 {
+		return "\"" + str + "\""
+	}
+	tmp := strings.ReplaceAll(str, "\",", "\"\",")
+	if tmp[0] != '"' && tmp[len(tmp)-1] != '"' && !flag {
+		return "\"" + tmp + "\""
+	}
+	return tmp
+}
+
 func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan *BatchByte, oq *outputQueue) {
 	ses := obj.(*Session)
 	symbol := oq.ep.Symbol
@@ -404,7 +416,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 			switch vec.GetType().Oid { //get col
 			case types.T_json:
 				val := types.DecodeJson(vec.GetBytesAt(i))
-				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+				writeByte = appendBytes(writeByte, []byte(formatJsonString(val.String(), flag[j])), symbol[j], closeby, flag[j])
 			case types.T_bool:
 				val := vector.GetFixedAt[bool](vec, i)
 				if val {

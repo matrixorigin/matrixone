@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/google/shlex"
 	"go.uber.org/zap"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -150,62 +152,17 @@ func (h *Handle) HandleCommit(
 			}
 		})
 	}()
-	//Handle precommit-write command for 1PC
 	var txn txnif.AsyncTxn
 	if ok {
-		for _, e := range txnCtx.reqs {
-			switch req := e.(type) {
-			case *db.CreateDatabaseReq:
-				err = h.HandleCreateDatabase(
-					ctx,
-					meta,
-					req,
-					&db.CreateDatabaseResp{},
-				)
-			case *db.CreateRelationReq:
-				err = h.HandleCreateRelation(
-					ctx,
-					meta,
-					req,
-					&db.CreateRelationResp{},
-				)
-			case *db.DropDatabaseReq:
-				err = h.HandleDropDatabase(
-					ctx,
-					meta,
-					req,
-					&db.DropDatabaseResp{},
-				)
-			case *db.DropOrTruncateRelationReq:
-				err = h.HandleDropOrTruncateRelation(
-					ctx,
-					meta,
-					req,
-					&db.DropOrTruncateRelationResp{},
-				)
-			case *api.AlterTableReq:
-				err = h.HandleAlterTable(
-					ctx,
-					meta,
-					req,
-					&db.WriteResp{},
-				)
-			case *db.WriteReq:
-				err = h.HandleWrite(
-					ctx,
-					meta,
-					req,
-					&db.WriteResp{},
-				)
-			default:
-				panic(moerr.NewNYI(ctx, "Pls implement me"))
-			}
-			//Need to roll back the txn.
-			if err != nil {
-				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback(ctx)
-				return
-			}
+		//Handle precommit-write command for 1PC
+		txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+			types.TimestampToTS(meta.GetSnapshotTS()))
+		if err != nil {
+			return
+		}
+		err = h.handleRequests(ctx, txn, txnCtx)
+		if err != nil {
+			return
 		}
 	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
@@ -218,6 +175,90 @@ func (h *Handle) HandleCommit(
 	}
 	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
+
+	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+		for {
+			txn, err = h.db.StartTxnWithStartTSAndSnapshotTS(nil,
+				types.TimestampToTS(meta.GetSnapshotTS()))
+			if err != nil {
+				return
+			}
+			logutil.Infof("retry txn %X with new txn %X", string(meta.GetID()), txn.GetID())
+			//Handle precommit-write command for 1PC
+			h.handleRequests(ctx, txn, txnCtx)
+			//if txn is 2PC ,need to set commit timestamp passed by coordinator.
+			if txn.Is2PC() {
+				txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
+			}
+			err = txn.Commit(ctx)
+			cts = txn.GetCommitTS().ToTimestamp()
+			if !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+				break
+			}
+		}
+	}
+	return
+}
+
+func (h *Handle) handleRequests(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	txnCtx *txnContext,
+) (err error) {
+
+	for _, e := range txnCtx.reqs {
+		switch req := e.(type) {
+		case *db.CreateDatabaseReq:
+			err = h.HandleCreateDatabase(
+				ctx,
+				txn,
+				req,
+				&db.CreateDatabaseResp{},
+			)
+		case *db.CreateRelationReq:
+			err = h.HandleCreateRelation(
+				ctx,
+				txn,
+				req,
+				&db.CreateRelationResp{},
+			)
+		case *db.DropDatabaseReq:
+			err = h.HandleDropDatabase(
+				ctx,
+				txn,
+				req,
+				&db.DropDatabaseResp{},
+			)
+		case *db.DropOrTruncateRelationReq:
+			err = h.HandleDropOrTruncateRelation(
+				ctx,
+				txn,
+				req,
+				&db.DropOrTruncateRelationResp{},
+			)
+		case *api.AlterTableReq:
+			err = h.HandleAlterTable(
+				ctx,
+				txn,
+				req,
+				&db.WriteResp{},
+			)
+		case *db.WriteReq:
+			err = h.HandleWrite(
+				ctx,
+				txn,
+				req,
+				&db.WriteResp{},
+			)
+		default:
+			panic(moerr.NewNYI(ctx, "Pls implement me"))
+		}
+		//Need to roll back the txn.
+		if err != nil {
+			txn.Rollback(ctx)
+			return
+		}
+	}
 	return
 }
 
@@ -262,60 +303,12 @@ func (h *Handle) HandlePrepare(
 	var txn txnif.AsyncTxn
 	if ok {
 		//handle pre-commit write for 2PC
-		for _, e := range txnCtx.reqs {
-			switch req := e.(type) {
-			case *db.CreateDatabaseReq:
-				err = h.HandleCreateDatabase(
-					ctx,
-					meta,
-					req,
-					&db.CreateDatabaseResp{},
-				)
-			case *db.CreateRelationReq:
-				err = h.HandleCreateRelation(
-					ctx,
-					meta,
-					req,
-					&db.CreateRelationResp{},
-				)
-			case *db.DropDatabaseReq:
-				err = h.HandleDropDatabase(
-					ctx,
-					meta,
-					req,
-					&db.DropDatabaseResp{},
-				)
-			case *db.DropOrTruncateRelationReq:
-				err = h.HandleDropOrTruncateRelation(
-					ctx,
-					meta,
-					req,
-					&db.DropOrTruncateRelationResp{},
-				)
-			case *api.AlterTableReq:
-				err = h.HandleAlterTable(
-					ctx,
-					meta,
-					req,
-					&db.WriteResp{},
-				)
-			case *db.WriteReq:
-				err = h.HandleWrite(
-					ctx,
-					meta,
-					req,
-					&db.WriteResp{},
-				)
-			default:
-				panic(moerr.NewNYI(ctx, "Pls implement me"))
-			}
-			//need to rollback the txn
-			if err != nil {
-				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback(ctx)
-				return
-			}
+		txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+			types.TimestampToTS(meta.GetSnapshotTS()))
+		if err != nil {
+			return
 		}
+		h.handleRequests(ctx, txn, txnCtx)
 	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
@@ -698,17 +691,11 @@ func (h *Handle) HandlePreCommitWrite(
 
 func (h *Handle) HandleCreateDatabase(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.CreateDatabaseReq,
 	resp *db.CreateDatabaseResp) (err error) {
 	_, span := trace.Start(ctx, "HandleCreateDatabase")
 	defer span.End()
-
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return err
-	}
 
 	common.DoIfInfoEnabled(func() {
 		logutil.Infof("[precommit] create database: %+v txn: %s", req, txn.String())
@@ -737,15 +724,9 @@ func (h *Handle) HandleCreateDatabase(
 
 func (h *Handle) HandleDropDatabase(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.DropDatabaseReq,
 	resp *db.DropDatabaseResp) (err error) {
-
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return err
-	}
 
 	common.DoIfInfoEnabled(func() {
 		logutil.Infof("[precommit] drop database: %+v txn: %s", req, txn.String())
@@ -765,15 +746,9 @@ func (h *Handle) HandleDropDatabase(
 
 func (h *Handle) HandleCreateRelation(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.CreateRelationReq,
 	resp *db.CreateRelationResp) (err error) {
-
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return
-	}
 
 	common.DoIfInfoEnabled(func() {
 		logutil.Infof("[precommit] create relation: %+v txn: %s", req, txn.String())
@@ -803,15 +778,9 @@ func (h *Handle) HandleCreateRelation(
 
 func (h *Handle) HandleDropOrTruncateRelation(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.DropOrTruncateRelationReq,
 	resp *db.DropOrTruncateRelationResp) (err error) {
-
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return
-	}
 
 	common.DoIfInfoEnabled(func() {
 		logutil.Infof("[precommit] drop/truncate relation: %+v txn: %s", req, txn.String())
@@ -838,7 +807,7 @@ func (h *Handle) HandleDropOrTruncateRelation(
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *db.WriteReq,
 	resp *db.WriteResp) (err error) {
 	defer func() {
@@ -846,11 +815,6 @@ func (h *Handle) HandleWrite(
 			req.Cancel()
 		}
 	}()
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return
-	}
 	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
 	switch req.PkCheck {
 	case db.FullDedup:
@@ -912,7 +876,7 @@ func (h *Handle) HandleWrite(
 			if n > 2 {
 				n = 2
 			}
-			logutil.Infof("[precommit](%s) metalocs: %v", hex.EncodeToString(meta.GetID()), req.MetaLocs[:n])
+			logutil.Infof("[precommit](%s) metalocs: %v", hex.EncodeToString([]byte(txn.GetID())), req.MetaLocs[:n])
 			err = tb.AddBlksWithMetaLoc(ctx, locations)
 			return
 		}
@@ -954,6 +918,7 @@ func (h *Handle) HandleWrite(
 			if err != nil {
 				return err
 			}
+			var ok bool
 			var bat *batch.Batch
 			bat, err = blockio.LoadColumns(
 				ctx,
@@ -965,6 +930,23 @@ func (h *Handle) HandleWrite(
 			)
 			if err != nil {
 				return
+			}
+			blkids := getBlkIDsFromRowids(bat.Vecs[0])
+			id := tb.GetMeta().(*catalog2.TableEntry).AsCommonID()
+			if len(blkids) == 1 {
+				for blkID := range blkids {
+					id.BlockID = blkID
+				}
+				ok, err = tb.TryDeleteByDeltaloc(id, location)
+				if err != nil {
+					return
+				}
+				if ok {
+					continue
+				}
+				logutil.Warnf("blk %v try delete by deltaloc failed", id.BlockID.String())
+			} else {
+				logutil.Warnf("multiply blocks in one deltalocation")
 			}
 			vec := containers.ToDNVector(bat.Vecs[0])
 			defer vec.Close()
@@ -980,17 +962,21 @@ func (h *Handle) HandleWrite(
 	return
 }
 
+func getBlkIDsFromRowids(vec *vector.Vector) map[types.Blockid]struct{} {
+	rowids := vector.MustFixedCol[types.Rowid](vec)
+	blkids := make(map[types.Blockid]struct{})
+	for _, rowid := range rowids {
+		blkID := *rowid.BorrowBlockID()
+		blkids[blkID] = struct{}{}
+	}
+	return blkids
+}
+
 func (h *Handle) HandleAlterTable(
 	ctx context.Context,
-	meta txn.TxnMeta,
+	txn txnif.AsyncTxn,
 	req *api.AlterTableReq,
 	resp *db.WriteResp) (err error) {
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	if err != nil {
-		return err
-	}
-
 	common.DoIfInfoEnabled(func() {
 		logutil.Debugf("[precommit] alter table: %v txn: %s", req.String(), txn.String())
 	})

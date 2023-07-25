@@ -394,6 +394,8 @@ type txnTable struct {
 	createSql     string
 	constraint    []byte
 
+	// timestamp of the last operation on this table
+	lastTS timestamp.Timestamp
 	//entries belong to this table,and come from txn.writes.
 	writes []Entry
 	// offset of the writes in workspace
