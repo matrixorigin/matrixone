@@ -83,6 +83,7 @@ func ApplyRuntimeFilters(
 
 	var (
 		objMeta  objectio.ObjectDataMeta
+		oMeta    objectio.ObjectMeta
 		skipObj  bool
 		auxIdCnt int32
 	)
@@ -115,9 +116,10 @@ func ApplyRuntimeFilters(
 		location := blk.MetaLocation()
 
 		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, fs); err != nil {
+			if oMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, fs); err != nil {
 				return nil, err
 			}
+			objMeta = oMeta.MustDataMeta()
 
 			skipObj = false
 			// here we only eval expr on the object meta if it has more than 2 blocks

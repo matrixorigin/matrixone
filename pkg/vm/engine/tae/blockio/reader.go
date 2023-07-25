@@ -138,10 +138,11 @@ func (r *BlockReader) LoadAllColumns(
 	if err != nil {
 		return nil, err
 	}
-	if meta.BlockHeader().MetaLocation().End() == 0 {
+	dataMeta := meta.MustDataMeta()
+	if dataMeta.BlockHeader().MetaLocation().End() == 0 {
 		return nil, nil
 	}
-	block := meta.GetBlockMeta(0)
+	block := dataMeta.GetBlockMeta(0)
 	if len(idxs) == 0 {
 		idxs = make([]uint16, block.GetColumnCount())
 		for i := range idxs {
@@ -155,7 +156,7 @@ func (r *BlockReader) LoadAllColumns(
 	if err != nil {
 		return nil, err
 	}
-	for y := 0; y < int(meta.BlockCount()); y++ {
+	for y := 0; y < int(dataMeta.BlockCount()); y++ {
 		bat := batch.NewWithSize(len(idxs))
 		var obj any
 		for i := range idxs {
@@ -181,7 +182,11 @@ func (r *BlockReader) LoadZoneMaps(
 }
 
 func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectDataMeta, error) {
-	return r.reader.ReadMeta(ctx, m)
+	meta, err := r.reader.ReadMeta(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	return meta.MustDataMeta(), nil
 }
 
 func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
@@ -189,9 +194,10 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]obje
 	if err != nil {
 		return nil, err
 	}
-	blocks := make([]objectio.BlockObject, meta.BlockCount())
-	for i := 0; i < int(meta.BlockCount()); i++ {
-		blocks[i] = meta.GetBlockMeta(uint32(i))
+	dataMeta := meta.MustDataMeta()
+	blocks := make([]objectio.BlockObject, dataMeta.BlockCount())
+	for i := 0; i < int(dataMeta.BlockCount()); i++ {
+		blocks[i] = dataMeta.GetBlockMeta(uint32(i))
 	}
 	return blocks, nil
 }

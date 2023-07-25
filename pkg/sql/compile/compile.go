@@ -2894,6 +2894,7 @@ func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
 
 func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
 	var objMeta objectio.ObjectDataMeta
+	var oMeta objectio.ObjectMeta
 
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
@@ -2903,9 +2904,10 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 			return err
 		}
 		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, fs); err != nil {
+			if oMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, fs); err != nil {
 				return err
 			}
+			objMeta = oMeta.MustDataMeta()
 		}
 		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.ShuffleColIdx)).ZoneMap()

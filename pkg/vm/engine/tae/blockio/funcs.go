@@ -33,12 +33,13 @@ func LoadColumns(ctx context.Context,
 	location objectio.Location,
 	m *mpool.MPool) (bat *batch.Batch, err error) {
 	name := location.Name()
-	var meta objectio.ObjectDataMeta
+	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 		return
 	}
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &meta, name.String(), location.ID(), cols, typs, m, fs); err != nil {
+	dataMeta := meta.MustDataMeta()
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs); err != nil {
 		return
 	}
 	bat = batch.NewWithSize(len(cols))
