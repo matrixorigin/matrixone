@@ -2140,6 +2140,19 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
+
+	if n.Stats.ShuffleMethod == plan.ShuffleMethod_Follow {
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.Group,
+				Idx:     c.anal.curr,
+				IsFirst: c.anal.isFirst,
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			})
+		}
+		return ss
+	}
+
 	dop := plan2.GetShuffleDop()
 	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
 
