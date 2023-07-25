@@ -92,7 +92,7 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
 			s.createProxyUser(cmd.CreateTaskService)
-			s.upgradeSystemTable()
+			s.upgrade()
 		}
 	}
 }

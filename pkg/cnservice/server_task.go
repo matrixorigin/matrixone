@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrade"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -113,7 +114,7 @@ func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
 	frontend.SetSpecialUser(proxy.SQLUserName, []byte(command.User.Password))
 }
 
-func (s *service) upgradeSystemTable() {
+func (s *service) upgrade() {
 	pu := config.NewParameterUnit(
 		&s.cfg.Frontend,
 		nil,
@@ -129,7 +130,7 @@ func (s *service) upgradeSystemTable() {
 	ieFactory := func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
 	}
-	motrace.UpgradeSchemaByInnerExecutor(moServerCtx, ieFactory)
+	upgrade.Upgrade(moServerCtx, ieFactory)
 }
 func (s *service) startTaskRunner() {
 	s.task.Lock()
