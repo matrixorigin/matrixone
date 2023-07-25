@@ -192,7 +192,7 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			stmt, stmt_ok := i.(*StatementInfo)
 			if stmt_ok {
 				if GetTracerProvider().enableStmtMerge {
-					stmt.Statement = strconv.FormatInt(stmt.AggrCount, 10) + " queries \n" + stmt.StmtBuilder.String()
+					stmt.Statement = "/*" + strconv.FormatInt(stmt.AggrCount, 10) + " queries */ \n" + stmt.StmtBuilder.String()
 				} else {
 					stmt.Statement = stmt.StmtBuilder.String()
 				}

@@ -351,8 +351,8 @@ func TestAggregatorWithStmtMerge(t *testing.T) {
 
 	assert.Equal(t, "SELECT 11\nSELECT 11", results[0].(*StatementInfo).StmtBuilder.String())
 
-	res := strconv.FormatInt(results[0].(*StatementInfo).AggrCount, 10) + " queries \n" + results[0].(*StatementInfo).StmtBuilder.String()
+	res := "/*" + strconv.FormatInt(results[0].(*StatementInfo).AggrCount, 10) + " queries */ \n" + results[0].(*StatementInfo).StmtBuilder.String()
 
-	assert.Equal(t, "2 queries \nSELECT 11\nSELECT 11", res)
+	assert.Equal(t, "/*2 queries */ \nSELECT 11\nSELECT 11", res)
 
 }
