@@ -72,10 +72,8 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.StatementTag = ""
 		s.StatementFingerprint = ""
 		s.Error = nil
-		s.RowsRead = 0
-		s.BytesScan = 0
-		s.ResultCount = 0
 		s.AggrCount = 1
+		s.Database = ""
 		s.StmtBuilder.WriteString(s.Statement)
 		duration := s.Duration
 		s.Duration = windowSize
@@ -93,10 +91,13 @@ func StatementInfoUpdate(existing, new Item) {
 	n := new.(*StatementInfo)
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
-		e.StmtBuilder.WriteString("; ")
+		e.StmtBuilder.WriteString("\n")
 		e.StmtBuilder.WriteString(n.Statement)
 	}
 	e.AggrCount += 1
+	e.RowsRead += n.RowsRead
+	e.BytesScan += n.BytesScan
+	e.ResultCount += n.ResultCount
 	// responseAt is the last response time
 	n.ExecPlan2Stats(context.Background())
 	if err := mergeStats(e, n); err != nil {
