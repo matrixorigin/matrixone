@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -618,6 +620,19 @@ func (tbl *txnTable) rangesOnePart(
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
+	if tbl.db.txn.meta.IsRCIsolation() {
+		state, err := tbl.getPartitionState(tbl.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		deleteBlks, createBlks := state.Copy().GetBlksBetween(types.TimestampToTS(tbl.db.txn.lastTS),
+			types.TimestampToTS(tbl.db.txn.meta.SnapshotTS))
+		if len(deleteBlks) > 0 {
+			if err := tbl.updateDeleteInfo(deleteBlks, createBlks, committedblocks); err != nil {
+				return err
+			}
+		}
+	}
 
 	//blks contains all visible blocks to this txn, namely
 	//includes committed blocks and uncommitted blocks by CN writing S3.
@@ -1639,12 +1654,181 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keysVector *vector.Vector) (bool, error) {
-	var packer *types.Packer
-	put := tbl.db.txn.engine.packerPool.Get(&packer)
-	defer put.Put()
+
+	switch tbl.tableId {
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return true, nil
+	}
+
 	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return false, err
 	}
-	return part.PrimaryKeysMayBeModified(from, to, keysVector, packer), nil
+
+	var packer *types.Packer
+	put := tbl.db.txn.engine.packerPool.Get(&packer)
+	defer put.Put()
+	packer.Reset()
+	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
+
+	for _, key := range keys {
+		if part.PrimaryKeyMayBeModified(from, to, key) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (tbl *txnTable) updateDeleteInfo(deleteBlks, createBlks []types.Blockid,
+	commitedblocks []catalog.BlockInfo) error {
+	var blks []catalog.BlockInfo
+
+	deleteBlksMap := make(map[types.Blockid]struct{})
+	for _, id := range deleteBlks {
+		deleteBlksMap[id] = struct{}{}
+	}
+	{ // Filtering is not a new block
+		createBlksMap := make(map[types.Blockid]struct{})
+		for _, id := range createBlks {
+			createBlksMap[id] = struct{}{}
+		}
+		for i, blk := range commitedblocks {
+			if _, ok := createBlksMap[blk.BlockID]; ok {
+				blks = append(blks, commitedblocks[i])
+			}
+		}
+	}
+	for _, entry := range tbl.db.txn.writes {
+		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
+			continue
+		}
+		if entry.typ == DELETE && entry.fileName == "" {
+			pkVec := entry.bat.GetVector(1)
+			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+			for i, rowid := range rowids {
+				blkid, _ := rowid.Decode()
+				if _, ok := deleteBlksMap[blkid]; ok {
+					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
+					if err != nil {
+						return err
+					}
+					if ok {
+						rowids[i] = newId
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
+	blks []catalog.BlockInfo) (types.Rowid, bool, error) {
+	var auxIdCnt int32
+	var typ *plan.Type
+	var rowid types.Rowid
+	var objMeta objectio.ObjectMeta
+
+	sels := make([]int, 0, 8192)
+	columns := []uint16{objectio.SEQNUM_ROWID}
+	colTypes := []types.Type{objectio.RowidType}
+	tableDef := tbl.getTableDef()
+	for _, col := range tableDef.Cols {
+		if col.Name == tableDef.Pkey.PkeyColName {
+			typ = col.Typ
+			columns = append(columns, uint16(col.Seqnum))
+			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
+		}
+	}
+	constExpr := getConstExpr(int32(vec.GetType().Oid),
+		rule.GetConstantValue(vec, true, uint64(row)))
+	filter, err := tbl.newPkFilter(newColumnExpr(1, typ, tableDef.Pkey.PkeyColName), constExpr)
+	if err != nil {
+		return rowid, false, err
+	}
+	columnMap := make(map[int]int)
+	auxIdCnt += plan2.AssignAuxIdForExpr(filter, auxIdCnt)
+	zms := make([]objectio.ZoneMap, auxIdCnt)
+	vecs := make([]*vector.Vector, auxIdCnt)
+	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, &columnMap)
+	objFilterMap := make(map[objectio.ObjectNameShort]bool)
+	for _, blk := range blks {
+		location := blk.MetaLocation()
+		if hit, ok := objFilterMap[*location.ShortName()]; !ok {
+			if objMeta, err = objectio.FastLoadObjectMeta(tbl.proc.Ctx, &location,
+				tbl.db.txn.engine.fs); err != nil {
+				return rowid, false, err
+			}
+			hit = colexec.EvaluateFilterByZoneMap(tbl.proc.Ctx, tbl.proc, filter,
+				objMeta, columnMap, zms, vecs)
+			objFilterMap[*location.ShortName()] = hit
+			if !hit {
+				continue
+			}
+		} else if !hit {
+			continue
+		}
+		// eval filter expr on the block
+		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+		if !colexec.EvaluateFilterByZoneMap(tbl.proc.Ctx, tbl.proc, filter,
+			blkMeta, columnMap, zms, vecs) {
+			continue
+		}
+		// rowid + pk
+		bat, err := blockio.BlockRead(
+			tbl.proc.Ctx, &blk, nil, columns, colTypes, tbl.db.txn.meta.SnapshotTS,
+			nil, nil, nil,
+			tbl.db.txn.engine.fs, tbl.proc.Mp(), tbl.proc,
+		)
+		if err != nil {
+			return rowid, false, err
+		}
+		{
+			sels = sels[:0]
+			state, err := tbl.getPartitionState(tbl.proc.Ctx)
+			if err != nil {
+				return rowid, false, err
+			}
+			ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+			iter := state.NewRowsIter(ts, &blk.BlockID, true)
+			for iter.Next() {
+				entry := iter.Entry()
+				_, offset := entry.RowID.Decode()
+				sels = append(sels, int(offset))
+			}
+			iter.Close()
+			sort.Ints(sels)
+		}
+		vec, err := colexec.EvalExpressionOnce(tbl.db.txn.proc, filter, []*batch.Batch{bat})
+		if err != nil {
+			return rowid, false, err
+		}
+		bs := vector.MustFixedCol[bool](vec)
+		for i, b := range bs {
+			if b {
+				if _, ok := sort.Find(len(sels), func(j int) int {
+					if i > sels[j] {
+						return 1
+					}
+					if i < sels[j] {
+						return -1
+					}
+					return 0
+				}); !ok {
+					rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+					vec.Free(tbl.proc.Mp())
+					bat.Clean(tbl.proc.Mp())
+					return rowids[i], true, nil
+				}
+			}
+		}
+		vec.Free(tbl.proc.Mp())
+		bat.Clean(tbl.proc.Mp())
+	}
+	return rowid, false, nil
+}
+
+func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
+	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }

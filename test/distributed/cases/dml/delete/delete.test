@@ -160,6 +160,7 @@ drop database if exists db1;
 
 # test cn block delete for single table, one CN
 use `delete`;
+-- @bvt:issue#10501
 create table temp(a int);
 insert into temp select * from generate_series(1,8192) g;
 create table t(a int);
@@ -172,6 +173,7 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
+-- @bvt:issue
 -- @bvt:issue#9447
 insert into t select * from t;
 begin;
