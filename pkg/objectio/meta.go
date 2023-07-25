@@ -64,7 +64,8 @@ func (o objectMetaV1) BlockIndex() BlockIndex {
 }
 
 func (o objectMetaV1) GetBlockMeta(id uint32) BlockObject {
-	offset, length := o.BlockIndex().BlockMetaPos(id)
+	BlockID := id - uint32(o.BlockHeader().Sequence())
+	offset, length := o.BlockIndex().BlockMetaPos(BlockID)
 	return BlockObject(o[offset : offset+length])
 }
 

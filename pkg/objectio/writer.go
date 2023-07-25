@@ -164,7 +164,7 @@ func (w *objectWriterV1) WriteObjectMeta(ctx context.Context, totalrow uint32, m
 	w.colmeta = metas
 }
 
-func (w *objectWriterV1) prepareDataMeta(objectMeta objectMetaV1, blocks []blockData, offset uint32) ([]byte, Extent, error) {
+func (w *objectWriterV1) prepareDataMeta(objectMeta objectMetaV1, blocks []blockData, offset uint32, offsetId uint16) ([]byte, Extent, error) {
 	var columnCount uint16
 	columnCount = 0
 	metaColCnt := uint16(0)
@@ -181,22 +181,24 @@ func (w *objectWriterV1) prepareDataMeta(objectMeta objectMetaV1, blocks []block
 	objectMeta.BlockHeader().SetColumnCount(columnCount)
 	objectMeta.BlockHeader().SetMetaColumnCount(metaColCnt)
 	objectMeta.BlockHeader().SetMaxSeqnum(maxSeqnum)
+	logutil.Infof("tObjectMeta is %d", objectMeta.BlockHeader().Sequence())
 
 	// prepare object meta and block index
-	meta, extent, err := w.prepareObjectMeta(blocks, objectMeta, offset, seqnums)
+	meta, extent, err := w.prepareObjectMeta(blocks, objectMeta, offset, seqnums, offsetId)
+	logutil.Infof("tObjectMeta11 is %d, offsetId is %d", objectMeta.BlockHeader().Sequence(), offsetId)
 	if err != nil {
 		return nil, nil, err
 	}
 	return meta, extent, err
 }
 
-func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta objectMetaV1, offset uint32, seqnums *Seqnums) ([]byte, Extent, error) {
+func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta objectMetaV1, offset uint32, seqnums *Seqnums, offsetId uint16) ([]byte, Extent, error) {
 	length := uint32(0)
 	blockCount := uint32(len(blocks))
-	objectMeta.BlockHeader().SetSequence(uint16(blockCount))
 	sid := w.name.SegmentId()
 	blockId := NewBlockid(&sid, w.name.Num(), uint16(blockCount))
 	objectMeta.BlockHeader().SetBlockID(blockId)
+	objectMeta.BlockHeader().SetSequence(offsetId)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	// write column meta
 	if seqnums != nil && len(seqnums.Seqs) > 0 {
@@ -384,12 +386,13 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	tObjectMeta.BlockHeader().SetZoneMapArea(tzoneMapAreaExtent)
 	offset += tzoneMapAreaExtent.Length()
 	// prepare object meta and block index
-	meta, metaExtent, err := w.prepareDataMeta(objectMeta, w.blocks, offset)
+	meta, metaExtent, err := w.prepareDataMeta(objectMeta, w.blocks, offset, 0)
 	start := metaExtent.Offset()
 
 	metaHeader.SetDataMetaCount(uint16(len(w.blocks)))
 	metaHeader.SetDataMetaOffset(metaHeader.Length())
-	tmeta, _, err := w.prepareDataMeta(tObjectMeta, w.tombstones, metaExtent.End())
+	tmeta, _, err := w.prepareDataMeta(tObjectMeta, w.tombstones, metaExtent.End(), metaHeader.DataMetaCount())
+	logutil.Infof("tObjectMeta.DataMetaCount()) is %d", tObjectMeta.BlockHeader().Sequence())
 	metaHeader.SetTombstoneMetaCount(uint16(len(w.tombstones)))
 	metaHeader.SetTombstoneMetaOffset(metaHeader.Length() + metaExtent.OriginSize())
 	var buf bytes.Buffer
@@ -438,6 +441,8 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		blockObjects = append(blockObjects, w.blocks[i].meta)
 	}
 	for i := range w.tombstones {
+		header := w.tombstones[i].meta.BlockHeader()
+		header.SetMetaLocation(objectHeader.Extent())
 		blockObjects = append(blockObjects, w.tombstones[i].meta)
 	}
 	err = w.Sync(ctx, items...)

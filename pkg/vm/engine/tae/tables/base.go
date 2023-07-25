@@ -17,6 +17,7 @@ package tables
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -216,6 +217,7 @@ func (blk *baseBlock) LoadPersistedDeletes(ctx context.Context) (bat *containers
 	if location.IsEmpty() {
 		return
 	}
+	logutil.Infof("blk.meta.GetDeltaLoc() is %v", location.String())
 	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
 	return LoadPersistedDeletes(
 		ctx,
