@@ -2708,7 +2708,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	_, txnOp := ses.GetTxnHandler().GetTxnOperator()
 	ses.GetTxnHandler().disableStartStmt()
 	if txnOp != nil && !ses.IsDerivedStmt() {
-		fmt.Println("===> start statement 2", txnOp.Txn().DebugString())
 		txnOp.GetWorkspace().StartStatement()
 		ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
 	}
