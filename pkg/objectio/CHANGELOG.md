@@ -39,6 +39,7 @@
 
 ### Log Entry
 
-| Type | Version | Name             |
-| ---- | ------- | ---------------- |
-| 3010 | 2       | TxnCommand_Table |
+| Type | Version | Name                           |
+| ---- | ------- | ------------------------------ |
+| 3010 | 2       | TxnCommand_Table               |
+| 3013 | 1       | TxnCommand_PersistedDeleteNode |
