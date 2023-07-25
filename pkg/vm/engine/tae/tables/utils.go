@@ -108,7 +108,7 @@ func LoadPersistedDeletes(
 	pkName string,
 	fs *objectio.ObjectFS,
 	location objectio.Location) (bat *containers.Batch, err error) {
-	movbat, err := blockio.LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
+	movbat, err := blockio.LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
 	if err != nil {
 		return
 	}

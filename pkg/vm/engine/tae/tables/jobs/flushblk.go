@@ -78,7 +78,7 @@ func (task *flushBlkTask) Execute(ctx context.Context) error {
 		return err
 	}
 	if task.delta != nil {
-		_, err := writer.WriteBatchWithOutIndex(containers.ToCNBatch(task.delta))
+		_, err := writer.WriteTombstoneBatch(containers.ToCNBatch(task.delta))
 		if err != nil {
 			return err
 		}

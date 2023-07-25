@@ -32,19 +32,20 @@ import (
 
 type objectWriterV1 struct {
 	sync.RWMutex
-	schemaVer   uint32
-	seqnums     *Seqnums
-	object      *Object
-	blocks      []blockData
-	tombstones  []blockData
-	totalRow    uint32
-	colmeta     []ColumnMeta
-	buffer      *ObjectBuffer
-	fileName    string
-	lastId      uint32
-	name        ObjectName
-	compressBuf []byte
-	bloomFilter []byte
+	schemaVer         uint32
+	seqnums           *Seqnums
+	object            *Object
+	blocks            []blockData
+	tombstones        []blockData
+	tombstonesColmeta []ColumnMeta
+	totalRow          uint32
+	colmeta           []ColumnMeta
+	buffer            *ObjectBuffer
+	fileName          string
+	lastId            uint32
+	name              ObjectName
+	compressBuf       []byte
+	bloomFilter       []byte
 }
 
 type blockData struct {
@@ -200,6 +201,9 @@ func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta object
 	// write column meta
 	if seqnums != nil && len(seqnums.Seqs) > 0 {
 		for i, colMeta := range w.colmeta {
+			if i >= len(seqnums.Seqs) {
+				break
+			}
 			objectMeta.AddColumnMeta(seqnums.Seqs[i], colMeta)
 		}
 	}
@@ -225,7 +229,8 @@ func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta object
 	return buf.Bytes(), extent, nil
 }
 
-func (w *objectWriterV1) prepareBlockMeta(offset uint32, blocks []blockData) uint32 {
+func (w *objectWriterV1) prepareBlockMeta(offset uint32, blocks []blockData, colmeta []ColumnMeta) uint32 {
+	logutil.Infof("object io: prepare block meta, offset %d, blocks %d, colmeta %d", offset, len(blocks), len(colmeta))
 	maxIndex := w.getMaxIndex(blocks)
 	var off, size, oSize uint32
 	for idx := uint16(0); idx < maxIndex; idx++ {
@@ -246,13 +251,13 @@ func (w *objectWriterV1) prepareBlockMeta(offset uint32, blocks []blockData) uin
 			oSize += location.OriginSize()
 			alg = location.Alg()
 		}
-		if uint16(len(w.colmeta)) <= idx {
+		if uint16(len(colmeta)) <= idx {
 			continue
 		}
-		w.colmeta[idx].Location().SetAlg(alg)
-		w.colmeta[idx].Location().SetOffset(off)
-		w.colmeta[idx].Location().SetLength(size)
-		w.colmeta[idx].Location().SetOriginSize(oSize)
+		colmeta[idx].Location().SetAlg(alg)
+		colmeta[idx].Location().SetOffset(off)
+		colmeta[idx].Location().SetLength(size)
+		colmeta[idx].Location().SetOriginSize(oSize)
 	}
 	return offset
 }
@@ -337,8 +342,8 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	objectHeader := BuildHeader()
 	objectHeader.SetSchemaVersion(w.schemaVer)
 
-	offset := w.prepareBlockMeta(HeaderSize, w.blocks)
-	offset = w.prepareBlockMeta(offset, w.tombstones)
+	offset := w.prepareBlockMeta(HeaderSize, w.blocks, w.colmeta)
+	offset = w.prepareBlockMeta(offset, w.tombstones, w.tombstonesColmeta)
 	metaHeader := buildMetaHeaderV1()
 	colMetaCount := uint16(0)
 	if len(w.blocks) > 0 {
@@ -529,6 +534,12 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) error {
 	w.Lock()
 	defer w.Unlock()
+	if w.tombstonesColmeta == nil {
+		w.tombstonesColmeta = make([]ColumnMeta, len(bat.Vecs))
+	}
+	for i := range w.tombstonesColmeta {
+		w.tombstonesColmeta[i] = BuildObjectColumnMeta()
+	}
 	blockMeta.BlockHeader().SetSequence(uint16(w.lastId))
 
 	block := blockData{meta: blockMeta, seqnums: seqnums}
@@ -555,8 +566,9 @@ func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, s
 			return err
 		}
 		block.data = append(block.data, data)
-		blockMeta.ColumnMeta(uint16(i)).setLocation(ext)
-		blockMeta.ColumnMeta(uint16(i)).setDataType(uint8(vec.GetType().Oid))
+		blockMeta.ColumnMeta(seqnums.Seqs[i]).setLocation(ext)
+		logutil.Infof("uint8(vec.GetType().Oid) is %d", uint8(vec.GetType().Oid))
+		blockMeta.ColumnMeta(seqnums.Seqs[i]).setDataType(uint8(vec.GetType().Oid))
 		if vec.GetType().Oid == types.T_any {
 			panic("any type batch")
 		}

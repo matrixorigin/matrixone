@@ -168,6 +168,8 @@ func ReadOneBlockWithMeta(
 
 		// need fill vector
 		if seqnum > maxSeqnum || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+			logutil.Infof("read one block, seqnum %d is not written, maxSeqnum %d, blkmeta.ColumnMeta(seqnum).DataType() is %d",
+				seqnum, maxSeqnum, blkmeta.ColumnMeta(seqnum).DataType())
 			if filledEntries == nil {
 				filledEntries = make([]fileservice.IOEntry, len(seqnums))
 			}
