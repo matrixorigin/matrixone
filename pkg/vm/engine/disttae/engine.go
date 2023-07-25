@@ -354,6 +354,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		engine:   e,
 		meta:     op.TxnRef(),
 		idGen:    e.idGen,
+		lastTS:   op.TxnRef().SnapshotTS,
 		dnStores: e.getDNServices(),
 		tableCache: struct {
 			cachedIndex int

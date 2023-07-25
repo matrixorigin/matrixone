@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	HashMapSizeForBucket = 500000
-	MAXShuffleDOP        = 64
-	ShuffleThreshHold    = 50000
+	HashMapSizeForShuffle = 250000
+	MAXShuffleDOP         = 64
+	ShuffleThreshHold     = 50000
 )
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
@@ -148,21 +148,38 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	// do not shuffle by default
 	n.Stats.ShuffleColIdx = -1
-	if n.NodeType != plan.Node_JOIN || n.JoinType != plan.Node_INNER {
+	if n.NodeType != plan.Node_JOIN {
 		return
 	}
-	// for now ,only support one join condition
-	if len(n.OnList) != 1 {
-		return
-	}
-	if !builder.IsEquiJoin(n) {
-		return
-	}
-	if n.Stats.HashmapSize < HashMapSizeForBucket {
+	switch n.JoinType {
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI:
+	default:
 		return
 	}
 
+	if n.Stats.HashmapSize < HashMapSizeForShuffle {
+		return
+	}
 	idx := 0
+	if !builder.IsEquiJoin(n) {
+		return
+	}
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(n.Children[0]) {
+		leftTags[tag] = nil
+	}
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(n.Children[1]) {
+		rightTags[tag] = nil
+	}
+	// for now ,only support the first join condition
+	for i := range n.OnList {
+		if isEquiCond(n.OnList[i], leftTags, rightTags) {
+			idx = i
+			break
+		}
+	}
+
 	//find the highest ndv
 	highestNDV := n.OnList[idx].Ndv
 	if highestNDV < ShuffleThreshHold {
@@ -181,9 +198,13 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
 	case types.T_varchar, types.T_char, types.T_text:
-		// for now, do not support hash shuffle join. will support it in the future
-		//n.Stats.ShuffleColIdx = int32(idx)
-		//n.Stats.Shuffle = true
+		n.Stats.ShuffleColIdx = int32(idx)
+		n.Stats.Shuffle = true
+	}
+
+	// for now, do not support hash shuffle join. will support it in the future
+	if n.Stats.ShuffleType == plan.ShuffleType_Hash {
+		n.Stats.Shuffle = false
 	}
 }
 
@@ -198,7 +219,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	if len(n.GroupBy) == 0 {
 		return
 	}
-	if n.Stats.HashmapSize < HashMapSizeForBucket {
+	if n.Stats.HashmapSize < HashMapSizeForShuffle {
 		return
 	}
 	//find the highest ndv
@@ -261,6 +282,22 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	}
 }
 
+func findShuffleNode(rootID, nodeID int32, builder *QueryBuilder) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			shuffleID := findShuffleNode(rootID, child, builder)
+			if shuffleID != -1 {
+				return shuffleID
+			}
+		}
+	}
+	if node.NodeId != rootID && node.Stats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+		return node.NodeId
+	}
+	return -1
+}
+
 func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
@@ -278,4 +315,19 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	default:
 		node.Stats.ShuffleColIdx = -1
 	}
+
+	// for now, only one node can go shuffle, choose the biggest one
+	// will fix this in the future
+	if node.Stats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+		shuffleID := findShuffleNode(nodeID, nodeID, builder)
+		if shuffleID != -1 {
+			shuffleNode := builder.qry.Nodes[shuffleID]
+			if node.Stats.HashmapSize > shuffleNode.Stats.HashmapSize {
+				shuffleNode.Stats.Shuffle = false
+			} else {
+				node.Stats.Shuffle = false
+			}
+		}
+	}
+
 }

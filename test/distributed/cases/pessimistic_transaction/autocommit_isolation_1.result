@@ -1,0 +1,586 @@
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+set autocommit=0;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+select * from test_11;
+c    d
+3    1
+4    2
+1    1
+2    2
+use autocommit_isolation_1;
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+3    1
+4    2
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+3    1
+4    2
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+set autocommit=0;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+select * from test_11;
+c    d
+3    1
+4    2
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+delete from test_11 where c =1;
+select * from test_11;
+c    d
+3    1
+4    2
+2    2
+select * from test_11;
+c    d
+1    1
+2    2
+update test_11 set d = c +1 where c > 2;
+select * from test_11;
+c    d
+3    4
+4    5
+2    2
+select * from test_11;
+c    d
+1    1
+2    2
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+2    2
+3    4
+4    5
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+2    2
+3    4
+4    5
+drop table if exists test_11;
+set autocommit=0;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+select * from test_11;
+c    d
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+SQL parser error: table "test_11" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+set autocommit=0;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+select * from test_11;
+c    d
+3    1
+4    2
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(5,4);
+select * from test_11;
+c    d
+5    4
+1    1
+2    2
+select * from test_11;
+c    d
+3    1
+4    2
+1    1
+2    2
+Insert into test_11 values(50,50);
+Insert into test_11 values(51,50);
+select * from test_11;
+c    d
+5    4
+51    50
+1    1
+2    2
+select * from test_11;
+c    d
+3    1
+4    2
+50    50
+1    1
+2    2
+commit;
+set autocommit=1;
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+3    1
+4    2
+50    50
+5    4
+51    50
+select * from test_11;
+c    d
+1    1
+2    2
+3    1
+4    2
+50    50
+5    4
+51    50
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+set autocommit=0;
+Insert into test_11 values(3,1);
+Insert into test_11 values(4,2);
+select * from test_11;
+c    d
+3    1
+4    2
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(5,4);
+select * from test_11;
+c    d
+5    4
+1    1
+2    2
+select * from test_11;
+c    d
+3    1
+4    2
+1    1
+2    2
+Insert into test_11 values(50,50);
+Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select * from test_11;
+c    d
+1    1
+2    2
+3    1
+4    2
+50    50
+select * from test_11;
+c    d
+3    1
+4    2
+50    50
+1    1
+2    2
+commit;
+set autocommit=1;
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+3    1
+4    2
+50    50
+select * from test_11;
+c    d
+1    1
+2    2
+3    1
+4    2
+50    50
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(50,50);
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+delete from test_11 where c = 50;
+select * from test_11;
+c    d
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+commit;
+set autocommit=1;
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+select * from test_11;
+c    d
+1    1
+2    2
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(50,50);
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+update test_11 set c = 100 where d = 50;
+select * from test_11;
+c    d
+100    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+Insert into test_11 values(100,50);
+Duplicate entry '100' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+commit;
+set autocommit=1;
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+100    50
+select * from test_11;
+c    d
+1    1
+2    2
+100    50
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(50,50);
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+update test_11 set c = 100 where d = 50;
+select * from test_11;
+c    d
+100    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+update test_11 set c = 101 where c = 50;
+commit;
+set autocommit=1;
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+100    50
+select * from test_11;
+c    d
+1    1
+2    2
+100    50
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(50,50);
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+update test_11 set c = 100 where d = 50;
+select * from test_11;
+c    d
+100    50
+1    1
+2    2
+select * from test_11;
+c    d
+50    50
+1    1
+2    2
+update test_11 set c = 100 where d = 50;
+commit;
+set autocommit=1;
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+100    50
+select * from test_11;
+c    d
+1    1
+2    2
+100    50
+drop table if exists test_11;
+set autocommit=0;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+select * from test_11;
+c    d
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+SQL parser error: table "test_11" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+drop table if exists test_11;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+select * from test_11;
+c    d
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+c    d
+1    1
+2    2
+set autocommit=0;
+drop table test_11;
+select * from test_11;
+SQL parser error: table "test_11" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select * from test_11;
+c    d
+1    1
+2    2
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+drop table if exists test_11;
+set autocommit=0;
+create table test_11 (c int primary key,d int);
+Insert into test_11 values(1,1);
+Insert into test_11 values(2,2);
+select * from test_11;
+c    d
+1    1
+2    2
+set autocommit=0;
+select * from test_11;
+SQL parser error: table "test_11" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select * from test_11;
+c    d
+1    1
+2    2
+select * from test_11;
+SQL parser error: table "test_11" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+commit;
+set autocommit=1;
+select * from test_11;
+c    d
+1    1
+2    2
+drop table if exists test_11;

@@ -3055,7 +3055,7 @@ show_collation_stmt:
 show_stages_stmt:
     SHOW STAGES like_opt
     {
-        $$ = &tree.ShowStagse{
+        $$ = &tree.ShowStages{
             Like: $3,
         }
     }
@@ -10028,6 +10028,8 @@ non_reserved_keyword:
 |	WEEK
 |   DEFINER
 |   SQL
+|   STAGE
+|   STAGES
 
 func_not_keyword:
     DATE_ADD

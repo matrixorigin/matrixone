@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -141,6 +142,7 @@ func (c *Compile) clear() {
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
+	c.s3CounterSet.FileService.ResetS3()
 }
 
 // helper function to judge if init temporary engine is needed
@@ -333,6 +335,8 @@ func (c *Compile) Run(_ uint64) error {
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 	if err := c.runOnce(); err != nil {
+		c.fatalLog(0, err)
+
 		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 			c.proc.TxnOperator.Txn().IsRCIsolation() {
@@ -362,9 +366,11 @@ func (c *Compile) Run(_ uint64) error {
 				c.isInternal,
 				c.cnLabel)
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+				c.fatalLog(1, err)
 				return err
 			}
 			if err := cc.runOnce(); err != nil {
+				c.fatalLog(1, err)
 				return err
 			}
 			// set affectedRows to old compile to return
@@ -1657,6 +1663,91 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 }
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	if node.Stats.Shuffle {
+		if len(c.cnList) == 1 {
+			return c.compileShuffleJoin(ctx, node, left, right, ss, children)
+		} else {
+			// only support shuffle join on standalone for now. will fix this in the future
+			node.Stats.Shuffle = false
+		}
+	}
+	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
+}
+
+func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	var rs []*Scope
+	isEq := plan2.IsEquiJoin2(node.OnList)
+	if !isEq {
+		panic("shuffle join only support equal join for now!")
+	}
+
+	rightTyps := make([]types.Type, len(right.ProjectList))
+	for i, expr := range right.ProjectList {
+		rightTyps[i] = dupType(expr.Typ)
+	}
+
+	leftTyps := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		leftTyps[i] = dupType(expr.Typ)
+	}
+
+	switch node.JoinType {
+	case plan.Node_INNER:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.Join,
+				Idx: c.anal.curr,
+				Arg: constructJoin(node, rightTyps, c.proc),
+			})
+		}
+	case plan.Node_ANTI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightAnti,
+					Idx: c.anal.curr,
+					Arg: constructRightAnti(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Anti,
+					Idx: c.anal.curr,
+					Arg: constructAnti(node, rightTyps, c.proc),
+				})
+			}
+		}
+
+	case plan.Node_SEMI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightSemi,
+					Idx: c.anal.curr,
+					Arg: constructRightSemi(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Semi,
+					Idx: c.anal.curr,
+					Arg: constructSemi(node, rightTyps, c.proc),
+				})
+			}
+		}
+
+	default:
+		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
+	}
+	return rs
+}
+
+func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
 
@@ -2033,7 +2124,7 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Shuffle,
-				Arg: constructShuffleArg(children, n),
+				Arg: constructShuffleGroupArg(children, n),
 			})
 
 			ss[i].appendInstruction(vm.Instruction{
@@ -2390,9 +2481,6 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	c.anal.isFirst = false
 	mergeChildren := c.newMergeScope(children)
 
-	// a hack here to stop shuffle join, delete this in the future
-	n.Stats.Shuffle = false
-
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(1, rs, c.addr, n),
@@ -2401,6 +2489,64 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 
 	return rs
+}
+
+func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []*Scope {
+	joinScopes := make([]*Scope, 0, len(c.cnList))
+	idx := 0
+	cnt := 0
+	for _, n := range c.cnList {
+		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+		ss := make([]*Scope, dop)
+		for i := range ss {
+			ss[i] = new(Scope)
+			ss[i].Magic = Remote
+			ss[i].IsJoin = true
+			ss[i].NodeInfo.Addr = n.Addr
+			ss[i].NodeInfo.Mcpu = 1
+			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+				rr.Ch = make(chan *batch.Batch, 16)
+			}
+		}
+		if isSameCN(n.Addr, c.addr) {
+			idx = cnt
+		}
+		joinScopes = append(joinScopes, ss...)
+		cnt += dop
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	for i := range left {
+		left[i].appendInstruction(vm.Instruction{
+			Op:  vm.Shuffle,
+			Arg: constructShuffleJoinArg(joinScopes, n, true),
+		})
+	}
+	leftMerge := c.newMergeScope(left)
+	leftMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(0, joinScopes, c.addr, n),
+	})
+	leftMerge.IsEnd = true
+
+	c.anal.isFirst = currentFirstFlag
+	for i := range right {
+		right[i].appendInstruction(vm.Instruction{
+			Op:  vm.Shuffle,
+			Arg: constructShuffleJoinArg(joinScopes, n, false),
+		})
+	}
+	rightMerge := c.newMergeScope(right)
+	rightMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(1, joinScopes, c.addr, n),
+	})
+	rightMerge.IsEnd = true
+
+	joinScopes[idx].PreScopes = append(joinScopes[idx].PreScopes, leftMerge, rightMerge)
+
+	return joinScopes
 }
 
 func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
@@ -2987,4 +3133,31 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
 	}
 	return c.newMergeScope(ss2)
+}
+
+func (c *Compile) fatalLog(retry int, err error) {
+	if err == nil {
+		return
+	}
+	v, ok := moruntime.ProcessLevelRuntime().
+		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+	if !ok || !v.(bool) {
+		return
+	}
+	fatal := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+		moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) ||
+		moerr.IsMoErrCode(err, moerr.ER_DUP_ENTRY) ||
+		moerr.IsMoErrCode(err, moerr.ER_DUP_ENTRY_WITH_KEY_NAME)
+	if !fatal {
+		return
+	}
+	if retry == 0 && moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+		return
+	}
+
+	logutil.Fatalf("BUG(RC): txn %s retry %d, error %+v\n",
+		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
+		retry,
+		err.Error())
 }

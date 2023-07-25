@@ -109,7 +109,7 @@ func TestMultipleRowLocks(t *testing.T) {
 				Policy:      pb.WaitPolicy_Wait,
 			}
 			iter := 0
-			sum := 100
+			sum := 200
 			var wg sync.WaitGroup
 
 			for i := 0; i < sum; i++ {
