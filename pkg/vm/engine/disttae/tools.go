@@ -721,10 +721,11 @@ func newStringConstVal(v string) *plan.Expr {
 		},
 	}
 }
+*/
 
-func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
+func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
-		Typ: types.NewProtoType(oid),
+		Typ: typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				Name:   name,
@@ -733,7 +734,6 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 		},
 	}
 }
-*/
 
 func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
@@ -817,6 +817,12 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	typ := api.Entry_Insert
 	if e.typ == DELETE {
 		typ = api.Entry_Delete
+		if e.tableId != catalog.MO_TABLES_ID &&
+			e.tableId != catalog.MO_DATABASE_ID {
+			ebat = batch.NewWithSize(0)
+			ebat.Vecs = e.bat.Vecs[:1]
+			ebat.Attrs = e.bat.Attrs[:1]
+		}
 	} else if e.typ == UPDATE {
 		typ = api.Entry_Update
 	} else if e.typ == ALTER {
