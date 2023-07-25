@@ -379,7 +379,10 @@ func (c *Compile) Run(_ uint64) error {
 		}
 		return err
 	}
-	return c.proc.TxnOperator.GetWorkspace().Adjust()
+	if c.proc.TxnOperator != nil {
+		return c.proc.TxnOperator.GetWorkspace().Adjust()
+	}
+	return nil
 }
 
 // run once
