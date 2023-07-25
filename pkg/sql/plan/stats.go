@@ -517,10 +517,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		case plan.Node_ANTI:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.3,
+				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out * 0.3,
+				Selectivity: selectivity_out * 0.5,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
@@ -833,6 +833,12 @@ func IsTpQuery(qry *plan.Query) bool {
 		}
 	}
 	return true
+}
+
+func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
+	for _, rootID := range builder.qry.Steps {
+		ReCalcNodeStats(rootID, builder, true, false)
+	}
 }
 
 func PrintStats(qry *plan.Query) string {

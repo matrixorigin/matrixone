@@ -437,6 +437,12 @@ enum ShuffleType {
 	Range = 1;
 }
 
+enum ShuffleMethod {
+	Noraml = 0;
+	Follow = 1;
+	Reshuffle = 2;
+}
+
 message Stats {
 	//for scan, number of blocks to read from S3
 	int32  block_num        = 1;
@@ -463,8 +469,9 @@ message Stats {
 	// for range shuffle on integer column, need to know its min and max value
 	int64 shuffleColMin = 11;
 	int64 shuffleColMax = 12;
+	ShuffleMethod shuffleMethod = 13;
 	//not used for now
-	int32   parallelism = 13;
+	int32   parallelism = 14;
 }
 
 message RowsetExpr {
