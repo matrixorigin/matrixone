@@ -2718,6 +2718,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		_, txnOp := ses.GetTxnHandler().GetTxnOperator()
 		if txnOp != nil && !ses.IsDerivedStmt() {
 			if ses.GetTxnHandler().calledStartStmt() {
+				ses.GetTxnHandler().disableStartStmt()
 				txnOp.GetWorkspace().EndStatement()
 			}
 		}
