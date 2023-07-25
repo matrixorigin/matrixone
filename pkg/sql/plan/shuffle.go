@@ -129,12 +129,14 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	}
 
 	colName := tableDef.Cols[col.ColPos].Name
-	if GetSortOrder(tableDef, colName) != 0 {
-		return
-	}
-	//if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
-	//	return
-	//}
+	/*
+		if GetSortOrder(tableDef, colName) != 0 {
+			return
+		}
+		if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
+			return
+		}
+	*/
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
 		return
