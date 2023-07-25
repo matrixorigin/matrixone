@@ -44,13 +44,11 @@ const (
 const (
 	dataMetaCount         = 2
 	dataMetaOffset        = 4
-	dataMetaLen           = 4
-	tombstoneMetaCountOff = dataMetaCount + dataMetaOffset + dataMetaLen
+	tombstoneMetaCountOff = dataMetaCount + dataMetaOffset
 	tombstoneMetaCount    = 2
 	tombstoneMetaOffset   = 4
-	tombstoneMetaLen      = 4
-	metaDummyOff          = tombstoneMetaCountOff + tombstoneMetaCount + tombstoneMetaOffset + tombstoneMetaLen
-	metaDummy             = 12
+	metaDummyOff          = tombstoneMetaCountOff + tombstoneMetaCount + tombstoneMetaOffset
+	metaDummy             = 20
 
 	metaHeaderLen = metaDummyOff + metaDummy
 )
@@ -101,7 +99,7 @@ func (mh metaHeaderV1) TombstoneMeta() (objectMetaV1, bool) {
 		return nil, false
 	}
 	offset := types.DecodeUint32(mh[tombstoneMetaCountOff+tombstoneMetaCount : metaDummyOff])
-	return objectMetaV1(mh[offset : offset+headerLen]), true
+	return objectMetaV1(mh[offset:]), true
 }
 
 func (mh metaHeaderV1) MustTombstoneMeta() objectMetaV1 {
