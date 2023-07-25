@@ -120,7 +120,9 @@ type Transaction struct {
 
 	// local timestamp for workspace operations
 	meta *txn.TxnMeta
-	op   client.TxnOperator
+	// the timestamp of the previous statement
+	lastTS timestamp.Timestamp
+	op     client.TxnOperator
 
 	// writes cache stores any writes done by txn
 	writes []Entry
@@ -286,6 +288,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 			timestamp.Timestamp{}); err != nil {
 			return err
 		}
+		txn.lastTS = txn.meta.SnapshotTS
 		txn.resetSnapshot()
 	}
 	return nil
@@ -353,6 +356,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
 	}
+	// current statement has been rolled back, make can call IncrStatementID again.
+	txn.incrStatementCalled = false
 	return nil
 }
 func (txn *Transaction) resetSnapshot() error {
