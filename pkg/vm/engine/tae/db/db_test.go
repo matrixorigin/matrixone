@@ -5699,7 +5699,6 @@ func TestAlterRenameTbl(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 		require.NoError(t, txn1.Rollback(context.Background()))
 		require.NoError(t, txn2.Rollback(context.Background()))
-
 	}
 
 	txn, _ := tae.StartTxn(nil)
@@ -5851,7 +5850,64 @@ func TestAlterRenameTbl(t *testing.T) {
 	dbentry = db.GetMeta().(*catalog.DBEntry)
 	t.Log(dbentry.PrettyNameIndex())
 	require.NoError(t, txn.Commit(context.Background()))
+}
 
+func TestAlterRenameTbl2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "t1"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.Constraint = []byte("start version")
+	schema.Comment = "comment version"
+
+	schema2 := schema.Clone()
+	schema2.Name = "t1-copy-fefsfwafe"
+
+	var oldId, newId uint64
+	{
+		var err error
+		txn, _ := tae.StartTxn(nil)
+		txn.CreateDatabase("xx", "", "")
+
+		db, _ := txn.GetDatabase("xx")
+
+		hdl, err := db.CreateRelation(schema)
+		oldId = hdl.ID()
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("xx")
+		hdl, err := db.CreateRelation(schema2)
+		newId = hdl.ID()
+		require.NoError(t, err)
+
+		_, err = db.DropRelationByID(oldId)
+		require.NoError(t, err)
+
+		newhdl, _ := db.GetRelationByID(newId)
+		require.NoError(t, newhdl.AlterTable(ctx, api.NewRenameTableReq(0, 0, "t1-copy-fefsfwafe", "t1")))
+		require.NoError(t, txn.Commit(context.Background()))
+
+		dbentry := db.GetMeta().(*catalog.DBEntry)
+		t.Log(dbentry.PrettyNameIndex())
+	}
+
+	tae.restart(ctx)
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.GetDatabase("xx")
+	dbentry := db.GetMeta().(*catalog.DBEntry)
+	t.Log(dbentry.PrettyNameIndex())
+	require.NoError(t, txn.Commit(context.Background()))
 }
 
 func TestAlterTableBasic(t *testing.T) {

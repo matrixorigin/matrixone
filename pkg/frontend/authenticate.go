@@ -1375,6 +1375,10 @@ const (
 
 	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s";`
 
+	checkStageStatusFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_status = "%s";`
+
+	checkStageStatusWithStageNameFormat = `select url, stage_status from mo_catalog.mo_stages where stage_name = "%s";`
+
 	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s';`
 
 	updateStageUrlFotmat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s';`
@@ -1453,6 +1457,18 @@ func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(checkStageFormat, stage), nil
+}
+
+func getSqlForCheckStageStatus(ctx context.Context, status string) string {
+	return fmt.Sprintf(checkStageStatusFormat, status)
+}
+
+func getSqlForCheckStageStatusWithStageName(ctx context.Context, stage string) (string, error) {
+	err := inputNameIsInvalid(ctx, stage)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkStageStatusWithStageNameFormat, stage), nil
 }
 
 func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) string {
@@ -3405,6 +3421,98 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 	}
 
 	return err
+}
+
+func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
+	var err error
+	var filePath string
+	var sql string
+	var erArray []ExecResult
+	var stageName string
+	var stageStatus string
+	var url string
+	if st.Ep == nil {
+		return err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	// detect filepath contain stage or not
+	filePath = st.Ep.FilePath
+	if !strings.Contains(filePath, ":") {
+		// the filepath is the target path
+		sql = getSqlForCheckStageStatus(ctx, "enabled")
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+
+		// if have stage enabled
+		if execResultArrayHasData(erArray) {
+			return moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
+		} else {
+			// use the filepath
+			return err
+		}
+	} else {
+
+		stageName = strings.Split(filePath, ":")[0]
+		// check the stage status
+		sql, err = getSqlForCheckStageStatusWithStageName(ctx, stageName)
+		if err != nil {
+			return err
+		}
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(erArray) {
+			stageStatus, err = erArray[0].GetString(ctx, 0, 1)
+			if err != nil {
+				return err
+			}
+
+			// is the stage staus is disabled
+			if stageStatus == tree.StageStatusDisabled.String() {
+				return moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
+			} else if stageStatus == tree.StageStatusEnabled.String() {
+				// replace the filepath using stage url
+				url, err = erArray[0].GetString(ctx, 0, 0)
+				if err != nil {
+					return err
+				}
+
+				filePath = strings.Replace(filePath, stageName+":", url, 1)
+				st.Ep.FilePath = filePath
+			}
+
+		} else {
+			return moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
+		}
+	}
+	return err
+
 }
 
 func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error {
