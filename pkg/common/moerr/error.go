@@ -193,6 +193,7 @@ const (
 	ErrTAEDebug                  uint16 = 20626
 	ErrDuplicateKey              uint16 = 20627
 	ErrTxnNeedRetry              uint16 = 20628
+	ErrTAENeedRetry              uint16 = 20629
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -373,6 +374,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 	ErrTxnNeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
+	ErrTAENeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae need retry"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},

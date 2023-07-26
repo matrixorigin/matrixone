@@ -20,6 +20,12 @@ import (
 	"time"
 )
 
+// WithDisableIncrStatement disable incr statement
+func (opts Options) WithDisableIncrStatement() Options {
+	opts.disableIncrStatement = true
+	return opts
+}
+
 // WithTxn exec sql in a exists txn
 func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
 	opts.txnOp = txnOp
@@ -103,4 +109,9 @@ func (opts Options) SetupNewTxn(txnOp client.TxnOperator) Options {
 // Txn returns the txn operator
 func (opts Options) Txn() client.TxnOperator {
 	return opts.txnOp
+}
+
+// DisableIncrStatement returns the txn operator need incr a new input statement
+func (opts Options) DisableIncrStatement() bool {
+	return opts.disableIncrStatement
 }

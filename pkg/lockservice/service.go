@@ -241,10 +241,9 @@ func (s *service) waitLockTableBind(tableID uint64, locked bool) lockTable {
 	}
 
 	c := getter()
-	if c == nil {
-		return nil
+	if c != nil {
+		<-c
 	}
-	<-c
 	if v, ok := s.tables.Load(tableID); ok {
 		return v.(lockTable)
 	}

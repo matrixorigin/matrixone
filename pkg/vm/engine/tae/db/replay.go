@@ -143,7 +143,7 @@ func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 		return
 	}
 	replayer.applyCount++
-	txn := txnimpl.MakeReplayTxn(replayer.db.TxnMgr, txnCmd.TxnCtx, lsn,
+	txn := txnimpl.MakeReplayTxn(replayer.db.Runtime.Options.Ctx, replayer.db.TxnMgr, txnCmd.TxnCtx, lsn,
 		txnCmd, replayer, replayer.db.Catalog, replayer.DataFactory, replayer.db.Wal)
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {
 		panic(err)

@@ -42,6 +42,7 @@ type TxnExecutor interface {
 
 // Options execute options.
 type Options struct {
+	disableIncrStatement    bool
 	txnOp                   client.TxnOperator
 	database                string
 	accountID               uint32

@@ -616,6 +616,9 @@ func TestGetExprValue(t *testing.T) {
 
 		ws := mock_frontend.NewMockWorkspace(ctrl)
 		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ws.EXPECT().StartStatement().AnyTimes()
+		ws.EXPECT().EndStatement().AnyTimes()
+		ws.EXPECT().Adjust().AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -712,6 +715,9 @@ func TestGetExprValue(t *testing.T) {
 
 		ws := mock_frontend.NewMockWorkspace(ctrl)
 		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ws.EXPECT().StartStatement().AnyTimes()
+		ws.EXPECT().EndStatement().AnyTimes()
+		ws.EXPECT().Adjust().AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
