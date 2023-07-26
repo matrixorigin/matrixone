@@ -904,6 +904,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
+			logutil.Infof("delete of '%s' write s3\n", c.sql)
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
@@ -1004,6 +1005,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
 
 		if toWriteS3 {
+			logutil.Infof("insert of '%s' write s3\n", c.sql)
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
 				insertArg, err := constructInsert(n, c.e, c.proc)
 				if err != nil {
