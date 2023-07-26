@@ -53,6 +53,10 @@ func (s *sqlStore) Create(
 	cols []AutoColumn,
 	txnOp client.TxnOperator) error {
 	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	if txnOp != nil {
+		opts = opts.WithDisableIncrStatement()
+	}
+
 	return s.exec.ExecTxn(
 		ctx,
 		func(te executor.TxnExecutor) error {
@@ -85,6 +89,9 @@ func (s *sqlStore) Allocate(
 		WithDatabase(database).
 		WithTxn(txnOp).
 		WithWaitCommittedLogApplied() // make sure the update is visible to the subsequence txn, wait log tail applied
+	if txnOp != nil {
+		opts = opts.WithDisableIncrStatement()
+	}
 	for {
 		err := s.exec.ExecTxn(
 			ctx,
@@ -143,6 +150,8 @@ func (s *sqlStore) UpdateMinValue(
 	// committed log tail applied to ensure subsequence txn must get a snapshot ts which is large than this commit.
 	if txnOp == nil {
 		opts = opts.WithWaitCommittedLogApplied()
+	} else {
+		opts = opts.WithDisableIncrStatement()
 	}
 	res, err := s.exec.Exec(
 		ctx,
@@ -186,6 +195,10 @@ func (s *sqlStore) GetColumns(
 		incrTableName,
 		tableID)
 	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	if txnOp != nil {
+		opts = opts.WithDisableIncrStatement()
+	}
+
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
 	if err != nil {
 		return nil, err
