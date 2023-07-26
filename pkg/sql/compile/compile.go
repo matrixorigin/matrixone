@@ -2171,6 +2171,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
+		ss = c.compileProjection(n, c.compileRestrict(n, ss))
 		return ss
 	}
 
