@@ -351,64 +351,69 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 
 	objectHeader := BuildHeader()
 	objectHeader.SetSchemaVersion(w.schemaVer)
+	offset := uint32(HeaderSize)
 
-	offset := w.prepareBlockMeta(HeaderSize, w.blocks[SchemaData], w.colmeta)
-	offset = w.prepareBlockMeta(offset, w.blocks[SchemaTombstone], w.tombstonesColmeta)
+	for i := range w.blocks {
+		if i == int(SchemaData) {
+			offset = w.prepareBlockMeta(offset, w.blocks[SchemaData], w.colmeta)
+			continue
+		}
+		offset = w.prepareBlockMeta(offset, w.blocks[i], w.tombstonesColmeta)
+	}
 
 	metaHeader := buildObjectMetaV1()
-	colMetaCount := uint16(0)
-	if len(w.blocks[SchemaData]) > 0 {
-		colMetaCount = w.blocks[SchemaData][0].meta.GetMetaColumnCount()
-	}
-	objectMeta := BuildObjectMeta(colMetaCount)
-	if len(w.blocks[SchemaTombstone]) > 0 {
-		colMetaCount = w.blocks[SchemaTombstone][0].meta.GetMetaColumnCount()
-	}
-	tObjectMeta := BuildObjectMeta(colMetaCount)
-	// prepare bloom filter
-	bloomFilterData, bloomFilterExtent, err := w.prepareBloomFilter(w.blocks[SchemaData], uint32(len(w.blocks[SchemaData])), offset)
-	if err != nil {
-		return nil, err
-	}
-	objectMeta.BlockHeader().SetBFExtent(bloomFilterExtent)
-	offset += bloomFilterExtent.Length()
+	objectMetas := make([]objectDataMetaV1, len(w.blocks))
+	bloomFilterDatas := make([][]byte, len(w.blocks))
+	bloomFilterExtents := make([]Extent, len(w.blocks))
+	zoneMapAreaDatas := make([][]byte, len(w.blocks))
+	zoneMapAreaExtents := make([]Extent, len(w.blocks))
+	metas := make([][]byte, len(w.blocks))
+	metaExtents := make([]Extent, len(w.blocks))
+	for i := range w.blocks {
+		colMetaCount := uint16(0)
+		if len(w.blocks[i]) > 0 {
+			colMetaCount = w.blocks[i][0].meta.GetMetaColumnCount()
+		}
+		objectMetas[i] = BuildObjectMeta(colMetaCount)
+		// prepare bloom filter
+		bloomFilterDatas[i], bloomFilterExtents[i], err = w.prepareBloomFilter(w.blocks[i], uint32(len(w.blocks[i])), offset)
+		if err != nil {
+			return nil, err
+		}
+		objectMetas[i].BlockHeader().SetBFExtent(bloomFilterExtents[i])
+		offset += bloomFilterExtents[i].Length()
 
-	// prepare zone map area
-	zoneMapAreaData, zoneMapAreaExtent, err := w.prepareZoneMapArea(w.blocks[SchemaData], uint32(len(w.blocks[SchemaData])), offset)
-	if err != nil {
-		return nil, err
+		// prepare zone map area
+		zoneMapAreaDatas[i], zoneMapAreaExtents[i], err = w.prepareZoneMapArea(w.blocks[i], uint32(len(w.blocks[i])), offset)
+		if err != nil {
+			return nil, err
+		}
+		objectMetas[i].BlockHeader().SetZoneMapArea(zoneMapAreaDatas[i])
+		offset += zoneMapAreaExtents[i].Length()
 	}
-	objectMeta.BlockHeader().SetZoneMapArea(zoneMapAreaExtent)
-	offset += zoneMapAreaExtent.Length()
-	tbloomFilterData, tbloomFilterExtent, err := w.prepareBloomFilter(w.blocks[SchemaTombstone], uint32(len(w.blocks[SchemaTombstone])), offset)
-	if err != nil {
-		return nil, err
+	startID := uint16(0)
+	start := uint32(0)
+	for i := range w.blocks {
+		// prepare object meta and block index
+		metas[i], metaExtents[i], err = w.prepareDataMeta(objectMetas[i], w.blocks[i], offset, startID)
+		if i == int(SchemaData) {
+			start = metaExtents[SchemaData].Offset()
+			metaHeader.SetDataMetaOffset(metaHeader.HeaderLength())
+			metaHeader.SetDataMetaCount(uint16(len(w.blocks[i])))
+		} else {
+			metaHeader.SetTombstoneMetaOffset(metaHeader.HeaderLength() + metaExtents[SchemaData].OriginSize())
+			metaHeader.SetTombstoneMetaCount(uint16(len(w.blocks[SchemaTombstone])))
+		}
+		startID += uint16(len(w.blocks[i]))
 	}
-	tObjectMeta.BlockHeader().SetBFExtent(tbloomFilterExtent)
-	offset += tbloomFilterExtent.Length()
-
-	// prepare zone map area
-	tzoneMapAreaData, tzoneMapAreaExtent, err := w.prepareZoneMapArea(w.blocks[SchemaTombstone], uint32(len(w.blocks[SchemaTombstone])), offset)
-	if err != nil {
-		return nil, err
-	}
-	tObjectMeta.BlockHeader().SetZoneMapArea(tzoneMapAreaExtent)
-	offset += tzoneMapAreaExtent.Length()
-	// prepare object meta and block index
-	meta, metaExtent, err := w.prepareDataMeta(objectMeta, w.blocks[SchemaData], offset, 0)
-	start := metaExtent.Offset()
-
-	metaHeader.SetDataMetaCount(uint16(len(w.blocks[SchemaData])))
-	metaHeader.SetDataMetaOffset(metaHeader.HeaderLength())
-	tmeta, _, err := w.prepareDataMeta(tObjectMeta, w.blocks[SchemaTombstone], metaExtent.End(), metaHeader.DataMetaCount())
-	metaHeader.SetTombstoneMetaCount(uint16(len(w.blocks[SchemaTombstone])))
-	metaHeader.SetTombstoneMetaOffset(metaHeader.HeaderLength() + metaExtent.OriginSize())
 	var buf bytes.Buffer
 	h := IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_CurrVer}
 	buf.Write(EncodeIOEntryHeader(&h))
 	buf.Write(metaHeader)
-	buf.Write(meta)
-	buf.Write(tmeta)
+
+	for i := range metas {
+		buf.Write(metas[i])
+	}
 	objMeta, extent, err := w.WriteWithCompress(start, buf.Bytes())
 	objectHeader.SetExtent(extent)
 
@@ -422,18 +427,16 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	// writer data
 	w.writerBlocks(w.blocks[SchemaTombstone])
 	// writer bloom filter
-	w.buffer.Write(bloomFilterData)
-
-	w.buffer.Write(zoneMapAreaData)
-	w.buffer.Write(tbloomFilterData)
-
-	w.buffer.Write(tzoneMapAreaData)
+	for i := range bloomFilterDatas {
+		w.buffer.Write(bloomFilterDatas[i])
+		w.buffer.Write(zoneMapAreaDatas[i])
+	}
 	// writer object metadata
 	w.buffer.Write(objMeta)
 
 	// write footer
 	footer := Footer{
-		metaExtent: metaExtent,
+		metaExtent: extent,
 		version:    Version,
 		magic:      Magic,
 	}
