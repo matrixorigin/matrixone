@@ -161,6 +161,11 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
+	// for now, if join children is agg, do not allow shuffle
+	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || builder.qry.Nodes[n.Children[1]].NodeType == plan.Node_AGG {
+		return
+	}
+
 	if n.Stats.HashmapSize < HashMapSizeForShuffle {
 		return
 	}
