@@ -32,7 +32,6 @@ import (
 )
 
 const BlockNumForceOneCN = 200
-
 const blockNDVThreshHold = 100
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
@@ -473,6 +472,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if !isCrossJoin {
 				outcnt *= selectivity
+			}
+			if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
+				outcnt = rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,

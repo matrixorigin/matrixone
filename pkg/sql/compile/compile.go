@@ -2180,6 +2180,11 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		return ss
 	}
 
+	if n.Stats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+		ss = c.compileProjection(n, c.compileRestrict(n, ss))
+		return ss
+	}
+
 	dop := plan2.GetShuffleDop()
 	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
 
