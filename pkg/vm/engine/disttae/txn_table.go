@@ -181,7 +181,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	zms := make([]objectio.ZoneMap, dataLength)
 
 	var meta objectio.ObjectDataMeta
-	var oMeta objectio.ObjectMeta
+	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, nil, err
@@ -192,10 +192,10 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		if objectio.IsSameObjectLocVsMeta(location, meta) {
 			return nil
 		}
-		if oMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 			return err
 		}
-		meta = oMeta.MustDataMeta()
+		meta = objMeta.MustDataMeta()
 		if inited {
 			for idx := range zms {
 				zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
@@ -293,7 +293,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	// repetitive computation
 	handled := make(map[*batch.Batch]struct{})
 	var meta objectio.ObjectDataMeta
-	var oMeta objectio.ObjectMeta
+	var objMeta objectio.ObjectMeta
 	// Calculate the in mem size
 	// TODO: It might includ some deleted row size
 	iter := part.NewRowsIter(ts, nil, false)
@@ -329,11 +329,11 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			continue
 		}
 
-		if oMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 			biter.Close()
 			return 0, err
 		}
-		meta = oMeta.MustDataMeta()
+		meta = objMeta.MustDataMeta()
 		for _, col := range neededCols {
 			colmata := meta.MustGetColumn(uint16(col.Seqnum))
 			ret += int64(colmata.Location().Length())
@@ -373,17 +373,17 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil, err
 	}
 	var meta objectio.ObjectDataMeta
-	var oMeta objectio.ObjectMeta
+	var objMeta objectio.ObjectMeta
 	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.blockInfos))
 	eachBlkFn := func(blk logtailreplay.BlockEntry) error {
 		var err error
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
-			if oMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 				return err
 			}
 		}
-		meta = oMeta.MustDataMeta()
+		meta = objMeta.MustDataMeta()
 		blkmeta := meta.GetBlockMeta(uint32(location.ID()))
 		maxSeq := uint32(blkmeta.GetMaxSeqnum())
 		for _, col := range needCols {
@@ -693,12 +693,12 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		objMeta  objectio.ObjectDataMeta
-		oMeta    objectio.ObjectMeta
-		zms      []objectio.ZoneMap
-		vecs     []*vector.Vector
-		skipObj  bool
-		auxIdCnt int32
+		objDataMeta objectio.ObjectDataMeta
+		objMeta     objectio.ObjectMeta
+		zms         []objectio.ZoneMap
+		vecs        []*vector.Vector
+		skipObj     bool
+		auxIdCnt    int32
 	)
 
 	defer func() {
@@ -742,16 +742,16 @@ func (tbl *txnTable) rangesOnePart(
 			//     1. check whether the object is skipped
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
-			if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-				if oMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 					return
 				}
-				objMeta = oMeta.MustDataMeta()
+				objDataMeta = objMeta.MustDataMeta()
 				skipObj = false
 				// here we only eval expr on the object meta if it has more than 2 blocks
-				if objMeta.BlockCount() > 2 {
+				if objDataMeta.BlockCount() > 2 {
 					for _, expr := range exprs {
-						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objMeta, columnMap, zms, vecs) {
+						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
 							skipObj = true
 							break
 						}
@@ -766,7 +766,7 @@ func (tbl *txnTable) rangesOnePart(
 			var skipBlk bool
 
 			// eval filter expr on the block
-			blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+			blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 			for _, expr := range exprs {
 				if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 					skipBlk = true

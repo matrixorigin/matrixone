@@ -402,7 +402,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	buf.Write(metaHeader)
 	buf.Write(meta)
 	buf.Write(tmeta)
-	oMeta, extent, err := w.WriteWithCompress(start, buf.Bytes())
+	objMeta, extent, err := w.WriteWithCompress(start, buf.Bytes())
 	objectHeader.SetExtent(extent)
 
 	// begin write
@@ -422,7 +422,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 
 	w.buffer.Write(tzoneMapAreaData)
 	// writer object metadata
-	w.buffer.Write(oMeta)
+	w.buffer.Write(objMeta)
 
 	// write footer
 	footer := Footer{

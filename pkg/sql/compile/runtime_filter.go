@@ -82,10 +82,10 @@ func ApplyRuntimeFilters(
 	}
 
 	var (
-		objMeta  objectio.ObjectDataMeta
-		oMeta    objectio.ObjectMeta
-		skipObj  bool
-		auxIdCnt int32
+		objDataMeta objectio.ObjectDataMeta
+		objMeta     objectio.ObjectMeta
+		skipObj     bool
+		auxIdCnt    int32
 	)
 
 	for _, expr := range exprs {
@@ -115,17 +115,17 @@ func ApplyRuntimeFilters(
 		blk := catalog.DecodeBlockInfo(blockInfos[i])
 		location := blk.MetaLocation()
 
-		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-			if oMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, fs); err != nil {
+		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, fs); err != nil {
 				return nil, err
 			}
-			objMeta = oMeta.MustDataMeta()
+			objDataMeta = objMeta.MustDataMeta()
 
 			skipObj = false
 			// here we only eval expr on the object meta if it has more than 2 blocks
-			if objMeta.BlockCount() > 2 {
+			if objDataMeta.BlockCount() > 2 {
 				for i, expr := range exprs {
-					zm := colexec.GetExprZoneMap(errCtx, proc, expr, objMeta, columnMap, zms, vecs)
+					zm := colexec.GetExprZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs)
 					if zm.IsInited() && !evaluators[i].Evaluate(zm) {
 						skipObj = true
 						break
@@ -141,7 +141,7 @@ func ApplyRuntimeFilters(
 		var skipBlk bool
 
 		// eval filter expr on the block
-		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		for i, expr := range exprs {
 			zm := colexec.GetExprZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs)
 			if zm.IsInited() && !evaluators[i].Evaluate(zm) {

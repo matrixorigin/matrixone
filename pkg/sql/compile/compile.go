@@ -2893,8 +2893,8 @@ func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
 }
 
 func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
-	var objMeta objectio.ObjectDataMeta
-	var oMeta objectio.ObjectMeta
+	var objDataMeta objectio.ObjectDataMeta
+	var objMeta objectio.ObjectMeta
 
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
@@ -2903,13 +2903,13 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		if err != nil {
 			return err
 		}
-		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-			if oMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, fs); err != nil {
+		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, fs); err != nil {
 				return err
 			}
-			objMeta = oMeta.MustDataMeta()
+			objDataMeta = objMeta.MustDataMeta()
 		}
-		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.ShuffleColIdx)).ZoneMap()
 		index := plan2.GetRangeShuffleIndexForZM(n.Stats.ShuffleColMin, n.Stats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		nodes[index].Data = append(nodes[index].Data, blk)
