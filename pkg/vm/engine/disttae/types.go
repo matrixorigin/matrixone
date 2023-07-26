@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -173,8 +174,10 @@ type Transaction struct {
 	statementID   int
 	statements    []int
 
-	hasS3Op atomic.Bool
-	removed bool
+	hasS3Op              atomic.Bool
+	removed              bool
+	startStatementCalled bool
+	incrStatementCalled  bool
 }
 
 type Pos struct {
@@ -228,15 +231,75 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
+func (txn *Transaction) StartStatement() {
+	if txn.startStatementCalled {
+		logutil.Fatal("BUG: StartStatement called twice")
+	}
+	txn.startStatementCalled = true
+	txn.incrStatementCalled = false
+}
+
+func (txn *Transaction) EndStatement() {
+	if !txn.startStatementCalled {
+		logutil.Fatal("BUG: StartStatement not called")
+	}
+
+	txn.startStatementCalled = false
+	txn.incrStatementCalled = false
+}
+
 func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error {
-	if err := txn.mergeTxnWorkspace(); err != nil {
-		return err
+	if !commit {
+		if !txn.startStatementCalled {
+			logutil.Fatal("BUG: StartStatement not called")
+		}
+		if txn.incrStatementCalled {
+			logutil.Fatal("BUG: IncrStatementID called twice")
+		}
+		txn.incrStatementCalled = true
 	}
-	if err := txn.dumpBatch(0); err != nil {
-		return err
-	}
+
 	txn.Lock()
 	defer txn.Unlock()
+	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+		return err
+	}
+	if err := txn.dumpBatchLocked(0); err != nil {
+		return err
+	}
+	txn.statements = append(txn.statements, len(txn.writes))
+	txn.statementID++
+
+	// For RC isolation, update the snapshot TS of transaction for each statement including
+	// the first one. Means that, the timestamp of the first statement is not the transaction's
+	// begin timestamp, but its own timestamp.
+	if !commit && txn.meta.IsRCIsolation() {
+		if err := txn.op.UpdateSnapshot(
+			ctx,
+			timestamp.Timestamp{}); err != nil {
+			return err
+		}
+		txn.resetSnapshot()
+	}
+	return nil
+}
+
+// Adjust
+func (txn *Transaction) Adjust() error {
+	txn.Lock()
+	defer txn.Unlock()
+	if err := txn.adjustUpdateOrderLocked(); err != nil {
+		return err
+	}
+	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// The current implementation, update's delete and insert are executed concurrently, inside workspace it
+// may be the order of insert+delete that needs to be adjusted.
+func (txn *Transaction) adjustUpdateOrderLocked() error {
 	if txn.statementID > 0 {
 		start := txn.statements[txn.statementID-1]
 		writes := make([]Entry, 0, len(txn.writes[start:]))
@@ -253,20 +316,6 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 		txn.writes = append(txn.writes[:start], writes...)
 		// restore the scope of the statement
 		txn.statements[txn.statementID-1] = len(txn.writes)
-	}
-	txn.statements = append(txn.statements, len(txn.writes))
-	txn.statementID++
-
-	// For RC isolation, update the snapshot TS of transaction for each statement including
-	// the first one. Means that, the timestamp of the first statement is not the transaction's
-	// begin timestamp, but its own timestamp.
-	if !commit && txn.meta.IsRCIsolation() {
-		if err := txn.op.UpdateSnapshot(
-			ctx,
-			timestamp.Timestamp{}); err != nil {
-			return err
-		}
-		txn.resetSnapshot()
 	}
 	return nil
 }
@@ -297,6 +346,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
 	}
+	// current statement has been rolled back, make can call IncrStatementID again.
+	txn.incrStatementCalled = false
 	return nil
 }
 func (txn *Transaction) resetSnapshot() error {
@@ -394,6 +445,8 @@ type txnTable struct {
 	createSql     string
 	constraint    []byte
 
+	// timestamp of the last operation on this table
+	lastTS timestamp.Timestamp
 	//entries belong to this table,and come from txn.writes.
 	writes []Entry
 	// offset of the writes in workspace

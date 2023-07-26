@@ -30,7 +30,7 @@ current_account_name()
 abc
 select current_user_name();
 current_user_name()
-abc:admin
+admin
 select current_user_id();
 current_user_id()
 2
