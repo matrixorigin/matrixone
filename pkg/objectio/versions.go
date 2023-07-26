@@ -28,7 +28,7 @@ type ObjectDataMeta = objectDataMetaV1
 type ObjectMeta = objectMetaV1
 
 var (
-	BuildObjectMeta        = buildObjectMetaV1
+	BuildObjectMeta        = buildObjectDataMetaV1
 	NewObjectWriterSpecial = newObjectWriterSpecialV1
 	NewObjectWriter        = newObjectWriterV1
 	NewObjectReaderWithStr = newObjectReaderWithStrV1

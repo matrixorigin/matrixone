@@ -347,7 +347,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 
 	offset := w.prepareBlockMeta(HeaderSize, w.blocks, w.colmeta)
 	offset = w.prepareBlockMeta(offset, w.tombstones, w.tombstonesColmeta)
-	metaHeader := buildMetaHeaderV1()
+	metaHeader := buildObjectMetaV1()
 	colMetaCount := uint16(0)
 	if len(w.blocks) > 0 {
 		colMetaCount = w.blocks[0].meta.GetMetaColumnCount()
