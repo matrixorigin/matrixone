@@ -1055,13 +1055,22 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp {
-		if err := lockMoTable(c, dbName, tblName); err != nil {
-			return err
+	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
+		var err error
+		if e := lockMoTable(c, dbName, tblName); e != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+				return e
+			}
+			err = e
 		}
-
-		// before dropping table, lock it. It only works on pessimistic mode.
-		if err := lockTable(c.e, c.proc, rel); err != nil {
+		// before dropping table, lock it.
+		if e := lockTable(c.e, c.proc, rel); e != nil {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+				return e
+			}
+			err = e
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -1237,13 +1246,22 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp && !isView {
-		if err := lockMoTable(c, dbName, tblName); err != nil {
-			return err
+	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
+		var err error
+		if e := lockMoTable(c, dbName, tblName); e != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+				return e
+			}
+			err = e
 		}
-
-		// before dropping table, lock it. It only works on pessimistic mode.
-		if err := lockTable(c.e, c.proc, rel); err != nil {
+		// before dropping table, lock it.
+		if e := lockTable(c.e, c.proc, rel); e != nil {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+				return e
+			}
+			err = e
+		}
+		if err != nil {
 			return err
 		}
 	}

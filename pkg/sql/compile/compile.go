@@ -904,6 +904,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
+			logutil.Infof("delete of '%s' write s3\n", c.sql)
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
@@ -1004,6 +1005,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
 
 		if toWriteS3 {
+			logutil.Infof("insert of '%s' write s3\n", c.sql)
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
 				insertArg, err := constructInsert(n, c.e, c.proc)
 				if err != nil {
@@ -1701,6 +1703,45 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 				Arg: constructJoin(node, rightTyps, c.proc),
 			})
 		}
+	case plan.Node_ANTI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightAnti,
+					Idx: c.anal.curr,
+					Arg: constructRightAnti(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Anti,
+					Idx: c.anal.curr,
+					Arg: constructAnti(node, rightTyps, c.proc),
+				})
+			}
+		}
+
+	case plan.Node_SEMI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightSemi,
+					Idx: c.anal.curr,
+					Arg: constructRightSemi(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Semi,
+					Idx: c.anal.curr,
+					Arg: constructSemi(node, rightTyps, c.proc),
+				})
+			}
+		}
 
 	default:
 		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
@@ -2101,6 +2142,23 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
+
+	if len(c.cnList) > 1 {
+		n.Stats.ShuffleMethod = plan.ShuffleMethod_Noraml
+	}
+
+	if n.Stats.ShuffleMethod == plan.ShuffleMethod_Follow {
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.Group,
+				Idx:     c.anal.curr,
+				IsFirst: c.anal.isFirst,
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			})
+		}
+		return ss
+	}
+
 	dop := plan2.GetShuffleDop()
 	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
 
@@ -2457,7 +2515,8 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 	idx := 0
 	cnt := 0
 	for _, n := range c.cnList {
-		ss := make([]*Scope, n.Mcpu)
+		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+		ss := make([]*Scope, dop)
 		for i := range ss {
 			ss[i] = new(Scope)
 			ss[i].Magic = Remote
@@ -2465,12 +2524,15 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 			ss[i].NodeInfo.Addr = n.Addr
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+				rr.Ch = make(chan *batch.Batch, 16)
+			}
 		}
 		if isSameCN(n.Addr, c.addr) {
 			idx = cnt
 		}
 		joinScopes = append(joinScopes, ss...)
-		cnt += n.Mcpu
+		cnt += dop
 	}
 
 	currentFirstFlag := c.anal.isFirst

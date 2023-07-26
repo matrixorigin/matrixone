@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	HashMapSizeForBucket = 500000
-	MAXShuffleDOP        = 64
-	ShuffleThreshHold    = 50000
+	HashMapSizeForShuffle = 250000
+	MAXShuffleDOP         = 64
+	ShuffleThreshHold     = 50000
 )
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
@@ -148,21 +148,38 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	// do not shuffle by default
 	n.Stats.ShuffleColIdx = -1
-	if n.NodeType != plan.Node_JOIN || n.JoinType != plan.Node_INNER {
+	if n.NodeType != plan.Node_JOIN {
 		return
 	}
-	// for now ,only support one join condition
-	if len(n.OnList) != 1 {
-		return
-	}
-	if !builder.IsEquiJoin(n) {
-		return
-	}
-	if n.Stats.HashmapSize < HashMapSizeForBucket {
+	switch n.JoinType {
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI:
+	default:
 		return
 	}
 
+	if n.Stats.HashmapSize < HashMapSizeForShuffle {
+		return
+	}
 	idx := 0
+	if !builder.IsEquiJoin(n) {
+		return
+	}
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(n.Children[0]) {
+		leftTags[tag] = nil
+	}
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(n.Children[1]) {
+		rightTags[tag] = nil
+	}
+	// for now ,only support the first join condition
+	for i := range n.OnList {
+		if isEquiCond(n.OnList[i], leftTags, rightTags) {
+			idx = i
+			break
+		}
+	}
+
 	//find the highest ndv
 	highestNDV := n.OnList[idx].Ndv
 	if highestNDV < ShuffleThreshHold {
@@ -202,7 +219,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	if len(n.GroupBy) == 0 {
 		return
 	}
-	if n.Stats.HashmapSize < HashMapSizeForBucket {
+	if n.Stats.HashmapSize < HashMapSizeForShuffle {
 		return
 	}
 	//find the highest ndv
@@ -297,6 +314,21 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 		determinShuffleForJoin(node, builder)
 	default:
 		node.Stats.ShuffleColIdx = -1
+	}
+
+	//join->group ,if they use the same hask key, the group can use follow shuffle method
+	if node.NodeType == plan.Node_AGG {
+		child := builder.qry.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_JOIN {
+			if node.Stats.Shuffle && child.Stats.Shuffle {
+				groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
+				joinHashCol, _ := GetHashColumn(child.OnList[node.Stats.ShuffleColIdx])
+				if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
+					node.Stats.ShuffleMethod = plan.ShuffleMethod_Follow
+					return
+				}
+			}
+		}
 	}
 
 	// for now, only one node can go shuffle, choose the biggest one
