@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -988,6 +989,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	}
 	// for writing S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
+		tbl.db.txn.hasS3Op.Store(true)
 		blkInfo := catalog.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0))
 		fileName := blkInfo.MetaLocation().Name().String()
 		ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
@@ -1043,6 +1045,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	}
 	switch typ {
 	case deletion.FlushDeltaLoc:
+		tbl.db.txn.hasS3Op.Store(true)
 		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
 		if err != nil {
 			return err
@@ -1059,11 +1062,18 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId] =
 			append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
+		tbl.db.txn.hasS3Op.Store(true)
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
 		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
 	case deletion.RawRowIdBatch:
+		logutil.Infof("data return by remote pipeline\n")
+		bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if bat.RowCount() == 0 {
+			return nil
+		}
 		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
 	default:
+		tbl.db.txn.hasS3Op.Store(true)
 		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
 	}
 	return nil
