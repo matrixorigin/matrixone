@@ -92,7 +92,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
-				// TODO
+				err = AddPrimaryKey(ctx, alterTablePlan, optionAdd, alterTableCtx)
 			case *tree.ForeignKey:
 				// TODO
 			case *tree.UniqueIndex:
@@ -105,7 +105,20 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			}
 		case *tree.AlterOptionDrop:
-			// TODO
+			switch option.Typ {
+			case tree.AlterTableDropColumn:
+				// TODO
+			case tree.AlterTableDropIndex:
+				// TODO
+			case tree.AlterTableDropKey:
+				// TODO
+			case tree.AlterTableDropPrimaryKey:
+				err = DropPrimaryKey(ctx, alterTablePlan, alterTableCtx)
+			case tree.AlterTableDropForeignKey:
+				// TODO
+			default:
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
+			}
 		case *tree.AlterOptionAlterIndex:
 			// TODO
 		case *tree.TableOptionComment:
@@ -515,7 +528,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			switch option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
 				// TODO
-				algorithm = plan.AlterTable_INPLACE
+				algorithm = plan.AlterTable_COPY
 			case *tree.ForeignKey:
 				// TODO
 				algorithm = plan.AlterTable_INPLACE
@@ -532,7 +545,20 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 				algorithm = plan.AlterTable_INPLACE
 			}
 		case *tree.AlterOptionDrop:
-			algorithm = plan.AlterTable_INPLACE
+			switch option.Typ {
+			case tree.AlterTableDropColumn:
+				algorithm = plan.AlterTable_INPLACE
+			case tree.AlterTableDropIndex:
+				algorithm = plan.AlterTable_INPLACE
+			case tree.AlterTableDropKey:
+				algorithm = plan.AlterTable_INPLACE
+			case tree.AlterTableDropPrimaryKey:
+				algorithm = plan.AlterTable_COPY
+			case tree.AlterTableDropForeignKey:
+				algorithm = plan.AlterTable_INPLACE
+			default:
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.AlterOptionAlterIndex:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.TableOptionComment:

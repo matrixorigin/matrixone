@@ -139,6 +139,8 @@ const (
 	ErrForeignKeyColumnCannotChangeChild uint16 = 20456
 	ErrForeignKeyColumnCannotChange      uint16 = 20457
 	ErrForeignKeyOnPartitioned           uint16 = 20458
+	ErrKeyColumnDoesNotExits             uint16 = 20459
+	ErrCantDropFieldOrKey                uint16 = 20460
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -330,6 +332,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrForeignKeyColumnCannotChangeChild: {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrForeignKeyColumnCannotChange:      {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 	ErrForeignKeyOnPartitioned:           {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
+	ErrKeyColumnDoesNotExits:             {ER_KEY_COLUMN_DOES_NOT_EXITS, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
+	ErrCantDropFieldOrKey:                {ER_CANT_DROP_FIELD_OR_KEY, []string{MySQLDefaultSqlState}, "Can't DROP '%-.192s'; check that column/key exists"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1093,6 +1097,14 @@ func NewErrTooManyFields(ctx context.Context) *Error {
 
 func NewErrDupFieldName(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrDupFieldName, k)
+}
+
+func NewErrKeyColumnDoesNotExits(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrKeyColumnDoesNotExits, k)
+}
+
+func NewErrCantDropFieldOrKey(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrCantDropFieldOrKey, k)
 }
 
 func NewErrMultiplePriKey(ctx context.Context) *Error {

@@ -58,8 +58,19 @@ var (
 		//------------------------------------------------------------------------
 		//input:  "alter table t1 order by a ASC, b DESC",
 		//output: "alter table t1 order by a asc, b desc",
-		input:  "alter table t1 order by a, b DESC",
-		output: "alter table t1 order by a, b desc",
+		//input:  "alter table t1 order by a, b DESC",
+		//output: "alter table t1 order by a, b desc",
+		//------------------------------------------------------------------------
+		//input:  "alter table t1 add constraint pk primary key (col4)",
+		//output: "alter table t1 add constraint pk primary key (col4)",
+		//input:  "alter table t1 add constraint pk primary key (col1, col4)",
+		//output: "alter table t1 add constraint pk primary key (col1, col4)",
+		input:  "alter table t1 add constraint pk primary key pk1 (col1, col4)",
+		output: "alter table t1 add constraint pk primary key pk1 (col1, col4)",
+		//input:  "alter table t1 add primary key (col1, col4)",
+		//output: "alter table t1 add primary key (col1, col4)",
+		//input:  "alter table t1 add primary key pk1 (col1, col4)",
+		//output: "alter table t1 add primary key pk1 (col1, col4)",
 	}
 )
 
@@ -2216,6 +2227,27 @@ var (
 		{
 			input:  "alter table t1 add constraint foreign key (col4) references dept(deptno)",
 			output: "alter table t1 add foreign key (col4) references dept(deptno)",
+		},
+		{
+
+			input:  "alter table t1 add constraint pk primary key pk1(col1, col4)",
+			output: "alter table t1 add constraint pk primary key pk1(col1, col4)",
+		},
+		{
+			input:  "alter table t1 add constraint pk primary key (col4)",
+			output: "alter table t1 add constraint pk primary key (col4)",
+		},
+		{
+			input:  "alter table t1 add constraint pk primary key (col1, col4)",
+			output: "alter table t1 add constraint pk primary key (col1, col4)",
+		},
+		{
+			input:  "alter table t1 add primary key (col1, col4)",
+			output: "alter table t1 add primary key (col1, col4)",
+		},
+		{
+			input:  "alter table t1 add primary key pk1 (col1, col4)",
+			output: "alter table t1 add primary key pk1 (col1, col4)",
 		},
 		{
 			input:  "alter table t1 comment 'abc'",

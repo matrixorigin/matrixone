@@ -503,6 +503,7 @@ const (
 	AlterTableRenameColumn
 	AlterTableAlterColumn
 	AlterTableOrderByColumn
+	AlterTableAddConstraint
 	AlterTableAddColumn
 )
 
