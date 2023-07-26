@@ -128,6 +128,12 @@ func (db *DB) GetOrCreateTxnWithMeta(
 	return db.TxnMgr.GetOrCreateTxnWithMeta(info, id, ts)
 }
 
+func (db *DB) StartTxnWithStartTSAndSnapshotTS(
+	info []byte,
+	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	return db.TxnMgr.StartTxnWithStartTSAndSnapshotTS(info, ts, ts)
+}
+
 func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback(context.Background())
 }
