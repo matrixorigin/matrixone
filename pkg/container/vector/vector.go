@@ -660,6 +660,8 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Rowid](v, sels, negate)
 	case types.T_Blockid:
 		shrinkFixed[types.Blockid](v, sels, negate)
+	case types.T_float32vec:
+		shrinkFixed[types.Float32Vector](v, sels, negate)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
@@ -716,6 +718,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) error {
 		shuffleFixed[types.Rowid](v, sels, mp)
 	case types.T_Blockid:
 		shuffleFixed[types.Blockid](v, sels, mp)
+	case types.T_float32vec:
+		shuffleFixed[types.Float32Vector](v, sels, mp)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
@@ -1682,6 +1686,17 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return appendOneBytes(v, ws[sel].GetByteSlice(w.area), false, mp)
 			}
 		}
+	case types.T_float32vec:
+		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Float32Vector{}, true, mp)
+			}
+			ws := MustFixedCol[types.Float32Vector](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
+			return appendOneFixed(v, ws[sel], nulls.Contains(&w.nsp, uint64(sel)), mp)
+		}
 	case types.T_Blockid:
 		return func(v, w *Vector, sel int64) error {
 			if w.IsConstNull() {
@@ -2310,6 +2325,8 @@ func (v *Vector) String() string {
 			}
 		}
 		return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+	case types.T_float32vec:
+		return vecToString[types.Float32Vector](v)
 	default:
 		panic("vec to string unknown types.")
 	}
