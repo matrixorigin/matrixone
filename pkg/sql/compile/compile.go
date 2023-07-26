@@ -2181,7 +2181,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		return ss
 
 	case plan.ShuffleMethod_Reshuffle:
-		ss = c.compileProjection(n, c.compileRestrict(n, ss))
 
 		dop := plan2.GetShuffleDop()
 		parent, children := c.newScopeListForShuffleGroup(1, dop)
@@ -2193,6 +2192,8 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
+
+		children = c.compileProjection(n, c.compileRestrict(n, children))
 
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
