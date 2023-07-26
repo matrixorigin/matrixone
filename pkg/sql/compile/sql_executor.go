@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -23,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -30,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/multierr"
 )
 
 type sqlExecutor struct {
@@ -40,6 +42,7 @@ type sqlExecutor struct {
 	txnClient client.TxnClient
 	fs        fileservice.FileService
 	ls        lockservice.LockService
+	qs        queryservice.QueryService
 	aicm      *defines.AutoIncrCacheManager
 }
 
@@ -50,6 +53,7 @@ func NewSQLExecutor(
 	mp *mpool.MPool,
 	txnClient client.TxnClient,
 	fs fileservice.FileService,
+	qs queryservice.QueryService,
 	aicm *defines.AutoIncrCacheManager) executor.SQLExecutor {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService)
 	if !ok {
@@ -61,6 +65,7 @@ func NewSQLExecutor(
 		txnClient: txnClient,
 		fs:        fs,
 		ls:        v.(lockservice.LockService),
+		qs:        qs,
 		aicm:      aicm,
 		mp:        mp,
 	}
@@ -95,7 +100,8 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		return exec.rollback()
+		logutil.Errorf("internal sql executor error: %v", err)
+		return exec.rollback(err)
 	}
 	if err = exec.commit(); err != nil {
 		return err
@@ -191,6 +197,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.opts.Txn(),
 		exec.s.fs,
 		exec.s.ls,
+		exec.s.qs,
 		exec.s.aicm,
 	)
 
@@ -252,10 +259,9 @@ func (exec *txnExecutor) commit() error {
 	return exec.opts.Txn().Commit(exec.ctx)
 }
 
-func (exec *txnExecutor) rollback() error {
+func (exec *txnExecutor) rollback(err error) error {
 	if exec.opts.ExistsTxn() {
-		return nil
+		return err
 	}
-	return multierr.Append(nil,
-		exec.opts.Txn().Rollback(exec.ctx))
+	return errors.Join(err, exec.opts.Txn().Rollback(exec.ctx))
 }

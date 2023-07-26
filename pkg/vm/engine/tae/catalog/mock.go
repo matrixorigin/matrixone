@@ -282,6 +282,6 @@ func MockBatch(schema *Schema, rows int) *containers.Batch {
 		sortKey := schema.GetSingleSortKey()
 		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), rows, sortKey.Idx, nil)
 	} else {
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), rows, schema.PhyAddrKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), rows, schema.GetPrimaryKey().Idx /*get fake pk*/, nil)
 	}
 }

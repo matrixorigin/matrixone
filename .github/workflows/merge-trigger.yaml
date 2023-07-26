@@ -48,7 +48,7 @@ jobs:
     if: ${{ always() && !cancelled() && needs.docker_image_build.result == 'success' }}
     needs: docker_image_build
     runs-on: arm64-runner
-    timeout-minutes: 120
+    timeout-minutes: 90
     name: SETUP MO TEST ENV
     outputs:
       mo_svc_ip: ${{ steps.get_mo_addr.outputs.mo_svc_ip }}
@@ -144,7 +144,6 @@ jobs:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN BVT TEST
     runs-on: arm64-runner
-    timeout-minutes: 60
     needs: [setup_mo_test_env,docker_image_build]
     steps:
       - name: Clone mo-tester Repo
@@ -169,7 +168,7 @@ jobs:
           distribution: 'adopt'
       - name: Generate MO-Tester Config and Start BVT Test
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 40
+        timeout-minutes: 20
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -177,7 +176,7 @@ jobs:
           sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' ./mo-tester/mo.yml
           cat ./mo-tester/mo.yml          
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources -e pessimistic_transaction 2>&1
           rm -rf .git lib
       - name: Collect Upload files
         if: ${{ always() || cancelled() }}
@@ -195,7 +194,6 @@ jobs:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN SSB AND TPCH TEST
     runs-on: arm64-runner
-    timeout-minutes: 150
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
@@ -250,7 +248,7 @@ jobs:
 
       - name: Start Load SSB 10G Data And Test
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 60
+        timeout-minutes: 10
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -267,7 +265,7 @@ jobs:
       # start tpch test
       - name: Load TPCH 10G Test Data
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 30
+        timeout-minutes: 10
         id: load_tpch_data
         run: |
           set -uo pipefail
@@ -280,7 +278,7 @@ jobs:
 
       - name: Start TPCH 10G Test
         if: ${{ always() && !cancelled() && steps.load_tpch_data.conclusion == 'success' }}
-        timeout-minutes: 60
+        timeout-minutes: 20
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -382,7 +380,7 @@ jobs:
       # start sysbench test
       - name: Start OLTP Insert Test With 100 Threads
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 30
+        timeout-minutes: 15
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -405,7 +403,7 @@ jobs:
 
       - name: Start OLTP Delete Test With 100 Threads
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 30
+        timeout-minutes: 15
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -424,7 +422,7 @@ jobs:
           
       - name: Start OLTP Update Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
-        timeout-minutes: 30
+        timeout-minutes: 15
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -443,7 +441,7 @@ jobs:
 
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
-        timeout-minutes: 30
+        timeout-minutes: 15
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -548,7 +546,7 @@ jobs:
      # start tpcc test
       - name: Load TPCC 10 Warehouse Data
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 30
+        timeout-minutes: 10
         id: load_tpcc_data
         run: |
           set -uo pipefail
@@ -561,7 +559,7 @@ jobs:
 
       - name: Start TPCC 10 Warehouses 10 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 30
+        timeout-minutes: 10
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -585,7 +583,7 @@ jobs:
           
       - name: Start TPCC 10 Warehouses 50 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 30
+        timeout-minutes: 10
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -607,7 +605,7 @@ jobs:
           
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 30
+        timeout-minutes: 10
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"

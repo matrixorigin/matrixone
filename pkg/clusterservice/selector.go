@@ -19,9 +19,17 @@ import (
 )
 
 // NewSelector return a default selector, this empty selector
-// will select all input
+// will select all instances. For CN type, it only select the
+// ones whose work state is working.
 func NewSelector() Selector {
 	return Selector{}
+}
+
+// NewSelectAll will return all CN services.
+func NewSelectAll() Selector {
+	return Selector{
+		all: true,
+	}
 }
 
 // NewServiceIDSelector

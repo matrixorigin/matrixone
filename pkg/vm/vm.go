@@ -50,19 +50,37 @@ func Prepare(ins Instructions, proc *process.Process) error {
 }
 
 func Run(ins Instructions, proc *process.Process) (end bool, err error) {
-	var ok bool
-
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(proc.Ctx, e)
 		}
 	}()
-	for _, in := range ins {
-		if ok, err = execFunc[in.Op](in.Idx, proc, in.Arg, in.IsFirst, in.IsLast); err != nil {
-			return ok || end, err
+
+	return fubarRun(ins, proc, 0)
+}
+
+func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err error) {
+	var fubarStack []int
+	var ok process.ExecStatus
+
+	for i := start; i < len(ins); i++ {
+		if ok, err = execFunc[ins[i].Op](ins[i].Idx, proc, ins[i].Arg, ins[i].IsFirst, ins[i].IsLast); err != nil {
+			// error handling weirdness
+			return ok == process.ExecStop || end, err
 		}
-		if ok { // ok is true shows that at least one operator has done its work
+
+		if ok == process.ExecStop {
 			end = true
+		} else if ok == process.ExecHasMore {
+			fubarStack = append(fubarStack, i)
+		}
+	}
+
+	// run the stack backwards.
+	for i := len(fubarStack) - 1; i >= 0; i-- {
+		end, err = fubarRun(ins, proc, fubarStack[i])
+		if end || err != nil {
+			return end, err
 		}
 	}
 	return end, err

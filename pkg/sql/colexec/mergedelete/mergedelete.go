@@ -32,7 +32,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
 	var name string
 	ap := arg.(*Argument)
@@ -46,12 +46,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		// 3.do compaction when read
 		// choose which one depends on next pr
 		ap.DelSource.Delete(proc.Ctx, nil, catalog.BlockMeta_Delete_ID)
-		return true, nil
+		return process.ExecStop, nil
 	}
 
-	if len(bat.Zs) == 0 {
+	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
-		return false, nil
+		return process.ExecNext, nil
 	}
 
 	// 	  blkId           deltaLoc                        type                                 partitionIdx
@@ -67,35 +67,35 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	// If the target table is a partition table, Traverse partition subtables for separate processing
 	if len(ap.PartitionSources) > 0 {
 		partitionIdxs := vector.MustFixedCol[int32](bat.GetVector(3))
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
 			bat := &batch.Batch{}
 			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			bat.Cnt = 1
 			pIndex := partitionIdxs[i]
 			err = ap.PartitionSources[pIndex].Delete(proc.Ctx, bat, name)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 	} else {
 		// If the target table is a general table
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
 			bat := &batch.Batch{}
 			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 			bat.Cnt = 1
 			err = ap.DelSource.Delete(proc.Ctx, bat, name)
 			if err != nil {
-				return false, err
+				return process.ExecNext, err
 			}
 		}
 	}
 	// and there are another attr used to record how many rows are deleted
 	ap.AffectedRows += uint64(vector.GetFixedAt[uint32](bat.GetVector(4), 0))
-	return false, nil
+	return process.ExecNext, nil
 }

@@ -55,7 +55,12 @@ the migration cannot be done.
 (3) If you are in a transaction, you cannot do migration. Tracking of transaction state is
 recorded as data is interacted.
 
-5. Usage
+5. Scaling:
+The proxy module regularly checks the work state of the cn service. If the state is draining,
+then migrate the tunnels on the cn to appropriate cns. If no suitable cn is found, an error
+will be reported and the original connection will become unavailable.
+
+6. Usage
 Proxy is mainly used on the cloud platform. If you want to use proxy locally, you need to
 add configuration -with-proxy to start the proxy module in launch configuration mode, and
 add configuration in CN config file:

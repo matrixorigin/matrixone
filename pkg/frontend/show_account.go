@@ -452,7 +452,6 @@ func mergeOutputResult(ses *Session, outputBatch *batch.Batch, rsOfMoAccount *ba
 			return err
 		}
 	}
-	outputBatch.Zs = make([]int64, len(rsOfMoAccount.Zs))
-	copy(outputBatch.Zs, rsOfMoAccount.Zs)
+	outputBatch.SetRowCount(rsOfMoAccount.RowCount())
 	return nil
 }

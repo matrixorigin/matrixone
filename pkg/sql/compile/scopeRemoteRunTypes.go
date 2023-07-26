@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -48,11 +49,12 @@ const (
 
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
-	cnAddr      string
-	storeEngine engine.Engine
-	fileService fileservice.FileService
-	lockService lockservice.LockService
-	aicm        *defines.AutoIncrCacheManager
+	cnAddr       string
+	storeEngine  engine.Engine
+	fileService  fileservice.FileService
+	lockService  lockservice.LockService
+	queryService queryservice.QueryService
+	aicm         *defines.AutoIncrCacheManager
 }
 
 // processHelper records source process information to help
@@ -193,6 +195,7 @@ func newMessageReceiverOnServer(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
+	queryService queryservice.QueryService,
 	txnClient client.TxnClient,
 	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
 
@@ -206,11 +209,12 @@ func newMessageReceiverOnServer(
 		sequence:        0,
 	}
 	receiver.cnInformation = cnInformation{
-		cnAddr:      cnAddr,
-		storeEngine: storeEngine,
-		fileService: fileService,
-		lockService: lockService,
-		aicm:        aicm,
+		cnAddr:       cnAddr,
+		storeEngine:  storeEngine,
+		fileService:  fileService,
+		lockService:  lockService,
+		queryService: queryService,
+		aicm:         aicm,
 	}
 
 	switch m.GetCmd() {
@@ -263,6 +267,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		pHelper.txnOperator,
 		cnInfo.fileService,
 		cnInfo.lockService,
+		cnInfo.queryService,
 		cnInfo.aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
@@ -430,7 +435,7 @@ outter:
 			logutil.Errorf("receiver conctx done during get dispatch process")
 			return nil, nil
 		default:
-			if opProc, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
+			if opProc, ok = colexec.Srv.GetProcByUuid(opUuid); !ok {
 				runtime.Gosched()
 			} else {
 				break outter

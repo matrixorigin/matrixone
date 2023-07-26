@@ -26,7 +26,6 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"go.uber.org/multierr"
 )
 
 var (
@@ -567,12 +566,7 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) (tasks []task.Cron
 		return nil, err
 	}
 	defer func() {
-		if e := rows.Close(); e != nil {
-			err = errors.Join(err, e)
-		}
-		if e := rows.Err(); e != nil {
-			err = errors.Join(err, e)
-		}
+		err = errors.Join(err, rows.Close(), rows.Err())
 	}()
 
 	tasks = make([]task.CronTask, 0)
@@ -775,10 +769,10 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 	}
 
 	if err = m.useDB(db); err != nil {
-		return nil, nil, multierr.Append(err, db.Close())
+		return nil, nil, errors.Join(err, db.Close())
 	}
 
-	return db, func() error { return db.Close() }, nil
+	return db, db.Close, nil
 }
 
 func (m *mysqlTaskStorage) useDB(db *sql.DB) (err error) {
@@ -786,7 +780,7 @@ func (m *mysqlTaskStorage) useDB(db *sql.DB) (err error) {
 		return errNotReady
 	}
 	if _, err := db.Exec("use " + m.dbname); err != nil {
-		return multierr.Append(err, db.Close())
+		return errors.Join(err, db.Close())
 	}
 	return nil
 }

@@ -198,9 +198,6 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 
 	ctx, span := trace.Start(ctx, "S3FS.List")
 	defer span.End()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
@@ -266,9 +263,6 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 
 	ctx, span := trace.Start(ctx, "S3FS.StatFile")
 	defer span.End()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
@@ -402,6 +396,16 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		}
 	}
 
+	var r io.Reader
+	r = bytes.NewReader(content)
+	if vector.Hash.Sum != nil && vector.Hash.New != nil {
+		h := vector.Hash.New()
+		r = io.TeeReader(r, h)
+		defer func() {
+			*vector.Hash.Sum = h.Sum(nil)
+		}()
+	}
+
 	// put
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
@@ -412,7 +416,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		&s3.PutObjectInput{
 			Bucket:        ptrTo(s.bucket),
 			Key:           ptrTo(key),
-			Body:          bytes.NewReader(content),
+			Body:          r,
 			ContentLength: size,
 			Expires:       expire,
 		},

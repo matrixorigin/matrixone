@@ -55,7 +55,6 @@ func TestInsertIndexMetadata(t *testing.T) {
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}) (*batch.Batch, error) {
 		bat := batch.NewWithSize(3)
-		//bat.Zs = []int64{1}
 		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
@@ -74,7 +73,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 		if err != nil {
 			require.Nil(t, err)
 		}
-		bat.SetZs(bat.GetVector(1).Length(), proc.Mp())
+		bat.SetRowCount(bat.GetVector(1).Length())
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()
@@ -166,7 +165,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 		if err != nil {
 			require.Nil(t, err)
 		}
-		bat.SetZs(bat.GetVector(1).Length(), proc.Mp())
+		bat.SetRowCount(bat.GetVector(1).Length())
 		return bat, nil
 	}).AnyTimes()
 	reader.EXPECT().Close().Return(nil).AnyTimes()

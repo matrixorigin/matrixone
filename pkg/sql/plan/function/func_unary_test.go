@@ -1182,8 +1182,6 @@ func TestHexInt64(t *testing.T) {
 	}
 }
 
-// Length
-
 func initBlobLengthTestCase() []tcTemp {
 	return []tcTemp{
 		{

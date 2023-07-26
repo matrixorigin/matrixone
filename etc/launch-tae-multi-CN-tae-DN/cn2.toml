@@ -56,5 +56,9 @@ service-address = "127.0.0.1:7003"
 listen-address = "0.0.0.0:9958"
 service-address = "127.0.0.1:9958"
 
+[cn.query-service.address]
+listen-address = "0.0.0.0:29998"
+service-address = "127.0.0.1:29998"
+
 [cn.txn]
 # mode = "Pessimistic"

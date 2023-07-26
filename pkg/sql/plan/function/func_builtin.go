@@ -1618,3 +1618,10 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 	}
 	return nil
 }
+
+func builtInConvertFake(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	// ignore the second parameter and just set result the same to the first parameter.
+	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+		return v
+	})
+}

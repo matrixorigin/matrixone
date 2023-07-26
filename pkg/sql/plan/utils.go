@@ -267,12 +267,12 @@ func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
 	return expr
 }
 
-func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
+func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *BindContext) ([]*plan.Expr, error) {
 	conds := splitAstConjunction(astExpr)
 	exprs := make([]*plan.Expr, len(conds))
 
 	for i, cond := range conds {
-		cond, err := ctx.qualifyColumnNames(cond, nil, false)
+		cond, err := ctx.qualifyColumnNames(cond, expandAlias)
 		if err != nil {
 			return nil, err
 		}
@@ -1147,7 +1147,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 		return nil, err
 	}
 	defer vec.Free(proc.Mp())
-	c := rule.GetConstantValue(vec, false)
+	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
 		return e, nil
 	}

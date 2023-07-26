@@ -37,6 +37,12 @@ type Selector struct {
 	byLabel bool
 	labels  map[string]string
 	labelOp Op
+
+	// all is ture means that we only want all the CN services to do
+	// the filter. Otherwise, only the ones whose work state is working
+	// would do the filter. This is only used for CN. Its default value
+	// is false.
+	all bool
 }
 
 // MOCluster is used to get the meta and status information of the MO cluster.

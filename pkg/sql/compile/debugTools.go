@@ -41,6 +41,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Product:      "product",
 	vm.Restrict:     "restrict",
 	vm.Dispatch:     "dispatch",
+	vm.Shuffle:      "shuffle",
 	vm.Connector:    "connect",
 	vm.Projection:   "projection",
 	vm.Anti:         "anti",
@@ -65,6 +66,8 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Intersect:    "intersect",
 	vm.IntersectAll: "intersect all",
 	vm.HashBuild:    "hash build",
+	vm.MergeDelete:  "merge delete",
+	vm.LockOp:       "lockop",
 }
 
 var debugMagicNames = map[magicType]string{

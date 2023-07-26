@@ -95,9 +95,9 @@ func RunTestCases(cases []GroupConcatTestCase, t *testing.T, proc *process.Proce
 	for _, case_ := range cases {
 		gc := NewGroupConcat(case_.arg, case_.ityp)
 		gc.Grows(1, case_.proc.Mp())
-		gc.Fill(0, 0, 1, case_.vecs)
-		gc.Fill(0, 1, 1, case_.vecs)
-		gc.Fill(0, 2, 1, case_.vecs)
+		gc.Fill(0, 0, case_.vecs)
+		gc.Fill(0, 1, case_.vecs)
+		gc.Fill(0, 2, case_.vecs)
 		res, _ := gc.Eval(case_.proc.Mp())
 		require.Equal(t, case_.expect, res.GetStringAt(0))
 		gc.Free(case_.proc.Mp())

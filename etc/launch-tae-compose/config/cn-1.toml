@@ -57,6 +57,10 @@ service-address = "cn-1:17001"
 listen-address = "0.0.0.0:19958"
 service-address = "cn-1:19958"
 
+[cn.query-service.address]
+listen-address = "0.0.0.0:19998"
+service-address = "cn-1:19998"
+
 [cn.Engine]
 type = "distributed-tae"
 

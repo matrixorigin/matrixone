@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/mohae/deepcopy"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -339,7 +340,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.proc,
 		cwft.stmt,
 		cwft.ses.isInternal,
-		cwft.ses.getCNLabels(),
+		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
 	)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
@@ -405,9 +406,9 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
-	logDebugf(cwft.ses.GetDebugString(), "compile.Run begin")
+	logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run begin")
 	defer func() {
-		logDebugf(cwft.ses.GetDebugString(), "compile.Run end")
+		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
 	err := cwft.compile.Run(ts)
 	return err

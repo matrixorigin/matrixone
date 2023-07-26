@@ -80,7 +80,7 @@ func Call(
 	proc *process.Process,
 	v any,
 	isFirst bool,
-	isLast bool) (bool, error) {
+	isLast bool) (process.ExecStatus, error) {
 	arg, ok := v.(*Argument)
 	if !ok {
 		getLogger().Fatal("invalid argument",
@@ -89,14 +89,21 @@ func Call(
 
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {
-		return false, nil
+		return process.ExecNext, nil
 	}
 
 	if !arg.block {
-		return callNonBlocking(idx, proc, arg)
+		ok, err := callNonBlocking(idx, proc, arg)
+		if ok {
+			return process.ExecStop, err
+		}
+		return process.ExecNext, err
 	}
-
-	return callBlocking(idx, proc, arg, isFirst, isLast)
+	ok, err := callBlocking(idx, proc, arg, isFirst, isLast)
+	if ok {
+		return process.ExecStop, err
+	}
+	return process.ExecNext, err
 }
 
 func callNonBlocking(
@@ -104,10 +111,11 @@ func callNonBlocking(
 	proc *process.Process,
 	arg *Argument) (bool, error) {
 	bat := proc.InputBatch()
+
 	if bat == nil {
 		return true, arg.rt.retryError
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
@@ -150,7 +158,7 @@ func callBlocking(
 		}
 
 		// skip empty batch
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			bat.Clean(proc.Mp())
 			return false, nil
 		}
@@ -174,6 +182,7 @@ func callBlocking(
 		if len(arg.rt.cachedBatches) == 0 {
 			arg.rt.step = stepEnd
 		}
+
 		proc.SetInputBatch(bat)
 		return false, nil
 	case stepEnd:

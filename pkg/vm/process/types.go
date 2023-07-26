@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -149,6 +150,14 @@ type AnalyzeInfo struct {
 	InsertTime int64
 }
 
+type ExecStatus int
+
+const (
+	ExecStop = iota
+	ExecNext
+	ExecHasMore
+)
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
@@ -196,6 +205,8 @@ type Process struct {
 
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	prepareParams       *vector.Vector
+
+	QueryService queryservice.QueryService
 }
 
 type vectorPool struct {
@@ -317,7 +328,8 @@ func (si *SessionInfo) GetHost() string {
 }
 
 func (si *SessionInfo) GetUserHost() string {
-	return si.User + "@" + si.Host
+	//currently, the host_name is 'localhost'
+	return si.User + "@localhost"
 }
 
 func (si *SessionInfo) GetRole() string {

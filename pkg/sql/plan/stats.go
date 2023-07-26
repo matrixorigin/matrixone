@@ -159,8 +159,23 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 
 // cols in one table, return if ndv of  multi column is high enough
 func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
+	if tableDef == nil {
+		return false
+	}
+	// first to check if it is primary key.
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		pks := make([]int32, len(pkNames))
+		for i := range pkNames {
+			pks[i] = tableDef.Name2ColIndex[pkNames[i]]
+		}
+		if containsAllPKs(cols, pks) {
+			return true
+		}
+	}
+
 	sc := builder.compCtx.GetStatsCache()
-	if sc == nil || tableDef == nil {
+	if sc == nil {
 		return false
 	}
 	s := sc.GetStatsInfoMap(tableDef.TblId)
@@ -447,6 +462,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.5))
 		selectivity_out := math.Min(math.Pow(leftStats.Selectivity, math.Pow(rightStats.Selectivity, 0.5)), selectivity)
 
+		for _, pred := range node.OnList {
+			if pred.Ndv <= 0 {
+				pred.Ndv = getExprNdv(pred, builder)
+			}
+		}
+
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
@@ -496,10 +517,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		case plan.Node_ANTI:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity),
+				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Selectivity: selectivity_out * 0.5,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
@@ -812,6 +833,12 @@ func IsTpQuery(qry *plan.Query) bool {
 		}
 	}
 	return true
+}
+
+func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
+	for _, rootID := range builder.qry.Steps {
+		ReCalcNodeStats(rootID, builder, true, false)
+	}
 }
 
 func PrintStats(qry *plan.Query) string {

@@ -44,6 +44,7 @@ type Relation interface {
 	DeleteByPhyAddrKeys(keys containers.Vector) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
+	TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
 	Update(id *common.ID, row uint32, col uint16, v any, isNull bool) error
 	GetByFilter(ctx context.Context, filter *Filter) (id *common.ID, offset uint32, err error)
 	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
