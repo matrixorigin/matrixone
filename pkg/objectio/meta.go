@@ -64,7 +64,7 @@ func (o objectMetaV1) BlockIndex() BlockIndex {
 }
 
 func (o objectMetaV1) GetBlockMeta(id uint32) BlockObject {
-	BlockID := id - uint32(o.BlockHeader().Sequence())
+	BlockID := id - uint32(o.BlockHeader().StartID())
 	offset, length := o.BlockIndex().BlockMetaPos(BlockID)
 	return BlockObject(o[offset : offset+length])
 }
@@ -153,8 +153,10 @@ const (
 	metaColCntLen      = 2
 	maxSeqOff          = metaColCntOff + metaColCntLen
 	maxSeqLen          = 2
-	headerDummyOff     = maxSeqOff + maxSeqLen
-	headerDummyLen     = 35
+	startIDOff         = maxSeqOff + maxSeqLen
+	StartIDLen         = 2
+	headerDummyOff     = startIDOff + StartIDLen
+	headerDummyLen     = 33
 	headerLen          = headerDummyOff + headerDummyLen
 )
 
@@ -223,6 +225,14 @@ func (bh BlockHeader) MaxSeqnum() uint16 {
 
 func (bh BlockHeader) SetMaxSeqnum(seqnum uint16) {
 	copy(bh[maxSeqOff:maxSeqOff+maxSeqLen], types.EncodeUint16(&seqnum))
+}
+
+func (bh BlockHeader) StartID() uint16 {
+	return types.DecodeUint16(bh[startIDOff : startIDOff+StartIDLen])
+}
+
+func (bh BlockHeader) SetStartID(id uint16) {
+	copy(bh[startIDOff:startIDOff+StartIDLen], types.EncodeUint16(&id))
 }
 
 func (bh BlockHeader) MetaLocation() Extent {

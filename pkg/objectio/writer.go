@@ -196,9 +196,10 @@ func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta object
 	length := uint32(0)
 	blockCount := uint32(len(blocks))
 	sid := w.name.SegmentId()
+	objectMeta.BlockHeader().SetSequence(uint16(blockCount))
 	blockId := NewBlockid(&sid, w.name.Num(), uint16(blockCount))
 	objectMeta.BlockHeader().SetBlockID(blockId)
-	objectMeta.BlockHeader().SetSequence(offsetId)
+	objectMeta.BlockHeader().SetStartID(offsetId)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	// write column meta
 	if seqnums != nil && len(seqnums.Seqs) > 0 {

@@ -7466,7 +7466,7 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 				writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
 				assert.NoError(t, err)
 				writer.SetPrimaryKey(3)
-				writer.WriteBatch(containers.ToCNBatch(batch))
+				writer.WriteTombstoneBatch(containers.ToCNBatch(batch))
 				blocks, _, err := writer.Sync(context.TODO())
 				assert.NoError(t, err)
 				assert.Equal(t, 1, len(blocks))
