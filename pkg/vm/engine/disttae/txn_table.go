@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -1065,6 +1066,11 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
 		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
 	case deletion.RawRowIdBatch:
+		logutil.Infof("data return by remote pipeline\n")
+		bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if bat.RowCount() == 0 {
+			return nil
+		}
 		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
 	default:
 		tbl.db.txn.hasS3Op.Store(true)
