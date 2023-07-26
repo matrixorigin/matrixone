@@ -117,9 +117,7 @@ type Transaction struct {
 
 	// local timestamp for workspace operations
 	meta *txn.TxnMeta
-	// the timestamp of the previous statement
-	lastTS timestamp.Timestamp
-	op     client.TxnOperator
+	op   client.TxnOperator
 
 	// writes cache stores any writes done by txn
 	writes []Entry
@@ -268,7 +266,6 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 			timestamp.Timestamp{}); err != nil {
 			return err
 		}
-		txn.lastTS = txn.meta.SnapshotTS
 		txn.resetSnapshot()
 	}
 	return nil
@@ -397,6 +394,8 @@ type txnTable struct {
 	createSql     string
 	constraint    []byte
 
+	// timestamp of the last operation on this table
+	lastTS timestamp.Timestamp
 	//entries belong to this table,and come from txn.writes.
 	writes []Entry
 	// offset of the writes in workspace
