@@ -25,7 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
-func LoadColumns(ctx context.Context,
+func LoadColumnsData(ctx context.Context,
+	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
@@ -37,7 +38,7 @@ func LoadColumns(ctx context.Context,
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
 		return
 	}
-	dataMeta := meta.MustDataMeta()
+	dataMeta := meta.MustGetMeta(metaType)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs); err != nil {
 		return
 	}
@@ -54,33 +55,22 @@ func LoadColumns(ctx context.Context,
 	return
 }
 
+func LoadColumns(ctx context.Context,
+	cols []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	m *mpool.MPool) (bat *batch.Batch, err error) {
+	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m)
+}
+
 func LoadTombstoneColumns(ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool) (bat *batch.Batch, err error) {
-	name := location.Name()
-	var meta objectio.ObjectMeta
-	var ioVectors *fileservice.IOVector
-	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
-		return
-	}
-	dataMeta := meta.MustTombstoneMeta()
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs); err != nil {
-		return
-	}
-	bat = batch.NewWithSize(len(cols))
-	var obj any
-	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].ObjectBytes)
-		if err != nil {
-			return
-		}
-		bat.Vecs[i] = obj.(*vector.Vector)
-		bat.SetRowCount(bat.Vecs[i].Length())
-	}
-	return
+	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m)
 }
 
 func LoadBF(

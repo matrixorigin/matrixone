@@ -18,27 +18,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-type SchemaType uint16
+type DataMetaType uint16
 
 const (
-	SchemaData      SchemaType = 0
-	SchemaTombstone SchemaType = 1
+	SchemaData      DataMetaType = 0
+	SchemaTombstone DataMetaType = 1
 
-	CkpMeta         SchemaType = 100
-	CkpSystemDB     SchemaType = 101
-	CkpTxnNode      SchemaType = 102
-	CkpDBDel        SchemaType = 103
-	CkpDBDN         SchemaType = 104
-	CkpSystemTable  SchemaType = 105
-	CkpTblDN        SchemaType = 106
-	CkpTblDel       SchemaType = 107
-	CkpSystemColumn SchemaType = 108
-	CkpColumnDel    SchemaType = 109
-	CkpSegment      SchemaType = 110
-	CkpSegmentDN    SchemaType = 111
-	CkpDel          SchemaType = 112
-	CkpBlkMeta      SchemaType = 113
-	CkpBlkDN        SchemaType = 114
+	CkpMeta         DataMetaType = 100
+	CkpSystemDB     DataMetaType = 101
+	CkpTxnNode      DataMetaType = 102
+	CkpDBDel        DataMetaType = 103
+	CkpDBDN         DataMetaType = 104
+	CkpSystemTable  DataMetaType = 105
+	CkpTblDN        DataMetaType = 106
+	CkpTblDel       DataMetaType = 107
+	CkpSystemColumn DataMetaType = 108
+	CkpColumnDel    DataMetaType = 109
+	CkpSegment      DataMetaType = 110
+	CkpSegmentDN    DataMetaType = 111
+	CkpDel          DataMetaType = 112
+	CkpBlkMeta      DataMetaType = 113
+	CkpBlkDN        DataMetaType = 114
 )
 
 const (
@@ -55,8 +55,8 @@ const (
 
 const InvalidSchemaType = 0xFF
 
-func ConvertToSchemaType(ckpIdx uint16) SchemaType {
-	return 100 + SchemaType(ckpIdx)
+func ConvertToSchemaType(ckpIdx uint16) DataMetaType {
+	return 100 + DataMetaType(ckpIdx)
 }
 
 type objectMetaV1 []byte
@@ -64,6 +64,15 @@ type objectMetaV1 []byte
 func buildObjectMetaV1() objectMetaV1 {
 	var buf [metaHeaderLen]byte
 	return buf[:]
+}
+
+func (mh objectMetaV1) MustGetMeta(metaType DataMetaType) objectDataMetaV1 {
+	if metaType == SchemaData {
+		return mh.MustDataMeta()
+	} else if metaType == SchemaTombstone {
+		return mh.MustTombstoneMeta()
+	}
+	return nil
 }
 
 func (mh objectMetaV1) HeaderLength() uint32 {
