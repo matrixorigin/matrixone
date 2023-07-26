@@ -254,12 +254,17 @@ var NormalTableEngine = "TABLE"
 // Deprecated
 var ExternalTableEngine = "EXTERNAL"
 
+type SchemaDiff struct {
+	AddedColumns []Column
+	TableName    string
+	DatabaseName string
+}
+
 type Table struct {
 	Account          string
 	Database         string
 	Table            string
 	Columns          []Column
-	UpgradeColumns   map[string]map[string][]Column
 	PrimaryKeyColumn []Column
 	ClusterBy        []Column
 	Engine           string
@@ -306,33 +311,6 @@ type TableOptions interface {
 	// GetCreateOptions return option for `create {option}table`, which should end with ' '
 	GetCreateOptions() string
 	GetTableOptions(PathBuilder) string
-}
-
-func (tbl *Table) ToUpgradeSql(ctx context.Context) string {
-	if tbl.UpgradeColumns == nil || len(tbl.UpgradeColumns) == 0 {
-		return ""
-	}
-
-	var columnDefinitions []string
-
-	// Generate ADD COLUMN statements for each upgrade column
-	for _, actions := range tbl.UpgradeColumns {
-		for action, cols := range actions {
-			for _, col := range cols {
-				colDef := fmt.Sprintf("%s COLUMN %s", action, col.ToCreateSql(ctx))
-				columnDefinitions = append(columnDefinitions, colDef)
-			}
-		}
-	}
-
-	// Concatenate all column definitions with commas
-	columnDefinitionsStr := strings.Join(columnDefinitions, ", ")
-
-	// Start alter command
-	sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` %s", tbl.Database, tbl.Table, columnDefinitionsStr)
-
-	// Return SQL command
-	return sql
 }
 
 func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
@@ -555,16 +533,6 @@ var bufferPool = sync.Pool{
 	New: func() any {
 		return bytes.NewBuffer(make([]byte, 16*mpool.MB))
 	},
-}
-
-func GetBuffer() *bytes.Buffer {
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	return buf
-}
-
-func ReleaseBuffer(b *bytes.Buffer) {
-	bufferPool.Put(b)
 }
 
 type Row struct {
@@ -884,13 +852,6 @@ func GetAllTables() []*Table {
 		tables = append(tables, tbl)
 	}
 	return tables
-}
-
-func GetTable(b string) (*Table, bool) {
-	mux.Lock()
-	defer mux.Unlock()
-	tbl, exist := gTable[b]
-	return tbl, exist
 }
 
 // SetPathBuilder

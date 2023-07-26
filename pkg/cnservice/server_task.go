@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrade"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -125,12 +124,13 @@ func (s *service) upgrade() {
 	s.cfg.Frontend.SetDefaultValues()
 	pu.FileService = s.fileService
 	pu.LockService = s.lockService
-	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
-
-	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
-	}
-	upgrade.Upgrade(moServerCtx, ieFactory)
+	//moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	//
+	//ieFactory := func() ie.InternalExecutor {
+	//	return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
+	//}
+	// todo: gavinyue will repair this
+	// upgrade.Upgrade(moServerCtx, ieFactory)
 }
 func (s *service) startTaskRunner() {
 	s.task.Lock()

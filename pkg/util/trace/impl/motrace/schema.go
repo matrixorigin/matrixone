@@ -176,7 +176,6 @@ var (
 			statementIDCol,
 			sessionIDCol,
 		},
-		UpgradeColumns:   UpgradeColumns,
 		PrimaryKeyColumn: nil,
 		ClusterBy:        []table.Column{timestampCol, rawItemCol},
 		Engine:           table.NormalTableEngine,
@@ -259,43 +258,6 @@ const (
 var tables = []*table.Table{SingleStatementTable, SingleRowLogTable}
 var views = []*table.View{logView, errorView, spanView}
 
-func UpgradeSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	exec := ieFactory()
-	if exec == nil {
-		return nil
-	}
-	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
-	mustExec := func(sql string) error {
-		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			return moerr.NewInternalError(ctx, "[Trace] init table error: %v, sql: %s", err, sql)
-		}
-		return nil
-	}
-
-	if err := mustExec(sqlCreateDBConst); err != nil {
-		return err
-	}
-	var createCost time.Duration
-	defer func() {
-		logutil.Debugf("[Trace] upgrade tables: create cost %d ms",
-			createCost.Milliseconds())
-	}()
-	instant := time.Now()
-
-	for _, tbl := range tables {
-		stmt := tbl.ToUpgradeSql(ctx)
-		if stmt == "" {
-			continue
-		}
-		err := mustExec(stmt)
-		if err != nil {
-			return err
-		}
-	}
-	createCost = time.Since(instant)
-	return nil
-}
-
 // InitSchemaByInnerExecutor init schema, which can access db by io.InternalExecutor on any Node.
 func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
 	exec := ieFactory()
@@ -324,7 +286,6 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 		if err := mustExec(tbl.ToCreateSql(ctx, true)); err != nil {
 			return err
 		}
-		mustExec(tbl.ToUpgradeSql(ctx))
 	}
 	for _, v := range views {
 		if err := mustExec(v.ToCreateSql(ctx, true)); err != nil {
