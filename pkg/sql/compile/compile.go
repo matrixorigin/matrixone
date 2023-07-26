@@ -2184,6 +2184,15 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		dop := plan2.GetShuffleDop()
 		parent, children := c.newScopeListForShuffleGroup(1, dop)
+		// saving the last operator of all children to make sure the connector setting in
+		// the right place
+		lastOperator := make([]vm.Instruction, 0, len(children))
+		for i := range children {
+			ilen := len(children[i].Instructions) - 1
+			lastOperator = append(lastOperator, children[i].Instructions[ilen])
+			children[i].Instructions = children[i].Instructions[:ilen]
+		}
+
 		for i := range children {
 			children[i].appendInstruction(vm.Instruction{
 				Op:      vm.Group,
@@ -2192,8 +2201,11 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
-
 		children = c.compileProjection(n, c.compileRestrict(n, children))
+		// recovery the children's last operator
+		for i := range children {
+			children[i].appendInstruction(lastOperator[i])
+		}
 
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
