@@ -164,7 +164,7 @@ func (w *objectWriterV1) WriteObjectMeta(ctx context.Context, totalrow uint32, m
 	w.colmeta = metas
 }
 
-func (w *objectWriterV1) prepareDataMeta(objectMeta objectMetaV1, blocks []blockData, offset uint32, offsetId uint16) ([]byte, Extent, error) {
+func (w *objectWriterV1) prepareDataMeta(objectMeta objectDataMetaV1, blocks []blockData, offset uint32, offsetId uint16) ([]byte, Extent, error) {
 	var columnCount uint16
 	columnCount = 0
 	metaColCnt := uint16(0)
@@ -192,7 +192,7 @@ func (w *objectWriterV1) prepareDataMeta(objectMeta objectMetaV1, blocks []block
 	return meta, extent, err
 }
 
-func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta objectMetaV1, offset uint32, seqnums *Seqnums, offsetId uint16) ([]byte, Extent, error) {
+func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta objectDataMetaV1, offset uint32, seqnums *Seqnums, offsetId uint16) ([]byte, Extent, error) {
 	length := uint32(0)
 	blockCount := uint32(len(blocks))
 	sid := w.name.SegmentId()
@@ -391,11 +391,11 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	start := metaExtent.Offset()
 
 	metaHeader.SetDataMetaCount(uint16(len(w.blocks)))
-	metaHeader.SetDataMetaOffset(metaHeader.Length())
+	metaHeader.SetDataMetaOffset(metaHeader.HeaderLength())
 	tmeta, _, err := w.prepareDataMeta(tObjectMeta, w.tombstones, metaExtent.End(), metaHeader.DataMetaCount())
 	logutil.Infof("tObjectMeta.DataMetaCount()) is %d", tObjectMeta.BlockHeader().Sequence())
 	metaHeader.SetTombstoneMetaCount(uint16(len(w.tombstones)))
-	metaHeader.SetTombstoneMetaOffset(metaHeader.Length() + metaExtent.OriginSize())
+	metaHeader.SetTombstoneMetaOffset(metaHeader.HeaderLength() + metaExtent.OriginSize())
 	var buf bytes.Buffer
 	h := IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_CurrVer}
 	buf.Write(EncodeIOEntryHeader(&h))

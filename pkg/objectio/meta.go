@@ -26,54 +26,54 @@ var EmptyZm = [64]byte{}
 const FooterSize = 64
 const HeaderSize = 64
 
-type objectMetaV1 []byte
+type objectDataMetaV1 []byte
 
-func buildObjectMetaV1(count uint16) objectMetaV1 {
+func buildObjectDataMetaV1(count uint16) objectDataMetaV1 {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
 	return buf[:]
 }
 
-func (o objectMetaV1) BlockHeader() BlockHeader {
+func (o objectDataMetaV1) BlockHeader() BlockHeader {
 	return BlockHeader(o[:headerLen])
 }
 
-func (o objectMetaV1) MustGetColumn(seqnum uint16) ColumnMeta {
+func (o objectDataMetaV1) MustGetColumn(seqnum uint16) ColumnMeta {
 	if seqnum > o.BlockHeader().MaxSeqnum() {
 		return BuildObjectColumnMeta()
 	}
 	return GetObjectColumnMeta(seqnum, o[headerLen:])
 }
 
-func (o objectMetaV1) AddColumnMeta(idx uint16, col ColumnMeta) {
+func (o objectDataMetaV1) AddColumnMeta(idx uint16, col ColumnMeta) {
 	offset := headerLen + uint32(idx)*colMetaLen
 	copy(o[offset:offset+colMetaLen], col)
 }
 
-func (o objectMetaV1) Length() uint32 {
+func (o objectDataMetaV1) Length() uint32 {
 	return headerLen + uint32(o.BlockHeader().MetaColumnCount())*colMetaLen
 }
 
-func (o objectMetaV1) BlockCount() uint32 {
+func (o objectDataMetaV1) BlockCount() uint32 {
 	return uint32(o.BlockHeader().Sequence())
 }
 
-func (o objectMetaV1) BlockIndex() BlockIndex {
+func (o objectDataMetaV1) BlockIndex() BlockIndex {
 	offset := o.Length()
 	return BlockIndex(o[offset:])
 }
 
-func (o objectMetaV1) GetBlockMeta(id uint32) BlockObject {
+func (o objectDataMetaV1) GetBlockMeta(id uint32) BlockObject {
 	BlockID := id - uint32(o.BlockHeader().StartID())
 	offset, length := o.BlockIndex().BlockMetaPos(BlockID)
 	return BlockObject(o[offset : offset+length])
 }
 
-func (o objectMetaV1) GetColumnMeta(blk uint32, seqnum uint16) ColumnMeta {
+func (o objectDataMetaV1) GetColumnMeta(blk uint32, seqnum uint16) ColumnMeta {
 	return o.GetBlockMeta(blk).MustGetColumn(seqnum)
 }
 
-func (o objectMetaV1) IsEmpty() bool {
+func (o objectDataMetaV1) IsEmpty() bool {
 	return len(o) == 0
 }
 
@@ -355,7 +355,7 @@ func IsSameObjectLocVsShort(location Location, short *ObjectNameShort) bool {
 }
 
 // test used
-func BuildMetaData(blkCount, colCount uint16) objectMetaV1 {
+func BuildMetaData(blkCount, colCount uint16) objectDataMetaV1 {
 	var meta bytes.Buffer
 	length := uint32(0)
 	seqnum := NewSeqnums(nil)

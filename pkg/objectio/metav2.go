@@ -59,34 +59,34 @@ func ConvertToSchemaType(ckpIdx uint16) SchemaType {
 	return 100 + SchemaType(ckpIdx)
 }
 
-type metaHeaderV1 []byte
+type objectMetaV1 []byte
 
-func buildMetaHeaderV1() metaHeaderV1 {
+func buildObjectMetaV1() objectMetaV1 {
 	var buf [metaHeaderLen]byte
 	return buf[:]
 }
 
-func (mh metaHeaderV1) Length() uint32 {
+func (mh objectMetaV1) HeaderLength() uint32 {
 	return metaHeaderLen
 }
 
-func (mh metaHeaderV1) DataMetaCount() uint16 {
+func (mh objectMetaV1) DataMetaCount() uint16 {
 	return types.DecodeUint16(mh[:dataMetaCount])
 }
 
-func (mh metaHeaderV1) TombstoneMetaCount() uint16 {
+func (mh objectMetaV1) TombstoneMetaCount() uint16 {
 	return types.DecodeUint16(mh[tombstoneMetaCountOff : tombstoneMetaCountOff+tombstoneMetaCount])
 }
 
-func (mh metaHeaderV1) DataMeta() (objectMetaV1, bool) {
+func (mh objectMetaV1) DataMeta() (objectDataMetaV1, bool) {
 	if mh.DataMetaCount() == 0 {
 		return nil, false
 	}
 	offset := types.DecodeUint32(mh[dataMetaCount:tombstoneMetaCountOff])
-	return objectMetaV1(mh[offset:]), true
+	return objectDataMetaV1(mh[offset:]), true
 }
 
-func (mh metaHeaderV1) MustDataMeta() objectMetaV1 {
+func (mh objectMetaV1) MustDataMeta() objectDataMetaV1 {
 	meta, ok := mh.DataMeta()
 	if !ok {
 		panic("no data meta")
@@ -94,15 +94,15 @@ func (mh metaHeaderV1) MustDataMeta() objectMetaV1 {
 	return meta
 }
 
-func (mh metaHeaderV1) TombstoneMeta() (objectMetaV1, bool) {
+func (mh objectMetaV1) TombstoneMeta() (objectDataMetaV1, bool) {
 	if mh.TombstoneMetaCount() == 0 {
 		return nil, false
 	}
 	offset := types.DecodeUint32(mh[tombstoneMetaCountOff+tombstoneMetaCount : metaDummyOff])
-	return objectMetaV1(mh[offset:]), true
+	return objectDataMetaV1(mh[offset:]), true
 }
 
-func (mh metaHeaderV1) MustTombstoneMeta() objectMetaV1 {
+func (mh objectMetaV1) MustTombstoneMeta() objectDataMetaV1 {
 	meta, ok := mh.TombstoneMeta()
 	if !ok {
 		panic("no tombstone meta")
@@ -110,23 +110,23 @@ func (mh metaHeaderV1) MustTombstoneMeta() objectMetaV1 {
 	return meta
 }
 
-func (mh metaHeaderV1) SetDataMetaCount(count uint16) {
+func (mh objectMetaV1) SetDataMetaCount(count uint16) {
 	copy(mh[:dataMetaCount], types.EncodeUint16(&count))
 }
 
-func (mh metaHeaderV1) SetDataMetaOffset(offset uint32) {
+func (mh objectMetaV1) SetDataMetaOffset(offset uint32) {
 	copy(mh[dataMetaCount:dataMetaCount+dataMetaOffset], types.EncodeUint32(&offset))
 }
 
-func (mh metaHeaderV1) SetTombstoneMetaCount(count uint16) {
+func (mh objectMetaV1) SetTombstoneMetaCount(count uint16) {
 	copy(mh[tombstoneMetaCountOff:tombstoneMetaCountOff+tombstoneMetaCount], types.EncodeUint16(&count))
 }
 
-func (mh metaHeaderV1) SetTombstoneMetaOffset(offset uint32) {
+func (mh objectMetaV1) SetTombstoneMetaOffset(offset uint32) {
 	copy(mh[tombstoneMetaCountOff+tombstoneMetaCount:tombstoneMetaCountOff+tombstoneMetaCount+tombstoneMetaOffset], types.EncodeUint32(&offset))
 }
 
-func (mh metaHeaderV1) SubMetaIndex() SubMetaIndex {
+func (mh objectMetaV1) SubMetaIndex() SubMetaIndex {
 	return SubMetaIndex(mh[metaHeaderLen:])
 }
 
@@ -154,11 +154,11 @@ func (oh SubMetaIndex) SetSubMetaCount(cnt uint16) {
 	copy(oh[:schemaCountLen], types.EncodeUint16(&cnt))
 }
 
-func (oh SubMetaIndex) SubMeta(pos uint16) (objectMetaV1, bool) {
+func (oh SubMetaIndex) SubMeta(pos uint16) (objectDataMetaV1, bool) {
 	offStart := schemaCountLen + pos*typePosLen
 	offEnd := schemaCountLen + pos*typePosLen + schemaType + schemaBlockCount
 	offset := types.DecodeUint16(oh[offStart:offEnd])
-	return objectMetaV1(oh[offset : offset+headerLen]), true
+	return objectDataMetaV1(oh[offset : offset+headerLen]), true
 }
 
 func (oh SubMetaIndex) SubMetaTypes() []uint16 {

@@ -289,7 +289,7 @@ func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Head
 type ReaderOptions struct {
 	// noLRUCache true means NOT cache IOVector in FileService's cache
 	noLRUCache bool
-	// withMetaCache true means cache objectMetaV1 in the Reader
+	// withMetaCache true means cache objectDataMetaV1 in the Reader
 	// Note: if withMetaCache is true, cleanup is needed
 	withMetaCache bool
 }
