@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -63,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -106,6 +108,7 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.stepRegs = make(map[int32][]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
+	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 	return c
 }
 
@@ -139,6 +142,7 @@ func (c *Compile) clear() {
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
+	c.s3CounterSet.FileService.ResetS3()
 }
 
 // helper function to judge if init temporary engine is needed
@@ -224,6 +228,8 @@ func (c *Compile) run(s *Scope) error {
 	if s == nil {
 		return nil
 	}
+
+	//fmt.Println(DebugShowScopes([]*Scope{s}))
 
 	switch s.Magic {
 	case Normal:
@@ -329,6 +335,8 @@ func (c *Compile) Run(_ uint64) error {
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 	if err := c.runOnce(); err != nil {
+		c.fatalLog(0, err)
+
 		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 			c.proc.TxnOperator.Txn().IsRCIsolation() {
@@ -358,11 +366,21 @@ func (c *Compile) Run(_ uint64) error {
 				c.isInternal,
 				c.cnLabel)
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+				c.fatalLog(1, err)
 				return err
 			}
-			return cc.runOnce()
+			if err := cc.runOnce(); err != nil {
+				c.fatalLog(1, err)
+				return err
+			}
+			// set affectedRows to old compile to return
+			c.setAffectedRows(cc.GetAffectedRows())
+			return c.proc.TxnOperator.GetWorkspace().Adjust()
 		}
 		return err
+	}
+	if c.proc.TxnOperator != nil {
+		return c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
 	return nil
 }
@@ -375,12 +393,13 @@ func (c *Compile) runOnce() error {
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
-	for _, s := range c.scope {
+	for i := range c.scope {
 		wg.Add(1)
-		go func(scope *Scope) {
+		scope := c.scope[i]
+		ants.Submit(func() {
 			errC <- c.run(scope)
 			wg.Done()
-		}(s)
+		})
 	}
 	wg.Wait()
 	c.scope = nil
@@ -694,7 +713,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 		return bat, nil
 	}
 	// select * from (values row(1,1), row(2,2), row(3,3)) a;
@@ -888,6 +907,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
+			logutil.Infof("delete of '%s' write s3\n", c.sql)
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
@@ -988,6 +1008,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
 
 		if toWriteS3 {
+			logutil.Infof("insert of '%s' write s3\n", c.sql)
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
 				insertArg, err := constructInsert(n, c.e, c.proc)
 				if err != nil {
@@ -1201,7 +1222,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	bat := batch.NewWithSize(1)
 	{
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
 	return ds
@@ -1223,6 +1244,23 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
+
+	// lock table
+	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		if err != nil {
+			panic(err)
+		}
+		rel, err := db.Relation(ctx, n.ObjRef.ObjName, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		err = lockTable(c.e, c.proc, rel)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			return nil, err
+		}
+	}
+
 	ID2Addr := make(map[int]int, 0)
 	mcpu := 0
 	for i := 0; i < len(c.cnList); i++ {
@@ -1400,13 +1438,22 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 		return nil, err
 	}
 	ss := make([]*Scope, 0, len(nodes))
+
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
+	if filterExpr != nil {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	for i := range nodes {
-		ss = append(ss, c.compileTableScanWithNode(n, nodes[i]))
+		ss = append(ss, c.compileTableScanWithNode(n, nodes[i], filterExpr))
 	}
 	return ss, nil
 }
 
-func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
+func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filterExpr *plan.Expr) *Scope {
 	var err error
 	var s *Scope
 	var tblDef *plan.TableDef
@@ -1510,28 +1557,11 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			PartitionRelationNames: partitionRelNames,
 			SchemaName:             n.ObjRef.SchemaName,
 			AccountId:              n.ObjRef.GetPubInfo(),
-			Expr:                   colexec.RewriteFilterExprList(n.FilterList),
+			Expr:                   plan2.DeepCopyExpr(filterExpr),
+			RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-
-	// Register runtime filters
-	// XXX currently we only enable runtime filter on single CN
-	if len(c.cnList) == 1 && len(n.RuntimeFilterProbeList) > 0 {
-		receivers := make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterProbeList))
-		if c.runtimeFilterReceiverMap == nil {
-			c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-		}
-		for i, rfSpec := range n.RuntimeFilterProbeList {
-			ch := make(chan *pipeline.RuntimeFilter, 1)
-			receivers[i] = &colexec.RuntimeFilterChan{
-				Spec: rfSpec,
-				Chan: ch,
-			}
-			c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-		}
-		s.DataSource.RuntimeFilterReceivers = receivers
-	}
 
 	return s
 }
@@ -1541,12 +1571,13 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Restrict,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructRestrict(n),
+			Arg:     constructRestrict(n, filterExpr),
 		})
 	}
 	c.anal.isFirst = false
@@ -1593,7 +1624,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
+		Arg: constructDispatch(0, rs, c.addr, n),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
@@ -1637,6 +1668,91 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 }
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	if node.Stats.Shuffle {
+		if len(c.cnList) == 1 {
+			return c.compileShuffleJoin(ctx, node, left, right, ss, children)
+		} else {
+			// only support shuffle join on standalone for now. will fix this in the future
+			node.Stats.Shuffle = false
+		}
+	}
+	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
+}
+
+func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	var rs []*Scope
+	isEq := plan2.IsEquiJoin2(node.OnList)
+	if !isEq {
+		panic("shuffle join only support equal join for now!")
+	}
+
+	rightTyps := make([]types.Type, len(right.ProjectList))
+	for i, expr := range right.ProjectList {
+		rightTyps[i] = dupType(expr.Typ)
+	}
+
+	leftTyps := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		leftTyps[i] = dupType(expr.Typ)
+	}
+
+	switch node.JoinType {
+	case plan.Node_INNER:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.Join,
+				Idx: c.anal.curr,
+				Arg: constructJoin(node, rightTyps, c.proc),
+			})
+		}
+	case plan.Node_ANTI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightAnti,
+					Idx: c.anal.curr,
+					Arg: constructRightAnti(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Anti,
+					Idx: c.anal.curr,
+					Arg: constructAnti(node, rightTyps, c.proc),
+				})
+			}
+		}
+
+	case plan.Node_SEMI:
+		rs = c.newShuffleJoinScopeList(ss, children, node)
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightSemi,
+					Idx: c.anal.curr,
+					Arg: constructRightSemi(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Semi,
+					Idx: c.anal.curr,
+					Arg: constructSemi(node, rightTyps, c.proc),
+				})
+			}
+		}
+
+	default:
+		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
+	}
+	return rs
+}
+
+func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
 
@@ -2001,12 +2117,8 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
-	currentIsFirst := c.anal.isFirst
-	c.anal.isFirst = false
-	dop := plan2.GetShuffleDop()
-	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
-
+// shuffle and dispatch must stick together
+func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Node) {
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
@@ -2016,13 +2128,44 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		}
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
+				Op:  vm.Shuffle,
+				Arg: constructShuffleGroupArg(children, n),
+			})
+
+			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, n),
+				Arg: constructDispatch(j, children, ss[i].NodeInfo.Addr, n),
 			})
 			j++
 			ss[i].IsEnd = true
 		}
 	}
+}
+
+func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+	currentIsFirst := c.anal.isFirst
+	c.anal.isFirst = false
+
+	if len(c.cnList) > 1 {
+		n.Stats.ShuffleMethod = plan.ShuffleMethod_Noraml
+	}
+
+	if n.Stats.ShuffleMethod == plan.ShuffleMethod_Follow {
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.Group,
+				Idx:     c.anal.curr,
+				IsFirst: c.anal.isFirst,
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			})
+		}
+		return ss
+	}
+
+	dop := plan2.GetShuffleDop()
+	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+
+	c.constructShuffleAndDispatch(ss, children, n)
 
 	// saving the last operator of all children to make sure the connector setting in
 	// the right place
@@ -2271,7 +2414,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 	leftMerge := c.newMergeScope(ss)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
+		Arg: constructDispatch(0, rs, c.addr, n),
 	})
 	leftMerge.IsEnd = true
 
@@ -2280,7 +2423,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 	rightMerge := c.newMergeScope(children)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
+		Arg: constructDispatch(1, rs, c.addr, n),
 	})
 	rightMerge.IsEnd = true
 
@@ -2359,14 +2502,73 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	// so we set it to false now
 	c.anal.isFirst = false
 	mergeChildren := c.newMergeScope(children)
+
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
+		Arg: constructDispatch(1, rs, c.addr, n),
 	})
 	mergeChildren.IsEnd = true
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 
 	return rs
+}
+
+func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []*Scope {
+	joinScopes := make([]*Scope, 0, len(c.cnList))
+	idx := 0
+	cnt := 0
+	for _, n := range c.cnList {
+		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+		ss := make([]*Scope, dop)
+		for i := range ss {
+			ss[i] = new(Scope)
+			ss[i].Magic = Remote
+			ss[i].IsJoin = true
+			ss[i].NodeInfo.Addr = n.Addr
+			ss[i].NodeInfo.Mcpu = 1
+			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+				rr.Ch = make(chan *batch.Batch, 16)
+			}
+		}
+		if isSameCN(n.Addr, c.addr) {
+			idx = cnt
+		}
+		joinScopes = append(joinScopes, ss...)
+		cnt += dop
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	for i := range left {
+		left[i].appendInstruction(vm.Instruction{
+			Op:  vm.Shuffle,
+			Arg: constructShuffleJoinArg(joinScopes, n, true),
+		})
+	}
+	leftMerge := c.newMergeScope(left)
+	leftMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(0, joinScopes, c.addr, n),
+	})
+	leftMerge.IsEnd = true
+
+	c.anal.isFirst = currentFirstFlag
+	for i := range right {
+		right[i].appendInstruction(vm.Instruction{
+			Op:  vm.Shuffle,
+			Arg: constructShuffleJoinArg(joinScopes, n, false),
+		})
+	}
+	rightMerge := c.newMergeScope(right)
+	rightMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(1, joinScopes, c.addr, n),
+	})
+	rightMerge.IsEnd = true
+
+	joinScopes[idx].PreScopes = append(joinScopes[idx].PreScopes, leftMerge, rightMerge)
+
+	return joinScopes
 }
 
 func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
@@ -2876,6 +3078,9 @@ func (s *Scope) affectedRows() uint64 {
 }
 
 func (c *Compile) runSql(sql string) error {
+	if sql == "" {
+		return nil
+	}
 	res, err := c.runSqlWithResult(sql)
 	if err != nil {
 		return err
@@ -2891,6 +3096,9 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	}
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
 		WithTxn(c.proc.TxnOperator).
 		WithDatabase(c.db)
 	return exec.Exec(c.proc.Ctx, sql, opts)
@@ -2947,4 +3155,31 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
 	}
 	return c.newMergeScope(ss2)
+}
+
+func (c *Compile) fatalLog(retry int, err error) {
+	if err == nil {
+		return
+	}
+	v, ok := moruntime.ProcessLevelRuntime().
+		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+	if !ok || !v.(bool) {
+		return
+	}
+	fatal := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+		moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) ||
+		moerr.IsMoErrCode(err, moerr.ER_DUP_ENTRY) ||
+		moerr.IsMoErrCode(err, moerr.ER_DUP_ENTRY_WITH_KEY_NAME)
+	if !fatal {
+		return
+	}
+	if retry == 0 && moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+		return
+	}
+
+	logutil.Fatalf("BUG(RC): txn %s retry %d, error %+v\n",
+		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
+		retry,
+		err.Error())
 }

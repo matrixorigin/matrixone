@@ -649,6 +649,8 @@ prepare stmt2 from 'insert into prepare01 values(null,0)';
 execute stmt2;
 select * from prepare01;
 drop table prepare01;
+deallocate prepare stmt1;
+deallocate prepare stmt2;
 
 -- @bvt:issue#10354
 drop table if exists t;

@@ -17,15 +17,13 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,9 +34,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -48,7 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var MaxPrepareNumberInOneSession int = 1024
+var MaxPrepareNumberInOneSession int = 100000
 
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
@@ -211,6 +212,36 @@ type Session struct {
 
 	// requestLabel is the CN label info requested from client.
 	requestLabel map[string]string
+
+	sqlType atomic.Value
+	// startedAt is the session start time.
+	startedAt time.Time
+
+	//derivedStmt denotes the sql or statement that derived from the user input statement.
+	//a new internal statement derived from the statement the user input and executed during
+	// the execution of it in the same transaction.
+	//
+	//For instance
+	//	select nextval('seq_15')
+	//  nextval internally will derive two sql (a select and an update). the two sql are executed
+	//	in the same transaction.
+	derivedStmt bool
+}
+
+func (ses *Session) IsDerivedStmt() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.derivedStmt
+}
+
+// ReplaceDerivedStmt sets the derivedStmt and returns the previous value.
+// if b is true, executing a derived statement.
+func (ses *Session) ReplaceDerivedStmt(b bool) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	prev := ses.derivedStmt
+	ses.derivedStmt = b
+	return prev
 }
 
 func (ses *Session) setRoutineManager(rm *RoutineManager) {
@@ -386,6 +417,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		cache:     &privilegeCache{},
 		blockIdx:  0,
 		planCache: newPlanCache(100),
+		startedAt: time.Now(),
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -426,6 +458,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		nil,
 		pu.FileService,
 		pu.LockService,
+		pu.QueryService,
 		ses.GetAutoIncrCacheManager())
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
@@ -707,6 +740,8 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, true),
 	}
+	//the derived statement execute in a shared transaction in background session
+	bh.ses.ReplaceDerivedStmt(true)
 	if newRawBatch {
 		bh.ses.SetOutputCallback(batchFetcher)
 	}
@@ -956,12 +991,16 @@ func (ses *Session) GetTenantInfo() *TenantInfo {
 // GetTenantName return tenant name according to GetTenantInfo and stmt.
 //
 // With stmt = nil, should be only called in TxnHandler.NewTxn, TxnHandler.CommitTxn, TxnHandler.RollbackTxn
-func (ses *Session) GetTenantName(stmt tree.Statement) string {
+func (ses *Session) GetTenantNameWithStmt(stmt tree.Statement) string {
 	tenant := sysAccountName
 	if ses.GetTenantInfo() != nil && (stmt == nil || !IsPrepareStatement(stmt)) {
 		tenant = ses.GetTenantInfo().GetTenant()
 	}
 	return tenant
+}
+
+func (ses *Session) GetTenantName() string {
+	return ses.GetTenantNameWithStmt(nil)
 }
 
 func (ses *Session) GetUUID() []byte {
@@ -1219,6 +1258,7 @@ func (ses *Session) DatabaseNameIsEmpty() bool {
 	return len(ses.GetDatabaseName()) == 0
 }
 
+// GetUserName returns the user_ame and the account_name
 func (ses *Session) GetUserName() string {
 	return ses.GetMysqlProtocol().GetUserName()
 }
@@ -1228,7 +1268,11 @@ func (ses *Session) SetUserName(uname string) {
 }
 
 func (ses *Session) GetConnectionID() uint32 {
-	return ses.GetMysqlProtocol().ConnectionID()
+	protocol := ses.GetMysqlProtocol()
+	if protocol != nil {
+		return ses.GetMysqlProtocol().ConnectionID()
+	}
+	return 0
 }
 
 func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
@@ -1618,11 +1662,8 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 }
 
 func fillResultSet(oq outputPool, dataSet *batch.Batch, ses *Session) error {
-	n := dataSet.Vecs[0].Length()
+	n := dataSet.RowCount()
 	for j := 0; j < n; j++ { //row index
-		if dataSet.Zs[j] <= 0 {
-			continue
-		}
 		//needCopyBytes = true. we need to copy the bytes from the batch.Batch
 		//to avoid the data being changed after the batch.Batch returned to the
 		//pipeline.
@@ -1682,7 +1723,8 @@ func executeSQLInBackgroundSession(
 }
 
 // executeStmtInSameSession executes the statement in the same session.
-// To be clear,
+// To be clear, only for the select statement derived from the set_var statement
+// in an independent transaction
 func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, stmt tree.Statement) error {
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
@@ -1961,6 +2003,46 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 		resp = NewResponse(category, affectedRows, 0, 0, ses.GetServerStatus(), cmd, d)
 	}
 	return resp
+}
+
+// StatusSession implements the queryservice.Session interface.
+func (ses *Session) StatusSession() *status.Session {
+	var (
+		txnID         string
+		statementID   string
+		statementType string
+		queryType     string
+		queryStart    time.Time
+	)
+	if ses.txnHandler != nil && ses.txnHandler.txnOperator != nil {
+		txn := ses.txnHandler.txnOperator.Txn()
+		txnID = hex.EncodeToString(txn.GetID())
+	}
+	stmtInfo := ses.tStmt
+	if stmtInfo != nil {
+		statementID = uuid.UUID(stmtInfo.StatementID).String()
+		statementType = stmtInfo.StatementType
+		queryType = stmtInfo.QueryType
+		queryStart = stmtInfo.RequestAt
+	}
+	return &status.Session{
+		NodeID:        ses.getRoutineManager().baseService.ID(),
+		ConnID:        ses.GetConnectionID(),
+		SessionID:     ses.GetUUIDString(),
+		Account:       ses.GetTenantName(),
+		User:          ses.GetUserName(),
+		Host:          ses.getRoutineManager().baseService.SQLAddress(),
+		DB:            ses.GetDatabaseName(),
+		SessionStart:  ses.startedAt,
+		Command:       ses.GetCmd().String(),
+		Info:          ses.GetSql(),
+		TxnID:         txnID,
+		StatementID:   statementID,
+		StatementType: statementType,
+		QueryType:     queryType,
+		SQLSourceType: ses.sqlType.Load().(string),
+		QueryStart:    queryStart,
+	}
 }
 
 func checkPlanIsInsertValues(proc *process.Process,

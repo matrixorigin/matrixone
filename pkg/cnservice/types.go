@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/ctlservice"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -46,8 +48,9 @@ import (
 )
 
 var (
-	defaultListenAddress    = "127.0.0.1:6002"
-	defaultCtlListenAddress = "127.0.0.1:19958"
+	defaultListenAddress             = "127.0.0.1:6002"
+	defaultCtlListenAddress          = "127.0.0.1:19958"
+	defaultQueryServiceListenAddress = "127.0.0.1:19998"
 	// defaultTxnIsolation     = txn.TxnIsolation_SI
 	defaultTxnMode             = txn.TxnMode_Optimistic
 	maxForMaxPreparedStmtCount = 1000000
@@ -56,7 +59,8 @@ var (
 type Service interface {
 	Start() error
 	Close() error
-
+	// ID returns UUID of the service.
+	ID() string
 	GetTaskRunner() taskservice.TaskRunner
 	GetTaskService() (taskservice.TaskService, bool)
 	WaitSystemInitCompleted(ctx context.Context) error
@@ -169,20 +173,35 @@ type Config struct {
 		// by the current CN + 1 is used as the start time of the transaction. But it will
 		// ensure that the transactions of the same database connection can see the writes
 		// of the previous committed transactions.
-		EnableSacrificingFreshness bool `toml:"enable-sacrificing-freshness"`
+		// -1: disable
+		//	0: auto config based on txn mode
+		//  1: enable
+		EnableSacrificingFreshness int `toml:"enable-sacrificing-freshness"`
 		// EnableCNBasedConsistency ensure that all the transactions on a CN can read
 		// the writes of the previous committed transaction
-		EnableCNBasedConsistency bool `toml:"enable-cn-based-consistency"`
+		// -1: disable
+		//	0: auto config based on txn mode
+		//  1: enable
+		EnableCNBasedConsistency int `toml:"enable-cn-based-consistency"`
 		// EnableRefreshExpressionIn RC mode, in the event of a conflict, the later transaction
 		// needs to see the latest data after the previous transaction commits. At this time we
 		// need to re-read the data, re-read the latest data, and re-compute the expression. This
 		// feature was turned off in 0.8 and is not supported for now. The replacement solution is
 		// to return a retry error and let the whole computation re-execute.
-		EnableRefreshExpression bool `toml:"enable-refresh-expression"`
+		// -1: disable
+		//	0: auto config based on txn mode
+		//  1: enable
+		EnableRefreshExpression int `toml:"enable-refresh-expression"`
 		// EnableLeakCheck enable txn leak check
-		EnableLeakCheck bool `toml:"enable-leak-check"`
+		// -1: disable
+		//	0: auto config based on txn mode
+		//  1: enable
+		EnableLeakCheck int `toml:"enable-leak-check"`
 		// MaxActiveAges a txn max active duration
 		MaxActiveAges toml.Duration `toml:"max-active-ages"`
+		// EnableCheckRCInvalidError this config is used to check and find RC bugs in pessimistic mode.
+		// Will remove it later version.
+		EnableCheckRCInvalidError bool `toml:"enable-check-rc-invalid-error"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
@@ -190,6 +209,9 @@ type Config struct {
 
 	// AutoIncrement auto increment config
 	AutoIncrement incrservice.Config `toml:"auto-increment"`
+
+	// QueryServiceConfig is the config for query service.
+	QueryServiceConfig queryservice.Config `toml:"query-service"`
 
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
@@ -275,6 +297,33 @@ func (c *Config) Validate() error {
 		return moerr.NewBadDBNoCtx("not support txn isolation: " + c.Txn.Isolation)
 	}
 
+	// Fix txn mode various config, simply override
+	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = 1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = -1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	} else {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = -1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = -1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	}
+
 	if c.Txn.MaxActiveAges.Duration == 0 {
 		c.Txn.MaxActiveAges.Duration = time.Minute * 2
 	}
@@ -296,8 +345,13 @@ func (c *Config) Validate() error {
 			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
 		}
 	} else {
-		frontend.MaxPrepareNumberInOneSession = 1024
+		frontend.MaxPrepareNumberInOneSession = 100000
 	}
+	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
+
+	// TODO: remove this if rc is stable
+	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
+		c.Txn.EnableCheckRCInvalidError)
 	return nil
 }
 
@@ -320,6 +374,7 @@ type service struct {
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
+		queryService queryservice.QueryService,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
@@ -340,6 +395,9 @@ type service struct {
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
 	ctlservice             ctlservice.CtlService
+	sessionMgr             *queryservice.SessionManager
+	// queryService is used to send query request between CN services.
+	queryService queryservice.QueryService
 
 	stopper *stopper.Stopper
 	aicm    *defines.AutoIncrCacheManager

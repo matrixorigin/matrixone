@@ -397,20 +397,25 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		return nil
 	}
 	newTable := &plan.TableDef{
-		TblId:         table.TblId,
-		Name:          table.Name,
-		Hidden:        table.Hidden,
-		TableType:     table.TableType,
-		Createsql:     table.Createsql,
-		RefChildTbls:  make([]uint64, len(table.RefChildTbls)),
-		Cols:          make([]*plan.ColDef, len(table.Cols)),
-		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
-		Name2ColIndex: table.Name2ColIndex,
-		Indexes:       make([]*IndexDef, len(table.Indexes)),
-		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
-		IsLocked:      table.IsLocked,
-		IsTemporary:   table.IsTemporary,
-		TableLockType: table.TableLockType,
+		TblId:          table.TblId,
+		Name:           table.Name,
+		Hidden:         table.Hidden,
+		Cols:           make([]*plan.ColDef, len(table.Cols)),
+		TableType:      table.TableType,
+		Createsql:      table.Createsql,
+		Version:        table.Version,
+		Pkey:           DeepCopyPrimaryKeyDef(table.Pkey),
+		Indexes:        make([]*IndexDef, len(table.Indexes)),
+		Fkeys:          make([]*plan.ForeignKeyDef, len(table.Fkeys)),
+		RefChildTbls:   make([]uint64, len(table.RefChildTbls)),
+		Checks:         make([]*plan.CheckDef, len(table.Checks)),
+		Props:          make([]*plan.PropertyDef, len(table.Props)),
+		Defs:           make([]*plan.TableDef_DefType, len(table.Defs)),
+		Name2ColIndex:  table.Name2ColIndex,
+		IsLocked:       table.IsLocked,
+		TableLockType:  table.TableLockType,
+		IsTemporary:    table.IsTemporary,
+		AutoIncrOffset: table.AutoIncrOffset,
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)
@@ -423,16 +428,26 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		newTable.Fkeys[idx] = DeepCopyFkey(fkey)
 	}
 
+	for idx, col := range table.Checks {
+		newTable.Checks[idx] = &plan.CheckDef{
+			Name:  col.Name,
+			Check: DeepCopyExpr(col.Check),
+		}
+	}
+
+	for idx, prop := range table.Props {
+		newTable.Props[idx] = &plan.PropertyDef{
+			Key:   prop.Key,
+			Value: prop.Value,
+		}
+	}
+
 	if table.TblFunc != nil {
 		newTable.TblFunc = &plan.TableFunction{
 			Name:  table.TblFunc.Name,
 			Param: make([]byte, len(table.TblFunc.Param)),
 		}
 		copy(newTable.TblFunc.Param, table.TblFunc.Param)
-	}
-
-	if table.Pkey != nil {
-		newTable.Pkey = DeepCopyPrimaryKeyDef(table.Pkey)
 	}
 
 	if table.ClusterBy != nil {
@@ -782,7 +797,9 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ: DeepCopyType(expr.Typ),
+		Typ:         DeepCopyType(expr.Typ),
+		Ndv:         expr.Ndv,
+		Selectivity: expr.Selectivity,
 	}
 
 	switch item := expr.Expr.(type) {

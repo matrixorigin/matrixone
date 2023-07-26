@@ -62,13 +62,12 @@ func init() {
 	SV.TraceExportInterval = 15
 	SV.LongQueryTime = 0
 	SV.EnableTraceDebug = true
-	if err := InitWithConfig(
+	if err, _ := InitWithConfig(
 		context.Background(),
 		&SV,
 		EnableTracer(true),
 		withMOVersion("v0.test.0"),
 		WithNode("node_uuid", trace.NodeTypeStandalone),
-		WithBatchProcessMode(FileService),
 		WithFSWriterFactory(&dummyFSWriterFactory{}),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil

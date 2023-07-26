@@ -29,6 +29,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
@@ -69,7 +70,20 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 	if !t.IsEnable() {
 		return ctx, trace.NoopSpan{}
 	}
+
 	span := newMOSpan()
+
+	// per statement profiler
+	v := ctx.Value(fileservice.CtxKeyStatementProfiler)
+	if v != nil {
+		profiler := v.(*fileservice.SpanProfiler)
+		newProfiler, end := profiler.Begin(2)
+		if newProfiler != profiler {
+			ctx = context.WithValue(ctx, fileservice.CtxKeyStatementProfiler, newProfiler)
+		}
+		span.onEnd = append(span.onEnd, end)
+	}
+
 	span.tracer = t
 	span.ctx = ctx
 	span.init(name, opts...)
@@ -88,7 +102,6 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 	// handle HungThreshold
 	if threshold := span.SpanConfig.HungThreshold(); threshold > 0 {
 		s := newMOHungSpan(span)
-		go s.loop()
 		return trace.ContextWithSpan(ctx, s), s
 	}
 
@@ -116,48 +129,45 @@ type MOHungSpan struct {
 	quitCtx context.Context
 	// quitCancel cancel quitCtx in End()
 	quitCancel context.CancelFunc
-	// deadlineCtx is used to check hung threshold in work goroutine loop().
-	deadlineCtx    context.Context
-	deadlineCancel context.CancelFunc
+	trigger    *time.Timer
+	stop       func()
+	stopped    bool
 	// mux control doProfile exec order, called in loop and End
 	mux sync.Mutex
 }
 
 func newMOHungSpan(span *MOSpan) *MOHungSpan {
-	originCtx, originCancel := context.WithCancel(span.ctx)
 	ctx, cancel := context.WithTimeout(span.ctx, span.SpanConfig.HungThreshold())
 	span.ctx = ctx
-	return &MOHungSpan{
-		MOSpan:         span,
-		quitCtx:        originCtx,
-		quitCancel:     originCancel,
-		deadlineCtx:    ctx,
-		deadlineCancel: cancel,
+	s := &MOHungSpan{
+		MOSpan:     span,
+		quitCtx:    ctx,
+		quitCancel: cancel,
 	}
-}
-
-func (s *MOHungSpan) loop() {
-	select {
-	case <-s.quitCtx.Done():
-	case <-s.deadlineCtx.Done():
+	s.trigger = time.AfterFunc(s.HungThreshold(), func() {
 		s.mux.Lock()
 		defer s.mux.Unlock()
-		if e := s.quitCtx.Err(); e == context.Canceled {
-			break
+		if e := s.quitCtx.Err(); e == context.Canceled || s.stopped {
+			return
 		}
 		s.doProfile()
 		logutil.Warn("span trigger hung threshold",
 			trace.SpanField(s.SpanContext()),
 			zap.String("span_name", s.Name),
 			zap.Duration("threshold", s.HungThreshold()))
+	})
+	s.stop = func() {
+		s.trigger.Stop()
+		s.quitCancel()
+		s.stopped = true
 	}
-	s.deadlineCancel()
+	return s
 }
 
 func (s *MOHungSpan) End(options ...trace.SpanEndOption) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	s.quitCancel()
+	s.stop()
 	s.MOSpan.End(options...)
 }
 
@@ -179,6 +189,7 @@ type MOSpan struct {
 	needRecord bool
 
 	doneProfile bool
+	onEnd       []func()
 }
 
 var spanPool = &sync.Pool{New: func() any {
@@ -260,6 +271,9 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 // 1. If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the Deadline.
 // 2. If NOT set Deadline, then check condition: Span.Duration > span.GetLongTimeThreshold().
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
+	for _, fn := range s.onEnd {
+		fn()
+	}
 	var err error
 	s.EndTime = time.Now()
 	deadline, hasDeadline := s.ctx.Deadline()
@@ -276,7 +290,7 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 		}
 	}
 	if !s.needRecord {
-		go freeMOSpan(s)
+		freeMOSpan(s)
 		return
 	}
 	// apply End option

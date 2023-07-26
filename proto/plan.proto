@@ -24,12 +24,12 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 message Type {
-	int32 id            = 1;
-	bool notNullable	= 2;
-	bool auto_incr      = 3;
-	int32 width			= 4;
-	int32 scale 		= 5;
-	string table 		= 6;
+	int32 id         = 1;
+	bool notNullable = 2;
+	bool auto_incr   = 3;
+	int32 width      = 4;
+	int32 scale      = 5;
+	string table     = 6;
 };
 
 // Const: if a const value can be reprensented by int64 or
@@ -423,6 +423,8 @@ message TableDef {
 	bool isLocked = 27;
 	TableLockType tableLockType = 28;
 	bool is_temporary = 29;
+
+	uint64 auto_incr_offset = 30;
 }
 
 message TableFunction{
@@ -433,6 +435,12 @@ message TableFunction{
 enum ShuffleType {
 	Hash = 0;
 	Range = 1;
+}
+
+enum ShuffleMethod {
+	Noraml = 0;
+	Follow = 1;
+	Reshuffle = 2;
 }
 
 message Stats {
@@ -461,8 +469,9 @@ message Stats {
 	// for range shuffle on integer column, need to know its min and max value
 	int64 shuffleColMin = 11;
 	int64 shuffleColMax = 12;
+	ShuffleMethod shuffleMethod = 13;
 	//not used for now
-	int32   parallelism = 13;
+	int32   parallelism = 14;
 }
 
 message RowsetExpr {

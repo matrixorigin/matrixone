@@ -267,12 +267,12 @@ func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
 	return expr
 }
 
-func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
+func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *BindContext) ([]*plan.Expr, error) {
 	conds := splitAstConjunction(astExpr)
 	exprs := make([]*plan.Expr, len(conds))
 
 	for i, cond := range conds {
-		cond, err := ctx.qualifyColumnNames(cond, nil, false)
+		cond, err := ctx.qualifyColumnNames(cond, expandAlias)
 		if err != nil {
 			return nil, err
 		}
@@ -767,9 +767,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 func rejectsNull(filter *plan.Expr, proc *process.Process) bool {
 	filter = replaceColRefWithNull(DeepCopyExpr(filter))
 
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	filter, err := ConstantFold(bat, filter, proc)
+	filter, err := ConstantFold(batch.EmptyForConstFoldBatch, filter, proc, false)
 	if err != nil {
 		return false
 	}
@@ -968,7 +966,7 @@ func GetColumnsByExpr(
 
 func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := ConstantFold(bat, expr, proc)
+		e, err := ConstantFold(bat, expr, proc, false)
 		if err != nil {
 			return false, err
 		}
@@ -1095,14 +1093,14 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 	}
 }
 
-func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
 		exprList := exprImpl.List
 		for i, exprElem := range exprList.List {
 			_, ok2 := exprElem.Expr.(*plan.Expr_F)
 			if ok2 {
-				foldExpr, err := ConstantFold(bat, exprElem, proc)
+				foldExpr, err := ConstantFold(bat, exprElem, proc, varAndParamIsConst)
 				if err != nil {
 					return e, nil
 				}
@@ -1115,7 +1113,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	var err error
 	if elist, ok := e.Expr.(*plan.Expr_List); ok {
 		for i, expr := range elist.List.List {
-			if elist.List.List[i], err = ConstantFold(bat, expr, proc); err != nil {
+			if elist.List.List[i], err = ConstantFold(bat, expr, proc, varAndParamIsConst); err != nil {
 				return nil, err
 			}
 		}
@@ -1132,15 +1130,15 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if err != nil {
 		return nil, err
 	}
-	if f.CannotFold() { // function cannot be fold
+	if ef.F.Func.ObjName != "cast" && f.CannotFold() { // function cannot be fold
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc); err != nil {
+		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc, varAndParamIsConst); err != nil {
 			return nil, err
 		}
 	}
-	if !rule.IsConstant(e) {
+	if !rule.IsConstant(e, varAndParamIsConst) {
 		return e, nil
 	}
 
@@ -1149,7 +1147,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 		return nil, err
 	}
 	defer vec.Free(proc.Mp())
-	c := rule.GetConstantValue(vec, false)
+	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
 		return e, nil
 	}
@@ -1655,33 +1653,33 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 	}
 }
 
-func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
-	switch t := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range t.F.Args {
-			SubstitueParam(arg, proc)
-		}
-	case *plan.Expr_P:
-		vec, _ := proc.GetPrepareParamsAt(int(t.P.Pos))
-		c := rule.GetConstantValue(vec, false)
-		ec := &plan.Expr_C{
-			C: c,
-		}
-		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-		expr.Expr = ec
-	case *plan.Expr_V:
-		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
-		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
-		vec, _ := util.GenVectorByVarValue(proc, typ, val)
-		c := rule.GetConstantValue(vec, false)
-		ec := &plan.Expr_C{
-			C: c,
-		}
-		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-		expr.Expr = ec
-	}
-	return expr
-}
+// func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
+// 	switch t := expr.Expr.(type) {
+// 	case *plan.Expr_F:
+// 		for _, arg := range t.F.Args {
+// 			SubstitueParam(arg, proc)
+// 		}
+// 	case *plan.Expr_P:
+// 		vec, _ := proc.GetPrepareParamsAt(int(t.P.Pos))
+// 		c := rule.GetConstantValue(vec, false)
+// 		ec := &plan.Expr_C{
+// 			C: c,
+// 		}
+// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+// 		expr.Expr = ec
+// 	case *plan.Expr_V:
+// 		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
+// 		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+// 		vec, _ := util.GenVectorByVarValue(proc, typ, val)
+// 		c := rule.GetConstantValue(vec, false)
+// 		ec := &plan.Expr_C{
+// 			C: c,
+// 		}
+// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+// 		expr.Expr = ec
+// 	}
+// 	return expr
+// }
 
 func FormatExpr(expr *plan.Expr) string {
 	var w bytes.Buffer

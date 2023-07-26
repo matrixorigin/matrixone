@@ -38,13 +38,13 @@ func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	cfg := HAKeeperClientConfig{}
 	cc1, err := NewCNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc1)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 	cc2, err := NewDNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc2)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 	cc3, err := NewLogHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc3)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 }
 
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
@@ -283,31 +283,34 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 
 func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAKeeperClient)) {
 	defer leaktest.AfterTest(t)()
-	cfg1 := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9002",
-		RaftAddress:         "127.0.0.1:9000",
-		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: []string{"127.0.0.1:9011"},
-		DisableWorkers:      true,
-	}
-	cfg2 := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-2",
-		ServiceAddress:      "127.0.0.1:9012",
-		RaftAddress:         "127.0.0.1:9010",
-		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: []string{"127.0.0.1:9001"},
-		DisableWorkers:      true,
-	}
+	cfg1 := DefaultConfig()
+	cfg1.UUID = uuid.New().String()
+	cfg1.FS = vfs.NewStrictMem()
+	cfg1.DeploymentID = 1
+	cfg1.RTTMillisecond = 5
+	cfg1.DataDir = "data-1"
+	cfg1.ServiceAddress = "127.0.0.1:9002"
+	cfg1.RaftAddress = "127.0.0.1:9000"
+	cfg1.GossipAddress = "127.0.0.1:9001"
+	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011"}
+	cfg1.DisableWorkers = true
 	cfg1.Fill()
+	cfg2 := DefaultConfig()
+	cfg2.UUID = uuid.New().String()
+	cfg2.FS = vfs.NewStrictMem()
+	cfg2.DeploymentID = 1
+	cfg2.RTTMillisecond = 5
+	cfg2.DataDir = "data-2"
+	cfg2.ServiceAddress = "127.0.0.1:9012"
+	cfg2.ServiceListenAddress = cfg2.ServiceAddress
+	cfg2.RaftAddress = "127.0.0.1:9010"
+	cfg2.RaftListenAddress = cfg2.RaftAddress
+	cfg2.GossipAddress = "127.0.0.1:9011"
+	cfg2.GossipAddressV2 = cfg2.GossipAddress
+	cfg2.GossipListenAddress = cfg2.GossipAddress
+	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
+	cfg2.DisableWorkers = true
+	cfg2.Fill()
 	service1, err := NewService(cfg1,
 		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -318,7 +321,6 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	defer func() {
 		assert.NoError(t, service1.Close())
 	}()
-	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		newFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -654,6 +656,47 @@ func TestHAKeeperClientPatchCNStore(t *testing.T) {
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})
 		labels2, ok3 = info.Labels["role"]
 		assert.False(t, ok3)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientDeleteCNStore(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{testServiceAddress},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c1, err := NewProxyHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		c2, err := NewCNHAKeeperClient(ctx, cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c1.Close())
+			assert.NoError(t, c2.Close())
+		}()
+
+		hb := pb.CNStoreHeartbeat{
+			UUID:           s.ID(),
+			ServiceAddress: "addr1",
+		}
+		_, err = c2.SendCNHeartbeat(ctx, hb)
+		require.NoError(t, err)
+		state, err := c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		_, ok := state.CNState.Stores[s.ID()]
+		assert.True(t, ok)
+
+		cnStore := pb.DeleteCNStore{
+			StoreID: s.ID(),
+		}
+		err = c1.DeleteCNStore(ctx, cnStore)
+		require.NoError(t, err)
+
+		state, err = c1.GetClusterState(ctx)
+		require.NoError(t, err)
+		_, ok = state.CNState.Stores[s.ID()]
+		assert.False(t, ok)
 	}
 	runServiceTest(t, true, true, fn)
 }

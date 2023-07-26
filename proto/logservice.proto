@@ -44,8 +44,9 @@ message CNStore {
   metadata.CNRole Role               = 6;
   uint64          Tick               = 7;
   NodeState       State              = 8;
-  metadata.WorkState WorkState           = 9;
-  map<string, metadata.LabelList> Labels = 10 [(gogoproto.nullable) = false];
+  map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
+  metadata.WorkState WorkState       = 10;
+  string          QueryAddress       = 11;
 }
 
 message DNStore {
@@ -107,6 +108,7 @@ message CNStoreHeartbeat {
   string          CtlAddress         = 5;
   metadata.CNRole Role               = 6;
   bool            TaskServiceCreated = 7;
+  string          QueryAddress       = 8;
 }
 
 
@@ -191,6 +193,7 @@ enum MethodType {
   UPDATE_CN_LABEL = 15;
   UPDATE_CN_WORK_STATE = 16;
   PATCH_CN_STORE = 17;
+  DELETE_CN_STORE = 18;
 };
 
 enum RecordType {
@@ -263,6 +266,7 @@ message Request {
   CNStoreLabel CNStoreLabel      = 9;
   CNWorkState CNWorkState        = 10;
   CNStateLabel CNStateLabel      = 11;
+  DeleteCNStore DeleteCNStore    = 12;
 };
 
 message LogResponse {
@@ -316,6 +320,7 @@ enum HAKeeperUpdateType {
   UpdateCNLabel = 10;
   UpdateCNWorkState = 11;
   PatchCNStore = 12;
+  RemoveCNStore = 13;
 }
 
 // HAKeeperState state transition diagram
@@ -448,8 +453,9 @@ message CNStoreInfo {
   string          CtlAddress         = 5;
   metadata.CNRole Role               = 6;
   bool            TaskServiceCreated = 7;
-  metadata.WorkState WorkState       = 8;
-  map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
+  map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
+  metadata.WorkState WorkState       = 9;
+  string          QueryAddress       = 10;
 }
 
 // CNState contains all CN details known to the HAKeeper.

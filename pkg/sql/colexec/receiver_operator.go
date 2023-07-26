@@ -99,13 +99,14 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 
 		pointer := value.UnsafePointer()
 		bat := (*batch.Batch)(pointer)
+
 		if bat == nil {
 			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
 			r.aliveMergeReceiver--
 			continue
 		}
 
-		if bat.Length() == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(r.proc.Mp())
 			continue
 		}

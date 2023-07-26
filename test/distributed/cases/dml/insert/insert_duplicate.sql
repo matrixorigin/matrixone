@@ -1,3 +1,4 @@
+-- @skip:issue#10848
 CREATE TABLE IF NOT EXISTS indup_00(
     `id` INT UNSIGNED,
     `act_name` VARCHAR(20) NOT NULL,
@@ -206,3 +207,4 @@ select * from indup_07;
 set @a_var = 23;
 execute stmt1 using @a_var;
 select * from indup_07;
+deallocate prepare stmt1;

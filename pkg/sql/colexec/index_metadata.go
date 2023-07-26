@@ -368,7 +368,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	}
 	bat.Vecs[12] = vec_prikey
 
-	bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
+	bat.SetRowCount(bat.GetVector(0).Length())
 	return bat, nil
 }
 

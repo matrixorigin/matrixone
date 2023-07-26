@@ -43,6 +43,7 @@ select abs(tan(d))*2 from t1;
 
 -- @suite
 -- @setup
+-- @bvt:issue#10748
 drop table if exists ceil;
 create table ceil(id int,d int,dl double,fl float,de decimal);
 insert into ceil values(1,5,5,-5.5,-5.5);
@@ -61,6 +62,8 @@ insert into ceil values(2,-1,-99999999999999999.9,1.23,-1.23);
 -- @label:bvt
 select ceil(d),ceil(dl),ceil(fl) from ceil;
 
+
 drop table t1;
 drop table ceil;
 drop table abs;
+-- @bvt:issue

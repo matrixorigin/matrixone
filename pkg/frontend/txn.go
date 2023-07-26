@@ -17,9 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -45,11 +46,13 @@ type TxnHandler struct {
 	// the lifetime of txnCtx is longer than the requestCtx.
 	// the timeout of txnCtx is from the FrontendParameters.SessionTimeout with
 	// default 24 hours.
-	txnCtx       context.Context
-	txnCtxCancel context.CancelFunc
-	shareTxn     bool
-	mu           sync.Mutex
-	entryMu      sync.Mutex
+	txnCtx             context.Context
+	txnCtxCancel       context.CancelFunc
+	shareTxn           bool
+	mu                 sync.Mutex
+	entryMu            sync.Mutex
+	hasCalledStartStmt bool
+	prevTxnId          []byte
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -154,6 +157,26 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	return txnCtx, th.txnOperator, err
 }
 
+func (th *TxnHandler) enableStartStmt(txnId []byte) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledStartStmt = true
+	th.prevTxnId = txnId
+}
+
+func (th *TxnHandler) disableStartStmt() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledStartStmt = false
+	th.prevTxnId = nil
+}
+
+func (th *TxnHandler) calledStartStmt() (bool, []byte) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.hasCalledStartStmt, th.prevTxnId
+}
+
 // NewTxn commits the old transaction if it existed.
 // Then it creates the new transaction by Engin.New.
 func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
@@ -180,7 +203,7 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 	th.SetTxnOperatorInvalid()
 	defer func() {
 		if err != nil {
-			tenant := th.ses.GetTenantName(nil)
+			tenant := th.ses.GetTenantName()
 			incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
 		}
 	}()
@@ -193,6 +216,11 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 	}
 	storage := th.GetStorage()
 	err = storage.New(txnCtx, txnOp)
+	//if txnOp != nil && !th.GetSession().IsDerivedStmt() {
+	//	fmt.Println("===> start statement 1", txnOp.Txn().DebugString())
+	//	txnOp.GetWorkspace().StartStatement()
+	//	th.enableStartStmt()
+	//}
 	return txnCtx, txnOp, err
 }
 
@@ -244,7 +272,7 @@ func (th *TxnHandler) CommitTxn() error {
 	txnCtx, txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
-		logErrorf(sessionInfo, "CommitTxn: txn operator is null")
+		logError(ses, sessionInfo, "CommitTxn: txn operator is null")
 	}
 	if txnCtx == nil {
 		panic("context should not be nil")
@@ -268,7 +296,7 @@ func (th *TxnHandler) CommitTxn() error {
 	var err error
 	defer func() {
 		// metric count
-		tenant := ses.GetTenantName(nil)
+		tenant := ses.GetTenantName()
 		incTransactionCounter(tenant)
 		if err != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
@@ -287,7 +315,10 @@ func (th *TxnHandler) CommitTxn() error {
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()
-			logErrorf(sessionInfo, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
+			logError(ses, sessionInfo,
+				"CommitTxn: txn operator commit failed",
+				zap.String("txnId", txnId),
+				zap.Error(err))
 		}
 		ses.updateLastCommitTS(txnOp.Txn().CommitTS)
 	}
@@ -306,7 +337,9 @@ func (th *TxnHandler) RollbackTxn() error {
 	txnCtx, txnOp := th.GetTxnOperator()
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
-		logErrorf(sessionInfo, "RollbackTxn: txn operator is null")
+		logError(ses, ses.GetDebugString(),
+			"RollbackTxn: txn operator is null",
+			zap.String("sessionInfo", sessionInfo))
 	}
 	if txnCtx == nil {
 		panic("context should not be nil")
@@ -323,7 +356,7 @@ func (th *TxnHandler) RollbackTxn() error {
 	var err error
 	defer func() {
 		// metric count
-		tenant := ses.GetTenantName(nil)
+		tenant := ses.GetTenantName()
 		incTransactionCounter(tenant)
 		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
 		if err != nil {
@@ -342,7 +375,10 @@ func (th *TxnHandler) RollbackTxn() error {
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()
-			logErrorf(sessionInfo, "RollbackTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
+			logError(ses, ses.GetDebugString(),
+				"RollbackTxn: txn operator commit failed",
+				zap.String("txnId", txnId),
+				zap.Error(err))
 		}
 	}
 	th.SetTxnOperatorInvalid()
@@ -359,7 +395,9 @@ func (th *TxnHandler) GetTxn() (context.Context, TxnOperator, error) {
 	ses := th.GetSession()
 	txnCtx, txnOp, err := ses.TxnCreate()
 	if err != nil {
-		logErrorf(ses.GetDebugString(), "GetTxn. error:%v", err)
+		logError(ses, ses.GetDebugString(),
+			"Failed to get transaction",
+			zap.Error(err))
 		return nil, nil, err
 	}
 	return txnCtx, txnOp, err

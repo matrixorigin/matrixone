@@ -369,6 +369,33 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 	if err != nil {
 		return "", err
 	}
+
+	if ndesc.Node.Stats.Shuffle {
+		idx := ndesc.Node.Stats.ShuffleColIdx
+		shuffleType := ndesc.Node.Stats.ShuffleType
+		var hashCol *plan.Expr
+		switch exprImpl := ndesc.Node.OnList[idx].Expr.(type) {
+		case *plan.Expr_F:
+			hashCol = exprImpl.F.Args[0]
+		}
+
+		if shuffleType == plan.ShuffleType_Hash {
+			buf.WriteString(" shuffle: hash(")
+			err := describeExpr(ctx, hashCol, options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
+		} else {
+			buf.WriteString(" shuffle: range(")
+			err := describeExpr(ctx, hashCol, options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
+		}
+	}
+
 	return buf.String(), nil
 }
 

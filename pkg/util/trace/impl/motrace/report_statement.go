@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -71,10 +72,8 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.StatementTag = ""
 		s.StatementFingerprint = ""
 		s.Error = nil
-		s.RowsRead = 0
-		s.BytesScan = 0
-		s.ResultCount = 0
 		s.AggrCount = 1
+		s.Database = ""
 		s.StmtBuilder.WriteString(s.Statement)
 		duration := s.Duration
 		s.Duration = windowSize
@@ -92,10 +91,13 @@ func StatementInfoUpdate(existing, new Item) {
 	n := new.(*StatementInfo)
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
-		e.StmtBuilder.WriteString("; ")
+		e.StmtBuilder.WriteString("\n")
 		e.StmtBuilder.WriteString(n.Statement)
 	}
 	e.AggrCount += 1
+	e.RowsRead += n.RowsRead
+	e.BytesScan += n.BytesScan
+	e.ResultCount += n.ResultCount
 	// responseAt is the last response time
 	n.ExecPlan2Stats(context.Background())
 	if err := mergeStats(e, n); err != nil {
@@ -119,7 +121,7 @@ func StatementInfoFilter(i Item) bool {
 
 	// Check SqlSourceType
 	switch statementInfo.SqlSourceType {
-	case "internal_sql", "external_sql", "non_cloud_user":
+	case constant.InternalSql, constant.ExternSql, constant.CloudNoUserSql:
 		// Check StatementType
 		switch statementInfo.StatementType {
 		case "Insert", "Update", "Delete", "Execute", "Select":

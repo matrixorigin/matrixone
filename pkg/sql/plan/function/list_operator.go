@@ -227,7 +227,7 @@ var supportedOperators = []FuncNew{
 	// return a != b, if any one of a and b is null, return null.
 	{
 		functionId: NOT_EQUAL,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {

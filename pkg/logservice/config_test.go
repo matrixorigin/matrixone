@@ -25,18 +25,17 @@ import (
 )
 
 func getTestConfig() Config {
-	c := Config{
-		UUID:                 "uuid",
-		DeploymentID:         100,
-		DataDir:              "/mydata/dir",
-		ServiceAddress:       "localhost:9000",
-		ServiceListenAddress: "localhost:9000",
-		RaftAddress:          "localhost:9001",
-		RaftListenAddress:    "localhost:9001",
-		GossipAddress:        "localhost:9002",
-		GossipListenAddress:  "localhost:9002",
-		GossipSeedAddresses:  []string{"localhost:9002"},
-	}
+	c := DefaultConfig()
+	c.UUID = "uuid"
+	c.DeploymentID = 100
+	c.DataDir = "/mydata/dir"
+	c.ServiceAddress = "localhost:9000"
+	c.ServiceListenAddress = "localhost:9000"
+	c.RaftAddress = "localhost:9001"
+	c.RaftListenAddress = "localhost:9001"
+	c.GossipAddress = "localhost:9002"
+	c.GossipListenAddress = "localhost:9002"
+	c.GossipSeedAddresses = []string{"localhost:9002"}
 	c.Fill()
 	return c
 }
@@ -170,10 +169,9 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 }
 
 func TestFillConfig(t *testing.T) {
-	c := Config{}
+	c := DefaultConfig()
 	c.Fill()
-
-	assert.Equal(t, uint64(0), c.DeploymentID)
+	assert.Equal(t, uint64(1), c.DeploymentID)
 	assert.Equal(t, defaultDataDir, c.DataDir)
 	assert.Equal(t, defaultSnapshotExportDir, c.SnapshotExportDir)
 	assert.Equal(t, defaultMaxExportedSnapshot, c.MaxExportedSnapshot)
@@ -183,7 +181,7 @@ func TestFillConfig(t *testing.T) {
 	assert.Equal(t, defaultRaftAddress, c.RaftListenAddress)
 	assert.Equal(t, defaultGossipAddress, c.GossipAddress)
 	assert.Equal(t, defaultGossipAddress, c.GossipListenAddress)
-	assert.Equal(t, 0, len(c.GossipSeedAddresses))
+	assert.Equal(t, 1, len(c.GossipSeedAddresses))
 	assert.Equal(t, hakeeper.DefaultTickPerSecond, c.HAKeeperConfig.TickPerSecond)
 	assert.Equal(t, hakeeper.DefaultLogStoreTimeout, c.HAKeeperConfig.LogStoreTimeout.Duration)
 	assert.Equal(t, hakeeper.DefaultDNStoreTimeout, c.HAKeeperConfig.DNStoreTimeout.Duration)
@@ -249,7 +247,7 @@ func TestHAKeeperClientConfigValidate(t *testing.T) {
 		ok  bool
 	}{
 		{
-			HAKeeperClientConfig{}, false,
+			HAKeeperClientConfig{}, true,
 		},
 		{
 			HAKeeperClientConfig{DiscoveryAddress: "localhost:9090"}, true,
@@ -276,10 +274,9 @@ func TestHAKeeperClientConfigValidate(t *testing.T) {
 }
 
 func TestGossipAddressV2IsUsed(t *testing.T) {
-	cfg := Config{
-		GossipAddress:   "127.0.0.1:9001",
-		GossipAddressV2: "localhost:9002",
-	}
+	cfg := DefaultConfig()
+	cfg.GossipAddress = "127.0.0.1:9001"
+	cfg.GossipAddressV2 = "localhost:9002"
 	cfg.Fill()
 	assert.Equal(t, cfg.GossipAddress, cfg.GossipAddressV2)
 	assert.Equal(t, cfg.GossipAddress, cfg.GossipListenAddress)

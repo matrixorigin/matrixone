@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 const (
@@ -233,16 +232,7 @@ var (
 			"SOURCE_FILE varchar(20) DEFAULT NULL," +
 			"SOURCE_LINE int DEFAULT NULL" +
 			");",
-		"CREATE TABLE IF NOT EXISTS `PROCESSLIST` (" +
-			"ID bigint unsigned NOT NULL DEFAULT '0'," +
-			"USER varchar(32) NOT NULL DEFAULT ''," +
-			"HOST varchar(261) NOT NULL DEFAULT ''," +
-			"DB varchar(64) DEFAULT NULL," +
-			"COMMAND varchar(16) NOT NULL DEFAULT ''," +
-			"TIME int NOT NULL DEFAULT '0'," +
-			"STATE varchar(64) DEFAULT NULL," +
-			"INFO longtext" +
-			");",
+		"CREATE VIEW IF NOT EXISTS `PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
 		"CREATE TABLE IF NOT EXISTS USER_PRIVILEGES (" +
 			"GRANTEE varchar(292) NOT NULL DEFAULT ''," +
 			"TABLE_CATALOG varchar(512) NOT NULL DEFAULT ''," +
@@ -264,7 +254,7 @@ var (
 			"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
 			"if(true, NULL, '') AS SQL_PATH," +
 			"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
-			"FROM mo_catalog.mo_database;",
+			"FROM mo_catalog.mo_database where account_id = CURRENT_ACCOUNT_ID();",
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
 			"DEFAULT_COLLATE_NAME varchar(64)," +
@@ -435,12 +425,12 @@ var (
 )
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	initMysqlTables(ctx, ieFactory, motrace.FileService)
-	initInformationSchemaTables(ctx, ieFactory, motrace.FileService)
+	initMysqlTables(ctx, ieFactory)
+	initInformationSchemaTables(ctx, ieFactory)
 	return nil
 }
 
-func initMysqlTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batchProcessMode string) {
+func initMysqlTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	exec := ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MysqlDBConst).Internal(true).Finish())
 	mustExec := func(sql string) {
@@ -462,7 +452,7 @@ func initMysqlTables(ctx context.Context, ieFactory func() ie.InternalExecutor, 
 	createCost = time.Since(instant)
 }
 
-func initInformationSchemaTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batchProcessMode string) {
+func initInformationSchemaTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	exec := ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(InformationDBConst).Internal(true).Finish())
 	mustExec := func(sql string) {

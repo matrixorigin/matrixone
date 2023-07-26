@@ -85,6 +85,10 @@ func u64ToRowID(v uint64) types.Rowid {
 	return rowid
 }
 
+func rowIDToU64(v types.Rowid) uint64 {
+	return types.DecodeUint64(v[:])
+}
+
 func blockid2rowid(bid *types.Blockid) types.Rowid {
 	var rowid types.Rowid
 	copy(rowid[:], bid[:])
