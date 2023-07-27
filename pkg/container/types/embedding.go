@@ -15,11 +15,11 @@
 package types
 
 import (
-	"encoding/binary"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strings"
+	"unsafe"
 )
 
 const (
@@ -35,9 +35,12 @@ func BytesToEmbedding(input []byte) (res []float32) {
 	dimension := len(input) / 4
 	res = make([]float32, dimension)
 
+	// Get the starting address of the byte slice
+	ptr := unsafe.Pointer(&input[0])
+
 	for i := 0; i < dimension; i++ {
-		bits := binary.LittleEndian.Uint32(input[i*4 : (i+1)*4])
-		res[i] = math.Float32frombits(bits)
+		res[i] = math.Float32frombits(*(*uint32)(ptr))
+		ptr = unsafe.Pointer(uintptr(ptr) + 4) // Increment the pointer by 4 bytes for the next iteration
 	}
 
 	return res
@@ -47,9 +50,12 @@ func EmbeddingToBytes(input []float32) []byte {
 	totalBytes := len(input) * 4
 	res := make([]byte, totalBytes)
 
-	for i, val := range input {
-		bits := math.Float32bits(val)
-		binary.LittleEndian.PutUint32(res[i*4:(i+1)*4], bits)
+	// Get the starting address of the byte slice
+	ptr := unsafe.Pointer(&res[0])
+
+	for _, val := range input {
+		*(*uint32)(ptr) = math.Float32bits(val)
+		ptr = unsafe.Pointer(uintptr(ptr) + 4) // Increment the pointer by 4 bytes for the next iteration
 	}
 	return res
 }
@@ -57,9 +63,9 @@ func EmbeddingToBytes(input []float32) []byte {
 func EmbeddingToString(input []float32) string {
 	var strValues []string
 	for _, value := range input {
+		//TODO: Float decimal place
 		strValues = append(strValues, fmt.Sprintf("%f", value))
 	}
-
 	return "[" + strings.Join(strValues, ", ") + "]"
 }
 
