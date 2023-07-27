@@ -300,13 +300,14 @@ type AlterColPos struct {
 
 // suggest rename: AlterAddColumnPosition
 type AlterAddCol struct {
-	Column *ColumnTableDef
-	Pos    *AlterColPos
+	Column   *ColumnTableDef
+	Position *ColumnPosition
 }
 
 func (node *AlterAddCol) Format(ctx *FmtCtx) {
 	ctx.WriteString("add column ")
 	node.Column.Format(ctx)
+	node.Position.Format(ctx)
 }
 
 type AccountsSetOption struct {
@@ -511,10 +512,11 @@ const (
 type ColumnPositionType int
 
 // ColumnPosition Types
+// Do not change the value of a constant, as there are external dependencies
 const (
-	ColumnPositionNone ColumnPositionType = iota
-	ColumnPositionFirst
-	ColumnPositionAfter
+	ColumnPositionNone  ColumnPositionType = -1
+	ColumnPositionFirst                    = 0
+	ColumnPositionAfter                    = 1
 )
 
 // ColumnPosition represent the position of the newly added column
@@ -524,7 +526,6 @@ type ColumnPosition struct {
 	Typ ColumnPositionType
 	// RelativeColumn is the column the newly added column after if type is ColumnPositionAfter
 	RelativeColumn *UnresolvedName
-	//ReferenceColumn **UnresolvedName
 }
 
 func (node *ColumnPosition) Format(ctx *FmtCtx) {

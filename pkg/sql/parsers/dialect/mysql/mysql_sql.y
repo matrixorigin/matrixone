@@ -39,7 +39,6 @@ import (
     alterTable tree.AlterTable
     alterTableOptions tree.AlterTableOptions
     alterTableOption tree.AlterTableOption
-    alterColpos *tree.AlterColPos
     alterColPosition *tree.ColumnPosition
     alterColumnOrderBy []*tree.AlterColumnOrder
     alterColumnOrder *tree.AlterColumnOrder
@@ -540,7 +539,6 @@ import (
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
-%type <alterColpos> pos_info
 %type <alterColPosition> column_position
 %type <alterColumnOrder> alter_column_order
 %type <alterColumnOrderBy> alter_column_order_list
@@ -2708,21 +2706,12 @@ alter_option:
     {
         $$ = tree.AlterTableOption($3)
     }
-|   ADD column_def pos_info
-    {
-        $$ = tree.AlterTableOption(
-            &tree.AlterAddCol{
-                Column: $2,
-                Pos: $3,
-            },
-        )
-    }
-|   ADD COLUMN column_def pos_info
+|   ADD column_keyword_opt column_def column_position
     {
         $$ = tree.AlterTableOption(
             &tree.AlterAddCol{
                 Column: $3,
-                Pos: $4,
+                Position: $4,
             },
         )
     }
@@ -2795,27 +2784,6 @@ lock_type:
 with_type:
     WITHOUT
 |   WITH
-
-pos_info:
-    {
-        $$ = &tree.AlterColPos{
-            Pos: -1,
-        }
-    }
-|   FIRST
-    {
-         $$ = &tree.AlterColPos{
-            Pos: 0,
-        }
-    }
-|   AFTER column_name
-    {
-         $$ = &tree.AlterColPos{
-            PreColName: $2,
-            Pos: -2,
-        }
-    }
-
 
 column_keyword_opt:
     {

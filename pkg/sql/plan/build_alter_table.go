@@ -127,7 +127,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			// TODO
 		case *tree.AlterAddCol:
 			// TODO
-			err = AddColumn(ctx, alterTablePlan, option)
+			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableModifyColumnClause:
 			err = ModifyColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableChangeColumnClause:

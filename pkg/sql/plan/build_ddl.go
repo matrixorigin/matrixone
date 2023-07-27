@@ -1925,8 +1925,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 			colMap[col.Name] = col
 			preName := ""
-			if opt.Pos.PreColName != nil {
-				preName = opt.Pos.PreColName.Parts[0]
+			if opt.Position.RelativeColumn != nil {
+				preName = opt.Position.RelativeColumn.Parts[0]
 			}
 			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], colType, ctx)
 			if err != nil {
@@ -1938,7 +1938,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						Name:    opt.Column.Name.Parts[0],
 						PreName: preName,
 						Type:    colType,
-						Pos:     opt.Pos.Pos,
+						Pos:     int32(opt.Position.Typ),
 					},
 				},
 			}
