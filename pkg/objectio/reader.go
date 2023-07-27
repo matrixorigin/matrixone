@@ -162,6 +162,21 @@ func (r *objectReaderV1) ReadOneBlock(
 	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory)
 }
 
+func (r *objectReaderV1) ReadOneSubBlock(
+	ctx context.Context,
+	idxs []uint16,
+	typs []types.Type,
+	blk uint16,
+	m *mpool.MPool,
+) (ioVec *fileservice.IOVector, err error) {
+	var metaHeader ObjectMeta
+	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
+		return
+	}
+	meta, _ := metaHeader.SubMeta(blk)
+	return ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID(), idxs, typs, m, r.fs, constructorFactory)
+}
+
 func (r *objectReaderV1) ReadAll(
 	ctx context.Context,
 	idxs []uint16,
@@ -259,6 +274,41 @@ func (r *objectReaderV1) ReadMultiBlocks(
 		m,
 		r.fs,
 		constructorFactory)
+}
+
+func (r *objectReaderV1) ReadMultiSubBlocks(
+	ctx context.Context,
+	opts map[uint16]*ReadBlockOptions,
+	m *mpool.MPool,
+) (ioVec *fileservice.IOVector, err error) {
+	var metaHeader ObjectMeta
+	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
+		return
+	}
+	ioVec = &fileservice.IOVector{
+		FilePath: r.name,
+		Entries:  make([]fileservice.IOEntry, 0),
+	}
+	for _, opt := range opts {
+		meta, _ := metaHeader.SubMeta(uint16(ConvertToSchemaType(opt.Id)))
+		for seqnum := range opt.Idxes {
+			blkmeta := meta.GetBlockMeta(uint32(opt.Id))
+			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+				// prefetch, do not generate
+				continue
+			}
+			col := blkmeta.ColumnMeta(seqnum)
+			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
+				Offset: int64(col.Location().Offset()),
+				Size:   int64(col.Location().Length()),
+
+				ToObjectBytes: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
+			})
+		}
+	}
+
+	err = r.fs.Read(ctx, ioVec)
+	return
 }
 
 func (r *objectReaderV1) ReadAllMeta(

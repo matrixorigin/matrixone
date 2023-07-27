@@ -149,13 +149,22 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := reader.ReadMultiBlocks(ctx,
-				params.ids, nil)
-			if err != nil {
-				res.Err = err
-				return
+			if params.dataType == objectio.CkpMetaStart {
+				ioVectors, err := reader.ReadMultiSubBlocks(ctx, params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				res.Res = ioVectors
+			} else {
+				ioVectors, err := reader.ReadMultiBlocks(ctx,
+					params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				res.Res = ioVectors
 			}
-			res.Res = ioVectors
 			if params.reader == nil {
 				putReader(reader)
 			}
@@ -177,6 +186,7 @@ func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
 			ioVectors, err := reader.ReadMeta(ctx, nil)
 			if err != nil {
 				res.Err = err
+				logutil.Infof("sdfsdfs")
 				return
 			}
 			res.Res = ioVectors

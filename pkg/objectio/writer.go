@@ -453,15 +453,12 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		return nil, err
 	}
 	blockObjects := make([]BlockObject, 0)
-	for i := range w.blocks[SchemaData] {
-		header := w.blocks[SchemaData][i].meta.BlockHeader()
-		header.SetMetaLocation(objectHeader.Extent())
-		blockObjects = append(blockObjects, w.blocks[SchemaData][i].meta)
-	}
-	for i := range w.blocks[SchemaTombstone] {
-		header := w.blocks[SchemaTombstone][i].meta.BlockHeader()
-		header.SetMetaLocation(objectHeader.Extent())
-		blockObjects = append(blockObjects, w.blocks[SchemaTombstone][i].meta)
+	for i := range w.blocks {
+		for j := range w.blocks[i] {
+			header := w.blocks[i][j].meta.BlockHeader()
+			header.SetMetaLocation(objectHeader.Extent())
+			blockObjects = append(blockObjects, w.blocks[i][j].meta)
+		}
 	}
 	err = w.Sync(ctx, items...)
 	if err != nil {

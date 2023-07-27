@@ -703,8 +703,8 @@ func (data *CheckpointData) PrintData() {
 
 func (data *CheckpointData) WriteTo(
 	writer *blockio.BlockWriter) (blks []objectio.BlockObject, err error) {
-	for _, bat := range data.bats {
-		if _, err = writer.WriteBatchWithOutIndex(containers.ToCNBatch(bat)); err != nil {
+	for i, bat := range data.bats {
+		if _, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 			return
 		}
 	}
@@ -718,7 +718,7 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResult, err := reader.LoadColumns(cxt, idxs, nil, id, nil)
+	ioResult, err := reader.LoadSubColumns(cxt, idxs, nil, id, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -760,6 +760,28 @@ func LoadCNBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames
 	return ioResult, nil
 }
 
+func LoadCNSubBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint16, reader *blockio.BlockReader, m *mpool.MPool) (*batch.Batch, error) {
+	idxs := make([]uint16, len(colNames))
+	for i := range colNames {
+		idxs[i] = uint16(i)
+	}
+	ioResult, err := reader.LoadSubColumns(cxt, idxs, nil, id, nil)
+	if err != nil {
+		return nil, err
+	}
+	ioResult.Attrs = make([]string, len(colNames))
+	copy(ioResult.Attrs, colNames)
+	maxLength := 0
+	for _, vec := range ioResult.Vecs {
+		length := vec.Length()
+		if maxLength < length {
+			maxLength = length
+		}
+	}
+	ioResult.SetRowCount(maxLength)
+	return ioResult, nil
+}
+
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
 	version uint32,
@@ -774,7 +796,7 @@ func prefetchCheckpointData(
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
 
-	pref, err := blockio.BuildPrefetchParams(service, key)
+	pref, err := blockio.BuildSubPrefetchParams(service, key)
 	if err != nil {
 		return
 	}
