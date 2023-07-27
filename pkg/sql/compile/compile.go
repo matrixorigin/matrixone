@@ -2638,9 +2638,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 			ss[i].NodeInfo.Addr = n.Addr
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, 16)
-			}
+			ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, n.Mcpu)
 		}
 		if isSameCN(n.Addr, c.addr) {
 			idx = cnt
