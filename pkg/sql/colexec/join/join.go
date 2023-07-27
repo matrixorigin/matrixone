@@ -16,7 +16,6 @@ package join
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -75,6 +74,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			if bat == nil {
 				ctr.state = End
 				continue
+			}
+			if bat.Last() {
+				proc.SetInputBatch(bat)
+				return process.ExecNext, nil
 			}
 			if bat.RowCount() == 0 {
 				bat.Clean(proc.Mp())
