@@ -375,9 +375,12 @@ func (c *Compile) Run(_ uint64) error {
 			}
 			// set affectedRows to old compile to return
 			c.setAffectedRows(cc.GetAffectedRows())
-			return nil
+			return c.proc.TxnOperator.GetWorkspace().Adjust()
 		}
 		return err
+	}
+	if c.proc.TxnOperator != nil {
+		return c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
 	return nil
 }
@@ -1693,9 +1696,9 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 		leftTyps[i] = dupType(expr.Typ)
 	}
 
+	rs = c.newShuffleJoinScopeList(ss, children, node)
 	switch node.JoinType {
 	case plan.Node_INNER:
-		rs = c.newShuffleJoinScopeList(ss, children, node)
 		for i := range rs {
 			rs[i].appendInstruction(vm.Instruction{
 				Op:  vm.Join,
@@ -1703,8 +1706,8 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 				Arg: constructJoin(node, rightTyps, c.proc),
 			})
 		}
+
 	case plan.Node_ANTI:
-		rs = c.newShuffleJoinScopeList(ss, children, node)
 		if node.BuildOnLeft {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1724,7 +1727,6 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 		}
 
 	case plan.Node_SEMI:
-		rs = c.newShuffleJoinScopeList(ss, children, node)
 		if node.BuildOnLeft {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1741,6 +1743,24 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 					Arg: constructSemi(node, rightTyps, c.proc),
 				})
 			}
+		}
+
+	case plan.Node_LEFT:
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.Left,
+				Idx: c.anal.curr,
+				Arg: constructLeft(node, rightTyps, c.proc),
+			})
+		}
+
+	case plan.Node_RIGHT:
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.Right,
+				Idx: c.anal.curr,
+				Arg: constructRight(node, leftTyps, rightTyps, 0, 0, c.proc),
+			})
 		}
 
 	default:
@@ -2156,6 +2176,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
+		ss = c.compileProjection(n, c.compileRestrict(n, ss))
 		return ss
 	}
 
@@ -3093,6 +3114,9 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	}
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
 		WithTxn(c.proc.TxnOperator).
 		WithDatabase(c.db)
 	return exec.Exec(c.proc.Ctx, sql, opts)

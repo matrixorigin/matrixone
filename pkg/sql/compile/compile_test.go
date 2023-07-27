@@ -97,6 +97,13 @@ func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
+func (w *Ws) Adjust() error {
+	return nil
+}
+
+func (w *Ws) StartStatement() {}
+func (w *Ws) EndStatement()   {}
+
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)

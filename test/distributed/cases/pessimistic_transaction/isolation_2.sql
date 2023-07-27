@@ -161,7 +161,6 @@ select b, c from dis_table_02;
 use isolation_2;
 select b, c from dis_table_02;
 -- @session}
--- @bvt:issue#10742
 prepare stmt2 from "update dis_table_02 set a=null";
 execute stmt2;
 commit;
@@ -169,7 +168,6 @@ select b,c from dis_table_02;
 use dis_db_02;
 select b,c from dis_table_02;
 insert into dis_table_02(b,c) values ('','1999-06-04');
--- @bvt:issue
 ------------------------------
 -- @bvt:issue#9124
 create temporary table dis_temp_01(a int,b varchar(100),primary key(a));
