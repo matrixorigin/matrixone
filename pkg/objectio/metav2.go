@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type DataMetaType uint16
@@ -25,21 +24,7 @@ const (
 	SchemaData      DataMetaType = 0
 	SchemaTombstone DataMetaType = 1
 
-	CkpMeta         DataMetaType = 100
-	CkpSystemDB     DataMetaType = 101
-	CkpTxnNode      DataMetaType = 102
-	CkpDBDel        DataMetaType = 103
-	CkpDBDN         DataMetaType = 104
-	CkpSystemTable  DataMetaType = 105
-	CkpTblDN        DataMetaType = 106
-	CkpTblDel       DataMetaType = 107
-	CkpSystemColumn DataMetaType = 108
-	CkpColumnDel    DataMetaType = 109
-	CkpSegment      DataMetaType = 110
-	CkpSegmentDN    DataMetaType = 111
-	CkpDel          DataMetaType = 112
-	CkpBlkMeta      DataMetaType = 113
-	CkpBlkDN        DataMetaType = 114
+	CkpMetaStart DataMetaType = 2
 )
 
 const (
@@ -57,7 +42,7 @@ const (
 const InvalidSchemaType = 0xFF
 
 func ConvertToSchemaType(ckpIdx uint16) DataMetaType {
-	return 100 + DataMetaType(ckpIdx)
+	return CkpMetaStart + DataMetaType(ckpIdx)
 }
 
 type objectMetaV1 []byte
@@ -143,8 +128,23 @@ func (mh objectMetaV1) SubMeta(pos uint16) (objectDataMetaV1, bool) {
 	return objectDataMetaV1(mh[offset:]), true
 }
 
+func (mh objectMetaV1) SubMetaCount() uint16 {
+	return types.DecodeUint16(mh[metaHeaderLen : metaHeaderLen+schemaCountLen])
+}
+
 func (mh objectMetaV1) SubMetaIndex() SubMetaIndex {
 	return SubMetaIndex(mh[metaHeaderLen:])
+}
+
+func (mh objectMetaV1) SubMetaTypes() []uint16 {
+	cnt := mh.SubMetaCount()
+	subMetaTypes := make([]uint16, cnt)
+	for i := uint16(0); i < cnt; i++ {
+		offStart := schemaCountLen + i*typePosLen + metaHeaderLen
+		offEnd := schemaCountLen + i*typePosLen + schemaType + metaHeaderLen
+		subMetaTypes[i] = types.DecodeUint16(mh[offStart:offEnd])
+	}
+	return subMetaTypes
 }
 
 const (
@@ -163,31 +163,12 @@ func BuildSubMetaIndex(count uint16) SubMetaIndex {
 	return buf[:]
 }
 
-func (oh SubMetaIndex) SubMetaCount() uint16 {
-	return types.DecodeUint16(oh[:schemaCountLen])
-}
-
 func (oh SubMetaIndex) SetSubMetaCount(cnt uint16) {
 	copy(oh[:schemaCountLen], types.EncodeUint16(&cnt))
 }
 
-func (oh SubMetaIndex) SubMeta(pos uint16) (objectDataMetaV1, bool) {
-	offStart := schemaCountLen + pos*typePosLen + schemaType + schemaBlockCount
-	offEnd := schemaCountLen + pos*typePosLen + typePosLen
-	offset := types.DecodeUint16(oh[offStart:offEnd])
-	logutil.Infof("sub meta offset %d", offset)
-	return objectDataMetaV1(oh[offset:]), true
-}
-
-func (oh SubMetaIndex) SubMetaTypes() []uint16 {
-	cnt := oh.SubMetaCount()
-	subMetaTypes := make([]uint16, cnt)
-	for i := uint16(0); i < cnt; i++ {
-		offStart := schemaCountLen + i*typePosLen
-		offEnd := schemaCountLen + i*typePosLen + schemaType
-		subMetaTypes[i] = types.DecodeUint16(oh[offStart:offEnd])
-	}
-	return subMetaTypes
+func (oh SubMetaIndex) SubMetaCount() uint16 {
+	return types.DecodeUint16(oh[:schemaCountLen])
 }
 
 func (oh SubMetaIndex) SetSchemaMeta(pos uint16, st uint16, count uint16, offset uint32) {
