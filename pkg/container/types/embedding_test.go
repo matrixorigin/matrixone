@@ -114,3 +114,27 @@ func TestEmbeddingsToString(t *testing.T) {
 		})
 	}
 }
+
+func TestStringToEmbedding(t *testing.T) {
+	type args struct {
+		input string
+	}
+	tests := []struct {
+		name string
+		args args
+		want []float32
+	}{
+		{
+			name: "Test3",
+			args: args{input: "[1,2,3]"},
+			want: []float32{1, 2, 3},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := StringToEmbedding(tt.args.input); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("StringToEmbedding() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

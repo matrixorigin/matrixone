@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
+	"strconv"
 	"strings"
 	"unsafe"
 )
@@ -69,6 +70,45 @@ func EmbeddingToString(input []float32) string {
 	return "[" + strings.Join(strValues, ", ") + "]"
 }
 
+func StringToEmbedding(input string) []float32 {
+	input = strings.ReplaceAll(input, "[", "")
+	input = strings.ReplaceAll(input, "]", "")
+	input = strings.ReplaceAll(input, " ", "")
+
+	numbers := strings.Split(input, ",")
+	result := make([]float32, len(numbers))
+
+	for i, numStr := range numbers {
+		num, err := strconv.ParseFloat(numStr, 32)
+		if err != nil {
+			panic(err)
+		}
+		result[i] = float32(num)
+	}
+
+	return result
+}
+
+func CompareEmbedding(left, right []float32) int64 {
+
+	if len(left) != len(right) {
+		panic("Embeddings size mismatch")
+	}
+
+	for i := 0; i < len(left); i++ {
+		if left[i] == right[i] {
+			continue
+		} else if left[i] > right[i] {
+			return +1
+		} else {
+			return -1
+		}
+	}
+
+	return 0
+}
+
+// Not useful.
 func EmbeddingsToString(input [][]float32) string {
 	var strValues []string
 	for _, row := range input {

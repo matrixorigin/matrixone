@@ -424,6 +424,10 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = vec.GetBytesAt(j)
 			}
+		case types.T_embedding:
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = vec.GetEmbeddingAt(j)
+			}
 		default:
 			panic(fmt.Sprintf("unspported type: %v", vec.GetType()))
 		}
