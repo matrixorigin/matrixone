@@ -83,7 +83,7 @@ const (
 	T_tuple T = 201
 
 	// Embedding family
-	T_float32vec T = 210
+	T_embedding T = 210
 )
 
 const (
@@ -197,9 +197,6 @@ type Uuid [16]byte
 // timestamp for transaction: physical time (higher 8 bytes) + logical (lower 4 bytes)
 // See txts.go for impl.
 type TS [TxnTsSize]byte
-
-// Similar to https://github.com/milvus-io/milvus-sdk-go/blob/9e61d26bdcd37770394878c2ab783a72b27c8791/entity/columns.go#L67
-type Float32Vector []float32
 
 // ProtoSize is used by gogoproto.
 func (ts *TS) ProtoSize() int {
@@ -320,7 +317,7 @@ type Decimal interface {
 
 // FixedSized types in our type system.   Esp, Varlena.
 type FixedSizeT interface {
-	FixedSizeTExceptStrType | Varlena | Float32Vector
+	FixedSizeTExceptStrType | Varlena
 }
 
 type FixedSizeTExceptStrType interface {
@@ -374,7 +371,7 @@ var Types map[string]T = map[string]T{
 	"rowid":                 T_Rowid,
 	"blockid":               T_Blockid,
 
-	"float vector": T_float32vec,
+	"float vector": T_embedding,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -414,9 +411,6 @@ func (t Type) GetSize() int32 {
 }
 
 func (t Type) TypeSize() int {
-	if t.Oid == T_float32vec {
-		return int(t.Width * t.Size)
-	}
 	return int(t.Size)
 }
 
@@ -493,6 +487,7 @@ func (t Type) String() string {
 	return t.Oid.String()
 }
 
+// DescString No usage
 func (t Type) DescString() string {
 	switch t.Oid {
 	case T_char:
@@ -573,8 +568,8 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
-	case T_float32vec:
-		typ.Size = 4
+	case T_embedding:
+		typ.Size = VarlenaSize
 		typ.Width = MaxVecDimension
 	case T_binary:
 		typ.Size = VarlenaSize
@@ -657,7 +652,7 @@ func (t T) String() string {
 		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
-	case T_float32vec:
+	case T_embedding:
 		return "FLOAT VECTOR"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
@@ -726,8 +721,8 @@ func (t T) OidString() string {
 		return "T_Blockid"
 	case T_interval:
 		return "T_interval"
-	case T_float32vec:
-		return "T_float32vec"
+	case T_embedding:
+		return "T_embedding"
 	}
 	return "unknown_type"
 }
@@ -775,8 +770,8 @@ func (t T) TypeLen() int {
 		return BlockidSize
 	case T_tuple, T_interval:
 		return 0
-	case T_float32vec:
-		return 4 //TODO: Can I do this here?
+	case T_embedding:
+		return VarlenaSize
 	}
 	panic(fmt.Sprintf("unknown type %d", t))
 }
@@ -784,7 +779,7 @@ func (t T) TypeLen() int {
 // FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
 func (t T) FixedLength() int {
 	switch t {
-	case T_any, T_float32vec:
+	case T_any:
 		return 0 //TODO: Can I do this here?
 	case T_int8, T_uint8, T_bool:
 		return 1
@@ -809,6 +804,8 @@ func (t T) FixedLength() int {
 	case T_Blockid:
 		return BlockidSize
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
+		return -24
+	case T_embedding:
 		return -24
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))

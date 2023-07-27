@@ -75,6 +75,22 @@ func MustStrCol(v *Vector) []string {
 	}
 }
 
+func MustEmbeddingCol(v *Vector) [][]float32 {
+	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
+		return nil
+	}
+	varcol := MustFixedCol[types.Varlena](v)
+	if v.class == CONSTANT {
+		return [][]float32{(&varcol[0]).GetEmbedding(v.area)}
+	} else {
+		ret := make([][]float32, v.length)
+		for i := range varcol {
+			ret[i] = (&varcol[i]).GetEmbedding(v.area)
+		}
+		return ret
+	}
+}
+
 // ExpandFixedCol decode data and return decoded []T.
 // For const/scalar vector we expand and return newly allocated slice.
 func ExpandFixedCol[T any](v *Vector) []T {
@@ -104,6 +120,21 @@ func ExpandStrCol(v *Vector) []string {
 		return vs
 	}
 	return MustStrCol(v)
+}
+
+func ExpandEmbeddingCol(v *Vector) [][]float32 {
+	if v.IsConst() {
+		vs := make([][]float32, v.Length())
+		if len(v.data) > 0 {
+			cols := v.col.([]types.Varlena)
+			ss := cols[0].GetEmbedding(v.area)
+			for i := range vs {
+				vs[i] = ss
+			}
+		}
+		return vs
+	}
+	return MustEmbeddingCol(v)
 }
 
 func ExpandBytesCol(v *Vector) [][]byte {
@@ -196,8 +227,6 @@ func (v *Vector) setupColFromData() {
 			v.col = DecodeFixedCol[types.Rowid](v)
 		case types.T_Blockid:
 			v.col = DecodeFixedCol[types.Blockid](v)
-		case types.T_float32vec:
-			v.col = DecodeFixedCol[types.Float32Vector](v)
 		default:
 			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
 		}
@@ -315,7 +344,7 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 			return strings.Compare(t1, t2) <= 0
 		})
 	}
-	//TODO: T_float32vec won't be used in zonemap.
+	//TODO: T_embedding won't be used in zonemap.
 	return false, moerr.NewInternalErrorNoCtx("unsupport type to check intersect")
 }
 
@@ -493,7 +522,7 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 	default:
 		return false, moerr.NewInternalErrorNoCtx("unsupport compare type")
 	}
-	//TODO: T_float32vec won't be used in zonemap.
+	//TODO: T_embedding won't be used in zonemap.
 	return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 }
 
@@ -619,7 +648,7 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Rowid](vec)
 	case types.T_Blockid:
 		return appendBytesToFixSized[types.Blockid](vec)
-		//TODO: Is it required. Need to check
+		//TODO: Embedding won't be used in Zonemap
 	}
 	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
 }

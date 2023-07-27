@@ -36,8 +36,8 @@ func TestLength(t *testing.T) {
 	{
 		//Embedding
 		mp := mpool.MustNewZero()
-		vec := NewVec(types.New(types.T_float32vec, 3, 0))
-		err := AppendFixedList(vec, []types.Float32Vector{{1, 2, 3}, {4, 5, 6}}, nil, mp)
+		vec := NewVec(types.New(types.T_embedding, 3, 0))
+		err := AppendEmbeddingList(vec, [][]float32{{1, 2, 3}, {4, 5, 6}}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, 2, vec.Length())
 		vec.Free(mp)
@@ -54,7 +54,7 @@ func TestSize(t *testing.T) {
 	{
 		//Embedding
 		mp := mpool.MustNewZero()
-		vec := NewVec(types.New(types.T_float32vec, 4, 0))
+		vec := NewVec(types.New(types.T_embedding, 4, 0))
 		require.Equal(t, 0, vec.Size())
 		vec.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -91,9 +91,9 @@ func TestGetUnionOneFunction(t *testing.T) {
 
 	{ // test const embedding vector
 		mp := mpool.MustNewZero()
-		v := NewVec(types.New(types.T_float32vec, 4, 0))
-		w := NewVec(types.New(types.T_float32vec, 4, 0))
-		err := AppendFixedList(w, []types.Float32Vector{{1, 2, 3, 0}, {4, 5, 6, 0}}, nil, mp)
+		v := NewVec(types.New(types.T_embedding, 4, 0))
+		w := NewVec(types.New(types.T_embedding, 4, 0))
+		err := AppendEmbeddingList(w, [][]float32{{1, 2, 3, 0}, {4, 5, 6, 0}}, nil, mp)
 		require.NoError(t, err)
 		uf := GetUnionOneFunction(*w.GetType(), mp)
 		err = uf(v, w, 0)
@@ -157,14 +157,14 @@ func TestAppend(t *testing.T) {
 	{
 		// Embedding
 		mp := mpool.MustNewZero()
-		vec := NewVec(types.New(types.T_float32vec, 4, 0))
-		err := AppendFixed(vec, types.Float32Vector{1, 2, 3, 0}, false, mp)
+		vec := NewVec(types.New(types.T_embedding, 4, 0))
+		err := AppendEmbedding(vec, []float32{1, 2, 3, 0}, false, mp)
 		require.NoError(t, err)
 		require.Equal(t, 1, vec.Length())
-		err = AppendFixed(vec, types.Float32Vector{2, 4, 5, 6}, true, mp)
+		err = AppendEmbedding(vec, []float32{2, 4, 5, 6}, true, mp)
 		require.NoError(t, err)
 		require.Equal(t, 2, vec.Length())
-		err = AppendFixedList(vec, []types.Float32Vector{{4, 4, 4, 6}, {2, 5, 5, 3}}, nil, mp)
+		err = AppendEmbeddingList(vec, [][]float32{{4, 4, 4, 6}, {2, 5, 5, 3}}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, 4, vec.Length())
 		vec.Free(mp)
@@ -190,47 +190,28 @@ func TestAppendBytes(t *testing.T) {
 }
 
 func TestDup(t *testing.T) {
-	//mp := mpool.MustNewZero()
-	//v := NewVec(types.T_int8.ToType())
-	//err := AppendFixedList(v, []int8{0, 1, 2}, nil, mp)
-	//require.NoError(t, err)
-	//w, err := v.Dup(mp)
-	//require.NoError(t, err)
-	//vs := MustFixedCol[int8](v)
-	//ws := MustFixedCol[int8](w)
-	//require.Equal(t, vs, ws)
-	//v.Free(mp)
-	//w.Free(mp)
-	//require.Equal(t, int64(0), mp.CurrNB())
-
-	{
-		mp := mpool.MustNewZero()
-		v := NewVec(types.T_float32vec.ToType())
-		err := AppendFixedList(v, []types.Float32Vector{{0, 1, 2}, {3, 4, 5}}, nil, mp)
-		require.NoError(t, err)
-		w, err := v.Dup(mp)
-		require.NoError(t, err)
-		vs := MustFixedCol[types.Float32Vector](v)
-		ws := MustFixedCol[types.Float32Vector](w)
-		require.Equal(t, vs, ws)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
+	mp := mpool.MustNewZero()
+	v := NewVec(types.T_int8.ToType())
+	err := AppendFixedList(v, []int8{0, 1, 2}, nil, mp)
+	require.NoError(t, err)
+	w, err := v.Dup(mp)
+	require.NoError(t, err)
+	vs := MustFixedCol[int8](v)
+	ws := MustFixedCol[int8](w)
+	require.Equal(t, vs, ws)
+	v.Free(mp)
+	w.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestShrink(t *testing.T) {
 	mp := mpool.MustNewZero()
 	{ // embedding
-		vs := make([]types.Float32Vector, 4)
-		for i := 0; i < 4; i++ {
-			vs[i] = make(types.Float32Vector, 3)
-		}
-		v := NewVec(types.New(types.T_float32vec, 3, 0))
-		err := AppendFixedList(v, vs, nil, mp)
+		v := NewVec(types.T_embedding.ToType())
+		err := AppendEmbeddingList(v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
 		v.Shrink([]int64{1, 2}, false)
-		require.Equal(t, vs[1:3], MustFixedCol[types.Float32Vector](v))
+		require.Equal(t, [][]float32{{2, 2, 2}, {3, 3, 3}}, MustEmbeddingCol(v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -461,16 +442,12 @@ func TestShuffle(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	{ // embedding
-		vs := make([]types.Float32Vector, 4)
-		for i := 0; i < 4; i++ {
-			vs[i] = make(types.Float32Vector, 3)
-		}
-		v := NewVec(types.T_float32vec.ToType())
-		err := AppendFixedList(v, vs, nil, mp)
+		v := NewVec(types.T_embedding.ToType())
+		err := AppendEmbeddingList(v, [][]float32{{1, 1}, {2, 2}, {3, 3}}, nil, mp)
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
-		require.Equal(t, vs[1:3], MustFixedCol[types.Float32Vector](v))
-		require.Equal(t, "[[0 0 0] [0 0 0]]-[]", v.String())
+		require.Equal(t, [][]float32{{2, 2}, {3, 3}}, MustEmbeddingCol(v))
+		require.Equal(t, "[2.000000, 2.000000] [3.000000, 3.000000]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -734,14 +711,13 @@ func TestCopy(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // embedding
-		v := NewVec(types.New(types.T_float32vec, 2, 0))
-		AppendFixedList(v, []types.Float32Vector{{0, 1}, {2, 3}, {0, 0}, {6, 7}}, nil, mp)
-		w := NewVec(types.New(types.T_float32vec, 2, 0))
-		AppendFixedList(w, []types.Float32Vector{{0, 1}, {2, 3}, {4, 5}, {6, 7}}, nil, mp)
-		//TODO: Not working. Value not getting copied.
+		v := NewVec(types.New(types.T_embedding, 10, 0))
+		AppendEmbeddingList(v, [][]float32{{0, 0}, {0, 0}, {1, 1}, {0, 0}}, nil, mp)
+		w := NewVec(types.New(types.T_embedding, 10, 0))
+		AppendEmbeddingList(w, [][]float32{{0, 0}, {0, 0}, {0, 0}, {0, 0}}, nil, mp)
 		err := v.Copy(w, 2, 0, mp)
 		require.NoError(t, err)
-		require.Equal(t, MustFixedCol[types.Float32Vector](v), MustFixedCol[types.Float32Vector](w))
+		require.Equal(t, MustEmbeddingCol(v), MustEmbeddingCol(w))
 		v.Free(mp)
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -805,10 +781,10 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 
 	{ //embedding
 		mp := mpool.MustNewZero()
-		vec5 := NewVec(types.New(types.T_float32vec, 2, 0))
-		AppendFixed(vec5, types.Float32Vector{1, 1}, false, mp)
-		AppendFixed(vec5, types.Float32Vector{2, 2}, true, mp)
-		AppendFixed(vec5, types.Float32Vector{3, 3}, false, mp)
+		vec5 := NewVec(types.New(types.T_embedding, 2, 0))
+		AppendEmbedding(vec5, []float32{1, 1}, false, mp)
+		AppendEmbedding(vec5, []float32{2, 2}, true, mp)
+		AppendEmbedding(vec5, []float32{3, 3}, false, mp)
 		require.False(t, vec5.NeedDup())
 
 		vec6, err := vec5.CloneWindow(0, vec5.Length(), nil)
@@ -817,12 +793,9 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 
 		t.Log(vec6.String())
 		require.True(t, vec6.NeedDup())
-		require.Equal(t, types.Float32Vector{1, 1}, GetFixedAt[types.Float32Vector](vec6, 0))
+		require.Equal(t, []float32{1, 1}, GetEmbeddingAt(vec6, 0))
 		require.True(t, vec6.GetNulls().Contains(uint64(1)))
-		//TODO: Error unexpected fault address 0xb0000000b
-		//fatal error: fault
-		//[signal SIGSEGV: segmentation violation code=0x2 addr=0xb0000000b pc=0x1004bb7a0]
-		require.Equal(t, types.Float32Vector{3, 3}, GetFixedAt[types.Float32Vector](vec6, 2))
+		require.Equal(t, []float32{3, 3}, GetEmbeddingAt(vec6, 2))
 
 	}
 }
@@ -1151,31 +1124,6 @@ func TestMarshalAndUnMarshal(t *testing.T) {
 	v.Free(mp)
 	w.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
-
-	{
-		// encoding
-		mp := mpool.MustNewZero()
-		v := NewVec(types.New(types.T_float32vec, 2, 0))
-		err := AppendFixedList(v, []types.Float32Vector{{0, 0}, {1, 1}, {2, 2}}, nil, mp)
-		require.NoError(t, err)
-		data, err := v.MarshalBinary()
-		require.NoError(t, err)
-		w := new(Vector)
-		err = w.UnmarshalBinary(data)
-		require.NoError(t, err)
-		//TODO: Error:unexpected fault address 0x56323374616f6c46
-		//fatal error: fault
-		//[signal SIGSEGV: segmentation violation code=0x2 addr=0x56323374616f6c46 pc=0x1041ffb10]
-		require.Equal(t, MustFixedCol[types.Float32Vector](v), MustFixedCol[types.Float32Vector](w))
-		w = new(Vector)
-		err = w.UnmarshalBinaryWithCopy(data, mp)
-		require.NoError(t, err)
-		require.Equal(t, MustFixedCol[types.Float32Vector](v), MustFixedCol[types.Float32Vector](w))
-		require.NoError(t, err)
-		v.Free(mp)
-		w.Free(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	}
 }
 
 func TestStrMarshalAndUnMarshal(t *testing.T) {
@@ -1198,8 +1146,29 @@ func TestStrMarshalAndUnMarshal(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestEncodingMarshalAndUnMarshal(t *testing.T) {
+	// encoding
+	mp := mpool.MustNewZero()
+	v := NewVec(types.New(types.T_embedding, 2, 0))
+	err := AppendEmbeddingList(v, [][]float32{{0, 0}, {1, 1}, {2, 2}}, nil, mp)
+	require.NoError(t, err)
+	data, err := v.MarshalBinary()
+	require.NoError(t, err)
+	w := new(Vector)
+	err = w.UnmarshalBinary(data)
+	require.NoError(t, err)
+	require.Equal(t, MustEmbeddingCol(v), MustEmbeddingCol(w))
+	w = new(Vector)
+	err = w.UnmarshalBinaryWithCopy(data, mp)
+	require.NoError(t, err)
+	require.Equal(t, MustEmbeddingCol(v), MustEmbeddingCol(w))
+	require.NoError(t, err)
+	v.Free(mp)
+	w.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestWindowWith(t *testing.T) {
-	//TODO: Pending
 	mp := mpool.MustNewZero()
 	vec1 := NewVec(types.T_int32.ToType())
 	AppendFixed(vec1, int32(1), false, mp)
@@ -1260,10 +1229,42 @@ func TestWindowWith(t *testing.T) {
 	require.Equal(t, "uuu", string(vec3.GetBytesAt(2)))
 	require.True(t, vec3.GetNulls().Contains(uint64(1)))
 	vec3.Free(mp)
+
+	{
+		//embedding
+
+		vec7 := NewVec(types.T_embedding.ToType())
+		AppendEmbedding(vec7, []float32{1, 1, 1}, false, mp)
+		AppendEmbedding(vec7, []float32{2, 2, 2}, true, mp)
+		AppendEmbedding(vec7, []float32{3, 3, 3}, false, mp)
+		require.False(t, vec7.NeedDup())
+
+		vec8, err := vec7.Window(0, vec7.Length())
+		require.NoError(t, err)
+
+		require.True(t, vec8.NeedDup())
+		require.Equal(t, []float32{1, 1, 1}, vec8.GetEmbeddingAt(0))
+		require.Equal(t, []float32{3, 3, 3}, vec8.GetEmbeddingAt(2))
+		require.True(t, vec8.GetNulls().Contains(uint64(1)))
+		vec8.Free(mp)
+
+		vec9, err := vec7.Window(1, vec7.Length())
+		require.NoError(t, err)
+
+		require.True(t, vec9.NeedDup())
+		require.Equal(t, []float32{3, 3, 3}, vec9.GetEmbeddingAt(1))
+		require.True(t, vec9.GetNulls().Contains(uint64(0)))
+		vec9.Free(mp)
+
+		require.False(t, vec7.NeedDup())
+		require.Equal(t, []float32{1, 1, 1}, vec7.GetEmbeddingAt(0))
+		require.Equal(t, []float32{3, 3, 3}, vec7.GetEmbeddingAt(2))
+		require.True(t, vec7.GetNulls().Contains(uint64(1)))
+		vec7.Free(mp)
+	}
 }
 
 func TestSetFunction(t *testing.T) {
-	//TODO: Pending
 	mp := mpool.MustNewZero()
 	{ // bool
 		v := NewVec(types.T_bool.ToType())
@@ -1429,6 +1430,20 @@ func TestSetFunction(t *testing.T) {
 		require.NoError(t, err)
 		ws := MustStrCol(w)
 		require.Equal(t, []string{"2"}, ws)
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // embedding
+		v := NewVec(types.T_embedding.ToType())
+		w := NewConstNull(types.T_embedding.ToType(), 0, mp)
+		err := AppendEmbeddingList(v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}, {4, 4, 4}}, nil, mp)
+		require.NoError(t, err)
+		sf := GetConstSetFunction(types.T_embedding.ToType(), mp)
+		err = sf(w, v, 1, 1)
+		require.NoError(t, err)
+		ws := MustEmbeddingCol(w)
+		require.Equal(t, [][]float32{{2, 2, 2}}, ws)
 		v.Free(mp)
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
