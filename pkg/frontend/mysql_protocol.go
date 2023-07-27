@@ -701,6 +701,13 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				}
 				pos = newPos
 				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
+			case defines.MYSQL_TYPE_EMBEDDING: //TODO: Check with someone.
+				val, newPos, ok := mp.readStringLenEnc(data, pos)
+				if !ok {
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+				}
+				pos = newPos
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_TEXT:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
@@ -2010,6 +2017,13 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
 				return nil, err
 			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_EMBEDDING:
+			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				//TODO: check if this correct
 				data = mp.appendStringLenEnc(data, value)
 			}
 		// TODO: some type, we use string now. someday need fix it
