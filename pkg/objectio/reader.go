@@ -292,7 +292,7 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 	for _, opt := range opts {
 		meta, _ := metaHeader.SubMeta(uint16(ConvertToSchemaType(opt.Id)))
 		for seqnum := range opt.Idxes {
-			blkmeta := meta.GetBlockMeta(uint32(opt.Id))
+			blkmeta := meta.GetBlockMeta(uint32(ConvertToSchemaType(opt.Id)))
 			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
 				// prefetch, do not generate
 				continue

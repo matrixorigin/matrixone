@@ -410,7 +410,7 @@ func (data *CNCheckpointData) ReadFrom(
 
 	for idx, item := range checkpointDataReferVersions[version] {
 		var bat *batch.Batch
-		bat, err = LoadCNBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader, m)
+		bat, err = LoadCNSubBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader, m)
 		if err != nil {
 			return
 		}
@@ -736,28 +736,6 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 
 	}
 	return bat, nil
-}
-
-func LoadCNBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint16, reader *blockio.BlockReader, m *mpool.MPool) (*batch.Batch, error) {
-	idxs := make([]uint16, len(colNames))
-	for i := range colNames {
-		idxs[i] = uint16(i)
-	}
-	ioResult, err := reader.LoadColumns(cxt, idxs, nil, id, nil)
-	if err != nil {
-		return nil, err
-	}
-	ioResult.Attrs = make([]string, len(colNames))
-	copy(ioResult.Attrs, colNames)
-	maxLength := 0
-	for _, vec := range ioResult.Vecs {
-		length := vec.Length()
-		if maxLength < length {
-			maxLength = length
-		}
-	}
-	ioResult.SetRowCount(maxLength)
-	return ioResult, nil
 }
 
 func LoadCNSubBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint16, reader *blockio.BlockReader, m *mpool.MPool) (*batch.Batch, error) {

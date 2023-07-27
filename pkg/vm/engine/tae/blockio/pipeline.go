@@ -183,6 +183,7 @@ func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
+			logutil.Infof("sdfsdfs2222")
 			ioVectors, err := reader.ReadMeta(ctx, nil)
 			if err != nil {
 				res.Err = err
@@ -425,6 +426,9 @@ func (p *IoPipeline) onWait(jobs ...any) {
 	for _, j := range jobs {
 		job := j.(*tasks.Job)
 		res := job.WaitDone()
+		if res == nil {
+			logutil.Infof("job is %v", job.String())
+		}
 		if res.Err != nil {
 			logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)
 		}
