@@ -45,16 +45,21 @@ func init() {
 
 type PartitionState struct {
 	// also modify the Copy method if adding fields
-	rows         *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
-	blocks       *btree.BTreeG[BlockEntry]
+
+	// data
+	rows        *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	blocks      *btree.BTreeG[BlockEntry]
+	checkpoints []string
+
+	// index
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
 	dirtyBlocks *btree.BTreeG[BlockEntry]
 	//index for blocks by timestamp.
-	//TODO:: 1. to reuse blocks btree. 2.how to gc?
+	//TODO gc entries
 	blockIndexByTS *btree.BTreeG[BlockIndexByTSEntry]
-	checkpoints    []string
+
 	// noData indicates whether to retain data batch
 	// for primary key dedup, reading data is not required
 	noData bool
@@ -147,18 +152,15 @@ func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
 }
 
 type BlockIndexByTSEntry struct {
-	//create time or delete time of block
-	Time    types.TS
-	BlockID types.Blockid
-
-	//true for delete block, false for create block.
+	Time     types.TS // insert or delete time
+	BlockID  types.Blockid
 	IsDelete bool
-	//false for non-appendable block, true for appendable block.
-	EntryState bool
+
+	IsAppendable bool
 }
 
 func (b BlockIndexByTSEntry) Less(than BlockIndexByTSEntry) bool {
-	//asc
+	// asc
 	if b.Time.Less(than.Time) {
 		return true
 	}
@@ -166,7 +168,6 @@ func (b BlockIndexByTSEntry) Less(than BlockIndexByTSEntry) bool {
 		return false
 	}
 
-	//if b.Time equals than.Time , then compare block id.
 	cmp := b.BlockID.Compare(than.BlockID)
 	if cmp < 0 {
 		return true
@@ -175,12 +176,13 @@ func (b BlockIndexByTSEntry) Less(than BlockIndexByTSEntry) bool {
 		return false
 	}
 
-	//if b.IsDelete && !than.IsDelete {
-	//	return true
-	//}
-	//if !b.IsDelete && than.IsDelete {
-	//	return false
-	//}
+	if b.IsDelete && !than.IsDelete {
+		return true
+	}
+	if !b.IsDelete && than.IsDelete {
+		return false
+	}
+
 	return false
 }
 
@@ -499,10 +501,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			{
 				e := BlockIndexByTSEntry{
-					Time:       blockEntry.CreateTime,
-					BlockID:    blockID,
-					IsDelete:   false,
-					EntryState: blockEntry.EntryState,
+					Time:         blockEntry.CreateTime,
+					BlockID:      blockID,
+					IsDelete:     false,
+					IsAppendable: blockEntry.EntryState,
 				}
 				p.blockIndexByTS.Set(e)
 			}
@@ -592,7 +594,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 				},
 			}
 			entry, ok := p.blocks.Get(pivot)
-			//FIXME:: non-appendable block' delete maybe arrive before its insert?
+			//TODO non-appendable block' delete maybe arrive before its insert?
 			if !ok {
 				panic(fmt.Sprintf("invalid block id. %x", rowID))
 			}
@@ -603,10 +605,10 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 
 			{
 				e := BlockIndexByTSEntry{
-					Time:       entry.DeleteTime,
-					BlockID:    blockID,
-					IsDelete:   true,
-					EntryState: entry.EntryState,
+					Time:         entry.DeleteTime,
+					BlockID:      blockID,
+					IsDelete:     true,
+					IsAppendable: entry.EntryState,
 				}
 				p.blockIndexByTS.Set(e)
 			}

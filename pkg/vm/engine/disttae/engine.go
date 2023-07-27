@@ -80,7 +80,6 @@ func New(
 		ls:         ls.(lockservice.LockService),
 		cli:        cli,
 		idGen:      idGen,
-		catalog:    cache.NewCatalog(),
 		dnID:       dnID,
 		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 		packerPool: fileservice.NewPool(

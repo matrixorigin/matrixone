@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package merge
+package mergecte
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -22,15 +22,13 @@ import (
 
 type container struct {
 	colexec.ReceiverOperator
+	nodeCnt    int32
+	curNodeCnt int32
 }
 
 type Argument struct {
-	ctr      *container
-	SinkScan bool
+	ctr *container
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr != nil {
-		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-	}
 }

@@ -12,23 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package merge
+package mergecte
 
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(_ any, buf *bytes.Buffer) {
-	buf.WriteString(" union all ")
+	buf.WriteString(" merge cte ")
 }
 
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
+	ap.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers))
+	ap.ctr.curNodeCnt = ap.ctr.nodeCnt
 	return nil
 }
 
@@ -38,20 +39,30 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	defer anal.Stop()
 	ap := arg.(*Argument)
 	ctr := ap.ctr
+	var sb *batch.Batch
+	var end bool
 
-	bat, end, _ := ctr.ReceiveFromAllRegs(anal)
-	if end {
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+	for {
+		sb, end, _ = ctr.ReceiveFromAllRegs(anal)
+		if end {
+			proc.SetInputBatch(nil)
+			return process.ExecStop, nil
+		}
+
+		if sb.Last() {
+			sb.SetLast()
+			ap.ctr.curNodeCnt--
+			if ap.ctr.curNodeCnt == 0 {
+				ap.ctr.curNodeCnt = ap.ctr.nodeCnt
+				break
+			}
+		} else {
+			break
+		}
 	}
 
-	if bat.Last() && ap.SinkScan {
-		bat.Clean(proc.Mp())
-		bat = batch.EmptyBatch
-	}
-
-	anal.Input(bat, isFirst)
-	anal.Output(bat, isLast)
-	proc.SetInputBatch(bat)
+	anal.Input(sb, isFirst)
+	anal.Output(sb, isLast)
+	proc.SetInputBatch(sb)
 	return process.ExecNext, nil
 }

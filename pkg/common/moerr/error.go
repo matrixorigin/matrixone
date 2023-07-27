@@ -222,6 +222,7 @@ const (
 	ErrUniqueKeyNeedAllFieldsInPf          uint16 = 20816
 	ErrPartitionMaxvalue                   uint16 = 20817
 	ErrRangeNotIncreasing                  uint16 = 20818
+	ErrCheckRecursiveLevel                 uint16 = 20819
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -400,6 +401,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrUniqueKeyNeedAllFieldsInPf:          {ER_UNIQUE_KEY_NEED_ALL_FIELDS_IN_PF, []string{MySQLDefaultSqlState}, "A %-.192s must include all columns in the table's partitioning function"},
 	ErrPartitionMaxvalue:                   {ER_PARTITION_MAXVALUE_ERROR, []string{MySQLDefaultSqlState}, "MAXVALUE can only be used in last partition definition"},
 	ErrRangeNotIncreasing:                  {ER_RANGE_NOT_INCREASING_ERROR, []string{MySQLDefaultSqlState}, "VALUES LESS THAN value must be strictly increasing for each partition"},
+	ErrCheckRecursiveLevel:                 {ErrCheckRecursiveLevel, []string{MySQLDefaultSqlState}, "recursive level out of range"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1091,6 +1093,9 @@ func NewErrRangeNotIncreasing(ctx context.Context) *Error {
 
 func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
 	return newError(ctx, ErrForeignKeyOnPartitioned)
+}
+func NewCheckRecursiveLevel(ctx context.Context) *Error {
+	return newError(ctx, ErrCheckRecursiveLevel)
 }
 
 func NewErrTooManyFields(ctx context.Context) *Error {
