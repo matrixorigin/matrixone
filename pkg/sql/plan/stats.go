@@ -197,6 +197,11 @@ func getColStatsInfo(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
 	if !ok {
 		return nil
 	}
+	//fix column name
+	if len(col.Name) == 0 {
+		col.Name = tableDef.Cols[col.ColPos].Name
+	}
+
 	return sc.GetStatsInfoMap(tableDef.TblId)
 }
 
@@ -221,7 +226,7 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return getExprNdv(exprImpl.F.Args[0], builder) / 365
 		case "substring":
 			// no good way to calc ndv for substring
-			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 100)
+			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 25)
 		default:
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
