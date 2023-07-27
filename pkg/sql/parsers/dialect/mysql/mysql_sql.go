@@ -17905,9 +17905,9 @@ yydefault:
 				InternalType: tree.InternalType{
 					Family:       tree.EmbeddingFamily,
 					FamilyString: yyDollar[1].str,
-					DisplayWith:  yyDollar[2].lengthOptUnion(),
 					Locale:       &locale,
 					Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+					DisplayWith:  yyDollar[2].lengthOptUnion(),
 				},
 			}
 		}
