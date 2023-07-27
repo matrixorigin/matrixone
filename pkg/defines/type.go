@@ -92,8 +92,6 @@ func (typ *MysqlType) GetLength(width int32) uint32 {
 		return 53
 	case MYSQL_TYPE_VARCHAR, MYSQL_TYPE_STRING, MYSQL_TYPE_BLOB, MYSQL_TYPE_TEXT:
 		return uint32(width) * 3
-	case MYSQL_TYPE_EMBEDDING:
-		return uint32(width) * 3 // TODO: Why *3?
 	case MYSQL_TYPE_DATE:
 		return 64
 	case MYSQL_TYPE_TIME:

@@ -432,10 +432,4 @@ var (
 		Locale: &emptyLocale,
 		Oid:    uint32(defines.MYSQL_TYPE_GEOMETRY),
 	}}
-
-	TYPE_EMBEDDING = &T{InternalType: InternalType{
-		Family: EmbeddingFamily,
-		Locale: &emptyLocale,
-		Oid:    uint32(defines.MYSQL_TYPE_EMBEDDING),
-	}}
 )

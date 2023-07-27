@@ -20330,7 +20330,7 @@ yydefault:
 					Locale:       &locale,
 					FamilyString: yyDollar[1].str,
 					DisplayWith:  yyDollar[2].lengthOptUnion(),
-					Oid:          uint32(defines.MYSQL_TYPE_EMBEDDING),
+					Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
 				},
 			}
 		}

@@ -9429,7 +9429,7 @@ char_type:
                 Locale: &locale,
                 FamilyString: $1,
                 DisplayWith: $2,
-                Oid:uint32(defines.MYSQL_TYPE_EMBEDDING),
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
             },
         }
     }
