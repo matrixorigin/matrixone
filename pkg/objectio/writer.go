@@ -240,7 +240,6 @@ func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta object
 }
 
 func (w *objectWriterV1) prepareBlockMeta(offset uint32, blocks []blockData, colmeta []ColumnMeta) uint32 {
-	logutil.Infof("object io: prepare block meta, offset %d, blocks %d, colmeta %d", offset, len(blocks), len(colmeta))
 	maxIndex := w.getMaxIndex(blocks)
 	var off, size, oSize uint32
 	for idx := uint16(0); idx < maxIndex; idx++ {
@@ -388,7 +387,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		if err != nil {
 			return nil, err
 		}
-		objectMetas[i].BlockHeader().SetZoneMapArea(zoneMapAreaDatas[i])
+		objectMetas[i].BlockHeader().SetZoneMapArea(zoneMapAreaExtents[i])
 		offset += zoneMapAreaExtents[i].Length()
 	}
 	startID := uint16(0)
