@@ -20326,11 +20326,11 @@ yydefault:
 			locale := ""
 			yyLOCAL = &tree.T{
 				InternalType: tree.InternalType{
-					Family:       tree.JsonFamily,
+					Family:       tree.EmbeddingFamily,
 					Locale:       &locale,
 					FamilyString: yyDollar[1].str,
 					DisplayWith:  yyDollar[2].lengthOptUnion(),
-					Oid:          uint32(defines.MYSQL_TYPE_JSON),
+					Oid:          uint32(defines.MYSQL_TYPE_EMBEDDING),
 				},
 			}
 		}

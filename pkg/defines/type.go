@@ -47,6 +47,7 @@ const (
 	MYSQL_TYPE_DATETIME2   MysqlType = 0x12 /**< Internal to MySQL. Not used in protocol */
 	MYSQL_TYPE_TIME2       MysqlType = 0x13 /**< Internal to MySQL. Not used in protocol */
 	MYSQL_TYPE_TYPED_ARRAY MysqlType = 0x14 /**< Used for replication only */
+	MYSQL_TYPE_EMBEDDING   MysqlType = 0x15
 
 	MYSQL_TYPE_TEXT        MysqlType = 241 // add text to distinct blob and blob
 	MYSQL_TYPE_INVALID     MysqlType = 242
@@ -91,6 +92,8 @@ func (typ *MysqlType) GetLength(width int32) uint32 {
 		return 53
 	case MYSQL_TYPE_VARCHAR, MYSQL_TYPE_STRING, MYSQL_TYPE_BLOB, MYSQL_TYPE_TEXT:
 		return uint32(width) * 3
+	case MYSQL_TYPE_EMBEDDING:
+		return uint32(width) * 3 // TODO: Why *3?
 	case MYSQL_TYPE_DATE:
 		return 64
 	case MYSQL_TYPE_TIME:

@@ -9425,11 +9425,11 @@ char_type:
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
-                Family: tree.JsonFamily,
+                Family: tree.EmbeddingFamily,
                 Locale: &locale,
                 FamilyString: $1,
                 DisplayWith: $2,
-                Oid:uint32(defines.MYSQL_TYPE_JSON),
+                Oid:uint32(defines.MYSQL_TYPE_EMBEDDING),
             },
         }
     }
