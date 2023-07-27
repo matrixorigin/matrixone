@@ -5368,6 +5368,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		canExecInRestricted = true
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+		canExecInRestricted = true
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase, *tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -5506,9 +5507,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SetVar:
+	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.SetVar:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+		canExecInRestricted = true
 	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
 		objType = objectTypeNone
 		kind = privilegeKindNone

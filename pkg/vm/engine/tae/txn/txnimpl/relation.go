@@ -296,6 +296,9 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error {
 	return h.Txn.GetStore().RangeDelete(id, start, end, dt)
 }
+func (h *txnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
+	return h.Txn.GetStore().TryDeleteByDeltaloc(id, deltaloc)
+}
 
 // Only used by test.
 func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) {

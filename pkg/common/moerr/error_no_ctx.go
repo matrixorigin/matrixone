@@ -247,6 +247,10 @@ func NewTxnWWConflictNoCtx() *Error {
 	return newError(Context(), ErrTxnWWConflict)
 }
 
+func NewTAENeedRetryNoCtx() *Error {
+	return newError(Context(), ErrTAENeedRetry)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }

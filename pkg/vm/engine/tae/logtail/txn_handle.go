@@ -178,6 +178,9 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 }
 
 func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.DeleteNode) {
+	if vnode.IsPersistedDeletedNode() {
+		return
+	}
 	if b.batches[dataDelBatch] == nil {
 		b.batches[dataDelBatch] = makeRespBatchFromSchema(DelSchema)
 	}

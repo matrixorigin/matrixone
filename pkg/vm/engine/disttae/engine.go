@@ -80,7 +80,6 @@ func New(
 		ls:         ls.(lockservice.LockService),
 		cli:        cli,
 		idGen:      idGen,
-		catalog:    cache.NewCatalog(),
 		dnID:       dnID,
 		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 		packerPool: fileservice.NewPool(
@@ -354,7 +353,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		engine:   e,
 		meta:     op.TxnRef(),
 		idGen:    e.idGen,
-		lastTS:   op.TxnRef().SnapshotTS,
 		dnStores: e.getDNServices(),
 		tableCache: struct {
 			cachedIndex int

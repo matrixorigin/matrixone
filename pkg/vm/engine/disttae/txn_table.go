@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -625,13 +625,14 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return err
 		}
-		deleteBlks, createBlks := state.Copy().GetBlksBetween(types.TimestampToTS(tbl.db.txn.lastTS),
+		deleteBlks, createBlks := state.GetChangedBlocksBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.meta.SnapshotTS))
 		if len(deleteBlks) > 0 {
 			if err := tbl.updateDeleteInfo(deleteBlks, createBlks, committedblocks); err != nil {
 				return err
 			}
 		}
+		tbl.lastTS = tbl.db.txn.meta.SnapshotTS
 	}
 
 	//blks contains all visible blocks to this txn, namely
@@ -988,6 +989,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	}
 	// for writing S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
+		tbl.db.txn.hasS3Op.Store(true)
 		blkInfo := catalog.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0))
 		fileName := blkInfo.MetaLocation().Name().String()
 		ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
@@ -1043,6 +1045,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	}
 	switch typ {
 	case deletion.FlushDeltaLoc:
+		tbl.db.txn.hasS3Op.Store(true)
 		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
 		if err != nil {
 			return err
@@ -1059,19 +1062,19 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId] =
 			append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
+		tbl.db.txn.hasS3Op.Store(true)
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
 		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
 	case deletion.RawRowIdBatch:
-		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
-	case deletion.RawBatchOffset:
-		vs := vector.MustFixedCol[int64](bat.GetVector(0))
-		entry_bat := tbl.db.txn.blockId_raw_batch[*blkId]
-		entry_bat.AntiShrink(vs)
-		// reset rowId offset
-		rowIds := vector.MustFixedCol[types.Rowid](entry_bat.GetVector(0))
-		for i := range rowIds {
-			(&rowIds[i]).SetRowOffset(uint32(i))
+		logutil.Infof("data return by remote pipeline\n")
+		bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if bat.RowCount() == 0 {
+			return nil
 		}
+		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
+	default:
+		tbl.db.txn.hasS3Op.Store(true)
+		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
 	}
 	return nil
 }
@@ -1730,7 +1733,6 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	var rowid types.Rowid
 	var objMeta objectio.ObjectMeta
 
-	sels := make([]int, 0, 8192)
 	columns := []uint16{objectio.SEQNUM_ROWID}
 	colTypes := []types.Type{objectio.RowidType}
 	tableDef := tbl.getTableDef()
@@ -1784,22 +1786,6 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		if err != nil {
 			return rowid, false, err
 		}
-		{
-			sels = sels[:0]
-			state, err := tbl.getPartitionState(tbl.proc.Ctx)
-			if err != nil {
-				return rowid, false, err
-			}
-			ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-			iter := state.NewRowsIter(ts, &blk.BlockID, true)
-			for iter.Next() {
-				entry := iter.Entry()
-				_, offset := entry.RowID.Decode()
-				sels = append(sels, int(offset))
-			}
-			iter.Close()
-			sort.Ints(sels)
-		}
 		vec, err := colexec.EvalExpressionOnce(tbl.db.txn.proc, filter, []*batch.Batch{bat})
 		if err != nil {
 			return rowid, false, err
@@ -1807,20 +1793,10 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		bs := vector.MustFixedCol[bool](vec)
 		for i, b := range bs {
 			if b {
-				if _, ok := sort.Find(len(sels), func(j int) int {
-					if i > sels[j] {
-						return 1
-					}
-					if i < sels[j] {
-						return -1
-					}
-					return 0
-				}); !ok {
-					rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-					vec.Free(tbl.proc.Mp())
-					bat.Clean(tbl.proc.Mp())
-					return rowids[i], true, nil
-				}
+				rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+				vec.Free(tbl.proc.Mp())
+				bat.Clean(tbl.proc.Mp())
+				return rowids[i], true, nil
 			}
 		}
 		vec.Free(tbl.proc.Mp())
