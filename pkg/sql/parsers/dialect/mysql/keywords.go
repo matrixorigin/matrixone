@@ -365,6 +365,7 @@ func init() {
 		"require":                    REQUIRE,
 		"resignal":                   UNUSED,
 		"restrict":                   RESTRICT,
+		"recursive":                  RECURSIVE,
 		"return":                     UNUSED,
 		"revoke":                     REVOKE,
 		"reverse":                    REVERSE,
