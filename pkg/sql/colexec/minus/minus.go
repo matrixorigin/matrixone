@@ -146,6 +146,10 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		if bat == nil {
 			return true, nil
 		}
+		if bat.Last() {
+			proc.SetInputBatch(bat)
+			return false, nil
+		}
 		// just an empty batch.
 		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())

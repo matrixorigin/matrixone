@@ -177,6 +177,10 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "sink", nil
 	case plan.Node_SINK_SCAN:
 		return "sink_scan", nil
+	case plan.Node_RECURSIVE_SCAN:
+		return "recursive_scan", nil
+	case plan.Node_RECURSIVE_CTE:
+		return "cte_scan", nil
 	case plan.Node_ON_DUPLICATE_KEY:
 		return "on_duplicate_key", nil
 	case plan.Node_LOCK_OP:
@@ -441,6 +445,16 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_SINK_SCAN:
 		labels = append(labels, Label{
 			Name:  Label_Sink_Scan, //"sink scan",
+			Value: []string{},
+		})
+	case plan.Node_RECURSIVE_SCAN:
+		labels = append(labels, Label{
+			Name:  Label_Recursive_SCAN, //"sink scan",
+			Value: []string{},
+		})
+	case plan.Node_RECURSIVE_CTE:
+		labels = append(labels, Label{
+			Name:  Label_Recursive_SCAN, //"sink scan",
 			Value: []string{},
 		})
 	case plan.Node_LOCK_OP:

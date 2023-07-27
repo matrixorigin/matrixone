@@ -95,9 +95,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if bat == nil {
 		return process.ExecStop, nil
 	}
-	if bat.RowCount() == 0 {
+	if bat.Last() {
+		if !ap.ctr.hasData {
+			bat.SetEnd()
+		} else {
+			ap.ctr.hasData = false
+		}
+	} else if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		return process.ExecNext, nil
+	} else {
+		ap.ctr.hasData = true
 	}
 	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {

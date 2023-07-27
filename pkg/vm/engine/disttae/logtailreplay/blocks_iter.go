@@ -111,35 +111,36 @@ func (b *dirtyBlocksIter) Close() error {
 	return nil
 }
 
-// GetBlksBetween get changed blocks between (startTS, endTS]
-func (p *PartitionState) GetBlksBetween(
-	startTS types.TS,
-	endTS types.TS) (
-	deletedBlks []types.Blockid,
-	createdBlks []types.Blockid) {
-	iter := p.blockIndexByTS.Iter()
+// GetChangedBlocksBetween get changed blocks between two timestamps
+func (p *PartitionState) GetChangedBlocksBetween(
+	begin types.TS,
+	end types.TS,
+) (
+	deleted []types.Blockid,
+	inserted []types.Blockid,
+) {
+
+	iter := p.blockIndexByTS.Copy().Iter()
 	defer iter.Release()
 
-	var minBlockid types.Blockid
-	for ok := iter.Seek(
-		BlockIndexByTSEntry{
-			Time:    startTS,
-			BlockID: minBlockid,
-		}); ok; ok = iter.Next() {
+	for ok := iter.Seek(BlockIndexByTSEntry{
+		Time: begin,
+	}); ok; ok = iter.Next() {
 		entry := iter.Item()
 
-		if entry.Time.Equal(startTS) {
-			continue
-		}
-		if entry.Time.Greater(endTS) {
+		if entry.Time.Greater(end) {
 			break
 		}
+
 		if entry.IsDelete {
-			deletedBlks = append(deletedBlks, entry.BlockID)
+			deleted = append(deleted, entry.BlockID)
+		} else {
+			if !entry.IsAppendable {
+				inserted = append(inserted, entry.BlockID)
+			}
 		}
-		if !entry.IsDelete && !entry.EntryState {
-			createdBlks = append(createdBlks, entry.BlockID)
-		}
+
 	}
-	return deletedBlks, createdBlks
+
+	return
 }
