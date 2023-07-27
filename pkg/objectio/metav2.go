@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type DataMetaType uint16
@@ -135,6 +136,13 @@ func (mh objectMetaV1) SetTombstoneMetaOffset(offset uint32) {
 	copy(mh[tombstoneMetaCountOff+tombstoneMetaCount:tombstoneMetaCountOff+tombstoneMetaCount+tombstoneMetaOffset], types.EncodeUint32(&offset))
 }
 
+func (mh objectMetaV1) SubMeta(pos uint16) (objectDataMetaV1, bool) {
+	offStart := schemaCountLen + pos*typePosLen + schemaType + schemaBlockCount + metaHeaderLen
+	offEnd := schemaCountLen + pos*typePosLen + typePosLen + metaHeaderLen
+	offset := types.DecodeUint16(mh[offStart:offEnd])
+	return objectDataMetaV1(mh[offset:]), true
+}
+
 func (mh objectMetaV1) SubMetaIndex() SubMetaIndex {
 	return SubMetaIndex(mh[metaHeaderLen:])
 }
@@ -164,10 +172,11 @@ func (oh SubMetaIndex) SetSubMetaCount(cnt uint16) {
 }
 
 func (oh SubMetaIndex) SubMeta(pos uint16) (objectDataMetaV1, bool) {
-	offStart := schemaCountLen + pos*typePosLen
-	offEnd := schemaCountLen + pos*typePosLen + schemaType + schemaBlockCount
+	offStart := schemaCountLen + pos*typePosLen + schemaType + schemaBlockCount
+	offEnd := schemaCountLen + pos*typePosLen + typePosLen
 	offset := types.DecodeUint16(oh[offStart:offEnd])
-	return objectDataMetaV1(oh[offset : offset+headerLen]), true
+	logutil.Infof("sub meta offset %d", offset)
+	return objectDataMetaV1(oh[offset:]), true
 }
 
 func (oh SubMetaIndex) SubMetaTypes() []uint16 {
@@ -181,11 +190,12 @@ func (oh SubMetaIndex) SubMetaTypes() []uint16 {
 	return subMetaTypes
 }
 
-func (oh SubMetaIndex) SetSchemaMeta(pos uint16, st uint16, count uint16) {
+func (oh SubMetaIndex) SetSchemaMeta(pos uint16, st uint16, count uint16, offset uint32) {
 	offStart := schemaCountLen + pos*typePosLen
 	offEnd := schemaCountLen + pos*typePosLen + schemaType
 	copy(oh[offStart:offEnd], types.EncodeUint16(&st))
-	copy(oh[offStart+schemaBlockCount:offEnd+schemaBlockCount], types.EncodeUint16(&count))
+	copy(oh[offStart+schemaType:offEnd+schemaBlockCount], types.EncodeUint16(&count))
+	copy(oh[offStart+schemaType+schemaBlockCount:offEnd+schemaBlockCount+schemaMetaOffset], types.EncodeUint32(&offset))
 }
 
 func (oh SubMetaIndex) Length() uint32 {

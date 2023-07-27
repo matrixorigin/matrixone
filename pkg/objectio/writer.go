@@ -390,25 +390,33 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		objectMetas[i].BlockHeader().SetZoneMapArea(zoneMapAreaExtents[i])
 		offset += zoneMapAreaExtents[i].Length()
 	}
+	subMetaCount := uint16(len(w.blocks) - 2)
+	subMetachIndex := BuildSubMetaIndex(subMetaCount)
+	subMetachIndex.SetSubMetaCount(subMetaCount)
 	startID := uint16(0)
 	start := uint32(0)
+	idxStart := metaHeader.HeaderLength() + subMetachIndex.Length()
 	for i := range w.blocks {
 		// prepare object meta and block index
 		metas[i], metaExtents[i], err = w.prepareDataMeta(objectMetas[i], w.blocks[i], offset, startID)
 		if i == int(SchemaData) {
 			start = metaExtents[SchemaData].Offset()
-			metaHeader.SetDataMetaOffset(metaHeader.HeaderLength())
+			metaHeader.SetDataMetaOffset(idxStart)
 			metaHeader.SetDataMetaCount(uint16(len(w.blocks[i])))
-		} else {
-			metaHeader.SetTombstoneMetaOffset(metaHeader.HeaderLength() + metaExtents[SchemaData].OriginSize())
+		} else if i == int(SchemaTombstone) {
+			metaHeader.SetTombstoneMetaOffset(idxStart)
 			metaHeader.SetTombstoneMetaCount(uint16(len(w.blocks[SchemaTombstone])))
+		} else {
+			subMetachIndex.SetSchemaMeta(uint16(i-2), uint16(i-2), uint16(len(w.blocks[i])), idxStart)
 		}
+		idxStart += metaExtents[i].OriginSize()
 		startID += uint16(len(w.blocks[i]))
 	}
 	var buf bytes.Buffer
 	h := IOEntryHeader{IOET_ObjMeta, IOET_ObjectMeta_CurrVer}
 	buf.Write(EncodeIOEntryHeader(&h))
 	buf.Write(metaHeader)
+	buf.Write(subMetachIndex)
 
 	for i := range metas {
 		buf.Write(metas[i])
@@ -422,9 +430,9 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	w.buffer.Write(objectHeader)
 
 	// writer data
-	w.writerBlocks(w.blocks[SchemaData])
-	// writer data
-	w.writerBlocks(w.blocks[SchemaTombstone])
+	for i := range w.blocks {
+		w.writerBlocks(w.blocks[i])
+	}
 	// writer bloom filter
 	for i := range bloomFilterDatas {
 		w.buffer.Write(bloomFilterDatas[i])
@@ -566,8 +574,9 @@ func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, s
 func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) error {
 	w.Lock()
 	defer w.Unlock()
-	if w.blocks[dataType] == nil {
-		w.blocks[dataType] = make([]blockData, 0)
+	if len(w.blocks) == int(dataType) {
+		blocks := make([]blockData, 0)
+		w.blocks = append(w.blocks, blocks)
 	}
 	return w.addBlock(&w.blocks[dataType], blockMeta, bat, seqnums)
 }
