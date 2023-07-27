@@ -23,18 +23,9 @@ import (
 )
 
 const (
-	// Based on here: https://github.com/pgvector/pgvector/blob/b56971febeec389a011de7bb40b3349e24757aff/src/vector.h#L10
+	// MaxVecDimension Based on here: https://github.com/pgvector/pgvector/blob/b56971febeec389a011de7bb40b3349e24757aff/src/vector.h#L10
 	MaxVecDimension = 16000
 )
-
-func (v *Varlena) GetEmbedding(area []byte) []float32 {
-	svlen := (*v)[0]
-	if svlen <= VarlenaInlineSize {
-		return BytesToEmbedding(v.ByteSlice())
-	}
-	voff, vlen := v.OffsetLen()
-	return BytesToEmbedding(area[voff : voff+vlen])
-}
 
 func BytesToEmbedding(input []byte) (res []float32) {
 	if len(input)%4 != 0 {
