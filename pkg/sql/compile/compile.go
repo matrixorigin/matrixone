@@ -19,6 +19,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"math"
 	"net"
 	"runtime"
@@ -104,8 +106,8 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.proc = proc
 	c.stmt = stmt
 	c.addr = addr
-	c.nodeRegs = make(map[int32]*process.WaitRegister)
-	c.stepRegs = make(map[int32][]int32)
+	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
+	c.stepRegs = make(map[int32][][2]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
@@ -388,7 +390,6 @@ func (c *Compile) Run(_ uint64) error {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
-
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -645,7 +646,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		if err != nil {
 			return nil, err
 		}
-		scope, err := c.compileApQuery(qry, scopes)
+		scope, err := c.compileApQuery(qry, scopes, qry.Steps[i])
 		if err != nil {
 			return nil, err
 		}
@@ -663,26 +664,31 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 		}
 	}
 
-	if n.NodeType == plan.Node_SINK_SCAN {
-		var wr *process.WaitRegister
-		if c.anal.qry.LoadTag {
-			wr = &process.WaitRegister{
-				Ctx: c.ctx,
-				Ch:  make(chan *batch.Batch, ncpu),
-			}
-		} else {
-			wr = &process.WaitRegister{
-				Ctx: c.ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
+	if n.NodeType == plan.Node_SINK_SCAN || n.NodeType == plan.Node_RECURSIVE_SCAN || n.NodeType == plan.Node_RECURSIVE_CTE {
+		for _, s := range n.SourceStep {
+			var wr *process.WaitRegister
+			if c.anal.qry.LoadTag {
+				wr = &process.WaitRegister{
+					Ctx: c.ctx,
+					Ch:  make(chan *batch.Batch, ncpu),
+				}
+			} else {
+				wr = &process.WaitRegister{
+					Ctx: c.ctx,
+					Ch:  make(chan *batch.Batch, 1),
+				}
 
+			}
+			c.appendStepRegs(s, nodeId, wr)
 		}
-		c.appendStepRegs(n.SourceStep, nodeId, wr)
 	}
 	return nil
 }
 
-func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
+func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
+	if qry.Nodes[step].NodeType == plan.Node_SINK {
+		return ss[0], nil
+	}
 	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
@@ -1145,18 +1151,63 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss)))), nil
 	case plan.Node_SINK_SCAN:
+		receivers := make([]*process.WaitRegister, len(n.SourceStep))
+		for i, step := range n.SourceStep {
+			receivers[i] = c.getNodeReg(step, curNodeIdx)
+			if receivers[i] == nil {
+				return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
+			}
+		}
 		rs := &Scope{
 			Magic:        Merge,
 			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: ncpu},
 			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
-			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
+			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{SinkScan: true}}},
 		}
-		receiver, ok := c.getNodeReg(curNodeIdx)
-		if !ok {
-			return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
+		for _, r := range receivers {
+			r.Ctx = rs.Proc.Ctx
 		}
-		receiver.Ctx = rs.Proc.Ctx
-		rs.Proc.Reg.MergeReceivers[0] = receiver
+		rs.Proc.Reg.MergeReceivers = receivers
+		return []*Scope{rs}, nil
+	case plan.Node_RECURSIVE_SCAN:
+		receivers := make([]*process.WaitRegister, len(n.SourceStep))
+		for i, step := range n.SourceStep {
+			receivers[i] = c.getNodeReg(step, curNodeIdx)
+			if receivers[i] == nil {
+				return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
+			}
+		}
+		rs := &Scope{
+			Magic:        Merge,
+			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: 1},
+			Proc:         process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes()),
+			Instructions: []vm.Instruction{{Op: vm.MergeRecursive, Arg: &mergerecursive.Argument{}}},
+		}
+
+		for _, r := range receivers {
+			r.Ctx = rs.Proc.Ctx
+		}
+		rs.Proc.Reg.MergeReceivers = receivers
+		return []*Scope{rs}, nil
+	case plan.Node_RECURSIVE_CTE:
+		receivers := make([]*process.WaitRegister, len(n.SourceStep))
+		for i, step := range n.SourceStep {
+			receivers[i] = c.getNodeReg(step, curNodeIdx)
+			if receivers[i] == nil {
+				return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
+			}
+		}
+		rs := &Scope{
+			Magic:        Merge,
+			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: ncpu},
+			Proc:         process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes()),
+			Instructions: []vm.Instruction{{Op: vm.MergeCTE, Arg: &mergecte.Argument{}}},
+		}
+
+		for _, r := range receivers {
+			r.Ctx = rs.Proc.Ctx
+		}
+		rs.Proc.Reg.MergeReceivers = receivers
 		return []*Scope{rs}, nil
 	case plan.Node_SINK:
 		receivers := c.getStepRegs(step, ns)
@@ -1179,35 +1230,21 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	}
 }
 
-func (c *Compile) appendStepRegs(step int32, nodeId int32, reg *process.WaitRegister) {
-	if _, ok := c.nodeRegs[nodeId]; !ok {
-		c.nodeRegs[nodeId] = reg
-	}
-	if _, ok := c.stepRegs[step]; !ok {
-		c.stepRegs[step] = []int32{nodeId}
-	} else {
-		c.stepRegs[step] = append(c.stepRegs[step], nodeId)
-	}
+func (c *Compile) appendStepRegs(step, nodeId int32, reg *process.WaitRegister) {
+	c.nodeRegs[[2]int32{step, nodeId}] = reg
+	c.stepRegs[step] = append(c.stepRegs[step], [2]int32{step, nodeId})
 }
 
-func (c *Compile) getNodeReg(nodeId int32) (*process.WaitRegister, bool) {
-	if channels, ok := c.nodeRegs[nodeId]; !ok {
-		return nil, false
-	} else {
-		return channels, true
-	}
+func (c *Compile) getNodeReg(step, nodeId int32) *process.WaitRegister {
+	return c.nodeRegs[[2]int32{step, nodeId}]
 }
 
 func (c *Compile) getStepRegs(step int32, ns []*plan.Node) []*process.WaitRegister {
-	if _, ok := c.stepRegs[step]; !ok {
-		return nil
-	} else {
-		var wrs []*process.WaitRegister
-		for _, nodeId := range c.stepRegs[step] {
-			wrs = append(wrs, c.nodeRegs[nodeId])
-		}
-		return wrs
+	wrs := make([]*process.WaitRegister, len(c.stepRegs[step]))
+	for i, sn := range c.stepRegs[step] {
+		wrs[i] = c.nodeRegs[sn]
 	}
+	return wrs
 }
 
 func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {

@@ -629,7 +629,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		*/
 	case plan.Node_SINK_SCAN:
-		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
+
+	case plan.Node_RECURSIVE_SCAN:
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
 
 	case plan.Node_EXTERNAL_SCAN:
 		//calc for external scan is heavy, avoid recalc of this
@@ -791,6 +794,22 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 			node.BuildOnLeft = true
 		}
 	}
+
+	if builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
+		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+	}
+}
+
+func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
+	if node.NodeType == plan.Node_RECURSIVE_SCAN {
+		return true
+	}
+	for _, nodeID := range node.Children {
+		if builder.hasRecursiveScan(builder.qry.Nodes[nodeID]) {
+			return true
+		}
+	}
+	return false
 }
 
 func compareStats(stats1, stats2 *Stats) bool {
