@@ -161,6 +161,11 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
+	// for now, if join children is agg, do not allow shuffle
+	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || builder.qry.Nodes[n.Children[1]].NodeType == plan.Node_AGG {
+		return
+	}
+
 	if n.Stats.HashmapSize < HashMapSizeForShuffle {
 		return
 	}
@@ -324,18 +329,25 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	if node.NodeType == plan.Node_AGG {
 		child := builder.qry.Nodes[node.Children[0]]
 		if child.NodeType == plan.Node_JOIN {
-			if node.Stats.Shuffle && child.Stats.Shuffle && node.Stats.ShuffleType == child.Stats.ShuffleType {
-				groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
-				switch exprImpl := child.OnList[node.Stats.ShuffleColIdx].Expr.(type) {
-				case *plan.Expr_F:
-					for _, arg := range exprImpl.F.Args {
-						joinHashCol, _ := GetHashColumn(arg)
-						if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
-							node.Stats.ShuffleMethod = plan.ShuffleMethod_Follow
-							return
+			if node.Stats.Shuffle && child.Stats.Shuffle {
+				// shuffle group can follow shuffle join
+				if node.Stats.ShuffleType == child.Stats.ShuffleType {
+					groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
+					switch exprImpl := child.OnList[node.Stats.ShuffleColIdx].Expr.(type) {
+					case *plan.Expr_F:
+						for _, arg := range exprImpl.F.Args {
+							joinHashCol, _ := GetHashColumn(arg)
+							if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
+								node.Stats.ShuffleMethod = plan.ShuffleMethod_Follow
+								return
+							}
 						}
 					}
 				}
+
+				// shuffle group can not follow shuffle join, need to reshuffle
+				node.Stats.ShuffleMethod = plan.ShuffleMethod_Reshuffle
+				return
 			}
 		}
 	}
@@ -347,6 +359,8 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 		if shuffleID != -1 {
 			shuffleNode := builder.qry.Nodes[shuffleID]
 			if node.Stats.HashmapSize > shuffleNode.Stats.HashmapSize {
+				shuffleNode.Stats.Shuffle = false
+			} else if node.Stats.HashmapSize == shuffleNode.Stats.HashmapSize && node.Stats.Cost > shuffleNode.Stats.Cost {
 				shuffleNode.Stats.Shuffle = false
 			} else {
 				node.Stats.Shuffle = false

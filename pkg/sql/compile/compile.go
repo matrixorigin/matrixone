@@ -2204,7 +2204,8 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		n.Stats.ShuffleMethod = plan.ShuffleMethod_Noraml
 	}
 
-	if n.Stats.ShuffleMethod == plan.ShuffleMethod_Follow {
+	switch n.Stats.ShuffleMethod {
+	case plan.ShuffleMethod_Follow:
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.Group,
@@ -2215,53 +2216,108 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		}
 		ss = c.compileProjection(n, c.compileRestrict(n, ss))
 		return ss
-	}
 
-	dop := plan2.GetShuffleDop()
-	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+	case plan.ShuffleMethod_Reshuffle:
 
-	c.constructShuffleAndDispatch(ss, children, n)
+		dop := plan2.GetShuffleDop()
+		parent, children := c.newScopeListForShuffleGroup(1, dop)
+		// saving the last operator of all children to make sure the connector setting in
+		// the right place
+		lastOperator := make([]vm.Instruction, 0, len(children))
+		for i := range children {
+			ilen := len(children[i].Instructions) - 1
+			lastOperator = append(lastOperator, children[i].Instructions[ilen])
+			children[i].Instructions = children[i].Instructions[:ilen]
+		}
 
-	// saving the last operator of all children to make sure the connector setting in
-	// the right place
-	lastOperator := make([]vm.Instruction, 0, len(children))
-	for i := range children {
-		ilen := len(children[i].Instructions) - 1
-		lastOperator = append(lastOperator, children[i].Instructions[ilen])
-		children[i].Instructions = children[i].Instructions[:ilen]
-	}
+		for i := range children {
+			children[i].appendInstruction(vm.Instruction{
+				Op:      vm.Group,
+				Idx:     c.anal.curr,
+				IsFirst: currentIsFirst,
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			})
+		}
+		children = c.compileProjection(n, c.compileRestrict(n, children))
+		// recovery the children's last operator
+		for i := range children {
+			children[i].appendInstruction(lastOperator[i])
+		}
 
-	for i := range children {
-		children[i].appendInstruction(vm.Instruction{
-			Op:      vm.Group,
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.Shuffle,
+				Idx:     c.anal.curr,
+				IsFirst: currentIsFirst,
+				Arg:     constructShuffleGroupArg(children, n),
+			})
+		}
+
+		mergeScopes := c.newMergeScope(ss)
+		mergeScopes.appendInstruction(vm.Instruction{
+			Op:      vm.Dispatch,
 			Idx:     c.anal.curr,
 			IsFirst: currentIsFirst,
-			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			Arg:     constructDispatch(0, children, c.addr, n),
 		})
-	}
 
-	children = c.compileProjection(n, c.compileRestrict(n, children))
-
-	// recovery the children's last operator
-	for i := range children {
-		children[i].appendInstruction(lastOperator[i])
-	}
-
-	for i := range ss {
-		appended := false
-		for j := range children {
-			if children[j].NodeInfo.Addr == ss[i].NodeInfo.Addr {
-				children[j].PreScopes = append(children[j].PreScopes, ss[i])
-				appended = true
+		appendIdx := 0
+		for i := range children {
+			if isSameCN(mergeScopes.NodeInfo.Addr, children[i].NodeInfo.Addr) {
+				appendIdx = i
 				break
 			}
 		}
-		if !appended {
-			children[0].PreScopes = append(children[0].PreScopes, ss[i])
-		}
-	}
+		children[appendIdx].PreScopes = append(children[appendIdx].PreScopes, mergeScopes)
 
-	return []*Scope{c.newMergeScope(parent)}
+		return parent
+	default:
+		dop := plan2.GetShuffleDop()
+		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+		c.constructShuffleAndDispatch(ss, children, n)
+
+		// saving the last operator of all children to make sure the connector setting in
+		// the right place
+		lastOperator := make([]vm.Instruction, 0, len(children))
+		for i := range children {
+			ilen := len(children[i].Instructions) - 1
+			lastOperator = append(lastOperator, children[i].Instructions[ilen])
+			children[i].Instructions = children[i].Instructions[:ilen]
+		}
+
+		for i := range children {
+			children[i].appendInstruction(vm.Instruction{
+				Op:      vm.Group,
+				Idx:     c.anal.curr,
+				IsFirst: currentIsFirst,
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			})
+		}
+
+		children = c.compileProjection(n, c.compileRestrict(n, children))
+
+		// recovery the children's last operator
+		for i := range children {
+			children[i].appendInstruction(lastOperator[i])
+		}
+
+		for i := range ss {
+			appended := false
+			for j := range children {
+				if isSameCN(children[j].NodeInfo.Addr, ss[i].NodeInfo.Addr) {
+					children[j].PreScopes = append(children[j].PreScopes, ss[i])
+					appended = true
+					break
+				}
+			}
+			if !appended {
+				children[0].PreScopes = append(children[0].PreScopes, ss[i])
+			}
+		}
+
+		return parent
+		//return []*Scope{c.newMergeScope(parent)}
+	}
 }
 
 //func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {

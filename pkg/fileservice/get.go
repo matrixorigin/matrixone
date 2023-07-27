@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 
@@ -180,6 +181,45 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 			return nil, "", err
 		}
 		readPath = path
+	}
+
+	return
+}
+
+// GetForBackup creates a FileService instance for backup operations
+// if service part of path is empty, a LocalFS will be created
+// if service part of path is argumented, a FileService instance will be created dynamically with those arguments
+// supported dynamic file service:
+// s3-opts,endpoint=<endpoint>,region=<region>,bucket=<bucket>,key=<key>,secret=<secret>,prefix=<prefix>,role-arn=<role arn>,external-id=<external id>,is-minio=<is-minio>
+func GetForBackup(spec string) (res FileService, err error) {
+	fsPath, err := ParsePath(spec)
+	if err != nil {
+		return nil, err
+	}
+
+	if fsPath.Service == "" {
+		// no service, create local fs
+		res, err = NewLocalFS(context.Background(), "backup", spec, DisabledCacheConfig, nil)
+		if err != nil {
+			return nil, err
+		}
+
+	} else if len(fsPath.ServiceArguments) > 0 {
+		// service with arguments, create dynamically
+		switch fsPath.Service {
+
+		case "s3-opts":
+			res, err = newS3FS(fsPath.ServiceArguments)
+			if err != nil {
+				return
+			}
+
+		default:
+			err = moerr.NewInvalidInputNoCtx("no such service: %s", fsPath.Service)
+		}
+
+	} else {
+		return nil, moerr.NewInvalidInputNoCtx("unknown file service: %v", spec)
 	}
 
 	return
