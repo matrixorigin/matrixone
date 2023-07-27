@@ -899,6 +899,18 @@ func (h *Handle) HandleWrite(
 				panic("invalid batch : the length of vectors in batch is not the same")
 			}
 		}
+
+		if schema, ok := tb.Schema().(*catalog2.Schema); ok {
+			if schema.Name == "indup_02" {
+				ctx, span := trace.Start(ctx, "wuxiliang test on duplicate")
+				defer span.End()
+				logutil.Info("info", trace.ContextField(ctx))
+				logutil.Info("info", trace.ContextField(ctx),
+					zap.String("-----wuxiliang01-------HandleWrite table:", schema.Name),
+					zap.String("Insert Batch is : ", req.Batch.PrintBatch()))
+			}
+		}
+
 		//Appends a batch of data into table.
 		err = AppendDataToTable(ctx, tb, req.Batch)
 		return

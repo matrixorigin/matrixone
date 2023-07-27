@@ -16,6 +16,9 @@ package tables
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -360,6 +363,8 @@ func (node *memoryNode) BatchDedup(
 		keysZM,
 		node.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask),
 		bf)
+	logutil.Info("info", trace.ContextField(ctx),
+		zap.String("--------wuxiliang02-------BatchDedup : ", fmt.Sprintf("err is NULL? %v", err == nil)))
 
 	// definitely no duplicate
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
