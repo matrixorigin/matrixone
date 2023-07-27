@@ -25,13 +25,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
-func LoadColumnsData(ctx context.Context,
+func LoadColumnsData(
+	ctx context.Context,
 	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool) (bat *batch.Batch, err error) {
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
@@ -55,21 +57,25 @@ func LoadColumnsData(ctx context.Context,
 	return
 }
 
-func LoadColumns(ctx context.Context,
+func LoadColumns(
+	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool) (bat *batch.Batch, err error) {
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
 	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m)
 }
 
-func LoadTombstoneColumns(ctx context.Context,
+func LoadTombstoneColumns(
+	ctx context.Context,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool) (bat *batch.Batch, err error) {
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
 	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m)
 }
 
