@@ -780,7 +780,7 @@ func (t T) TypeLen() int {
 func (t T) FixedLength() int {
 	switch t {
 	case T_any:
-		return 0 //TODO: Can I do this here?
+		return 0
 	case T_int8, T_uint8, T_bool:
 		return 1
 	case T_int16, T_uint16:
