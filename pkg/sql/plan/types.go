@@ -175,6 +175,7 @@ type QueryBuilder struct {
 
 type CTERef struct {
 	defaultDatabase string
+	isRecursive     bool
 	ast             *tree.CTE
 	maskedCTEs      map[string]any
 }
@@ -187,8 +188,14 @@ type aliasItem struct {
 type BindContext struct {
 	binder Binder
 
-	cteByName  map[string]*CTERef
-	maskedCTEs map[string]any
+	cteByName              map[string]*CTERef
+	maskedCTEs             map[string]any
+	initSelect             bool
+	recSelect              bool
+	finalSelect            bool
+	unionSelect            bool
+	recRecursiveScanNodeId int32
+	isTryBindingCTE        bool
 
 	cteName  string
 	headings []string
@@ -197,6 +204,7 @@ type BindContext struct {
 	aggregateTag int32
 	projectTag   int32
 	resultTag    int32
+	sinkTag      int32
 	windowTag    int32
 
 	groups     []*plan.Expr
