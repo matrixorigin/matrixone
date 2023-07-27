@@ -184,14 +184,29 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		metaLoc := s3Writer.GetMetaLocBat()
+		blockInfo := s3Writer.GetBlockInfoBat()
 
-		lenVecs := len(metaLoc.Attrs)
+		lenVecs := len(blockInfo.Attrs)
 		// only remain the metaLoc col
-		metaLoc.Vecs = metaLoc.Vecs[lenVecs-1:]
-		metaLoc.Attrs = metaLoc.Attrs[lenVecs-1:]
-		metaLoc.SetRowCount(metaLoc.Vecs[0].Length())
-		err = tbl.Write(txn.proc.Ctx, metaLoc)
+		blockInfo.Vecs = blockInfo.Vecs[lenVecs-1:]
+		blockInfo.Attrs = blockInfo.Attrs[lenVecs-1:]
+		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
+
+		table := tbl.(*txnTable)
+		fileName := catalog.DecodeBlockInfo(
+			blockInfo.Vecs[0].GetBytesAt(0)).
+			MetaLocation().Name().String()
+		err = table.db.txn.WriteFileLocked(
+			INSERT,
+			table.db.databaseId,
+			table.tableId,
+			table.db.databaseName,
+			table.tableName,
+			fileName,
+			blockInfo,
+			table.db.txn.dnStores[0],
+		)
+		//err = tbl.Write(txn.proc.Ctx, metaLoc)
 		if err != nil {
 			return err
 		}
@@ -279,10 +294,15 @@ func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 	return nil
 }
 
-// WriteFile used to add a s3 file information to the transaction buffer
-// insert/delete/update all use this api
-func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
-	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
+func (txn *Transaction) WriteFileLocked(
+	typ int,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	bat *batch.Batch,
+	dnStore DNStore) error {
 	txn.hasS3Op.Store(true)
 	newBat := bat
 	idx := len(txn.writes)
@@ -325,6 +345,24 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		}
 	}
 	return nil
+}
+
+// WriteFile used to add a s3 file information to the transaction buffer
+// insert/delete/update all use this api
+func (txn *Transaction) WriteFile(
+	typ int,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	bat *batch.Batch,
+	dnStore DNStore) error {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.WriteFileLocked(
+		typ, databaseId, tableId,
+		databaseName, tableName, fileName, bat, dnStore)
 }
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,

@@ -990,12 +990,13 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	// for writing S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 		tbl.db.txn.hasS3Op.Store(true)
-		blkInfo := catalog.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0))
-		fileName := blkInfo.MetaLocation().Name().String()
-		ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
-		if err != nil {
-			return err
-		}
+		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
+		fileName := catalog.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
+		//fileName := blkInfo.MetaLocation().Name().String()
+		//ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
+		//if err != nil {
+		//	return err
+		//}
 		return tbl.db.txn.WriteFile(
 			INSERT,
 			tbl.db.databaseId,
@@ -1003,7 +1004,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.db.databaseName,
 			tbl.tableName,
 			fileName,
-			ibat,
+			//ibat,
+			bat,
 			tbl.db.txn.dnStores[0])
 	}
 	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
