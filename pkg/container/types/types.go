@@ -371,7 +371,7 @@ var Types map[string]T = map[string]T{
 	"rowid":                 T_Rowid,
 	"blockid":               T_Blockid,
 
-	"float vector": T_embedding,
+	"embedding": T_embedding,
 }
 
 func New(oid T, width, scale int32) Type {
