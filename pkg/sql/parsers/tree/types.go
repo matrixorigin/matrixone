@@ -43,6 +43,8 @@ const (
 	BlobFamily
 
 	GeometryFamily
+
+	EmbeddingFamily
 )
 
 type IntervalDurationField struct {

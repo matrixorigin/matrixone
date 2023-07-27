@@ -293,6 +293,7 @@ import (
 %token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
+%token <str> EMBEDDING
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
@@ -7618,6 +7619,19 @@ mysql_cast_type:
             },
         }
     }
+|   EMBEDDING length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.EmbeddingFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                DisplayWith: $2,
+            },
+        }
+    }
 |   DATE
     {
         locale := ""
@@ -9892,6 +9906,7 @@ non_reserved_keyword:
 |   INDEXES
 |   ISOLATION
 |   JSON
+|   EMBEDDING
 |   KEY_BLOCK_SIZE
 |   KEYS
 |   LANGUAGE
@@ -9983,6 +9998,7 @@ non_reserved_keyword:
 |   USER
 |   VARBINARY
 |   VARCHAR
+|   EMBEDDING
 |   VARIABLES
 |   VIEW
 |   WRITE

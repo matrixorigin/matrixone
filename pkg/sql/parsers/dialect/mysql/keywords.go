@@ -583,5 +583,6 @@ func init() {
 		"stage":                      STAGE,
 		"stages":                     STAGES,
 		"credentials":                CREDENTIALS,
+		"embedding":                  EMBEDDING,
 	}
 }
