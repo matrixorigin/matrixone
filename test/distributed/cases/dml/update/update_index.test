@@ -23,6 +23,8 @@ insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
 insert into t1 values(5, 5, 5);
+
+-- @bvt:issue#10882
 insert into t1 values(null, 7, 7);
 update t1 set a = 6 where a = 1;
 insert into t1 values(1, 1, 1);
@@ -35,6 +37,8 @@ insert into t1 values(null, 8, 8);
 update t1 set a = 8, b = null where b = 8;
 insert into t1 values(8, 8, 8);
 select * from t1;
+-- @bvt:issue
+
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int, unique key(a, b));
