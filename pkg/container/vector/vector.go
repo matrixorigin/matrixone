@@ -281,6 +281,19 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) *Vec
 	return vec
 }
 
+func NewConstEmbedding(typ types.Type, val []float32, length int, mp *mpool.MPool) *Vector {
+	vec := &Vector{
+		typ:   typ,
+		class: CONSTANT,
+	}
+
+	if length > 0 {
+		SetConstEmbedding(vec, val, length, mp)
+	}
+
+	return vec
+}
+
 func (v *Vector) IsConst() bool {
 	return v.class == CONSTANT
 }
