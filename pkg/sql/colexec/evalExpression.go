@@ -1250,6 +1250,12 @@ func SortInFilter(vec *vector.Vector) {
 			return col[i] < col[j]
 		})
 
+	case types.T_enum:
+		col := vector.MustFixedCol[types.Enum](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
 	case types.T_decimal64:
 		col := vector.MustFixedCol[types.Decimal64](vec)
 		sort.Slice(col, func(i, j int) bool {

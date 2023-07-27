@@ -390,6 +390,11 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
+		case types.T_enum:
+			col := vector.MustFixedCol[types.Enum](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
 		case types.T_decimal64:
 			col := vector.MustFixedCol[types.Decimal64](vec)
 			for j := 0; j < vec.Length(); j++ {

@@ -648,6 +648,8 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Time](v, sels, negate)
 	case types.T_timestamp:
 		shrinkFixed[types.Timestamp](v, sels, negate)
+	case types.T_enum:
+		shrinkFixed[types.Enum](v, sels, negate)
 	case types.T_decimal64:
 		shrinkFixed[types.Decimal64](v, sels, negate)
 	case types.T_decimal128:
@@ -704,6 +706,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) error {
 		shuffleFixed[types.Time](v, sels, mp)
 	case types.T_timestamp:
 		shuffleFixed[types.Timestamp](v, sels, mp)
+	case types.T_enum:
+		shuffleFixed[types.Enum](v, sels, mp)
 	case types.T_decimal64:
 		shuffleFixed[types.Decimal64](v, sels, mp)
 	case types.T_decimal128:
@@ -1214,6 +1218,36 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			v.length += w.length
 			return nil
 		}
+	case types.T_enum:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Enum](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(&w.nsp, uint64(i)) {
+						nulls.Add(&v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
 	case types.T_decimal64:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
@@ -1693,6 +1727,17 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(&w.nsp, uint64(sel)), mp)
 		}
+	case types.T_enum:
+		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Enum(0), true, mp)
+			}
+			ws := MustFixedCol[types.Enum](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
+			return appendOneFixed(v, ws[sel], nulls.Contains(&w.nsp, uint64(sel)), mp)
+		}
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.GetUnionOneFunction", typ))
 	}
@@ -1862,6 +1907,17 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Timestamp](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_enum:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Enum](w)
 			if w.IsConst() {
 				return SetConstFixed(v, ws[0], length, mp)
 			}
@@ -2288,6 +2344,8 @@ func (v *Vector) String() string {
 		return vecToString[types.Time](v)
 	case types.T_timestamp:
 		return vecToString[types.Timestamp](v)
+	case types.T_enum:
+		return vecToString[types.Enum](v)
 	case types.T_decimal64:
 		return vecToString[types.Decimal64](v)
 	case types.T_decimal128:
@@ -2401,6 +2459,8 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(types.Time), false, mp)
 	case types.T_timestamp:
 		return appendOneFixed(vec, val.(types.Timestamp), false, mp)
+	case types.T_enum:
+		return appendOneFixed(vec, val.(types.Enum), false, mp)
 	case types.T_decimal64:
 		return appendOneFixed(vec, val.(types.Decimal64), false, mp)
 	case types.T_decimal128:
@@ -2883,6 +2943,11 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minVal, maxVal := OrderedGetMinAndMax[types.Timestamp](v)
 		minv = types.EncodeTimestamp(&minVal)
 		maxv = types.EncodeTimestamp(&maxVal)
+
+	case types.T_enum:
+		minVal, maxVal := OrderedGetMinAndMax[types.Enum](v)
+		minv = types.EncodeEnum(&minVal)
+		maxv = types.EncodeEnum(&maxVal)
 
 	case types.T_decimal64:
 		col := MustFixedCol[types.Decimal64](v)

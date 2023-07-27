@@ -68,6 +68,8 @@ type Attribute struct {
 	AutoIncrement bool
 	// Seqnum, do not change during the whole lifetime of the table
 	Seqnum uint16
+	// Elems is the element list for enum and set type.
+	Elems []string
 }
 
 type PropertiesDef struct {

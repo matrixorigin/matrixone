@@ -104,6 +104,8 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 		return movec.GetFixedAt[types.Datetime](col, int(row))
 	case types.T_timestamp:
 		return movec.GetFixedAt[types.Timestamp](col, int(row))
+	case types.T_enum:
+		return movec.GetFixedAt[types.Enum](col, int(row))
 	case types.T_TS:
 		return movec.GetFixedAt[types.TS](col, int(row))
 	case types.T_Rowid:

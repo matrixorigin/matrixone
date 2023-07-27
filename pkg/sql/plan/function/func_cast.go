@@ -97,7 +97,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
+		types.T_binary, types.T_varbinary, types.T_enum,
 	},
 
 	types.T_uint8: {
@@ -731,6 +731,9 @@ func int64ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int64 to %s", toType))
 }
@@ -2030,6 +2033,36 @@ func integerToTime[T constraints.Integer](
 				return moerr.NewOutOfRange(ctx, "time", "value %d", v)
 			}
 			result, err := types.ParseInt64ToTime(vI64, toType.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func integerToEnum[T constraints.Integer](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[types.Enum], length int) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Enum
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		vI64 := int64(v)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			if vI64 < 1 || vI64 > types.MaxEnumLen {
+				return moerr.NewOutOfRange(ctx, "enum", "value %d", v)
+			}
+			result, err := types.ParseInt64ToEnum(vI64)
 			if err != nil {
 				return err
 			}

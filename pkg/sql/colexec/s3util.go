@@ -465,6 +465,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Time](), getFixedCols[types.Time](w.Bats, pos), nulls)
 		case types.T_timestamp:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Timestamp](), getFixedCols[types.Timestamp](w.Bats, pos), nulls)
+		case types.T_enum:
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Enum](), getFixedCols[types.Enum](w.Bats, pos), nulls)
 		case types.T_decimal64:
 			merge = NewMerge(len(w.Bats), sort.NewDecimal64Less(), getFixedCols[types.Decimal64](w.Bats, pos), nulls)
 		case types.T_decimal128:

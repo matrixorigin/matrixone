@@ -150,6 +150,8 @@ func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
 		return newGenericCount[types.Time](typ, dist, isStar)
 	case types.T_timestamp:
 		return newGenericCount[types.Timestamp](typ, dist, isStar)
+	case types.T_enum:
+		return newGenericCount[types.Enum](typ, dist, isStar)
 	case types.T_decimal64:
 		return newGenericCount[types.Decimal64](typ, dist, isStar)
 	case types.T_decimal128:
@@ -204,6 +206,8 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 		return newGenericAnyValue[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericAnyValue[types.Timestamp](typ, dist)
+	case types.T_enum:
+		return newGenericAnyValue[types.Enum](typ, dist)
 	case types.T_decimal64:
 		return newGenericAnyValue[types.Decimal64](typ, dist)
 	case types.T_decimal128:
@@ -362,6 +366,8 @@ func newMax(typ types.Type, dist bool) Agg[any] {
 		return newGenericMax[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericMax[types.Timestamp](typ, dist)
+	case types.T_enum:
+		return newGenericMax[types.Enum](typ, dist)
 	case types.T_decimal64:
 		aggPriv := NewD64Max()
 		if dist {
@@ -456,6 +462,8 @@ func newMin(typ types.Type, dist bool) Agg[any] {
 		return newGenericMin[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericMin[types.Timestamp](typ, dist)
+	case types.T_enum:
+		return newGenericMin[types.Enum](typ, dist)
 	case types.T_decimal64:
 		aggPriv := NewD64Min()
 		if dist {
@@ -522,6 +530,8 @@ func newApprox(typ types.Type, dist bool) Agg[any] {
 		return newGenericApproxcd[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericApproxcd[types.Timestamp](typ, dist)
+	case types.T_enum:
+		return newGenericApproxcd[types.Enum](typ, dist)
 	case types.T_decimal64:
 		return newGenericApproxcd[types.Decimal64](typ, dist)
 	case types.T_decimal128:

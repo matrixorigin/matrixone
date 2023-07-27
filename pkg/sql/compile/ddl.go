@@ -1422,6 +1422,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				AutoIncrement: col.Typ.GetAutoIncr(),
 				IsHidden:      col.Hidden,
 				Seqnum:        uint16(col.Seqnum),
+				Elems:         col.Typ.GetEnumvalues(),
 			},
 		}
 	}

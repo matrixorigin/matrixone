@@ -196,6 +196,8 @@ func (v *Vector) setupColFromData() {
 			v.col = DecodeFixedCol[types.Rowid](v)
 		case types.T_Blockid:
 			v.col = DecodeFixedCol[types.Blockid](v)
+		case types.T_enum:
+			v.col = DecodeFixedCol[types.Enum](v)
 		default:
 			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
 		}
@@ -288,6 +290,8 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		return checkNumberIntersect[types.Datetime](v, vec)
 	case types.T_timestamp:
 		return checkNumberIntersect[types.Timestamp](v, vec)
+	case types.T_enum:
+		return checkNumberIntersect[types.Enum](v, vec)
 	case types.T_decimal64:
 		return checkGeneralIntersect(v, vec, func(t1, t2 types.Decimal64) bool {
 			return (t1.Compare(t2) >= 0)
@@ -411,6 +415,8 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 		return compareNumber[types.Datetime](ctx, v, vec, funName)
 	case types.T_timestamp:
 		return compareNumber[types.Timestamp](ctx, v, vec, funName)
+	case types.T_enum:
+		return compareNumber[types.Enum](ctx, v, vec, funName)
 	case types.T_decimal64:
 		switch funName {
 		case ">":
@@ -604,6 +610,8 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Time](vec)
 	case types.T_timestamp:
 		return appendBytesToFixSized[types.Timestamp](vec)
+	case types.T_enum:
+		return appendBytesToFixSized[types.Enum](vec)
 	case types.T_decimal64:
 		return appendBytesToFixSized[types.Decimal64](vec)
 	case types.T_decimal128:
@@ -688,6 +696,8 @@ func BinarySearchOffsetByValFactory(t types.T, v any) func(*Vector) int {
 		return OrderedBinarySearchOffsetByValFactory[types.Time](v.(types.Time))
 	case types.T_timestamp:
 		return OrderedBinarySearchOffsetByValFactory[types.Timestamp](v.(types.Timestamp))
+	case types.T_enum:
+		return OrderedBinarySearchOffsetByValFactory[types.Enum](v.(types.Enum))
 	case types.T_decimal64:
 		return FixSizedBinarySearchOffsetByValFactory[types.Decimal64](v.(types.Decimal64), types.CompareDecimal64)
 	case types.T_decimal128:

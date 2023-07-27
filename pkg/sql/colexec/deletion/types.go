@@ -321,6 +321,8 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		return vector.GetFixedAt[types.Datetime](col, int(row))
 	case types.T_timestamp:
 		return vector.GetFixedAt[types.Timestamp](col, int(row))
+	case types.T_enum:
+		return vector.GetFixedAt[types.Enum](col, int(row))
 	case types.T_TS:
 		return vector.GetFixedAt[types.TS](col, int(row))
 	case types.T_Rowid:

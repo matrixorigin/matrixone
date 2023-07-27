@@ -15,12 +15,13 @@
 package function
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
 )
 
 var (
@@ -405,6 +406,8 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[types.Time](parameters, result, proc, length)
 	case types.T_timestamp:
 		return generalIffFn[types.Timestamp](parameters, result, proc, length)
+	case types.T_enum:
+		return generalIffFn[types.Enum](parameters, result, proc, length)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json:
 		return strIffFn(parameters, result, proc, length)
 	}

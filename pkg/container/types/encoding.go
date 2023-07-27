@@ -229,6 +229,14 @@ func DecodeTimestamp(v []byte) Timestamp {
 	return *(*Timestamp)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeEnum(v *Enum) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 2)
+}
+
+func DecodeEnum(v []byte) Enum {
+	return *(*Enum)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeDecimal64(v *Decimal64) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(v)), Decimal64Size)
 }

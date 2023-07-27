@@ -69,6 +69,7 @@ const (
 	T_uuid      T = 63
 	T_binary    T = 64
 	T_varbinary T = 65
+	T_enum      T = 66
 
 	// blobs
 	T_blob T = 70
@@ -173,6 +174,8 @@ type Timestamp int64
 type Time int64
 
 type Decimal64 uint64
+
+type Enum uint16
 
 type Decimal128 struct {
 	B0_63   uint64
@@ -358,6 +361,8 @@ var Types map[string]T = map[string]T{
 
 	"binary":    T_binary,
 	"varbinary": T_varbinary,
+
+	"enum": T_enum,
 
 	"json": T_json,
 	"text": T_text,
@@ -572,6 +577,9 @@ func (t T) ToType() Type {
 	case T_varbinary:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarBinaryLen
+	case T_enum:
+		typ.Size = VarlenaSize
+		typ.Width = MaxEnumLen
 	case T_any:
 		// XXX I don't know about this one ...
 		typ.Size = 0
@@ -647,6 +655,8 @@ func (t T) String() string {
 		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
+	case T_enum:
+		return "ENUM"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -714,6 +724,8 @@ func (t T) OidString() string {
 		return "T_Blockid"
 	case T_interval:
 		return "T_interval"
+	case T_enum:
+		return "T_enum"
 	}
 	return "unknown_type"
 }
@@ -761,6 +773,8 @@ func (t T) TypeLen() int {
 		return BlockidSize
 	case T_tuple, T_interval:
 		return 0
+	case T_enum:
+		return VarlenaSize
 	}
 	panic(fmt.Sprintf("unknown type %d", t))
 }
@@ -794,6 +808,8 @@ func (t T) FixedLength() int {
 		return BlockidSize
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return -24
+	case T_enum:
+		return 2
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
 }

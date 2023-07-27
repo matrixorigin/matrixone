@@ -89,6 +89,8 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int64 {
 		return CompareOrdered(types.DecodeTime(a), types.DecodeTime(b))
 	case types.T_datetime:
 		return CompareOrdered(types.DecodeDatetime(a), types.DecodeDatetime(b))
+	case types.T_enum:
+		return CompareOrdered(types.DecodeEnum(a), types.DecodeEnum(b))
 	case types.T_TS:
 		return CompareBytes(a, b)
 	case types.T_Rowid:

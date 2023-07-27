@@ -236,6 +236,8 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		row[i] = vector.GetFixedAt[types.Blockid](vec, rowIndex)
 	case types.T_TS:
 		row[i] = vector.GetFixedAt[types.TS](vec, rowIndex)
+	case types.T_enum:
+		row[i] = vector.GetFixedAt[types.Enum](vec, rowIndex)
 	default:
 		logError(ses, ses.GetDebugString(),
 			"Failed to extract row from vector, unsupported type",

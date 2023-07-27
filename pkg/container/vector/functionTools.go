@@ -560,6 +560,8 @@ func NewFunctionResultWrapper(
 		return newResultFunc[types.Blockid](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_uuid:
 		return newResultFunc[types.Uuid](v, getVectorMethod, putVectorMethod, mp)
+	case types.T_enum:
+		return newResultFunc[types.Enum](v, getVectorMethod, putVectorMethod, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }
