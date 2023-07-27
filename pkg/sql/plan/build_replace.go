@@ -22,48 +22,14 @@ import (
 )
 
 func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
-	if err != nil {
-		return nil, err
-	}
-	rewriteInfo := &dmlSelectInfo{
-		typ:     "insert",
-		rootId:  -1,
-		tblInfo: tblInfo,
-	}
-	tableDef := tblInfo.tableDefs[0]
-
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
-
-	bindCtx := NewBindContext(builder, nil)
-	checkInsertPkDup, pkPosInValues, err := initReplaceStmt(builder, bindCtx, stmt, rewriteInfo)
-	if err != nil {
-		return nil, err
-	}
-	sourceStep := builder.appendStep(rewriteInfo.rootId)
-	query, err := builder.createQuery()
-	if err != nil {
-		return nil, err
-	}
-	var pkFilterExprs []*Expr
-	if !checkInsertPkDup {
-		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
-	}
-	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
-
-	objRef := tblInfo.objRef[0]
-
-	err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, false, pkFilterExprs)
-	if err != nil {
-		return nil, err
-	}
-	query.StmtType = plan.Query_INSERT
-	reduceSinkSinkScanNodes(query)
 	return &Plan{
 		Plan: &plan.Plan_Query{
-			Query: query,
+			Query: &plan.Query{
+				StmtType: plan.Query_REPLACE,
+				Nodes:    []*plan.Node{{NodeType: plan.Node_REPLACE, ReplaceCtx: &plan.ReplaceCtx{}}},
+			},
 		},
-	}, err
+	}, nil
 }
 
 func initReplaceStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Replace, info *dmlSelectInfo) (bool, map[int]int, error) {

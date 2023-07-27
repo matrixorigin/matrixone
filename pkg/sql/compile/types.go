@@ -45,7 +45,6 @@ const (
 	Merge magicType = iota
 	Normal
 	Remote
-	Parallel
 	Pushdown
 	CreateDatabase
 	CreateTable
@@ -53,9 +52,6 @@ const (
 	DropDatabase
 	DropTable
 	DropIndex
-	Deletion
-	Insert
-	InsertValues
 	TruncateTable
 	AlterView
 	AlterTable
@@ -63,8 +59,7 @@ const (
 	MergeDelete
 	CreateSequence
 	DropSequence
-	AlterSequence
-	MagicDelete
+	Replace
 )
 
 // Source contains information of a relation which will be used in execution,

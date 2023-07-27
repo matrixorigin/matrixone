@@ -1590,13 +1590,6 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 				return nil, err
 			}
 		}
-	} else if s, ok := stmt.(*tree.Replace); ok {
-		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, false)
-			if err != nil {
-				return nil, err
-			}
-		}
 	}
 	if ret != nil {
 		if ses != nil && ses.GetTenantInfo() != nil {
@@ -1609,7 +1602,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	}
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-		*tree.Update, *tree.Delete, *tree.Insert, *tree.Replace,
+		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze:

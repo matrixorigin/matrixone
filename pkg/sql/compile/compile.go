@@ -298,22 +298,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropIndex(c)
 	case TruncateTable:
 		return s.TruncateTable(c)
-	case Deletion:
-		defer c.fillAnalyzeInfo()
-		affectedRows, err := s.Delete(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(affectedRows)
-		return nil
-	case Insert:
-		defer c.fillAnalyzeInfo()
-		affectedRows, err := s.Insert(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(affectedRows)
-		return nil
+	case Replace:
+		return s.replace(c)
 	}
 	return nil
 }
@@ -415,6 +401,13 @@ func (c *Compile) runOnce() error {
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
+		switch qry.Query.StmtType {
+		case plan.Query_REPLACE:
+			return []*Scope{{
+				Magic: Replace,
+				Plan:  pn,
+			}}, nil
+		}
 		scopes, err := c.compileQuery(ctx, qry.Query)
 		if err != nil {
 			return nil, err
@@ -748,7 +741,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 					}
 				}
 			}
-			if err := evalRowsetData(ctx, proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
+			if err := evalRowsetData(proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
 				bat.Clean(proc.Mp())
 				return nil, err
 			}
@@ -1159,7 +1152,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs.Proc.Reg.MergeReceivers[0] = receiver
 		return []*Scope{rs}, nil
 	case plan.Node_SINK:
-		receivers := c.getStepRegs(step, ns)
+		receivers := c.getStepRegs(step)
 		if len(receivers) == 0 {
 			return nil, moerr.NewInternalError(c.ctx, "no data receiver for sink node")
 		}
@@ -1198,7 +1191,7 @@ func (c *Compile) getNodeReg(nodeId int32) (*process.WaitRegister, bool) {
 	}
 }
 
-func (c *Compile) getStepRegs(step int32, ns []*plan.Node) []*process.WaitRegister {
+func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 	if _, ok := c.stepRegs[step]; !ok {
 		return nil
 	} else {
@@ -3122,7 +3115,7 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
-func evalRowsetData(ctx context.Context, proc *process.Process,
+func evalRowsetData(proc *process.Process,
 	exprs []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor) error {
 	var bats []*batch.Batch
 

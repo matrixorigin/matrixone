@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1022,6 +1023,15 @@ func (s *Scope) removeRefChildTbl(c *Compile, fkTblId uint64, tblId uint64) erro
 		return err
 	}
 	return fkRelation.UpdateConstraint(c.ctx, oldCt)
+}
+
+func (s *Scope) replace(c *Compile) error {
+	_, err := c.runSqlWithResult(strings.ReplaceAll(c.sql, "replace", "insert"))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Truncation operations cannot be performed if the session holds an active table lock.
