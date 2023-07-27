@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	// MaxVecDimension Based on here: https://github.com/pgvector/pgvector/blob/b56971febeec389a011de7bb40b3349e24757aff/src/vector.h#L10
-	MaxVecDimension = 16000
+	// MaxEmbeddingDimension Based on here: https://github.com/pgvector/pgvector/blob/b56971febeec389a011de7bb40b3349e24757aff/src/vector.h#L10
+	MaxEmbeddingDimension = 16000
 )
 
 func BytesToEmbedding(input []byte) (res []float32) {

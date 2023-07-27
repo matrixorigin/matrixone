@@ -120,6 +120,8 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+			} else if fstr == "embedding" && width > types.MaxEmbeddingDimension {
+				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxEmbeddingDimension: %v", types.MaxVarcharLen)
 			}
 			switch fstr {
 			case "char":
@@ -128,6 +130,8 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return &plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
 				return &plan.Type{Id: int32(types.T_varchar), Width: width}, nil
+			case "embedding":
+				return &plan.Type{Id: int32(types.T_embedding), Width: width}, nil
 			}
 			// varbinary
 			return &plan.Type{Id: int32(types.T_varbinary), Width: width}, nil

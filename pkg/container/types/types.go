@@ -570,7 +570,7 @@ func (t T) ToType() Type {
 		typ.Width = MaxVarcharLen
 	case T_embedding:
 		typ.Size = VarlenaSize
-		typ.Width = MaxVecDimension
+		typ.Width = MaxEmbeddingDimension
 	case T_binary:
 		typ.Size = VarlenaSize
 		typ.Width = MaxBinaryLen
@@ -653,7 +653,7 @@ func (t T) String() string {
 	case T_interval:
 		return "INTERVAL"
 	case T_embedding:
-		return "FLOAT VECTOR"
+		return "EMBEDDING"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
