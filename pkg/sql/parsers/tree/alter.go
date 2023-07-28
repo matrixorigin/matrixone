@@ -515,8 +515,8 @@ type ColumnPositionType int
 // Do not change the value of a constant, as there are external dependencies
 const (
 	ColumnPositionNone  ColumnPositionType = -1
-	ColumnPositionFirst                    = 0
-	ColumnPositionAfter                    = 1
+	ColumnPositionFirst ColumnPositionType = 0
+	ColumnPositionAfter ColumnPositionType = 1
 )
 
 // ColumnPosition represent the position of the newly added column

@@ -28,8 +28,8 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 		return moerr.NewErrMultiplePriKey(ctx.GetContext())
 	}
 
-	var primaryKeys []string
-	var indexs []string
+	primaryKeys := make([]string, 0)
+	indexs := make([]string, 0)
 
 	pksMap := map[string]bool{}
 	for _, key := range spec.KeyParts {
