@@ -38,13 +38,23 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 	if parent != nil {
 		bc.defaultDatabase = parent.defaultDatabase
+		if parent.recSelect || parent.initSelect {
+			bc.cteByName = parent.cteByName
+			bc.initSelect = parent.initSelect
+			bc.recSelect = parent.recSelect
+			bc.finalSelect = parent.finalSelect
+			bc.recRecursiveScanNodeId = parent.recRecursiveScanNodeId
+			bc.isTryBindingCTE = parent.isTryBindingCTE
+		}
 	}
 
 	return bc
 }
 
 func (bc *BindContext) rootTag() int32 {
-	if bc.resultTag > 0 {
+	if bc.initSelect || bc.recSelect || bc.finalSelect {
+		return bc.sinkTag
+	} else if bc.resultTag > 0 {
 		return bc.resultTag
 	} else {
 		return bc.projectTag

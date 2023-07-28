@@ -3,16 +3,16 @@ Number of tables in mo_task
 2
 show table_number from information_schema;
 Number of tables in information_schema
-13
+14
 show table_number from mysql;
 Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-12
+14
 show table_number from system_metrics;
 Number of tables in system_metrics
-17
+19
 show table_number from system;
 Number of tables in system
 5
@@ -26,7 +26,7 @@ Number of columns in sys_cron_task
 use information_schema;
 show column_number from key_column_usage;
 Number of columns in key_column_usage
-13
+14
 show column_number from columns;
 Number of columns in columns
 23
@@ -41,25 +41,25 @@ Number of columns in schemata
 7
 show column_number from character_sets;
 Number of columns in character_sets
-5
+6
 show column_number from triggers;
 Number of columns in triggers
-23
+24
 show column_number from tables;
 Number of columns in tables
 22
 show column_number from engines;
 Number of columns in engines
-7
+8
 show column_number from routines;
 Number of columns in routines
-32
+33
 show column_number from parameters;
 Number of columns in parameters
-17
+18
 show column_number from keywords;
 Number of columns in keywords
-3
+4
 use mysql;
 show column_number from user;
 Number of columns in user
@@ -82,96 +82,96 @@ Number of columns in mo_user
 12
 show column_number from mo_account;
 Number of columns in mo_account
-7
+8
 show column_number from mo_role;
 Number of columns in mo_role
 7
 show column_number from mo_user_grant;
 Number of columns in mo_user_grant
-5
+6
 show column_number from mo_role_grant;
 Number of columns in mo_role_grant
-7
+8
 show column_number from mo_role_privs;
 Number of columns in mo_role_privs
-11
+12
 show column_number from mo_user_defined_function;
 Number of columns in mo_user_defined_function
-17
+18
 show column_number from mo_tables;
 Number of columns in mo_tables
-15
+17
 show column_number from mo_database;
 Number of columns in mo_database
-8
+9
 show column_number from mo_columns;
 Number of columns in mo_columns
-22
+23
 show column_number from mo_indexes;
 Number of columns in mo_indexes
-12
+14
 use system_metrics;
 show column_number from metric;
 Number of columns in metric
 8
 show column_number from sql_statement_total;
 Number of columns in sql_statement_total
-8
+7
 show column_number from sql_statement_errors;
 Number of columns in sql_statement_errors
-8
+7
 show column_number from sql_transaction_total;
 Number of columns in sql_transaction_total
-7
+6
 show column_number from sql_transaction_errors;
 Number of columns in sql_transaction_errors
-8
+7
 show column_number from server_connections;
 Number of columns in server_connections
-7
+6
 show column_number from process_cpu_percent;
 Number of columns in process_cpu_percent
-7
+6
 show column_number from process_resident_memory_bytes;
 Number of columns in process_resident_memory_bytes
-7
+6
 show column_number from process_open_fds;
 Number of columns in process_open_fds
-7
+6
 show column_number from sys_cpu_seconds_total;
 Number of columns in sys_cpu_seconds_total
-7
+6
 show column_number from sys_cpu_combined_percent;
 Number of columns in sys_cpu_combined_percent
-7
+6
 show column_number from sys_memory_used;
 Number of columns in sys_memory_used
-7
+6
 show column_number from sys_memory_available;
 Number of columns in sys_memory_available
-7
+6
 show column_number from sys_disk_read_bytes;
 Number of columns in sys_disk_read_bytes
-7
+6
 show column_number from sys_disk_write_bytes;
 Number of columns in sys_disk_write_bytes
-7
+6
 show column_number from sys_net_recv_bytes;
 Number of columns in sys_net_recv_bytes
-7
+6
 show column_number from sys_net_sent_bytes;
 Number of columns in sys_net_sent_bytes
-7
+6
 use system;
 show column_number from statement_info;
 Number of columns in statement_info
-27
+31
 show column_number from rawlog;
 Number of columns in rawlog
-22
+24
 show column_number from log_info;
 Number of columns in log_info
-14
+13
 show column_number from error_info;
 Number of columns in error_info
 11
@@ -212,7 +212,7 @@ max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    ma
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
 mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
-2    154
+2    122
 drop table if exists t11;
 create table t11(
 col1 int primary key,
@@ -241,7 +241,7 @@ max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    ma
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
 mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
-2    154
+2    122
 create external table external_table(
 col1 int,
 col2 float,
@@ -337,23 +337,23 @@ drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 show table_number from information_schema;
 Number of tables in information_schema
-13
+14
 show table_number from mysql;
 Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-11
+14
 show table_number from system_metrics;
 Number of tables in system_metrics
-7
+19
 show table_number from system;
 Number of tables in system
 1
 use information_schema;
 show column_number from key_column_usage;
 Number of columns in key_column_usage
-13
+14
 show column_number from columns;
 Number of columns in columns
 23
@@ -368,25 +368,25 @@ Number of columns in schemata
 7
 show column_number from character_sets;
 Number of columns in character_sets
-5
+6
 show column_number from triggers;
 Number of columns in triggers
-23
+24
 show column_number from tables;
 Number of columns in tables
 22
 show column_number from engines;
 Number of columns in engines
-7
+8
 show column_number from routines;
 Number of columns in routines
-32
+33
 show column_number from parameters;
 Number of columns in parameters
-17
+18
 show column_number from keywords;
 Number of columns in keywords
-3
+4
 use mysql;
 show column_number from user;
 Number of columns in user
@@ -415,26 +415,26 @@ Number of columns in mo_user_grant
 5
 show column_number from mo_role_grant;
 Number of columns in mo_role_grant
-7
+8
 show column_number from mo_role_privs;
 Number of columns in mo_role_privs
-11
+12
 show column_number from mo_user_defined_function;
 Number of columns in mo_user_defined_function
-17
+18
 show column_number from mo_tables;
 Number of columns in mo_tables
 15
 show column_number from mo_database;
 Number of columns in mo_database
-8
+9
 show column_number from mo_columns;
 Number of columns in mo_columns
-22
+23
 use system;
 show column_number from statement_info;
 Number of columns in statement_info
-27
+31
 drop database if exists test_db;
 create database test_db;
 show table_number from test_db;
@@ -469,7 +469,7 @@ max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    ma
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
 mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
-2    154
+2    122
 drop table if exists t11;
 create table t11(
 col1 int primary key,
@@ -498,7 +498,7 @@ max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    ma
 100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
 mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
-2    154
+2    122
 create external table external_table(
 col1 int,
 col2 float,

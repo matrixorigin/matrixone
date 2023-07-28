@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -1003,7 +1004,7 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 	return bat, nil
 }
 
-func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt *tree.AnalyzeStmt) error {
+func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, ses *Session, stmt *tree.AnalyzeStmt) error {
 	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
@@ -1021,6 +1022,12 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt 
 	ctx.WriteString(" from ")
 	stmt.Table.Format(ctx)
 	sql := ctx.String()
+	//backup the inside statement
+	prevInsideStmt := ses.ReplaceDerivedStmt(true)
+	defer func() {
+		//restore the inside statement
+		ses.ReplaceDerivedStmt(prevInsideStmt)
+	}()
 	return mce.GetDoQueryFunc()(requestCtx, &UserInput{sql: sql})
 }
 
@@ -2389,10 +2396,13 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	var msg interface{}
 	msg, err = proto.GetTcpConnection().Read(goetty.ReadOptions{})
 	if err != nil {
+		proto.SetSequenceID(proto.GetSequenceId() + 1)
+		if errors.Is(err, errorInvalidLength0) {
+			return nil
+		}
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 			err = moerr.NewInvalidInput(ctx, "cannot read '%s' from client,please check the file path, user privilege and if client start with --local-infile", param.Filepath)
 		}
-		proto.SetSequenceID(proto.GetSequenceId() + 1)
 		return
 	}
 
@@ -2493,6 +2503,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	proto MysqlProtocol,
 	pu *config.ParameterUnit,
 	tenant string,
+	userName string,
 ) (retErr error) {
 	var err error
 	var cmpBegin time.Time
@@ -2698,8 +2709,24 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return retErr
 	}
 
+	_, txnOp := ses.GetTxnHandler().GetTxnOperator()
+	ses.GetTxnHandler().disableStartStmt()
+	if txnOp != nil && !ses.IsDerivedStmt() {
+		txnOp.GetWorkspace().StartStatement()
+		ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+	}
+
 	defer func() {
 		retErr = finishTxnFunc()
+
+		_, txnOp := ses.GetTxnHandler().GetTxnOperator()
+		if txnOp != nil && !ses.IsDerivedStmt() {
+			ok, id := ses.GetTxnHandler().calledStartStmt()
+			if ok && bytes.Equal(txnOp.Txn().ID, id) {
+				txnOp.GetWorkspace().EndStatement()
+			}
+		}
+		ses.GetTxnHandler().disableStartStmt()
 	}()
 
 	//check transaction states
@@ -2725,6 +2752,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
+			err = doCheckFilePath(requestCtx, ses, st)
+			if err != nil {
+				return err
+			}
 			ses.SetExportParam(st.Ep)
 		}
 	}
@@ -2838,7 +2869,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.AnalyzeStmt:
 		selfHandle = true
-		if err = mce.handleAnalyzeStmt(requestCtx, st); err != nil {
+		if err = mce.handleAnalyzeStmt(requestCtx, ses, st); err != nil {
 			return err
 		}
 	case *tree.ExplainStmt:
@@ -3029,6 +3060,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		selfHandle = true
 	case *tree.UnLockTableStmt:
 		selfHandle = true
+	case *tree.ShowGrants:
+		if len(st.Username) == 0 {
+			st.Username = userName
+		}
+		if len(st.Hostname) == 0 || st.Hostname == "%" {
+			st.Hostname = rootHost
+		}
 	}
 
 	if selfHandle {
@@ -3366,6 +3404,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.SetSql(input.getSql())
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
+	//the ses.GetUserName returns the user_name with the account_name.
+	//here,we only need the user_name.
+	userNameOnly := rootName
 	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
@@ -3408,12 +3449,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
 			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
+		userNameOnly = ses.GetTenantInfo().GetUser()
 	} else {
 		proc.SessionInfo.Account = sysAccountName
 		proc.SessionInfo.AccountId = sysAccountID
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
+	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(ses.proc)
 	ses.proc.SessionInfo = proc.SessionInfo
@@ -3488,7 +3531,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 			}
 		}
 
-		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant)
+		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly)
 		if err != nil {
 			return err
 		}

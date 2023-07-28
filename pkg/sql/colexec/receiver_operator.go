@@ -54,6 +54,22 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 	}
 }
 
+func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze process.Analyze) (*batch.Batch, bool, error) {
+	start := time.Now()
+	defer analyze.WaitStop(start)
+	select {
+	case <-r.proc.Ctx.Done():
+		return nil, true, nil
+	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+		if !ok || bat == nil {
+			return nil, true, nil
+		}
+		return bat, false, nil
+	default:
+		return nil, false, nil
+	}
+}
+
 func (r *ReceiverOperator) FreeAllReg() {
 	for i := range r.proc.Reg.MergeReceivers {
 		r.FreeSingleReg(i)
@@ -71,6 +87,12 @@ func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
 	}
 }
 
+func (r *ReceiverOperator) CloseAllReg() {
+	for _, c := range r.proc.Reg.MergeReceivers {
+		close(c.Ch)
+	}
+}
+
 // You MUST Init ReceiverOperator with Merge-Type
 // if you want to use this function
 func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.Batch, bool, error) {
@@ -81,7 +103,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 
 		start := time.Now()
 		// It is not convenience fo Select to receive proc.Ctx.Done()
-		// so we make sure that the proc.Cancel() will pass to its
+		// so we make sure that the proc.Cancel() will  pass to its
 		// children and the children will close the channel
 		chosen, value, ok := reflect.Select(r.receiverListener)
 		analyze.WaitStop(start)

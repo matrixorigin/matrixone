@@ -174,6 +174,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		query.StmtType = plan.Query_INSERT
 	}
 	reduceSinkSinkScanNodes(query)
+	ReCalcQueryStats(builder, query)
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -233,7 +234,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	if bat != nil {
 		for insertRowIdx, pkColIdx := range pkPosInValues {
 			if pkValueExprs[pkColIdx] == nil {
-				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true)
+				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, 0)
 				if constExpr == nil {
 					return nil
 				}

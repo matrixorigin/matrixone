@@ -100,10 +100,11 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 		aggInfos[i].Agg = bat.Aggs[i]
 	}
 	return types.Encode(&EncodeBatch{
-		rowCount: int64(bat.rowCount),
-		Vecs:     bat.Vecs,
-		Attrs:    bat.Attrs,
-		AggInfos: aggInfos,
+		rowCount:  int64(bat.rowCount),
+		Vecs:      bat.Vecs,
+		Attrs:     bat.Attrs,
+		AggInfos:  aggInfos,
+		Recursive: bat.Recursive,
 	})
 }
 
@@ -113,6 +114,7 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	if err := types.Decode(data, rbat); err != nil {
 		return err
 	}
+	bat.Recursive = rbat.Recursive
 	bat.Cnt = 1
 	bat.rowCount = int(rbat.rowCount)
 	bat.Vecs = rbat.Vecs
@@ -224,6 +226,22 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	bat.Attrs = nil
 	bat.rowCount = 0
 	bat.Vecs = nil
+}
+
+func (bat *Batch) Last() bool {
+	return bat.Recursive > 0
+}
+
+func (bat *Batch) SetEnd() {
+	bat.Recursive = 2
+}
+
+func (bat *Batch) SetLast() {
+	bat.Recursive = 1
+}
+
+func (bat *Batch) End() bool {
+	return bat.Recursive == 2
 }
 
 func (bat *Batch) CleanOnlyData() {

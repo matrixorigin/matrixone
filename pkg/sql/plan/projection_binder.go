@@ -257,7 +257,7 @@ func (b *ProjectionBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec, false)
+	c := rule.GetConstantValue(vec, false, 0)
 
 	return &plan.Expr{
 		Typ:  typ,
@@ -302,7 +302,7 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := rule.GetConstantValue(vec, false)
+	c := rule.GetConstantValue(vec, false, 0)
 
 	e.Expr.(*plan.Expr_List).List.List[0] = &plan.Expr{Typ: typ, Expr: &plan.Expr_C{C: c}}
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))

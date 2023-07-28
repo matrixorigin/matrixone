@@ -54,7 +54,7 @@ type S3Writer struct {
 	writer  *blockio.BlockWriter
 	lengths []uint64
 
-	metaLocBat *batch.Batch
+	blockInfoBat *batch.Batch
 
 	// An intermediate cache after the merge sort of all `Bats` data
 	buffer *batch.Batch
@@ -85,9 +85,9 @@ const (
 )
 
 func (w *S3Writer) Free(proc *process.Process) {
-	if w.metaLocBat != nil {
-		w.metaLocBat.Clean(proc.Mp())
-		w.metaLocBat = nil
+	if w.blockInfoBat != nil {
+		w.blockInfoBat.Clean(proc.Mp())
+		w.blockInfoBat = nil
 	}
 	if w.buffer != nil {
 		w.buffer.Clean(proc.Mp())
@@ -103,8 +103,8 @@ func (w *S3Writer) Free(proc *process.Process) {
 	w.Bats = nil
 }
 
-func (w *S3Writer) GetMetaLocBat() *batch.Batch {
-	return w.metaLocBat
+func (w *S3Writer) GetBlockInfoBat() *batch.Batch {
+	return w.blockInfoBat
 }
 
 func (w *S3Writer) SetSortIdx(sortIdx int) {
@@ -134,7 +134,7 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 		partitionIndex: 0,
 	}
 
-	writer.ResetMetaLocBat(proc)
+	writer.ResetBlockInfoBat(proc)
 	for i, colDef := range tableDef.Cols {
 		if colDef.Name != catalog.Row_ID {
 			writer.seqnums = append(writer.seqnums, uint16(colDef.Seqnum))
@@ -196,7 +196,7 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 			partitionIndex: int16(i), // This value is aligned with the partition number
 		}
 
-		writers[i].ResetMetaLocBat(proc)
+		writers[i].ResetBlockInfoBat(proc)
 		for j, colDef := range tableDef.Cols {
 			if colDef.Name != catalog.Row_ID {
 				writers[i].seqnums = append(writers[i].seqnums, uint16(colDef.Seqnum))
@@ -238,19 +238,19 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 	return writers, nil
 }
 
-func (w *S3Writer) ResetMetaLocBat(proc *process.Process) {
+func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
-	if w.metaLocBat != nil {
-		w.metaLocBat.Clean(proc.GetMPool())
+	if w.blockInfoBat != nil {
+		w.blockInfoBat.Clean(proc.GetMPool())
 	}
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
-	metaLocBat := batch.NewWithSize(len(attrs))
-	metaLocBat.Attrs = attrs
-	metaLocBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
-	metaLocBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
-	w.metaLocBat = metaLocBat
+	blockInfoBat := batch.NewWithSize(len(attrs))
+	blockInfoBat.Attrs = attrs
+	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
+	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
+	w.blockInfoBat = blockInfoBat
 }
 
 //func (w *S3Writer) WriteEnd(proc *process.Process) {
@@ -261,18 +261,18 @@ func (w *S3Writer) ResetMetaLocBat(proc *process.Process) {
 //}
 
 func (w *S3Writer) Output(proc *process.Process) error {
-	bat := batch.NewWithSize(len(w.metaLocBat.Attrs))
-	bat.SetAttributes(w.metaLocBat.Attrs)
+	bat := batch.NewWithSize(len(w.blockInfoBat.Attrs))
+	bat.SetAttributes(w.blockInfoBat.Attrs)
 
-	for i := range w.metaLocBat.Attrs {
-		vec := proc.GetVector(*w.metaLocBat.Vecs[i].GetType())
-		if err := vec.UnionBatch(w.metaLocBat.Vecs[i], 0, w.metaLocBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+	for i := range w.blockInfoBat.Attrs {
+		vec := proc.GetVector(*w.blockInfoBat.Vecs[i].GetType())
+		if err := vec.UnionBatch(w.blockInfoBat.Vecs[i], 0, w.blockInfoBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 			return err
 		}
 		bat.SetVector(int32(i), vec)
 	}
-	bat.SetRowCount(w.metaLocBat.RowCount())
-	w.ResetMetaLocBat(proc)
+	bat.SetRowCount(w.blockInfoBat.RowCount())
+	w.ResetBlockInfoBat(proc)
 	proc.SetInputBatch(bat)
 	return nil
 }
@@ -296,12 +296,12 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 		if err := w.SortAndFlush(proc); err != nil {
 			return err
 		}
-		w.metaLocBat.SetRowCount(w.metaLocBat.Vecs[0].Length())
+		w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
 		return nil
 	}
 	for _, bat := range w.Bats {
 		if err := vector.AppendFixed(
-			w.metaLocBat.Vecs[0], -w.partitionIndex-1,
+			w.blockInfoBat.Vecs[0], -w.partitionIndex-1,
 			false, proc.GetMPool()); err != nil {
 			return err
 		}
@@ -310,12 +310,12 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 			return err
 		}
 		if err = vector.AppendBytes(
-			w.metaLocBat.Vecs[1], bytes,
+			w.blockInfoBat.Vecs[1], bytes,
 			false, proc.GetMPool()); err != nil {
 			return err
 		}
 	}
-	w.metaLocBat.SetRowCount(w.metaLocBat.Vecs[0].Length())
+	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
 	return nil
 }
 
@@ -634,14 +634,14 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 	}
 	for _, blkInfo := range blkInfos {
 		if err := vector.AppendFixed(
-			w.metaLocBat.Vecs[0],
+			w.blockInfoBat.Vecs[0],
 			w.partitionIndex,
 			false,
 			proc.GetMPool()); err != nil {
 			return err
 		}
 		if err := vector.AppendBytes(
-			w.metaLocBat.Vecs[1],
+			w.blockInfoBat.Vecs[1],
 			//[]byte(metaLoc),
 			catalog.EncodeBlockInfo(blkInfo),
 			false,
@@ -649,7 +649,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 			return err
 		}
 	}
-	w.metaLocBat.SetRowCount(w.metaLocBat.Vecs[0].Length())
+	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
 	return nil
 }
 
