@@ -83,7 +83,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		TableDef:       tableDef,
 		CopyTableDef:   copyTableDef,
 		IsClusterTable: isClusterTable,
-		Actions:        make([]*plan.AlterTable_Action, len(validAlterSpecs)),
 		AlgorithmType:  plan.AlterTable_COPY,
 	}
 

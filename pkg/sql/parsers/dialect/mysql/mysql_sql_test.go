@@ -2240,9 +2240,8 @@ var (
 			output: "alter table t1 add foreign key (col4) references dept(deptno)",
 		},
 		{
-
-			input:  "alter table t1 add constraint pk primary key pk1(col1, col4)",
-			output: "alter table t1 add constraint pk primary key pk1(col1, col4)",
+			input:  "alter table t1 add constraint pk primary key pk1 (col1, col4)",
+			output: "alter table t1 add constraint pk primary key pk1 (col1, col4)",
 		},
 		{
 			input:  "alter table t1 add constraint pk primary key (col4)",
