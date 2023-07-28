@@ -27,7 +27,7 @@ select big,count(big) from t1 group by big having count(big)>1 order by 2;
 drop table t1;
 create table t1 (id timestamp(6) not null default "2022-01-31 00:00:00.0000006", a int, primary key (a));
 insert into t1(a) values(1);
--- @bvt:issue#3290
+-- @bvt:issue#10895
 select * from t1;
 -- @bvt:issue
 
