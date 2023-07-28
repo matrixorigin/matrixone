@@ -305,16 +305,16 @@ func NewCheckpointData() *CheckpointData {
 	data := &CheckpointData{
 		meta: make(map[uint64]*CheckpointMeta),
 	}
-	for idx, schema := range checkpointDataSchemas_Curr {
-		factory := func(bat *containers.Batch, s any) *model.BatchBlock {
-			bat = makeRespBatchFromSchema(s.(*catalog.Schema))
+	for idx := range checkpointDataSchemas_Curr {
+		factory := func(batch *containers.Batch) *model.BatchBlock {
+			bat := makeRespBatchFromBatch(batch)
 			id := common.NextGlobalSeqNum()
 			return &model.BatchBlock{
 				Batch: bat,
 				ID:    id,
 			}
 		}
-		data.bats[idx] = model.NewAOTWithSchema(schema, 40000, factory,
+		data.bats[idx] = model.NewAOT(40000, factory,
 			func(a, b *model.BatchBlock) bool {
 				return a.ID < b.ID
 			})
