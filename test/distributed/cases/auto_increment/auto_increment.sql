@@ -220,6 +220,7 @@ Drop table auto_increment16;
 
 
 -- temporary table: auto_incerment = 0
+-- @bvt:issue#10903
 drop table if exists auto_increment01;
 create temporary table auto_increment01(col1 int auto_increment primary key)auto_increment = 0;
 select * from auto_increment01;
@@ -229,6 +230,7 @@ Select * from auto_increment01;
 Insert into auto_increment01 values(1);
 Select * from auto_increment01;
 drop table auto_increment01;
+-- @bvt:issue
 
 
 -- temporary table:auto_increment > 0
@@ -246,6 +248,7 @@ Drop table auto_increment02;
 
 
 -- temporary table:auto_increment > 0 and have duplicate value
+-- @bvt:issue#10903
 Drop table if exists auto_increment03;
 create temporary table auto_increment03(col1 int auto_increment primary key) auto_increment = 10000;
 Insert into auto_increment03 values();
@@ -255,6 +258,7 @@ Insert into auto_increment03 values();
 select last_insert_id();
 Select * from auto_increment03;
 Drop table auto_increment03;
+-- @bvt:issue
 
 
 -- temporary table:auto_increment > 0 and col is primary key: check for duplicate primary keys

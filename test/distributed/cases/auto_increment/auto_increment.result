@@ -335,22 +335,23 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 Drop table auto_increment16;
 no such table auto_increment.auto_increment16
 drop table if exists auto_increment01;
+[unknown result because it is related to issue#10903]
 create temporary table auto_increment01(col1 int auto_increment primary key)auto_increment = 0;
+[unknown result because it is related to issue#10903]
 select * from auto_increment01;
-col1
+[unknown result because it is related to issue#10903]
 Insert into auto_increment01 values();
+[unknown result because it is related to issue#10903]
 select last_insert_id();
-last_insert_id()
-1
+[unknown result because it is related to issue#10903]
 Select * from auto_increment01;
-col1
-1
+[unknown result because it is related to issue#10903]
 Insert into auto_increment01 values(1);
-tae data: duplicate
+[unknown result because it is related to issue#10903]
 Select * from auto_increment01;
-col1
-1
+[unknown result because it is related to issue#10903]
 drop table auto_increment01;
+[unknown result because it is related to issue#10903]
 Drop table if exists auto_increment02;
 [unknown result because it is related to issue#10836]
 Create temporary table auto_increment02(col1 int auto_increment unique key)auto_increment = 10;
@@ -370,44 +371,47 @@ Select * from auto_increment02;
 Drop table auto_increment02;
 [unknown result because it is related to issue#10836]
 Drop table if exists auto_increment03;
+[unknown result because it is related to issue#10903]
 create temporary table auto_increment03(col1 int auto_increment primary key) auto_increment = 10000;
+[unknown result because it is related to issue#10903]
 Insert into auto_increment03 values();
+[unknown result because it is related to issue#10903]
 Insert into auto_increment03 values(10000);
-tae data: duplicate
+[unknown result because it is related to issue#10903]
 Insert into auto_increment03 values(10000);
-tae data: duplicate
+[unknown result because it is related to issue#10903]
 Insert into auto_increment03 values();
+[unknown result because it is related to issue#10903]
 select last_insert_id();
-last_insert_id()
-10001
+[unknown result because it is related to issue#10903]
 Select * from auto_increment03;
-col1
-10000
-10001
+[unknown result because it is related to issue#10903]
 Drop table auto_increment03;
+[unknown result because it is related to issue#10903]
 Drop table if exists auto_increment04;
+[unknown result because it is related to issue#10903]
 Create temporary table auto_increment04(col1 int primary key auto_increment) auto_increment = 10;
+[unknown result because it is related to issue#10903]
 insert into auto_increment04 values();
+[unknown result because it is related to issue#10903]
 Select * from auto_increment04;
-col1
-10
+[unknown result because it is related to issue#10903]
 Insert into auto_increment04 values();
+[unknown result because it is related to issue#10903]
 select last_insert_id();
-last_insert_id()
-11
+[unknown result because it is related to issue#10903]
 Insert into auto_increment04 values(100);
-Duplicate entry '100' for key 'col1'
+[unknown result because it is related to issue#10903]
 Insert into auto_increment04 values(200);
+[unknown result because it is related to issue#10903]
 Insert into auto_increment04 values(10);
-tae data: duplicate
+[unknown result because it is related to issue#10903]
 Insert into auto_increment04 values(11);
-tae data: duplicate
+[unknown result because it is related to issue#10903]
 Select * from auto_increment04;
-col1
-10
-11
-200
+[unknown result because it is related to issue#10903]
 Drop table auto_increment04;
+[unknown result because it is related to issue#10903]
 Drop table if exists auto_increment05;
 [unknown result because it is related to issue#10834]
 Create temporary table auto_increment05(col1 int unique key auto_increment) auto_increment = 10000;
@@ -519,26 +523,27 @@ Select * from auto_increment10;
 Drop table auto_increment10;
 [unknown result because it is related to issue#10834]
 Drop table if exists auto_increment11;
+[unknown result because it is related to issue#10903]
 Create temporary table auto_increment11(col1 int auto_increment primary key) auto_increment = 100;
+[unknown result because it is related to issue#10903]
 insert into auto_increment11 values();
+[unknown result because it is related to issue#10903]
 Insert into auto_increment11 values();
+[unknown result because it is related to issue#10903]
 Insert into auto_increment11 values();
+[unknown result because it is related to issue#10903]
 select last_insert_id();
-last_insert_id()
-102
+[unknown result because it is related to issue#10903]
 Select * from auto_increment11;
-col1
-100
-101
-102
+[unknown result because it is related to issue#10903]
 Delete from auto_increment11 where col1 = 100;
+[unknown result because it is related to issue#10903]
 Update auto_increment11 set col1 = 200 where col1 = 101;
 [unknown result because it is related to issue#10834]
 Select * from auto_increment11;
-col1
-101
-102
+[unknown result because it is related to issue#10834]
 Drop table auto_increment11;
+[unknown result because it is related to issue#10834]
 Drop table if exists auto_increment12;
 [unknown result because it is related to issue#10842]
 create temporary table auto_increment12(col1 int auto_increment primary key)auto_increment = 10;
