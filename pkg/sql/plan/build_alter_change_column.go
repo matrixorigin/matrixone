@@ -101,13 +101,9 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 	newCol := &ColDef{
 		ColId:   originalCol.ColId,
 		Primary: originalCol.Primary,
-		//NotNull:  originalCol.NotNull,
-		//Default:  originalCol.Default,
-		//Comment:  originalCol.Comment,
-		//OnUpdate: originalCol.OnUpdate,
-		Name: newColName,
-		Typ:  colType,
-		Alg:  plan.CompressType_Lz4,
+		Name:    newColName,
+		Typ:     colType,
+		Alg:     plan.CompressType_Lz4,
 	}
 
 	hasDefaultValue := false

@@ -358,7 +358,6 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 func (node *AlterPublication) GetStatementType() string { return "Alter Publication" }
 func (node *AlterPublication) GetQueryType() string     { return QueryTypeDCL }
 
-// --------------------------------------------------------------------------------------------------------
 type AlterTableModifyColumnClause struct {
 	alterOptionImpl
 	Typ       AlterTableOptionType
@@ -463,7 +462,6 @@ func (node *AlterTableAlterColumnClause) Format(ctx *FmtCtx) {
 	}
 }
 
-// --------------------------------------------------------------------------------------
 type AlterTableOrderByColumnClause struct {
 	alterOptionImpl
 	Typ              AlterTableOptionType
@@ -491,8 +489,6 @@ func (node *AlterColumnOrder) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Direction.String())
 	}
 }
-
-//--------------------------------------------------------------------------------------
 
 // AlterTableType is the type for AlterTableOptionType.
 type AlterTableOptionType int
