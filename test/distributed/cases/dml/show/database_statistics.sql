@@ -1,4 +1,4 @@
--- @skip:issue#10473
+
 -- test system db table_number
 
 show table_number from mo_task;
