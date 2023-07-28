@@ -114,6 +114,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 	case *plan.Expr_T:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ.EnumValues = t.T.Typ.Enumvalues
 		vec := vector.NewConstNull(typ, 1, proc.Mp())
 		return &FixedVectorExpressionExecutor{
 			m:            proc.Mp(),

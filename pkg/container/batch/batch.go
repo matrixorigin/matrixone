@@ -59,7 +59,10 @@ func (info *aggInfo) MarshalBinary() ([]byte, error) {
 	i32 := int32(info.Op)
 	buf.Write(types.EncodeInt32(&i32))
 	buf.Write(types.EncodeBool(&info.Dist))
-	buf.Write(types.EncodeType(&info.inputTypes))
+	// Encode type
+	dat, len := types.EncodeType(&info.inputTypes)
+	buf.Write(types.EncodeInt32(&len))
+	buf.Write(dat)
 	data, err := types.Encode(info.Agg)
 	if err != nil {
 		return nil, err
@@ -73,8 +76,13 @@ func (info *aggInfo) UnmarshalBinary(data []byte) error {
 	data = data[4:]
 	info.Dist = types.DecodeBool(data[:1])
 	data = data[1:]
-	info.inputTypes = types.DecodeType(data[:types.TSize])
-	data = data[types.TSize:]
+	// info.inputTypes = types.DecodeType(data[:types.TSize])
+	// data = data[types.TSize:]
+	// Decode type
+	len := types.DecodeInt32(data[:4])
+	data = data[4:]
+	info.inputTypes = types.DecodeType(data[:len])
+	data = data[len:]
 	aggregate, err := agg.New(info.Op, info.Dist, info.inputTypes)
 	if err != nil {
 		return err

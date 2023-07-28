@@ -106,6 +106,8 @@ type Type struct {
 	Width int32
 	// Scale means number of fractional digits for decimal, timestamp, float, etc.
 	Scale int32
+
+	EnumValues []string
 }
 
 // ProtoSize is used by gogoproto.
@@ -886,4 +888,24 @@ func (t T) IsDecimal() bool {
 		return true
 	}
 	return false
+}
+
+func (t *Type) TypeEqual(o *Type) (equal bool) {
+	equal = t.Size == o.Size && t.Width == o.Width && t.Scale == o.Scale &&
+		t.Oid == o.Oid && t.Charset == o.Charset
+	if !equal {
+		return false
+	}
+	if t.EnumValues == nil && o.EnumValues == nil {
+		return true
+	}
+	if len(t.EnumValues) != len(o.EnumValues) {
+		return false
+	}
+	for i := range t.EnumValues {
+		if t.EnumValues[i] != o.EnumValues[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -16,9 +16,10 @@ package disttae
 
 import (
 	"context"
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"strconv"
 	"strings"
+
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -114,7 +115,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return nil, moerr.NewTxnClosedNoCtx(txn.meta.ID)
 	}
 
-	//check the table is deleted or not
+	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(genTableKey(ctx, name, db.databaseId)); exist {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}

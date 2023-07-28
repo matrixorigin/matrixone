@@ -2215,6 +2215,12 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
+		case defines.MYSQL_TYPE_ENUM:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
 		default:
 			return nil, moerr.NewInternalError(ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}

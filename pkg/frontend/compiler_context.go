@@ -407,6 +407,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 					AutoIncr:    attr.Attr.AutoIncrement,
 					Table:       tableName,
 					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					Enumvalues:  attr.Attr.Type.EnumValues,
 				},
 				Primary:   attr.Attr.Primary,
 				Default:   attr.Attr.Default,

@@ -31,6 +31,7 @@ import (
 
 const (
 	TSize          int = int(unsafe.Sizeof(Type{}))
+	SSize          int = int(unsafe.Sizeof([]string{}))
 	DateSize       int = 4
 	TimeSize       int = 8
 	DatetimeSize   int = 8
@@ -93,12 +94,28 @@ func DecodeJson(buf []byte) bytejson.ByteJson {
 	return bj
 }
 
-func EncodeType(v *Type) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize)
+func EncodeType(v *Type) ([]byte, int32) {
+	n := int32(TSize)
+	dat := unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize)
+	// For enum type encode the string list.
+	if v.EnumValues != nil {
+		sdat := EncodeStringSlice(v.EnumValues)
+		n += int32(len(sdat))
+		dat = append(dat, sdat...)
+	}
+	return dat, n
 }
 
 func DecodeType(v []byte) Type {
-	return *(*Type)(unsafe.Pointer(&v[0]))
+	basedata := v[:TSize]
+	start := TSize - SSize
+	*(*[]string)(unsafe.Pointer(&basedata[start])) = nil
+	basetyp := *(*Type)(unsafe.Pointer(&basedata[0]))
+	v = v[TSize:]
+	if len(v) != 0 {
+		basetyp.EnumValues = DecodeStringSlice(v)
+	}
+	return basetyp
 }
 
 func EncodeFixed[T FixedSizeT](v T) []byte {

@@ -1067,6 +1067,15 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 					ps[i].EncodeTimestamp(b)
 				}
 			}
+		case types.T_enum:
+			s := vector.MustFixedCol[types.Enum](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeEnum(b)
+				}
+			}
 		case types.T_decimal64:
 			s := vector.MustFixedCol[types.Decimal64](v)
 			for i, b := range s {
