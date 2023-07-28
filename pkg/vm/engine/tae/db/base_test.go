@@ -21,7 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	checkpoint2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
@@ -29,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -262,6 +265,51 @@ func (e *testEngine) incrementalCheckpoint(
 		})
 	}
 	return nil
+}
+
+func (e *testEngine) tryDeleteByDeltaloc(vals []any) (ok bool, err error) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(e.t, err)
+	ok, err = e.tryDeleteByDeltalocWithTxn(vals, txn)
+	if ok {
+		assert.NoError(e.t, txn.Commit(context.Background()))
+	} else {
+		assert.NoError(e.t, txn.Rollback(context.Background()))
+	}
+	return
+}
+
+func (e *testEngine) tryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) (ok bool, err error) {
+	rel := e.getRelationWithTxn(txn)
+
+	idOffsetsMap := make(map[common.ID][]uint32)
+	for _, val := range vals {
+		filter := handle.NewEQFilter(val)
+		id, offset, err := rel.GetByFilter(context.Background(), filter)
+		assert.NoError(e.t, err)
+		offsets, ok := idOffsetsMap[*id]
+		if !ok {
+			offsets = make([]uint32, 0)
+		}
+		offsets = append(offsets, offset)
+		idOffsetsMap[*id] = offsets
+	}
+
+	for id, offsets := range idOffsetsMap {
+		seg, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(id.SegmentID())
+		assert.NoError(e.t, err)
+		blk, err := seg.GetBlockEntryByID(&id.BlockID)
+		assert.NoError(e.t, err)
+		deltaLoc, err := mockCNDeleteInS3(e.Runtime.Fs, blk.GetBlockData(), e.schema, txn, offsets)
+		assert.NoError(e.t, err)
+		ok, err = rel.TryDeleteByDeltaloc(&id, deltaLoc)
+		assert.NoError(e.t, err)
+		if !ok {
+			return ok, err
+		}
+	}
+	ok = true
+	return
 }
 
 func initDB(ctx context.Context, t *testing.T, opts *options.Options) *DB {
@@ -645,5 +693,37 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 
 func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {
 	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(row)
+	return
+}
+
+func mockCNDeleteInS3(fs *objectio.ObjectFS, blk data.Block, schema *catalog.Schema, txn txnif.AsyncTxn, deleteRows []uint32) (location objectio.Location, err error) {
+	pkDef := schema.GetPrimaryKey()
+	view, err := blk.GetColumnDataById(context.Background(), txn, schema, pkDef.Idx)
+	pkVec := containers.MakeVector(pkDef.Type)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType())
+	blkID := &blk.GetMeta().(*catalog.BlockEntry).ID
+	if err != nil {
+		return
+	}
+	for _, row := range deleteRows {
+		pkVal := view.GetData().Get(int(row))
+		pkVec.Append(pkVal, false)
+		rowID := objectio.NewRowid(blkID, row)
+		rowIDVec.Append(*rowID, false)
+	}
+	bat := containers.NewBatch()
+	bat.AddVector(catalog.AttrRowID, rowIDVec)
+	bat.AddVector("pk", pkVec)
+	name := objectio.MockObjectName()
+	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil)
+	if err != nil {
+		return
+	}
+	_, err = writer.WriteBatchWithOutIndex(containers.ToCNBatch(bat))
+	if err != nil {
+		return
+	}
+	blks, _, err := writer.Sync(context.Background())
+	location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
 	return
 }

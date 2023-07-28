@@ -126,12 +126,15 @@ func (txn *Transaction) WriteBatch(
 	return nil
 }
 
-// dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
 func (txn *Transaction) dumpBatch(offset int) error {
-	var size uint64
-
 	txn.Lock()
 	defer txn.Unlock()
+	return txn.dumpBatchLocked(offset)
+}
+
+// dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
+func (txn *Transaction) dumpBatchLocked(offset int) error {
+	var size uint64
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
@@ -455,9 +458,7 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-func (txn *Transaction) mergeTxnWorkspace() error {
-	txn.Lock()
-	defer txn.Unlock()
+func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
@@ -514,10 +515,10 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 	if txn.readOnly.Load() {
 		return nil
 	}
-	if err := txn.mergeTxnWorkspace(); err != nil {
+	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
-	if err := txn.dumpBatch(0); err != nil {
+	if err := txn.dumpBatchLocked(0); err != nil {
 		return err
 	}
 	reqs, err := genWriteReqs(ctx, txn.writes)
