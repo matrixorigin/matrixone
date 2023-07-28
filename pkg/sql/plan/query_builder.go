@@ -1516,7 +1516,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					subCtx := NewBindContext(builder, ctx)
 					subCtx.maskedCTEs = cteRef.maskedCTEs
 					subCtx.recSelect = true
-					subCtx.sinkTag = initCtx.sinkTag
+					subCtx.sinkTag = builder.genNewTag()
 					subCtx.isTryBindingCTE = true
 					subCtx.cteByName = make(map[string]*CTERef)
 					subCtx.cteByName[table] = cteRef
@@ -2487,6 +2487,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 					// final statement
 					ctx.finalSelect = true
+					ctx.sinkTag = builder.genNewTag()
 					err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, ctx)
 					if err != nil {
 						return
