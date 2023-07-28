@@ -3111,7 +3111,7 @@ func BuildVarlenaFromValena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m 
 		BuildVarlenaInline(v1, v2)
 		return nil
 	}
-	voff, vlen := v1.OffsetLen()
+	voff, vlen := v2.OffsetLen()
 	bs := (*area)[voff : voff+vlen]
 	return BuildVarlenaNoInline(vec, v1, &bs, m)
 }
