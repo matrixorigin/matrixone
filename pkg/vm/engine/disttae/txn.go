@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -506,6 +507,46 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 		}
 	}
 	return nil
+}
+
+func (txn *Transaction) getInsertedBlocksForTable(
+	databaseId uint64,
+	tableId uint64) (blks []catalog.BlockInfo, err error) {
+	txn.Lock()
+	defer txn.Unlock()
+	for _, entry := range txn.writes {
+		if entry.databaseId != databaseId ||
+			entry.tableId != tableId {
+			continue
+		}
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			continue
+		}
+		if entry.typ != INSERT ||
+			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
+			continue
+		}
+		metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
+		for _, metaLoc := range metaLocs {
+			location, err := blockio.EncodeLocationFromString(metaLoc)
+			if err != nil {
+				return nil, err
+			}
+			sid := location.Name().SegmentId()
+			blkid := objectio.NewBlockid(
+				&sid,
+				location.Name().Num(),
+				location.ID())
+			pos, ok := txn.cnBlkId_Pos[*blkid]
+			if !ok {
+				panic(fmt.Sprintf("blkid %s not found", blkid.String()))
+			}
+			blks = append(blks, pos.blkInfo)
+		}
+
+	}
+	return blks, nil
+
 }
 
 func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
