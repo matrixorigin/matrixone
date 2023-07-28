@@ -492,6 +492,24 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 	return nil
 }
 
+func embeddingArith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	arithFn func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error)) (err error) {
+
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetEmbeddingValue(0)
+		v2, _ := p2.GetEmbeddingValue(0)
+		res, _ := arithFn(v1, v2, 0, 0)
+		rs.AppendEmbedding(res, false)
+	}
+
+	return nil
+}
+
 // XXX For decimal64 / decimal64, decimal64 * decimal64
 func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error)) error {

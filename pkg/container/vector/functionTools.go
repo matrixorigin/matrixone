@@ -39,6 +39,8 @@ type FunctionParameterWrapper[T types.FixedSizeT] interface {
 	// GetStrValue return the Idx th string value and if it's null or not.
 	GetStrValue(idx uint64) ([]byte, bool)
 
+	GetEmbeddingValue(idx uint64) ([]float32, bool)
+
 	// UnSafeGetAllValue return all the values.
 	// please use it carefully because we didn't check the null situation.
 	UnSafeGetAllValue() []T
@@ -167,6 +169,13 @@ func (p *FunctionParameterNormal[T]) GetStrValue(idx uint64) (value []byte, isNu
 	return p.strValues[idx].GetByteSlice(p.area), false
 }
 
+func (p *FunctionParameterNormal[T]) GetEmbeddingValue(idx uint64) ([]float32, bool) {
+	if p.nullMap.Contains(idx) {
+		return nil, true
+	}
+	return types.BytesToEmbedding(p.strValues[idx].ByteSlice()), false
+}
+
 func (p *FunctionParameterNormal[T]) UnSafeGetAllValue() []T {
 	return p.values
 }
@@ -203,6 +212,13 @@ func (p *FunctionParameterNormalSpecial1[T]) GetStrValue(idx uint64) ([]byte, bo
 	return p.strValues[idx].ByteSlice(), false
 }
 
+func (p *FunctionParameterNormalSpecial1[T]) GetEmbeddingValue(idx uint64) ([]float32, bool) {
+	if p.nullMap.Contains(idx) {
+		return nil, true
+	}
+	return types.BytesToEmbedding(p.strValues[idx].ByteSlice()), false
+}
+
 func (p *FunctionParameterNormalSpecial1[T]) UnSafeGetAllValue() []T {
 	panic("not implement")
 }
@@ -237,6 +253,10 @@ func (p *FunctionParameterWithoutNull[T]) GetStrValue(idx uint64) ([]byte, bool)
 	return p.strValues[idx].GetByteSlice(p.area), false
 }
 
+func (p *FunctionParameterWithoutNull[T]) GetEmbeddingValue(idx uint64) ([]float32, bool) {
+	return p.strValues[idx].GetEmbedding(p.area), false
+}
+
 func (p *FunctionParameterWithoutNull[T]) UnSafeGetAllValue() []T {
 	return p.values
 }
@@ -267,6 +287,10 @@ func (p *FunctionParameterWithoutNullSpecial1[T]) GetValue(_ uint64) (T, bool) {
 
 func (p *FunctionParameterWithoutNullSpecial1[T]) GetStrValue(idx uint64) ([]byte, bool) {
 	return p.strValues[idx].ByteSlice(), false
+}
+
+func (p *FunctionParameterWithoutNullSpecial1[T]) GetEmbeddingValue(idx uint64) ([]float32, bool) {
+	return types.BytesToEmbedding(p.strValues[idx].ByteSlice()), false
 }
 
 func (p *FunctionParameterWithoutNullSpecial1[T]) UnSafeGetAllValue() []T {
@@ -301,6 +325,10 @@ func (p *FunctionParameterScalar[T]) GetStrValue(_ uint64) ([]byte, bool) {
 	return p.scalarStr, false
 }
 
+func (p *FunctionParameterScalar[T]) GetEmbeddingValue(_ uint64) ([]float32, bool) {
+	return types.BytesToEmbedding(p.scalarStr), false
+}
+
 func (p *FunctionParameterScalar[T]) UnSafeGetAllValue() []T {
 	return []T{p.scalarValue}
 }
@@ -328,6 +356,10 @@ func (p *FunctionParameterScalarNull[T]) GetValue(_ uint64) (value T, isNull boo
 }
 
 func (p *FunctionParameterScalarNull[T]) GetStrValue(_ uint64) ([]byte, bool) {
+	return nil, true
+}
+
+func (p *FunctionParameterScalarNull[T]) GetEmbeddingValue(_ uint64) ([]float32, bool) {
 	return nil, true
 }
 

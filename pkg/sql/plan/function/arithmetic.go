@@ -29,7 +29,7 @@ func plusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
-	case types.T_decimal64, types.T_decimal128:
+	case types.T_decimal64, types.T_decimal128, types.T_embedding:
 	default:
 		return false
 	}
@@ -159,6 +159,19 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			r, _, err := v1.Add(v2, scale1, scale2)
 			return r, err
+		})
+	case types.T_embedding:
+		return embeddingArith(parameters, result, proc, length, func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error) {
+			if len(v1) != len(v2) {
+				panic("Dimensions should be same")
+			}
+
+			r := make([]float32, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] + v2[i]
+			}
+
+			return r, nil
 		})
 	}
 	panic("unreached code")
