@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -65,7 +66,7 @@ func ReadByFilter(
 		if persistedByCN {
 			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
 		} else {
-			rows = evalDeleteRowsByTimestamp(persistedDeletes, ts)
+			rows = evalDeleteRowsByTimestamp(persistedDeletes, ts, &info.BlockID)
 		}
 		deleteMask.Merge(rows)
 	}
@@ -273,7 +274,7 @@ func BlockReadInner(
 		if persistedByCN {
 			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
 		} else {
-			rows = evalDeleteRowsByTimestamp(deletes, ts)
+			rows = evalDeleteRowsByTimestamp(deletes, ts, &info.BlockID)
 		}
 
 		// merge delete rows
@@ -506,22 +507,25 @@ func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservi
 	return columnCount == 2, nil
 }
 
-func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows *nulls.Bitmap) {
+func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types.Blockid) (rows *nulls.Bitmap) {
 	if deletes == nil {
 		return
 	}
 	// record visible delete rows
 	rows = nulls.NewWithSize(0)
+
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
 	aborts := deletes.Vecs[3]
 
-	for i, rowid := range rowids {
+	start, end := FindIntervalForBlock(rowids, blockid)
+
+	for i := start; i < end; i++ {
 		abort := vector.GetFixedAt[bool](aborts, i)
 		if abort || tss[i].Greater(ts) {
 			continue
 		}
-		row := rowid.GetRowOffset()
+		row := rowids[i].GetRowOffset()
 		rows.Add(uint64(row))
 	}
 	return
@@ -586,4 +590,33 @@ func RecordColumnSelectivity(hit, total int) {
 
 func ExportSelectivityString() string {
 	return pipeline.stats.selectivityStats.ExportString()
+}
+
+func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, end int) {
+	lowRowid := objectio.NewRowid(id, 0)
+	highRowid := objectio.NewRowid(id, math.MaxUint32)
+	i, j := 0, len(rowids)
+	for i < j {
+		m := (i + j) / 2
+		// first value >= lowRowid
+		if !rowids[m].Less(*lowRowid) {
+			j = m
+		} else {
+			i = m + 1
+		}
+	}
+	start = i
+
+	i, j = 0, len(rowids)
+	for i < j {
+		m := (i + j) / 2
+		// first value > highRowid
+		if highRowid.Less(rowids[m]) {
+			j = m
+		} else {
+			i = m + 1
+		}
+	}
+	end = i
+	return
 }

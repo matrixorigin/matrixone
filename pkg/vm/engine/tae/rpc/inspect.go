@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -121,6 +123,46 @@ func runCatalog(arg *catalogArg, respWriter io.Writer) {
 	}
 }
 
+type compactPolicyArg struct {
+	ctx                  *inspectContext
+	db, table            string
+	enableFlushTableTail bool
+	flushGapDuration     time.Duration
+}
+
+func (c *compactPolicyArg) fromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	address, _ := cmd.Flags().GetString("dbtable")
+	parts := strings.Split(address, ".")
+	if len(parts) != 2 {
+		return moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
+	}
+	c.db, c.table = parts[0], parts[1]
+	c.enableFlushTableTail, _ = cmd.Flags().GetBool("enable")
+	c.flushGapDuration, _ = cmd.Flags().GetDuration("flushgap")
+	return nil
+}
+
+func runCompactPolicy(arg *compactPolicyArg) error {
+	txn, _ := arg.ctx.db.StartTxn(nil)
+	dbHdl, err := txn.GetDatabase(arg.db)
+	if err != nil {
+		return err
+	}
+	tblHdl, err := dbHdl.GetRelationByName(arg.table)
+	if err != nil {
+		return err
+	}
+	meta := tblHdl.GetMeta().(*catalog.TableEntry)
+	meta.Stats.Lock()
+	defer meta.Stats.Unlock()
+
+	meta.Stats.FlushTableTailEnabled = arg.enableFlushTableTail
+	meta.Stats.FlushGapDuration = arg.flushGapDuration
+	return nil
+
+}
+
 func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use: "inspect",
@@ -138,6 +180,29 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 		},
 	}
 
+	policyCmd := &cobra.Command{
+		Use:   "policy",
+		Short: "set flush policy for table",
+		Run: func(cmd *cobra.Command, args []string) {
+			arg := &compactPolicyArg{}
+			if err := arg.fromCommand(cmd); err != nil {
+				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
+				return
+			}
+			err := runCompactPolicy(arg)
+
+			if err != nil {
+				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
+			} else {
+				cmd.OutOrStdout().Write([]byte(
+					fmt.Sprintf(
+						"success. [%s.%s] enable %v, flush_gap %v",
+						arg.db, arg.table, arg.enableFlushTableTail, arg.flushGapDuration,
+					)))
+			}
+		},
+	}
+
 	rootCmd.PersistentFlags().VarPF(inspectCtx, "ictx", "", "").Hidden = true
 
 	rootCmd.SetArgs(inspectCtx.args)
@@ -149,6 +214,11 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	catalogCmd.Flags().StringP("db", "d", "", "database name")
 	catalogCmd.Flags().StringP("table", "t", "", "table name")
 	rootCmd.AddCommand(catalogCmd)
+
+	policyCmd.Flags().StringP("dbtable", "d", "", "database.table")
+	policyCmd.Flags().BoolP("enable", "e", false, "enable flush table tail")
+	policyCmd.Flags().DurationP("flushgap", "g", 1*time.Minute, "flush gap duration")
+	rootCmd.AddCommand(policyCmd)
 
 	return rootCmd
 }

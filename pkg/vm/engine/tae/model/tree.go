@@ -16,6 +16,7 @@ package model
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"unsafe"
@@ -150,6 +151,7 @@ func (tree *Tree) visitSegment(visitor TreeVisitor, table *TableTree, segment *S
 		if err = visitor.VisitBlock(table.DbID, table.ID, segment.ID, id.Num, id.Seq); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
+				continue
 			}
 			return
 		}
@@ -162,6 +164,7 @@ func (tree *Tree) visitTable(visitor TreeVisitor, table *TableTree) (err error) 
 		if err = visitor.VisitSegment(table.DbID, table.ID, segment.ID); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
+				continue
 			}
 			return
 		}
@@ -177,7 +180,7 @@ func (tree *Tree) Visit(visitor TreeVisitor) (err error) {
 		if err = visitor.VisitTable(table.DbID, table.ID); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
-				return
+				continue
 			}
 			return
 		}
@@ -331,6 +334,18 @@ func (ttree *TableTree) AddBlock(id *objectio.Blockid) {
 	sid := objectio.ToSegmentId(id)
 	ttree.AddSegment(sid)
 	ttree.Segs[*sid].AddBlock(id.Offsets())
+}
+
+func (ttree *TableTree) ShortBlocksString() string {
+	buf := bytes.Buffer{}
+	for _, seg := range ttree.Segs {
+		var shortuuid [8]byte
+		hex.Encode(shortuuid[:], seg.ID[:4])
+		for id := range seg.Blks {
+			buf.WriteString(fmt.Sprintf(" %s-%d-%d", string(shortuuid[:]), id.Num, id.Seq))
+		}
+	}
+	return buf.String()
 }
 
 func (ttree *TableTree) IsEmpty() bool {

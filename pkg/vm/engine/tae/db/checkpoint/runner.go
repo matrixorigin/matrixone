@@ -32,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -740,12 +742,143 @@ func (r *runner) onWaitWaitableItems(items ...any) {
 	logutil.Debugf("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
 }
 
+func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.TableTree, endTs types.TS) error {
+	metas := make([]*catalog.BlockEntry, 0, 10)
+	for _, seg := range tree.Segs {
+		segment, err := table.GetSegmentByID(seg.ID)
+		if err != nil {
+			panic(err)
+		}
+		for blk := range seg.Blks {
+			bid := objectio.NewBlockid(seg.ID, blk.Num, blk.Seq)
+			block, err := segment.GetBlockEntryByID(bid)
+			if err != nil {
+				panic(err)
+			}
+			metas = append(metas, block)
+		}
+	}
+
+	// freeze all append
+	scopes := make([]common.ID, 0, len(metas))
+	for _, meta := range metas {
+		if !meta.GetBlockData().PrepareCompact() {
+			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchema().Name, meta.ID.String())
+			return moerr.GetOkExpectedEOB()
+		}
+		scopes = append(scopes, *meta.AsCommonID())
+	}
+
+	factory := jobs.FlushTableTailTaskFactory(metas, r.rt, endTs)
+	if _, err := r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory); err != nil {
+		logutil.Warnf("[FlushTabletail] %d-%s %v", table.ID, table.GetLastestSchema().Name, err)
+		return moerr.GetOkExpectedEOB()
+	}
+	return nil
+}
+
+func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) int {
+	size := 0
+	for _, seg := range tree.Segs {
+		segment, err := table.GetSegmentByID(seg.ID)
+		if err != nil {
+			panic(err)
+		}
+		for blk := range seg.Blks {
+			bid := objectio.NewBlockid(seg.ID, blk.Num, blk.Seq)
+			block, err := segment.GetBlockEntryByID(bid)
+			if err != nil {
+				panic(err)
+			}
+			size += block.GetBlockData().EstimateMemSize()
+		}
+	}
+	return size
+}
+
+func humanReadableSize(size int) string {
+	if size < 1024 {
+		return fmt.Sprintf("%dB", size)
+	}
+	if size < 1024*1024 {
+		return fmt.Sprintf("%dKB", size/1024)
+	}
+	if size < 1024*1024*1024 {
+		return fmt.Sprintf("%dMB", size/1024/1024)
+	}
+	return fmt.Sprintf("%dGB", size/1024/1024/1024)
+}
+
 func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	if entry.IsEmpty() {
 		return
 	}
 	logutil.Debugf(entry.String())
 	visitor := new(model.BaseTreeVisitor)
+
+	visitor.TableFn = func(dbID, tableID uint64) error {
+		db, err := r.catalog.GetDatabaseByID(dbID)
+		if err != nil {
+			panic(err)
+		}
+		table, err := db.GetTableEntryByID(tableID)
+		if err != nil {
+			panic(err)
+		}
+
+		if !table.Stats.Inited {
+			table.Stats.Lock()
+			table.Stats.FlushGapDuration = r.options.maxFlushInterval * 6
+			table.Stats.FlushMemCapacity = 20 * 1024 * 1024
+			table.Stats.FlushTableTailEnabled = true
+			table.Stats.Inited = true
+			table.Stats.Unlock()
+		}
+
+		if !table.Stats.FlushTableTailEnabled {
+			return nil
+		}
+
+		dirtyTree := entry.GetTree().GetTable(tableID)
+		_, endTs := entry.GetTimeRange()
+
+		size := r.EstimateTableMemSize(table, dirtyTree)
+
+		stats := &table.Stats
+		stats.Lock()
+		defer stats.Unlock()
+
+		// debug log, delete later
+		if !stats.LastFlush.IsEmpty() && size > 1*1000*1024 {
+			logutil.Infof("[flushtabletail] %s(%s)  FlushCountDown %v",
+				table.GetLastestSchema().Name,
+				humanReadableSize(size),
+				time.Until(stats.FlushDeadline))
+		}
+
+		if force {
+			logutil.Infof("[flushtabletail] force flush %s", table.GetLastestSchema().Name)
+			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
+				stats.ResetDeadline()
+			}
+			return moerr.GetOkStopCurrRecur()
+		}
+
+		if stats.LastFlush.IsEmpty() {
+			// first boot, just bail out, and never enter this branch again
+			stats.LastFlush = stats.LastFlush.Next()
+			stats.ResetDeadline()
+			return moerr.GetOkStopCurrRecur()
+		}
+
+		if stats.FlushDeadline.Before(time.Now()) || size > stats.FlushMemCapacity {
+			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
+				stats.ResetDeadline()
+			}
+		}
+
+		return moerr.GetOkStopCurrRecur()
+	}
 	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.Segmentid, uint16, uint16) error {
 		return func(dbID, tableID uint64, segmentID *objectio.Segmentid, num, seq uint16) (err error) {
 			id := objectio.NewBlockid(segmentID, num, seq)
@@ -783,7 +916,7 @@ func (r *runner) crontask(ctx context.Context) {
 		r.source.Run()
 		entry := r.source.GetAndRefreshMerged()
 		if entry.IsEmpty() {
-			logutil.Debugf("No dirty block found")
+			logutil.Infof("[flushtabletail]No dirty block found")
 		} else {
 			e := new(DirtyCtx)
 			e.tree = entry

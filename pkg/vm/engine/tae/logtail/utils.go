@@ -138,11 +138,11 @@ func init() {
 		SegDNSchema,
 		DelSchema,
 		SegDNSchema,
-		BlkMetaSchema, // 15
+		BlkMetaSchema_V1, // 15
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 19
+		BlkMetaSchema_V1, // 19
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
@@ -165,11 +165,11 @@ func init() {
 		SegDNSchema,
 		DelSchema,
 		SegDNSchema,
-		BlkMetaSchema, // 15
+		BlkMetaSchema_V1, // 15
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 19
+		BlkMetaSchema_V1, // 19
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,

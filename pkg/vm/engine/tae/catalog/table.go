@@ -43,6 +43,7 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn 
 type TableEntry struct {
 	*BaseEntryImpl[*TableMVCCNode]
 	*TableNode
+	Stats   common.TableCompactStat
 	ID      uint64
 	db      *DBEntry
 	entries map[types.Uuid]*common.GenericDLNode[*SegmentEntry]
@@ -50,8 +51,30 @@ type TableEntry struct {
 	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
 	rows      atomic.Uint64
+	// used for the next flush table tail.
+	DeletedDirties []*BlockEntry
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
+}
+
+type DirtyDelsSrc struct {
+	ver      atomic.Int64
+	versions map[int64][]*BlockEntry
+}
+
+func (src *DirtyDelsSrc) GetDirtyDels() (ver int64, ret [][]*BlockEntry) {
+	ver = src.ver.Load()
+	for v, list := range src.versions {
+		if v <= ver {
+			ret = append(ret, list)
+		}
+	}
+	return
+}
+
+func (src *DirtyDelsSrc) AddDirtyDels(list []*BlockEntry) {
+	ver := src.ver.Add(1)
+	src.versions[ver] = list
 }
 
 func genTblFullName(tenantID uint32, name string) string {
@@ -87,6 +110,9 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		e.tableData = dataFactory(e)
 	}
 	e.CreateWithTxnAndSchema(txnCtx, schema)
+	// e.Stats.FlushGapDuration = 6 * time.Minute
+	// e.Stats.FlushMemCapacity = 20 * 1024 * 1024
+	// e.Stats.FlushTableTailEnabled = true
 	return e
 }
 
