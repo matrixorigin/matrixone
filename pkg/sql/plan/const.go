@@ -1,3 +1,17 @@
+// Copyright 2023 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package plan
 
 const (
@@ -13,28 +27,8 @@ const (
 		Identifier Length Limits
 		See MySQL: https://dev.mysql.com/doc/refman/8.0/en/identifiers.html
 	*/
-	// MaxPayloadLen is the max packet payload length.
-	MaxPayloadLen = 1<<24 - 1
-	// MaxTableNameLength is max length of table name identifier.
-	MaxTableNameLength = 64
-	// MaxDatabaseNameLength is max length of database name identifier.
-	MaxDatabaseNameLength = 64
-	// MaxColumnNameLength is max length of column name identifier.
-	MaxColumnNameLength = 64
 	// MaxKeyParts is max length of key parts.
 	MaxKeyParts = 16
-	// MaxIndexIdentifierLen is max length of index identifier.
-	MaxIndexIdentifierLen = 64
-	// MaxForeignKeyIdentifierLen is max length of foreign key identifier.
-	MaxForeignKeyIdentifierLen = 64
-	// MaxConstraintIdentifierLen is max length of constrain identifier.
-	MaxConstraintIdentifierLen = 64
-	// MaxViewIdentifierLen is max length of view identifier.
-	MaxViewIdentifierLen = 64
-	// MaxAliasIdentifierLen is max length of alias identifier.
-	MaxAliasIdentifierLen = 256
-	// MaxUserDefinedVariableLen is max length of user-defined variable.
-	MaxUserDefinedVariableLen = 64
 )
 
 const (

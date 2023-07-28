@@ -27,61 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		//input:  "alter table t1 add column a int",
-		//output: "alter table t1 add column a int",
-		//input:  "alter table t1 add column b int first",
-		//output: "alter table t1 add column b int first",
-		//input:  "alter table t1 add x varchar(20) after b",
-		//output: "alter table t1 add column x varchar(20) after b",
-		//input:  "alter table t1 add column x varchar(20) after b",
-		//output: "alter table t1 add column x varchar(20) after b",
 		input:  "alter table t1 add column x varchar(20) primary key after b",
 		output: "alter table t1 add column x varchar(20) primary key after b",
-		//----------------------------------------------------------------------------
-		//input:  "alter table t1 modify column b int",
-		//output: "alter table t1 modify column b int",
-		//input:  "alter table t1 modify column b VARCHAR(20) first",
-		//output: "alter table t1 modify column b varchar(20) first",
-		//input:  "alter table t1 modify column b VARCHAR(20) after a",
-		//output: "alter table t1 modify column b varchar(20) after a",
-		//input:  "alter table t1 modify db1.b VARCHAR(20) after a",
-		//output: "alter table t1 modify column b varchar(20) after a",
-		//input:  "alter table emp modify deptno varchar(25)",
-		//output: "alter table emp modify column deptno varchar(25)",
-		//------------------------------------------------------------------------
-		//input:  "alter table t1 change column a b int",
-		//output: "alter table t1 change column a b int",
-		//input:  "alter table t1 change column a b int first",
-		//output: "alter table t1 change column a b int first",
-		//input:  "alter table t1 change a x varchar(20) after b",
-		//output: "alter table t1 change column a x varchar(20) after b",
-		//input:  "alter table t1 change column a x varchar(20) after b",
-		//output: "alter table t1 change column a x varchar(20) after b",
-		//------------------------------------------------------------------------
-		//input:  "alter table emp rename column deptno to deptid",
-		//output: "alter table emp rename column deptno to deptid",
-		//input:  "alter table t1 alter a set default 100",
-		//output: "alter table t1 alter column a set default 100",
-		//input:  "alter table t1 alter column a drop default",
-		//output: "alter table t1 alter column a drop default",
-		//input:  "alter table t1 alter column b set visible",
-		//output: "alter table t1 alter column b set visible",
-		//------------------------------------------------------------------------
-		//input:  "alter table t1 order by a ASC, b DESC",
-		//output: "alter table t1 order by a asc, b desc",
-		//input:  "alter table t1 order by a, b DESC",
-		//output: "alter table t1 order by a, b desc",
-		//------------------------------------------------------------------------
-		//input:  "alter table t1 add constraint pk primary key (col4)",
-		//output: "alter table t1 add constraint pk primary key (col4)",
-		//input:  "alter table t1 add constraint pk primary key (col1, col4)",
-		//output: "alter table t1 add constraint pk primary key (col1, col4)",
-		//input:  "alter table t1 add constraint pk primary key pk1 (col1, col4)",
-		//output: "alter table t1 add constraint pk primary key pk1 (col1, col4)",
-		//input:  "alter table t1 add primary key (col1, col4)",
-		//output: "alter table t1 add primary key (col1, col4)",
-		//input:  "alter table t1 add primary key pk1 (col1, col4)",
-		//output: "alter table t1 add primary key pk1 (col1, col4)",
 	}
 )
 

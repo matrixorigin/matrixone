@@ -30,10 +30,6 @@ import (
 )
 
 func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
-	// ALTER TABLE tbl_name
-	//		[alter_option [, alter_option] ...]
-	//		[partition_options]
-
 	// 1. get origin table name and Schema name
 	schemaName, tableName := string(stmt.Table.Schema()), string(stmt.Table.Name())
 	if schemaName == "" {
@@ -43,7 +39,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
-	//-----------------------------------------<<<<<< Abstract a function ------------------------------------------
+
 	if tableDef.ViewSql != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
 	}
@@ -57,7 +53,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	if tableDef.Partition != nil {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Currently, partition table does not support alter table")
 	}
-	//-------------------------------------------------------------------------------------------------------->>>>>
+
 	// 2. split alter_option list
 	copyTableDef, err := buildCopyTableDef(ctx.GetContext(), tableDef)
 	if err != nil {
@@ -93,39 +89,38 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(ctx, alterTablePlan, optionAdd, alterTableCtx)
 			case *tree.ForeignKey:
-				// TODO
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			case *tree.UniqueIndex:
-				// TODO
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			case *tree.Index:
-				// TODO
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			case *tree.ColumnTableDef:
-				// TODO
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			default:
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
-				// TODO
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			case tree.AlterTableDropIndex:
-				// TODO
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			case tree.AlterTableDropKey:
-				// TODO
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(ctx, alterTablePlan, alterTableCtx)
 			case tree.AlterTableDropForeignKey:
-				// TODO
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			default:
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
 			}
 		case *tree.AlterOptionAlterIndex:
-			// TODO
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
-			// TODO
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterTableName:
-			// TODO
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterAddCol:
-			// TODO
 			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableModifyColumnClause:
 			err = ModifyColumn(ctx, alterTablePlan, option, alterTableCtx)
@@ -138,7 +133,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(ctx, alterTablePlan, option, alterTableCtx)
 		case *tree.TableOptionAutoIncrement:
-			// TODO
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		default:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
 		}
@@ -526,19 +521,14 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterOptionAdd:
 			switch option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
-				// TODO
 				algorithm = plan.AlterTable_COPY
 			case *tree.ForeignKey:
-				// TODO
 				algorithm = plan.AlterTable_INPLACE
 			case *tree.UniqueIndex:
-				// TODO
 				algorithm = plan.AlterTable_INPLACE
 			case *tree.Index:
-				// TODO
 				algorithm = plan.AlterTable_INPLACE
 			case *tree.ColumnTableDef:
-				// TODO
 				algorithm = plan.AlterTable_INPLACE
 			default:
 				algorithm = plan.AlterTable_INPLACE

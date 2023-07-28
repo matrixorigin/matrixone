@@ -56,20 +56,13 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	// 4. Migrate Foreign Key Dependencies
-
+	// TODO 4. Migrate Foreign Key Dependencies
 	// 5. drop original table
 	if err = dbSource.Delete(c.ctx, tblName); err != nil {
 		return err
 	}
-	//for _, name := range qry.IndexTableNames {
-	//	if err := dbSource.Delete(c.ctx, name); err != nil {
-	//		return err
-	//	}
-	//}
 
 	// 6. rename copy table name to original table name
-	//------------------------------------------------------------------------------------------------------------------
 	copyRel, err := dbSource.Relation(c.ctx, qry.CopyTableDef.Name, nil)
 	if err != nil {
 		return err
@@ -85,8 +78,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		Cts: []engine.Constraint{},
 	}
 
-	//var addColIdx int
-	//var dropColIdx int
 	constraint := make([][]byte, 0)
 	for _, kind := range alterKind {
 		var req *api.AlterTableReq

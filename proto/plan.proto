@@ -1081,7 +1081,6 @@ message AlterTable {
 	AlgorithmType algorithm_type = 6;
 	string create_table_sql = 7;
 	string insert_data_sql = 8;
-	string drop_original_table_sql = 9;
 }
 
 message DropTable {
