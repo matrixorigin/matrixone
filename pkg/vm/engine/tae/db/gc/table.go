@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -118,7 +117,6 @@ func (t *GCTable) dropTable(id common.ID) {
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	ins, insTxn, del, delTxn := data.GetBlkBatchs()
-	logutil.Infof("ins is %d, insTxn is %d", ins.Length(), insTxn.Length())
 	for i := 0; i < ins.Length(); i++ {
 		dbid := insTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := insTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)

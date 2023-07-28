@@ -165,12 +165,12 @@ drop table if exists t1;
 drop table if exists t2;
 DROP TABLE IF EXISTS c;
 CREATE TABLE `c` (
-  `int_nokey` int(11) NOT NULL,
-  `int_key` int(11) NOT NULL
+                     `int_nokey` int(11) NOT NULL,
+                     `int_key` int(11) NOT NULL
 );
 INSERT INTO `c` VALUES (9,9), (0,0), (8,6), (3,6), (7,6), (0,4),
-(1,7), (9,4), (0,8), (9,4), (0,7), (5,5), (0,0), (8,5), (8,7),
-(5,2), (1,8), (7,0), (0,9), (9,5);
+                       (1,7), (9,4), (0,8), (9,4), (0,7), (5,5), (0,0), (8,5), (8,7),
+                       (5,2), (1,8), (7,0), (0,9), (9,5);
 SELECT * FROM c WHERE `int_key` IN (SELECT `int_nokey`);
 create view v1 as SELECT * FROM c WHERE `int_key` IN (SELECT `int_nokey`);
 select * from v1;
@@ -191,18 +191,18 @@ drop table if exists t1;
 drop table if exists t2;
 
 CREATE TABLE t1 (
-  a1 char(8) DEFAULT NULL,
-  a2 char(8) DEFAULT NULL
+                    a1 char(8) DEFAULT NULL,
+                    a2 char(8) DEFAULT NULL
 );
 CREATE TABLE t2 (
-  b1 char(8) DEFAULT NULL,
-  b2 char(8) DEFAULT NULL
+                    b1 char(8) DEFAULT NULL,
+                    b2 char(8) DEFAULT NULL
 );
 INSERT INTO t1 VALUES
- ('1 - 00', '2 - 00'),('1 - 01', '2 - 01'),('1 - 02', '2 - 02');
+                   ('1 - 00', '2 - 00'),('1 - 01', '2 - 01'),('1 - 02', '2 - 02');
 INSERT INTO t2 VALUES
- ('1 - 01', '2 - 01'),('1 - 01', '2 - 01'),
- ('1 - 02', '2 - 02'),('1 - 02', '2 - 02'),('1 - 03', '2 - 03');
+                   ('1 - 01', '2 - 01'),('1 - 01', '2 - 01'),
+                   ('1 - 02', '2 - 02'),('1 - 02', '2 - 02'),('1 - 03', '2 - 03');
 SELECT * FROM t2 WHERE b1 NOT IN ('1 - 00', '1 - 01', '1 - 02');
 create view v1 as SELECT * FROM t2 WHERE b1 NOT IN ('1 - 00', '1 - 01', '1 - 02');
 select * from v1;
@@ -218,20 +218,20 @@ drop table if exists t2;
 drop table if exists t3;
 drop table if exists t4;
 CREATE TABLE `t1` (
-  `numeropost` int(8) unsigned NOT NULL,
-  `maxnumrep` int(10) unsigned NOT NULL default 0,
-  PRIMARY KEY  (`numeropost`)
+                      `numeropost` int(8) unsigned NOT NULL,
+                      `maxnumrep` int(10) unsigned NOT NULL default 0,
+                      PRIMARY KEY  (`numeropost`)
 ) ;
 
 INSERT INTO t1 (numeropost,maxnumrep) VALUES (40143,1),(43506,2);
 
 CREATE TABLE `t2` (
-      `mot` varchar(30) NOT NULL default '',
-      `topic` int(8) unsigned NOT NULL default 0,
-      `dt` date,
-      `pseudo` varchar(35) NOT NULL default '',
-       PRIMARY KEY  (`topic`)
-    ) ;
+                      `mot` varchar(30) NOT NULL default '',
+                      `topic` int(8) unsigned NOT NULL default 0,
+                      `dt` date,
+                      `pseudo` varchar(35) NOT NULL default '',
+                      PRIMARY KEY  (`topic`)
+) ;
 
 INSERT INTO t2 (mot,topic,dt,pseudo) VALUES ('joce','40143','2002-10-22','joce'), ('joce','43506','2002-10-22','joce');
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic);
@@ -287,17 +287,17 @@ insert into t3 values (NULL), (NULL);
 select a, oref, a in (select max(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 select a, oref from t2 where a in (select max(ie) from t1 where oref=t2.oref group by grp);
 select a, oref, a in (
-  select max(ie) from t1 where oref=t2.oref group by grp union
-  select max(ie) from t1 where oref=t2.oref group by grp
-  ) Z from t2;
+    select max(ie) from t1 where oref=t2.oref group by grp union
+    select max(ie) from t1 where oref=t2.oref group by grp
+) Z from t2;
 select a in (select max(ie) from t1 where oref=4 group by grp) from t3;
 
 create view v1 as select a, oref, a in (select max(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 create view v2 as select a, oref from t2 where a in (select max(ie) from t1 where oref=t2.oref group by grp);
 create view v3 as select a, oref, a in (
-  select max(ie) from t1 where oref=t2.oref group by grp union
-  select max(ie) from t1 where oref=t2.oref group by grp
-  ) Z from t2;
+    select max(ie) from t1 where oref=t2.oref group by grp union
+    select max(ie) from t1 where oref=t2.oref group by grp
+) Z from t2;
 create view v4 as select a in (select max(ie) from t1 where oref=4 group by grp) from t3;
 select * from v1;
 select * from v2;
@@ -374,12 +374,12 @@ select * from v5;
 select * from v6;
 select * from v7;
 
-drop view v1;	
-drop view v2;	
-drop view v3;	
-drop view v5;	
-drop view v6;	
-drop view v7;	
+drop view v1;
+drop view v2;
+drop view v3;
+drop view v5;
+drop view v6;
+drop view v7;
 
 DROP TABLE IF EXISTS t1;
 create table t1 (a varchar(20));
@@ -393,8 +393,8 @@ create view v3 as select NULL IN (SELECT * from t1);
 select * from v1;
 select * from v2;
 select * from v3;
-drop view v1;	
-drop view v2;	
+drop view v1;
+drop view v2;
 drop view v3;
 
 update t1 set a=NULL where a='BC';
@@ -407,8 +407,8 @@ create view v3 as select 'XYZS' IN (SELECT * from t1);
 select * from v1;
 select * from v2;
 select * from v3;
-drop view v1;	
-drop view v2;	
+drop view v1;
+drop view v2;
 drop view v3;
 
 DROP TABLE IF EXISTS t1;
@@ -423,8 +423,8 @@ create view v3 as select NULL IN (SELECT * from t1);
 select * from v1;
 select * from v2;
 select * from v3;
-drop view v1;	
-drop view v2;	
+drop view v1;
+drop view v2;
 drop view v3;
 update t1 set a=NULL where a=2.5;
 select 1.5 IN (SELECT * from t1);
@@ -436,8 +436,8 @@ create view v3 as select 10.5 IN (SELECT * from t1);
 select * from v1;
 select * from v2;
 select * from v3;
-drop view v1;	
-drop view v2;	
+drop view v1;
+drop view v2;
 drop view v3;
 
 drop table if exists t1;
@@ -454,7 +454,7 @@ create view v1 as SELECT t1.a, t1.a in (select t2.a from t2) FROM t1;
 create view v2 as SELECT t1.a, t1.a in (select t2.a from t2,t3 where t3.a=t2.a) FROM t1;
 select * from v1;
 select * from v2;
-drop view v1;	
+drop view v1;
 drop view v2;
 drop table if exists t1;
 drop table if exists t2;
@@ -487,9 +487,9 @@ select * from v1;
 select * from v2;
 -- @bvt:issue
 select * from v3;
-drop view v1;	
+drop view v1;
 -- @bvt:issue#4354
-drop view v2;	
+drop view v2;
 -- @bvt:issue
 drop view v3;
 
@@ -555,8 +555,8 @@ create view v3 as select (select * from t1) = (1,(2,2));
 select * from v1;
 select * from v2;
 select * from v3;
-drop view v1;	
-drop view v2;	
+drop view v1;
+drop view v2;
 drop view v3;
 -- @bvt:issue
 
@@ -584,12 +584,12 @@ insert into t2 values (1,1), (3,3);
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 create view v1 as select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 select * from v1;
-drop view v1;	
+drop view v1;
 insert into t2 values (NULL,4);
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 create view v1 as select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 select * from v1;
-drop view v1;	
+drop view v1;
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 
@@ -669,7 +669,7 @@ insert into t2 values (1);
 select a from t1 where a in (select a from t1 where a in (select b from t2));
 create view v1 as select a from t1 where a in (select a from t1 where a in (select b from t2));
 select * from v1;
-drop view v1;	
+drop view v1;
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 
@@ -678,7 +678,7 @@ create table t2 (a int, b int);
 select * from t1 where (a,b) in (select a,b from t2);
 create view v1 as select * from t1 where (a,b) in (select a,b from t2);
 select * from v1;
-drop view v1;	
+drop view v1;
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 
@@ -719,13 +719,13 @@ INSERT INTO t2 VALUES (5, 0);
 SELECT i1, i2
 FROM t1
 WHERE (i1, i2)
-      NOT IN (SELECT i1, i2 FROM t2);
+          NOT IN (SELECT i1, i2 FROM t2);
 
 create view v1 as SELECT i1, i2
-FROM t1
-WHERE (i1, i2)
-      NOT IN (SELECT i1, i2 FROM t2);
-      
+                  FROM t1
+                  WHERE (i1, i2)
+                            NOT IN (SELECT i1, i2 FROM t2);
+
 select * from v1;
 drop view v1;
 
@@ -733,14 +733,14 @@ INSERT INTO t1 VALUES (NULL, NULL);
 SELECT i1, i2
 FROM t1
 WHERE (i1, i2)
-      NOT IN (SELECT i1, i2 FROM t2);
-      
+          NOT IN (SELECT i1, i2 FROM t2);
+
 
 create view v1 as SELECT i1, i2
-FROM t1
-WHERE (i1, i2)
-      NOT IN (SELECT i1, i2 FROM t2);
-      
+                  FROM t1
+                  WHERE (i1, i2)
+                            NOT IN (SELECT i1, i2 FROM t2);
+
 select * from v1;
 drop view v1;
 
@@ -840,9 +840,9 @@ CREATE TABLE t1 (a int, b int);
 CREATE TABLE t2 (c int, d int);
 CREATE TABLE t3 (e int);
 INSERT INTO t1 VALUES
-  (1,10), (2,10), (1,20), (2,20), (3,20), (2,30), (4,40);
+                   (1,10), (2,10), (1,20), (2,20), (3,20), (2,30), (4,40);
 INSERT INTO t2 VALUES
-  (2,10), (2,20), (4,10), (5,10), (3,20), (2,40);
+                   (2,10), (2,20), (4,10), (5,10), (3,20), (2,40);
 INSERT INTO t3 VALUES (10), (30), (10), (20) ;
 
 SELECT a FROM t1 GROUP BY a HAVING a IN (SELECT c FROM t2 WHERE MAX(b)>20);
@@ -890,16 +890,16 @@ DROP TABLE IF EXISTS  t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t1xt2;
 CREATE TABLE t1 (
-  id_1 int(5) NOT NULL,
-  t varchar(4) DEFAULT NULL
+                    id_1 int(5) NOT NULL,
+                    t varchar(4) DEFAULT NULL
 );
 CREATE TABLE t2 (
-  id_2 int(5) NOT NULL,
-  t varchar(4) DEFAULT NULL
+                    id_2 int(5) NOT NULL,
+                    t varchar(4) DEFAULT NULL
 );
 CREATE TABLE t1xt2 (
-  id_1 int(5) NOT NULL,
-  id_2 int(5) NOT NULL
+                       id_1 int(5) NOT NULL,
+                       id_2 int(5) NOT NULL
 );
 INSERT INTO t1 VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd');
 INSERT INTO t2 VALUES (2, 'bb'), (3, 'cc'), (4, 'dd'), (12, 'aa');

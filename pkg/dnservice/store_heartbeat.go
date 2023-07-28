@@ -118,7 +118,9 @@ func (s *store) handleRemoveReplica(cmd logservicepb.ScheduleCommand) {
 }
 
 func (s *store) handleShutdownStore(_ logservicepb.ScheduleCommand) {
-	if err := s.Close(); err != nil {
-		s.rt.Logger().Error("failed to shutdown store", zap.Error(err))
+	// notify main routine that have received shutdown cmd
+	select {
+	case s.shutdownC <- struct{}{}:
+	default:
 	}
 }

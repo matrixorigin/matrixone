@@ -73,7 +73,6 @@ func (blk *ablock) OnApplyAppend(n txnif.AppendNode) (err error) {
 
 func (blk *ablock) OnApplyDelete(
 	deleted uint64,
-	gen common.RowGen,
 	ts types.TS) (err error) {
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return

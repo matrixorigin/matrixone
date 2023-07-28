@@ -15,6 +15,8 @@
 package txnimpl
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -33,11 +35,13 @@ type replayTxnStore struct {
 	catalog     *catalog.Catalog
 	dataFactory *tables.DataFactory
 	wal         wal.Driver
+	ctx         context.Context
 }
 
 func MakeReplayTxn(
+	ctx context.Context,
 	mgr *txnbase.TxnManager,
-	ctx *txnbase.TxnCtx,
+	txnCtx *txnbase.TxnCtx,
 	lsn uint64,
 	cmd *txnbase.TxnCmd,
 	observer wal.ReplayObserver,
@@ -50,10 +54,11 @@ func MakeReplayTxn(
 		catalog:     catalog,
 		dataFactory: dataFactory,
 		wal:         wal,
+		ctx:         ctx,
 	}
 	txn := txnbase.NewPersistedTxn(
 		mgr,
-		ctx,
+		txnCtx,
 		store,
 		lsn,
 		store.prepareCommit,
@@ -62,7 +67,9 @@ func MakeReplayTxn(
 		store.applyRollback)
 	return txn
 }
-
+func (store *replayTxnStore) GetContext() context.Context {
+	return store.ctx
+}
 func (store *replayTxnStore) IsReadonly() bool { return false }
 
 func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
@@ -174,7 +181,7 @@ func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, observer wal
 	switch cmd.GetType() {
 	case updates.IOET_WALTxnCommand_AppendNode:
 		store.replayAppend(cmd, observer)
-	case updates.IOET_WALTxnCommand_DeleteNode:
+	case updates.IOET_WALTxnCommand_DeleteNode, updates.IOET_WALTxnCommand_PersistedDeleteNode:
 		store.replayDelete(cmd, observer)
 	}
 }

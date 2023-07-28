@@ -202,6 +202,16 @@ func (store *txnStore) RangeDelete(
 	return db.RangeDelete(id, start, end, dt)
 }
 
+func (store *txnStore) TryDeleteByDeltaloc(
+	id *common.ID, deltaloc objectio.Location,
+) (ok bool, err error) {
+	db, err := store.getOrSetDB(id.DbID)
+	if err != nil {
+		return
+	}
+	return db.TryDeleteByDeltaloc(id, deltaloc)
+}
+
 func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(id.DbID)

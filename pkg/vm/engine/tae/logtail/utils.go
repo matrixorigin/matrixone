@@ -279,20 +279,42 @@ func GetBatch(mt *MemoryTable, schema *catalog.Schema) *containers.Batch {
 	return bat
 }
 
+func AppendBatch(mt *MemoryTable, bat *containers.Batch) {
+	if bat.Length() == 0 {
+		rows := 0
+		for i := range bat.Vecs {
+			if bat.Vecs[i].Length() > 0 {
+				rows = bat.Vecs[i].Length()
+				break
+			}
+		}
+		if rows > 0 {
+			for i := range bat.Vecs {
+				if bat.Vecs[i].Length() == 0 {
+					for z := 0; z < rows; z++ {
+						bat.Vecs[i].Append(nil, true)
+					}
+				}
+			}
+		}
+	}
+	mt.Append(bat)
+}
+
 func NewCheckpointData() *CheckpointData {
 	data := &CheckpointData{
 		meta: make(map[uint64]*CheckpointMeta),
 	}
-	for idx := range checkpointDataSchemas_Curr {
-		factory := func(bat *containers.Batch) *model.BatchBlock {
-			//bat := makeRespBatchFromSchema(schema)
+	for idx, schema := range checkpointDataSchemas_Curr {
+		factory := func(bat *containers.Batch, s any) *model.BatchBlock {
+			bat = makeRespBatchFromSchema(s.(*catalog.Schema))
 			id := common.NextGlobalSeqNum()
 			return &model.BatchBlock{
 				Batch: bat,
 				ID:    id,
 			}
 		}
-		data.bats[idx] = model.NewAOT(40000, factory,
+		data.bats[idx] = model.NewAOTWithSchema(schema, 40000, factory,
 			func(a, b *model.BatchBlock) bool {
 				return a.ID < b.ID
 			})
@@ -675,7 +697,8 @@ func (data *CheckpointData) prepareMeta() {
 			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Append(int32(meta.segDeleteOffset.End), false)
 		}
 	}
-	data.bats[MetaIDX].Append(bat)
+	AppendBatch(data.bats[MetaIDX], bat)
+	//data.bats[MetaIDX].Append(bat)
 }
 
 func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart, delEnd int32) {
@@ -754,18 +777,11 @@ func (data *CheckpointData) WriteTo(
 	if err != nil {
 		return
 	}
-	for i, bat := range data.bats {
+	for i, schema := range checkpointDataSchemas_Curr {
 		if i == int(MetaIDX) {
 			continue
 		}
-		writeFun := func(block *model.BatchBlock) bool {
-			if _, err = writer.WriteSubBatch(containers.ToCNBatch(block.Batch), objectio.ConvertToSchemaType(uint16(i))); err != nil {
-				return false
-			}
-			return true
-		}
-		bat.Scan(writeFun)
-		if err != nil {
+		if _, err = writer.WriteSubBatch(containers.ToCNBatch(GetBatch(data.bats[i], schema)), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 			return
 		}
 	}
@@ -796,7 +812,9 @@ func (data *CheckpointData) WriteTo(
 		return
 	}
 	writeFun := func(block *model.BatchBlock) bool {
-		if _, err = writer2.WriteSubBatch(containers.ToCNBatch(block.Batch), objectio.ConvertToSchemaType(uint16(MetaIDX))); err != nil {
+		if _, err = writer2.WriteSubBatch(
+			containers.ToCNBatch(GetBatch(data.bats[MetaIDX], checkpointDataSchemas_Curr[MetaIDX])),
+			objectio.ConvertToSchemaType(uint16(MetaIDX))); err != nil {
 			return false
 		}
 		return true
@@ -1188,11 +1206,10 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 			dbNode.TxnMVCCNode.AppendTuple(dbInsTxnBat)
 		}
 	}
-	collector.data.bats[DBDeleteIDX].Append(dbDelBat)
-	collector.data.bats[DBDeleteTxnIDX].Append(dbDelTxnBat)
-	logutil.Infof("dbInsBat is %d", dbInsBat.Length())
-	collector.data.bats[DBInsertIDX].Append(dbInsBat)
-	collector.data.bats[DBInsertTxnIDX].Append(dbInsTxnBat)
+	AppendBatch(collector.data.bats[DBDeleteIDX], dbDelBat)
+	AppendBatch(collector.data.bats[DBDeleteTxnIDX], dbDelTxnBat)
+	AppendBatch(collector.data.bats[DBInsertIDX], dbInsBat)
+	AppendBatch(collector.data.bats[DBInsertTxnIDX], dbInsTxnBat)
 	return nil
 }
 func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.BaseEntry) bool {
@@ -1298,15 +1315,15 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 				u64ToRowID(entry.GetID()),
 				tblNode.GetEnd(),
 			)
-			tblNode.TxnMVCCNode.AppendTuple(tableColDelBat)
+			tblNode.TxnMVCCNode.AppendTuple(tableDelTxnBat)
 		}
 	}
-	collector.data.bats[TBLColDeleteIDX].Append(tableColDelBat)
-	collector.data.bats[TBLDeleteTxnIDX].Append(tableDelTxnBat)
-	collector.data.bats[TBLDeleteIDX].Append(tableDelBat)
-	collector.data.bats[TBLColInsertIDX].Append(tableColInsBat)
-	collector.data.bats[TBLInsertIDX].Append(tableInsBat)
-	collector.data.bats[TBLInsertTxnIDX].Append(tableColInsTxnBat)
+	AppendBatch(collector.data.bats[TBLColDeleteIDX], tableColDelBat)
+	AppendBatch(collector.data.bats[TBLDeleteTxnIDX], tableDelTxnBat)
+	AppendBatch(collector.data.bats[TBLDeleteIDX], tableDelBat)
+	AppendBatch(collector.data.bats[TBLColInsertIDX], tableColInsBat)
+	AppendBatch(collector.data.bats[TBLInsertTxnIDX], tableColInsTxnBat)
+	AppendBatch(collector.data.bats[TBLInsertIDX], tableInsBat)
 	return nil
 }
 
@@ -1358,11 +1375,10 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	}
 	delEnd := segDelBat.GetVectorByName(catalog.AttrRowID).Length()
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
-	logutil.Infof("segDelBat is %d", segDelBat.Length())
-	collector.data.bats[SEGDeleteIDX].Append(segDelBat)
-	collector.data.bats[SEGDeleteTxnIDX].Append(segDelTxn)
-	collector.data.bats[SEGInsertIDX].Append(segInsBat)
-	collector.data.bats[SEGInsertTxnIDX].Append(segInsTxn)
+	AppendBatch(collector.data.bats[SEGDeleteIDX], segDelBat)
+	AppendBatch(collector.data.bats[SEGDeleteTxnIDX], segDelTxn)
+	AppendBatch(collector.data.bats[SEGInsertIDX], segInsBat)
+	AppendBatch(collector.data.bats[SEGInsertTxnIDX], segInsTxn)
 	return nil
 }
 
@@ -1477,15 +1493,15 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 			}
 		}
 	}
-	collector.data.bats[BLKDNMetaDeleteIDX].Append(blkDNMetaDelBat)
-	collector.data.bats[BLKDNMetaDeleteTxnIDX].Append(blkDNMetaDelTxnBat)
-	collector.data.bats[BLKDNMetaInsertIDX].Append(blkDNMetaInsBat)
-	collector.data.bats[BLKDNMetaInsertTxnIDX].Append(blkDNMetaInsTxnBat)
-	collector.data.bats[BLKMetaDeleteIDX].Append(blkMetaDelBat)
-	collector.data.bats[BLKMetaDeleteTxnIDX].Append(blkMetaDelTxnBat)
-	collector.data.bats[BLKCNMetaInsertIDX].Append(blkCNMetaInsBat)
-	collector.data.bats[BLKMetaInsertIDX].Append(blkMetaInsBat)
-	collector.data.bats[BLKMetaInsertTxnIDX].Append(blkMetaInsTxnBat)
+	AppendBatch(collector.data.bats[BLKDNMetaDeleteIDX], blkDNMetaDelBat)
+	AppendBatch(collector.data.bats[BLKDNMetaDeleteTxnIDX], blkDNMetaDelTxnBat)
+	AppendBatch(collector.data.bats[BLKDNMetaInsertIDX], blkDNMetaInsBat)
+	AppendBatch(collector.data.bats[BLKDNMetaInsertTxnIDX], blkDNMetaInsTxnBat)
+	AppendBatch(collector.data.bats[BLKMetaDeleteIDX], blkMetaDelBat)
+	AppendBatch(collector.data.bats[BLKMetaDeleteTxnIDX], blkMetaDelTxnBat)
+	AppendBatch(collector.data.bats[BLKCNMetaInsertIDX], blkCNMetaInsBat)
+	AppendBatch(collector.data.bats[BLKMetaInsertIDX], blkMetaInsBat)
+	AppendBatch(collector.data.bats[BLKMetaInsertTxnIDX], blkMetaInsTxnBat)
 	insEnd := GetRows(collector.data.bats[BLKMetaInsertIDX])
 	delEnd := GetRows(collector.data.bats[BLKMetaDeleteIDX])
 	collector.data.UpdateBlkMeta(entry.GetSegment().GetTable().ID, int32(insStart), int32(insEnd), int32(delStart), int32(delEnd))
