@@ -2084,8 +2084,9 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 			}
 		} else {
 			for i, sel := range sels {
-				bs := wCol[sel].GetByteSlice(w.area)
-				err = BuildVarlenaFromByteSlice(v, &vCol[oldLen+i], &bs, mp)
+				//bs := wCol[sel].GetByteSlice(w.area)
+				//err = BuildVarlenaFromByteSlice(v, &vCol[oldLen+i], &bs, mp)
+				err = BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
 				if err != nil {
 					return err
 				}
