@@ -31,7 +31,7 @@ import (
 func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.AlterAddCol, alterCtx *AlterTableContext) error {
 	tableDef := alterPlan.CopyTableDef
 
-	if len(tableDef.Cols) > TableColumnCountLimit {
+	if len(tableDef.Cols) == TableColumnCountLimit {
 		return moerr.NewErrTooManyFields(ctx.GetContext())
 	}
 

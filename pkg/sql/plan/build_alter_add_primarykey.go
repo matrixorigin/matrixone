@@ -38,9 +38,10 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 		if col == nil {
 			return moerr.NewErrKeyColumnDoesNotExits(ctx.GetContext(), colName)
 		}
-
-		err := checkPrimaryKeyPartType(ctx.GetContext(), col.Typ, colName)
-		if err != nil {
+		if err := CheckColumnNameValid(ctx.GetContext(), colName); err != nil {
+			return err
+		}
+		if err := checkPrimaryKeyPartType(ctx.GetContext(), col.Typ, colName); err != nil {
 			return err
 		}
 

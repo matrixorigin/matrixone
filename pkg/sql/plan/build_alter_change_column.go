@@ -218,7 +218,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 	return newCol, nil
 }
 
-// Check if the new column name is valid and conflicts with internal hidden columns
+// Check if the column name is valid and conflicts with internal hidden columns
 func CheckColumnNameValid(ctx context.Context, colName string) error {
 	if _, ok := catalog.InternalColumns[colName]; ok {
 		return moerr.NewErrWrongColumnName(ctx, colName)
