@@ -259,8 +259,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
 			endStep := builder.appendStep(newSinkNodeId)
 			for i, n := range builder.qry.Nodes {
-				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
-					n.SourceStep = endStep
+				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
+					n.SourceStep[0] = endStep
 				}
 			}
 			builder.deleteNode[delCtx.tableDef.TblId] = unionNodeId
@@ -1482,6 +1482,32 @@ func getProjectionByLastNode(builder *QueryBuilder, lastNodeId int32) []*Expr {
 	return projection
 }
 
+func getProjectionByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32) []*Expr {
+	lastNode := builder.qry.Nodes[lastNodeId]
+	projLength := len(lastNode.ProjectList)
+	if projLength == 0 {
+		return getProjectionByLastNodeWithTag(builder, lastNode.Children[0], tag)
+	}
+	projection := make([]*Expr, len(lastNode.ProjectList))
+	for i, expr := range lastNode.ProjectList {
+		name := ""
+		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		projection[i] = &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: tag,
+					ColPos: int32(i),
+					Name:   name,
+				},
+			},
+		}
+	}
+	return projection
+}
+
 func haveUniqueKey(tableDef *TableDef) bool {
 	for _, indexdef := range tableDef.Indexes {
 		if indexdef.Unique {
@@ -1541,10 +1567,52 @@ func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep 
 	sinkScanProject := getProjectionByLastNode(builder, lastNodeId)
 	sinkScanNode := &Node{
 		NodeType:    plan.Node_SINK_SCAN,
-		SourceStep:  sourceStep,
+		SourceStep:  []int32{sourceStep},
 		ProjectList: sinkScanProject,
 	}
 	lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
+	return lastNodeId
+}
+
+func appendSinkScanNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, sourceStep, tag int32) int32 {
+	lastNodeId := builder.qry.Steps[sourceStep]
+	// lastNode := builder.qry.Nodes[lastNodeId]
+	sinkScanProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	sinkScanNode := &Node{
+		NodeType:    plan.Node_SINK_SCAN,
+		SourceStep:  []int32{sourceStep},
+		ProjectList: sinkScanProject,
+		BindingTags: []int32{tag},
+	}
+	lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
+	return lastNodeId
+}
+
+func appendRecursiveScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep, tag int32) int32 {
+	lastNodeId := builder.qry.Steps[sourceStep]
+	// lastNode := builder.qry.Nodes[lastNodeId]
+	recursiveScanProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	recursiveScanNode := &Node{
+		NodeType:    plan.Node_RECURSIVE_SCAN,
+		SourceStep:  []int32{sourceStep},
+		ProjectList: recursiveScanProject,
+		BindingTags: []int32{tag},
+	}
+	lastNodeId = builder.appendNode(recursiveScanNode, bindCtx)
+	return lastNodeId
+}
+
+func appendCTEScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep, tag int32) int32 {
+	lastNodeId := builder.qry.Steps[sourceStep]
+	// lastNode := builder.qry.Nodes[lastNodeId]
+	recursiveScanProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	recursiveScanNode := &Node{
+		NodeType:    plan.Node_RECURSIVE_CTE,
+		SourceStep:  []int32{sourceStep},
+		ProjectList: recursiveScanProject,
+		BindingTags: []int32{tag},
+	}
+	lastNodeId = builder.appendNode(recursiveScanNode, bindCtx)
 	return lastNodeId
 }
 
@@ -1554,6 +1622,18 @@ func appendSinkNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int3
 		NodeType:    plan.Node_SINK,
 		Children:    []int32{lastNodeId},
 		ProjectList: sinkProject,
+	}
+	lastNodeId = builder.appendNode(sinkNode, bindCtx)
+	return lastNodeId
+}
+
+func appendSinkNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, lastNodeId, tag int32) int32 {
+	sinkProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	sinkNode := &Node{
+		NodeType:    plan.Node_SINK,
+		Children:    []int32{lastNodeId},
+		ProjectList: sinkProject,
+		BindingTags: []int32{tag},
 	}
 	lastNodeId = builder.appendNode(sinkNode, bindCtx)
 	return lastNodeId
@@ -2418,7 +2498,7 @@ func reduceSinkSinkScanNodes(qry *Query) {
 			newSteps = append(newSteps, nodeId)
 			if sinkScanNodeIds, ok := pointToNodeMap[nodeId]; ok {
 				for _, sinkScanNodeId := range sinkScanNodeIds {
-					qry.Nodes[sinkScanNodeId].SourceStep = int32(newStepIdx)
+					qry.Nodes[sinkScanNodeId].SourceStep = []int32{int32(newStepIdx)}
 				}
 			}
 		}
@@ -2444,7 +2524,7 @@ func collectSinkAndSinkScanMeta(
 			sinks[nodeId].step = oldStep
 		}
 	} else if node.NodeType == plan.Node_SINK_SCAN {
-		sinkNodeId := qry.Steps[node.SourceStep]
+		sinkNodeId := qry.Steps[node.SourceStep[0]]
 		if _, ok := sinks[sinkNodeId]; !ok {
 			sinks[sinkNodeId] = &sinkMeta{
 				step:  -1,

@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package merge
+package fileservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/assert"
 )
 
-type container struct {
-	colexec.ReceiverOperator
-}
-
-type Argument struct {
-	ctr      *container
-	SinkScan bool
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr != nil {
-		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-	}
+func TestGetForBackup(t *testing.T) {
+	dir := t.TempDir()
+	fs, err := GetForBackup(dir)
+	assert.Nil(t, err)
+	localFS, ok := fs.(*LocalFS)
+	assert.True(t, ok)
+	assert.Equal(t, dir, localFS.rootPath)
 }

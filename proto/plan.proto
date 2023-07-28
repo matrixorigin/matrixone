@@ -600,6 +600,7 @@ message Node {
 		RECURSIVE_CTE = 21;
 		SINK = 22;
 		SINK_SCAN = 23;
+		RECURSIVE_SCAN = 24;
 
 		// Proper Relational Operators
 		AGG = 30;
@@ -711,7 +712,7 @@ message Node {
 	ReplaceCtx replace_ctx = 31;
 
 	// used to connect two plans[steps]
-	int32 source_step = 32;
+	repeated int32 source_step = 32;
 
 	PreDeleteCtx pre_delete_ctx = 33;
 	PreInsertCtx pre_insert_ctx = 34;
