@@ -1232,7 +1232,7 @@ func (c *Compile) getNodeReg(step, nodeId int32) *process.WaitRegister {
 	return c.nodeRegs[[2]int32{step, nodeId}]
 }
 
-func (c *Compile) getStepRegs(step int32, ns []*plan.Node) []*process.WaitRegister {
+func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 	wrs := make([]*process.WaitRegister, len(c.stepRegs[step]))
 	for i, sn := range c.stepRegs[step] {
 		wrs[i] = c.nodeRegs[sn]
@@ -3244,12 +3244,18 @@ func evalRowsetData(proc *process.Process,
 }
 
 func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
-	ss2 := make([]*Scope, 0, len(ss))
+	// see errors.Join()
+	n := 0
 	for _, s := range ss {
-		if s.IsEnd {
-			continue
+		if !s.IsEnd {
+			n++
 		}
-		ss2 = append(ss2, s)
+	}
+	ss2 := make([]*Scope, 0, n)
+	for _, s := range ss {
+		if !s.IsEnd {
+			ss2 = append(ss2, s)
+		}
 	}
 	insert := &vm.Instruction{
 		Op:  vm.Insert,
