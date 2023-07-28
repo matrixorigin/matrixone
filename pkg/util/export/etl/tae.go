@@ -400,7 +400,7 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 		cols := vector.MustFixedCol[types.Datetime](vec)
 		return len(cols), nil
 	default:
-		return 0, moerr.NewInternalError(ctx, "the value type %d is not support now", *vec.GetType())
+		return 0, moerr.NewInternalError(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)
 	}
 }
 
@@ -429,6 +429,6 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		cols := vector.MustFixedCol[types.Datetime](vec)
 		return table.Time2DatetimeString(cols[rowIdx].ConvertToGoTime(time.Local)), nil
 	default:
-		return "", moerr.NewInternalError(ctx, "the value type %d is not support now", *vec.GetType())
+		return "", moerr.NewInternalError(ctx, "the value type with oid %d is not support now", vec.GetType().Oid)
 	}
 }
