@@ -29,8 +29,6 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 	}
 
 	primaryKeys := make([]string, 0)
-	indexs := make([]string, 0)
-
 	pksMap := map[string]bool{}
 	for _, key := range spec.KeyParts {
 		colName := key.ColName.Parts[0] // name of primary key column
@@ -51,7 +49,6 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 
 		primaryKeys = append(primaryKeys, colName)
 		pksMap[colName] = true
-		indexs = append(indexs, colName)
 	}
 
 	pkeyName := ""
