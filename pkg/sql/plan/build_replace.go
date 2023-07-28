@@ -22,11 +22,17 @@ import (
 )
 
 func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
+	if err != nil {
+		return nil, err
+	}
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: &plan.Query{
 				StmtType: plan.Query_REPLACE,
-				Nodes:    []*plan.Node{{NodeType: plan.Node_REPLACE, ReplaceCtx: &plan.ReplaceCtx{}}},
+				Nodes: []*plan.Node{
+					{NodeType: plan.Node_REPLACE, ReplaceCtx: &plan.ReplaceCtx{TableDef: tblInfo.tableDefs[0]}},
+				},
 			},
 		},
 	}, nil

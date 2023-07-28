@@ -1026,6 +1026,16 @@ func (s *Scope) removeRefChildTbl(c *Compile, fkTblId uint64, tblId uint64) erro
 }
 
 func (s *Scope) replace(c *Compile) error {
+	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
+	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
+
+	if deleteCond != "" {
+		_, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
+		if err != nil {
+			return err
+		}
+	}
+
 	_, err := c.runSqlWithResult(strings.ReplaceAll(c.sql, "replace", "insert"))
 	if err != nil {
 		return err

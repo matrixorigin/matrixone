@@ -139,7 +139,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	var err error
 	// sink_scan -> project -> [agg] -> [filter] -> sink
 	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
-	lastNodeId, err = makePreUpdateDeletePlan(builder, bindCtx, updatePlanCtx, lastNodeId)
+	lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
 	if err != nil {
 		return err
 	}

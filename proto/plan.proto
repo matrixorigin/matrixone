@@ -554,10 +554,11 @@ message ReplaceCtx {
 	bool add_affected_rows 	= 2;
 	bool is_cluster_table	= 3;
 	TableDef table_def		= 4;
+	string delete_cond    = 5;
 	// Align array index with the partition number
-	repeated uint64 partition_table_ids = 5;
-	repeated string partition_table_names = 6;
-	int32 partition_idx = 7;
+	repeated uint64 partition_table_ids = 6;
+	repeated string partition_table_names = 7;
+	int32 partition_idx = 8;
 }
 
 message AnalyzeInfo {
