@@ -822,30 +822,58 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_SINK_SCAN, plan.Node_RECURSIVE_SCAN, plan.Node_RECURSIVE_CTE:
 		tag := node.BindingTags[0]
-		for i := range node.ProjectList {
-			globalRef := [2]int32{tag, int32(i)}
-			remapping.addColRef(globalRef)
-		}
-
-	case plan.Node_SINK:
-		childNode := builder.qry.Nodes[node.Children[0]]
-		resultTag := childNode.BindingTags[0]
-		for i := range childNode.ProjectList {
-			colRefCnt[[2]int32{resultTag, int32(i)}] = 1
-		}
-
-		_, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
-		if err != nil {
-			return nil, err
-		}
 		var newProjList []*plan.Expr
+
 		for i, expr := range node.ProjectList {
+			globalRef := [2]int32{tag, int32(i)}
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
 			newProjList = append(newProjList, &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: 0,
 						ColPos: int32(i),
+					},
+				},
+			})
+			remapping.addColRef(globalRef)
+			for _, sourceStep := range node.SourceStep {
+				if sourceStep >= step {
+					continue
+				}
+				colRefBool[[2]int32{sourceStep, int32(i)}] = true
+			}
+
+		}
+		node.ProjectList = newProjList
+
+	case plan.Node_SINK:
+		childNode := builder.qry.Nodes[node.Children[0]]
+		resultTag := childNode.BindingTags[0]
+		for i := range childNode.ProjectList {
+			if colRefBool[[2]int32{step, int32(i)}] {
+				colRefCnt[[2]int32{resultTag, int32(i)}] = 1
+			}
+		}
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+		var newProjList []*plan.Expr
+		for i, expr := range node.ProjectList {
+			if !colRefBool[[2]int32{step, int32(i)}] {
+				continue
+			}
+			sinkColRef[[2]int32{step, int32(i)}] = len(newProjList)
+			newProjList = append(newProjList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: childRemapping.globalToLocal[[2]int32{resultTag, int32(i)}][1],
 						// Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -1062,11 +1090,10 @@ func (builder *QueryBuilder) remapSinkScanColRefs(nodeID int32, step int32, sink
 	node := builder.qry.Nodes[nodeID]
 
 	switch node.NodeType {
-	/*
-		case plan.Node_SINK_SCAN:
-			for _, expr := range node.ProjectList {
-				expr.Expr.(*plan.Expr_Col).Col.ColPos = int32(sinkColRef[[2]int32{step, expr.Expr.(*plan.Expr_Col).Col.ColPos}])
-			}*/
+	case plan.Node_SINK_SCAN:
+		for _, expr := range node.ProjectList {
+			expr.Expr.(*plan.Expr_Col).Col.ColPos = int32(sinkColRef[[2]int32{step, expr.Expr.(*plan.Expr_Col).Col.ColPos}])
+		}
 	default:
 		for i := range node.Children {
 			builder.remapSinkScanColRefs(node.Children[i], step, sinkColRef)
