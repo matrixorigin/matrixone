@@ -354,7 +354,7 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 
 	// for now, only one node can go shuffle, choose the biggest one
 	// will fix this in the future
-	if node.Stats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+	if node.Stats.Shuffle && node.NodeType == plan.Node_JOIN {
 		shuffleID := findShuffleNode(nodeID, nodeID, builder)
 		if shuffleID != -1 {
 			shuffleNode := builder.qry.Nodes[shuffleID]
