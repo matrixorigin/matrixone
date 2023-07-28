@@ -418,6 +418,7 @@ Drop table auto_increment14;
 
 
 -- temporary: test one table more auto_increment columns
+-- @bvt:issue#10903
 drop table if exists auto_increment15;
 create temporary table auto_increment15(
 a int primary key auto_increment,
@@ -440,6 +441,7 @@ select * from auto_increment15;
 insert into auto_increment15(c,d,e) values (200, 400, 600);
 select * from auto_increment15;
 Drop table auto_increment15;
+-- @bvt:issue
 
 
 -- temporary table:abnormal test:auto_increment < 0
