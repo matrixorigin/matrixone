@@ -16,6 +16,7 @@
 package mysql
 
 import (
+    "encoding/json"
     "fmt"
     "strings"
     "go/constant"
@@ -451,6 +452,9 @@ import (
 
 %token <str> BACKEND SERVERS
 
+// python udf
+%token <str> HANDLER
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
@@ -764,6 +768,9 @@ import (
 %type <fillMode> fill_mode
 
 %start start_command
+
+// python udf
+%type<str> func_handler func_handler_opt
 %%
 
 start_command:
@@ -5326,15 +5333,30 @@ proc_arg_in_out_type:
 
 
 create_function_stmt:
-    CREATE FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING
+    CREATE FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING func_handler_opt
     {
-        $$ = &tree.CreateFunction{
+        fun := &tree.CreateFunction{
             Name: $3,
             Args: $5,
             ReturnType: $8,
             Language: $10,
             Body: $12,
         }
+
+        if $10 == "python" {
+            if $13 == "" {
+            	yylex.Error("no handler error")
+            	return 1
+            }
+            body := &tree.PythonFunctionBody{
+            	Handler: $13,
+            	As: $12,
+            }
+            bytes, _ := json.Marshal(body)
+            fun.Body = string(bytes)
+        }
+
+        $$ = fun
     }
 
 func_name:
@@ -5395,6 +5417,18 @@ func_return:
     column_type
     {
         $$ = tree.NewReturnType($1)
+    }
+
+func_handler_opt:
+    {
+    	$$ = ""
+    }
+|   func_handler
+
+func_handler:
+    HANDLER STRING
+    {
+    	$$ = $2
     }
 
 create_view_stmt:

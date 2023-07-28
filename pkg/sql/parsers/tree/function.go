@@ -14,6 +14,12 @@
 
 package tree
 
+import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
 type FunctionArg interface {
 	NodeFormatter
 	Expr
@@ -69,6 +75,24 @@ type FunctionName struct {
 	Name objName
 }
 
+type FunctionLanguage int
+
+const (
+	SQL FunctionLanguage = iota
+	PYTHON
+)
+
+func (l FunctionLanguage) String() string {
+	switch l {
+	case SQL:
+		return "sql"
+	case PYTHON:
+		return "python"
+	default:
+		return "unknown"
+	}
+}
+
 type CreateFunction struct {
 	statementImpl
 	Name       *FunctionName
@@ -76,6 +100,11 @@ type CreateFunction struct {
 	ReturnType *ReturnType
 	Body       string
 	Language   string
+}
+
+type PythonFunctionBody struct {
+	Handler string `json:"handler"`
+	As      string `json:"as"`
 }
 
 type DropFunction struct {
@@ -98,6 +127,18 @@ func (node *FunctionName) Format(ctx *FmtCtx) {
 
 func (node *FunctionName) HasNoNameQualifier() bool {
 	return !node.Name.ExplicitCatalog && !node.Name.ExplicitSchema
+}
+
+func (node *CreateFunction) Valid() error {
+	node.Language = strings.ToLower(node.Language)
+	switch node.Language {
+	case SQL.String():
+		return nil // TODO
+	case PYTHON.String():
+		return nil // TODO
+	default:
+		return moerr.NewInvalidArgNoCtx("function language", node.Language)
+	}
 }
 
 func (node *CreateFunction) Format(ctx *FmtCtx) {

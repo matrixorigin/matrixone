@@ -1099,7 +1099,7 @@ var (
 			comment,
 			character_set_client,
 			collation_connection,
-			database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			database_collation) values ("%s",%d,'%s',"%s",$$%s$$,"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
@@ -8365,7 +8365,10 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	// build argmap and marshal as json
 	argMap = make(map[string]string)
 	for i := 0; i < len(cf.Args); i++ {
-		curName := cf.Args[i].GetName(fmtctx)
+		// FIXME Json maybe should be changed to array later.
+		// here we do not use the param name provided by user,
+		// because two same udfs with different param names will be seen as two different udfs.
+		curName := strconv.Itoa(i)
 		fmtctx.Reset()
 		argMap[curName] = cf.Args[i].GetType(fmtctx)
 		fmtctx.Reset()
