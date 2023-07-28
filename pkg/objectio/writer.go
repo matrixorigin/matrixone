@@ -571,9 +571,14 @@ func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, s
 func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) error {
 	w.Lock()
 	defer w.Unlock()
-	if len(w.blocks) == int(dataType) {
-		blocks := make([]blockData, 0)
-		w.blocks = append(w.blocks, blocks)
+	if dataType < CkpMetaStart {
+		panic("invalid data type")
+	}
+	for i := int(CkpMetaStart); i <= int(dataType); i++ {
+		if len(w.blocks) <= i {
+			blocks := make([]blockData, 0)
+			w.blocks = append(w.blocks, blocks)
+		}
 	}
 	return w.addBlock(&w.blocks[dataType], blockMeta, bat, seqnums)
 }
