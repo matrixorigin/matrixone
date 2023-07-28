@@ -352,6 +352,7 @@ Drop table auto_increment10;
 
 
 -- temporary table:auto_increment > 0 and update/delete
+-- @bvt:issue#10903
 Drop table if exists auto_increment11;
 Create temporary table auto_increment11(col1 int auto_increment primary key) auto_increment = 100;
 insert into auto_increment11 values();
@@ -360,11 +361,12 @@ Insert into auto_increment11 values();
 select last_insert_id();
 Select * from auto_increment11;
 Delete from auto_increment11 where col1 = 100;
+-- @bvt:issue#10903
 -- @bvt:issue#10834
 Update auto_increment11 set col1 = 200 where col1 = 101;
--- @bvt:issue
 Select * from auto_increment11;
 Drop table auto_increment11;
+-- @bvt:issue
 
 
 -- temporary table:auto_increment > 0 and insert into table non-int type
