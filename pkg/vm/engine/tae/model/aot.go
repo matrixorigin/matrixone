@@ -145,6 +145,12 @@ func (aot *AOT[B, R]) Max() (b B) {
 	return
 }
 
+func (aot *AOT[B, R]) GetBlocks() *btree.BTreeG[B] {
+	aot.Lock()
+	defer aot.Unlock()
+	return aot.blocks
+}
+
 // Truncate prunes the blocks.
 // Deletable blocks are those have all txns prepared before the given timestamp
 // For example: truncate the table by timestamp

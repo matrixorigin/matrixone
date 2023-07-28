@@ -17,7 +17,9 @@ package logtail
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -255,9 +257,31 @@ func NewCheckpointMeta() *CheckpointMeta {
 	return &CheckpointMeta{}
 }
 
+type MemoryTable = model.AOT[*model.BatchBlock, *containers.Batch]
+
 type CheckpointData struct {
 	meta map[uint64]*CheckpointMeta
-	bats [MaxIDX]*containers.Batch
+	bats [MaxIDX]*MemoryTable
+}
+
+func GetRows(mt *MemoryTable) int {
+	rows := 0
+	fn := func(block *model.BatchBlock) bool {
+		rows += block.Length()
+		return true
+	}
+	mt.Scan(fn)
+	return rows
+}
+
+func GetBatch(mt *MemoryTable) *containers.Batch {
+	bat := containers.NewBatch()
+	fn := func(block *model.BatchBlock) bool {
+		bat.Append(block.Batch)
+		return true
+	}
+	mt.Scan(fn)
+	return bat
 }
 
 func NewCheckpointData() *CheckpointData {
@@ -265,7 +289,18 @@ func NewCheckpointData() *CheckpointData {
 		meta: make(map[uint64]*CheckpointMeta),
 	}
 	for idx, schema := range checkpointDataSchemas_Curr {
-		data.bats[idx] = makeRespBatchFromSchema(schema)
+		factory := func(_ *containers.Batch) *model.BatchBlock {
+			bat := makeRespBatchFromSchema(schema)
+			id := common.NextGlobalSeqNum()
+			return &model.BatchBlock{
+				Batch: bat,
+				ID:    id,
+			}
+		}
+		data.bats[idx] = model.NewAOT(3, factory,
+			func(a, b *model.BatchBlock) bool {
+				return a.ID < b.ID
+			})
 	}
 	return data
 }
@@ -620,7 +655,7 @@ func windowCNBatch(bat *batch.Batch, start, end uint64) {
 }
 
 func (data *CheckpointData) prepareMeta() {
-	bat := data.bats[MetaIDX]
+	bat := makeRespBatchFromSchema(checkpointDataSchemas_Curr[MetaIDX])
 	for tid, meta := range data.meta {
 		bat.GetVectorByName(SnapshotAttr_TID).Append(tid, false)
 		if meta.blkInsertOffset == nil {
@@ -645,6 +680,7 @@ func (data *CheckpointData) prepareMeta() {
 			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Append(int32(meta.segDeleteOffset.End), false)
 		}
 	}
+	data.bats[MetaIDX].Append(bat)
 }
 
 func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart, delEnd int32) {
@@ -697,14 +733,23 @@ func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 }
 
 func (data *CheckpointData) PrintData() {
-	logutil.Info(BatchToString("BLK-META-DEL-BAT", data.bats[BLKMetaDeleteIDX], true))
-	logutil.Info(BatchToString("BLK-META-INS-BAT", data.bats[BLKMetaInsertIDX], true))
+	/*logutil.Info(BatchToString("BLK-META-DEL-BAT", data.bats[BLKMetaDeleteIDX], true))
+	logutil.Info(BatchToString("BLK-META-INS-BAT", data.bats[BLKMetaInsertIDX], true))*/
+	logutil.Info(data.bats[BLKMetaDeleteIDX].String())
+	logutil.Info(data.bats[BLKMetaInsertIDX].String())
 }
 
 func (data *CheckpointData) WriteTo(
 	writer *blockio.BlockWriter) (blks []objectio.BlockObject, err error) {
 	for i, bat := range data.bats {
-		if _, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
+		writeFun := func(block *model.BatchBlock) bool {
+			if _, err = writer.WriteSubBatch(containers.ToCNBatch(block.Batch), objectio.ConvertToSchemaType(uint16(i))); err != nil {
+				return false
+			}
+			return true
+		}
+		bat.Scan(writeFun)
+		if err != nil {
 			return
 		}
 	}
@@ -802,19 +847,20 @@ func (data *CheckpointData) ReadFrom(
 		if err != nil {
 			return
 		}
-		data.bats[idx] = bat
+		data.bats[idx].Append(bat)
 	}
 	if version == CheckpointVersion1 {
 		bat := data.bats[TBLInsertIDX]
 		if bat == nil {
 			return
 		}
-		length := bat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Length()
+		length := GetRows(bat)
 		vec := containers.MakeVector(types.T_uint32.ToType())
 		for i := 0; i < length; i++ {
 			vec.Append(pkgcatalog.CatalogVersion_V1, false)
 		}
-		bat.AddVector(pkgcatalog.SystemRelAttr_CatalogVersion, vec)
+		//Fixme: add vector to batch
+		//bat.AddVector(pkgcatalog.SystemRelAttr_CatalogVersion, vec)
 	}
 
 	return
@@ -832,12 +878,12 @@ func (data *CheckpointData) Close() {
 func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
 	switch version {
 	case CheckpointVersion1:
-		bat := data.bats[TBLInsertIDX]
-		if bat == nil {
-			return
+		colseFun := func(block *model.BatchBlock) bool {
+			vec := block.GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion)
+			vec.Close()
+			return true
 		}
-		vec := data.bats[TBLInsertIDX].GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion)
-		vec.Close()
+		data.bats[TBLInsertIDX].Scan(colseFun)
 	}
 }
 
@@ -846,10 +892,11 @@ func (data *CheckpointData) GetDBBatchs() (
 	*containers.Batch,
 	*containers.Batch,
 	*containers.Batch) {
-	return data.bats[DBInsertIDX],
-		data.bats[DBInsertTxnIDX],
-		data.bats[DBDeleteIDX],
-		data.bats[DBDeleteTxnIDX]
+	return GetBatch(data.bats[DBInsertIDX]),
+		GetBatch(data.bats[DBInsertTxnIDX]),
+		GetBatch(data.bats[DBDeleteIDX]),
+		GetBatch(data.bats[DBDeleteTxnIDX])
+
 }
 func (data *CheckpointData) GetTblBatchs() (
 	*containers.Batch,
@@ -857,41 +904,41 @@ func (data *CheckpointData) GetTblBatchs() (
 	*containers.Batch,
 	*containers.Batch,
 	*containers.Batch) {
-	return data.bats[TBLInsertIDX],
-		data.bats[TBLInsertTxnIDX],
-		data.bats[TBLColInsertIDX],
-		data.bats[TBLDeleteIDX],
-		data.bats[TBLDeleteTxnIDX]
+	return GetBatch(data.bats[TBLInsertIDX]),
+		GetBatch(data.bats[TBLInsertTxnIDX]),
+		GetBatch(data.bats[TBLColInsertIDX]),
+		GetBatch(data.bats[TBLDeleteIDX]),
+		GetBatch(data.bats[TBLDeleteTxnIDX])
 }
 func (data *CheckpointData) GetSegBatchs() (
 	*containers.Batch,
 	*containers.Batch,
 	*containers.Batch,
 	*containers.Batch) {
-	return data.bats[SEGInsertIDX],
-		data.bats[SEGInsertTxnIDX],
-		data.bats[SEGDeleteIDX],
-		data.bats[SEGDeleteTxnIDX]
+	return GetBatch(data.bats[SEGInsertIDX]),
+		GetBatch(data.bats[SEGInsertTxnIDX]),
+		GetBatch(data.bats[SEGDeleteIDX]),
+		GetBatch(data.bats[SEGDeleteTxnIDX])
 }
 func (data *CheckpointData) GetBlkBatchs() (
 	*containers.Batch,
 	*containers.Batch,
 	*containers.Batch,
 	*containers.Batch) {
-	return data.bats[BLKMetaInsertIDX],
-		data.bats[BLKMetaInsertTxnIDX],
-		data.bats[BLKMetaDeleteIDX],
-		data.bats[BLKMetaDeleteTxnIDX]
+	return GetBatch(data.bats[BLKMetaInsertIDX]),
+		GetBatch(data.bats[BLKMetaInsertTxnIDX]),
+		GetBatch(data.bats[BLKMetaDeleteIDX]),
+		GetBatch(data.bats[BLKMetaDeleteTxnIDX])
 }
 func (data *CheckpointData) GetDNBlkBatchs() (
 	*containers.Batch,
 	*containers.Batch,
 	*containers.Batch,
 	*containers.Batch) {
-	return data.bats[BLKDNMetaInsertIDX],
-		data.bats[BLKDNMetaInsertTxnIDX],
-		data.bats[BLKDNMetaDeleteIDX],
-		data.bats[BLKDNMetaDeleteTxnIDX]
+	return GetBatch(data.bats[BLKDNMetaInsertIDX]),
+		GetBatch(data.bats[BLKDNMetaInsertTxnIDX]),
+		GetBatch(data.bats[BLKDNMetaDeleteIDX]),
+		GetBatch(data.bats[BLKDNMetaDeleteTxnIDX])
 }
 
 func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
@@ -1061,33 +1108,41 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	if len(mvccNodes) == 0 {
 		return nil
 	}
-	delStart := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	delStart := GetRows(collector.data.bats[SEGDeleteIDX])
+	segDelBat := makeRespBatchFromSchema(checkpointDataSchemas_Curr[SEGDeleteIDX])
+	segDelTxn := makeRespBatchFromSchema(checkpointDataSchemas_Curr[SEGDeleteTxnIDX])
+	segInsBat := makeRespBatchFromSchema(checkpointDataSchemas_Curr[SEGInsertIDX])
+	segInsTxn := makeRespBatchFromSchema(checkpointDataSchemas_Curr[SEGInsertTxnIDX])
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
 			continue
 		}
 		segNode := node
 		if segNode.HasDropCommitted() {
-			collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Append(segid2rowid(&entry.ID), false)
-			collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrCommitTs).Append(segNode.GetEnd(), false)
-			collector.data.bats[SEGDeleteTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID(), false)
-			collector.data.bats[SEGDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID(), false)
-			segNode.TxnMVCCNode.AppendTuple(collector.data.bats[SEGDeleteTxnIDX])
+			segDelBat.GetVectorByName(catalog.AttrRowID).Append(segid2rowid(&entry.ID), false)
+			segDelBat.GetVectorByName(catalog.AttrCommitTs).Append(segNode.GetEnd(), false)
+			segDelTxn.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID(), false)
+			segDelTxn.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID(), false)
+			segNode.TxnMVCCNode.AppendTuple(segDelTxn)
 		} else {
-			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_ID).Append(entry.ID, false)
-			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_CreateAt).Append(segNode.GetEnd(), false)
+			segInsBat.GetVectorByName(SegmentAttr_ID).Append(entry.ID, false)
+			segInsBat.GetVectorByName(SegmentAttr_CreateAt).Append(segNode.GetEnd(), false)
 			buf := &bytes.Buffer{}
 			if _, err := entry.SegmentNode.WriteTo(buf); err != nil {
 				return err
 			}
-			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_SegNode).Append(buf.Bytes(), false)
-			collector.data.bats[SEGInsertTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID(), false)
-			collector.data.bats[SEGInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID(), false)
-			segNode.TxnMVCCNode.AppendTuple(collector.data.bats[SEGInsertTxnIDX])
+			segInsBat.GetVectorByName(SegmentAttr_SegNode).Append(buf.Bytes(), false)
+			segInsTxn.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID(), false)
+			segInsTxn.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID(), false)
+			segNode.TxnMVCCNode.AppendTuple(segInsTxn)
 		}
 	}
-	delEnd := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	delEnd := segDelBat.GetVectorByName(catalog.AttrRowID).Length()
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
+	collector.data.bats[SEGDeleteIDX].Append(segDelBat)
+	collector.data.bats[SEGDeleteTxnIDX].Append(segDelTxn)
+	collector.data.bats[SEGInsertIDX].Append(segInsBat)
+	collector.data.bats[SEGInsertTxnIDX].Append(segInsTxn)
 	return nil
 }
 

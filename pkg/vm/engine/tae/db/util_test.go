@@ -73,4 +73,12 @@ func TestAOT2(t *testing.T) {
 	assert.NoError(t, aot.Append(bat))
 	t.Log(aot.BlockCount())
 	assert.Equal(t, 5, aot.BlockCount())
+	rows := 0
+	fn := func(block *model.BatchBlock) bool {
+		rows += block.Length()
+		return true
+	}
+	aot.Scan(fn)
+	aot.
+		assert.Equal(t, 42, rows)
 }
