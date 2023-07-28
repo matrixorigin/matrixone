@@ -218,6 +218,9 @@ func (aot *AOT[B, R]) Append(rows R) (err error) {
 		appended int
 		toAppend int
 	)
+	if rows.Length() == 0 {
+		return
+	}
 	for !done {
 		toAppend, done = aot.prepareAppend(rows.Length() - appended)
 		if toAppend == 0 {

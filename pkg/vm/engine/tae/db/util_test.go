@@ -79,6 +79,5 @@ func TestAOT2(t *testing.T) {
 		return true
 	}
 	aot.Scan(fn)
-	aot.
-		assert.Equal(t, 42, rows)
+	assert.Equal(t, 42, rows)
 }
