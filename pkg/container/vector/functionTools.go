@@ -446,6 +446,15 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 	return nil
 }
 
+func (fr *FunctionResult[T]) AppendEmbedding(val []float32, isnull bool) error {
+	if !fr.vec.IsConst() {
+		return AppendEmbedding(fr.vec, val, isnull, fr.mp)
+	} else if !isnull {
+		return SetConstEmbedding(fr.vec, val, fr.vec.Length(), fr.mp)
+	}
+	return nil
+}
+
 func (fr *FunctionResult[T]) AppendMustValue(val T) {
 	fr.cols[fr.length] = val
 	fr.length++
