@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -656,38 +655,48 @@ func (tbl *txnTable) rangesOnePart(
 	for _, bid := range tbl.GetDirtyBlksIn(state) {
 		dirtyBlks[bid] = struct{}{}
 	}
-	txn := tbl.db.txn
+
+	insertedS3Blks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
+	if err != nil {
+		return err
+	}
+	for _, blk := range insertedS3Blks {
+		blks = append(blks, blk)
+		if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
+			dirtyBlks[blk.BlockID] = struct{}{}
+		}
+	}
+
+	//txn := tbl.db.txn
 	for _, entry := range tbl.writes {
 		if entry.typ == INSERT {
-			if entry.bat == nil || entry.bat.IsEmpty() {
-				continue
-			}
-			if entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
-				continue
-			}
-			//load uncommitted blocks from txn's workspace.
-			metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
-			for _, metaLoc := range metaLocs {
-				location, err := blockio.EncodeLocationFromString(metaLoc)
-				if err != nil {
-					return err
-				}
-				sid := location.Name().SegmentId()
-				blkid := objectio.NewBlockid(
-					&sid,
-					location.Name().Num(),
-					location.ID())
-				pos, ok := txn.cnBlkId_Pos[*blkid]
-				if !ok {
-					panic(fmt.Sprintf("blkid %s not found", blkid.String()))
-				}
-				blks = append(blks, pos.blkInfo)
-				var offsets []int64
-				txn.deletedBlocks.getDeletedOffsetsByBlock(blkid, &offsets)
-				if len(offsets) != 0 {
-					dirtyBlks[*blkid] = struct{}{}
-				}
-			}
+			//if entry.bat == nil || entry.bat.IsEmpty() {
+			//	continue
+			//}
+			//if entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
+			//	continue
+			//}
+			////load uncommitted blocks from txn's workspace.
+			//metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
+			//for _, metaLoc := range metaLocs {
+			//	location, err := blockio.EncodeLocationFromString(metaLoc)
+			//	if err != nil {
+			//		return err
+			//	}
+			//	sid := location.Name().SegmentId()
+			//	blkid := objectio.NewBlockid(
+			//		&sid,
+			//		location.Name().Num(),
+			//		location.ID())
+			//	pos, ok := txn.cnBlkId_Pos[*blkid]
+			//	if !ok {
+			//		panic(fmt.Sprintf("blkid %s not found", blkid.String()))
+			//	}
+			//	blks = append(blks, pos.blkInfo)
+			//	if txn.deletedBlocks.isDeleted(blkid) {
+			//		dirtyBlks[*blkid] = struct{}{}
+			//	}
+			//}
 			continue
 		}
 		// entry.typ == DELETE
@@ -990,12 +999,13 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	// for writing S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 		tbl.db.txn.hasS3Op.Store(true)
-		blkInfo := catalog.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0))
-		fileName := blkInfo.MetaLocation().Name().String()
-		ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
-		if err != nil {
-			return err
-		}
+		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
+		fileName := catalog.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
+		//fileName := blkInfo.MetaLocation().Name().String()
+		//ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
+		//if err != nil {
+		//	return err
+		//}
 		return tbl.db.txn.WriteFile(
 			INSERT,
 			tbl.db.databaseId,
@@ -1003,7 +1013,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.db.databaseName,
 			tbl.tableName,
 			fileName,
-			ibat,
+			//ibat,
+			bat,
 			tbl.db.txn.dnStores[0])
 	}
 	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
