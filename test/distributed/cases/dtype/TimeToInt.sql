@@ -20,6 +20,7 @@ select cast(col1 as int) from test01;
 select cast(col1 as decimal(20,10)) from test01;
 drop table test01;
 
+-- @bvt:issue#10895
 -- explicit:datetime with scale to int and decimal
 drop table if exists test01;
 create table test01(col1 datetime(3));
@@ -27,10 +28,11 @@ insert into test01 values('2020-01-13 12:20:59.12343243');
 insert into test01 values('2023-04-17 01:01:45');
 insert into test01 values(NULL);
 select * from test01;
-
 select cast(col1 as int) from test01;
 select cast(col1 as decimal(20,10)) from test01;
 drop table test01;
+-- @bvt:issue
+
 
 -- explicit:date to int
 drop table if exists test02;
@@ -78,6 +80,7 @@ drop table test05;
 drop table test06;
 drop table test07;
 
+-- @bvt:issue#10895
 -- implicit:datetime with scale to int/decimal
 drop table if exists test05;
 drop table if exists test06;
@@ -100,6 +103,7 @@ select * from test07;
 drop table test05;
 drop table test06;
 drop table test07;
+-- @bvt:issue
 
 -- implicit:date to int
 drop table if exists test07;
