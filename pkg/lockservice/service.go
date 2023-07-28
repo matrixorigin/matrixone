@@ -47,6 +47,11 @@ type service struct {
 		server Server
 		keeper LockTableKeeper
 	}
+
+	mu struct {
+		sync.RWMutex
+		allocating map[uint64]chan struct{}
+	}
 }
 
 // NewLockService create a lock service instance
@@ -60,6 +65,7 @@ func NewLockService(cfg Config) LockService {
 			stopper.WithLogger(getLogger().RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
 	}
+	s.mu.allocating = make(map[uint64]chan struct{})
 	s.activeTxnHolder = newMapBasedTxnHandler(s.cfg.ServiceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
 		s.cfg.ServiceID,
@@ -225,14 +231,54 @@ func (s *service) getLockTable(tableID uint64) (lockTable, error) {
 	return s.getLockTableWithCreate(tableID, true)
 }
 
+func (s *service) waitLockTableBind(tableID uint64, locked bool) lockTable {
+	getter := func() chan struct{} {
+		if !locked {
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+		}
+		return s.mu.allocating[tableID]
+	}
+
+	c := getter()
+	if c != nil {
+		<-c
+	}
+	if v, ok := s.tables.Load(tableID); ok {
+		return v.(lockTable)
+	}
+	return nil
+}
+
 func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable, error) {
 	if v, ok := s.tables.Load(tableID); ok {
 		return v.(lockTable), nil
 	}
 	if !create {
-		return nil, nil
+		return s.waitLockTableBind(tableID, false), nil
 	}
 
+	var c chan struct{}
+	fn := func() lockTable {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		v := s.waitLockTableBind(tableID, true)
+		if v == nil {
+			c = make(chan struct{})
+			s.mu.allocating[tableID] = c
+		}
+		return v
+	}
+	if v := fn(); v != nil {
+		return v, nil
+	}
+
+	defer func() {
+		close(c)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.mu.allocating, tableID)
+	}()
 	bind, err := getLockTableBind(
 		s.remote.client,
 		tableID,
@@ -242,9 +288,8 @@ func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable
 	}
 
 	l := s.createLockTableByBind(bind)
-	if v, loaded := s.tables.LoadOrStore(tableID, l); loaded {
-		l.close()
-		return v.(lockTable), nil
+	if _, loaded := s.tables.LoadOrStore(tableID, l); loaded {
+		getLogger().Fatal("BUG: cannot loaded lock table from tables")
 	}
 	return l, nil
 }

@@ -33,10 +33,11 @@ var (
 )
 
 type EncodeBatch struct {
-	rowCount int64
-	Vecs     []*vector.Vector
-	Attrs    []string
-	AggInfos []aggInfo
+	rowCount  int64
+	Vecs      []*vector.Vector
+	Attrs     []string
+	AggInfos  []aggInfo
+	Recursive int32
 }
 
 func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
@@ -86,6 +87,8 @@ func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
 		buf.Write(types.EncodeInt32(&size))
 		buf.Write(data)
 	}
+
+	buf.Write(types.EncodeInt32(&m.Recursive))
 
 	return buf.Bytes(), nil
 }
@@ -145,6 +148,8 @@ func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
 	}
 	m.AggInfos = aggs
 
+	m.Recursive = types.DecodeInt32(buf[:4])
+
 	return nil
 }
 
@@ -162,6 +167,8 @@ type aggInfo struct {
 //	(Attrs) - list of attributes
 //	(vecs) 	- columns
 type Batch struct {
+	// For recursive CTE, 1 is last batch, 2 is end of batch
+	Recursive int32
 	// Ro if true, Attrs is read only
 	Ro         bool
 	ShuffleIDX int //used only in shuffle dispatch

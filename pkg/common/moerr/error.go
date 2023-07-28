@@ -179,6 +179,7 @@ const (
 	ErrTAEDebug                  uint16 = 20626
 	ErrDuplicateKey              uint16 = 20627
 	ErrTxnNeedRetry              uint16 = 20628
+	ErrTAENeedRetry              uint16 = 20629
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -207,6 +208,7 @@ const (
 	ErrUniqueKeyNeedAllFieldsInPf          uint16 = 20816
 	ErrPartitionMaxvalue                   uint16 = 20817
 	ErrRangeNotIncreasing                  uint16 = 20818
+	ErrCheckRecursiveLevel                 uint16 = 20819
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -345,6 +347,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 	ErrTxnNeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
+	ErrTAENeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae need retry"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -370,6 +373,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrUniqueKeyNeedAllFieldsInPf:          {ER_UNIQUE_KEY_NEED_ALL_FIELDS_IN_PF, []string{MySQLDefaultSqlState}, "A %-.192s must include all columns in the table's partitioning function"},
 	ErrPartitionMaxvalue:                   {ER_PARTITION_MAXVALUE_ERROR, []string{MySQLDefaultSqlState}, "MAXVALUE can only be used in last partition definition"},
 	ErrRangeNotIncreasing:                  {ER_RANGE_NOT_INCREASING_ERROR, []string{MySQLDefaultSqlState}, "VALUES LESS THAN value must be strictly increasing for each partition"},
+	ErrCheckRecursiveLevel:                 {ErrCheckRecursiveLevel, []string{MySQLDefaultSqlState}, "recursive level out of range"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1061,6 +1065,9 @@ func NewErrRangeNotIncreasing(ctx context.Context) *Error {
 
 func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
 	return newError(ctx, ErrForeignKeyOnPartitioned)
+}
+func NewCheckRecursiveLevel(ctx context.Context) *Error {
+	return newError(ctx, ErrCheckRecursiveLevel)
 }
 
 var contextFunc atomic.Value

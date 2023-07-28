@@ -721,7 +721,7 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		}
 
 		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
-		if ok && !v.(bool) {
+		if ok && v.(bool) {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
 				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 				util.GetLogger().Fatal("failed",

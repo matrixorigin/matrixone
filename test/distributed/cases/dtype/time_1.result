@@ -128,7 +128,7 @@ Field 't2' is of a not allowed type for this type of partitioning
 create table time_03 (t1 int,t2 time primary key,t3 varchar(25));
 insert into time_03 values (30,"101412","yellow");
 insert into time_03 values (40,"101412","apple");
-Duplicate entry '10:14:12.000000' for key 't2'
+Duplicate entry ('\d{2}\:\d{2}:\d{2}'|'\d{2}\:\d{2}:\d{2}\.\d{6}') for key 't2'
 select * from time_03;
 t1    t2    t3
 30    10:14:12    yellow
@@ -136,7 +136,7 @@ drop table time_03;
 create table time_03 (t1 int,t2 time,t3 varchar(25),t4 time default '110034',primary key(t1,t2));
 insert into time_03(t1,t2,t3) values (30,"24:59:09.932823","yellow");
 insert into time_03(t1,t2,t3) values (30,"24:59:09.932823","oooppppp");
-Duplicate entry '3a151e471914f1701380' for key '__mo_cpkey_col'
+Duplicate entry ('\(\d{2}\,\d{11}\)'|'\d\w\d{3}\w\d{6}\w\d{7}') for key '__mo_cpkey_col'
 insert into time_03(t1,t2,t3) values (31,"24:59:09.932823","postttttt");
 insert into time_03(t1,t2,t3) values (32,NULL,"vinda");
 constraint violation: Column 't2' cannot be null

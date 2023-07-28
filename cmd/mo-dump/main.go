@@ -373,7 +373,9 @@ func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string, lo
 		}
 		for i, v := range args {
 			dt, format := convertValue2(v, cols[i].Type)
-			_, err = fmt.Fprintf(f, format, dt)
+			str := fmt.Sprintf(format, dt)
+			str = strings.ReplaceAll(str, "\\\"", "\"\"")
+			_, err = fmt.Fprintf(f, "%s", str)
 			if err != nil {
 				return err
 			}

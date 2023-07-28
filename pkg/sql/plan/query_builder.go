@@ -820,6 +820,40 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
+	case plan.Node_SINK_SCAN, plan.Node_RECURSIVE_SCAN, plan.Node_RECURSIVE_CTE:
+		tag := node.BindingTags[0]
+		for i := range node.ProjectList {
+			globalRef := [2]int32{tag, int32(i)}
+			remapping.addColRef(globalRef)
+		}
+
+	case plan.Node_SINK:
+		childNode := builder.qry.Nodes[node.Children[0]]
+		resultTag := childNode.BindingTags[0]
+		for i := range childNode.ProjectList {
+			colRefCnt[[2]int32{resultTag, int32(i)}] = 1
+		}
+
+		_, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		if err != nil {
+			return nil, err
+		}
+		var newProjList []*plan.Expr
+		for i, expr := range node.ProjectList {
+			newProjList = append(newProjList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						// Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		node.ProjectList = newProjList
+
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		projectTag := node.BindingTags[0]
 
@@ -1118,6 +1152,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	var nodeID int32
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
+		subCtx.unionSelect = subCtx.initSelect
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.buildSelect(slt, subCtx, isRoot)
 		} else {
@@ -1385,6 +1420,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		ctx.results = ctx.projects
 	}
 
+	if ctx.initSelect {
+		lastNodeID = appendSinkNodeWithTag(builder, ctx, lastNodeID, ctx.sinkTag)
+	}
+
 	// set heading
 	if isRoot {
 		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
@@ -1419,30 +1458,81 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			maskedNames = append(maskedNames, name)
 
 			ctx.cteByName[name] = &CTERef{
-				ast:        cte,
-				maskedCTEs: maskedCTEs,
+				ast:         cte,
+				isRecursive: stmt.With.IsRecursive,
+				maskedCTEs:  maskedCTEs,
 			}
 		}
 
 		// Try to do binding for CTE at declaration
 		for _, cte := range stmt.With.CTEs {
-			subCtx := NewBindContext(builder, ctx)
-			subCtx.maskedCTEs = ctx.cteByName[string(cte.Name.Alias)].maskedCTEs
+
+			table := string(cte.Name.Alias)
+			cteRef := ctx.cteByName[table]
 
 			var err error
+			var s *tree.Select
 			switch stmt := cte.Stmt.(type) {
 			case *tree.Select:
-				_, err = builder.buildSelect(stmt, subCtx, false)
+				s = stmt
 
 			case *tree.ParenSelect:
-				_, err = builder.buildSelect(stmt.Select, subCtx, false)
+				s = stmt.Select
 
 			default:
-				err = moerr.NewParseError(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+				return 0, moerr.NewParseError(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
 			}
 
+			var left *tree.SelectStatement
+			var stmts []tree.SelectStatement
+			left, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
 			if err != nil {
 				return 0, err
+			}
+			isR := len(stmts) > 0
+
+			if isR && !cteRef.isRecursive {
+				return 0, moerr.NewParseError(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
+			} else if !isR {
+				subCtx := NewBindContext(builder, ctx)
+				subCtx.maskedCTEs = cteRef.maskedCTEs
+				cteRef.isRecursive = false
+				_, err := builder.buildSelect(s, subCtx, false)
+				if err != nil {
+					return 0, err
+				}
+			} else {
+
+				initCtx := NewBindContext(builder, ctx)
+				initCtx.initSelect = true
+				initCtx.sinkTag = builder.genNewTag()
+				initCtx.isTryBindingCTE = true
+				initLastNodeID, err := builder.buildSelect(&tree.Select{Select: *left}, initCtx, false)
+				if err != nil {
+					return 0, err
+				}
+				recursiveNodeId := initLastNodeID
+				for _, r := range stmts {
+					subCtx := NewBindContext(builder, ctx)
+					subCtx.maskedCTEs = cteRef.maskedCTEs
+					subCtx.recSelect = true
+					subCtx.sinkTag = builder.genNewTag()
+					subCtx.isTryBindingCTE = true
+					subCtx.cteByName = make(map[string]*CTERef)
+					subCtx.cteByName[table] = cteRef
+					err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, subCtx)
+					if err != nil {
+						return 0, err
+					}
+					sourceStep := builder.appendStep(recursiveNodeId)
+					nodeID := appendSinkScanNodeWithTag(builder, subCtx, sourceStep, subCtx.sinkTag)
+					subCtx.recRecursiveScanNodeId = nodeID
+					recursiveNodeId, err = builder.buildSelect(&tree.Select{Select: r}, subCtx, false)
+					if err != nil {
+						return 0, err
+					}
+				}
+				builder.qry.Steps = builder.qry.Steps[:0]
 			}
 		}
 	}
@@ -1613,6 +1703,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		ctx.binder = NewWhereBinder(builder, ctx)
+		if !ctx.isTryBindingCTE {
+			if ctx.initSelect {
+				clause.Exprs = append(clause.Exprs, makeZeroRecursiveLevel())
+			} else if ctx.recSelect {
+				clause.Exprs = append(clause.Exprs, makePlusRecursiveLevel(ctx.cteName))
+			}
+		}
 		// unfold stars and generate headings
 		for _, selectExpr := range clause.Exprs {
 			switch expr := selectExpr.Expr.(type) {
@@ -1621,8 +1718,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				if err != nil {
 					return 0, err
 				}
-				selectList = append(selectList, cols...)
-				ctx.headings = append(ctx.headings, names...)
+				for i, name := range names {
+					if ctx.finalSelect && name == moRecursiveLevelCol {
+						continue
+					}
+					selectList = append(selectList, cols[i])
+					ctx.headings = append(ctx.headings, name)
+				}
 
 			case *tree.UnresolvedName:
 				if expr.Star {
@@ -1721,6 +1823,17 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		// rewrite right join to left join
 		builder.rewriteRightJoinToLeftJoin(nodeID)
 
+		if !ctx.isTryBindingCTE && ctx.recSelect {
+			f := &tree.FuncExpr{
+				Func:  tree.FuncName2ResolvableFunctionReference(tree.SetUnresolvedName(moCheckRecursionLevelFun)),
+				Exprs: tree.Exprs{tree.NewComparisonExpr(tree.LESS_THAN, tree.SetUnresolvedName(ctx.cteName, moRecursiveLevelCol), tree.NewNumValWithType(constant.MakeInt64(moDefaultRecursionMax), fmt.Sprintf("%d", moDefaultRecursionMax), false, tree.P_int64))},
+			}
+			if clause.Where != nil {
+				clause.Where = &tree.Where{Type: tree.AstWhere, Expr: tree.NewAndExpr(clause.Where.Expr, f)}
+			} else {
+				clause.Where = &tree.Where{Type: tree.AstWhere, Expr: f}
+			}
+		}
 		if clause.Where != nil {
 			whereList, err := splitAndBindCondition(clause.Where.Expr, NoAlias, ctx)
 			if err != nil {
@@ -1770,6 +1883,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		// bind GROUP BY clause
 		if clause.GroupBy != nil {
+			if ctx.recSelect {
+				return 0, moerr.NewParseError(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(&clause.GroupBy, dialect.MYSQL))
+			}
 			groupBinder := NewGroupBinder(builder, ctx)
 			for _, group := range clause.GroupBy {
 				group, err = ctx.qualifyColumnNames(group, AliasAfterColumn)
@@ -1787,6 +1903,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		// bind HAVING clause
 		havingBinder = NewHavingBinder(builder, ctx)
 		if clause.Having != nil {
+			if ctx.recSelect {
+				return 0, moerr.NewParseError(builder.GetContext(), "not support having in recursive cte: '%v'", tree.String(clause.Having, dialect.MYSQL))
+			}
 			ctx.binder = havingBinder
 			havingList, err = splitAndBindCondition(clause.Having.Expr, AliasAfterColumn, ctx)
 			if err != nil {
@@ -1820,6 +1939,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	// bind ORDER BY clause
 	var orderBys []*plan.OrderBySpec
 	if astOrderBy != nil {
+		if ctx.recSelect {
+			return 0, moerr.NewParseError(builder.GetContext(), "not support order by in recursive cte: '%v'", tree.String(&astOrderBy, dialect.MYSQL))
+		}
 		orderBinder := NewOrderBinder(projectionBinder, selectList)
 		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
@@ -1909,6 +2031,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	// append AGG node
 	if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
+		if ctx.recSelect {
+			return 0, moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
+		}
 		if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
 		}
@@ -1951,6 +2076,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	// append WINDOW node
 	if len(ctx.windows) > 0 {
+		if ctx.recSelect {
+			return 0, moerr.NewInternalError(builder.GetContext(), "not support window function recursive cte")
+		}
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_WINDOW,
 			Children:    []int32{nodeID},
@@ -2028,6 +2156,10 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}, ctx)
 	} else {
 		ctx.results = ctx.projects
+	}
+
+	if (ctx.initSelect || ctx.recSelect) && !ctx.unionSelect {
+		nodeID = appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
 	}
 
 	if isRoot {
@@ -2110,6 +2242,84 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	// return leftChildID, err
 }
 
+func (builder *QueryBuilder) splitRecursiveMember(stmt *tree.SelectStatement, name string, stmts *[]tree.SelectStatement) (*tree.SelectStatement, error) {
+	ok, left, err := builder.checkRecursiveCTE(stmt, name, stmts)
+	if !ok || err != nil {
+		return left, err
+	}
+	return builder.splitRecursiveMember(left, name, stmts)
+}
+
+func (builder *QueryBuilder) checkRecursiveCTE(left *tree.SelectStatement, name string, stmts *[]tree.SelectStatement) (bool, *tree.SelectStatement, error) {
+	if u, ok := (*left).(*tree.UnionClause); ok {
+		if !u.All {
+			return false, left, nil
+		}
+
+		rt, ok := u.Right.(*tree.SelectClause)
+		if !ok {
+			return false, left, nil
+		}
+
+		count, err := builder.checkRecursiveTable(rt.From.Tables[0], name)
+		if err != nil && count > 0 {
+			return false, left, err
+		}
+		if count == 0 {
+			return false, left, nil
+		}
+		if count > 1 {
+			return false, left, moerr.NewParseError(builder.GetContext(), "unsupport multiple recursive table expr in recursive CTE: %T", left)
+		}
+		*stmts = append(*stmts, u.Right)
+		return true, &u.Left, nil
+	}
+	return false, left, nil
+}
+
+func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name string) (int, error) {
+	switch tbl := stmt.(type) {
+	case *tree.Select:
+		return 0, moerr.NewParseError(builder.GetContext(), "unsupport SUBQUERY in recursive CTE: %T", stmt)
+
+	case *tree.TableName:
+		table := string(tbl.ObjectName)
+		if table == name {
+			return 1, nil
+		}
+		return 0, nil
+
+	case *tree.JoinTableExpr:
+		var err, err0 error
+		if tbl.JoinType == tree.JOIN_TYPE_LEFT || tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
+			err0 = moerr.NewParseError(builder.GetContext(), "unsupport LEFT, RIGHT or OUTER JOIN in recursive CTE: %T", stmt)
+		}
+		c1, err1 := builder.checkRecursiveTable(tbl.Left, name)
+		c2, err2 := builder.checkRecursiveTable(tbl.Right, name)
+		if err0 != nil {
+			err = err0
+		} else if err1 != nil {
+			err = err1
+		} else {
+			err = err2
+		}
+		c := c1 + c2
+		return c, err
+
+	case *tree.TableFunction:
+		return 0, nil
+
+	case *tree.ParenTableExpr:
+		return builder.checkRecursiveTable(tbl.Expr, name)
+
+	case *tree.AliasedTableExpr:
+		return builder.checkRecursiveTable(tbl.Expr, name)
+
+	default:
+		return 0, nil
+	}
+}
+
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
@@ -2142,41 +2352,149 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
-				subCtx := NewBindContext(builder, ctx)
-				subCtx.maskedCTEs = cteRef.maskedCTEs
-				subCtx.cteName = table
-				//reset defaultDatabase
-				if len(cteRef.defaultDatabase) > 0 {
-					subCtx.defaultDatabase = cteRef.defaultDatabase
-				}
-
-				switch stmt := cteRef.ast.Stmt.(type) {
-				case *tree.Select:
-					nodeID, err = builder.buildSelect(stmt, subCtx, false)
-
-				case *tree.ParenSelect:
-					nodeID, err = builder.buildSelect(stmt.Select, subCtx, false)
-
-				default:
-					err = moerr.NewParseError(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
-				}
-
-				if err != nil {
+				if ctx.recSelect {
+					nodeID = ctx.recRecursiveScanNodeId
 					return
 				}
 
-				if subCtx.hasSingleRow {
-					ctx.hasSingleRow = true
+				var s *tree.Select
+				switch stmt := cteRef.ast.Stmt.(type) {
+				case *tree.Select:
+					s = stmt
+				case *tree.ParenSelect:
+					s = stmt.Select
+				default:
+					err = moerr.NewParseError(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+					return
 				}
 
-				cols := cteRef.ast.Name.Cols
-
-				if len(cols) > len(subCtx.headings) {
-					return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
+				var left *tree.SelectStatement
+				var stmts []tree.SelectStatement
+				left, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
+				if err != nil {
+					return 0, err
 				}
+				isR := len(stmts) > 0
 
-				for i, col := range cols {
-					subCtx.headings[i] = string(col)
+				if isR && !cteRef.isRecursive {
+					err = moerr.NewParseError(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
+				} else if !isR {
+					subCtx := NewBindContext(builder, ctx)
+					subCtx.maskedCTEs = cteRef.maskedCTEs
+					subCtx.cteName = table
+					//reset defaultDatabase
+					if len(cteRef.defaultDatabase) > 0 {
+						subCtx.defaultDatabase = cteRef.defaultDatabase
+					}
+					cteRef.isRecursive = false
+					nodeID, err = builder.buildSelect(s, subCtx, false)
+					if err != nil {
+						return
+					}
+
+					if subCtx.hasSingleRow {
+						ctx.hasSingleRow = true
+					}
+
+					cols := cteRef.ast.Name.Cols
+
+					if len(cols) > len(subCtx.headings) {
+						return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
+					}
+
+					for i, col := range cols {
+						subCtx.headings[i] = string(col)
+					}
+				} else {
+					// initial statement
+					initCtx := NewBindContext(builder, ctx)
+					initCtx.initSelect = true
+					initCtx.sinkTag = builder.genNewTag()
+					initLastNodeID, err1 := builder.buildSelect(&tree.Select{Select: *left}, initCtx, false)
+					if err1 != nil {
+						err = err1
+						return
+					}
+					projects := builder.qry.Nodes[builder.qry.Nodes[initLastNodeID].Children[0]].ProjectList
+					// recursive statement
+					recursiveLastNodeID := initLastNodeID
+					initSourceStep := int32(len(builder.qry.Steps))
+					recursiveSteps := make([]int32, len(stmts))
+					recursiveNodeIDs := make([]int32, len(stmts))
+					if len(cteRef.ast.Name.Cols) > 0 {
+						cteRef.ast.Name.Cols = append(cteRef.ast.Name.Cols, moRecursiveLevelCol)
+					}
+
+					for i, r := range stmts {
+						subCtx := NewBindContext(builder, ctx)
+						subCtx.maskedCTEs = cteRef.maskedCTEs
+						subCtx.cteName = table
+						if len(cteRef.defaultDatabase) > 0 {
+							subCtx.defaultDatabase = cteRef.defaultDatabase
+						}
+						subCtx.recSelect = true
+						subCtx.sinkTag = initCtx.sinkTag
+						subCtx.cteByName = make(map[string]*CTERef)
+						subCtx.cteByName[table] = cteRef
+						err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, subCtx)
+						if err != nil {
+							return
+						}
+						_ = builder.appendStep(recursiveLastNodeID)
+						subCtx.recRecursiveScanNodeId = appendRecursiveScanNode(builder, subCtx, initSourceStep, subCtx.sinkTag)
+						recursiveNodeIDs[i] = subCtx.recRecursiveScanNodeId
+						recursiveSteps[i] = int32(len(builder.qry.Steps))
+						recursiveLastNodeID, err = builder.buildSelect(&tree.Select{Select: r}, subCtx, false)
+						if err != nil {
+							return
+						}
+						// some check
+						n := builder.qry.Nodes[builder.qry.Nodes[recursiveLastNodeID].Children[0]]
+						if len(projects) != len(n.ProjectList) {
+							return 0, moerr.NewParseError(builder.GetContext(), "recursive cte %s projection error", table)
+						}
+						for i := range n.ProjectList {
+							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projects[i].GetTyp())
+							if err != nil {
+								return
+							}
+						}
+						if subCtx.hasSingleRow {
+							ctx.hasSingleRow = true
+						}
+
+						cols := cteRef.ast.Name.Cols
+
+						if len(cols) > len(subCtx.headings) {
+							return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
+						}
+
+						for i, col := range cols {
+							subCtx.headings[i] = string(col)
+						}
+					}
+					// union all statement
+					sourceStep := builder.appendStep(recursiveLastNodeID)
+					nodeID = appendCTEScanNode(builder, ctx, sourceStep, initCtx.sinkTag)
+					for i := 0; i < len(recursiveSteps)-1; i++ {
+						builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, recursiveSteps[i])
+					}
+					curStep := int32(len(builder.qry.Steps))
+					for _, id := range recursiveNodeIDs {
+						builder.qry.Nodes[id].SourceStep = append(builder.qry.Nodes[id].SourceStep, curStep)
+					}
+					unionAllLastNodeID := appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
+
+					// final statement
+					ctx.finalSelect = true
+					ctx.sinkTag = builder.genNewTag()
+					err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, ctx)
+					if err != nil {
+						return
+					}
+					sourceStep = builder.appendStep(unionAllLastNodeID)
+					nodeID = appendSinkScanNodeWithTag(builder, ctx, sourceStep, initCtx.sinkTag)
+					builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, initSourceStep)
 				}
 
 				break
@@ -2425,9 +2743,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 	var table string
-
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN {
-		if node.NodeType == plan.Node_VALUE_SCAN && node.TableDef == nil {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN {
+		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
 		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {

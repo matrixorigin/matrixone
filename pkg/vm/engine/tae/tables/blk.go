@@ -58,7 +58,6 @@ func (blk *block) Init() (err error) {
 
 func (blk *block) OnApplyDelete(
 	deleted uint64,
-	gen common.RowGen,
 	ts types.TS) (err error) {
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return
@@ -238,6 +237,14 @@ func (blk *block) getPersistedRowByFilter(
 		return
 	}
 	if deleted {
+		err = moerr.NewNotFoundNoCtx()
+		return
+	}
+	deletes, err := blk.persistedCollectDeleteMaskInRange(ctx, types.TS{}, txn.GetStartTS())
+	if err != nil {
+		return
+	}
+	if deletes.Contains(uint64(offset)) {
 		err = moerr.NewNotFoundNoCtx()
 	}
 	return
