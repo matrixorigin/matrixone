@@ -1498,7 +1498,7 @@ func getProjectionByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: tag,
+					RelPos: lastNode.BindingTags[0],
 					ColPos: int32(i),
 					Name:   name,
 				},
