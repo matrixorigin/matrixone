@@ -286,6 +286,7 @@ insert into t1 values(4, 4, 4);
 -- @pattern
 insert into t1 values(NULL, 5, 5);
 
+-- @bvt:issue#10882
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int, unique key(a, b), unique key(c));
@@ -310,6 +311,7 @@ insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
 insert into t1 values(NULL, 5, 5);
+-- @bvt:issue
 
 drop table if exists t1;
 create table t1(a int, b int, c int, primary key(c), unique key(a));
