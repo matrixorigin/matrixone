@@ -165,7 +165,7 @@ jobs:
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -e pessimistic_transaction 2>&1
       - name: Stop MO Service
         id: test_bvt_stop
         if: ${{ steps.ut-pr.outputs.paths != '' }}

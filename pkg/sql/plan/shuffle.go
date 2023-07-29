@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	HashMapSizeForBucket = 500000
-	MAXShuffleDOP        = 64
-	ShuffleThreshHold    = 50000
+	HashMapSizeForShuffle = 250000
+	MAXShuffleDOP         = 64
+	ShuffleThreshHold     = 50000
 )
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
@@ -101,6 +101,7 @@ func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
 	return nil, -1
 }
 
+/*
 func maybeSorted(n *plan.Node, builder *QueryBuilder, tag int32) bool {
 	// for scan node, primary key and cluster by may be sorted
 	if n.NodeType == plan.Node_TABLE_SCAN {
@@ -113,6 +114,7 @@ func maybeSorted(n *plan.Node, builder *QueryBuilder, tag int32) bool {
 	}
 	return false
 }
+*/
 
 func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
 	// hash by default
@@ -127,12 +129,14 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	}
 
 	colName := tableDef.Cols[col.ColPos].Name
-	if GetSortOrder(tableDef, colName) != 0 {
-		return
-	}
-	if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
-		return
-	}
+	/*
+		if GetSortOrder(tableDef, colName) != 0 {
+			return
+		}
+		if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
+			return
+		}
+	*/
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
 		return
@@ -148,21 +152,43 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	// do not shuffle by default
 	n.Stats.ShuffleColIdx = -1
-	if n.NodeType != plan.Node_JOIN || n.JoinType != plan.Node_INNER {
+	if n.NodeType != plan.Node_JOIN {
 		return
 	}
-	// for now ,only support one join condition
-	if len(n.OnList) != 1 {
-		return
-	}
-	if !builder.IsEquiJoin(n) {
-		return
-	}
-	if n.Stats.HashmapSize < HashMapSizeForBucket {
+	switch n.JoinType {
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT:
+	default:
 		return
 	}
 
+	// for now, if join children is agg, do not allow shuffle
+	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || builder.qry.Nodes[n.Children[1]].NodeType == plan.Node_AGG {
+		return
+	}
+
+	if n.Stats.HashmapSize < HashMapSizeForShuffle {
+		return
+	}
 	idx := 0
+	if !builder.IsEquiJoin(n) {
+		return
+	}
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(n.Children[0]) {
+		leftTags[tag] = nil
+	}
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(n.Children[1]) {
+		rightTags[tag] = nil
+	}
+	// for now ,only support the first join condition
+	for i := range n.OnList {
+		if isEquiCond(n.OnList[i], leftTags, rightTags) {
+			idx = i
+			break
+		}
+	}
+
 	//find the highest ndv
 	highestNDV := n.OnList[idx].Ndv
 	if highestNDV < ShuffleThreshHold {
@@ -202,7 +228,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	if len(n.GroupBy) == 0 {
 		return
 	}
-	if n.Stats.HashmapSize < HashMapSizeForBucket {
+	if n.Stats.HashmapSize < HashMapSizeForShuffle {
 		return
 	}
 	//find the highest ndv
@@ -299,13 +325,42 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 		node.Stats.ShuffleColIdx = -1
 	}
 
+	//join->group ,if they use the same hask key, the group can use follow shuffle method
+	if node.NodeType == plan.Node_AGG {
+		child := builder.qry.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_JOIN {
+			if node.Stats.Shuffle && child.Stats.Shuffle {
+				// shuffle group can follow shuffle join
+				if node.Stats.ShuffleType == child.Stats.ShuffleType {
+					groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
+					switch exprImpl := child.OnList[node.Stats.ShuffleColIdx].Expr.(type) {
+					case *plan.Expr_F:
+						for _, arg := range exprImpl.F.Args {
+							joinHashCol, _ := GetHashColumn(arg)
+							if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
+								node.Stats.ShuffleMethod = plan.ShuffleMethod_Follow
+								return
+							}
+						}
+					}
+				}
+
+				// shuffle group can not follow shuffle join, need to reshuffle
+				node.Stats.ShuffleMethod = plan.ShuffleMethod_Reshuffle
+				return
+			}
+		}
+	}
+
 	// for now, only one node can go shuffle, choose the biggest one
 	// will fix this in the future
-	if node.Stats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+	if node.Stats.Shuffle && node.NodeType == plan.Node_JOIN {
 		shuffleID := findShuffleNode(nodeID, nodeID, builder)
 		if shuffleID != -1 {
 			shuffleNode := builder.qry.Nodes[shuffleID]
 			if node.Stats.HashmapSize > shuffleNode.Stats.HashmapSize {
+				shuffleNode.Stats.Shuffle = false
+			} else if node.Stats.HashmapSize == shuffleNode.Stats.HashmapSize && node.Stats.Cost > shuffleNode.Stats.Cost {
 				shuffleNode.Stats.Shuffle = false
 			} else {
 				node.Stats.Shuffle = false

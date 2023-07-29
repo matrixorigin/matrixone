@@ -32,7 +32,6 @@ import (
 )
 
 const BlockNumForceOneCN = 200
-
 const blockNDVThreshHold = 100
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
@@ -198,6 +197,11 @@ func getColStatsInfo(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
 	if !ok {
 		return nil
 	}
+	//fix column name
+	if len(col.Name) == 0 {
+		col.Name = tableDef.Cols[col.ColPos].Name
+	}
+
 	return sc.GetStatsInfoMap(tableDef.TblId)
 }
 
@@ -222,7 +226,7 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return getExprNdv(exprImpl.F.Args[0], builder) / 365
 		case "substring":
 			// no good way to calc ndv for substring
-			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 100)
+			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 25)
 		default:
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
@@ -462,14 +466,20 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.5))
 		selectivity_out := math.Min(math.Pow(leftStats.Selectivity, math.Pow(rightStats.Selectivity, 0.5)), selectivity)
 
+		for _, pred := range node.OnList {
+			if pred.Ndv <= 0 {
+				pred.Ndv = getExprNdv(pred, builder)
+			}
+		}
+
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if !isCrossJoin {
 				outcnt *= selectivity
 			}
-			for _, pred := range node.OnList {
-				pred.Ndv = getExprNdv(pred, builder)
+			if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
+				outcnt = rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
@@ -514,10 +524,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		case plan.Node_ANTI:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity),
+				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Selectivity: selectivity_out * 0.5,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
@@ -624,7 +634,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		*/
 	case plan.Node_SINK_SCAN:
-		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
+
+	case plan.Node_RECURSIVE_SCAN:
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
 
 	case plan.Node_EXTERNAL_SCAN:
 		//calc for external scan is heavy, avoid recalc of this
@@ -786,6 +799,22 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 			node.BuildOnLeft = true
 		}
 	}
+
+	if builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
+		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+	}
+}
+
+func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
+	if node.NodeType == plan.Node_RECURSIVE_SCAN {
+		return true
+	}
+	for _, nodeID := range node.Children {
+		if builder.hasRecursiveScan(builder.qry.Nodes[nodeID]) {
+			return true
+		}
+	}
+	return false
 }
 
 func compareStats(stats1, stats2 *Stats) bool {
@@ -830,6 +859,12 @@ func IsTpQuery(qry *plan.Query) bool {
 		}
 	}
 	return true
+}
+
+func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
+	for _, rootID := range builder.qry.Steps {
+		ReCalcNodeStats(rootID, builder, true, false)
+	}
 }
 
 func PrintStats(qry *plan.Query) string {
