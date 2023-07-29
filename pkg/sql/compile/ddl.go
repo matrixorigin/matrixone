@@ -1058,7 +1058,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName); e != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
 				return e
 			}
 			err = e
@@ -1249,7 +1249,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName); e != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
 				return e
 			}
 			err = e
