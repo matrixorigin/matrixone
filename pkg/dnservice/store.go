@@ -96,6 +96,7 @@ type store struct {
 	ctlservice          ctlservice.CtlService
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
+	shutdownC           chan struct{}
 
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
@@ -123,6 +124,7 @@ func NewService(
 	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
+	shutdownC chan struct{},
 	opts ...Option) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -146,6 +148,7 @@ func NewService(
 		rt:                  rt,
 		fileService:         fileService,
 		metadataFileService: metadataFS,
+		shutdownC:           shutdownC,
 	}
 	for _, opt := range opts {
 		opt(s)
