@@ -141,6 +141,11 @@ const (
 	ErrForeignKeyOnPartitioned           uint16 = 20458
 	ErrKeyColumnDoesNotExits             uint16 = 20459
 	ErrCantDropFieldOrKey                uint16 = 20460
+	ErrTableMustHaveColumns              uint16 = 20461
+	ErrCantRemoveAllFields               uint16 = 20462
+	ErrFkColumnCannotDrop                uint16 = 20463
+	ErrFkColumnCannotDropChild           uint16 = 20464
+	ErrDependentByPartitionFunction      uint16 = 20465
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -336,6 +341,11 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrForeignKeyOnPartitioned:           {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
 	ErrKeyColumnDoesNotExits:             {ER_KEY_COLUMN_DOES_NOT_EXITS, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
 	ErrCantDropFieldOrKey:                {ER_CANT_DROP_FIELD_OR_KEY, []string{MySQLDefaultSqlState}, "Can't DROP '%-.192s'; check that column/key exists"},
+	ErrTableMustHaveColumns:              {ER_TABLE_MUST_HAVE_COLUMNS, []string{MySQLDefaultSqlState}, "A table must have at least 1 column"},
+	ErrCantRemoveAllFields:               {ER_CANT_REMOVE_ALL_FIELDS, []string{MySQLDefaultSqlState}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},
+	ErrFkColumnCannotDrop:                {ER_FK_COLUMN_CANNOT_DROP, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s'"},
+	ErrFkColumnCannotDropChild:           {ER_FK_COLUMN_CANNOT_DROP_CHILD, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s' of table '%-.192s'"},
+	ErrDependentByPartitionFunction:      {ER_DEPENDENT_BY_PARTITION_FUNC, []string{MySQLDefaultSqlState}, "Column '%s' has a partitioning function dependency and cannot be dropped or renamed"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1152,6 +1162,26 @@ func NewErrForeignKeyColumnCannotChangeChild(ctx context.Context, args1 any, arg
 
 func NewErrForeignKeyColumnCannotChange(ctx context.Context, oriColName any, fkName any) *Error {
 	return newError(ctx, ErrForeignKeyColumnCannotChange, oriColName, fkName)
+}
+
+func NewErrTableMustHaveColumns(ctx context.Context) *Error {
+	return newError(ctx, ErrTableMustHaveColumns)
+}
+
+func NewErrCantRemoveAllFields(ctx context.Context) *Error {
+	return newError(ctx, ErrCantRemoveAllFields)
+}
+
+func NewErrFkColumnCannotDropChild(ctx context.Context, oriColName any, childFKName any, childTableName any) *Error {
+	return newError(ctx, ErrFkColumnCannotDropChild, oriColName, childFKName, childTableName)
+}
+
+func NewErrFkColumnCannotDrop(ctx context.Context, colName any, fKName any) *Error {
+	return newError(ctx, ErrFkColumnCannotDrop, colName, fKName)
+}
+
+func NewErrDependentByPartitionFunction(ctx context.Context, colName any) *Error {
+	return newError(ctx, ErrDependentByPartitionFunction, colName)
 }
 
 var contextFunc atomic.Value

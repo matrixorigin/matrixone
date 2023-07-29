@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -24,11 +25,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
-
-	// 1. lock origin table
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
 
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
@@ -40,29 +36,47 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	if err = lockTable(c.e, c.proc, originRel); err != nil {
-		return err
+	if c.proc.TxnOperator.Txn().IsPessimistic() {
+		var retryErr error
+		// 1. lock origin table metadata in catalog
+		if err = lockMoTable(c, dbName, tblName); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+				return err
+			}
+			retryErr = err
+		}
+
+		// 2. lock origin table
+		if err = lockTable(c.e, c.proc, originRel); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+				return err
+			}
+			retryErr = err
+		}
+		if retryErr != nil {
+			return retryErr
+		}
 	}
 
-	// 2. create a replica table of the original table
+	// 3. create a replica table of the original table
 	err = c.runSql(qry.CreateTableSql)
 	if err != nil {
 		return err
 	}
 
-	// 3. copy the original table data to the replica table
+	// 4. copy the original table data to the replica table
 	err = c.runSql(qry.InsertDataSql)
 	if err != nil {
 		return err
 	}
 
-	// TODO 4. Migrate Foreign Key Dependencies
-	// 5. drop original table
+	// TODO 5. Migrate Foreign Key Dependencies
+	// 6. drop original table
 	if err = dbSource.Delete(c.ctx, tblName); err != nil {
 		return err
 	}
 
-	// 6. rename copy table name to original table name
+	// 7. rename copy table name to original table name
 	copyRel, err := dbSource.Relation(c.ctx, qry.CopyTableDef.Name, nil)
 	if err != nil {
 		return err
@@ -93,8 +107,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		constraint = append(constraint, tmp)
 	}
 
-	err = copyRel.AlterTable(c.ctx, newCt, constraint)
-	if err != nil {
+	if err = copyRel.AlterTable(c.ctx, newCt, constraint); err != nil {
 		return err
 	}
 	return nil

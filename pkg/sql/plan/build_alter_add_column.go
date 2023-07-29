@@ -278,3 +278,162 @@ func findPositionRelativeColumn(ctx context.Context, cols []*ColDef, pos *tree.C
 	}
 	return position, nil
 }
+
+//-----------------------------------------------------------------------------------------------------------------------------------
+
+// AddColumn will add a new column to the table.
+func DropColumn(ctx CompilerContext, alterPlan *plan.AlterTable, colName string, alterCtx *AlterTableContext) error {
+	tableDef := alterPlan.CopyTableDef
+	// Check whether original column has existed.
+	col := FindColumn(tableDef.Cols, colName)
+	if col == nil || col.Hidden {
+		return moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
+	}
+
+	// We only support dropping column with single-value none Primary Key index covered now.
+	if err := handleDropColumnWithIndex(ctx.GetContext(), colName, tableDef); err != nil {
+		return err
+	}
+	if err := handleDropColumnWithPrimaryKey(ctx.GetContext(), colName, tableDef); err != nil {
+		return err
+	}
+	if err := checkDropColumnWithPartition(ctx.GetContext(), tableDef, colName); err != nil {
+		return err
+	}
+	// Check the column with foreign key.
+	if err := checkDropColumnWithForeignKey(ctx, tableDef, col); err != nil {
+		return err
+	}
+	if err := checkVisibleColumnCnt(ctx.GetContext(), tableDef, 0, 1); err != nil {
+		return err
+	}
+	if isColumnWithPartition(col.Name, tableDef.Partition) {
+		return moerr.NewNotSupported(ctx.GetContext(), "unsupport alter partition part column currently")
+	}
+
+	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, col); err != nil {
+		return err
+	}
+	delete(alterCtx.alterColMap, colName)
+	return nil
+}
+
+func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dropCount int) error {
+	visibleColumCnt := 0
+	for _, column := range tblInfo.Cols {
+		if !column.Hidden {
+			visibleColumCnt++
+		}
+	}
+	if visibleColumCnt+addCount > dropCount {
+		return nil
+	}
+	if len(tblInfo.Cols)-visibleColumCnt > 0 {
+		// There are only invisible columns.
+		return moerr.NewErrTableMustHaveColumns(ctx)
+	}
+	return moerr.NewErrCantRemoveAllFields(ctx)
+}
+
+func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *TableDef) error {
+	for i := 0; i < len(tbInfo.Indexes); i++ {
+		indexInfo := tbInfo.Indexes[i]
+		for j := 0; j < len(indexInfo.Parts); j++ {
+			if indexInfo.Parts[j] == colName {
+				indexInfo.Parts = append(indexInfo.Parts[:j], indexInfo.Parts[j+1:]...)
+				break
+			}
+		}
+		if len(indexInfo.Parts) == 0 {
+			tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+		}
+	}
+	return nil
+}
+
+func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo *TableDef) error {
+	if tbInfo.Pkey != nil && tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return nil
+	} else {
+		for i := 0; i < len(tbInfo.Pkey.Names); i++ {
+			if tbInfo.Pkey.Names[i] == colName {
+				tbInfo.Pkey.Names = append(tbInfo.Pkey.Names[:i], tbInfo.Pkey.Names[i+1:]...)
+				break
+			}
+		}
+
+		if len(tbInfo.Pkey.Names) == 0 {
+			tbInfo.Pkey = nil
+		} else if len(tbInfo.Pkey.Names) == 1 {
+			tbInfo.Pkey.PkeyColName = tbInfo.Pkey.Names[0]
+			for _, coldef := range tbInfo.Cols {
+				if coldef.Name == tbInfo.Pkey.PkeyColName {
+					coldef.Primary = true
+					break
+				}
+			}
+		}
+
+		return nil
+	}
+}
+
+func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, targetCol *ColDef) error {
+	colName := targetCol.Name
+	for _, fkInfo := range tbInfo.Fkeys {
+		for _, colId := range fkInfo.Cols {
+			referCol := FindColumnByColId(tbInfo.Cols, colId)
+			if referCol == nil {
+				continue
+			}
+			if referCol.Name == colName {
+				return moerr.NewErrFkColumnCannotDrop(ctx.GetContext(), colName, fkInfo.Name)
+			}
+		}
+	}
+
+	for _, referredTblId := range tbInfo.RefChildTbls {
+		_, refTableDef := ctx.ResolveById(referredTblId)
+		if refTableDef == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
+		}
+		for _, referredFK := range refTableDef.Fkeys {
+			if referredFK.ForeignTbl == tbInfo.TblId {
+				for i, _ := range referredFK.Cols {
+					if referredFK.ForeignCols[i] == targetCol.ColId {
+						return moerr.NewErrFkColumnCannotDropChild(ctx.GetContext(), colName, referredFK.Name, refTableDef.Name)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// checkDropColumnWithPartition is used to check the partition key of the drop column.
+func checkDropColumnWithPartition(ctx context.Context, tbInfo *TableDef, colName string) error {
+	if tbInfo.Partition != nil {
+		partition := tbInfo.Partition
+		// TODO Implement this method in the future to obtain the partition column in the partition expression
+		// func (m *PartitionByDef) GetPartitionColumnNames() []string
+		for _, name := range partition.GetPartitionColumns().PartitionColumns {
+			if strings.EqualFold(name, colName) {
+				return moerr.NewErrDependentByPartitionFunction(ctx, colName)
+			}
+		}
+	}
+	return nil
+}
+
+// checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
+func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColDef) error {
+	targetPos := -1
+	for i := 0; i < len(tableDef.Cols); i++ {
+		if tableDef.Cols[i].Name == col.Name {
+			targetPos = i
+			break
+		}
+	}
+	tableDef.Cols = append(tableDef.Cols[:targetPos], tableDef.Cols[targetPos+1:]...)
+	return nil
+}
