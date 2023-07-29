@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -778,4 +780,23 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			dataBuffer = nil
 		}
 	}
+}
+
+func (s *Scope) replace(c *Compile) error {
+	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
+	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
+
+	if deleteCond != "" {
+		_, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err := c.runSqlWithResult(strings.ReplaceAll(c.sql, "replace", "insert"))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
