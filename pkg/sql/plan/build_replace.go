@@ -16,12 +16,13 @@ package plan
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
@@ -46,7 +47,25 @@ func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (
 		}
 		deleteCond = strings.Join(disjunction, " or ")
 	} else {
+		keyToRow := make(map[string]int, len(tableDef.Cols))
+		for i, col := range tableDef.Cols {
+			keyToRow[col.Name] = i
+		}
 
+		rows := stmt.Rows.Select.(*tree.ValuesClause).Rows
+		disjunction := make([]string, 0, len(rows))
+		for _, row := range rows {
+			for _, key := range keys {
+				conjunction := make([]string, 0, len(tableDef.Cols))
+				for k := range key {
+					fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+					row[keyToRow[k]].Format(fmtctx)
+					conjunction = append(conjunction, fmt.Sprintf("%s in (select %s)", k, fmtctx.String()))
+				}
+				disjunction = append(disjunction, "("+strings.Join(conjunction, " and ")+")")
+			}
+		}
+		deleteCond = strings.Join(disjunction, " or ")
 	}
 
 	return &Plan{
