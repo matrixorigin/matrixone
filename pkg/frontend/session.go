@@ -1515,6 +1515,9 @@ func (ses *Session) InitGlobalSystemVariables() error {
 				}
 
 				if sv, ok := gSysVarsDefs[variable_name]; ok {
+					if !sv.GetDynamic() || (sv.Scope != ScopeGlobal && sv.Scope != ScopeBoth) {
+						continue
+					}
 					val, err := sv.GetType().ConvertFromString(variable_value)
 					if err != nil {
 						return err
