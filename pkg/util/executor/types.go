@@ -49,7 +49,7 @@ type Options struct {
 	minCommittedTS          timestamp.Timestamp
 	innerTxn                bool
 	waitCommittedLogApplied bool
-	TimeZone                *time.Location
+	timeZone                *time.Location
 }
 
 // Result exec sql result

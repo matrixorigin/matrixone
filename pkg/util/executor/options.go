@@ -45,7 +45,7 @@ func (opts Options) WithAccountID(accountID uint32) Options {
 }
 
 func (opts Options) WithTimeZone(timeZone *time.Location) Options {
-	opts.TimeZone = timeZone
+	opts.timeZone = timeZone
 	return opts
 }
 
@@ -114,4 +114,9 @@ func (opts Options) Txn() client.TxnOperator {
 // DisableIncrStatement returns the txn operator need incr a new input statement
 func (opts Options) DisableIncrStatement() bool {
 	return opts.disableIncrStatement
+}
+
+// GetTimeZone return the time zone of original session
+func (opts Options) GetTimeZone() *time.Location {
+	return opts.timeZone
 }
