@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/backup"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -44,6 +45,10 @@ func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet 
 		return err
 	}
 
+	backup.SaveLaunchConfigPath([]string{*launchFile})
+	backup.SaveLaunchConfigPath(cfg.LogServiceConfigFiles)
+	backup.SaveLaunchConfigPath(cfg.DNServiceConfigsFiles)
+	backup.SaveLaunchConfigPath(cfg.CNServiceConfigsFiles)
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet); err != nil {
 		return err
 	}
@@ -54,6 +59,7 @@ func startCluster(ctx context.Context, stopper *stopper.Stopper, perfCounterSet 
 		return err
 	}
 	if *withProxy {
+		backup.SaveLaunchConfigPath(cfg.ProxyServiceConfigsFiles)
 		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet); err != nil {
 			return err
 		}
