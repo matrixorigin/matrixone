@@ -67,6 +67,7 @@ func runServiceTest(t *testing.T,
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -110,6 +111,7 @@ func TestNewService(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -539,6 +541,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -552,6 +555,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
 	service2, err := NewService(cfg2,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -668,6 +672,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		configs = append(configs, cfg)
 		service, err := NewService(cfg,
 			newFS(),
+			nil,
 			WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 				return true
 			}),
@@ -781,6 +786,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	service, err := NewService(configs[12],
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
