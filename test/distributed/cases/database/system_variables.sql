@@ -3,9 +3,18 @@
 -- @case
 -- @desc:test for Some System variables and new variables like ERRORS, INDEXES and so on
 -- @label:bvt
+set interactive_timeout = default;
+set net_write_timeout = default;
+set wait_timeout = default;
+set sql_select_limit = default;
+set max_allowed_packet = default;
+set wait_timeout = default;
+set tx_isolation = default;
+set tx_isolation = default;
+
 
 -- auto_increment_increment
--- @bvt:issue#10473
+-- @bvt:issue#10898
 show variables like 'auto%';
 -- @bvt:issue
 show variables like 'auto_increment_increment';
@@ -21,10 +30,8 @@ show variables like 'init%';
 show variables like 'init_connect';
 
 -- interactive_timeout
--- @bvt:issue#10473
 show variables like 'interactive%';
 show variables like 'interactive_timeout';
--- @bvt:issue
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 set interactive_timeout = 30000+100;
@@ -144,11 +151,9 @@ set wait_timeout = default;
 show variables like 'wait_timeout';
 
 --string type
--- @bvt:issue#10473
 show variables like 'character_set_results';
 set character_set_server = default;
 show variables like 'character_set_results';
--- @bvt:issue
 
 show variables like 'character_set_server';
 set character_set_server = default;

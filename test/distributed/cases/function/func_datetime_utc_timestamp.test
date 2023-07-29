@@ -1,11 +1,3 @@
-#SELECT
--- @bvt:issue#3329
-select unix_timestamp(utc_timestamp());
--- @bvt:issue
-#select unix_timestamp(current_timestamp());
-
-
-
 create table t1 (ts timestamp);
 set time_zone='+00:00';
 select unix_timestamp(utc_timestamp())-unix_timestamp(utc_timestamp());
@@ -22,9 +14,7 @@ drop table t1;
 
 #SELECT,  算术运算，嵌套
 
--- @bvt:issue#10473
 select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_timestamp()),unix_timestamp()-unix_timestamp(utc_timestamp());
--- @bvt:issue
 
 #0.5 not supported
 #select utc_timestamp()-curdate()*1000000-curtime();

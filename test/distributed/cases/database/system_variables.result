@@ -1,3 +1,11 @@
+set interactive_timeout = default;
+set net_write_timeout = default;
+set wait_timeout = default;
+set sql_select_limit = default;
+set max_allowed_packet = default;
+set wait_timeout = default;
+set tx_isolation = default;
+set tx_isolation = default;
 show variables like 'auto%';
 Variable_name    Value
 auto_generate_certs    off
@@ -29,10 +37,10 @@ Variable_name    Value
 init_connect    
 show variables like 'interactive%';
 Variable_name    Value
-interactive_timeout    30100
+interactive_timeout    28800
 show variables like 'interactive_timeout';
 Variable_name    Value
-interactive_timeout    30100
+interactive_timeout    28800
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 Variable_name    Value
@@ -433,11 +441,11 @@ Variable_name    Value
 wait_timeout    28800
 show variables like 'character_set_results';
 Variable_name    Value
-character_set_results    utf8mb4
+character_set_results    utf8
 set character_set_server = default;
 show variables like 'character_set_results';
 Variable_name    Value
-character_set_results    utf8mb4
+character_set_results    utf8
 show variables like 'character_set_server';
 Variable_name    Value
 character_set_server    utf8mb4
