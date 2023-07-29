@@ -124,7 +124,7 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 	return newNodeId
 }
 
-func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int32]int) (*ColRefRemapping, error) {
+func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
 	node := builder.qry.Nodes[nodeID]
 
 	remapping := &ColRefRemapping{
@@ -235,7 +235,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		for _, expr := range node.TblFuncExprList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
-		childMap, err := builder.remapAllColRefs(childId, colRefCnt)
+		childMap, err := builder.remapAllColRefs(childId, step, colRefCnt, colRefBool, sinkColRef)
 
 		if err != nil {
 			return nil, err
@@ -412,7 +412,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		internalMap := make(map[[2]int32][2]int32)
 
-		leftRemapping, err := builder.remapAllColRefs(leftID, colRefCnt)
+		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -420,7 +420,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			internalMap[k] = v
 		}
 
-		_, err = builder.remapAllColRefs(rightID, colRefCnt)
+		_, err = builder.remapAllColRefs(rightID, step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -441,7 +441,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		internalMap := make(map[[2]int32][2]int32)
 
 		leftID := node.Children[0]
-		leftRemapping, err := builder.remapAllColRefs(leftID, colRefCnt)
+		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -451,7 +451,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		rightID := node.Children[1]
-		rightRemapping, err := builder.remapAllColRefs(rightID, colRefCnt)
+		rightRemapping, err := builder.remapAllColRefs(rightID, step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -552,7 +552,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -654,7 +654,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -717,7 +717,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
 		}
 
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -771,7 +771,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -822,30 +822,58 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_SINK_SCAN, plan.Node_RECURSIVE_SCAN, plan.Node_RECURSIVE_CTE:
 		tag := node.BindingTags[0]
-		for i := range node.ProjectList {
-			globalRef := [2]int32{tag, int32(i)}
-			remapping.addColRef(globalRef)
-		}
-
-	case plan.Node_SINK:
-		childNode := builder.qry.Nodes[node.Children[0]]
-		resultTag := childNode.BindingTags[0]
-		for i := range childNode.ProjectList {
-			colRefCnt[[2]int32{resultTag, int32(i)}] = 1
-		}
-
-		_, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
-		if err != nil {
-			return nil, err
-		}
 		var newProjList []*plan.Expr
+
 		for i, expr := range node.ProjectList {
+			globalRef := [2]int32{tag, int32(i)}
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
 			newProjList = append(newProjList, &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: 0,
 						ColPos: int32(i),
+					},
+				},
+			})
+			remapping.addColRef(globalRef)
+			for _, sourceStep := range node.SourceStep {
+				if sourceStep >= step {
+					continue
+				}
+				colRefBool[[2]int32{sourceStep, int32(i)}] = true
+			}
+
+		}
+		node.ProjectList = newProjList
+
+	case plan.Node_SINK:
+		childNode := builder.qry.Nodes[node.Children[0]]
+		resultTag := childNode.BindingTags[0]
+		for i := range childNode.ProjectList {
+			if colRefBool[[2]int32{step, int32(i)}] {
+				colRefCnt[[2]int32{resultTag, int32(i)}] = 1
+			}
+		}
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+		var newProjList []*plan.Expr
+		for i, expr := range node.ProjectList {
+			if !colRefBool[[2]int32{step, int32(i)}] {
+				continue
+			}
+			sinkColRef[[2]int32{step, int32(i)}] = len(newProjList)
+			newProjList = append(newProjList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: childRemapping.globalToLocal[[2]int32{resultTag, int32(i)}][1],
 						// Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -874,7 +902,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			neededProj = append(neededProj, 0)
 		}
 
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -897,7 +925,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		node.ProjectList = newProjList
 
 	case plan.Node_DISTINCT:
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -987,7 +1015,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 		oldPos := [2]int32{preNode.BindingTags[0], node.LockTargets[0].PrimaryColIdxInBat}
 		increaseRefCnt(pkexpr, 1, colRefCnt)
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
@@ -1039,7 +1067,44 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	return remapping, nil
 }
 
+func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBool map[[2]int32]bool) {
+	node := builder.qry.Nodes[nodeID]
+
+	switch node.NodeType {
+	case plan.Node_SINK_SCAN, plan.Node_RECURSIVE_SCAN, plan.Node_RECURSIVE_CTE:
+		for _, i := range node.SourceStep {
+			if i >= step {
+				for _, expr := range node.ProjectList {
+					colRefBool[[2]int32{i, expr.Expr.(*plan.Expr_Col).Col.ColPos}] = true
+				}
+			}
+		}
+	default:
+		for i := range node.Children {
+			builder.markSinkProject(node.Children[i], step, colRefBool)
+		}
+	}
+}
+
+func (builder *QueryBuilder) remapSinkScanColRefs(nodeID int32, step int32, sinkColRef map[[2]int32]int) {
+	node := builder.qry.Nodes[nodeID]
+
+	switch node.NodeType {
+	case plan.Node_SINK_SCAN:
+		for _, expr := range node.ProjectList {
+			expr.Expr.(*plan.Expr_Col).Col.ColPos = int32(sinkColRef[[2]int32{step, expr.Expr.(*plan.Expr_Col).Col.ColPos}])
+		}
+	default:
+		for i := range node.Children {
+			builder.remapSinkScanColRefs(node.Children[i], step, sinkColRef)
+		}
+	}
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	colRefBool := make(map[[2]int32]bool)
+	sinkColRef := make(map[[2]int32]int)
+
 	for i, rootID := range builder.qry.Steps {
 		rootID, _ = builder.pushdownFilters(rootID, nil, false)
 		err := foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
@@ -1047,8 +1112,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 
-		colRefCnt := make(map[[2]int32]int)
-		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, make(map[[2]int32]int))
 
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
@@ -1076,18 +1140,40 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		determineShuffleMethod(rootID, builder)
 		builder.pushdownRuntimeFilters(rootID)
 
-		colRefCnt = make(map[[2]int32]int)
 		rootNode := builder.qry.Nodes[rootID]
-		resultTag := rootNode.BindingTags[0]
-		for i := range rootNode.ProjectList {
-			colRefCnt[[2]int32{resultTag, int32(i)}] = 1
+
+		for j := range rootNode.ProjectList {
+			colRefBool[[2]int32{int32(i), int32(j)}] = false
+			if i == len(builder.qry.Steps)-1 {
+				colRefBool[[2]int32{int32(i), int32(j)}] = true
+			}
 		}
 
-		_, err = builder.remapAllColRefs(rootID, colRefCnt)
+	}
+
+	for i := range builder.qry.Steps {
+		rootID := builder.qry.Steps[i]
+		builder.markSinkProject(rootID, int32(i), colRefBool)
+	}
+
+	for i := len(builder.qry.Steps) - 1; i >= 0; i-- {
+		rootID := builder.qry.Steps[i]
+		rootNode := builder.qry.Nodes[rootID]
+		resultTag := rootNode.BindingTags[0]
+		colRefCnt := make(map[[2]int32]int)
+		for j := range rootNode.ProjectList {
+			colRefCnt[[2]int32{resultTag, int32(j)}] = 1
+		}
+		_, err := builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
 	}
+
+	for i := 1; i < len(builder.qry.Steps); i++ {
+		builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
+	}
+
 	return builder.qry, nil
 }
 
