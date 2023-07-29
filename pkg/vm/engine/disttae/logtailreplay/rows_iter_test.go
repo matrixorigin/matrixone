@@ -345,6 +345,14 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 		require.Nil(t, iter.Close())
 	}
 
+	// should be detectable
+	for i := 0; i < num; i++ {
+		ts := types.BuildTS(int64(i), 0)
+		key := EncodePrimaryKey(int64(i), packer)
+		modified := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), key)
+		require.True(t, modified)
+	}
+
 }
 
 func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
@@ -427,6 +435,14 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 		}
 		require.Equal(t, num, n)
 		require.Nil(t, iter.Close())
+	}
+
+	// should be detectable
+	for i := 0; i < num; i++ {
+		ts := types.BuildTS(int64(i), 0)
+		key := EncodePrimaryKey(int64(i), packer)
+		modified := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), key)
+		require.True(t, modified)
 	}
 
 }
