@@ -73,6 +73,7 @@ type container struct {
 	remoteRegsCnt int
 
 	remoteToIdx map[uuid.UUID]int
+	hasData     bool
 }
 
 type Argument struct {

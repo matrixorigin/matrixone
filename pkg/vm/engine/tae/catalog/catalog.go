@@ -351,7 +351,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.TableNode = cmd.node
 		tbl.TableNode.schema.Store(un.BaseNode.Schema)
 		tbl.Insert(un)
-		err = db.AddEntryLocked(tbl, un.GetTxn(), false)
+		err = db.AddEntryLocked(tbl, un.GetTxn(), true)
 		if err != nil {
 			logutil.Warn(catalog.SimplePPString(common.PPL3))
 			panic(err)
@@ -367,7 +367,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		schema := un.BaseNode.Schema
 		tbl.TableNode.schema.Store(schema)
 		// alter table rename
-		if schema.Extra.OldName != "" {
+		if schema.Extra.OldName != "" && un.DeletedAt.IsEmpty() {
 			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
 			if err != nil {
 				logutil.Warn(schema.String())

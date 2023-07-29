@@ -158,6 +158,7 @@ insert into t1 values(1, 2);
 insert into t1 values(1, 3);
 insert into t1 values(2, 2);
 insert into t1 values(2, 3);
+-- @pattern
 update t1 set a = 2 where a = 1;
 
 -- @bvt:issue#5790

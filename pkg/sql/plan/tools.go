@@ -15,14 +15,29 @@
 package plan
 
 import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"go/constant"
 )
 
-func MakeExpr(ctx context.Context, name string, args []*Expr) *plan.Expr {
-	expr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
-	if err != nil {
-		panic(err)
+const (
+	moRecursiveLevelCol      = "__mo_recursive_level_col"
+	moDefaultRecursionMax    = 100
+	moCheckRecursionLevelFun = "mo_check_level"
+)
+
+func makeZeroRecursiveLevel() tree.SelectExpr {
+	return tree.SelectExpr{
+		Expr: tree.NewNumValWithType(constant.MakeInt64(0), "0", false, tree.P_int64),
+		As:   tree.NewCStr(moRecursiveLevelCol, 1),
 	}
-	return expr
+
+}
+
+func makePlusRecursiveLevel(name string) tree.SelectExpr {
+	a := tree.SetUnresolvedName(name, moRecursiveLevelCol)
+	b := tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
+	return tree.SelectExpr{
+		Expr: tree.NewBinaryExpr(tree.PLUS, a, b),
+		As:   tree.NewCStr("", 1),
+	}
 }

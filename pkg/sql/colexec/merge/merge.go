@@ -16,6 +16,7 @@ package merge
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,6 +43,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if end {
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
+	}
+
+	if bat.Last() && ap.SinkScan {
+		bat.Clean(proc.Mp())
+		bat = batch.EmptyBatch
 	}
 
 	anal.Input(bat, isFirst)

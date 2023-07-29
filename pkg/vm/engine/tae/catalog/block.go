@@ -358,6 +358,18 @@ func (entry *BlockEntry) GetDeltaLoc() objectio.Location {
 	return str
 }
 
+func (entry *BlockEntry) GetDeltaLocAndCommitTS() (objectio.Location, types.TS) {
+	entry.RLock()
+	defer entry.RUnlock()
+	if entry.GetLatestNodeLocked() == nil {
+		return nil, types.TS{}
+	}
+	node := entry.GetLatestNodeLocked()
+	str := node.BaseNode.DeltaLoc
+	ts := node.End
+	return str, ts
+}
+
 func (entry *BlockEntry) GetVisibleMetaLoc(txn txnif.TxnReader) objectio.Location {
 	entry.RLock()
 	defer entry.RUnlock()
