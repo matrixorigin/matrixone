@@ -335,10 +335,10 @@ func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}
 	count := 0
 	var resultVec *vector.Vector
 	for _, b := range batches {
-		if b.Length() == 0 {
+		if b.RowCount() == 0 {
 			continue
 		}
-		count += b.Length()
+		count += b.RowCount()
 		if count > 1 {
 			return nil, moerr.NewInternalError(ctx, "the expr %s generates multi rows value", e.String())
 		}
@@ -503,6 +503,16 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
+	sessionId := ""
+	statementId := ""
+	if ses != nil {
+		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
+		if ses.tStmt != nil {
+			statementId = string(ses.tStmt.StatementID[:])
+		}
+	}
+	fields = append(fields, zap.String("session_id", sessionId))
+	fields = append(fields, zap.String("statement_id", statementId))
 	logutil.Info(msg, fields...)
 }
 
@@ -511,6 +521,16 @@ func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
+	sessionId := ""
+	statementId := ""
+	if ses != nil {
+		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
+		if ses.tStmt != nil {
+			statementId = string(ses.tStmt.StatementID[:])
+		}
+	}
+	fields = append(fields, zap.String("session_id", sessionId))
+	fields = append(fields, zap.String("statement_id", statementId))
 	logutil.Debug(msg, fields...)
 }
 
@@ -519,25 +539,25 @@ func logError(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
+	sessionId := ""
+	statementId := ""
+	if ses != nil {
+		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
+		if ses.tStmt != nil {
+			statementId = string(ses.tStmt.StatementID[:])
+		}
+	}
+	fields = append(fields, zap.String("session_id", sessionId))
+	fields = append(fields, zap.String("statement_id", statementId))
 	logutil.Error(msg, fields...)
 }
 
-func logInfof(info string, msg string, fields ...interface{}) {
-	if strings.Contains(info, "sys:mo_logger") {
-		return
-	}
-	fields = append(fields, info)
-	logutil.Infof(msg+" %s", fields...)
-}
-
+// todo: remove this function after all the logDebugf are replaced by logDebug
 func logDebugf(info string, msg string, fields ...interface{}) {
-	fields = append(fields, info)
-	logutil.Debugf(msg+" %s", fields...)
-}
-
-func logErrorf(info string, msg string, fields ...interface{}) {
-	fields = append(fields, info)
-	logutil.Errorf(msg+" %s", fields...)
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		fields = append(fields, info)
+		logutil.Debugf(msg+" %s", fields...)
+	}
 }
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.

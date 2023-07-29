@@ -9,8 +9,6 @@ def    mo_catalog    mo_tables    rel_id    1    null    NO    BIGINT UNSIGNED  
 def    mo_catalog    mo_tables    relname    2    null    NO    VARCHAR    5000    120000    null    null    null    utf8    utf8_bin    VARCHAR(5000)            select,insert,update,references            null
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 constraint_catalog    constraint_schema    constraint_name    table_catalog    table_schema    table_name    column_name    ordinal_position    position_in_unique_constraint    referenced_table_schema    referenced_table_name    referenced_column_name
-SELECT * FROM `information_schema`.`PROCESSLIST` LIMIT 0,1000;
-id    user    host    db    command    time    state    info
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 query_id    seq    state    duration    cpu_user    cpu_system    context_voluntary    context_involuntary    block_ops_in    block_ops_out    messages_sent    messages_received    page_faults_major    page_faults_minor    swaps    source_function    source_file    source_line
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
@@ -220,16 +218,6 @@ swaps    INT(32)    YES        null
 source_function    VARCHAR(30)    YES        null        
 source_file    VARCHAR(20)    YES        null        
 source_line    INT(32)    YES        null        
-show columns from `PROCESSLIST`;
-Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT UNSIGNED(64)    NO        '0'        
-user    VARCHAR(32)    NO        ''        
-host    VARCHAR(261)    NO        ''        
-db    VARCHAR(64)    YES        null        
-command    VARCHAR(16)    NO        ''        
-time    INT(32)    NO        '0'        
-state    VARCHAR(64)    YES        null        
-info    TEXT(0)    YES        null        
 show columns from `USER_PRIVILEGES`;
 Field    Type    Null    Key    Default    Extra    Comment
 grantee    VARCHAR(292)    NO        ''        

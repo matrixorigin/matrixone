@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -95,7 +96,7 @@ func (txn *Transaction) WriteBatch(
 	if typ == INSERT {
 		if !insertBatchHasRowId {
 			txn.genBlock()
-			len := bat.Length()
+			len := bat.RowCount()
 			vec := txn.proc.GetVector(types.T_Rowid.ToType())
 			for i := 0; i < len; i++ {
 				if err := vector.AppendFixed(vec, txn.genRowId(), false,
@@ -126,20 +127,24 @@ func (txn *Transaction) WriteBatch(
 	return nil
 }
 
-// dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
 func (txn *Transaction) dumpBatch(offset int) error {
-	var size uint64
-
 	txn.Lock()
 	defer txn.Unlock()
+	return txn.dumpBatchLocked(offset)
+}
+
+// dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
+func (txn *Transaction) dumpBatchLocked(offset int) error {
+	var size uint64
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
 
+	txn.hasS3Op.Store(true)
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		// TODO: after shrink, we should update workspace size
-		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
+		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
 			continue
 		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
@@ -180,14 +185,29 @@ func (txn *Transaction) dumpBatch(offset int) error {
 		if err != nil {
 			return err
 		}
-		metaLoc := s3Writer.GetMetaLocBat()
+		blockInfo := s3Writer.GetBlockInfoBat()
 
-		lenVecs := len(metaLoc.Attrs)
+		lenVecs := len(blockInfo.Attrs)
 		// only remain the metaLoc col
-		metaLoc.Vecs = metaLoc.Vecs[lenVecs-1:]
-		metaLoc.Attrs = metaLoc.Attrs[lenVecs-1:]
-		metaLoc.SetZs(metaLoc.Vecs[0].Length(), txn.proc.GetMPool())
-		err = tbl.Write(txn.proc.Ctx, metaLoc)
+		blockInfo.Vecs = blockInfo.Vecs[lenVecs-1:]
+		blockInfo.Attrs = blockInfo.Attrs[lenVecs-1:]
+		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
+
+		table := tbl.(*txnTable)
+		fileName := catalog.DecodeBlockInfo(
+			blockInfo.Vecs[0].GetBytesAt(0)).
+			MetaLocation().Name().String()
+		err = table.db.txn.WriteFileLocked(
+			INSERT,
+			table.db.databaseId,
+			table.tableId,
+			table.db.databaseName,
+			table.tableName,
+			fileName,
+			blockInfo,
+			table.db.txn.dnStores[0],
+		)
+		//err = tbl.Write(txn.proc.Ctx, metaLoc)
 		if err != nil {
 			return err
 		}
@@ -275,10 +295,16 @@ func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 	return nil
 }
 
-// WriteFile used to add a s3 file information to the transaction buffer
-// insert/delete/update all use this api
-func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
-	databaseName, tableName string, fileName string, bat *batch.Batch, dnStore DNStore) error {
+func (txn *Transaction) WriteFileLocked(
+	typ int,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	bat *batch.Batch,
+	dnStore DNStore) error {
+	txn.hasS3Op.Store(true)
 	newBat := bat
 	idx := len(txn.writes)
 	if typ == INSERT {
@@ -297,7 +323,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 				false,
 				txn.proc.Mp())
 		}
-		newBat.SetZs(bat.Vecs[0].Length(), txn.proc.Mp())
+		newBat.SetRowCount(bat.Vecs[0].Length())
 	}
 	txn.readOnly.Store(false)
 	txn.writes = append(txn.writes, Entry{
@@ -320,6 +346,24 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		}
 	}
 	return nil
+}
+
+// WriteFile used to add a s3 file information to the transaction buffer
+// insert/delete/update all use this api
+func (txn *Transaction) WriteFile(
+	typ int,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	bat *batch.Batch,
+	dnStore DNStore) error {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.WriteFileLocked(
+		typ, databaseId, tableId,
+		databaseName, tableName, fileName, bat, dnStore)
 }
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
@@ -353,7 +397,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	}
 	// cn rowId antiShrink
 	bat.AntiShrink(cnRowIdOffsets)
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
@@ -453,9 +497,7 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-func (txn *Transaction) mergeTxnWorkspace() error {
-	txn.Lock()
-	defer txn.Unlock()
+func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
@@ -465,6 +507,46 @@ func (txn *Transaction) mergeTxnWorkspace() error {
 		}
 	}
 	return nil
+}
+
+func (txn *Transaction) getInsertedBlocksForTable(
+	databaseId uint64,
+	tableId uint64) (blks []catalog.BlockInfo, err error) {
+	txn.Lock()
+	defer txn.Unlock()
+	for _, entry := range txn.writes {
+		if entry.databaseId != databaseId ||
+			entry.tableId != tableId {
+			continue
+		}
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			continue
+		}
+		if entry.typ != INSERT ||
+			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
+			continue
+		}
+		metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
+		for _, metaLoc := range metaLocs {
+			location, err := blockio.EncodeLocationFromString(metaLoc)
+			if err != nil {
+				return nil, err
+			}
+			sid := location.Name().SegmentId()
+			blkid := objectio.NewBlockid(
+				&sid,
+				location.Name().Num(),
+				location.ID())
+			pos, ok := txn.cnBlkId_Pos[*blkid]
+			if !ok {
+				panic(fmt.Sprintf("blkid %s not found", blkid.String()))
+			}
+			blks = append(blks, pos.blkInfo)
+		}
+
+	}
+	return blks, nil
+
 }
 
 func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
@@ -512,10 +594,10 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 	if txn.readOnly.Load() {
 		return nil
 	}
-	if err := txn.mergeTxnWorkspace(); err != nil {
+	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
-	if err := txn.dumpBatch(0); err != nil {
+	if err := txn.dumpBatchLocked(0); err != nil {
 		return err
 	}
 	reqs, err := genWriteReqs(ctx, txn.writes)
@@ -533,6 +615,10 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 }
 
 func (txn *Transaction) delTransaction() {
+	if txn.removed {
+		return
+	}
+
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
 			continue
@@ -558,4 +644,6 @@ func (txn *Transaction) delTransaction() {
 	}
 	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
 	txn.cnBlkId_Pos = nil
+	txn.hasS3Op.Store(false)
+	txn.removed = true
 }

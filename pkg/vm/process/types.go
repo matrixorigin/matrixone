@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -149,6 +150,14 @@ type AnalyzeInfo struct {
 	InsertTime int64
 }
 
+type ExecStatus int
+
+const (
+	ExecStop = iota
+	ExecNext
+	ExecHasMore
+)
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
@@ -196,6 +205,8 @@ type Process struct {
 
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	prepareParams       *vector.Vector
+
+	QueryService queryservice.QueryService
 }
 
 type vectorPool struct {
@@ -257,13 +268,16 @@ func (proc *Process) GetValueScanBatchs() []*batch.Batch {
 	return bats
 }
 
-func (proc *Process) GetPrepareParamsAt(i int) (*vector.Vector, error) {
+func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	if i < 0 || i >= proc.prepareParams.Length() {
 		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
-	val := proc.prepareParams.GetRawBytesAt(i)
-	vec := vector.NewConstBytes(*proc.prepareParams.GetType(), val, 1, proc.Mp())
-	return vec, nil
+	if proc.prepareParams.IsNull(uint64(i)) {
+		return nil, nil
+	} else {
+		val := proc.prepareParams.GetRawBytesAt(i)
+		return val, nil
+	}
 }
 
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
@@ -314,7 +328,8 @@ func (si *SessionInfo) GetHost() string {
 }
 
 func (si *SessionInfo) GetUserHost() string {
-	return si.User + "@" + si.Host
+	//currently, the host_name is 'localhost'
+	return si.User + "@localhost"
 }
 
 func (si *SessionInfo) GetRole() string {
@@ -339,4 +354,22 @@ func (si *SessionInfo) GetDatabase() string {
 
 func (si *SessionInfo) GetVersion() string {
 	return si.Version
+}
+
+func (a *AnalyzeInfo) Reset() {
+	a.NodeId = 0
+	a.InputRows = 0
+	a.OutputRows = 0
+	a.TimeConsumed = 0
+	a.WaitTimeConsumed = 0
+	a.InputSize = 0
+	a.OutputSize = 0
+	a.MemorySize = 0
+	a.DiskIO = 0
+	a.S3IOByte = 0
+	a.S3IOInputCount = 0
+	a.S3IOOutputCount = 0
+	a.NetworkIO = 0
+	a.ScanTime = 0
+	a.InsertTime = 0
 }

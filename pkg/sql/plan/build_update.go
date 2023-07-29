@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -44,19 +42,16 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
-	if !updatePlanCtxs[0].checkInsertPkDup {
-		pkFilterExpr := getPkFilterExpr(builder, tblInfo.tableDefs[0])
-		updatePlanCtxs[0].pkFilterExpr = pkFilterExpr
-	}
+	// need change to get update values. not get values from where clause
+	// if !updatePlanCtxs[0].checkInsertPkDup {
+	// 	pkFilterExpr := getPkFilterExpr(builder, tblInfo.tableDefs[0])
+	// 	updatePlanCtxs[0].pkFilterExprs = []*Expr{pkFilterExpr}
+	// }
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
 	// append sink node
-	if tblInfo.isMulti {
-		lastNodeId = appendSinkNode(builder, queryBindCtx, lastNodeId)
-		sourceStep = builder.appendStep(lastNodeId)
-	} else {
-		sourceStep = -1
-	}
+	lastNodeId = appendSinkNode(builder, queryBindCtx, lastNodeId)
+	sourceStep = builder.appendStep(lastNodeId)
 
 	beginIdx := 0
 	for i, tableDef := range tblInfo.tableDefs {
@@ -66,7 +61,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, lastNodeId)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -76,6 +71,8 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		return nil, err
 	}
 
+	reduceSinkSinkScanNodes(query)
+	ReCalcQueryStats(builder, query)
 	query.StmtType = plan.Query_UPDATE
 	return &Plan{
 		Plan: &plan.Plan_Query{
@@ -259,30 +256,30 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	return lastNodeId, updatePlanCtxs, nil
 }
 
-func getPkFilterExpr(builder *QueryBuilder, tableDef *TableDef) *Expr {
+// func getPkFilterExpr(builder *QueryBuilder, tableDef *TableDef) *Expr {
 
-	for _, node := range builder.qry.Nodes {
-		if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 {
-			continue
-		}
+// 	for _, node := range builder.qry.Nodes {
+// 		if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 {
+// 			continue
+// 		}
 
-		preNode := builder.qry.Nodes[node.Children[0]]
-		if preNode.NodeType != plan.Node_TABLE_SCAN || preNode.TableDef.TblId != tableDef.TblId {
-			continue
-		}
+// 		preNode := builder.qry.Nodes[node.Children[0]]
+// 		if preNode.NodeType != plan.Node_TABLE_SCAN || preNode.TableDef.TblId != tableDef.TblId {
+// 			continue
+// 		}
 
-		basePkName := tableDef.Pkey.PkeyColName
-		tblAndPkName := fmt.Sprintf("%s.%s", tableDef.Name, tableDef.Pkey.PkeyColName)
-		if e, ok := node.FilterList[0].Expr.(*plan.Expr_F); ok && e.F.Func.ObjName == "=" {
-			if pkExpr, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
-				return DeepCopyExpr(e.F.Args[1])
-			}
+// 		basePkName := tableDef.Pkey.PkeyColName
+// 		tblAndPkName := fmt.Sprintf("%s.%s", tableDef.Name, tableDef.Pkey.PkeyColName)
+// 		if e, ok := node.FilterList[0].Expr.(*plan.Expr_F); ok && e.F.Func.ObjName == "=" {
+// 			if pkExpr, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
+// 				return DeepCopyExpr(e.F.Args[1])
+// 			}
 
-			if pkExpr, ok := e.F.Args[1].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
-				return DeepCopyExpr(e.F.Args[0])
-			}
+// 			if pkExpr, ok := e.F.Args[1].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
+// 				return DeepCopyExpr(e.F.Args[0])
+// 			}
 
-		}
-	}
-	return nil
-}
+// 		}
+// 	}
+// 	return nil
+// }

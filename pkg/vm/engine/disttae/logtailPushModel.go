@@ -53,7 +53,7 @@ const (
 	// periodToCheckTableSubscribeSucceed : check table subscribe status period after push client send a subscribe request.
 	// maxTimeToCheckTableSubscribeSucceed : max time to wait for table subscribe succeed. if time exceed, return error.
 	periodToCheckTableSubscribeSucceed  = 1 * time.Millisecond
-	maxTimeToCheckTableSubscribeSucceed = 10 * time.Second
+	maxTimeToCheckTableSubscribeSucceed = 30 * time.Second
 	maxCheckRangeTableSubscribeSucceed  = int(maxTimeToCheckTableSubscribeSucceed / periodToCheckTableSubscribeSucceed)
 
 	// unsubscribe process related constants.
@@ -494,14 +494,14 @@ func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 		isDeleting: false,
 		latestTime: time.Now(),
 	}
-	logutil.Debugf("[log-tail-push-client] subscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
+	logutil.Infof("[log-tail-push-client] subscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	delete(s.m, subscribeID{dbId, tblId})
-	logutil.Debugf("[log-tail-push-client] unsubscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
+	logutil.Infof("[log-tail-push-client] unsubscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
 }
 
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
@@ -724,6 +724,16 @@ func distributeSubscribeResponse(
 	tbl := lt.GetTable()
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
 	if notDistribute {
+		// time check for issue #10833.
+		startTime := time.Now()
+		defer func() {
+			tDuration := time.Since(startTime)
+			if tDuration > time.Millisecond*5 {
+				logutil.Warnf("[log-tail-push-client] consume subscribe response for tbl[dbId: %d, tblID: %d] cost %s",
+					tbl.DbId, tbl.TbId, tDuration.String())
+			}
+		}()
+
 		if err := e.consumeSubscribeResponse(ctx, response, false); err != nil {
 			return err
 		}
@@ -1025,13 +1035,19 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	tableName string,
 ) (err error) {
 	var entries []*api.Entry
-	if entries, err = taeLogtail.LoadCheckpointEntries(
+	var closeCBs []func()
+	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
 		ctx,
 		lt.CkpLocation,
 		tableId, tableName,
-		databaseId, "", engine.fs); err != nil {
+		databaseId, "", engine.mp, engine.fs); err != nil {
 		return
 	}
+	defer func() {
+		for _, cb := range closeCBs {
+			cb()
+		}
+	}()
 	for _, entry := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, entry); err != nil {

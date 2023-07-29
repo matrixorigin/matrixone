@@ -711,8 +711,8 @@ func checkPartitionDefs(ctx context.Context, partitionBinder *PartitionBinder, p
 	}
 
 	switch partitionDef.Type {
-	case plan.PartitionType_RANGE:
-		// TODO
+	case plan.PartitionType_RANGE, plan.PartitionType_RANGE_COLUMNS:
+		err = checkPartitionByRange(partitionBinder, partitionDef, tableDef)
 	case plan.PartitionType_HASH:
 		// TODO
 	case plan.PartitionType_LIST:

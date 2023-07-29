@@ -15,38 +15,21 @@
 package dnservice
 
 import (
-	"context"
-	"math/rand"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"go.uber.org/zap"
 )
 
 func (s *store) initSqlWriterFactory() {
-	addressFunc := func(ctx context.Context, randomCN bool) (string, error) {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-		defer cancel()
-		details, err := s.hakeeperClient.GetClusterDetails(ctx)
-		if err != nil {
-			return "", err
-		}
-		if len(details.CNStores) == 0 {
-			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
-		}
-		if randomCN {
-			n := rand.Intn(len(details.CNStores))
-			return details.CNStores[n].SQLAddress, nil
-		}
-		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
+	getClient := func() util.HAKeeperClient {
+		return s.hakeeperClient
 	}
-
-	db_holder.SetSQLWriterDBAddressFunc(addressFunc)
+	db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(getClient))
 }
+
 func (s *store) createSQLLogger(command *logservicepb.CreateTaskService) {
 	// convert username to "mo_logger"
 	frontend.SetSpecialUser(db_holder.MOLoggerUser, []byte(command.User.Password))
@@ -60,32 +43,20 @@ func (s *store) initTaskHolder() {
 		return
 	}
 
-	addressFunc := func(ctx context.Context) (string, error) {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-		defer cancel()
-		details, err := s.hakeeperClient.GetClusterDetails(ctx)
-		if err != nil {
-			return "", err
-		}
-		if len(details.CNStores) == 0 {
-			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
-		}
-
-		n := rand.Intn(len(details.CNStores))
-		return details.CNStores[n].SQLAddress, nil
+	getClient := func() util.HAKeeperClient {
+		return s.hakeeperClient
 	}
-
 	if s.task.storageFactory != nil {
 		s.task.serviceHolder = taskservice.NewTaskServiceHolderWithTaskStorageFactorySelector(
 			s.rt,
-			addressFunc,
+			util.AddressFunc(getClient),
 			func(_, _, _ string) taskservice.TaskStorageFactory {
 				return s.task.storageFactory
 			})
 		return
 	}
 
-	s.task.serviceHolder = taskservice.NewTaskServiceHolder(s.rt, addressFunc)
+	s.task.serviceHolder = taskservice.NewTaskServiceHolder(s.rt, util.AddressFunc(getClient))
 }
 
 func (s *store) createTaskService(command *logservicepb.CreateTaskService) {

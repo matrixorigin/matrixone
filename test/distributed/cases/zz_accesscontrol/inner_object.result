@@ -22,7 +22,38 @@ information_schema
 mysql
 mo_catalog
 show grants;
-Grants for account1:admin@localhost
+Grants for admin@localhost
+GRANT create user ON account  `admin`@`localhost`
+GRANT drop user ON account  `admin`@`localhost`
+GRANT alter user ON account  `admin`@`localhost`
+GRANT create role ON account  `admin`@`localhost`
+GRANT drop role ON account  `admin`@`localhost`
+GRANT create database ON account  `admin`@`localhost`
+GRANT drop database ON account  `admin`@`localhost`
+GRANT show databases ON account  `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+GRANT manage grants ON account  `admin`@`localhost`
+GRANT account all ON account  `admin`@`localhost`
+GRANT show tables ON database * `admin`@`localhost`
+GRANT create table ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
+GRANT create view ON database * `admin`@`localhost`
+GRANT drop view ON database * `admin`@`localhost`
+GRANT alter view ON database * `admin`@`localhost`
+GRANT database all ON database * `admin`@`localhost`
+GRANT database ownership ON database * `admin`@`localhost`
+GRANT select ON table *.* `admin`@`localhost`
+GRANT insert ON table *.* `admin`@`localhost`
+GRANT update ON table *.* `admin`@`localhost`
+GRANT truncate ON table *.* `admin`@`localhost`
+GRANT delete ON table *.* `admin`@`localhost`
+GRANT reference ON table *.* `admin`@`localhost`
+GRANT index ON table *.* `admin`@`localhost`
+GRANT table all ON table *.* `admin`@`localhost`
+GRANT table ownership ON table *.* `admin`@`localhost`
+GRANT values ON table *.* `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
 use system;
 show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
@@ -46,6 +77,7 @@ partition_info    BLOB(0)    YES        null
 viewdef    VARCHAR(5000)    YES        null        
 constraint    VARCHAR(5000)    YES        null        
 rel_version    INT UNSIGNED(0)    YES        null        
+catalog_version    INT UNSIGNED(0)    YES        null        
 select datname, dat_createsql from mo_database;
 datname    dat_createsql
 system    create database system
@@ -86,8 +118,8 @@ system
 system_metrics
 information_schema
 mysql
-account_db
 mo_catalog
+account_db
 update mo_catalog.mo_tables set relname='mo_aaaa';
 internal error: do not have privilege to execute the statement
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');
@@ -220,3 +252,12 @@ drop account if exists inner_account;
 drop account if exists accx11;
 drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
+desc mo_catalog.mo_stages;
+Field    Type    Null    Key    Default    Extra    Comment
+stage_id    INT UNSIGNED(32)    NO    PRI    null        
+stage_name    VARCHAR(64)    YES        null        
+url    TEXT(0)    YES        null        
+stage_credentials    TEXT(0)    YES        null        
+stage_status    VARCHAR(64)    YES        null        
+created_time    TIMESTAMP(0)    YES        null        
+comment    TEXT(0)    YES        null        

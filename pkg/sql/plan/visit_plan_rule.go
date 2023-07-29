@@ -57,7 +57,7 @@ func NewGetParamRule() *GetParamRule {
 func (rule *GetParamRule) MatchNode(node *Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		rule.schemas = append(rule.schemas, &plan.ObjectRef{
-			Server:     node.ObjRef.Server,
+			Server:     int64(node.TableDef.Version), //we use this unused field to store table's version
 			Db:         node.ObjRef.Db,
 			Schema:     node.ObjRef.Schema,
 			Obj:        node.ObjRef.Obj,
@@ -221,7 +221,7 @@ type ResetVarRefRule struct {
 
 func NewResetVarRefRule(compCtx CompilerContext, proc *process.Process) *ResetVarRefRule {
 	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+	bat.SetRowCount(1)
 	return &ResetVarRefRule{
 		compCtx: compCtx,
 		proc:    proc,
@@ -360,7 +360,7 @@ func GetVarValue(
 		if err1 != nil {
 			return nil, err1
 		}
-		constValue := rule.GetConstantValue(vec, true)
+		constValue := rule.GetConstantValue(vec, true, 0)
 		constValue.Src = e
 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 		expr.Expr = &plan.Expr_C{
@@ -407,7 +407,7 @@ type RecomputeRealTimeRelatedFuncRule struct {
 
 func NewRecomputeRealTimeRelatedFuncRule(proc *process.Process) *RecomputeRealTimeRelatedFuncRule {
 	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+	bat.SetRowCount(1)
 	return &RecomputeRealTimeRelatedFuncRule{bat, proc}
 }
 
@@ -445,7 +445,7 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 				if err != nil {
 					return nil, err
 				}
-				constValue := rule.GetConstantValue(vec, false)
+				constValue := rule.GetConstantValue(vec, false, 0)
 				constValue.Src = exprImpl.C.Src
 				exprImpl.C = constValue
 			}

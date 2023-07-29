@@ -113,6 +113,7 @@ func (w *StoreImpl) onTruncateQueue(items ...any) {
 			lsn = w.driverCheckpointing.Load()
 			err = w.driver.Truncate(lsn)
 		}
+		w.gcWalDriverLsnMap(lsn)
 		w.driverCheckpointed = lsn
 	}
 }

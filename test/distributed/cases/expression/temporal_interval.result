@@ -481,7 +481,11 @@ a
 1998-12-30
 1997-12-30
 select count(a),c + INTERVAL 1 DAY as c1 from t1 group by (c + INTERVAL 1 DAY) having c1 > "1998-01-01 00:59:59";
-SQL syntax error: column "c1" must appear in the GROUP BY clause or be used in an aggregate function
+count(a)    c1
+2    1998-01-02 00:59:59
+2    1998-01-03 00:59:59
+2    1998-01-03 01:01:00
+4    1998-01-02 00:00:00
 select i,c + INTERVAL 1 MINUTE from t1 where a - INTERVAL 1 SECOND  > "1997-01-01 00:00:00.000001" order by c + INTERVAL 1 MINUTE DESC;
 i	c + INTERVAL 1 MINUTE
 3	1998-01-02 01:02:00

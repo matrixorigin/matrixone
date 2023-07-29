@@ -73,7 +73,7 @@ func startLogServiceCluster(
 
 	var cfg *Config
 	for _, file := range files {
-		cfg = &Config{}
+		cfg = NewConfig()
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
@@ -95,7 +95,7 @@ func startDNServiceCluster(
 	}
 
 	for _, file := range files {
-		cfg := &Config{}
+		cfg := NewConfig()
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
@@ -120,7 +120,7 @@ func startCNServiceCluster(
 
 	var cfg *Config
 	for _, file := range files {
-		cfg = &Config{}
+		cfg = NewConfig()
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
@@ -155,7 +155,7 @@ func startProxyServiceCluster(
 
 	var cfg *Config
 	for _, file := range files {
-		cfg = &Config{}
+		cfg = NewConfig()
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}

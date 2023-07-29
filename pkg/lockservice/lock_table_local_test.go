@@ -430,7 +430,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					for _, txnID := range c.existsWaiters[i] {
 						w := acquireWaiter("", []byte(txnID))
 						w.setStatus("", blocking)
-						lock.waiter.add("", w)
+						lock.waiter.add("", true, w)
 						wg.Add(1)
 						require.NoError(t, stopper.RunTask(func(ctx context.Context) {
 							wg.Done()
@@ -868,6 +868,148 @@ func TestRangeLockConflict(t *testing.T) {
 
 				wg.Wait()
 			}
+		})
+}
+
+func TestLockedTSIsLastCommittedTS(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			tableID := uint64(1)
+			v, err := l.getLockTable(tableID)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+			lt.mu.Lock()
+			lt.mu.lastCommittedTS = timestamp.Timestamp{PhysicalTime: 1}
+			lt.mu.Unlock()
+
+			txnID := []byte{1}
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				tableID,
+				txnID,
+				[][]byte{{1}},
+				pb.Granularity_Row)
+			require.NoError(t, l.Unlock(ctx, txnID, timestamp.Timestamp{PhysicalTime: 0}))
+			lt.mu.Lock()
+			require.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, lt.mu.lastCommittedTS)
+			lt.mu.Unlock()
+
+			txnID = []byte{2}
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				tableID,
+				txnID,
+				[][]byte{{1}},
+				pb.Granularity_Row)
+			require.NoError(t, l.Unlock(ctx, txnID, timestamp.Timestamp{PhysicalTime: 2}))
+			lt.mu.Lock()
+			require.Equal(t, timestamp.Timestamp{PhysicalTime: 2}, lt.mu.lastCommittedTS)
+			lt.mu.Unlock()
+
+			txnID = []byte{3}
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				tableID,
+				txnID,
+				[][]byte{{1}},
+				pb.Granularity_Row)
+			require.NoError(t, l.Unlock(ctx, txnID, timestamp.Timestamp{PhysicalTime: 1}))
+			lt.mu.Lock()
+			require.Equal(t, timestamp.Timestamp{PhysicalTime: 2}, lt.mu.lastCommittedTS)
+			lt.mu.Unlock()
+
+			txnID = []byte{4}
+			res, err := l.Lock(ctx, tableID, [][]byte{{1}}, txnID, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.NoError(t, err)
+			require.Equal(t, timestamp.Timestamp{PhysicalTime: 2}, res.Timestamp)
+		})
+}
+
+func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			tableID := uint64(1)
+			v, err := l.getLockTable(tableID)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+			lt.mu.Lock()
+			lt.mu.lastCommittedTS = timestamp.Timestamp{PhysicalTime: 1}
+			lt.mu.Unlock()
+
+			txnID := []byte{1}
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				tableID,
+				txnID,
+				[][]byte{{1}, {2}},
+				pb.Granularity_Range)
+			require.NoError(t, l.Unlock(ctx, txnID, timestamp.Timestamp{PhysicalTime: 0}))
+			lt.mu.Lock()
+			require.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, lt.mu.lastCommittedTS)
+			lt.mu.Unlock()
+
+			txnID = []byte{2}
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				tableID,
+				txnID,
+				[][]byte{{1}, {2}},
+				pb.Granularity_Range)
+			require.NoError(t, l.Unlock(ctx, txnID, timestamp.Timestamp{PhysicalTime: 2}))
+			lt.mu.Lock()
+			require.Equal(t, timestamp.Timestamp{PhysicalTime: 2}, lt.mu.lastCommittedTS)
+			lt.mu.Unlock()
+
+			txnID = []byte{3}
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				tableID,
+				txnID,
+				[][]byte{{1}, {2}},
+				pb.Granularity_Range)
+			require.NoError(t, l.Unlock(ctx, txnID, timestamp.Timestamp{PhysicalTime: 1}))
+			lt.mu.Lock()
+			require.Equal(t, timestamp.Timestamp{PhysicalTime: 2}, lt.mu.lastCommittedTS)
+			lt.mu.Unlock()
+
+			txnID = []byte{4}
+			res, err := l.Lock(ctx, tableID, [][]byte{{1}, {2}}, txnID, pb.LockOptions{
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.NoError(t, err)
+			require.Equal(t, timestamp.Timestamp{PhysicalTime: 2}, res.Timestamp)
 		})
 }
 

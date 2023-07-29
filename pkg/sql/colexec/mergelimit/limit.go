@@ -35,7 +35,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -45,11 +45,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	for {
 		bat, end, err := ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
-			return true, nil
+			return process.ExecStop, nil
 		}
 		if end {
 			proc.SetInputBatch(nil)
-			return true, nil
+			return process.ExecStop, nil
 		}
 
 		anal.Input(bat, isFirst)
@@ -57,19 +57,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			proc.PutBatch(bat)
 			continue
 		}
-		newSeen := ap.ctr.seen + uint64(bat.Length())
+		newSeen := ap.ctr.seen + uint64(bat.RowCount())
 		if newSeen < ap.Limit {
 			ap.ctr.seen = newSeen
 			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)
-			return false, nil
+			return process.ExecNext, nil
 		} else {
 			num := int(newSeen - ap.Limit)
-			batch.SetLength(bat, bat.Length()-num)
+			batch.SetLength(bat, bat.RowCount()-num)
 			ap.ctr.seen = newSeen
 			anal.Output(bat, isLast)
 			proc.SetInputBatch(bat)
-			return false, nil
+			return process.ExecNext, nil
 		}
 	}
 }

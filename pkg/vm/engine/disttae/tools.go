@@ -41,7 +41,7 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 	name string, databaseId uint64, typ string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_DATABASE_DAT_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // dat_id
@@ -95,7 +95,7 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(2)
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema[:2]...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_DATABASE_DAT_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoDatabaseTypes[idx]) // dat_id
@@ -116,7 +116,7 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 	bat := batch.NewWithSize(5)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
 	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
@@ -151,7 +151,7 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 func genTableAlterTuple(constraint [][]byte, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(1)
 	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	idx := catalog.MO_TABLES_ALTER_TABLE
 	bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
 	for i := 0; i < len(constraint); i++ {
@@ -170,7 +170,7 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 	_ = sql //TODO delete this param if not required
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id
@@ -257,6 +257,11 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 		if err := vector.AppendFixed(bat.Vecs[idx], uint32(0), false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_CATALOG_VERSION_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // catalog version
+		if err := vector.AppendFixed(bat.Vecs[idx], catalog.CatalogVersion_Curr, false, m); err != nil {
+			return nil, err
+		}
 	}
 	if needRowid {
 		//add the rowid vector as the first one in the batch
@@ -276,7 +281,7 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 func genCreateColumnTuple(col column, rowid types.Rowid, needRowid bool, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_uniq_name
@@ -413,7 +418,7 @@ func genCreateColumnTuple(col column, rowid types.Rowid, needRowid bool, m *mpoo
 func genDropColumnTuple(rowid types.Rowid, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{catalog.Row_ID}
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 
 	//add the rowid vector as the first one in the batch
 	vec := vector.NewVec(types.T_Rowid.ToType())
@@ -430,7 +435,7 @@ func genDropTableTuple(rowid types.Rowid, id, databaseId uint64, name, databaseN
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id
@@ -469,7 +474,7 @@ func genTruncateTableTuple(rowid types.Rowid, id, databaseId uint64, name, datab
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id
@@ -716,10 +721,11 @@ func newStringConstVal(v string) *plan.Expr {
 		},
 	}
 }
+*/
 
-func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
+func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
-		Typ: types.NewProtoType(oid),
+		Typ: typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				Name:   name,
@@ -728,7 +734,6 @@ func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
 		},
 	}
 }
-*/
 
 func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
@@ -746,7 +751,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}
-		if e.bat == nil || e.bat.Length() == 0 {
+		if e.bat == nil || e.bat.IsEmpty() {
 			continue
 		}
 		if v != nil {
@@ -812,6 +817,12 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	typ := api.Entry_Insert
 	if e.typ == DELETE {
 		typ = api.Entry_Delete
+		if e.tableId != catalog.MO_TABLES_ID &&
+			e.tableId != catalog.MO_DATABASE_ID {
+			ebat = batch.NewWithSize(0)
+			ebat.Vecs = e.bat.Vecs[:1]
+			ebat.Attrs = e.bat.Attrs[:1]
+		}
 	} else if e.typ == UPDATE {
 		typ = api.Entry_Update
 	} else if e.typ == ALTER {
@@ -1104,7 +1115,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 		}
 // 	}
 // 	for i := range bats {
-// 		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
+// 		bats[i].SetZs(bats[i].GetVector(0).RowCount(), txn.proc.Mp())
 // 	}
 // 	return bats, nil
 // }
@@ -1134,7 +1145,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 
 	{
 		vec := vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			val := types.RandomRowid()
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				return nil, err
@@ -1147,7 +1158,7 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 		var val types.TS
 
 		vec := vector.NewVec(types.T_TS.ToType())
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				return nil, err
 			}
@@ -1181,161 +1192,161 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 // 	return false
 // }
 
-func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
+func transferIval[T int32 | int64](v T, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_int8:
-		return true, int8(v)
+		return true, false, int8(v)
 	case types.T_int16:
-		return true, int16(v)
+		return true, false, int16(v)
 	case types.T_int32:
-		return true, int32(v)
+		return true, false, int32(v)
 	case types.T_int64:
-		return true, int64(v)
+		return true, false, int64(v)
 	case types.T_uint8:
-		return true, uint8(v)
+		return true, false, uint8(v)
 	case types.T_uint16:
-		return true, uint16(v)
+		return true, false, uint16(v)
 	case types.T_uint32:
-		return true, uint32(v)
+		return true, false, uint32(v)
 	case types.T_uint64:
-		return true, uint64(v)
+		return true, false, uint64(v)
 	case types.T_float32:
-		return true, float32(v)
+		return true, false, float32(v)
 	case types.T_float64:
-		return true, float64(v)
+		return true, false, float64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferUval[T uint32 | uint64](v T, oid types.T) (bool, any) {
+func transferUval[T uint32 | uint64](v T, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_int8:
-		return true, int8(v)
+		return true, false, int8(v)
 	case types.T_int16:
-		return true, int16(v)
+		return true, false, int16(v)
 	case types.T_int32:
-		return true, int32(v)
+		return true, false, int32(v)
 	case types.T_int64:
-		return true, int64(v)
+		return true, false, int64(v)
 	case types.T_uint8:
-		return true, uint8(v)
+		return true, false, uint8(v)
 	case types.T_uint16:
-		return true, uint16(v)
+		return true, false, uint16(v)
 	case types.T_uint32:
-		return true, uint32(v)
+		return true, false, uint32(v)
 	case types.T_uint64:
-		return true, uint64(v)
+		return true, false, uint64(v)
 	case types.T_float32:
-		return true, float32(v)
+		return true, false, float32(v)
 	case types.T_float64:
-		return true, float64(v)
+		return true, false, float64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferFval(v float32, oid types.T) (bool, any) {
+func transferFval(v float32, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_float32:
-		return true, float32(v)
+		return true, false, float32(v)
 	case types.T_float64:
-		return true, float64(v)
+		return true, false, float64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDval(v float64, oid types.T) (bool, any) {
+func transferDval(v float64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_float32:
-		return true, float32(v)
+		return true, false, float32(v)
 	case types.T_float64:
-		return true, float64(v)
+		return true, false, float64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferSval(v string, oid types.T) (bool, any) {
+func transferSval(v string, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_json:
-		return true, []byte(v)
+		return true, false, []byte(v)
 	case types.T_char, types.T_varchar:
-		return true, []byte(v)
+		return true, false, []byte(v)
 	case types.T_text, types.T_blob:
-		return true, []byte(v)
+		return true, false, []byte(v)
 	case types.T_binary, types.T_varbinary:
-		return true, []byte(v)
+		return true, false, []byte(v)
 	case types.T_uuid:
 		var uv types.Uuid
 		copy(uv[:], []byte(v)[:])
-		return true, uv
+		return true, false, uv
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferBval(v bool, oid types.T) (bool, any) {
+func transferBval(v bool, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_bool:
-		return true, v
+		return true, false, v
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDateval(v int32, oid types.T) (bool, any) {
+func transferDateval(v int32, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_date:
-		return true, types.Date(v)
+		return true, false, types.Date(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferTimeval(v int64, oid types.T) (bool, any) {
+func transferTimeval(v int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_time:
-		return true, types.Time(v)
+		return true, false, types.Time(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDatetimeval(v int64, oid types.T) (bool, any) {
+func transferDatetimeval(v int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_datetime:
-		return true, types.Datetime(v)
+		return true, false, types.Datetime(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferTimestampval(v int64, oid types.T) (bool, any) {
+func transferTimestampval(v int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_timestamp:
-		return true, types.Timestamp(v)
+		return true, false, types.Timestamp(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDecimal64val(v int64, oid types.T) (bool, any) {
+func transferDecimal64val(v int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_decimal64:
-		return true, types.Decimal64(v)
+		return true, false, types.Decimal64(v)
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 
-func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
+func transferDecimal128val(a, b int64, oid types.T) (bool, bool, any) {
 	switch oid {
 	case types.T_decimal128:
-		return true, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
+		return true, false, types.Decimal128{B0_63: uint64(a), B64_127: uint64(b)}
 	default:
-		return false, nil
+		return false, false, nil
 	}
 }
 

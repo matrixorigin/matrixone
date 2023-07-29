@@ -64,12 +64,14 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "External Function"
 	case plan.Node_MATERIAL:
 		pname = "Material"
-	case plan.Node_RECURSIVE_CTE:
-		pname = "Recursive CTE"
 	case plan.Node_SINK:
 		pname = "Sink"
 	case plan.Node_SINK_SCAN:
 		pname = "Sink Scan"
+	case plan.Node_RECURSIVE_SCAN:
+		pname = "Recursive Scan"
+	case plan.Node_RECURSIVE_CTE:
+		pname = "CTE Scan"
 	case plan.Node_AGG:
 		pname = "Aggregate"
 	case plan.Node_DISTINCT:
@@ -369,6 +371,33 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 	if err != nil {
 		return "", err
 	}
+
+	if ndesc.Node.Stats.Shuffle {
+		idx := ndesc.Node.Stats.ShuffleColIdx
+		shuffleType := ndesc.Node.Stats.ShuffleType
+		var hashCol *plan.Expr
+		switch exprImpl := ndesc.Node.OnList[idx].Expr.(type) {
+		case *plan.Expr_F:
+			hashCol = exprImpl.F.Args[0]
+		}
+
+		if shuffleType == plan.ShuffleType_Hash {
+			buf.WriteString(" shuffle: hash(")
+			err := describeExpr(ctx, hashCol, options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
+		} else {
+			buf.WriteString(" shuffle: range(")
+			err := describeExpr(ctx, hashCol, options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
+		}
+	}
+
 	return buf.String(), nil
 }
 

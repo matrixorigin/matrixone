@@ -33,11 +33,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -188,9 +185,6 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 
 	ctx, span := trace.Start(ctx, "S3FS.List")
 	defer span.End()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
@@ -256,9 +250,6 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 
 	ctx, span := trace.Start(ctx, "S3FS.StatFile")
 	defer span.End()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
@@ -392,6 +383,16 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		}
 	}
 
+	var r io.Reader
+	r = bytes.NewReader(content)
+	if vector.Hash.Sum != nil && vector.Hash.New != nil {
+		h := vector.Hash.New()
+		r = io.TeeReader(r, h)
+		defer func() {
+			*vector.Hash.Sum = h.Sum(nil)
+		}()
+	}
+
 	// put
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
@@ -402,7 +403,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		&s3.PutObjectInput{
 			Bucket:        ptrTo(s.bucket),
 			Key:           ptrTo(key),
-			Body:          bytes.NewReader(content),
+			Body:          r,
 			ContentLength: size,
 			Expires:       expire,
 		},
@@ -913,9 +914,6 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		}
 	}
 
-	// credential provider
-	var credentialProvider aws.CredentialsProvider
-
 	// options for loading configs
 	loadConfigOptions := []func(*config.LoadOptions) error{
 		config.WithLogger(logutil.GetS3Logger()),
@@ -937,67 +935,22 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		)
 	}
 
-	// static credential
-	if apiKey != "" && apiSecret != "" {
-		// static
-		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
-	}
+	credentialProvider := getCredentialsProvider(
+		ctx,
+		endpoint,
+		region,
+		apiKey,
+		apiSecret,
+		roleARN,
+		externalID,
+	)
 
-	// credentials for 3rd-party services
-	if credentialProvider == nil && endpointURL != nil {
-		hostname := endpointURL.Hostname()
-		if strings.Contains(hostname, "aliyuncs.com") {
-			credentialProvider = newAliyunCredentialsProvider()
-			_, err := credentialProvider.Retrieve(ctx)
-			if err != nil {
-				// bad config, fallback to aws default
-				credentialProvider = nil
-			}
-		} else if strings.Contains(hostname, "myqcloud.com") ||
-			strings.Contains(hostname, "tencentcos.cn") {
-			credentialProvider = newTencentCloudCredentialsProvider()
-			_, err := credentialProvider.Retrieve(ctx)
-			if err != nil {
-				// bad config, fallback to aws default
-				credentialProvider = nil
-			}
-		}
-	}
-
-	// role arn credential
-	if roleARN != "" {
-		// role arn
-		awsConfig, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
-		if err != nil {
-			return nil, err
-		}
-
-		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
-			if region == "" {
-				options.Region = "ap-northeast-1"
-			} else {
-				options.Region = region
-			}
-		})
-		credentialProvider = stscreds.NewAssumeRoleProvider(
-			stsSvc,
-			roleARN,
-			func(opts *stscreds.AssumeRoleOptions) {
-				if externalID != "" {
-					opts.ExternalID = &externalID
-				}
-			},
-		)
-		// validate
-		_, err = credentialProvider.Retrieve(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// credentials cache
+	// validate
 	if credentialProvider != nil {
-		credentialProvider = aws.NewCredentialsCache(credentialProvider)
+		_, err := credentialProvider.Retrieve(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// load configs

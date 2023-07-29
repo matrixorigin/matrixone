@@ -53,6 +53,7 @@ func (c *mockHAKeeperClient) updateCN(uuid string, addr string, labels map[strin
 		UUID:       uuid,
 		SQLAddress: addr,
 		Labels:     labels,
+		WorkState:  metadata.WorkState_Working,
 	}
 	c.value.CNStores = append(c.value.CNStores, *cs)
 }
@@ -77,6 +78,17 @@ func (c *mockHAKeeperClient) GetClusterState(ctx context.Context) (logpb.Checker
 			Password: "p1",
 		},
 	}, nil
+}
+
+func (c *mockHAKeeperClient) updateCNWorkState(ctx context.Context, state logpb.CNWorkState) error {
+	c.Lock()
+	defer c.Unlock()
+	for i := range c.value.CNStores {
+		if c.value.CNStores[i].UUID == state.UUID {
+			c.value.CNStores[i].WorkState = state.State
+		}
+	}
+	return nil
 }
 
 func TestLabelInfoReserved(t *testing.T) {
@@ -283,4 +295,24 @@ func TestLabelHash(t *testing.T) {
 	require.Equal(t, h1, h2)
 	require.NotEqual(t, h1, h3)
 	require.NotEqual(t, h1, h4)
+}
+
+func TestLabelMerge(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	lb := labelInfo{
+		Tenant: "t1",
+		Labels: map[string]string{
+			"k1": "v1",
+			"k2": "v2",
+		},
+	}
+	lb.merge(nil)
+	require.Equal(t, 2, len(lb.Labels))
+
+	lb.merge(map[string]string{"a": "1"})
+	require.Equal(t, 3, len(lb.Labels))
+
+	lb.merge(map[string]string{"k1": "v11"})
+	require.Equal(t, 3, len(lb.Labels))
+	require.Equal(t, "v1", lb.Labels["k1"])
 }

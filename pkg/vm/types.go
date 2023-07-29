@@ -53,6 +53,8 @@ const (
 	MergeOrder
 	MergeGroup
 	MergeOffset
+	MergeRecursive
+	MergeCTE
 
 	Deletion
 	Insert
@@ -83,6 +85,8 @@ const (
 	// Operator that encounters a write conflict will block until the previous
 	// transaction has released the lock
 	LockOp
+
+	Shuffle
 )
 
 // Instruction contains relational algebra
@@ -120,6 +124,8 @@ func (ins *Instruction) IsBrokenNode() bool {
 	case Top, MergeTop:
 		return true
 	case Window:
+		return true
+	case MergeRecursive:
 		return true
 	}
 	return false

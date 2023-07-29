@@ -190,7 +190,7 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 		return nil
 	}
 
-	// otherwrise, wait bootstrap completed
+	// otherwise, wait bootstrap completed
 	for {
 		select {
 		case <-ctx.Done():

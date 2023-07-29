@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
@@ -33,6 +34,8 @@ import (
 func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	e.Lock()
 	defer e.Unlock()
+
+	e.catalog = cache.NewCatalog()
 
 	var packer *types.Packer
 	put := e.packerPool.Get(&packer)
@@ -97,7 +100,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-		bat.SetZs(len(cols), m)
+		bat.SetRowCount(len(cols))
 		for _, col := range cols {
 			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
@@ -157,7 +160,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-		bat.SetZs(len(cols), m)
+		bat.SetRowCount(len(cols))
 		for _, col := range cols {
 			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
@@ -217,7 +220,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-		bat.SetZs(len(cols), m)
+		bat.SetRowCount(len(cols))
 		for _, col := range cols {
 			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
@@ -276,14 +279,20 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 	state, doneMutate := part.MutateState()
 
 	if err := state.ConsumeCheckpoints(func(checkpoint string) error {
-		entries, err := logtail.LoadCheckpointEntries(
+		entries, closeCBs, err := logtail.LoadCheckpointEntries(
 			ctx,
 			checkpoint,
 			tbl.tableId,
 			tbl.tableName,
 			tbl.db.databaseId,
 			tbl.db.databaseName,
+			tbl.db.txn.engine.mp,
 			tbl.db.txn.engine.fs)
+		defer func() {
+			for _, cb := range closeCBs {
+				cb()
+			}
+		}()
 		if err != nil {
 			return err
 		}

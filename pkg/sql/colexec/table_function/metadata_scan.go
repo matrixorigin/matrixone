@@ -162,6 +162,8 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 				return err
 			}
 			vector.AppendFixed(opBat.Vecs[i], bid, false, mp)
+		case plan.MetadataScanInfo_OBJECT_NAME:
+			vector.AppendBytes(opBat.Vecs[i], []byte(info.ObjectName), false, mp)
 
 		case plan.MetadataScanInfo_ENTRY_STATE:
 			vector.AppendFixed(opBat.Vecs[i], info.EntryState, false, mp)
@@ -225,8 +227,7 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			vector.AppendBytes(opBat.Vecs[i], info.Max, false, mp)
 		default:
 		}
-		opBat.Zs = append(opBat.Zs, 1)
 	}
-
+	opBat.AddRowCount(len(arg.Attrs))
 	return nil
 }

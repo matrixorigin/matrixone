@@ -183,7 +183,7 @@ func TestLockWithBlocking(t *testing.T) {
 				}
 				n++
 			} else {
-				if !end {
+				if end != process.ExecStop {
 					downstreamBatches = append(downstreamBatches, proc.InputBatch())
 				} else {
 					require.Equal(t, 3, len(downstreamBatches))
@@ -193,7 +193,7 @@ func TestLockWithBlocking(t *testing.T) {
 					}
 				}
 			}
-			return end, nil
+			return end == process.ExecStop, nil
 		},
 		func(a *Argument) {
 		},
@@ -236,7 +236,8 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.rt.hasNewVersionInRange = testFunc
-			return Call(idx, proc, arg, isFirst, isLast)
+			ok, err := Call(idx, proc, arg, isFirst, isLast)
+			return ok == process.ExecStop, err
 		},
 		func(arg *Argument) {
 			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
@@ -293,7 +294,7 @@ func runLockNonBlockingOpTest(
 		t,
 		func(proc *process.Process) {
 			bat := batch.NewWithSize(len(tables) * 2)
-			bat.Zs = make([]int64, len(tables)*2)
+			bat.SetRowCount(len(tables) * 2)
 
 			defer func() {
 				bat.Clean(proc.Mp())
@@ -343,7 +344,7 @@ func runLockBlockingOpTest(
 			var batches []*batch.Batch
 			for _, vs := range values {
 				bat := batch.NewWithSize(2)
-				bat.Zs = make([]int64, 2)
+				bat.SetRowCount(2)
 
 				vec := vector.NewVec(pkType)
 				vector.AppendFixedList(vec, vs, nil, proc.Mp())
@@ -417,6 +418,7 @@ func runLockOpTest(
 				txnOp,
 				nil,
 				services[0],
+				nil,
 				nil)
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 			defer func() {

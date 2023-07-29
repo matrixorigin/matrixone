@@ -18,8 +18,11 @@ import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 // removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
 func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
-	projMap := make(map[[2]int32]*plan.Expr)
 	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_SINK {
+		return builder.removeSimpleProjections(node.Children[0], plan.Node_UNKNOWN, flag, colRefCnt)
+	}
+	projMap := make(map[[2]int32]*plan.Expr)
 
 	increaseRefCntForExprList(node.ProjectList, 1, colRefCnt)
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
@@ -702,7 +705,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32) int32 {
 	newOnList := make([]*Expr, 0, len(node.OnList))
 	colMap := make(map[[2]int32]int32)
 	for _, expr := range node.OnList {
-		if equi, _ := isEquiCond(expr, leftTags, rightTags); equi {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
 			col := getJoinCondLeftCol(expr, leftTags)
 			if col != nil {
 				if _, ok := colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}]; ok {

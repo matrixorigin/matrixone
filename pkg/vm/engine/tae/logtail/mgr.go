@@ -85,6 +85,8 @@ type Manager struct {
 	collectLogtailQueue sm.Queue
 	waitCommitQueue     sm.Queue
 	eventOnce           sync.Once
+
+	nextCompactTS types.TS
 }
 
 func NewManager(rt *dbutils.Runtime, blockSize int, nowClock func() types.TS) *Manager {
@@ -110,8 +112,11 @@ type txnWithLogtails struct {
 
 func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 	for _, item := range items {
-		builder := NewTxnLogtailRespBuilder(mgr.rt)
 		txn := item.(txnif.AsyncTxn)
+		if txn.IsReplay() {
+			continue
+		}
+		builder := NewTxnLogtailRespBuilder(mgr.rt)
 		entries, closeCB := builder.CollectLogtail(txn)
 		txn.GetStore().DoneWaitEvent(1)
 		txnWithLogtails := &txnWithLogtails{
@@ -195,6 +200,10 @@ func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) {
 	mgr.truncated = ts
 	cnt := mgr.table.TruncateByTimeStamp(ts)
 	logutil.Info("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted", cnt))
+}
+
+func (mgr *Manager) TryCompactTable() {
+	mgr.nextCompactTS = mgr.table.TryCompact(mgr.nextCompactTS, mgr.rt)
 }
 
 func (mgr *Manager) GetTableOperator(

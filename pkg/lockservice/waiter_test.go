@@ -44,7 +44,7 @@ func TestAddNewWaiter(t *testing.T) {
 	}()
 
 	w1.casStatus("", ready, blocking)
-	w.add("s1", w1)
+	w.add("s1", true, w1)
 	assert.Equal(t, 1, w.waiters.len())
 	assert.Equal(t, int32(2), w1.refCount.Load())
 	w.close("s1", notifyValue{})
@@ -59,8 +59,8 @@ func TestCloseWaiter(t *testing.T) {
 	w2 := acquireWaiter("s1", []byte("w2"))
 	w2.setStatus("", blocking)
 
-	w.add("s1", w1)
-	w.add("s1", w2)
+	w.add("s1", true, w1)
+	w.add("s1", true, w2)
 
 	v := w.close("s1", notifyValue{})
 	assert.NotNil(t, v)
@@ -86,7 +86,7 @@ func TestWait(t *testing.T) {
 	w1.setStatus("", blocking)
 	defer w1.close("s1", notifyValue{})
 
-	w.add("s1", w1)
+	w.add("s1", true, w1)
 	go func() {
 		time.Sleep(time.Millisecond * 10)
 		w.close("s1", notifyValue{})
@@ -102,7 +102,7 @@ func TestWaitWithTimeout(t *testing.T) {
 	w1.setStatus("", blocking)
 	defer w1.close("s1", notifyValue{})
 
-	w.add("s1", w1)
+	w.add("s1", true, w1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 	defer cancel()
@@ -134,13 +134,13 @@ func TestWaitMultiTimes(t *testing.T) {
 	defer cancel()
 
 	w2.setStatus("", blocking)
-	w.add("s1", w2)
+	w.add("s1", true, w2)
 	w.close("s1", notifyValue{})
 	assert.NoError(t, w2.wait(ctx, "s1").err)
 	w2.resetWait("s1")
 
 	w2.setStatus("", blocking)
-	w1.add("s1", w2)
+	w1.add("s1", true, w2)
 	w1.close("s1", notifyValue{})
 	assert.NoError(t, w2.wait(ctx, "s1").err)
 
@@ -152,15 +152,18 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	defer w1.close("s1", notifyValue{})
 	w2 := acquireWaiter("s1", []byte("w2"))
 	w3 := acquireWaiter("s1", []byte("w3"))
-	defer w3.close("s1", notifyValue{})
+	defer func() {
+		w3.wait(context.Background(), "s1")
+		w3.close("s1", notifyValue{})
+	}()
 
 	w1.setStatus("", blocking)
 	w2.setStatus("", blocking)
 	w3.setStatus("", blocking)
 
-	w.add("s1", w1)
-	w.add("s1", w2)
-	w.add("s1", w3)
+	w.add("s1", true, w1)
+	w.add("s1", true, w2)
+	w.add("s1", true, w3)
 
 	// make w1 completed
 	w1.setStatus("s1", completed)
@@ -168,6 +171,7 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	v := w.close("s1", notifyValue{})
 	assert.Equal(t, w2, v)
 
+	w2.wait(context.Background(), "s1")
 	v = w2.close("s1", notifyValue{})
 	assert.Equal(t, w3, v)
 }
@@ -210,7 +214,7 @@ func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 	w3.setStatus("", blocking)
 	w4.setStatus("", blocking)
 	w5.setStatus("", blocking)
-	w1.add("s1", w2, w3, w4, w5)
+	w1.add("s1", true, w2, w3, w4, w5)
 
 	// w1 commit at 1
 	w1.close("s1", notifyValue{ts: timestamp.Timestamp{PhysicalTime: 1}})

@@ -28,10 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const BlockNumForceOneCN = 200
-
 const blockNDVThreshHold = 100
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
@@ -158,8 +158,23 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 
 // cols in one table, return if ndv of  multi column is high enough
 func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
+	if tableDef == nil {
+		return false
+	}
+	// first to check if it is primary key.
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		pks := make([]int32, len(pkNames))
+		for i := range pkNames {
+			pks[i] = tableDef.Name2ColIndex[pkNames[i]]
+		}
+		if containsAllPKs(cols, pks) {
+			return true
+		}
+	}
+
 	sc := builder.compCtx.GetStatsCache()
-	if sc == nil || tableDef == nil {
+	if sc == nil {
 		return false
 	}
 	s := sc.GetStatsInfoMap(tableDef.TblId)
@@ -182,6 +197,11 @@ func getColStatsInfo(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
 	if !ok {
 		return nil
 	}
+	//fix column name
+	if len(col.Name) == 0 {
+		col.Name = tableDef.Cols[col.ColPos].Name
+	}
+
 	return sc.GetStatsInfoMap(tableDef.TblId)
 }
 
@@ -206,7 +226,7 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return getExprNdv(exprImpl.F.Args[0], builder) / 365
 		case "substring":
 			// no good way to calc ndv for substring
-			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 100)
+			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 25)
 		default:
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
@@ -446,11 +466,20 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.5))
 		selectivity_out := math.Min(math.Pow(leftStats.Selectivity, math.Pow(rightStats.Selectivity, 0.5)), selectivity)
 
+		for _, pred := range node.OnList {
+			if pred.Ndv <= 0 {
+				pred.Ndv = getExprNdv(pred, builder)
+			}
+		}
+
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
 			if !isCrossJoin {
 				outcnt *= selectivity
+			}
+			if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
+				outcnt = rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
@@ -495,10 +524,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		case plan.Node_ANTI:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity),
+				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5,
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Selectivity: selectivity_out * 0.5,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
@@ -605,7 +634,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		*/
 	case plan.Node_SINK_SCAN:
-		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
+
+	case plan.Node_RECURSIVE_SCAN:
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
 
 	case plan.Node_EXTERNAL_SCAN:
 		//calc for external scan is heavy, avoid recalc of this
@@ -643,6 +675,26 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	}
 }
 
+func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error {
+	node := qry.Nodes[nodeId]
+	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
+		for i, e := range node.FilterList {
+			foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, e, proc, false)
+			if err != nil {
+				return err
+			}
+			node.FilterList[i] = foldedExpr
+		}
+	}
+	for _, childId := range node.Children {
+		err := foldTableScanFilters(proc, qry, childId)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if !needStats(node.TableDef) {
 		return DefaultStats()
@@ -661,15 +713,9 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.TableCnt = s.TableCnt
 	var blockSel float64 = 1
 
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		fixColumnName(node.TableDef, node.FilterList[i])
-		foldedExpr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
-		if foldedExpr != nil {
-			node.FilterList[i] = foldedExpr
-		}
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
 		if currentBlockSel < blockSelectivityThreshHold {
@@ -753,6 +799,22 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 			node.BuildOnLeft = true
 		}
 	}
+
+	if builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
+		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+	}
+}
+
+func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
+	if node.NodeType == plan.Node_RECURSIVE_SCAN {
+		return true
+	}
+	for _, nodeID := range node.Children {
+		if builder.hasRecursiveScan(builder.qry.Nodes[nodeID]) {
+			return true
+		}
+	}
+	return false
 }
 
 func compareStats(stats1, stats2 *Stats) bool {
@@ -797,6 +859,12 @@ func IsTpQuery(qry *plan.Query) bool {
 		}
 	}
 	return true
+}
+
+func ReCalcQueryStats(builder *QueryBuilder, query *plan.Query) {
+	for _, rootID := range builder.qry.Steps {
+		ReCalcNodeStats(rootID, builder, true, false)
+	}
 }
 
 func PrintStats(qry *plan.Query) string {

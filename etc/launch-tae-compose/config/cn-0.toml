@@ -56,6 +56,10 @@ service-address = "cn-0:17001"
 listen-address = "0.0.0.0:19958"
 service-address = "cn-0:19958"
 
+[cn.query-service.address]
+listen-address = "0.0.0.0:19998"
+service-address = "cn-0:19998"
+
 [cn.Engine]
 type = "distributed-tae"
 
@@ -63,5 +67,3 @@ type = "distributed-tae"
 port = 6001
 
 [cn.txn]
-enable-sacrificing-freshness = false
-enable-cn-based-consistency = false

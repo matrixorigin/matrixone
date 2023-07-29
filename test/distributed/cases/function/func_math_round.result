@@ -148,7 +148,8 @@ round(4, -4294967200)
 CREATE TABLE t1 (a INTEGER, b INTEGER, c INTEGER);
 INSERT INTO t1 (a,b) VALUES (1,2),(1,3),(2,5);
 SELECT a, 0.1*0+1 r2, SUM(1) r1 FROM t1 WHERE a = 1 GROUP BY a HAVING r1>1 AND r2=1;
-SQL syntax error: column "r1" must appear in the GROUP BY clause or be used in an aggregate function
+a    r2    r1
+1    1.0    2
 SELECT a, ROUND(sin(100)*10) r2, SUM(1) r1 FROM t1 GROUP BY a;
 a	r2	r1
 1	-5.0	2
@@ -181,9 +182,10 @@ sum(a) * sum(b)
 SELECT a,SUM(b) FROM t1 WHERE a=1 GROUP BY c HAVING a=1;
 SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a AS d,SUM(b) FROM t1 WHERE a=1 GROUP BY c HAVING d=1;
-SQL syntax error: column "d" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT SUM(a)*SUM(b) AS d FROM t1 WHERE a=1 GROUP BY c HAVING d > 0;
-SQL syntax error: column "d" must appear in the GROUP BY clause or be used in an aggregate function
+d
+10
 SELECT a, ROUND(sin(100)*10) r2 FROM t1;
 a	r2
 1	-5.0

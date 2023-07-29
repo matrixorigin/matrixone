@@ -38,7 +38,7 @@ type MVCCHandle struct {
 	meta            *catalog.BlockEntry
 	appends         *txnbase.MVCCSlice[*AppendNode]
 	changes         atomic.Uint32
-	deletesListener func(uint64, common.RowGen, types.TS) error
+	deletesListener func(uint64, types.TS) error
 	appendListener  func(txnif.AppendNode) error
 	persistedTS     types.TS
 }
@@ -93,11 +93,11 @@ func (n *MVCCHandle) UpgradeDeleteChainByTS(flushed types.TS) {
 	n.Unlock()
 }
 
-func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, types.TS) error) {
+func (n *MVCCHandle) SetDeletesListener(l func(uint64, types.TS) error) {
 	n.deletesListener = l
 }
 
-func (n *MVCCHandle) GetDeletesListener() func(uint64, common.RowGen, types.TS) error {
+func (n *MVCCHandle) GetDeletesListener() func(uint64, types.TS) error {
 	return n.deletesListener
 }
 
@@ -128,6 +128,10 @@ func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts types.TS) error {
 
 func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
 	return n.deletes.Load().AddNodeLocked(txn, deleteType)
+}
+
+func (n *MVCCHandle) CreatePersistedDeleteNode(txn txnif.AsyncTxn, deltaloc objectio.Location) txnif.DeleteNode {
+	return n.deletes.Load().AddPersistedNodeLocked(txn, deltaloc)
 }
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
@@ -171,6 +175,9 @@ func (n *MVCCHandle) CollectDeleteLocked(
 				n.RUnlock()
 				txn.GetTxnState(true)
 				n.RLock()
+			}
+			if node.nt == NT_Persisted {
+				return true
 			}
 			in, before := node.PreparedIn(start, end)
 			if in {

@@ -33,6 +33,7 @@ mo_user_defined_function
 mo_mysql_compatibility_mode
 mo_pubs
 mo_stored_procedure
+mo_stages
 mo_tables
 mo_columns
 mo_database

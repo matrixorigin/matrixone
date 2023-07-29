@@ -39,6 +39,9 @@ const (
 	TxnMode = "txn-mode"
 	// TxnIsolation runtime default txn isolation
 	TxnIsolation = "txn-isolation"
+
+	// EnableCheckInvalidRCErrors enable check rc errors
+	EnableCheckInvalidRCErrors = "enable-check-rc-invalid-error"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service

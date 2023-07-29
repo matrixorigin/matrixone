@@ -28,6 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+const (
+	CatalogVersion_V1 uint32 = 1
+
+	CatalogVersion_Curr uint32 = CatalogVersion_V1
+)
+
 func init() {
 	MoDatabaseTableDefs = make([]engine.TableDef, len(MoDatabaseSchema))
 	for i, name := range MoDatabaseSchema {
@@ -302,8 +308,8 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 }
 
 func GenRows(bat *batch.Batch) [][]any {
-	rows := make([][]any, bat.Length())
-	for i := 0; i < bat.Length(); i++ {
+	rows := make([][]any, bat.RowCount())
+	for i := 0; i < bat.RowCount(); i++ {
 		rows[i] = make([]any, bat.VectorCount())
 	}
 	for i := 0; i < bat.VectorCount(); i++ {

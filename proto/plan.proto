@@ -24,12 +24,12 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 message Type {
-	int32 id            = 1;
-	bool notNullable	= 2;
-	bool auto_incr      = 3;
-	int32 width			= 4;
-	int32 scale 		= 5;
-	string table 		= 6;
+	int32 id         = 1;
+	bool notNullable = 2;
+	bool auto_incr   = 3;
+	int32 width      = 4;
+	int32 scale      = 5;
+	string table     = 6;
 };
 
 // Const: if a const value can be reprensented by int64 or
@@ -425,6 +425,8 @@ message TableDef {
 	bool isLocked = 27;
 	TableLockType tableLockType = 28;
 	bool is_temporary = 29;
+
+	uint64 auto_incr_offset = 30;
 }
 
 message TableFunction{
@@ -435,6 +437,12 @@ message TableFunction{
 enum ShuffleType {
 	Hash = 0;
 	Range = 1;
+}
+
+enum ShuffleMethod {
+	Noraml = 0;
+	Follow = 1;
+	Reshuffle = 2;
 }
 
 message Stats {
@@ -463,8 +471,9 @@ message Stats {
 	// for range shuffle on integer column, need to know its min and max value
 	int64 shuffleColMin = 11;
 	int64 shuffleColMax = 12;
+	ShuffleMethod shuffleMethod = 13;
 	//not used for now
-	int32   parallelism = 13;
+	int32   parallelism = 14;
 }
 
 message RowsetExpr {
@@ -581,6 +590,7 @@ message Node {
 		RECURSIVE_CTE = 21;
 		SINK = 22;
 		SINK_SCAN = 23;
+		RECURSIVE_SCAN = 24;
 
 		// Proper Relational Operators
 		AGG = 30;
@@ -690,7 +700,7 @@ message Node {
 	InsertCtx insert_ctx = 30;
 
 	// used to connect two plans[steps]
-	int32 source_step = 31;
+	repeated int32 source_step = 31;
 
 	PreDeleteCtx pre_delete_ctx = 32;
 	PreInsertCtx pre_insert_ctx = 33;
@@ -1192,37 +1202,39 @@ message MetadataScanInfo {
 	enum MetadataScanInfoType {
 		COL_NAME      = 0;
 		BLOCK_ID      = 1;
-		ENTRY_STATE   = 2;
-		SORTED        = 3;
-		IS_HIDDEN = 4;
-		META_LOC      = 5;
-		DELTA_LOC     = 6;
-		COMMIT_TS     = 7;
-		CREATE_TS     = 8;
-		DELETE_TS     = 9;
-		SEG_ID         = 10;
-		ROWS_CNT      = 11;
-		NULL_CNT      = 12;
-		COMPRESS_SIZE = 13;
-		ORIGIN_SIZE   = 14;
-		MIN           = 15;
-		MAX           = 16;	
+		OBJECT_NAME = 2; 
+		ENTRY_STATE   = 3;
+		SORTED        = 4;
+		IS_HIDDEN = 5;
+		META_LOC      = 6;
+		DELTA_LOC     = 7;
+		COMMIT_TS     = 8;
+		CREATE_TS     = 9;
+		DELETE_TS     = 10;
+		SEG_ID         = 11;
+		ROWS_CNT      = 12;
+		NULL_CNT      = 13;
+		COMPRESS_SIZE = 14;
+		ORIGIN_SIZE   = 15;
+		MIN           = 16;
+		MAX           =  17;
 	} 
-	string ColName  =1;
-	bytes BlockId =2;
-	bool EntryState=3;
-	bool Sorted     =4;
-	bool IsHidden =5;
-	bytes MetaLoc     =6;
-	bytes DelLoc      =7;
-	bytes CommitTs    =8;
-	bytes CreateTs    =9;
-	bytes DeleteTs    = 10;
-	bytes SegId        = 11;
-	int64 RowCnt      = 12;
-	int64 NullCnt     = 13;
-	int64 CompressSize= 14;
-	int64 OriginSize  = 15;
-	bytes Min          = 16;
-	bytes Max          =17;
+	string ColName  = 1;
+	bytes BlockId = 2;
+	string ObjectName = 3;
+	bool EntryState= 4;
+	bool Sorted     = 5;
+	bool IsHidden = 6;
+	bytes MetaLoc     = 7;
+	bytes DelLoc      = 8;
+	bytes CommitTs    = 9;
+	bytes CreateTs    = 10;
+	bytes DeleteTs    = 11;
+	bytes SegId        = 12;
+	int64 RowCnt      = 13;
+	int64 NullCnt     = 14;
+	int64 CompressSize = 15;
+	int64 OriginSize  = 16;
+	bytes Min          = 17;
+	bytes Max          = 18;
 }

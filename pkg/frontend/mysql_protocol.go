@@ -43,6 +43,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -68,6 +69,10 @@ var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 var serverVersion atomic.Value
 
 const defaultSaltReadTimeout = time.Millisecond * 200
+
+const charsetBinary = 0x3f
+const charsetVarchar = 0x21
+const boolColumnLength = 12
 
 func init() {
 	serverVersion.Store("0.5.0")
@@ -198,7 +203,10 @@ var _ MysqlProtocol = &MysqlProtocolImpl{}
 func (ses *Session) GetMysqlProtocol() MysqlProtocol {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.protocol.(MysqlProtocol)
+	if ses.protocol != nil {
+		return ses.protocol.(MysqlProtocol)
+	}
+	return nil
 }
 
 type debugStats struct {
@@ -1146,7 +1154,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logInfof(mp.getDebugStringUnsafe(), "check password succeeded")
+				logInfo(mp.ses, "check password succeeded", "")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
@@ -1224,7 +1232,7 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
 		tipsFormat := "Access denied for user %s. %s"
-		msg := fmt.Sprintf(tipsFormat, mp.username, err.Error())
+		msg := fmt.Sprintf(tipsFormat, getUserPart(mp.username), err.Error())
 		err2 := mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], msg)
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)
@@ -1769,9 +1777,9 @@ func setCharacter(column *MysqlColumn) {
 	switch column.columnType {
 	// blob type should use 0x3f to show the binary data
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
-		column.SetCharset(0x21)
+		column.SetCharset(charsetVarchar)
 	default:
-		column.SetCharset(0x3f)
+		column.SetCharset(charsetBinary)
 	}
 }
 
@@ -1812,16 +1820,19 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	//lenenc_int     length of fixed-length fields [0c]
 	pos = mp.io.WriteUint8(data, pos, 0x0c)
 
-	//int<2>              character set
-	pos = mp.io.WriteUint16(data, pos, column.Charset())
-
-	//int<4>              column length
-	pos = mp.io.WriteUint32(data, pos, column.Length())
-
-	//int<1>              type
 	if column.ColumnType() == defines.MYSQL_TYPE_BOOL {
+		//int<2>              character set
+		pos = mp.io.WriteUint16(data, pos, charsetVarchar)
+		//int<4>              column length
+		pos = mp.io.WriteUint32(data, pos, boolColumnLength)
+		//int<1>              type
 		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_VARCHAR))
 	} else {
+		//int<2>              character set
+		pos = mp.io.WriteUint16(data, pos, column.Charset())
+		//int<4>              column length
+		pos = mp.io.WriteUint32(data, pos, column.Length())
+		//int<1>              type
 		pos = mp.io.WriteUint8(data, pos, uint8(column.ColumnType()))
 	}
 
@@ -2660,10 +2671,14 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		// TODO(volgariver6): we should change the port of the internal execution from
 		// 6001 to the proxy listen port.
 		if err, ok := err.(net.Error); !ok || err.Timeout() {
-			logErrorf(mp.GetDebugString(), "failed to get salt: %v", err)
+			logError(mp.ses, mp.GetDebugString(),
+				"Failed to get salt",
+				zap.Error(err))
 		}
 	} else if n != saltLen {
-		logErrorf(mp.GetDebugString(), "failed to get salt: %v", err)
+		logError(mp.ses, mp.GetDebugString(),
+			"Failed to get salt",
+			zap.Error(err))
 	} else {
 		mp.SetSalt(data)
 	}
@@ -2672,7 +2687,9 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	label := &proxy.RequestLabel{}
 	reader := bufio.NewReader(rs.RawConn())
 	if err = label.Decode(reader); err != nil {
-		logErrorf(mp.GetDebugString(), "failed to get CN labels: %v", err)
+		logError(mp.ses, mp.GetDebugString(),
+			"Failed to get CN labels",
+			zap.Error(err))
 	} else {
 		mp.GetSession().requestLabel = label.Labels
 		logDebugf(mp.GetDebugString(), "got requested CN labels: %v", *label)

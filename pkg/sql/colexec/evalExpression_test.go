@@ -34,7 +34,10 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	con := makePlan2Int64ConstExprWithType(218311)
 	conExprExecutor, err := NewExpressionExecutor(proc, con)
 	require.NoError(t, err)
-	vec, err := conExprExecutor.Eval(proc, []*batch.Batch{{Zs: make([]int64, 10)}})
+
+	emptyBatch := &batch.Batch{}
+	emptyBatch.SetRowCount(10)
+	vec, err := conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch})
 	require.NoError(t, err)
 	curr1 := proc.Mp().CurrNB()
 	{
@@ -43,7 +46,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 		require.Equal(t, int64(218311), vector.MustFixedCol[int64](vec)[0])
 		require.Equal(t, false, vec.GetNulls().Contains(0))
 	}
-	_, err = conExprExecutor.Eval(proc, []*batch.Batch{{Zs: make([]int64, 10)}})
+	_, err = conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch})
 	require.NoError(t, err)
 	require.Equal(t, curr1, proc.Mp().CurrNB()) // check memory reuse
 	conExprExecutor.Free()
@@ -68,7 +71,9 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	curr2 := proc.Mp().CurrNB()
 	typExpressionExecutor, err := NewExpressionExecutor(proc, ety)
 	require.NoError(t, err)
-	vec, err = typExpressionExecutor.Eval(proc, []*batch.Batch{{Zs: make([]int64, 5)}})
+
+	emptyBatch.SetRowCount(5)
+	vec, err = typExpressionExecutor.Eval(proc, []*batch.Batch{emptyBatch})
 	require.NoError(t, err)
 	{
 		require.Equal(t, 5, vec.Length())
@@ -93,7 +98,9 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	curr3 := proc.Mp().CurrNB()
 	lisExpressionExecutor1, err := NewExpressionExecutor(proc, lis1)
 	require.NoError(t, err)
-	vec, err = lisExpressionExecutor1.Eval(proc, []*batch.Batch{{Zs: make([]int64, 3)}})
+
+	emptyBatch.SetRowCount(3)
+	vec, err = lisExpressionExecutor1.Eval(proc, []*batch.Batch{emptyBatch})
 	require.NoError(t, err)
 	{
 		require.Equal(t, 2, vec.Length())

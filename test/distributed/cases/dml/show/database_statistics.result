@@ -9,7 +9,7 @@ Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-15
+16
 show table_number from system_metrics;
 Number of tables in system_metrics
 19
@@ -35,7 +35,7 @@ Number of columns in profiling
 20
 show column_number from processlist;
 Number of columns in processlist
-10
+17
 show column_number from schemata;
 Number of columns in schemata
 7
@@ -100,7 +100,7 @@ Number of columns in mo_user_defined_function
 18
 show column_number from mo_tables;
 Number of columns in mo_tables
-19
+18
 show column_number from mo_database;
 Number of columns in mo_database
 9
@@ -112,7 +112,7 @@ Number of columns in mo_indexes
 14
 show column_number from mo_table_partitions;
 Number of columns in mo_table_partitions
-10
+12
 use system_metrics;
 show column_number from metric;
 Number of columns in metric
@@ -346,7 +346,7 @@ Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-14
+15
 show table_number from system_metrics;
 Number of tables in system_metrics
 7
@@ -365,7 +365,7 @@ Number of columns in profiling
 20
 show column_number from processlist;
 Number of columns in processlist
-10
+17
 show column_number from schemata;
 Number of columns in schemata
 7
@@ -430,7 +430,7 @@ Number of columns in mo_user_defined_function
 18
 show column_number from mo_tables;
 Number of columns in mo_tables
-19
+18
 show column_number from mo_database;
 Number of columns in mo_database
 9

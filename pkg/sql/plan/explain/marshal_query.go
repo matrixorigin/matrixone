@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 // The global variable is used to serialize plan and avoid objects being repeatedly created
@@ -176,6 +177,10 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "sink", nil
 	case plan.Node_SINK_SCAN:
 		return "sink_scan", nil
+	case plan.Node_RECURSIVE_SCAN:
+		return "recursive_scan", nil
+	case plan.Node_RECURSIVE_CTE:
+		return "cte_scan", nil
 	case plan.Node_ON_DUPLICATE_KEY:
 		return "on_duplicate_key", nil
 	case plan.Node_LOCK_OP:
@@ -442,6 +447,16 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Sink_Scan, //"sink scan",
 			Value: []string{},
 		})
+	case plan.Node_RECURSIVE_SCAN:
+		labels = append(labels, Label{
+			Name:  Label_Recursive_SCAN, //"sink scan",
+			Value: []string{},
+		})
+	case plan.Node_RECURSIVE_CTE:
+		labels = append(labels, Label{
+			Name:  Label_Recursive_SCAN, //"sink scan",
+			Value: []string{},
+		})
 	case plan.Node_LOCK_OP:
 		labels = append(labels, Label{
 			Name:  Label_Lock_Op, //"lock op",
@@ -510,6 +525,27 @@ const S3IOByte = "S3 IO Byte"
 const S3IOInputCount = "S3 IO Input Count"
 const S3IOOutputCount = "S3 IO Output Count"
 const Network = "Network"
+
+func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
+	s.Reset()
+	if options.Analyze && node.AnalyzeInfo != nil {
+		analyzeInfo := node.AnalyzeInfo
+		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
+			WithMemorySize(float64(analyzeInfo.MemorySize)).
+			WithS3IOInputCount(float64(analyzeInfo.S3IOInputCount)).
+			WithS3IOOutputCount(float64(analyzeInfo.S3IOOutputCount))
+	}
+	return
+}
+
+// GetInputRowsAndInputSize return plan.Node AnalyzeInfo InputRows and InputSize.
+// migrate ExplainData.StatisticsRead to here
+func GetInputRowsAndInputSize(ctx context.Context, node *plan.Node, options *ExplainOptions) (rows int64, size int64) {
+	if options.Analyze && node.AnalyzeInfo != nil {
+		return node.AnalyzeInfo.InputRows, node.AnalyzeInfo.InputSize
+	}
+	return
+}
 
 func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOptions) Statistics {
 	statistics := NewStatistics()

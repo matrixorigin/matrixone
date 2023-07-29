@@ -266,6 +266,7 @@ L_COMMENT      VARCHAR(44) NOT NULL,
 PRIMARY KEY (L_ORDERKEY, L_LINENUMBER),constraint fk_l1 foreign key(L_ORDERKEY) REFERENCES ORDERS_fk(o_orderkey)on delete CASCADE on update CASCADE,constraint fk_l2 foreign key(L_PARTKEY,L_SUPPKEY) REFERENCES PARTSUPP_fk(PS_PARTKEY,PS_SUPPKEY) on delete CASCADE on update CASCADE);
 insert into lineitem_fk values(5999968,199,9991,2,46,63179.16,0.08,0.06,"R","F","1993-09-16","1993-09-21","1993-10-02","COLLECT COD","RAIL","dolites wake");
 
+-- @bvt:issue#10704
 -- update constraint
 update nation_fk set n_nationkey=10 where n_nationkey=13;
 select * from supplier_fk;
@@ -287,7 +288,6 @@ select N_REGIONKEY from NATION_fk;
 
 --delete constraint
 select * from nation_fk;
--- @bvt:issue#10228
 delete from nation_fk where n_nationkey=10;
 select * from SUPPLIER_fk;
 select * from CUSTOMER_fk;
@@ -324,9 +324,10 @@ insert into region_fk values(3,"ASIA","ges. thinly even pinto beans ca");
 select * from region_fk;
 insert into nation_fk values(1,"VIETNAM",2,"hely enticingly express accounts. even, final");
 insert into part_fk values(200,"pink wheat powder burlywood snow","Manufacturer#5","Brand#52","MEDIUM BURNISHED BRASS",49,"LG BOX",2097.99,". special deposits hag");
--- @bvt:issue
+
 insert into supplier_fk values(10000,"Supplier#000009991","RnP1Z uvwftshFtf",14,"23-451-948-8464",6785.10,". furiously pending accounts b");
 insert into PARTSUPP_fk values (200,10000,7872,606.64," according to the final pinto beans: carefully silent requests sleep final");
 insert into customer_fk values(14,"Customer#000149992","iwjVf1MZno1",15,"16-684-999-8810",3417.45,"AUTOMOBILE","luffily final requests integrate slyly. furiously special warhorses are furiously alongside o");
 insert into orders_fk values(1,14,"F",354575.46,"1992-12-24","3-MEDIUM","Clerk#000000736",0, "cajole blithely ag");
 insert into lineitem_fk values(1,200,10000,2,46,63179.16,0.08,0.06,"R","F","1993-09-16","1993-09-21","1993-10-02","COLLECT COD","RAIL","dolites wake");
+-- @bvt:issue
