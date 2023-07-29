@@ -7317,9 +7317,6 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
-		if !variable.GetDynamic() || (variable.Scope != ScopeGlobal && variable.Scope != ScopeBoth) {
-			continue
-		}
 		if _, ok := configInitVariables[variable.Name]; ok {
 			addsql := addInitSystemVariablesSql(sysAccountID, sysAccountName, variable.Name, pu)
 			if len(addsql) != 0 {
@@ -7702,9 +7699,6 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
-		if !variable.GetDynamic() || (variable.Scope != ScopeGlobal && variable.Scope != ScopeBoth) {
-			continue
-		}
 		if _, ok := configInitVariables[variable.Name]; ok {
 			addsql := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), variable.Name, pu)
 			if len(addsql) != 0 {
