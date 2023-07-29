@@ -76,6 +76,7 @@ var debugMagicNames = map[magicType]string{
 	Merge:          "Merge",
 	Normal:         "Normal",
 	Remote:         "Remote",
+	Parallel:       "Parallel",
 	Pushdown:       "Pushdown",
 	CreateDatabase: "CreateDatabase",
 	CreateTable:    "CreateTable",
@@ -83,6 +84,9 @@ var debugMagicNames = map[magicType]string{
 	DropDatabase:   "DropDatabase",
 	DropTable:      "DropTable",
 	DropIndex:      "DropIndex",
+	Deletion:       "Deletion",
+	Insert:         "Insert",
+	InsertValues:   "InsertValues",
 	MergeDelete:    "MergeDelete",
 	MergeInsert:    "MergeInsert",
 }

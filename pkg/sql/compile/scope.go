@@ -113,6 +113,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 			case Remote:
 				errChan <- scope.RemoteRun(c)
 				wg.Done()
+			case Parallel:
+				errChan <- scope.ParallelRun(c, scope.IsRemote)
+				wg.Done()
 			case Pushdown:
 				errChan <- scope.PushdownRun()
 				wg.Done()
