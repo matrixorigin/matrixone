@@ -300,6 +300,22 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropIndex(c)
 	case TruncateTable:
 		return s.TruncateTable(c)
+	case Deletion:
+		defer c.fillAnalyzeInfo()
+		affectedRows, err := s.Delete(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(affectedRows)
+		return nil
+	case Insert:
+		defer c.fillAnalyzeInfo()
+		affectedRows, err := s.Insert(c)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(affectedRows)
+		return nil
 	case Replace:
 		return s.replace(c)
 	}
