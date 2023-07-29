@@ -15,8 +15,11 @@
 package syshealth
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -55,6 +58,17 @@ func Check(
 	if sysHealthy {
 		return nil, sysHealthy
 	}
+
+	detail := "Expired logStore info..."
+	for uuid := range logStores.expired {
+		detail += fmt.Sprintf("store %s replicas: [", uuid)
+		for _, replicaInfo := range logState.Stores[uuid].Replicas {
+			detail += fmt.Sprintf("%d-%d, ", replicaInfo.ShardID, replicaInfo.ReplicaID)
+		}
+		detail += "]; "
+	}
+
+	logutil.GetGlobalLogger().Info(detail)
 
 	// parse all dn stores
 	dnStores := parseDnState(cfg, dnState, currTick)

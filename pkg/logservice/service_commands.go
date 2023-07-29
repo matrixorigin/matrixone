@@ -109,8 +109,10 @@ func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
 }
 
 func (s *Service) handleShutdownStore(_ pb.ScheduleCommand) {
-	if err := s.Close(); err != nil {
-		s.runtime.Logger().Error("failed to shutdown replica", zap.Error(err))
+	// notify main routine that have received shutdown cmd
+	select {
+	case s.shutdownC <- struct{}{}:
+	default:
 	}
 }
 
