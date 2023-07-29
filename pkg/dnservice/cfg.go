@@ -56,6 +56,9 @@ var (
 
 	storageDir     = "storage"
 	defaultDataDir = "./mo-data"
+
+	// Service ports related.
+	defaultServiceHost = "127.0.0.1"
 )
 
 // Config dn store configuration
@@ -69,6 +72,17 @@ type Config struct {
 	// ServiceAddress service address for communication, if this address is not set, use
 	// ListenAddress as the communication address.
 	ServiceAddress string `toml:"service-address"`
+
+	// PortBase is the base port for the service. We reserve reservedPorts for
+	// the service to start internal server inside it.
+	//
+	// TODO(volgariver6): The value of this field is also used to determine the version
+	// of MO. If it is not set, we use the old listen-address/service-address fields, and
+	// if it is set, we use the new policy to distribute the ports to all services.
+	PortBase int `toml:"port-base"`
+	// ServiceHost is the host name/IP for the service address of RPC request. There is
+	// no port value in it.
+	ServiceHost string `toml:"service-host"`
 
 	// HAKeeper configuration
 	HAKeeper struct {
@@ -248,5 +262,11 @@ func (c *Config) Validate() error {
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
+
+	if c.PortBase != 0 {
+		if c.ServiceHost == "" {
+			c.ServiceHost = defaultServiceHost
+		}
+	}
 	return nil
 }
