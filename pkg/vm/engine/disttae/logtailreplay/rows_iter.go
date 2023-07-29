@@ -210,6 +210,10 @@ func (p *primaryKeyIter) Next() bool {
 				// not visible
 				continue
 			}
+			if row.Deleted {
+				// visible and deleted, no longer valid
+				break
+			}
 			valid = row.ID == entry.RowEntryID
 			if valid {
 				p.curRow = row

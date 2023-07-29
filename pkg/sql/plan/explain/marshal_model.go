@@ -198,9 +198,10 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_PROJECT:           "Project",
 	plan2.Node_EXTERNAL_FUNCTION: "External Function",
 	plan2.Node_MATERIAL:          "Material",
-	plan2.Node_RECURSIVE_CTE:     "Recursive CTE",
 	plan2.Node_SINK:              "Sink",
 	plan2.Node_SINK_SCAN:         "Sink Scan",
+	plan2.Node_RECURSIVE_SCAN:    "Recursive Scan",
+	plan2.Node_RECURSIVE_CTE:     "CTE Scan",
 	plan2.Node_AGG:               "Aggregate",
 	plan2.Node_DISTINCT:          "Distinct",
 	plan2.Node_FILTER:            "Filter",
@@ -253,6 +254,8 @@ const (
 	Label_Pre_Delete                = "Pre delete"
 	Label_Sink                      = "Sink"
 	Label_Sink_Scan                 = "Sink scan"
+	Label_Recursive_SCAN            = "recursive scan"
+	Label_Recursive_CTE             = "CTE scan"
 	Label_Lock_Op                   = "Lock op"
 	Label_Row_Number                = "Number of rows"
 	Label_Offset                    = "Offset"

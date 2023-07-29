@@ -266,6 +266,7 @@ L_COMMENT      VARCHAR(44) NOT NULL,
 PRIMARY KEY (L_ORDERKEY, L_LINENUMBER),constraint fk_l1 foreign key(L_ORDERKEY) REFERENCES ORDERS_fk(o_orderkey)on delete CASCADE on update CASCADE,constraint fk_l2 foreign key(L_PARTKEY,L_SUPPKEY) REFERENCES PARTSUPP_fk(PS_PARTKEY,PS_SUPPKEY) on delete CASCADE on update CASCADE);
 insert into lineitem_fk values(5999968,199,9991,2,46,63179.16,0.08,0.06,"R","F","1993-09-16","1993-09-21","1993-10-02","COLLECT COD","RAIL","dolites wake");
 
+-- @bvt:issue#10704
 -- update constraint
 update nation_fk set n_nationkey=10 where n_nationkey=13;
 select * from supplier_fk;
@@ -329,3 +330,4 @@ insert into PARTSUPP_fk values (200,10000,7872,606.64," according to the final p
 insert into customer_fk values(14,"Customer#000149992","iwjVf1MZno1",15,"16-684-999-8810",3417.45,"AUTOMOBILE","luffily final requests integrate slyly. furiously special warhorses are furiously alongside o");
 insert into orders_fk values(1,14,"F",354575.46,"1992-12-24","3-MEDIUM","Clerk#000000736",0, "cajole blithely ag");
 insert into lineitem_fk values(1,200,10000,2,46,63179.16,0.08,0.06,"R","F","1993-09-16","1993-09-21","1993-10-02","COLLECT COD","RAIL","dolites wake");
+-- @bvt:issue

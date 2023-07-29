@@ -192,13 +192,13 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 	res.Vecs[1] = proc.GetVector(types.T_text.ToType())
 	for _, w := range s3Writers {
 		//deep copy.
-		bat := w.GetMetaLocBat()
+		bat := w.GetBlockInfoBat()
 		res, err = res.Append(proc.Ctx, proc.GetMPool(), bat)
 		if err != nil {
 			return
 		}
 		res.SetRowCount(res.RowCount() + bat.RowCount())
-		w.ResetMetaLocBat(proc)
+		w.ResetBlockInfoBat(proc)
 	}
 	proc.SetInputBatch(res)
 	return
