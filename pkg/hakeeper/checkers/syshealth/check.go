@@ -60,7 +60,7 @@ func Check(
 	}
 
 	detail := "Expired logStore info..."
-	for uuid, _ := range logStores.expired {
+	for uuid := range logStores.expired {
 		detail += fmt.Sprintf("store %s replicas: [", uuid)
 		for _, replicaInfo := range logState.Stores[uuid].Replicas {
 			detail += fmt.Sprintf("%d-%d, ", replicaInfo.ShardID, replicaInfo.ReplicaID)
