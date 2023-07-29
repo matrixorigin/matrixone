@@ -52,8 +52,7 @@ const (
 )
 
 const (
-	ALLOCID_INDEX_KEY     = "index_key"
-	ALLOCID_PARTITION_KEY = "partition_key"
+	ALLOCID_INDEX_KEY = "index_key"
 )
 
 var (
@@ -438,16 +437,22 @@ func genInsertMoTablePartitionsSql(eg engine.Engine, proc *process.Process, data
 		// 4. partition name
 		fmt.Fprintf(buffer, "'%s', ", partition.PartitionName)
 
-		// 5. description_utf8
+		// 5. partition type
+		fmt.Fprintf(buffer, "'%s', ", partitionByDef.Type.String())
+
+		// 6. partition expression
+		fmt.Fprintf(buffer, "'%s', ", partitionByDef.GenPartitionExprString())
+
+		// 7. description_utf8
 		fmt.Fprintf(buffer, "'%s', ", partition.Description)
 
-		// 6. partition item comment
+		// 8. partition item comment
 		fmt.Fprintf(buffer, "'%s', ", partition.Comment)
 
-		// 7. partition item options
+		// 9. partition item options
 		fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
-		// 8. partition_table_name
+		// 10. partition_table_name
 		fmt.Fprintf(buffer, "'%s')", partition.PartitionTableName)
 	}
 	buffer.WriteString(";")

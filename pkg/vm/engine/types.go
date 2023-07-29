@@ -128,10 +128,8 @@ type VersionDef struct {
 }
 
 type PartitionDef struct {
-	PartitionType       string
-	PartitionExpression string
-	Partitioned         int8
-	Partition           string
+	Partitioned int8
+	Partition   string
 }
 
 type ViewDef struct {

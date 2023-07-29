@@ -791,6 +791,8 @@ var (
 			  database_id bigint unsigned not null,
 			  number smallint unsigned NOT NULL,
 			  name varchar(64) NOT NULL,
+        	  partition_type varchar(50) NOT NULL,
+              partition_expression varchar(2048) NULL,
 			  description_utf8 text,
 			  comment varchar(2048) NOT NULL,
 			  options text,

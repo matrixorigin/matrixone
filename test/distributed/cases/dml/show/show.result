@@ -239,7 +239,7 @@ mo_columns
 mo_tables
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-14
+15
 show column_number from mo_database;
 Number of columns in mo_database
 9

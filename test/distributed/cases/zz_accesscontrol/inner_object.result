@@ -16,11 +16,11 @@ role_id    role_name    owner
 1    public    2
 show databases;
 Database
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
 show grants;
 Grants for account1:admin@localhost
 use system;
@@ -41,8 +41,6 @@ created_time    TIMESTAMP(0)    YES        null
 creator    INT UNSIGNED(0)    YES        null        
 owner    INT UNSIGNED(0)    YES        null        
 account_id    INT UNSIGNED(0)    YES        null        
-partition_type    VARCHAR(50)    YES        null        
-partition_expression    VARCHAR(2048)    YES        null        
 partitioned    TINYINT(0)    YES        null        
 partition_info    BLOB(0)    YES        null        
 viewdef    VARCHAR(5000)    YES        null        
@@ -50,11 +48,11 @@ constraint    VARCHAR(5000)    YES        null
 rel_version    INT UNSIGNED(0)    YES        null        
 select datname, dat_createsql from mo_database;
 datname    dat_createsql
-mo_catalog    
 system    create database system
 system_metrics    create database system_metrics
 information_schema    create database information_schema
 mysql    create database mysql
+mo_catalog    
 select relname from mo_tables where relname="sql_statement_total";
 relname
 sql_statement_total
@@ -84,12 +82,12 @@ Tables_in_account_db
 a
 show databases;
 Database
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
 account_db
+mo_catalog
 update mo_catalog.mo_tables set relname='mo_aaaa';
 internal error: do not have privilege to execute the statement
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');
@@ -194,6 +192,8 @@ table_id    BIGINT UNSIGNED(64)    NO    PRI    null
 database_id    BIGINT UNSIGNED(64)    NO        null        
 number    SMALLINT UNSIGNED(16)    NO        null        
 name    VARCHAR(64)    NO    PRI    null        
+partition_type    VARCHAR(50)    NO        null        
+partition_expression    VARCHAR(2048)    YES        null        
 description_utf8    TEXT(0)    YES        null        
 comment    VARCHAR(2048)    NO        null        
 options    TEXT(0)    YES        null        

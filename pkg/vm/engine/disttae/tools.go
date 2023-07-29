@@ -232,16 +232,6 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 		if err := vector.AppendFixed(bat.Vecs[idx], accountId, false, m); err != nil {
 			return nil, err
 		}
-		idx = catalog.MO_TABLES_PARTITION_TYPE_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx])
-		if err := vector.AppendBytes(bat.Vecs[idx], []byte(tbl.partitionType), false, m); err != nil {
-			return nil, err
-		}
-		idx = catalog.MO_TABLES_PARTITION_EXPRESSION_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx])
-		if err := vector.AppendBytes(bat.Vecs[idx], []byte(tbl.partitionExpression), false, m); err != nil {
-			return nil, err
-		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partitioned
 		if err := vector.AppendFixed(bat.Vecs[idx], tbl.partitioned, false, m); err != nil {

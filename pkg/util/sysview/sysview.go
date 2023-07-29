@@ -334,7 +334,7 @@ var (
 			"NULL AS `SUBPARTITION_NAME`," +
 			"`part`.`number` AS `PARTITION_ORDINAL_POSITION`," +
 			"NULL AS `SUBPARTITION_ORDINAL_POSITION`," +
-			"(case `tbl`.`partition_type` when 'HASH' then 'HASH' " +
+			"(case `part`.`partition_type` when 'HASH' then 'HASH' " +
 			"when 'RANGE' then 'RANGE' " +
 			"when 'LIST' then 'LIST' " +
 			"when 'AUTO' then 'AUTO' " +
@@ -346,7 +346,7 @@ var (
 			"when 'RANGE_COLUMNS' then 'RANGE COLUMNS' " +
 			"when 'LIST_COLUMNS' then 'LIST COLUMNS' else NULL end) AS `PARTITION_METHOD`," +
 			"NULL AS `SUBPARTITION_METHOD`," +
-			"`tbl`.`partition_expression` AS `PARTITION_EXPRESSION`," +
+			"`part`.`partition_expression` AS `PARTITION_EXPRESSION`," +
 			"NULL AS `SUBPARTITION_EXPRESSION`," +
 			"`part`.`description_utf8` AS `PARTITION_DESCRIPTION`," +
 			"mo_table_rows(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `TABLE_ROWS`," +

@@ -708,16 +708,6 @@ func genCreateTableTuple(
 		if err := vector.AppendFixed(bat.Vecs[idx], accountId, false, m); err != nil {
 			return nil, err
 		}
-		idx = catalog.MO_TABLES_PARTITION_TYPE_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx])
-		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
-			return nil, err
-		}
-		idx = catalog.MO_TABLES_PARTITION_EXPRESSION_IDX
-		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx])
-		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
-			return nil, err
-		}
 		idx = catalog.MO_TABLES_PARTITIONED_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // partition
 		if err := vector.AppendFixed(bat.Vecs[idx], int8(0), false, m); err != nil {

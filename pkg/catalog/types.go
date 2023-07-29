@@ -105,25 +105,23 @@ const (
 	SystemDBAttr_Type        = "dat_type"
 
 	// 'mo_tables' table
-	SystemRelAttr_ID                  = "rel_id"
-	SystemRelAttr_Name                = "relname"
-	SystemRelAttr_DBName              = "reldatabase"
-	SystemRelAttr_DBID                = "reldatabase_id"
-	SystemRelAttr_Persistence         = "relpersistence"
-	SystemRelAttr_Kind                = "relkind"
-	SystemRelAttr_Comment             = "rel_comment"
-	SystemRelAttr_CreateSQL           = "rel_createsql"
-	SystemRelAttr_CreateAt            = "created_time"
-	SystemRelAttr_Creator             = "creator"
-	SystemRelAttr_Owner               = "owner"
-	SystemRelAttr_AccID               = "account_id"
-	SystemRelAttr_PartitionType       = "partition_type"
-	SystemRelAttr_PartitionExpression = "partition_expression"
-	SystemRelAttr_Partitioned         = "partitioned"
-	SystemRelAttr_Partition           = "partition_info"
-	SystemRelAttr_ViewDef             = "viewdef"
-	SystemRelAttr_Constraint          = "constraint"
-	SystemRelAttr_Version             = "rel_version"
+	SystemRelAttr_ID          = "rel_id"
+	SystemRelAttr_Name        = "relname"
+	SystemRelAttr_DBName      = "reldatabase"
+	SystemRelAttr_DBID        = "reldatabase_id"
+	SystemRelAttr_Persistence = "relpersistence"
+	SystemRelAttr_Kind        = "relkind"
+	SystemRelAttr_Comment     = "rel_comment"
+	SystemRelAttr_CreateSQL   = "rel_createsql"
+	SystemRelAttr_CreateAt    = "created_time"
+	SystemRelAttr_Creator     = "creator"
+	SystemRelAttr_Owner       = "owner"
+	SystemRelAttr_AccID       = "account_id"
+	SystemRelAttr_Partitioned = "partitioned"
+	SystemRelAttr_Partition   = "partition_info"
+	SystemRelAttr_ViewDef     = "viewdef"
+	SystemRelAttr_Constraint  = "constraint"
+	SystemRelAttr_Version     = "rel_version"
 
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
@@ -191,18 +189,6 @@ const (
 	SystemDBTypeSubscription = "subscription"
 )
 
-// Partition type value enumeration(mo_tables.partition_type)
-const (
-	SystemPartitionType_KEY           = "KEY"
-	SystemPartitionType_LINEAR_KEY    = "LINEAR_KEY"
-	SystemPartitionType_HASH          = "HASH"
-	SystemPartitionType_LINEAR_HASH   = "LINEAR_KEY_51"
-	SystemPartitionType_RANGE         = "RANGE"
-	SystemPartitionType_RANGE_COLUMNS = "RANGE_COLUMNS"
-	SystemPartitionType_LIST          = "LIST"
-	SystemPartitionType_LIST_COLUMNS  = "LIST_COLUMNS"
-)
-
 const (
 	// default database id for catalog
 	MO_CATALOG_ID  = 1
@@ -229,25 +215,23 @@ const (
 	MO_DATABASE_ACCOUNT_ID_IDX       = 7
 	MO_DATABASE_DAT_TYPE_IDX         = 8
 
-	MO_TABLES_REL_ID_IDX               = 0
-	MO_TABLES_REL_NAME_IDX             = 1
-	MO_TABLES_RELDATABASE_IDX          = 2
-	MO_TABLES_RELDATABASE_ID_IDX       = 3
-	MO_TABLES_RELPERSISTENCE_IDX       = 4
-	MO_TABLES_RELKIND_IDX              = 5
-	MO_TABLES_REL_COMMENT_IDX          = 6
-	MO_TABLES_REL_CREATESQL_IDX        = 7
-	MO_TABLES_CREATED_TIME_IDX         = 8
-	MO_TABLES_CREATOR_IDX              = 9
-	MO_TABLES_OWNER_IDX                = 10
-	MO_TABLES_ACCOUNT_ID_IDX           = 11
-	MO_TABLES_PARTITION_TYPE_IDX       = 12
-	MO_TABLES_PARTITION_EXPRESSION_IDX = 13
-	MO_TABLES_PARTITIONED_IDX          = 14
-	MO_TABLES_PARTITION_INFO_IDX       = 15
-	MO_TABLES_VIEWDEF_IDX              = 16
-	MO_TABLES_CONSTRAINT_IDX           = 17
-	MO_TABLES_VERSION_IDX              = 18
+	MO_TABLES_REL_ID_IDX         = 0
+	MO_TABLES_REL_NAME_IDX       = 1
+	MO_TABLES_RELDATABASE_IDX    = 2
+	MO_TABLES_RELDATABASE_ID_IDX = 3
+	MO_TABLES_RELPERSISTENCE_IDX = 4
+	MO_TABLES_RELKIND_IDX        = 5
+	MO_TABLES_REL_COMMENT_IDX    = 6
+	MO_TABLES_REL_CREATESQL_IDX  = 7
+	MO_TABLES_CREATED_TIME_IDX   = 8
+	MO_TABLES_CREATOR_IDX        = 9
+	MO_TABLES_OWNER_IDX          = 10
+	MO_TABLES_ACCOUNT_ID_IDX     = 11
+	MO_TABLES_PARTITIONED_IDX    = 12
+	MO_TABLES_PARTITION_INFO_IDX = 13
+	MO_TABLES_VIEWDEF_IDX        = 14
+	MO_TABLES_CONSTRAINT_IDX     = 15
+	MO_TABLES_VERSION_IDX        = 16
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -338,7 +322,7 @@ type BlockInfo struct {
 	CommitTs   types.TS
 	SegmentID  types.Uuid
 
-	//TODO::putting them here is a bad idea, remove
+	//TODO:: putting them here is a bad idea, remove
 	//this block can be distributed to remote nodes.
 	CanRemote    bool
 	PartitionNum int
@@ -393,23 +377,21 @@ type DropDatabase struct {
 }
 
 type CreateTable struct {
-	TableId             uint64
-	Name                string
-	CreateSql           string
-	Owner               uint32
-	Creator             uint32
-	AccountId           uint32
-	DatabaseId          uint64
-	DatabaseName        string
-	Comment             string
-	PartitionType       string
-	PartitionExpression string
-	Partitioned         int8
-	Partition           string
-	RelKind             string
-	Viewdef             string
-	Constraint          []byte
-	Defs                []engine.TableDef
+	TableId      uint64
+	Name         string
+	CreateSql    string
+	Owner        uint32
+	Creator      uint32
+	AccountId    uint32
+	DatabaseId   uint64
+	DatabaseName string
+	Comment      string
+	Partitioned  int8
+	Partition    string
+	RelKind      string
+	Viewdef      string
+	Constraint   []byte
+	Defs         []engine.TableDef
 }
 
 type UpdateConstraint struct {
@@ -454,8 +436,6 @@ var (
 		SystemRelAttr_Creator,
 		SystemRelAttr_Owner,
 		SystemRelAttr_AccID,
-		SystemRelAttr_PartitionType,
-		SystemRelAttr_PartitionExpression,
 		SystemRelAttr_Partitioned,
 		SystemRelAttr_Partition,
 		SystemRelAttr_ViewDef,
@@ -520,8 +500,6 @@ var (
 		types.New(types.T_uint32, 0, 0),     // creator
 		types.New(types.T_uint32, 0, 0),     // owner
 		types.New(types.T_uint32, 0, 0),     // account_id
-		types.New(types.T_varchar, 50, 0),   // partition_type
-		types.New(types.T_varchar, 2048, 0), // partition_expression
 		types.New(types.T_int8, 0, 0),       // partitioned
 		types.New(types.T_blob, 0, 0),       // partition_info
 		types.New(types.T_varchar, 5000, 0), // viewdef

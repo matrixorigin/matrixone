@@ -109,19 +109,17 @@ func (cpk *SortKey) HasColumn(idx int) (found bool) { _, found = cpk.search[idx]
 func (cpk *SortKey) GetSingleIdx() int              { return cpk.Defs[0].Idx }
 
 type Schema struct {
-	Version             uint32
-	AcInfo              accessInfo
-	Name                string
-	ColDefs             []*ColDef
-	Comment             string
-	PartitionType       string
-	PartitionExpression string
-	Partitioned         int8   // 1: the table has partitions ; 0: no partition
-	Partition           string // the info about partitions when the table has partitions
-	Relkind             string
-	Createsql           string
-	View                string
-	Constraint          []byte
+	Version     uint32
+	AcInfo      accessInfo
+	Name        string
+	ColDefs     []*ColDef
+	Comment     string
+	Partitioned int8   // 1: the table has partitions ; 0: no partition
+	Partition   string // the info about partitions when the table has partitions
+	Relkind     string
+	Createsql   string
+	View        string
+	Constraint  []byte
 
 	// do not send to cn
 	BlockMaxRows     uint32
@@ -320,15 +318,6 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
-
-	if s.PartitionType, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
-	if s.PartitionExpression, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
 	if _, err = r.Read(types.EncodeInt8(&s.Partitioned)); err != nil {
 		return
 	}
@@ -451,12 +440,6 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = objectio.WriteString(s.Comment, &w); err != nil {
-		return
-	}
-	if _, err = objectio.WriteString(s.PartitionType, &w); err != nil {
-		return
-	}
-	if _, err = objectio.WriteString(s.PartitionExpression, &w); err != nil {
 		return
 	}
 	if _, err = w.Write(types.EncodeInt8(&s.Partitioned)); err != nil {

@@ -1368,10 +1368,6 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			return nil, err
 		}
 		exeDefs = append(exeDefs, &engine.PartitionDef{
-			PartitionType: tableDef.Partition.Type.String(),
-			//PartitionExpression: tableDef.Partition.PartitionExpr.ExprStr,
-			PartitionExpression: tableDef.Partition.GenPartitionExprString(),
-			//PartitionExpression: tableDef.Partition.PartitionMsg,
 			Partitioned: 1,
 			Partition:   string(bytes),
 		})

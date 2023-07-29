@@ -365,18 +365,16 @@ type txnTable struct {
 	// specify whether the logtail is updated. once it is updated, it will not be updated again
 	logtailUpdated bool
 
-	primaryIdx          int // -1 means no primary key
-	primarySeqnum       int // -1 means no primary key
-	clusterByIdx        int // -1 means no clusterBy key
-	viewdef             string
-	comment             string
-	partitionType       string
-	partitionExpression string
-	partitioned         int8   //1 : the table has partitions ; 0 : no partition
-	partition           string // the info about partitions when the table has partitions
-	relKind             string
-	createSql           string
-	constraint          []byte
+	primaryIdx    int // -1 means no primary key
+	primarySeqnum int // -1 means no primary key
+	clusterByIdx  int // -1 means no clusterBy key
+	viewdef       string
+	comment       string
+	partitioned   int8   //1 : the table has partitions ; 0 : no partition
+	partition     string // the info about partitions when the table has partitions
+	relKind       string
+	createSql     string
+	constraint    []byte
 
 	//entries belong to this table,and come from txn.writes.
 	writes []Entry
