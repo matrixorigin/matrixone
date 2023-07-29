@@ -2592,7 +2592,6 @@ func TestSegDelLogtail(t *testing.T) {
 		require.Equal(t, 2, len(segdel.Vecs))
 	}
 	check()
-	logutil.Infof("Fsfsfsdfdsfsfs")
 	tae.restart(ctx)
 
 	txn, err = tae.StartTxn(nil)
