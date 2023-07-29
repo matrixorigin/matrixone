@@ -214,37 +214,7 @@ func (node *Load) Format(ctx *FmtCtx) {
 			ctx.WriteString(" infile ")
 
 		}
-		ctx.WriteString("{")
-		for i := 0; i < len(node.Param.Option); i += 2 {
-			switch strings.ToLower(node.Param.Option[i]) {
-			case "endpoint":
-				ctx.WriteString("'endpoint'='" + node.Param.Option[i+1] + "'")
-			case "region":
-				ctx.WriteString("'region'='" + node.Param.Option[i+1] + "'")
-			case "access_key_id":
-				ctx.WriteString("'access_key_id'='******'")
-			case "secret_access_key":
-				ctx.WriteString("'secret_access_key'='******'")
-			case "bucket":
-				ctx.WriteString("'bucket'='" + node.Param.Option[i+1] + "'")
-			case "filepath":
-				ctx.WriteString("'filepath'='" + node.Param.Option[i+1] + "'")
-			case "compression":
-				ctx.WriteString("'compression'='" + node.Param.Option[i+1] + "'")
-			case "format":
-				ctx.WriteString("'format'='" + node.Param.Option[i+1] + "'")
-			case "jsondata":
-				ctx.WriteString("'jsondata'='" + node.Param.Option[i+1] + "'")
-			case "role_arn":
-				ctx.WriteString("'role_arn'='" + node.Param.Option[i+1] + "'")
-			case "external_id":
-				ctx.WriteString("'external_id'='" + node.Param.Option[i+1] + "'")
-			}
-			if i != len(node.Param.Option)-2 {
-				ctx.WriteString(", ")
-			}
-		}
-		ctx.WriteString("}")
+		formatS3option(ctx, node.Param.Option)
 	}
 
 	switch node.DuplicateHandling.(type) {
@@ -292,6 +262,40 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" set ")
 		node.Param.Tail.Assignments.Format(ctx)
 	}
+}
+
+func formatS3option(ctx *FmtCtx, option []string) {
+	ctx.WriteString("{")
+	for i := 0; i < len(option); i += 2 {
+		switch strings.ToLower(option[i]) {
+		case "endpoint":
+			ctx.WriteString("'endpoint'='" + option[i+1] + "'")
+		case "region":
+			ctx.WriteString("'region'='" + option[i+1] + "'")
+		case "access_key_id":
+			ctx.WriteString("'access_key_id'='******'")
+		case "secret_access_key":
+			ctx.WriteString("'secret_access_key'='******'")
+		case "bucket":
+			ctx.WriteString("'bucket'='" + option[i+1] + "'")
+		case "filepath":
+			ctx.WriteString("'filepath'='" + option[i+1] + "'")
+		case "compression":
+			ctx.WriteString("'compression'='" + option[i+1] + "'")
+		case "format":
+			ctx.WriteString("'format'='" + option[i+1] + "'")
+		case "jsondata":
+			ctx.WriteString("'jsondata'='" + option[i+1] + "'")
+		case "role_arn":
+			ctx.WriteString("'role_arn'='" + option[i+1] + "'")
+		case "external_id":
+			ctx.WriteString("'external_id'='" + option[i+1] + "'")
+		}
+		if i != len(option)-2 {
+			ctx.WriteString(", ")
+		}
+	}
+	ctx.WriteString("}")
 }
 
 func (node *Load) GetStatementType() string { return "Load" }

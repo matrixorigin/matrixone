@@ -458,6 +458,7 @@ import (
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
+%type <statement> backup_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -712,6 +713,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
+%token <str> BACKUP FILESYSTEM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %start start_command
@@ -833,6 +835,25 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
+|   backup_stmt
+
+backup_stmt:
+    BACKUP STRING FILESYSTEM STRING
+	{
+		$$ = &tree.BackupStart{
+		    Timestamp: $2,
+		    IsS3 : false,
+		    Dir: $4,
+		}
+	}
+    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
+    {
+    	$$ = &tree.BackupStart{
+        	    Timestamp: $2,
+        	    IsS3 : true,
+        	    Option : $5,
+        	}
+    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -10030,6 +10051,8 @@ non_reserved_keyword:
 |   SQL
 |   STAGE
 |   STAGES
+|   BACKUP
+| FILESYSTEM
 
 func_not_keyword:
     DATE_ADD
