@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -124,4 +125,38 @@ func TestBatch3(t *testing.T) {
 	bats = bat2.Split(2)
 	t.Log(bats[0].Vecs[3].Length())
 	t.Log(bats[1].Vecs[3].Length())
+}
+
+func TestBatchWithPool(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	colTypes := types.MockColTypes(17)
+	seedBat := MockBatch(colTypes, 10, 3, nil)
+	defer seedBat.Close()
+
+	uid := uuid.New()
+	pool := NewVectorPool(uid.String(), 200)
+
+	bat := NewBatchWithPool(seedBat.Attrs, colTypes, pool)
+
+	err := bat.Append(seedBat)
+	assert.NoError(t, err)
+	assert.True(t, seedBat.Equals(bat))
+
+	bat.Reset()
+
+	usedCnt, _ := pool.FixedSizeUsed(false)
+	assert.True(t, usedCnt > 0)
+
+	assert.Equal(t, 0, bat.Length())
+	err = bat.Append(seedBat)
+	assert.NoError(t, err)
+	assert.True(t, seedBat.Equals(bat))
+	bat.Close()
+
+	usedCnt, _ = pool.FixedSizeUsed(false)
+	assert.Equal(t, 0, usedCnt)
+	usedCnt, _ = pool.VarlenUsed(false)
+	assert.Equal(t, 0, usedCnt)
+
+	pool.Destory()
 }
