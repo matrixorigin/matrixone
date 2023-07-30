@@ -426,6 +426,8 @@ func (p *IoPipeline) onWait(jobs ...any) {
 		res := job.WaitDone()
 		if res == nil {
 			logutil.Infof("job is %v", job.String())
+			putJob(job)
+			return
 		}
 		if res.Err != nil {
 			logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)

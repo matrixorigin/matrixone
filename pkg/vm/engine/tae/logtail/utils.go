@@ -255,7 +255,7 @@ type MemoryTable = model.AOT[*model.BatchBlock, *containers.Batch]
 
 type CheckpointData struct {
 	meta      map[uint64]*CheckpointMeta
-	locations map[string]struct{}
+	locations map[string]objectio.Location
 	bats      [MaxIDX]*MemoryTable
 }
 
@@ -390,10 +390,13 @@ const (
 	Checkpoint_Meta_TID_IDX                = 2
 	Checkpoint_Meta_Insert_Block_Start_IDX = 3
 	Checkpoint_Meta_Insert_Block_End_IDX   = 4
-	Checkpoint_Meta_Delete_Block_Start_IDX = 5
-	Checkpoint_Meta_Delete_Block_End_IDX   = 6
-	Checkpoint_Meta_Segment_Start_IDX      = 7
-	Checkpoint_Meta_Segment_End_IDX        = 8
+	Checkpoint_Meta_Insert_Block_LOC       = 5
+	Checkpoint_Meta_Delete_Block_Start_IDX = 6
+	Checkpoint_Meta_Delete_Block_End_IDX   = 7
+	Checkpoint_Meta_Delete_Block_LOC       = 8
+	Checkpoint_Meta_Segment_Start_IDX      = 9
+	Checkpoint_Meta_Segment_End_IDX        = 10
+	Checkpoint_Meta_Segment_LOC            = 11
 )
 
 type CNCheckpointData struct {
@@ -460,7 +463,19 @@ func (data *CNCheckpointData) ReadFrom(
 	version uint32,
 	m *mpool.MPool) (err error) {
 
+	var bat *batch.Batch
+	metaIdx := checkpointDataReferVersions[version][MetaIDX]
+	bat, err = LoadCNSubBlkColumnsByMeta(ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, m)
+	if err != nil {
+		return
+	}
+	data.bats[MetaIDX] = bat
+	key := objectio.Location(bat.Vecs[5].GetBytesAt(0))
 	for idx, item := range checkpointDataReferVersions[version] {
+		if uint16(idx) == MetaIDX {
+			continue
+		}
+		reader, err = blockio.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), key)
 		var bat *batch.Batch
 		bat, err = LoadCNSubBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader, m)
 		if err != nil {
@@ -701,6 +716,40 @@ func (data *CheckpointData) prepareMeta() {
 	//data.bats[MetaIDX].Append(bat)
 }
 
+func (data *CheckpointData) prepareMetaTemp(key []byte) {
+	bat := makeRespBatchFromSchema(checkpointDataSchemas_Curr[MetaIDX])
+	for tid, meta := range data.meta {
+		bat.GetVectorByName(SnapshotAttr_TID).Append(tid, false)
+		if meta.blkInsertOffset == nil {
+			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Append(int32(-1), false)
+			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Append(int32(-1), false)
+		} else {
+			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Append(int32(meta.blkInsertOffset.Start), false)
+			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Append(int32(meta.blkInsertOffset.End), false)
+			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).Append(key, false)
+		}
+		bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).Append(key, false)
+		if meta.blkDeleteOffset == nil {
+			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Append(int32(-1), false)
+			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Append(int32(-1), false)
+		} else {
+			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Append(int32(meta.blkDeleteOffset.Start), false)
+			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Append(int32(meta.blkDeleteOffset.End), false)
+		}
+		bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).Append(key, false)
+		if meta.segDeleteOffset == nil {
+			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).Append(int32(-1), false)
+			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Append(int32(-1), false)
+		} else {
+			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).Append(int32(meta.segDeleteOffset.Start), false)
+			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Append(int32(meta.segDeleteOffset.End), false)
+		}
+		bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).Append(key, false)
+	}
+	AppendBatch(data.bats[MetaIDX], bat)
+	//data.bats[MetaIDX].Append(bat)
+}
+
 func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart, delEnd int32) {
 	if delEnd < delStart && insEnd < insStart {
 		return
@@ -800,7 +849,8 @@ func (data *CheckpointData) WriteTo(
 		data.updateBlkInsertLocation(tid, location)
 		data.updateSegmentLocation(tid, location)
 	}
-	data.prepareMeta()
+	//data.prepareMeta()
+	data.prepareMetaTemp(location)
 	if err != nil {
 		return
 	}
@@ -823,9 +873,8 @@ func (data *CheckpointData) WriteTo(
 	if err != nil {
 		return
 	}
-	blks2, _, err := writer.Sync(context.Background())
-
-	location = objectio.BuildLocation(name, blks2[0].GetExtent(), 0, blks2[0].GetID())
+	blks2, _, err := writer2.Sync(context.Background())
+	location = objectio.BuildLocation(name2, blks2[0].GetExtent(), 0, blks2[0].GetID())
 	return
 }
 
@@ -1005,13 +1054,14 @@ func (data *CheckpointData) getMetaBatch() (bat *containers.Batch) {
 
 func (data *CheckpointData) replayMetaBatch() {
 	bat := data.getMetaBatch()
+	data.locations = make(map[string]objectio.Location)
 	for i := 0; i < bat.Length(); i++ {
 		insLocation := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).Get(i).([]byte)
-		data.locations[string(insLocation)] = struct{}{}
+		data.locations[objectio.Location(insLocation).String()] = insLocation
 		delLocation := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).Get(i).([]byte)
-		data.locations[string(delLocation)] = struct{}{}
+		data.locations[objectio.Location(delLocation).String()] = delLocation
 		segLocation := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).Get(i).([]byte)
-		data.locations[string(insLocation)] = struct{}{}
+		data.locations[objectio.Location(segLocation).String()] = segLocation
 		meta := &CheckpointMeta{
 			blkInsertOffset: &common.ClosedInterval{
 				Start: uint64(bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Get(i).(int32)),
@@ -1048,16 +1098,19 @@ func (data *CheckpointData) readAll(
 	version uint32,
 	service fileservice.FileService) (err error) {
 	data.replayMetaBatch()
-	for key := range data.locations {
+	for _, val := range data.locations {
 		var reader *blockio.BlockReader
-		reader, err = blockio.NewObjectReader(service, []byte(key))
+		reader, err = blockio.NewObjectReader(service, val)
 		if err != nil {
 			return
 		}
 		var bat *containers.Batch
 		for idx := range checkpointDataReferVersions[version] {
+			if uint16(idx) == MetaIDX {
+				continue
+			}
 			item := checkpointDataReferVersions[version][idx]
-			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(0), reader)
+			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader)
 			if err != nil {
 				return
 			}

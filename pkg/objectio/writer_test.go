@@ -301,7 +301,7 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(blocks))
+	assert.Equal(t, 4, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	ext := blocks[0].BlockHeader().MetaLocation()

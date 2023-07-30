@@ -210,9 +210,10 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 		return
 	}
 	data := logtail.NewCNCheckpointData()
-	if err = data.PrefetchFrom(ctx, e.version, fs.Service, e.location); err != nil {
+	// FIXME
+	/*if err = data.PrefetchFrom(ctx, e.version, fs.Service, e.location); err != nil {
 		return
-	}
+	}*/
 	if err = data.ReadFrom(ctx, reader, e.version, common.DefaultAllocator); err != nil {
 		return
 	}

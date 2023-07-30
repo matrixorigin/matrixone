@@ -34,3 +34,7 @@ func NewObject(name string, fs fileservice.FileService) *Object {
 	}
 	return object
 }
+
+func (o *Object) GetFs() fileservice.FileService {
+	return o.fs
+}
