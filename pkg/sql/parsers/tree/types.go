@@ -167,12 +167,12 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
 			ctx.WriteByte(')')
 		}
-	case "embedding":
-		if node.DisplayWith >= 0 {
-			ctx.WriteByte('(') //TODO: What is this?
-			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
-			ctx.WriteByte(')')
-		}
+	//case "embedding":
+	//	if node.DisplayWith >= 0 {
+	//		ctx.WriteByte('(') //TODO: What is this?
+	//		ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+	//		ctx.WriteByte(')')
+	//	}
 	default:
 		if node.Scale > 0 {
 			ctx.WriteByte('(')
