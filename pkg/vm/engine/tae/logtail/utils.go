@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -36,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
@@ -105,7 +105,7 @@ var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
 
 func init() {
 	checkpointDataSchemas_V1 = [MaxIDX]*catalog.Schema{
-		MetaSchema,
+		MetaSchema_V1,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
 		DelSchema, // 3
@@ -131,7 +131,7 @@ func init() {
 		BlkMetaSchema, // 23
 	}
 	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
-		MetaSchema,
+		MetaSchema_V1,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
 		DelSchema, // 3
@@ -247,9 +247,12 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) fu
 }
 
 type CheckpointMeta struct {
-	blkInsertOffset *common.ClosedInterval
-	blkDeleteOffset *common.ClosedInterval
-	segDeleteOffset *common.ClosedInterval
+	blkInsertOffset   *common.ClosedInterval
+	blkDeleteOffset   *common.ClosedInterval
+	segDeleteOffset   *common.ClosedInterval
+	blkInsertLocation objectio.Location
+	blkDeleteLocation objectio.Location
+	segDeleteLocation objectio.Location
 }
 
 func NewCheckpointMeta() *CheckpointMeta {
@@ -259,8 +262,9 @@ func NewCheckpointMeta() *CheckpointMeta {
 type MemoryTable = model.AOT[*model.BatchBlock, *containers.Batch]
 
 type CheckpointData struct {
-	meta map[uint64]*CheckpointMeta
-	bats [MaxIDX]*MemoryTable
+	meta      map[uint64]*CheckpointMeta
+	locations map[string]struct{}
+	bats      [MaxIDX]*MemoryTable
 }
 
 func GetRows(mt *MemoryTable) int {
@@ -860,6 +864,47 @@ func prefetchCheckpointData(
 	return blockio.PrefetchWithMerged(pref)
 }
 
+func prefetchMetaBatch(
+	ctx context.Context,
+	version uint32,
+	service fileservice.FileService,
+	key objectio.Location) (err error) {
+
+	pref, err := blockio.BuildSubPrefetchParams(service, key)
+	if err != nil {
+		return
+	}
+	item := checkpointDataReferVersions[version][MetaIDX]
+	idxes := make([]uint16, len(item.attrs))
+	for i := range item.attrs {
+		idxes[i] = uint16(i)
+	}
+	pref.AddBlock(idxes, []uint16{uint16(MetaIDX)})
+	return blockio.PrefetchWithMerged(pref)
+}
+
+func prefetchBatches(
+	ctx context.Context,
+	version uint32,
+	service fileservice.FileService,
+	schemaIdxes []uint16,
+	key objectio.Location) (err error) {
+
+	pref, err := blockio.BuildSubPrefetchParams(service, key)
+	if err != nil {
+		return
+	}
+	for _, idx := range schemaIdxes {
+		item := checkpointDataReferVersions[version][idx]
+		idxes := make([]uint16, len(item.attrs))
+		for i := range item.attrs {
+			idxes[i] = uint16(i)
+		}
+		pref.AddBlock(idxes, []uint16{uint16(idx)})
+	}
+	return blockio.PrefetchWithMerged(pref)
+}
+
 // TODO:
 // There need a global io pool
 func (data *CheckpointData) ReadFrom(
@@ -889,6 +934,107 @@ func (data *CheckpointData) ReadFrom(
 		//Fixme: add vector to batch
 		//bat.AddVector(pkgcatalog.SystemRelAttr_CatalogVersion, vec)
 	}
+
+	return
+}
+
+func (data *CheckpointData) readMetaBatch(
+	ctx context.Context,
+	version uint32,
+	reader *blockio.BlockReader,
+	m *mpool.MPool,
+) (err error) {
+	var bat *containers.Batch
+	item := checkpointDataReferVersions[version][MetaIDX]
+	bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(0), reader)
+	if err != nil {
+		return
+	}
+	data.setMetaBatch(bat)
+	return
+}
+func (data *CheckpointData) setMetaBatch(bat *containers.Batch) {
+	data.bats[MetaIDX].Append(bat)
+}
+func (data *CheckpointData) getMetaBatch() (bat *containers.Batch) {
+	return GetBatch(data.bats[MetaIDX], MetaSchema)
+}
+
+func (data *CheckpointData) replayMetaBatch() {
+	bat := data.getMetaBatch()
+	for i := 0; i < bat.Length(); i++ {
+		insLocation := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).Get(i).([]byte)
+		data.locations[string(insLocation)] = struct{}{}
+		delLocation := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).Get(i).([]byte)
+		data.locations[string(delLocation)] = struct{}{}
+		segLocation := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).Get(i).([]byte)
+		data.locations[string(insLocation)] = struct{}{}
+		meta := &CheckpointMeta{
+			blkInsertOffset: &common.ClosedInterval{
+				Start: uint64(bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Get(i).(int32)),
+				End:   uint64(bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Get(i).(int32)),
+			},
+			blkInsertLocation: insLocation,
+			blkDeleteOffset: &common.ClosedInterval{
+				Start: uint64(bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Get(i).(int32)),
+				End:   uint64(bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Get(i).(int32)),
+			},
+			blkDeleteLocation: delLocation,
+			segDeleteOffset: &common.ClosedInterval{
+				Start: uint64(bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).Get(i).(int32)),
+				End:   uint64(bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Get(i).(int32)),
+			},
+			segDeleteLocation: segLocation,
+		}
+		tid := bat.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+		data.meta[tid] = meta
+	}
+
+}
+func (data *CheckpointData) prefetchMetaBatch(
+	ctx context.Context,
+	version uint32,
+	service fileservice.FileService,
+	key objectio.Location) (err error) {
+	err = prefetchMetaBatch(ctx, version, service, key)
+	return
+}
+
+func (data *CheckpointData) readAll(
+	ctx context.Context,
+	version uint32,
+	service fileservice.FileService) (err error) {
+	data.replayMetaBatch()
+	for key := range data.locations {
+		var reader *blockio.BlockReader
+		reader, err = blockio.NewObjectReader(service, []byte(key))
+		if err != nil {
+			return
+		}
+		var bat *containers.Batch
+		for idx := range checkpointDataReferVersions[version] {
+			item := checkpointDataReferVersions[version][idx]
+			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(0), reader)
+			if err != nil {
+				return
+			}
+			data.bats[idx].Append(bat)
+		}
+	}
+	return
+}
+
+func (data *CheckpointData) readBatch(
+	ctx context.Context,
+	version uint32,
+	service fileservice.FileService) (err error) {
+	return
+}
+
+func (data *CheckpointData) prefetchAll(
+	ctx context.Context,
+	version uint32,
+	service fileservice.FileService) (err error) {
 
 	return
 }
