@@ -428,13 +428,15 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 	var data []byte
 	var buf bytes.Buffer
 	var rows int
-	warned := 0
 	for i, vec := range bat.Vecs {
 		if i == 0 {
 			rows = vec.Length()
 		} else if rows != vec.Length() {
-			warned++
-			logutil.Warnf("%s unmatched length, expect %d, get %d", bat.Attrs[i], rows, vec.Length())
+			attr := "unknown"
+			if len(bat.Attrs) > i {
+				attr = bat.Attrs[i]
+			}
+			logutil.Debugf("%s unmatched length, expect %d, get %d", attr, rows, vec.Length())
 		}
 		buf.Reset()
 		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
@@ -454,9 +456,6 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 			panic("any type batch")
 		}
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
-	}
-	if warned > 0 {
-		logutil.Warnf("warned %d times", warned)
 	}
 	blockMeta.BlockHeader().SetRows(uint32(rows))
 	w.blocks = append(w.blocks, block)
