@@ -79,11 +79,25 @@ func (r *ReceiverOperator) FreeAllReg() {
 // clean up the batch left in channel
 func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
 	for {
-		bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch
-		if !ok || bat == nil {
-			break
+		select {
+		case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+			if !ok || bat == nil {
+				return
+			}
+			bat.Clean(r.proc.GetMPool())
+		case <-r.proc.Reg.MergeReceivers[regIdx].Ctx.Done():
+			for {
+				select {
+				case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
+					if !ok || bat == nil {
+						return
+					}
+					bat.Clean(r.proc.GetMPool())
+				default:
+					return
+				}
+			}
 		}
-		bat.Clean(r.proc.GetMPool())
 	}
 }
 
