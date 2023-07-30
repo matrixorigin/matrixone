@@ -68,12 +68,10 @@ type AOTSnapshot[B BlockT[R], R RowsT[R]] interface {
 // most scenarios, such as logtail data and checkpoint data
 type AOT[B BlockT[R], R RowsT[R]] struct {
 	sync.Mutex
-	schema             any
-	blockSize          int
-	appender           B
-	blocks             *btree.BTreeG[B]
-	blockFactory       func(R) B
-	blockFactorySchema func(R, any) B
+	blockSize    int
+	appender     B
+	blocks       *btree.BTreeG[B]
+	blockFactory func(R) B
 }
 
 func NewAOT[B BlockT[R], R RowsT[R]](
@@ -84,19 +82,6 @@ func NewAOT[B BlockT[R], R RowsT[R]](
 		blockSize:    blockSize,
 		blockFactory: blockFactory,
 		blocks:       btree.NewBTreeGOptions(lessFn, btree.Options{NoLocks: true}),
-	}
-}
-
-func NewAOTWithSchema[B BlockT[R], R RowsT[R]](
-	schema any,
-	blockSize int,
-	blockFactory func(R, any) B,
-	lessFn func(_, _ B) bool) *AOT[B, R] {
-	return &AOT[B, R]{
-		schema:             schema,
-		blockSize:          blockSize,
-		blockFactorySchema: blockFactory,
-		blocks:             btree.NewBTreeGOptions(lessFn, btree.Options{NoLocks: true}),
 	}
 }
 
@@ -239,13 +224,6 @@ func (aot *AOT[B, R]) Append(rows R) (err error) {
 	for !done {
 		toAppend, done = aot.prepareAppend(rows.Length() - appended)
 		if toAppend == 0 {
-			if aot.schema != nil {
-				newB := aot.blockFactorySchema(rows, aot.schema)
-				if err = aot.appendBlock(newB); err != nil {
-					return
-				}
-				continue
-			}
 			newB := aot.blockFactory(rows)
 			if err = aot.appendBlock(newB); err != nil {
 				return

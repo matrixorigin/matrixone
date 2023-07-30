@@ -131,6 +131,15 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	return bat
 }
 
+// make batch, append necessary field like commit ts
+func makeRespBatchFromBatch(batch *containers.Batch) *containers.Batch {
+	bat := containers.NewBatch()
+	for i, attr := range batch.Attrs {
+		bat.AddVector(attr, containers.MakeVector(*batch.Vecs[i].GetType()))
+	}
+	return bat
+}
+
 // func makeDataInsertRespBatch(schema *catalog.Schema) *containers.Batch {
 // 	capactity := int(schema.NextColSeqnum) + 2
 // 	bat := containers.NewBatch()
