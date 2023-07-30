@@ -474,18 +474,10 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 		return
 	}
 	defer data.Close()
-
-	segmentid := objectio.NewSegmentid()
-	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.rt.Fs.Service, name, 0, nil)
-	if err != nil {
-		return err
-	}
-	blks, err := data.WriteTo(writer)
+	location, err := data.WriteTo(r.rt.Fs.Service)
 	if err != nil {
 		return
 	}
-	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
 
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
@@ -503,17 +495,10 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	}
 	defer data.Close()
 
-	segmentid := objectio.NewSegmentid()
-	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.rt.Fs.Service, name, 0, nil)
+	location, err := data.WriteTo(r.rt.Fs.Service)
 	if err != nil {
 		return
 	}
-	blks, err := data.WriteTo(writer)
-	if err != nil {
-		return
-	}
-	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)

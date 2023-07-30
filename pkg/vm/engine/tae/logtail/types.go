@@ -395,11 +395,11 @@ func init() {
 	MetaSchema_V1 = catalog.NewEmptySchema("meta")
 	for i, colname := range MetaSchemaAttr_V1 {
 		if i == 0 {
-			if err := MetaSchema.AppendPKCol(colname, MetaShcemaTypes_V1[i], 0); err != nil {
+			if err := MetaSchema_V1.AppendPKCol(colname, MetaShcemaTypes_V1[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := MetaSchema.AppendCol(colname, MetaShcemaTypes_V1[i]); err != nil {
+			if err := MetaSchema_V1.AppendCol(colname, MetaShcemaTypes_V1[i]); err != nil {
 				panic(err)
 			}
 		}

@@ -220,10 +220,6 @@ func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catal
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
 		}
-		collector.data.prepareMeta()
-		if err != nil {
-			return
-		}
 		data = collector.OrphanData()
 		return
 	}
@@ -236,10 +232,6 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) fu
 		err = c.RecurLoop(collector)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
-		}
-		collector.data.prepareMeta()
-		if err != nil {
-			return
 		}
 		data = collector.OrphanData()
 		return
@@ -738,6 +730,14 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 	}
 }
 
+func (data *CheckpointData) updateBlkInsertLocation(tid uint64, location objectio.Location) {
+	data.meta[tid].blkInsertLocation = location
+}
+
+func (data *CheckpointData) updateBlkDeleteLocation(tid uint64, location objectio.Location) {
+	data.meta[tid].blkDeleteLocation = location
+}
+
 func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 	if delEnd < delStart {
 		return
@@ -758,6 +758,10 @@ func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 	}
 }
 
+func (data *CheckpointData) updateSegmentLocation(tid uint64, location objectio.Location) {
+	data.meta[tid].segDeleteLocation = location
+}
+
 func (data *CheckpointData) PrintData() {
 	/*logutil.Info(BatchToString("BLK-META-DEL-BAT", data.bats[BLKMetaDeleteIDX], true))
 	logutil.Info(BatchToString("BLK-META-INS-BAT", data.bats[BLKMetaInsertIDX], true))*/
@@ -766,25 +770,62 @@ func (data *CheckpointData) PrintData() {
 }
 
 func (data *CheckpointData) WriteTo(
-	writer *blockio.BlockWriter) (blks []objectio.BlockObject, err error) {
+	fs fileservice.FileService) (location objectio.Location, err error) {
+	segmentid := objectio.NewSegmentid()
+	name := objectio.BuildObjectName(segmentid, 0)
+	writer, err := blockio.NewBlockWriterNew(fs, name, 0, nil)
+	if err != nil {
+		return
+	}
 	for i, schema := range checkpointDataSchemas_Curr {
+		if i == int(MetaIDX) {
+			continue
+		}
 		if _, err = writer.WriteSubBatch(containers.ToCNBatch(GetBatch(data.bats[i], schema)), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 			return
 		}
 	}
-	/*for i, bat := range data.bats {
-		writeFun := func(block *model.BatchBlock) bool {
-			if _, err = writer.WriteSubBatch(containers.ToCNBatch(block.Batch), objectio.ConvertToSchemaType(uint16(i))); err != nil {
-				return false
-			}
-			return true
+	blks, _, err := writer.Sync(context.Background())
+
+	location = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
+	for tid := range data.meta {
+		data.updateBlkDeleteLocation(tid, location)
+		data.updateBlkInsertLocation(tid, location)
+		data.updateSegmentLocation(tid, location)
+	}
+	//mocatalog
+	for tid := uint64(1); tid < 4; tid++ {
+		data.meta[tid] = NewCheckpointMeta()
+		data.updateBlkDeleteLocation(tid, location)
+		data.updateBlkInsertLocation(tid, location)
+		data.updateSegmentLocation(tid, location)
+	}
+	data.prepareMeta()
+	if err != nil {
+		return
+	}
+
+	segmentid2 := objectio.NewSegmentid()
+	name2 := objectio.BuildObjectName(segmentid2, 0)
+	writer2, err := blockio.NewBlockWriterNew(fs, name2, 0, nil)
+	if err != nil {
+		return
+	}
+	writeFun := func(block *model.BatchBlock) bool {
+		if _, err = writer2.WriteSubBatch(
+			containers.ToCNBatch(GetBatch(data.bats[MetaIDX], checkpointDataSchemas_Curr[MetaIDX])),
+			objectio.ConvertToSchemaType(uint16(MetaIDX))); err != nil {
+			return false
 		}
-		bat.Scan(writeFun)
-		if err != nil {
-			return
-		}
-	}*/
-	blks, _, err = writer.Sync(context.Background())
+		return true
+	}
+	data.bats[MetaIDX].Scan(writeFun)
+	if err != nil {
+		return
+	}
+	blks2, _, err := writer.Sync(context.Background())
+
+	location = objectio.BuildLocation(name, blks2[0].GetExtent(), 0, blks2[0].GetID())
 	return
 }
 
@@ -911,16 +952,18 @@ func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
 	version uint32,
 	reader *blockio.BlockReader,
+	fs fileservice.FileService,
 	m *mpool.MPool) (err error) {
 
-	for idx, item := range checkpointDataReferVersions[version] {
-		var bat *containers.Batch
-		bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader)
-		if err != nil {
-			return
-		}
-		data.bats[idx].Append(bat)
+	err = data.readMetaBatch(ctx, version, reader, m)
+	if err != nil {
+		return
 	}
+	err = data.readAll(ctx, version, fs)
+	if err != nil {
+		return
+	}
+
 	if version == CheckpointVersion1 {
 		bat := data.bats[TBLInsertIDX]
 		if bat == nil {

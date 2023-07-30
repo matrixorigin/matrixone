@@ -157,7 +157,7 @@ func (e *CheckpointEntry) Replay(
 	if err = data.PrefetchFrom(ctx, e.version, fs.Service, e.location); err != nil {
 		return
 	}
-	if err = data.ReadFrom(ctx, e.version, reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(ctx, e.version, reader, fs.Service, common.DefaultAllocator); err != nil {
 		return
 	}
 	readDuration = time.Since(t0)
@@ -197,6 +197,7 @@ func (e *CheckpointEntry) Read(
 		ctx,
 		e.version,
 		reader,
+		fs.Service,
 		common.DefaultAllocator,
 	); err != nil {
 		return
