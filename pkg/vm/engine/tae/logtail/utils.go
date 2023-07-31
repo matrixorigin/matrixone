@@ -956,31 +956,43 @@ func (data *CheckpointData) getMetaBatch() (bat *containers.Batch) {
 func (data *CheckpointData) replayMetaBatch() {
 	bat := data.getMetaBatch()
 	data.locations = make(map[string]objectio.Location)
+	insertVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
+	blkDelVec := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector()
+	segDelVec := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
+	blkInsertStartVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector()
+	blkInsertEndVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).GetDownstreamVector()
+	blkDelStartVec := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).GetDownstreamVector()
+	blkDelEndVec := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).GetDownstreamVector()
+	segDelStartVec := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).GetDownstreamVector()
+	segDelEndVec := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).GetDownstreamVector()
+	tidVec := bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+
 	for i := 0; i < bat.Vecs[2].Length(); i++ {
-		insLocation := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).Get(i).([]byte)
+		insLocation := insertVec.GetBytesAt(i)
 		data.locations[objectio.Location(insLocation).String()] = insLocation
-		delLocation := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).Get(i).([]byte)
+		delLocation := blkDelVec.GetBytesAt(i)
 		data.locations[objectio.Location(delLocation).String()] = delLocation
-		segLocation := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).Get(i).([]byte)
+		segLocation := segDelVec.GetBytesAt(i)
 		data.locations[objectio.Location(segLocation).String()] = segLocation
+
 		meta := &CheckpointMeta{
 			blkInsertOffset: &common.ClosedInterval{
-				Start: uint64(bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Get(i).(int32)),
-				End:   uint64(bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Get(i).(int32)),
+				Start: uint64(vector.GetFixedAt[int32](blkInsertStartVec, i)),
+				End:   uint64(vector.GetFixedAt[int32](blkInsertEndVec, i)),
 			},
 			blkInsertLocation: insLocation,
 			blkDeleteOffset: &common.ClosedInterval{
-				Start: uint64(bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Get(i).(int32)),
-				End:   uint64(bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Get(i).(int32)),
+				Start: uint64(vector.GetFixedAt[int32](blkDelStartVec, i)),
+				End:   uint64(vector.GetFixedAt[int32](blkDelEndVec, i)),
 			},
 			blkDeleteLocation: delLocation,
 			segDeleteOffset: &common.ClosedInterval{
-				Start: uint64(bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).Get(i).(int32)),
-				End:   uint64(bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Get(i).(int32)),
+				Start: uint64(vector.GetFixedAt[int32](segDelStartVec, i)),
+				End:   uint64(vector.GetFixedAt[int32](segDelEndVec, i)),
 			},
 			segDeleteLocation: segLocation,
 		}
-		tid := bat.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+		tid := vector.GetFixedAt[uint64](tidVec, i)
 		data.meta[tid] = meta
 	}
 
