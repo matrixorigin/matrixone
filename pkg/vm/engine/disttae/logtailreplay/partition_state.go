@@ -299,12 +299,10 @@ func (p *PartitionState) HandleRowsInsert(
 	if err != nil {
 		panic(err)
 	}
-	if primarySeqnum >= 0 {
-		primaryKeys = EncodePrimaryKeyVector(
-			batch.Vecs[2+primarySeqnum],
-			packer,
-		)
-	}
+	primaryKeys = EncodePrimaryKeyVector(
+		batch.Vecs[2+primarySeqnum],
+		packer,
+	)
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
@@ -327,13 +325,10 @@ func (p *PartitionState) HandleRowsInsert(
 				entry.Batch = batch
 				entry.Offset = int64(i)
 			}
-			if i < len(primaryKeys) {
-				entry.PrimaryIndexBytes = primaryKeys[i]
-			}
-
+			entry.PrimaryIndexBytes = primaryKeys[i]
 			p.rows.Set(entry)
 
-			if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
+			{
 				entry := &PrimaryIndexEntry{
 					Bytes:      primaryKeys[i],
 					RowEntryID: entry.ID,
@@ -402,6 +397,9 @@ func (p *PartitionState) HandleRowsDelete(
 			}
 
 			entry.Deleted = true
+			if i < len(primaryKeys) {
+				entry.PrimaryIndexBytes = primaryKeys[i]
+			}
 			if !p.noData {
 				entry.Batch = batch
 				entry.Offset = int64(i)
