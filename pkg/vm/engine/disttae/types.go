@@ -183,7 +183,9 @@ type Transaction struct {
 }
 
 type Pos struct {
-	idx     int
+	bat     *batch.Batch
+	tbName  string
+	dbName  string
 	offset  int64
 	blkInfo catalog.BlockInfo
 }
@@ -216,14 +218,6 @@ func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets
 	defer b.RUnlock()
 	res := b.offsets[*blockID]
 	*offsets = append(*offsets, res...)
-}
-
-func (b *deletedBlocks) removeBlockDeletedInfos(ids []*types.Blockid) {
-	b.Lock()
-	defer b.Unlock()
-	for _, id := range ids {
-		delete(b.offsets, *id)
-	}
 }
 
 func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
