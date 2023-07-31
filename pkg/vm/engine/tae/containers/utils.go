@@ -16,7 +16,6 @@ package containers
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,6 +34,41 @@ func FillConstVector(length int, typ types.Type, defautV any) Vector {
 func FillCNConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) *movec.Vector {
 	// TODO(aptend): use default value
 	return movec.NewConstNull(typ, length, m)
+}
+
+func SplitDNBatch(dnBat *Batch, splitLen int) []*Batch {
+	dnBats := make([]*Batch, 0)
+	length := dnBat.Length()
+	if length == 0 {
+		for _, vec := range dnBat.Vecs {
+			if vec.Length() > 0 {
+				length = vec.Length()
+				break
+			}
+		}
+		if length == 0 {
+			dnBats = append(dnBats, dnBat)
+			return dnBats
+		}
+	}
+	for i := range dnBat.Vecs {
+		if dnBat.Vecs[i].Length() == 0 {
+			for l := 0; l < length; l++ {
+				dnBat.Vecs[i].Append(nil, true)
+			}
+		}
+	}
+	offset := 0
+	for {
+		if length < splitLen {
+			dnBats = append(dnBats, dnBat.Window(offset, length))
+			return dnBats
+		}
+		dnBats = append(dnBats, dnBat.Window(offset, splitLen))
+		offset += splitLen
+		length -= splitLen
+	}
+	return dnBats
 }
 
 // ### Shallow copy Functions

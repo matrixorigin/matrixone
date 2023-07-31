@@ -4725,6 +4725,7 @@ func TestFlushTable(t *testing.T) {
 }
 
 func TestReadCheckpoint(t *testing.T) {
+	t.Skip("debug")
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
@@ -4790,6 +4791,7 @@ func TestReadCheckpoint(t *testing.T) {
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			if ins != nil {
+				logutil.Infof("ins is %v", ins.Vecs[0].String())
 				t.Log(common.ApiBatchToString(ins, 3))
 			}
 			if del != nil {

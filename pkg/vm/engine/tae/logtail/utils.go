@@ -38,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
+const CheckpointBlockRows = 10
+
 const (
 	CheckpointVersion1 uint32 = 1
 	CheckpointVersion2 uint32 = 2
@@ -414,25 +416,42 @@ func (data *CNCheckpointData) ReadFrom(
 	m *mpool.MPool,
 ) (err error) {
 
-	var bat *batch.Batch
+	var metaBats []*batch.Batch
 	metaIdx := checkpointDataReferVersions[version][MetaIDX]
-	bat, err = LoadCNSubBlkColumnsByMeta(ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, m)
+	metaBats, err = LoadCNSubBlkColumnsByMeta(ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, m)
 	if err != nil {
 		return
 	}
-	data.bats[MetaIDX] = bat
-	key := objectio.Location(bat.Vecs[5].GetBytesAt(0))
+	metaBat := metaBats[0]
+	data.bats[MetaIDX] = metaBat
+	key := objectio.Location(metaBat.Vecs[5].GetBytesAt(0))
 	for idx, item := range checkpointDataReferVersions[version] {
 		if uint16(idx) == MetaIDX {
 			continue
 		}
 		reader, err = blockio.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), key)
-		var bat *batch.Batch
-		bat, err = LoadCNSubBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader, m)
+		var bats []*batch.Batch
+		bats, err = LoadCNSubBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader, m)
 		if err != nil {
 			return
 		}
-		data.bats[idx] = bat
+		for _, bat := range bats {
+			if data.bats[idx] == nil {
+				cnBatch := batch.NewWithSize(len(bat.Vecs))
+				for i := range cnBatch.Vecs {
+					cnBatch.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+					if err = cnBatch.Vecs[i].UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, m); err != nil {
+						return
+					}
+				}
+				data.bats[idx] = cnBatch
+			} else {
+				data.bats[idx], err = data.bats[idx].Append(ctx, m, bat)
+				if err != nil {
+					return
+				}
+			}
+		}
 	}
 	if version == CheckpointVersion1 {
 		bat := data.bats[TBLInsertIDX]
@@ -581,6 +600,7 @@ func (data *CNCheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel 
 	insInterval := meta.blkInsertOffset
 	if insInterval != nil && insInterval.End-insInterval.Start > 0 {
 		insTaeBat = data.bats[BLKMetaInsertIDX]
+		logutil.Infof("insTaeBat is %d", len(insTaeBat.Vecs))
 		windowCNBatch(insTaeBat, insInterval.Start, insInterval.End)
 		ins, err = batch.BatchToProtoBatch(insTaeBat)
 		if err != nil {
@@ -761,8 +781,14 @@ func (data *CheckpointData) WriteTo(
 		if i == int(MetaIDX) {
 			continue
 		}
-		if _, err = writer.WriteSubBatch(containers.ToCNBatch(data.bats[i]), objectio.ConvertToSchemaType(uint16(i))); err != nil {
-			return
+		bats := containers.SplitDNBatch(data.bats[i], CheckpointBlockRows)
+		for _, bat := range bats {
+			//if i == 21 {
+			logutil.Infof("bats111 is %d name is %v", bat.Length(), name)
+			//}
+			if _, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
+				return
+			}
 		}
 	}
 	blks, _, err := writer.Sync(context.Background())
@@ -811,30 +837,33 @@ func LoadBlkColumnsByMeta(
 	colNames []string,
 	id uint16,
 	reader *blockio.BlockReader,
-) (*containers.Batch, error) {
-	bat := containers.NewBatch()
+) ([]*containers.Batch, error) {
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResult, err := reader.LoadSubColumns(cxt, idxs, nil, id, nil)
+	ioResults, err := reader.LoadSubColumns(cxt, idxs, nil, id, nil)
 	if err != nil {
 		return nil, err
 	}
+	bats := make([]*containers.Batch, 0)
+	for _, ioResult := range ioResults {
+		bat := containers.NewBatch()
+		for i, idx := range idxs {
+			pkgVec := ioResult.Vecs[i]
+			var vec containers.Vector
+			if pkgVec.Length() == 0 {
+				vec = containers.MakeVector(colTypes[i])
+			} else {
+				vec = containers.ToDNVector(pkgVec)
+			}
+			bat.AddVector(colNames[idx], vec)
+			bat.Vecs[i] = vec
 
-	for i, idx := range idxs {
-		pkgVec := ioResult.Vecs[i]
-		var vec containers.Vector
-		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(colTypes[i])
-		} else {
-			vec = containers.ToDNVector(pkgVec)
 		}
-		bat.AddVector(colNames[idx], vec)
-		bat.Vecs[i] = vec
-
+		bats = append(bats, bat)
 	}
-	return bat, nil
+	return bats, nil
 }
 
 func LoadCNSubBlkColumnsByMeta(
@@ -844,26 +873,20 @@ func LoadCNSubBlkColumnsByMeta(
 	id uint16,
 	reader *blockio.BlockReader,
 	m *mpool.MPool,
-) (*batch.Batch, error) {
+) ([]*batch.Batch, error) {
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResult, err := reader.LoadSubColumns(cxt, idxs, nil, id, nil)
+	ioResults, err := reader.LoadSubColumns(cxt, idxs, nil, id, m)
 	if err != nil {
 		return nil, err
 	}
-	ioResult.Attrs = make([]string, len(colNames))
-	copy(ioResult.Attrs, colNames)
-	maxLength := 0
-	for _, vec := range ioResult.Vecs {
-		length := vec.Length()
-		if maxLength < length {
-			maxLength = length
-		}
+	for i := range ioResults {
+		ioResults[i].Attrs = make([]string, len(colNames))
+		copy(ioResults[i].Attrs, colNames)
 	}
-	ioResult.SetRowCount(maxLength)
-	return ioResult, nil
+	return ioResults, nil
 }
 
 func (data *CheckpointData) PrefetchFrom(
@@ -978,13 +1001,13 @@ func (data *CheckpointData) readMetaBatch(
 	reader *blockio.BlockReader,
 	m *mpool.MPool,
 ) (err error) {
-	var bat *containers.Batch
+	var bats []*containers.Batch
 	item := checkpointDataReferVersions[version][MetaIDX]
-	bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(0), reader)
+	bats, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(0), reader)
 	if err != nil {
 		return
 	}
-	data.setMetaBatch(bat)
+	data.setMetaBatch(bats[0])
 	return
 }
 func (data *CheckpointData) setMetaBatch(bat *containers.Batch) {
@@ -1071,21 +1094,24 @@ func (data *CheckpointData) readAll(
 	data.replayMetaBatch()
 	for _, val := range data.locations {
 		var reader *blockio.BlockReader
+		logutil.Infof("va is %v", val.String())
 		reader, err = blockio.NewObjectReader(service, val)
 		if err != nil {
 			return
 		}
-		var bat *containers.Batch
+		var bats []*containers.Batch
 		for idx := range checkpointDataReferVersions[version] {
 			if uint16(idx) == MetaIDX {
 				continue
 			}
 			item := checkpointDataReferVersions[version][idx]
-			bat, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader)
+			bats, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader)
 			if err != nil {
 				return
 			}
-			data.bats[idx].Append(bat)
+			for i := range bats {
+				data.bats[idx].Append(bats[i])
+			}
 		}
 	}
 	return

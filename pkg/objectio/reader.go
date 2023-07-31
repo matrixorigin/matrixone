@@ -162,19 +162,28 @@ func (r *objectReaderV1) ReadOneBlock(
 	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory)
 }
 
-func (r *objectReaderV1) ReadOneSubBlock(
+func (r *objectReaderV1) ReadSubBlock(
 	ctx context.Context,
 	idxs []uint16,
 	typs []types.Type,
 	blk uint16,
 	m *mpool.MPool,
-) (ioVec *fileservice.IOVector, err error) {
+) (ioVecs []*fileservice.IOVector, err error) {
 	var metaHeader ObjectMeta
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
 	meta, _ := metaHeader.SubMeta(blk)
-	return ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID(), idxs, typs, m, r.fs, constructorFactory)
+	ioVecs = make([]*fileservice.IOVector, 0)
+	for i := uint32(0); i < meta.BlockCount(); i++ {
+		var ioVec *fileservice.IOVector
+		ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID()+uint16(i), idxs, typs, m, r.fs, constructorFactory)
+		if err != nil {
+			return
+		}
+		ioVecs = append(ioVecs, ioVec)
+	}
+	return
 }
 
 func (r *objectReaderV1) ReadAll(

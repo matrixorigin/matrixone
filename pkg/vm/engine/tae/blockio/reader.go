@@ -136,25 +136,29 @@ func (r *BlockReader) LoadSubColumns(
 	typs []types.Type,
 	blk uint16,
 	m *mpool.MPool,
-) (bat *batch.Batch, err error) {
+) (bats []*batch.Batch, err error) {
 	metaExt := r.reader.GetMetaExtent()
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	var ioVectors *fileservice.IOVector
-	ioVectors, err = r.reader.ReadOneSubBlock(ctx, cols, typs, blk, m)
+	var ioVectors []*fileservice.IOVector
+	ioVectors, err = r.reader.ReadSubBlock(ctx, cols, typs, blk, m)
 	if err != nil {
 		return
 	}
-	bat = batch.NewWithSize(len(cols))
-	var obj any
-	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].ObjectBytes)
-		if err != nil {
-			return
+	bats = make([]*batch.Batch, 0)
+	for idx := range ioVectors {
+		bat := batch.NewWithSize(len(cols))
+		var obj any
+		for i := range cols {
+			obj, err = objectio.Decode(ioVectors[idx].Entries[i].ObjectBytes)
+			if err != nil {
+				return
+			}
+			bat.Vecs[i] = obj.(*vector.Vector)
+			bat.SetRowCount(bat.Vecs[i].Length())
 		}
-		bat.Vecs[i] = obj.(*vector.Vector)
-		bat.SetRowCount(bat.Vecs[i].Length())
+		bats = append(bats, bat)
 	}
 	return
 }
