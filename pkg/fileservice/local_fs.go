@@ -17,7 +17,6 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -52,10 +51,6 @@ type LocalFS struct {
 
 var _ FileService = new(LocalFS)
 
-const (
-	localFSSentinelFileName = ".thisisalocalfileservicedir"
-)
-
 func NewLocalFS(
 	ctx context.Context,
 	name string,
@@ -72,35 +67,13 @@ func NewLocalFS(
 		if err != nil {
 			return nil, err
 		}
-		err = os.WriteFile(filepath.Join(rootPath, localFSSentinelFileName), nil, 0644)
-		if err != nil {
-			return nil, err
-		}
 
 	} else if err != nil {
 		// stat error
 		return nil, err
 
 	} else {
-		// existed, check if a real file service dir
 		defer f.Close()
-		entries, err := f.ReadDir(1)
-		if len(entries) == 0 {
-			if errors.Is(err, io.EOF) {
-				// empty dir, ok
-			} else if err != nil {
-				// ReadDir error
-				return nil, err
-			}
-		} else {
-			// not empty, check sentinel file
-			_, err := os.Stat(filepath.Join(rootPath, localFSSentinelFileName))
-			if os.IsNotExist(err) {
-				return nil, moerr.NewInternalErrorNoCtx("%s is not a file service dir", rootPath)
-			} else if err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	// create tmp dir
