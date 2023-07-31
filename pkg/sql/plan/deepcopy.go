@@ -655,7 +655,11 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 		AlterTable := &plan.AlterTable{
 			Database:       df.AlterTable.Database,
 			TableDef:       DeepCopyTableDef(df.AlterTable.TableDef),
+			CopyTableDef:   DeepCopyTableDef(df.AlterTable.CopyTableDef),
 			IsClusterTable: df.AlterTable.IsClusterTable,
+			AlgorithmType:  df.AlterTable.AlgorithmType,
+			CreateTableSql: df.AlterTable.CreateTableSql,
+			InsertDataSql:  df.AlterTable.InsertDataSql,
 			Actions:        make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
 		}
 		for i, action := range df.AlterTable.Actions {

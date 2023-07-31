@@ -46,6 +46,22 @@ const (
 	MOAutoIncrTable = "mo_increment_columns"
 )
 
+var InternalColumns = map[string]int8{
+	Row_ID:                   0,
+	PrefixPriColName:         0,
+	PrefixCBColName:          0,
+	PrefixIndexTableName:     0,
+	CPrimaryKeyColName:       0,
+	FakePrimaryKeyColName:    0,
+	IndexTableIndexColName:   0,
+	IndexTablePrimaryColName: 0,
+}
+
+var InternalTableNames = map[string]int8{
+	IndexTableNamePrefix: 0,
+	MOAutoIncrTable:      0,
+}
+
 func ContainExternalHidenCol(col string) bool {
 	return col == ExternalFilePath
 }

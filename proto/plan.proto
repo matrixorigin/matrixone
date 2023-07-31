@@ -1057,6 +1057,12 @@ message AlterDropCol {
 }
 
 message AlterTable {
+	enum AlgorithmType {
+		DEFAULT = 0;
+		COPY  = 1;
+		INSTANT  = 2;
+		INPLACE  = 3;
+	}
 	message Action {
 		oneof action {
 			AlterTableDrop drop 	= 1;
@@ -1069,10 +1075,14 @@ message AlterTable {
 			AlterDropCol drop_col = 8;
 		};
 	}
-	string database			= 1;
-	TableDef table_def 		= 2;
-	bool is_cluster_table	= 3;
-	repeated Action actions = 4;
+	string database			      = 1;
+	TableDef table_def 		    = 2;
+	TableDef copy_table_def 	= 3;
+	bool is_cluster_table	    = 4;
+	repeated Action actions   = 5;
+	AlgorithmType algorithm_type = 6;
+	string create_table_sql = 7;
+	string insert_data_sql = 8;
 }
 
 message DropTable {
