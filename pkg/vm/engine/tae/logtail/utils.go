@@ -1407,6 +1407,41 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkMetaInsBat := collector.data.bats[BLKMetaInsertIDX]
 	blkMetaInsTxnBat := collector.data.bats[BLKMetaInsertTxnIDX]
 
+	blkDNMetaDelRowIDVec := blkDNMetaDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector()
+	blkDNMetaDelCommitTsVec := blkDNMetaDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
+	blkDNMetaDelTxnDBIDVec := blkDNMetaDelTxnBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
+	blkDNMetaDelTxnTIDVec := blkDNMetaDelTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	blkDNMetaDelTxnMetaLocVec := blkDNMetaDelTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
+	blkDNMetaDelTxnDeltaLocVec := blkDNMetaDelTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
+
+	blkDNMetaInsRowIDVec := blkDNMetaInsBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector()
+	blkDNMetaInsCommitTimeVec := blkDNMetaInsBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
+	blkDNMetaInsIDVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_ID).GetDownstreamVector()
+	blkDNMetaInsStateVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_EntryState).GetDownstreamVector()
+	blkDNMetaInsMetaLocVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
+	blkDNMetaInsDelLocVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
+	blkDNMetaInsSortedVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_Sorted).GetDownstreamVector()
+	blkDNMetaInsSegIDVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).GetDownstreamVector()
+	blkDNMetaInsCommitTsVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).GetDownstreamVector()
+
+	blkDNMetaInsTxnDBIDVec := blkDNMetaInsTxnBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
+	blkDNMetaInsTxnTIDVec := blkDNMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	blkDNMetaInsTxnMetaLocVec := blkDNMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
+	blkDNMetaInsTxnDeltaLocVec := blkDNMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
+
+	// blkMetaDelRowIDVec := blkMetaDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector()
+	// blkMetaDelCommitTsVec := blkMetaDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
+	// blkMetaDelTxnDBIDVec := blkMetaDelTxnBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
+	// blkMetaDelTxnTIDVec := blkMetaDelTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	// blkMetaDelTxnMetaLocVec := blkMetaDelTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
+	// blkMetaDelTxnDeltaLocVec := blkMetaDelTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
+
+	// blkCNMetaInsRowIDVec := blkCNMetaInsBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector()
+	// blkMetaInsRowIDVec := blkMetaInsBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector()
+	// blkMetaInsCommitTsVec := blkMetaInsBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
+	// blkMetaInsTxnDBIDVec := blkMetaInsTxnBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
+	// blkMetaInsTxnTIDVec := blkMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
 			continue
@@ -1414,32 +1449,127 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 		metaNode := node
 		if metaNode.BaseNode.MetaLoc.IsEmpty() || metaNode.Aborted {
 			if metaNode.HasDropCommitted() {
-				blkDNMetaDelBat.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&entry.ID), false)
-				blkDNMetaDelBat.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd(), false)
-				blkDNMetaDelTxnBat.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetSegment().GetTable().GetDB().GetID(), false)
-				blkDNMetaDelTxnBat.GetVectorByName(SnapshotAttr_TID).Append(entry.GetSegment().GetTable().GetID(), false)
+				vector.AppendFixed(
+					blkDNMetaDelRowIDVec,
+					blockid2rowid(&entry.ID),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaDelCommitTsVec,
+					metaNode.GetEnd(),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaDelTxnDBIDVec,
+					entry.GetSegment().GetTable().GetDB().GetID(),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaDelTxnTIDVec,
+					entry.GetSegment().GetTable().GetID(),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendBytes(
+					blkDNMetaDelTxnMetaLocVec,
+					[]byte(metaNode.BaseNode.MetaLoc),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendBytes(
+					blkDNMetaDelTxnDeltaLocVec,
+					[]byte(metaNode.BaseNode.DeltaLoc),
+					false,
+					common.DefaultAllocator,
+				)
 				metaNode.TxnMVCCNode.AppendTuple(blkDNMetaDelTxnBat)
-				blkDNMetaDelTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.BaseNode.MetaLoc), false)
-				blkDNMetaDelTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.BaseNode.DeltaLoc), false)
 			} else {
-				blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(entry.ID, false)
-				blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(entry.IsAppendable(), false)
-				blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.BaseNode.MetaLoc), false)
-				blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.BaseNode.DeltaLoc), false)
-				blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(metaNode.GetEnd(), false)
+				vector.AppendFixed(
+					blkDNMetaInsIDVec,
+					entry.ID,
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaInsStateVec,
+					entry.IsAppendable(),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaInsCommitTsVec,
+					metaNode.GetEnd(),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendBytes(
+					blkDNMetaInsMetaLocVec,
+					[]byte(metaNode.BaseNode.MetaLoc),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendBytes(
+					blkDNMetaInsDelLocVec,
+					[]byte(metaNode.BaseNode.DeltaLoc),
+					false,
+					common.DefaultAllocator,
+				)
 				is_sorted := false
 				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
 				}
-				blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted, false)
-				blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(entry.GetSegment().ID, false)
-				blkDNMetaInsBat.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.CreatedAt, false)
-				blkDNMetaInsBat.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&entry.ID), false)
-				blkDNMetaInsTxnBat.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetSegment().GetTable().GetDB().GetID(), false)
-				blkDNMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID).Append(entry.GetSegment().GetTable().GetID(), false)
+				vector.AppendFixed(
+					blkDNMetaInsSortedVec,
+					is_sorted,
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaInsSegIDVec,
+					entry.GetSegment().ID,
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaInsCommitTimeVec,
+					metaNode.CreatedAt,
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaInsRowIDVec,
+					blockid2rowid(&entry.ID),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaInsTxnDBIDVec,
+					entry.GetSegment().GetTable().GetDB().GetID(),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					blkDNMetaInsTxnTIDVec,
+					entry.GetSegment().GetTable().GetID(),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendBytes(
+					blkDNMetaInsTxnMetaLocVec,
+					[]byte(metaNode.BaseNode.MetaLoc),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendBytes(
+					blkDNMetaInsTxnDeltaLocVec,
+					[]byte(metaNode.BaseNode.DeltaLoc),
+					false,
+					common.DefaultAllocator,
+				)
 				metaNode.TxnMVCCNode.AppendTuple(blkDNMetaInsTxnBat)
-				blkDNMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.BaseNode.MetaLoc), false)
-				blkDNMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.BaseNode.DeltaLoc), false)
 			}
 		} else {
 			if metaNode.HasDropCommitted() {
