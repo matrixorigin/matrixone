@@ -38,6 +38,7 @@ func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (
 	deleteCond := ""
 
 	if len(stmt.Columns) != 0 {
+		// replace into table set col1 = val1, col2 = val2, ...
 		row := stmt.Rows.Select.(*tree.ValuesClause).Rows[0]
 		keyToRow := getKeyToRowMatch(stmt.Columns)
 		keepKeys := filterKeys(keys, stmt.Columns)
@@ -47,22 +48,17 @@ func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (
 		}
 		deleteCond = strings.Join(disjunction, " or ")
 	} else {
+		// replace into table values (...);
 		keyToRow := make(map[string]int, len(tableDef.Cols))
 		for i, col := range tableDef.Cols {
 			keyToRow[col.Name] = i
 		}
 
 		rows := stmt.Rows.Select.(*tree.ValuesClause).Rows
-		disjunction := make([]string, 0, len(rows))
+		disjunction := make([]string, 0, len(rows)*len(keys))
 		for _, row := range rows {
 			for _, key := range keys {
-				conjunction := make([]string, 0, len(tableDef.Cols))
-				for k := range key {
-					fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-					row[keyToRow[k]].Format(fmtctx)
-					conjunction = append(conjunction, fmt.Sprintf("%s in (select %s)", k, fmtctx.String()))
-				}
-				disjunction = append(disjunction, "("+strings.Join(conjunction, " and ")+")")
+				disjunction = append(disjunction, buildConjunction(key, row, keyToRow))
 			}
 		}
 		deleteCond = strings.Join(disjunction, " or ")
