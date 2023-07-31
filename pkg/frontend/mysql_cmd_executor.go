@@ -2173,6 +2173,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			i: st,
 		}
+	case *tree.Replace:
+		ret = &ReplaceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			r: st,
+		}
 	case *tree.Load:
 		ret = &LoadExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
@@ -2571,7 +2578,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				}
 				ses.SetSeqLastValue(proc)
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
-				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
+				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update, *tree.Replace,
 				*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
 				*tree.CreateSequence, *tree.DropSequence,
 				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
@@ -3231,7 +3238,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.CreateIndex, *tree.DropIndex,
 		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
 		*tree.CreateSequence, *tree.DropSequence,
-		*tree.Insert, *tree.Update,
+		*tree.Insert, *tree.Update, *tree.Replace,
 		*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 		*tree.SetVar,
 		*tree.Load,
