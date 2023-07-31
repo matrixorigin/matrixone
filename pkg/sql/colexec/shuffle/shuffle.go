@@ -64,7 +64,7 @@ func (arg *Argument) initShuffle() {
 	if arg.ctr.sels == nil {
 		arg.ctr.sels = make([][]int32, arg.AliveRegCnt)
 		for i := 0; i < int(arg.AliveRegCnt); i++ {
-			arg.ctr.sels[i] = make([]int32, shuffleBatchSize/arg.AliveRegCnt)
+			arg.ctr.sels[i] = make([]int32, shuffleBatchSize/arg.AliveRegCnt*2)
 		}
 		arg.ctr.shuffledBats = make([]*batch.Batch, arg.AliveRegCnt)
 	}
@@ -182,7 +182,7 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 }
 
 func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) process.ExecStatus {
-	threshHold := shuffleBatchSize
+	threshHold := shuffleBatchSize * 3 / 4
 	if isEnding {
 		threshHold = 0
 	}
