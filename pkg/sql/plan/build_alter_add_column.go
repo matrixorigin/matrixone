@@ -399,7 +399,7 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 		}
 		for _, referredFK := range refTableDef.Fkeys {
 			if referredFK.ForeignTbl == tbInfo.TblId {
-				for i, _ := range referredFK.Cols {
+				for i := 0; i < len(referredFK.Cols); i++ {
 					if referredFK.ForeignCols[i] == targetCol.ColId {
 						return moerr.NewErrFkColumnCannotDropChild(ctx.GetContext(), colName, referredFK.Name, refTableDef.Name)
 					}
