@@ -789,17 +789,19 @@ func (s *Scope) replace(c *Compile) error {
 	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
 	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
 
+	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		_, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
 		if err != nil {
 			return err
 		}
+		delAffectedRows = result.AffectedRows
 	}
 
-	_, err := c.runSqlWithResult(strings.ReplaceAll(c.sql, "replace", "insert"))
+	result, err := c.runSqlWithResult(strings.Replace(c.sql, "replace", "insert", 1))
 	if err != nil {
 		return err
 	}
-
+	c.addAffectedRows(result.AffectedRows + delAffectedRows)
 	return nil
 }
