@@ -223,9 +223,6 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 // Do not add CN's StartTaskRunner info to log string, because there has user and password.
 func (m *ScheduleCommand) LogString() string {
 	c := func(s string) string {
-		if len(s) > 6 {
-			return s[:6]
-		}
 		return s
 	}
 

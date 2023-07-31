@@ -31,35 +31,18 @@ func (p *PartitionState) PrimaryKeyMayBeModified(
 	lastFlushTimestamp := p.shared.lastFlushTimestamp
 	p.shared.Unlock()
 
-	changed := true
 	if !lastFlushTimestamp.IsEmpty() {
-		if from.Greater(lastFlushTimestamp) {
-			changed = false
+		if from.LessEq(lastFlushTimestamp) {
+			return true
 		}
-	} else {
-		changed = false
-	}
-	if changed {
-		return true
 	}
 
 	iter := p.primaryIndex.Copy().Iter()
 	defer iter.Release()
 
-	seek := false
-	for {
-		if !seek {
-			seek = true
-			if !iter.Seek(&PrimaryIndexEntry{
-				Bytes: key,
-			}) {
-				return false
-			}
-		} else {
-			if !iter.Next() {
-				break
-			}
-		}
+	for ok := iter.Seek(&PrimaryIndexEntry{
+		Bytes: key,
+	}); ok; ok = iter.Next() {
 
 		entry := iter.Item()
 
