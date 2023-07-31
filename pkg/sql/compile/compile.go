@@ -3211,7 +3211,8 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
 		WithTxn(c.proc.TxnOperator).
-		WithDatabase(c.db)
+		WithDatabase(c.db).
+		WithTimeZone(c.proc.SessionInfo.TimeZone)
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
