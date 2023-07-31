@@ -975,19 +975,17 @@ insert into td(d) select d+90 from td;
 insert into td(d) select d+100 from td;
 insert into td(d) select d+200 from td;
 insert into td(d) select d+300 from td;
--- @bvt:issue#10501
 insert into td(d) select d+400 from td;
 insert into td(d) select d+500 from td;
 insert into td(d) select d+600 from td;
 insert into td(d) select d+700 from td;
 insert into td(d) select d+800 from td;
 insert into td(d) select d+900 from td;
-
 insert into td(d) select d+1000 from td;
 insert into td(d) select d+2000 from td;
 insert into td(d) select d+3000 from td;
 select count(*) from td;
--- @bvt:issue
+
 
 -- @bvt:issue#10381
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
