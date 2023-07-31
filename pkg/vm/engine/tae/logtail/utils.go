@@ -78,11 +78,6 @@ const (
 	BLKDNMetaDeleteTxnIDX
 
 	BLKCNMetaInsertIDX
-
-	BLKInsertIDX
-	BLKInsertTxnIDX
-	BLKDeleteIDX
-	BLKDeleteTxnIDX
 )
 
 const MaxIDX = BLKCNMetaInsertIDX + 1
