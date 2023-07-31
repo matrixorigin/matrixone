@@ -50,10 +50,10 @@ func startCluster(
 		return err
 	}
 
-	backup.SaveLaunchConfigPath([]string{*launchFile})
-	backup.SaveLaunchConfigPath(cfg.LogServiceConfigFiles)
-	backup.SaveLaunchConfigPath(cfg.DNServiceConfigsFiles)
-	backup.SaveLaunchConfigPath(cfg.CNServiceConfigsFiles)
+	backup.SaveLaunchConfigPath(backup.LaunchConfig, []string{*launchFile})
+	backup.SaveLaunchConfigPath(backup.LogConfig, cfg.LogServiceConfigFiles)
+	backup.SaveLaunchConfigPath(backup.DnConfig, cfg.DNServiceConfigsFiles)
+	backup.SaveLaunchConfigPath(backup.CnConfig, cfg.CNServiceConfigsFiles)
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet, shutdownC); err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func startCluster(
 		return err
 	}
 	if *withProxy {
-		backup.SaveLaunchConfigPath(cfg.ProxyServiceConfigsFiles)
+		backup.SaveLaunchConfigPath(backup.ProxyConfig, cfg.ProxyServiceConfigsFiles)
 		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
 			return err
 		}
