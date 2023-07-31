@@ -627,33 +627,46 @@ func windowCNBatch(bat *batch.Batch, start, end uint64) {
 
 func (data *CheckpointData) prepareMeta(key []byte) {
 	bat := data.bats[MetaIDX]
+	blkInsStart := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector()
+	blkInsEnd := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).GetDownstreamVector()
+	blkInsLoc := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
+
+	blkDelStart := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).GetDownstreamVector()
+	blkDelEnd := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).GetDownstreamVector()
+	blkDelLoc := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector()
+
+	segDelStart := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).GetDownstreamVector()
+	segDelEnd := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).GetDownstreamVector()
+	segDelLoc := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
+
+	tidVec := bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+
 	for tid, meta := range data.meta {
-		bat.GetVectorByName(SnapshotAttr_TID).Append(tid, false)
+		vector.AppendFixed(tidVec, tid, false, common.DefaultAllocator)
 		if meta.blkInsertOffset == nil {
-			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Append(int32(-1), false)
-			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Append(int32(-1), false)
+			vector.AppendFixed(blkInsStart, int32(-1), false, common.DefaultAllocator)
+			vector.AppendFixed(blkInsEnd, int32(-1), false, common.DefaultAllocator)
 		} else {
-			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).Append(int32(meta.blkInsertOffset.Start), false)
-			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Append(int32(meta.blkInsertOffset.End), false)
-			bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).Append(key, false)
+			vector.AppendFixed(blkInsStart, int32(meta.blkInsertOffset.Start), false, common.DefaultAllocator)
+			vector.AppendFixed(blkInsEnd, int32(meta.blkInsertOffset.End), false, common.DefaultAllocator)
 		}
-		bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).Append(key, false)
+		vector.AppendBytes(blkInsLoc, key, false, common.DefaultAllocator)
 		if meta.blkDeleteOffset == nil {
-			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Append(int32(-1), false)
-			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Append(int32(-1), false)
+			vector.AppendFixed(blkDelStart, int32(-1), false, common.DefaultAllocator)
+			vector.AppendFixed(blkDelEnd, int32(-1), false, common.DefaultAllocator)
 		} else {
-			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Append(int32(meta.blkDeleteOffset.Start), false)
-			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Append(int32(meta.blkDeleteOffset.End), false)
+			vector.AppendFixed(blkDelStart, int32(meta.blkDeleteOffset.Start), false, common.DefaultAllocator)
+			vector.AppendFixed(blkDelEnd, int32(meta.blkDeleteOffset.End), false, common.DefaultAllocator)
 		}
-		bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).Append(key, false)
+		vector.AppendBytes(blkDelLoc, key, false, common.DefaultAllocator)
 		if meta.segDeleteOffset == nil {
-			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).Append(int32(-1), false)
-			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Append(int32(-1), false)
+			vector.AppendFixed(segDelStart, int32(-1), false, common.DefaultAllocator)
+			vector.AppendFixed(segDelEnd, int32(-1), false, common.DefaultAllocator)
 		} else {
-			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).Append(int32(meta.segDeleteOffset.Start), false)
-			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Append(int32(meta.segDeleteOffset.End), false)
+			vector.AppendFixed(segDelStart, int32(meta.segDeleteOffset.Start), false, common.DefaultAllocator)
+			vector.AppendFixed(segDelEnd, int32(meta.segDeleteOffset.End), false, common.DefaultAllocator)
 		}
-		bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).Append(key, false)
+		vector.AppendBytes(segDelLoc, key, false, common.DefaultAllocator)
 	}
 }
 
@@ -1774,10 +1787,6 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					false,
 					common.DefaultAllocator,
 				)
-				// blkMetaInsTxnBat.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetSegment().GetTable().GetDB().GetID(), false)
-				// blkMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID).Append(entry.GetSegment().GetTable().GetID(), false)
-				// blkMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(metaNode.BaseNode.MetaLoc), false)
-				// blkMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(metaNode.BaseNode.DeltaLoc), false)
 
 				metaNode.TxnMVCCNode.AppendTuple(blkMetaInsTxnBat)
 			}
