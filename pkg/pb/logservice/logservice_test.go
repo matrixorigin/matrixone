@@ -333,7 +333,7 @@ func TestLogString(t *testing.T) {
 				},
 				ServiceType: LogService,
 			},
-			expected: "L/Start storeA storeA:1:1:0 [1:storeA 2:storeB 3:storeC]",
+			expected: "L/Start storeA storeA:1:1:0 [1:storeA123 2:storeB 3:storeC]",
 		},
 	}
 
