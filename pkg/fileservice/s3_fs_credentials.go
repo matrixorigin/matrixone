@@ -35,6 +35,7 @@ func getCredentialsProvider(
 	region string,
 	apiKey string,
 	apiSecret string,
+	sessionToken string,
 	roleARN string,
 	externalID string,
 ) (
@@ -125,7 +126,7 @@ func getCredentialsProvider(
 	// static credential
 	if apiKey != "" && apiSecret != "" {
 		// static
-		return credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
+		return credentials.NewStaticCredentialsProvider(apiKey, apiSecret, sessionToken)
 	}
 
 	return
@@ -156,6 +157,12 @@ func newAliyunCredentialsProvider(
 					return err
 				}
 				cs.SecretAccessKey = *secretAccessKey
+
+				sessionToken, err := cred.GetSecurityToken()
+				if err != nil {
+					return err
+				}
+				cs.SessionToken = *sessionToken
 
 				return nil
 			}
@@ -208,12 +215,19 @@ func newAliyunCredentialsProvider(
 			}
 			cs.SecretAccessKey = *secretAccessKey
 
+			sessionToken, err := aliCredential.GetSecurityToken()
+			if err != nil {
+				return
+			}
+			cs.SessionToken = *sessionToken
+
 			// with role arn
 			if roleARN != "" {
 				config := new(alicredentials.Config)
 				config.SetType("ram_role_arn")
 				config.SetAccessKeyId(*accessKeyID)
 				config.SetAccessKeySecret(*secretAccessKey)
+				config.SetSecurityToken(*sessionToken)
 				config.SetRoleArn(roleARN)
 				config.SetRoleSessionName(externalID)
 				var cred alicredentials.Credential
@@ -249,6 +263,7 @@ func newTencentCloudCredentialsProvider(
 
 			cs.AccessKeyID = credentials.GetSecretId()
 			cs.SecretAccessKey = credentials.GetSecretKey()
+			cs.SessionToken = credentials.GetToken()
 
 			// with role arn
 			if roleARN != "" {
@@ -264,6 +279,7 @@ func newTencentCloudCredentialsProvider(
 				}
 				cs.AccessKeyID = cred.GetSecretId()
 				cs.SecretAccessKey = cred.GetSecretKey()
+				cs.SessionToken = cred.GetToken()
 			}
 
 			return
