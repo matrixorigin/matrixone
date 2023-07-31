@@ -81,6 +81,19 @@ const (
 
 const MaxIDX = BLKCNMetaInsertIDX + 1
 
+const (
+	Checkpoint_Meta_TID_IDX                = 2
+	Checkpoint_Meta_Insert_Block_Start_IDX = 3
+	Checkpoint_Meta_Insert_Block_End_IDX   = 4
+	Checkpoint_Meta_Insert_Block_LOC       = 5
+	Checkpoint_Meta_Delete_Block_Start_IDX = 6
+	Checkpoint_Meta_Delete_Block_End_IDX   = 7
+	Checkpoint_Meta_Delete_Block_LOC       = 8
+	Checkpoint_Meta_Segment_Start_IDX      = 9
+	Checkpoint_Meta_Segment_End_IDX        = 10
+	Checkpoint_Meta_Segment_LOC            = 11
+)
+
 type checkpointDataItem struct {
 	schema *catalog.Schema
 	types  []types.Type
@@ -312,7 +325,8 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 
 func (data *CheckpointData) ApplyReplayTo(
 	c *catalog.Catalog,
-	dataFactory catalog.DataFactory) (err error) {
+	dataFactory catalog.DataFactory,
+) (err error) {
 	c.OnReplayDatabaseBatch(data.GetDBBatchs())
 	ins, colins, dnins, del, dndel := data.GetTblBatchs()
 	c.OnReplayTableBatch(ins, colins, dnins, del, dndel, dataFactory)
@@ -324,19 +338,6 @@ func (data *CheckpointData) ApplyReplayTo(
 	c.OnReplayBlockBatch(ins, dnins, del, dndel, dataFactory)
 	return
 }
-
-const (
-	Checkpoint_Meta_TID_IDX                = 2
-	Checkpoint_Meta_Insert_Block_Start_IDX = 3
-	Checkpoint_Meta_Insert_Block_End_IDX   = 4
-	Checkpoint_Meta_Insert_Block_LOC       = 5
-	Checkpoint_Meta_Delete_Block_Start_IDX = 6
-	Checkpoint_Meta_Delete_Block_End_IDX   = 7
-	Checkpoint_Meta_Delete_Block_LOC       = 8
-	Checkpoint_Meta_Segment_Start_IDX      = 9
-	Checkpoint_Meta_Segment_End_IDX        = 10
-	Checkpoint_Meta_Segment_LOC            = 11
-)
 
 type CNCheckpointData struct {
 	meta map[uint64]*CheckpointMeta
@@ -400,7 +401,8 @@ func (data *CNCheckpointData) ReadFrom(
 	ctx context.Context,
 	reader *blockio.BlockReader,
 	version uint32,
-	m *mpool.MPool) (err error) {
+	m *mpool.MPool,
+) (err error) {
 
 	var bat *batch.Batch
 	metaIdx := checkpointDataReferVersions[version][MetaIDX]
@@ -737,7 +739,8 @@ func (data *CheckpointData) PrintData() {
 }
 
 func (data *CheckpointData) WriteTo(
-	fs fileservice.FileService) (location objectio.Location, err error) {
+	fs fileservice.FileService,
+) (location objectio.Location, err error) {
 	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
 	writer, err := blockio.NewBlockWriterNew(fs, name, 0, nil)
@@ -792,7 +795,13 @@ func (data *CheckpointData) WriteTo(
 	return
 }
 
-func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint16, reader *blockio.BlockReader) (*containers.Batch, error) {
+func LoadBlkColumnsByMeta(
+	cxt context.Context,
+	colTypes []types.Type,
+	colNames []string,
+	id uint16,
+	reader *blockio.BlockReader,
+) (*containers.Batch, error) {
 	bat := containers.NewBatch()
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
@@ -818,7 +827,14 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 	return bat, nil
 }
 
-func LoadCNSubBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint16, reader *blockio.BlockReader, m *mpool.MPool) (*batch.Batch, error) {
+func LoadCNSubBlkColumnsByMeta(
+	cxt context.Context,
+	colTypes []types.Type,
+	colNames []string,
+	id uint16,
+	reader *blockio.BlockReader,
+	m *mpool.MPool,
+) (*batch.Batch, error) {
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
 		idxs[i] = uint16(i)
@@ -852,7 +868,9 @@ func prefetchCheckpointData(
 	ctx context.Context,
 	version uint32,
 	service fileservice.FileService,
-	key objectio.Location) (err error) {
+	key objectio.Location,
+) (err error) {
+	// FIXME
 	return nil
 	pref, err := blockio.BuildSubPrefetchParams(service, key)
 	if err != nil {
@@ -892,8 +910,8 @@ func prefetchBatches(
 	version uint32,
 	service fileservice.FileService,
 	schemaIdxes []uint16,
-	key objectio.Location) (err error) {
-
+	key objectio.Location,
+) (err error) {
 	pref, err := blockio.BuildSubPrefetchParams(service, key)
 	if err != nil {
 		return
@@ -916,8 +934,8 @@ func (data *CheckpointData) ReadFrom(
 	version uint32,
 	reader *blockio.BlockReader,
 	fs fileservice.FileService,
-	m *mpool.MPool) (err error) {
-
+	m *mpool.MPool,
+) (err error) {
 	err = data.readMetaBatch(ctx, version, reader, m)
 	if err != nil {
 		return
@@ -1014,7 +1032,8 @@ func (data *CheckpointData) prefetchMetaBatch(
 	ctx context.Context,
 	version uint32,
 	service fileservice.FileService,
-	key objectio.Location) (err error) {
+	key objectio.Location,
+) (err error) {
 	err = prefetchMetaBatch(ctx, version, service, key)
 	return
 }
@@ -1022,7 +1041,8 @@ func (data *CheckpointData) prefetchMetaBatch(
 func (data *CheckpointData) readAll(
 	ctx context.Context,
 	version uint32,
-	service fileservice.FileService) (err error) {
+	service fileservice.FileService,
+) (err error) {
 	data.replayMetaBatch()
 	for _, val := range data.locations {
 		var reader *blockio.BlockReader
@@ -1049,15 +1069,16 @@ func (data *CheckpointData) readAll(
 func (data *CheckpointData) readBatch(
 	ctx context.Context,
 	version uint32,
-	service fileservice.FileService) (err error) {
+	service fileservice.FileService,
+) (err error) {
 	return
 }
 
 func (data *CheckpointData) prefetchAll(
 	ctx context.Context,
 	version uint32,
-	service fileservice.FileService) (err error) {
-
+	service fileservice.FileService,
+) (err error) {
 	return
 }
 

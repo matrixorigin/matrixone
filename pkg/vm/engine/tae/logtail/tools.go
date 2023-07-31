@@ -131,42 +131,6 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	return bat
 }
 
-// make batch, append necessary field like commit ts
-func makeRespBatchFromBatch(batch *containers.Batch) *containers.Batch {
-	bat := containers.NewBatch()
-	for i, attr := range batch.Attrs {
-		bat.AddVector(attr, containers.MakeVector(*batch.Vecs[i].GetType()))
-	}
-	return bat
-}
-
-// func makeDataInsertRespBatch(schema *catalog.Schema) *containers.Batch {
-// 	capactity := int(schema.NextColSeqnum) + 2
-// 	bat := containers.NewBatch()
-// 	bat.Attrs = make([]string, capactity, capactity)
-// 	bat.Vecs = make([]containers.Vector, capactity, capactity)
-// 	bat.Attrs[0] = catalog.AttrRowID
-// 	bat.Attrs[1] = catalog.AttrCommitTs
-// 	bat.Vecs[0] = containers.MakeVector(types.T_Rowid.ToType())
-// 	bat.Vecs[1] = containers.MakeVector(types.T_TS.ToType())
-
-// 	for _, col := range schema.ColDefs {
-// 		if col.IsPhyAddr() {
-// 			continue
-// 		}
-// 		bat.Vecs[2+col.SeqNum] = containers.MakeVector(col.Type)
-// 		bat.Attrs[2+col.SeqNum] = col.Name
-// 	}
-// 	for i := range bat.Attrs {
-// 		if bat.Vecs[i] != nil {
-// 			bat.Nameidx[bat.Attrs[i]] = i
-// 		} else {
-// 			bat.Vecs[i] = containers.EMPTY_VECTOR
-// 		}
-// 	}
-// 	return bat
-// }
-
 // GetDataWindowForLogtail returns the batch according to the writeSchema.
 // columns are sorted by seqnum and vacancy is filled with zero value
 func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batch {
