@@ -2076,16 +2076,15 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
 					continue
 				}
-				bs := wCol[sel].GetByteSlice(w.area)
-				err = BuildVarlenaFromByteSlice(v, &vCol[oldLen+i], &bs, mp)
+				err = BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
 				if err != nil {
 					return err
 				}
 			}
 		} else {
 			for i, sel := range sels {
-				bs := wCol[sel].GetByteSlice(w.area)
-				err = BuildVarlenaFromByteSlice(v, &vCol[oldLen+i], &bs, mp)
+
+				err = BuildVarlenaFromValena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
 				if err != nil {
 					return err
 				}
@@ -3112,7 +3111,8 @@ func BuildVarlenaFromValena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m 
 		BuildVarlenaInline(v1, v2)
 		return nil
 	}
-	bs := v2.GetByteSlice(*area)
+	voff, vlen := v2.OffsetLen()
+	bs := (*area)[voff : voff+vlen]
 	return BuildVarlenaNoInline(vec, v1, &bs, m)
 }
 
