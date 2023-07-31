@@ -363,34 +363,44 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 		meta = data.meta[tableID]
 		return
 	}
+
+	tidVec := vector.MustFixedCol[uint64](data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX])
+	insStartVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_Start_IDX])
+	insEndVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_End_IDX])
+	delStartVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_Start_IDX])
+	delEndVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_End_IDX])
+	segDelStartVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_Start_IDX])
+	segDelEndVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_End_IDX])
+
 	for i := 0; i < data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX].Length(); i++ {
-		tid := vector.MustFixedCol[uint64](data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX])[i]
-		insStart := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_Start_IDX])[i]
-		insEnd := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_End_IDX])[i]
-		delStart := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_Start_IDX])[i]
-		delEnd := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_End_IDX])[i]
-		segDelStart := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_Start_IDX])[i]
-		segDelEnd := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_End_IDX])[i]
-		meta := new(CheckpointMeta)
+		tid := tidVec[i]
+		insStart := insStartVec[i]
+		insEnd := insEndVec[i]
+		delStart := delStartVec[i]
+		delEnd := delEndVec[i]
+		segDelStart := segDelStartVec[i]
+		segDelEnd := segDelEndVec[i]
+
+		tableMeta := new(CheckpointMeta)
 		if insStart != -1 {
-			meta.blkInsertOffset = &common.ClosedInterval{
+			tableMeta.blkInsertOffset = &common.ClosedInterval{
 				Start: uint64(insStart),
 				End:   uint64(insEnd),
 			}
 		}
 		if delStart != -1 {
-			meta.blkDeleteOffset = &common.ClosedInterval{
+			tableMeta.blkDeleteOffset = &common.ClosedInterval{
 				Start: uint64(delStart),
 				End:   uint64(delEnd),
 			}
 		}
 		if segDelStart != -1 {
-			meta.segDeleteOffset = &common.ClosedInterval{
+			tableMeta.segDeleteOffset = &common.ClosedInterval{
 				Start: uint64(segDelStart),
 				End:   uint64(segDelEnd),
 			}
 		}
-		data.meta[tid] = meta
+		data.meta[tid] = tableMeta
 		// logutil.Infof("GetTableMeta TID=%d, INTERVAL=%s", tid, meta.blkInsertOffset.String())
 	}
 	meta = data.meta[tableID]
@@ -990,13 +1000,28 @@ func (data *CheckpointData) replayMetaBatch() {
 	insertVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
 	blkDelVec := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector()
 	segDelVec := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
-	blkInsertStartVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector()
-	blkInsertEndVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).GetDownstreamVector()
-	blkDelStartVec := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).GetDownstreamVector()
-	blkDelEndVec := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).GetDownstreamVector()
-	segDelStartVec := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).GetDownstreamVector()
-	segDelEndVec := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).GetDownstreamVector()
-	tidVec := bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+
+	blkInsertStartVec := vector.MustFixedCol[int32](
+		bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector(),
+	)
+	blkInsertEndVec := vector.MustFixedCol[int32](
+		bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).GetDownstreamVector(),
+	)
+	blkDelStartVec := vector.MustFixedCol[int32](
+		bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).GetDownstreamVector(),
+	)
+	blkDelEndVec := vector.MustFixedCol[int32](
+		bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).GetDownstreamVector(),
+	)
+	segDelStartVec := vector.MustFixedCol[int32](
+		bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).GetDownstreamVector(),
+	)
+	segDelEndVec := vector.MustFixedCol[int32](
+		bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).GetDownstreamVector(),
+	)
+	tidVec := vector.MustFixedCol[uint64](
+		bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+	)
 
 	for i := 0; i < bat.Vecs[2].Length(); i++ {
 		insLocation := insertVec.GetBytesAt(i)
@@ -1008,22 +1033,22 @@ func (data *CheckpointData) replayMetaBatch() {
 
 		meta := &CheckpointMeta{
 			blkInsertOffset: &common.ClosedInterval{
-				Start: uint64(vector.GetFixedAt[int32](blkInsertStartVec, i)),
-				End:   uint64(vector.GetFixedAt[int32](blkInsertEndVec, i)),
+				Start: uint64(blkInsertStartVec[i]),
+				End:   uint64(blkInsertEndVec[i]),
 			},
 			blkInsertLocation: insLocation,
 			blkDeleteOffset: &common.ClosedInterval{
-				Start: uint64(vector.GetFixedAt[int32](blkDelStartVec, i)),
-				End:   uint64(vector.GetFixedAt[int32](blkDelEndVec, i)),
+				Start: uint64(blkDelStartVec[i]),
+				End:   uint64(blkDelEndVec[i]),
 			},
 			blkDeleteLocation: delLocation,
 			segDeleteOffset: &common.ClosedInterval{
-				Start: uint64(vector.GetFixedAt[int32](segDelStartVec, i)),
-				End:   uint64(vector.GetFixedAt[int32](segDelEndVec, i)),
+				Start: uint64(segDelStartVec[i]),
+				End:   uint64(segDelEndVec[i]),
 			},
 			segDeleteLocation: segLocation,
 		}
-		tid := vector.GetFixedAt[uint64](tidVec, i)
+		tid := tidVec[i]
 		data.meta[tid] = meta
 	}
 
