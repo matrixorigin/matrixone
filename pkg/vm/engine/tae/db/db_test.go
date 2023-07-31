@@ -2577,7 +2577,6 @@ func TestSegDelLogtail(t *testing.T) {
 
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	require.NoError(t, err)
-	
 
 	check := func() {
 		ckpEntries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
