@@ -19,8 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"math"
 	"net"
 	"runtime"
@@ -29,6 +27,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1545,10 +1546,11 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 					ColId: attr.Attr.ID,
 					Name:  attr.Attr.Name,
 					Typ: &plan.Type{
-						Id:       int32(attr.Attr.Type.Oid),
-						Width:    attr.Attr.Type.Width,
-						Scale:    attr.Attr.Type.Scale,
-						AutoIncr: attr.Attr.AutoIncrement,
+						Id:         int32(attr.Attr.Type.Oid),
+						Width:      attr.Attr.Type.Width,
+						Scale:      attr.Attr.Type.Scale,
+						AutoIncr:   attr.Attr.AutoIncrement,
+						Enumvalues: attr.Attr.Type.EnumValues,
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,

@@ -562,6 +562,8 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 		return Datetime(ret), n + 1
 	case timestampCode:
 		return Timestamp(ret), n + 1
+	case enumCode:
+		return Enum(ret), n + 1
 	default:
 		return ret, n + 1
 	}

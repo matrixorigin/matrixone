@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1400,9 +1401,10 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	result := make([]*plan.Type, len(ts))
 	for i, t := range ts {
 		result[i] = &plan.Type{
-			Id:    int32(t.Oid),
-			Width: t.Width,
-			Scale: t.Scale,
+			Id:         int32(t.Oid),
+			Width:      t.Width,
+			Scale:      t.Scale,
+			Enumvalues: t.EnumValues,
 		}
 	}
 	return result

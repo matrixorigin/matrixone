@@ -313,6 +313,7 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 		Width:       typ.Width,
 		Scale:       typ.Scale,
 		AutoIncr:    typ.AutoIncr,
+		Enumvalues:  typ.Enumvalues,
 	}
 }
 

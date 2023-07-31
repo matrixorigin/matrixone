@@ -580,8 +580,7 @@ func (t T) ToType() Type {
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarBinaryLen
 	case T_enum:
-		typ.Size = VarlenaSize
-		typ.Width = MaxEnumLen
+		typ.Size = 2
 	case T_any:
 		// XXX I don't know about this one ...
 		typ.Size = 0
@@ -776,7 +775,7 @@ func (t T) TypeLen() int {
 	case T_tuple, T_interval:
 		return 0
 	case T_enum:
-		return VarlenaSize
+		return 2
 	}
 	panic(fmt.Sprintf("unknown type %d", t))
 }
