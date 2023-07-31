@@ -6,3 +6,10 @@
 drop table if exists names;
 create table names(id int PRIMARY KEY,name VARCHAR(255),age int);
 replace into names(id, name, age) values(1,"Abby", 24);
+select name, age from names where id = 1;
+replace into names(id, name, age) values(1,"Bobby", 25);
+select name, age from names where id = 1;
+replace into names set id = 2, name = "Ciro";
+select name, age from names where id = 2;
+replace into names set id = 2, name = "Ciro", age = 17;
+select name, age from names where id = 2;
