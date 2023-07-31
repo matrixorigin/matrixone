@@ -525,7 +525,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					}
 
 					for idx, col := range childTableDef.Cols {
-						if col.Name != catalog.Row_ID {
+						if col.Name != catalog.Row_ID && col.Name != catalog.CPrimaryKeyColName {
 							if pos, ok := updateChildColPosMap[col.Name]; ok {
 								insertColPos = append(insertColPos, pos)
 							} else {
