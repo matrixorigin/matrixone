@@ -549,6 +549,18 @@ message InsertCtx {
 	int32 partition_idx = 7;
 }
 
+message ReplaceCtx {
+	ObjectRef ref			= 1;
+	bool add_affected_rows 	= 2;
+	bool is_cluster_table	= 3;
+	TableDef table_def		= 4;
+	string delete_cond    = 5;
+	// Align array index with the partition number
+	repeated uint64 partition_table_ids = 6;
+	repeated string partition_table_names = 7;
+	int32 partition_idx = 8;
+}
+
 message AnalyzeInfo {
     int64 input_rows = 1;
     int64 output_rows = 2;
@@ -613,21 +625,22 @@ message Node {
 		//
 		INSERT = 51;
 		DELETE = 52;
+		REPLACE = 53;
 		//
-		LOCK_OP = 53;
+		LOCK_OP = 54;
 
 		//
-		INTERSECT = 54;
-		INTERSECT_ALL = 55;
-		MINUS = 56;
-		MINUS_ALL = 57;
+		INTERSECT = 55;
+		INTERSECT_ALL = 56;
+		MINUS = 57;
+		MINUS_ALL = 58;
 
 		//
-		ON_DUPLICATE_KEY = 58;
-		PRE_INSERT = 59;
-		PRE_DELETE = 60;
+		ON_DUPLICATE_KEY = 59;
+		PRE_INSERT = 60;
+		PRE_DELETE = 61;
 		// the node which build insert batch for hidden table(unique key)
-		PRE_INSERT_UK = 61;
+		PRE_INSERT_UK = 62;
 	}
 
 	enum JoinType {
@@ -689,32 +702,33 @@ message Node {
 
 	repeated int32 binding_tags = 24;
 
-    AnalyzeInfo analyze_info = 25;
+  AnalyzeInfo analyze_info = 25;
 
 	repeated Expr tbl_func_expr_list = 26;
 
 	ClusterTable cluster_table = 28;
 	bool not_cacheable = 29;
 	InsertCtx insert_ctx = 30;
+	ReplaceCtx replace_ctx = 31;
 
 	// used to connect two plans[steps]
-	repeated int32 source_step = 31;
+	repeated int32 source_step = 32;
 
-	PreDeleteCtx pre_delete_ctx = 32;
-	PreInsertCtx pre_insert_ctx = 33;
+	PreDeleteCtx pre_delete_ctx = 33;
+	PreInsertCtx pre_insert_ctx = 34;
 	// build unique key batch before insert into hidden table which keep the unique key
-	PreInsertUkCtx pre_insert_uk_ctx = 34;
-	OnDuplicateKeyCtx on_duplicate_key = 35;
+	PreInsertUkCtx pre_insert_uk_ctx = 35;
+	OnDuplicateKeyCtx on_duplicate_key = 36;
 
-	bool IsEnd = 36;
-	repeated LockTarget lock_targets = 37;
-	repeated Expr block_filter_list = 38;
+	bool IsEnd = 37;
+	repeated LockTarget lock_targets = 38;
+	repeated Expr block_filter_list = 39;
 
 	// Runtime filters
-	repeated RuntimeFilterSpec runtime_filter_probe_list = 39;
-	repeated RuntimeFilterSpec runtime_filter_build_list = 40;
+	repeated RuntimeFilterSpec runtime_filter_probe_list = 40;
+	repeated RuntimeFilterSpec runtime_filter_build_list = 41;
 
-    bytes uuid = 41;
+  bytes uuid = 42;
 }
 
 message LockTarget {
@@ -781,9 +795,10 @@ message Query {
 		UNKNOWN		= 0;
 		SELECT		= 1;
 		INSERT		= 2;
-		DELETE		= 3;
-		UPDATE		= 4;
-		MERGE		= 5;
+		REPLACE   = 3;
+		DELETE		= 4;
+		UPDATE		= 5;
+		MERGE		= 6;
 	}
 
 	StatementType stmt_type		= 1;
