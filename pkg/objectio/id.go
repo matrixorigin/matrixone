@@ -88,3 +88,42 @@ func IsEmptySegid(id *Segmentid) bool {
 func IsEmptyBlkid(id *Blockid) bool {
 	return bytes.Equal(id[:], emptyBlockId[:])
 }
+
+// some id hacks
+
+// used only in some special cases
+func HackU64ToRowid(v uint64) Rowid {
+	var id Rowid
+	copy(id[:], types.EncodeUint64(&v))
+	return id
+}
+
+// used only in some special cases
+func HackRowidToU64(id Rowid) uint64 {
+	return types.DecodeUint64(id[:])
+}
+
+// used only in some special cases
+func HackBlockid2Rowid(id *Blockid) Rowid {
+	var rowid Rowid
+	copy(rowid[:], id[:])
+	return rowid
+}
+
+// used only in some special cases
+func HackSegid2Rowid(id *Segmentid) Rowid {
+	var rowid Rowid
+	copy(rowid[:], id[:])
+	return rowid
+}
+
+// used only in some special cases
+func HackBytes2Rowid(bs []byte) Rowid {
+	if size := len(bs); size <= types.RowidSize {
+		var rowid types.Rowid
+		copy(rowid[:size], bs[:size])
+		return rowid
+	} else {
+		return types.RandomRowid()
+	}
+}
