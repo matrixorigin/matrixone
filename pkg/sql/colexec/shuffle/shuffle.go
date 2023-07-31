@@ -64,7 +64,7 @@ func (arg *Argument) initShuffle() {
 	if arg.ctr.sels == nil {
 		arg.ctr.sels = make([][]int32, arg.AliveRegCnt)
 		for i := 0; i < int(arg.AliveRegCnt); i++ {
-			arg.ctr.sels[i] = make([]int32, 8192)
+			arg.ctr.sels[i] = make([]int32, shuffleBatchSize/arg.AliveRegCnt)
 		}
 		arg.ctr.shuffledBats = make([]*batch.Batch, arg.AliveRegCnt)
 	}
@@ -130,15 +130,23 @@ func getShuffledSelsByHash(ap *Argument, bat *batch.Batch) [][]int32 {
 	return sels
 }
 
-func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, regIndex int) {
+func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, regIndex int) error {
 	lenVecs := len(bat.Vecs)
 	shuffledBats := ap.ctr.shuffledBats
 
 	shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
 	shuffledBats[regIndex].ShuffleIDX = regIndex
 	for j := range shuffledBats[regIndex].Vecs {
-		shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
+		v := proc.GetVector(*bat.Vecs[j].GetType())
+		if v.Capacity() < shuffleBatchSize {
+			err := v.PreExtend(shuffleBatchSize, proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+		shuffledBats[regIndex].Vecs[j] = v
 	}
+	return nil
 }
 
 func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process) error {
@@ -153,7 +161,10 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 		if lenSels > 0 {
 			b := shuffledBats[regIndex]
 			if b == nil {
-				initShuffledBats(ap, bat, proc, regIndex)
+				err := initShuffledBats(ap, bat, proc, regIndex)
+				if err != nil {
+					return err
+				}
 				b = shuffledBats[regIndex]
 			}
 			for vecIndex := range b.Vecs {
@@ -318,7 +329,10 @@ func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, proc *process.Proces
 		if lenSels > 0 {
 			b := shuffledBats[regIndex]
 			if b == nil {
-				initShuffledBats(ap, bat, proc, regIndex)
+				err := initShuffledBats(ap, bat, proc, regIndex)
+				if err != nil {
+					return err
+				}
 				b = shuffledBats[regIndex]
 			}
 			for vecIndex := range b.Vecs {
