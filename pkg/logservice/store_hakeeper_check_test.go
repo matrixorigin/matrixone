@@ -224,6 +224,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg4.Fill()
 	service1, err := NewService(cfg1,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -234,6 +235,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}()
 	service2, err := NewService(cfg2,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -244,6 +246,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}()
 	service3, err := NewService(cfg3,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -254,6 +257,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	}()
 	service4, err := NewService(cfg4,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

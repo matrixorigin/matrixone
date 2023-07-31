@@ -147,7 +147,7 @@ func newLogService(
 	fs fileservice.FileService,
 	opts logOptions,
 ) (LogService, error) {
-	svc, err := logservice.NewWrappedService(cfg, fs, opts...)
+	svc, err := logservice.NewWrappedService(cfg, fs, nil, opts...)
 	if err != nil {
 		return nil, err
 	}

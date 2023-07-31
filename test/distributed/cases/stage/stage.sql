@@ -24,7 +24,6 @@ DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
 
 
--- @bvt:issue#8544
 CREATE STAGE my_ext_stage URL='s3://load/files/';
 SELECT stage_name from mo_catalog.mo_stages;
 create account default_1 ADMIN_NAME admin IDENTIFIED BY '111111';
@@ -69,4 +68,3 @@ DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
 DROP STAGE my_ext_stage4;
--- @bvt:issue
