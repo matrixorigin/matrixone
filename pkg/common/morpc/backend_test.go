@@ -742,7 +742,7 @@ func testBackendSendWithoutServer(t *testing.T, addr string,
 	b := rb.(*remoteBackend)
 	defer func() {
 		b.Close()
-		assert.False(t, b.conn.Connected())
+		assert.Nil(t, b.conn)
 	}()
 	testFunc(b)
 }

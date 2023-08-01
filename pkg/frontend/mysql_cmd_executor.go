@@ -1004,7 +1004,7 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 	return bat, nil
 }
 
-func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt *tree.AnalyzeStmt) error {
+func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, ses *Session, stmt *tree.AnalyzeStmt) error {
 	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
@@ -1022,6 +1022,12 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt 
 	ctx.WriteString(" from ")
 	stmt.Table.Format(ctx)
 	sql := ctx.String()
+	//backup the inside statement
+	prevInsideStmt := ses.ReplaceDerivedStmt(true)
+	defer func() {
+		//restore the inside statement
+		ses.ReplaceDerivedStmt(prevInsideStmt)
+	}()
 	return mce.GetDoQueryFunc()(requestCtx, &UserInput{sql: sql})
 }
 
@@ -2167,6 +2173,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			i: st,
 		}
+	case *tree.Replace:
+		ret = &ReplaceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			r: st,
+		}
 	case *tree.Load:
 		ret = &LoadExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
@@ -2565,7 +2578,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				}
 				ses.SetSeqLastValue(proc)
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
-				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
+				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update, *tree.Replace,
 				*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
 				*tree.CreateSequence, *tree.DropSequence,
 				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
@@ -2703,8 +2716,24 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return retErr
 	}
 
+	_, txnOp := ses.GetTxnHandler().GetTxnOperator()
+	ses.GetTxnHandler().disableStartStmt()
+	if txnOp != nil && !ses.IsDerivedStmt() {
+		txnOp.GetWorkspace().StartStatement()
+		ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+	}
+
 	defer func() {
 		retErr = finishTxnFunc()
+
+		_, txnOp := ses.GetTxnHandler().GetTxnOperator()
+		if txnOp != nil && !ses.IsDerivedStmt() {
+			ok, id := ses.GetTxnHandler().calledStartStmt()
+			if ok && bytes.Equal(txnOp.Txn().ID, id) {
+				txnOp.GetWorkspace().EndStatement()
+			}
+		}
+		ses.GetTxnHandler().disableStartStmt()
 	}()
 
 	//check transaction states
@@ -2847,7 +2876,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.AnalyzeStmt:
 		selfHandle = true
-		if err = mce.handleAnalyzeStmt(requestCtx, st); err != nil {
+		if err = mce.handleAnalyzeStmt(requestCtx, ses, st); err != nil {
 			return err
 		}
 	case *tree.ExplainStmt:
@@ -3209,7 +3238,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.CreateIndex, *tree.DropIndex,
 		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
 		*tree.CreateSequence, *tree.DropSequence,
-		*tree.Insert, *tree.Update,
+		*tree.Insert, *tree.Update, *tree.Replace,
 		*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 		*tree.SetVar,
 		*tree.Load,

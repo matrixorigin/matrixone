@@ -159,3 +159,13 @@ func FindColumn(cols []*ColDef, name string) *ColDef {
 	}
 	return nil
 }
+
+// FindColumn finds column in cols by colId
+func FindColumnByColId(cols []*ColDef, colId uint64) *ColDef {
+	for _, col := range cols {
+		if col.ColId == colId {
+			return col
+		}
+	}
+	return nil
+}

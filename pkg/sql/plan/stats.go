@@ -32,7 +32,6 @@ import (
 )
 
 const BlockNumForceOneCN = 200
-
 const blockNDVThreshHold = 100
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
@@ -198,6 +197,11 @@ func getColStatsInfo(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
 	if !ok {
 		return nil
 	}
+	//fix column name
+	if len(col.Name) == 0 {
+		col.Name = tableDef.Cols[col.ColPos].Name
+	}
+
 	return sc.GetStatsInfoMap(tableDef.TblId)
 }
 
@@ -222,7 +226,7 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return getExprNdv(exprImpl.F.Args[0], builder) / 365
 		case "substring":
 			// no good way to calc ndv for substring
-			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 100)
+			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 25)
 		default:
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
@@ -474,6 +478,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if !isCrossJoin {
 				outcnt *= selectivity
 			}
+			if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
+				outcnt = rightStats.Outcnt
+			}
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -627,7 +634,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		*/
 	case plan.Node_SINK_SCAN:
-		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
+
+	case plan.Node_RECURSIVE_SCAN:
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()[0]].Stats
 
 	case plan.Node_EXTERNAL_SCAN:
 		//calc for external scan is heavy, avoid recalc of this
@@ -789,6 +799,22 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 			node.BuildOnLeft = true
 		}
 	}
+
+	if builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
+		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+	}
+}
+
+func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
+	if node.NodeType == plan.Node_RECURSIVE_SCAN {
+		return true
+	}
+	for _, nodeID := range node.Children {
+		if builder.hasRecursiveScan(builder.qry.Nodes[nodeID]) {
+			return true
+		}
+	}
+	return false
 }
 
 func compareStats(stats1, stats2 *Stats) bool {

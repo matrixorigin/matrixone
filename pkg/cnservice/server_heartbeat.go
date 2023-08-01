@@ -66,13 +66,13 @@ func (s *service) heartbeat(ctx context.Context) {
 
 	hb := logservicepb.CNStoreHeartbeat{
 		UUID:               s.cfg.UUID,
-		ServiceAddress:     s.cfg.ServiceAddress,
+		ServiceAddress:     s.pipelineServiceServiceAddr(),
 		SQLAddress:         s.cfg.SQLAddress,
-		LockServiceAddress: s.cfg.LockService.ServiceAddress,
-		CtlAddress:         s.cfg.Ctl.Address.ServiceAddress,
+		LockServiceAddress: s.lockServiceServiceAddr(),
+		CtlAddress:         s.ctlServiceServiceAddr(),
 		Role:               s.metadata.Role,
 		TaskServiceCreated: s.GetTaskRunner() != nil,
-		QueryAddress:       s.cfg.QueryServiceConfig.Address.ServiceAddress,
+		QueryAddress:       s.queryServiceServiceAddr(),
 	}
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	if err != nil {

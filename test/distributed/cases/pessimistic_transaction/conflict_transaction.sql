@@ -34,7 +34,6 @@ update ct_02 set a=3 where b='bell';
 commit;
 select * from ct_02;
 
--- @bvt:issue#10704
 -- primary key conflict/delete
 create table ct_03(a int primary key,b varchar(25));
 insert into ct_03 values(1,'bell'),(2,'app'),(3,'com');
@@ -50,7 +49,6 @@ commit;
 -- @session}
 commit;
 select * from ct_03;
--- @bvt:issue
 
 -- primary key conflict/insert into select
 create table ct_04_temp(a int,b varchar(25));

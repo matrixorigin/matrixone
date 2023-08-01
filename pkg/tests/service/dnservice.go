@@ -146,7 +146,7 @@ func newDNService(
 	opts dnOptions,
 ) (DNService, error) {
 	CounterSet := new(perfcounter.CounterSet)
-	svc, err := dnservice.NewService(CounterSet, cfg, rt, fs, opts...)
+	svc, err := dnservice.NewService(CounterSet, cfg, rt, fs, nil, opts...)
 	if err != nil {
 		return nil, err
 	}

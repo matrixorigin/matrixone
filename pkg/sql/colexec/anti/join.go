@@ -70,7 +70,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = End
 				continue
 			}
-
+			if bat.Last() {
+				proc.SetInputBatch(bat)
+				return process.ExecNext, nil
+			}
 			if bat.IsEmpty() {
 				bat.Clean(proc.Mp())
 				continue
