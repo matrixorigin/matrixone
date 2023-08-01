@@ -15,7 +15,6 @@
 package table
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -27,7 +26,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -527,12 +525,6 @@ func BytesField(val []byte) ColumnField {
 
 func UuidField(val []byte) ColumnField {
 	return ColumnField{Type: TUuid, Bytes: val}
-}
-
-var bufferPool = sync.Pool{
-	New: func() any {
-		return bytes.NewBuffer(make([]byte, 16*mpool.MB))
-	},
 }
 
 type Row struct {

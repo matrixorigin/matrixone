@@ -88,7 +88,7 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 
 	// If errors occurred, return them
 	if len(errors) > 0 {
-		return nil, moerr.NewInternalError(ctx, "can not get the schema", errors)
+		return nil, moerr.NewInternalError(ctx, "can not get the schema")
 	}
 
 	// Construct and return the table
@@ -135,7 +135,7 @@ func (u *Upgrader) GenerateDiff(currentSchema *table.Table, expectedSchema *tabl
 
 func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 	if len(diff.AddedColumns) == 0 {
-		return "", moerr.NewInternalError(nil, "no added columns in schema diff", nil)
+		return "", moerr.NewInternalError(nil, "no added columns in schema diff")
 	}
 
 	// Get database and table name from the schema diff
@@ -185,7 +185,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 
 		// Execute upgrade SQL
 		if err := exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
-			return moerr.NewInternalError(ctx, "failed to upgrade", []error{err})
+			return moerr.NewInternalError(ctx, "failed to upgrade")
 		}
 	}
 
