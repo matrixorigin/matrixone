@@ -2353,6 +2353,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 		return err
 	}
 	col[0] = va
+	vec.data = vec.data[:vec.Capacity()]
 	vec.SetLength(length)
 	return nil
 }

@@ -1277,3 +1277,90 @@ func TestSetFunction(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 }
+
+func TestSetFunction2(t *testing.T) {
+	// set vec to const value -> const null -> const value -> const null.
+	// bool type
+	{
+		mp := mpool.MustNewZero()
+
+		w := NewConstNull(types.T_bool.ToType(), 0, mp)
+		v := NewVec(types.T_bool.ToType())
+		err := AppendFixedList(v, []bool{true, false, true, false}, []bool{false, false, true, true}, mp)
+		require.NoError(t, err)
+
+		sf := GetConstSetFunction(types.T_bool.ToType(), mp)
+		// set to const value true
+		{
+			err = sf(w, v, 0, 1)
+			require.NoError(t, err)
+			ws := MustFixedCol[bool](w)
+			require.Equal(t, []bool{true}, ws)
+		}
+		// set to const null
+		{
+			err = sf(w, v, 2, 1)
+			require.NoError(t, err)
+			require.True(t, w.IsConstNull())
+		}
+		// set to const value false
+		{
+			err = sf(w, v, 1, 1)
+			require.NoError(t, err)
+			ws := MustFixedCol[bool](w)
+			require.Equal(t, []bool{false}, ws)
+		}
+		// set to const null
+		{
+			err = sf(w, v, 3, 1)
+			require.NoError(t, err)
+			require.True(t, w.IsConstNull())
+		}
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+
+	// byte type
+	{
+		mp := mpool.MustNewZero()
+
+		w := NewConstNull(types.T_varchar.ToType(), 0, mp)
+		v := NewVec(types.T_varchar.ToType())
+		err := AppendBytesList(v, [][]byte{
+			[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
+			[]bool{false, false, true, true}, mp)
+		require.NoError(t, err)
+
+		sf := GetConstSetFunction(types.T_varchar.ToType(), mp)
+		// set to const value a
+		{
+			err = sf(w, v, 0, 1)
+			require.NoError(t, err)
+			ws := MustBytesCol(w)
+			require.Equal(t, "a", string(ws[0]))
+		}
+		// set to const null
+		{
+			err = sf(w, v, 2, 1)
+			require.NoError(t, err)
+			require.True(t, w.IsConstNull())
+		}
+		// set to const value b
+		{
+			err = sf(w, v, 1, 1)
+			require.NoError(t, err)
+			ws := MustBytesCol(w)
+			require.Equal(t, "b", string(ws[0]))
+		}
+		// set to const null
+		{
+			err = sf(w, v, 3, 1)
+			require.NoError(t, err)
+			require.True(t, w.IsConstNull())
+		}
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
