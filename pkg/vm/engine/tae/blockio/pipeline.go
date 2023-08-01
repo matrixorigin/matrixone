@@ -232,7 +232,7 @@ type IoPipeline struct {
 	prefetchFunc PrefetchFunc
 
 	sensors struct {
-		prefetchDepth *utils.Sensor[float64]
+		prefetchDepth *utils.NumericSensor[int64]
 	}
 
 	stats struct {
@@ -295,13 +295,13 @@ func (p *IoPipeline) fillDefaults() {
 
 	if p.sensors.prefetchDepth == nil {
 		name := utils.MakeSensorName("IO", "PrefetchDepth")
-		sensor := utils.NewSensor[float64](
+		sensor := utils.NewNumericSensor[int64](
 			name,
 			utils.WithGetStateSensorOption(
-				func(v float64) utils.SensorState {
-					if v < 0.6*float64(p.options.queueDepth) {
+				func(v int64) utils.SensorState {
+					if float64(v) < 0.6*float64(p.options.queueDepth) {
 						return utils.SensorStateGreen
-					} else if v < 0.8*float64(p.options.queueDepth) {
+					} else if float64(v) < 0.8*float64(p.options.queueDepth) {
 						return utils.SensorStateYellow
 					} else {
 						return utils.SensorStateRed
@@ -468,7 +468,7 @@ func (p *IoPipeline) onWait(jobs ...any) {
 		}
 		putJob(job)
 	}
-	p.sensors.prefetchDepth.Add(-float64(len(jobs)))
+	p.sensors.prefetchDepth.Add(-int64(len(jobs)))
 }
 
 func (p *IoPipeline) crontask(ctx context.Context) {

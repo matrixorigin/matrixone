@@ -32,12 +32,19 @@ var DefaultSensorRegistry = NewSensorRegistry()
 
 type SensorRegistry struct {
 	sync.RWMutex
-	sensors map[string]*Sensor[float64]
+	sensors map[string]Sensor
 }
 
-type SensorOption[T types.OrderedT] func(*Sensor[T])
+type Sensor interface {
+	Name() string
+	State() SensorState
+	IsRed() bool
+	String() string
+}
 
-type Sensor[T types.OrderedT] struct {
+type SensorOption[T types.OrderedT] func(*NumericSensor[T])
+
+type NumericSensor[T types.OrderedT] struct {
 	getStateFn func(T) SensorState
 	current    atomic.Pointer[T]
 	name       string
