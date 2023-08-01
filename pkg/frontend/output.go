@@ -237,12 +237,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_TS:
 		row[i] = vector.GetFixedAt[types.TS](vec, rowIndex)
 	case types.T_enum:
-		val := vector.GetFixedAt[types.Enum](vec, rowIndex)
-		if val == 0 {
-			row[i] = ""
-		} else {
-			row[i] = vec.GetType().EnumValues[val-1]
-		}
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
 	default:
 		logError(ses, ses.GetDebugString(),
 			"Failed to extract row from vector, unsupported type",

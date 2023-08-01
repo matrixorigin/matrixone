@@ -459,7 +459,7 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			if err != nil {
 				return err
 			}
-			rel, err = dbo.Relation(ctx, tblStr, txn)
+			rel, err = dbo.Relation(ctx, tblStr, nil)
 			if err != nil {
 				return err
 			}
@@ -527,7 +527,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			if err != nil {
 				return err
 			}
-			rel, err = dbo.Relation(ctx, tblStr, txn)
+			rel, err = dbo.Relation(ctx, tblStr, nil)
 			if err != nil {
 				return err
 			}

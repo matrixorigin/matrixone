@@ -156,7 +156,7 @@ func (t *Type) Unmarshal(data []byte) error {
 	typLen := DecodeInt32(data[:4])
 	data = data[4:]
 	typ := DecodeType(data[:typLen])
-	data = data[typLen:]
+	// data = data[typLen:]
 	t.Oid = typ.Oid
 	t.Charset = typ.Charset
 	t.notNull = typ.notNull
