@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -34,6 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const maxAutoRetryTimes int = 20
 
 type sqlExecutor struct {
 	addr      string
@@ -98,16 +101,33 @@ func (s *sqlExecutor) ExecTxn(
 	if err != nil {
 		return err
 	}
-	err = execFunc(exec)
-	if err != nil {
-		logutil.Errorf("internal sql executor error: %v", err)
-		return exec.rollback(err)
+
+	rollbackIfErr := func(err error) error {
+		if err != nil {
+			return exec.rollback(err)
+		}
+		return nil
 	}
-	if err = exec.commit(); err != nil {
-		return err
+
+	for i := 0; i < maxAutoRetryTimes; i++ {
+		if err := rollbackIfErr(execFunc(exec)); err != nil {
+			logutil.Errorf("internal sql executor error: %v", err)
+			if opts.AutoRetry() {
+				logutil.Debugf("retry %d", i)
+				continue
+			}
+			return err
+		}
+		if err := rollbackIfErr(exec.commit()); err != nil {
+			if opts.AutoRetry() {
+				continue
+			}
+			return err
+		}
+		s.maybeWaitCommittedLogApplied(exec.opts)
+		return nil
 	}
-	s.maybeWaitCommittedLogApplied(exec.opts)
-	return nil
+	return moerr.NewInternalError(ctx, "internal executor: auto retry failed")
 }
 
 func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {

@@ -148,7 +148,7 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	// current node get the bootstrap privilege
 	if ok {
 
-		opts := executor.Options{}
+		opts := executor.Options{}.WithAutoRetry()
 		if err := b.exec.ExecTxn(ctx, execFunc(step1InitSQLs), opts); err != nil {
 			return err
 		}
@@ -156,7 +156,7 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 		getLogger().Info("bootstrap mo step 1 completed")
 
 		// make sure txn start at now, and make sure can see the data of step1
-		opts = opts.WithMinCommittedTS(b.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
+		opts = opts.WithMinCommittedTS(b.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied().WithAutoRetry()
 		if err := b.exec.ExecTxn(ctx, execFunc(step2InitSQLs), opts); err != nil {
 			getLogger().Error("bootstrap mo step 2 failed",
 				zap.Error(err))

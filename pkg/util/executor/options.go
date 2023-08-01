@@ -64,6 +64,11 @@ func (opts Options) WithWaitCommittedLogApplied() Options {
 	return opts
 }
 
+func (opts Options) WithAutoRetry() Options {
+	opts.autoRetry = true
+	return opts
+}
+
 // Database returns default database
 func (opts Options) Database() string {
 	return opts.database
@@ -119,4 +124,9 @@ func (opts Options) DisableIncrStatement() bool {
 // GetTimeZone return the time zone of original session
 func (opts Options) GetTimeZone() *time.Location {
 	return opts.timeZone
+}
+
+// AutoRetry return true if auto retry is set
+func (opts Options) AutoRetry() bool {
+	return opts.autoRetry
 }

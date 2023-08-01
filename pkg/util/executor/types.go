@@ -50,6 +50,8 @@ type Options struct {
 	innerTxn                bool
 	waitCommittedLogApplied bool
 	timeZone                *time.Location
+
+	autoRetry bool
 }
 
 // Result exec sql result
