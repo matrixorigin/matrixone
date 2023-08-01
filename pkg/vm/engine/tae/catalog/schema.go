@@ -364,18 +364,12 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 		return
 	}
 	n += int64(sn2)
-	//colBuf := make([]byte, types.TSize)
 	for i := uint16(0); i < colCnt; i++ {
 		def := new(ColDef)
 		if sn2, err = r.Read(types.EncodeUint16(&def.SeqNum)); err != nil {
 			return
 		}
 		n += int64(sn2)
-		// if _, err = r.Read(colBuf); err != nil {
-		// 	return
-		// }
-		// n += int64(types.TSize)
-		// def.Type = types.DecodeType(colBuf)
 		if def.Name, sn, err = objectio.ReadString(r); err != nil {
 			return
 		}
@@ -499,9 +493,6 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if _, err = w.Write(types.EncodeUint16(&def.SeqNum)); err != nil {
 			return
 		}
-		// if _, err = w.Write(types.EncodeType(&def.Type)); err != nil {
-		// 	return
-		// }
 		if _, err = objectio.WriteString(def.Name, &w); err != nil {
 			return
 		}

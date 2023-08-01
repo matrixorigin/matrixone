@@ -15,7 +15,6 @@
 package types
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -112,7 +111,8 @@ type Type struct {
 
 // ProtoSize is used by gogoproto.
 func (t *Type) ProtoSize() int {
-	return 2*4 + 4*3
+	_, typelen := EncodeType(t)
+	return 1*4 + int(typelen)
 }
 
 // MarshalToSizedBuffer is used by gogoproto.
@@ -120,14 +120,15 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	if len(data) < t.ProtoSize() {
 		panic("invalid byte slice")
 	}
-	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
-	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
-	binary.BigEndian.PutUint16(data[4:], uint16(t.notNull))
-	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
-	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
-	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
-	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
-	return 20, nil
+
+	typedata, typelen := EncodeType(t)
+	lendata := EncodeInt32(&typelen)
+	dat := make([]byte, 0)
+	dat = append(dat, lendata...)
+	dat = append(dat, typedata...)
+	copy(data, dat[:])
+
+	return len(data), nil
 }
 
 // MarshalTo is used by gogoproto.
@@ -151,13 +152,19 @@ func (t *Type) Unmarshal(data []byte) error {
 	if len(data) < t.ProtoSize() {
 		panic("invalid byte slice")
 	}
-	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
-	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
-	t.notNull = uint8(binary.BigEndian.Uint16(data[4:]))
-	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
-	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
-	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
-	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
+
+	typLen := DecodeInt32(data[:4])
+	data = data[4:]
+	typ := DecodeType(data[:typLen])
+	data = data[typLen:]
+	t.Oid = typ.Oid
+	t.Charset = typ.Charset
+	t.notNull = typ.notNull
+	t.dummy2 = typ.dummy2
+	t.Size = typ.Size
+	t.Width = typ.Width
+	t.Scale = typ.Scale
+	t.EnumValues = typ.EnumValues
 	return nil
 }
 

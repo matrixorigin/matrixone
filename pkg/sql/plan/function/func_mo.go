@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/enum"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -142,7 +143,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if proc.TxnOperator == nil {
-		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
+		return moerr.NewInternalError(proc.Ctx, "MoTableSize: txn operator is nil")
 	}
 	txn := proc.TxnOperator
 
@@ -239,7 +240,7 @@ func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if !ok || proc.TxnOperator == nil {
-		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
+		return moerr.NewInternalError(proc.Ctx, "MoTableColMaxMin: txn operator is nil")
 	}
 	txn := proc.TxnOperator
 
@@ -419,3 +420,138 @@ var (
 		"mo_stages":                   0,
 	}
 )
+
+// CastIndexToValue returns enum type index according to the value
+func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	tbls := vector.GenerateFunctionStrParameter(ivecs[0])
+	colNames := vector.GenerateFunctionStrParameter(ivecs[1])
+	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[2])
+
+	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if proc.TxnOperator == nil {
+		return moerr.NewInternalError(proc.Ctx, "CastIndexToValue: txn operator is nil")
+	}
+	txn := proc.TxnOperator
+
+	ses := proc.SessionInfo
+	dbStr := ses.Database
+
+	for i := uint64(0); i < uint64(length); i++ {
+		tbl, tblnull := tbls.GetStrValue(i)
+		colName, colnull := colNames.GetStrValue(i)
+		indexVal, indexnull := indexs.GetValue(i)
+		if tblnull || colnull || indexnull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var rel engine.Relation
+			tblStr := functionUtil.QuickBytesToStr(tbl)
+			colStr := functionUtil.QuickBytesToStr(colName)
+
+			ctx := proc.Ctx
+			if isClusterTable(dbStr, tblStr) {
+				//if it is the cluster table in the general account, switch into the sys account
+				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+			}
+			dbo, err := e.Database(ctx, dbStr, txn)
+			if err != nil {
+				return err
+			}
+			rel, err = dbo.Relation(ctx, tblStr, txn)
+			if err != nil {
+				return err
+			}
+
+			// get the table cols
+			cols, err := rel.TableColumns(ctx)
+			if err != nil {
+				return err
+			}
+			var enumVlaue string
+
+			for _, col := range cols {
+				if col.Name == colStr && col.Type.Oid == types.T_enum {
+					enumVlaue, err = enum.ParseEnumIndex(col.Type.EnumValues, indexVal)
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+			if err = rs.AppendBytes([]byte(enumVlaue), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// CastValueToIndex returns enum type index according to the value
+func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint16](result)
+	tbls := vector.GenerateFunctionStrParameter(ivecs[0])
+	colNames := vector.GenerateFunctionStrParameter(ivecs[1])
+	enumValues := vector.GenerateFunctionStrParameter(ivecs[2])
+
+	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if proc.TxnOperator == nil {
+		return moerr.NewInternalError(proc.Ctx, "CastValueToIndex: txn operator is nil")
+	}
+	txn := proc.TxnOperator
+
+	ses := proc.SessionInfo
+	dbStr := ses.Database
+
+	for i := uint64(0); i < uint64(length); i++ {
+		tbl, tblnull := tbls.GetStrValue(i)
+		colName, colnull := colNames.GetStrValue(i)
+		enumValue, enumValNull := enumValues.GetStrValue(i)
+		if tblnull || colnull || enumValNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			var rel engine.Relation
+			tblStr := functionUtil.QuickBytesToStr(tbl)
+			colStr := functionUtil.QuickBytesToStr(colName)
+			enumStr := functionUtil.QuickBytesToStr(enumValue)
+
+			ctx := proc.Ctx
+			if isClusterTable(dbStr, tblStr) {
+				//if it is the cluster table in the general account, switch into the sys account
+				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+			}
+			dbo, err := e.Database(ctx, dbStr, txn)
+			if err != nil {
+				return err
+			}
+			rel, err = dbo.Relation(ctx, tblStr, txn)
+			if err != nil {
+				return err
+			}
+
+			// get the table cols
+			cols, err := rel.TableColumns(ctx)
+			if err != nil {
+				return err
+			}
+			var index uint16
+
+			for _, col := range cols {
+				if col.Name == colStr && col.Type.Oid == types.T_enum {
+					index, err = enum.ParseEnum(col.Type.EnumValues, enumStr)
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+			if err = rs.Append(index, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

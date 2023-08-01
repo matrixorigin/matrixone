@@ -76,8 +76,6 @@ func (info *aggInfo) UnmarshalBinary(data []byte) error {
 	data = data[4:]
 	info.Dist = types.DecodeBool(data[:1])
 	data = data[1:]
-	// info.inputTypes = types.DecodeType(data[:types.TSize])
-	// data = data[types.TSize:]
 	// Decode type
 	len := types.DecodeInt32(data[:4])
 	data = data[4:]
