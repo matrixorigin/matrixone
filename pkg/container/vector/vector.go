@@ -2332,7 +2332,7 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 	vec.class = CONSTANT
 	col := vec.col.([]T)
 	col[0] = val
-	vec.data = vec.data[:vec.Capacity()]
+	vec.data = vec.data[:cap(vec.data)]
 	vec.SetLength(length)
 	return nil
 }
@@ -2353,6 +2353,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 		return err
 	}
 	col[0] = va
+	vec.data = vec.data[:cap(vec.data)]
 	vec.SetLength(length)
 	return nil
 }

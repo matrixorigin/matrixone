@@ -16,7 +16,6 @@ package loopjoin
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -135,13 +134,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					for k, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err = rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-								vec.Free(proc.Mp())
 								rbat.Clean(proc.Mp())
 								return err
 							}
 						} else {
 							if err = rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-								vec.Free(proc.Mp())
 								rbat.Clean(proc.Mp())
 								return err
 							}
@@ -151,21 +148,19 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 		} else {
-			l := vec.Length()
-			for j := uint64(0); j < uint64(l); j++ {
+			l := uint64(ctr.bat.RowCount())
+			for j := uint64(0); j < l; j++ {
 				b, null := rs.GetValue(j)
 				if !null && b {
 					for k, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+							if err = rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								vec.Free(proc.Mp())
 								return err
 							}
 						} else {
-							if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
+							if err = rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								vec.Free(proc.Mp())
 								return err
 							}
 						}
