@@ -119,8 +119,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 			return nil, true, nil
 		}
 
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
+		bat := (*batch.Batch)(value.UnsafePointer())
 		if bat == nil {
 			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
 			r.aliveMergeReceiver--
@@ -149,8 +148,7 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 			continue
 		}
 
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
+		bat := (*batch.Batch)(value.UnsafePointer())
 		if bat == nil {
 			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
 			r.aliveMergeReceiver--
