@@ -583,6 +583,7 @@ func init() {
 		"stage":                      STAGE,
 		"stages":                     STAGES,
 		"credentials":                CREDENTIALS,
-		"embedding":                  EMBEDDING,
+		"array_float32":              ARRAY_FLOAT32,
+		"array_float64":              ARRAY_FLOAT64,
 	}
 }

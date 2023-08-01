@@ -44,7 +44,7 @@ const (
 
 	GeometryFamily
 
-	EmbeddingFamily
+	ArrayFamily
 )
 
 type IntervalDurationField struct {
@@ -77,6 +77,7 @@ type InternalType struct {
 		From: https://dev.mysql.com/doc/refman/8.0/en/numeric-type-attributes.html
 		display width
 	*/
+	//TODO: Fix Typo
 	DisplayWith int32
 
 	//the accuracy of the data type.

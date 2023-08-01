@@ -79,8 +79,12 @@ var (
 		output string
 	}{
 		{
-			input:  "create table t1 (a int, b embedding(30))",
-			output: "create table t1 (a int, b embedding(30))",
+			input:  "create table t1 (a int, b array_float32(30))",
+			output: "create table t1 (a int, b array_float32(30))",
+		},
+		{
+			input:  "create table t1 (a int, b array_float64(30))",
+			output: "create table t1 (a int, b array_float64(30))",
 		},
 		{
 			input:  "insert into t1 values (1, \"[1,2,3]\" )",

@@ -37,9 +37,8 @@ type FunctionParameterWrapper[T types.FixedSizeT] interface {
 	GetValue(idx uint64) (T, bool)
 
 	// GetStrValue return the Idx th string value and if it's null or not.
+	//TODO: Later rename it to GetBytes.
 	GetStrValue(idx uint64) ([]byte, bool)
-
-	GetEmbeddingValue(idx uint64) ([]float32, bool)
 
 	// UnSafeGetAllValue return all the values.
 	// please use it carefully because we didn't check the null situation.
@@ -169,13 +168,6 @@ func (p *FunctionParameterNormal[T]) GetStrValue(idx uint64) (value []byte, isNu
 	return p.strValues[idx].GetByteSlice(p.area), false
 }
 
-func (p *FunctionParameterNormal[T]) GetEmbeddingValue(idx uint64) ([]float32, bool) {
-	if p.nullMap.Contains(idx) {
-		return nil, true
-	}
-	return types.BytesToEmbedding(p.strValues[idx].ByteSlice()), false
-}
-
 func (p *FunctionParameterNormal[T]) UnSafeGetAllValue() []T {
 	return p.values
 }
@@ -212,13 +204,6 @@ func (p *FunctionParameterNormalSpecial1[T]) GetStrValue(idx uint64) ([]byte, bo
 	return p.strValues[idx].ByteSlice(), false
 }
 
-func (p *FunctionParameterNormalSpecial1[T]) GetEmbeddingValue(idx uint64) ([]float32, bool) {
-	if p.nullMap.Contains(idx) {
-		return nil, true
-	}
-	return types.BytesToEmbedding(p.strValues[idx].ByteSlice()), false
-}
-
 func (p *FunctionParameterNormalSpecial1[T]) UnSafeGetAllValue() []T {
 	panic("not implement")
 }
@@ -253,10 +238,6 @@ func (p *FunctionParameterWithoutNull[T]) GetStrValue(idx uint64) ([]byte, bool)
 	return p.strValues[idx].GetByteSlice(p.area), false
 }
 
-func (p *FunctionParameterWithoutNull[T]) GetEmbeddingValue(idx uint64) ([]float32, bool) {
-	return p.strValues[idx].GetEmbedding(p.area), false
-}
-
 func (p *FunctionParameterWithoutNull[T]) UnSafeGetAllValue() []T {
 	return p.values
 }
@@ -287,10 +268,6 @@ func (p *FunctionParameterWithoutNullSpecial1[T]) GetValue(_ uint64) (T, bool) {
 
 func (p *FunctionParameterWithoutNullSpecial1[T]) GetStrValue(idx uint64) ([]byte, bool) {
 	return p.strValues[idx].ByteSlice(), false
-}
-
-func (p *FunctionParameterWithoutNullSpecial1[T]) GetEmbeddingValue(idx uint64) ([]float32, bool) {
-	return types.BytesToEmbedding(p.strValues[idx].ByteSlice()), false
 }
 
 func (p *FunctionParameterWithoutNullSpecial1[T]) UnSafeGetAllValue() []T {
@@ -325,10 +302,6 @@ func (p *FunctionParameterScalar[T]) GetStrValue(_ uint64) ([]byte, bool) {
 	return p.scalarStr, false
 }
 
-func (p *FunctionParameterScalar[T]) GetEmbeddingValue(_ uint64) ([]float32, bool) {
-	return types.BytesToEmbedding(p.scalarStr), false
-}
-
 func (p *FunctionParameterScalar[T]) UnSafeGetAllValue() []T {
 	return []T{p.scalarValue}
 }
@@ -356,10 +329,6 @@ func (p *FunctionParameterScalarNull[T]) GetValue(_ uint64) (value T, isNull boo
 }
 
 func (p *FunctionParameterScalarNull[T]) GetStrValue(_ uint64) ([]byte, bool) {
-	return nil, true
-}
-
-func (p *FunctionParameterScalarNull[T]) GetEmbeddingValue(_ uint64) ([]float32, bool) {
 	return nil, true
 }
 
@@ -478,14 +447,14 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 	return nil
 }
 
-func (fr *FunctionResult[T]) AppendEmbedding(val []float32, isnull bool) error {
-	if !fr.vec.IsConst() {
-		return AppendEmbedding(fr.vec, val, isnull, fr.mp)
-	} else if !isnull {
-		return SetConstEmbedding(fr.vec, val, fr.vec.Length(), fr.mp)
-	}
-	return nil
-}
+//func (fr *FunctionResult[T]) AppendEmbedding(val []float32, isnull bool) error {
+//	if !fr.vec.IsConst() {
+//		return AppendArray(fr.vec, val, isnull, fr.mp)
+//	} else if !isnull {
+//		return SetConstArray(fr.vec, val, fr.vec.Length(), fr.mp)
+//	}
+//	return nil
+//}
 
 func (fr *FunctionResult[T]) AppendMustValue(val T) {
 	fr.cols[fr.length] = val
@@ -551,12 +520,11 @@ func NewFunctionResultWrapper(
 	v := getVectorMethod(typ)
 
 	switch typ.Oid {
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64:
 		// IF STRING type.
 		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_json:
-		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
-	case types.T_embedding:
 		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
 	}
 

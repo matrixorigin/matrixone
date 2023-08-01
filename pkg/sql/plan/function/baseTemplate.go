@@ -492,8 +492,8 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 	return nil
 }
 
-func embeddingArith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error)) (err error) {
+func arrayArith[T types.BuiltinNumber](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	arithFn func(v1, v2 []T, scale1, scale2 int32) ([]T, error)) error {
 
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -501,10 +501,17 @@ func embeddingArith(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetEmbeddingValue(0)
-		v2, _ := p2.GetEmbeddingValue(0)
-		res, _ := arithFn(v1, v2, 0, 0)
-		rs.AppendEmbedding(res, false)
+		_v1, _ := p1.GetStrValue(0)
+		_v2, _ := p2.GetStrValue(0)
+
+		v1 := types.BytesToArray[T](_v1)
+		v2 := types.BytesToArray[T](_v2)
+		res, err := arithFn(v1, v2, 0, 0)
+
+		if err != nil {
+			return err
+		}
+		rs.AppendBytes(types.ArrayToBytes[T](res), false)
 	}
 
 	return nil

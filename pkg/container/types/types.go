@@ -17,7 +17,6 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
@@ -83,7 +82,8 @@ const (
 	T_tuple T = 201
 
 	// Embedding family
-	T_embedding T = 210
+	T_array_float32 T = 220
+	T_array_float64 T = 221 //note: max value of uint8 is 255
 )
 
 const (
@@ -371,7 +371,8 @@ var Types map[string]T = map[string]T{
 	"rowid":                 T_Rowid,
 	"blockid":               T_Blockid,
 
-	"embedding": T_embedding,
+	"array float32": T_array_float32, // TODO: should i include the space?
+	"array float64": T_array_float64,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -568,9 +569,9 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
-	case T_embedding:
+	case T_array_float32, T_array_float64:
 		typ.Size = VarlenaSize
-		typ.Width = MaxEmbeddingDimension
+		typ.Width = MaxArrayDimension
 	case T_binary:
 		typ.Size = VarlenaSize
 		typ.Width = MaxBinaryLen
@@ -652,8 +653,10 @@ func (t T) String() string {
 		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
-	case T_embedding:
-		return "EMBEDDING"
+	case T_array_float32:
+		return "ARRAY FLOAT"
+	case T_array_float64:
+		return "ARRAY DOUBLE"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -721,8 +724,10 @@ func (t T) OidString() string {
 		return "T_Blockid"
 	case T_interval:
 		return "T_interval"
-	case T_embedding:
-		return "T_embedding"
+	case T_array_float32:
+		return "T_array_float32"
+	case T_array_float64:
+		return "T_array_float64"
 	}
 	return "unknown_type"
 }
@@ -752,7 +757,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -770,8 +775,6 @@ func (t T) TypeLen() int {
 		return BlockidSize
 	case T_tuple, T_interval:
 		return 0
-	case T_embedding:
-		return VarlenaSize
 	}
 	panic(fmt.Sprintf("unknown type %d", t))
 }
@@ -803,9 +806,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
-		return -24
-	case T_embedding:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
 		return -24
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))

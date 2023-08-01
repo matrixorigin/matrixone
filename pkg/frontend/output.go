@@ -210,8 +210,10 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
-	case types.T_embedding:
-		row[i] = vec.GetEmbeddingAt(rowIndex) // check if we need to copy
+	case types.T_array_float32:
+		row[i] = vector.GetArrayAt[float32](vec, rowIndex) // check if we need to copy
+	case types.T_array_float64:
+		row[i] = vector.GetArrayAt[float64](vec, rowIndex) // check if we need to copy
 	case types.T_date:
 		row[i] = vector.GetFixedAt[types.Date](vec, rowIndex)
 	case types.T_datetime:

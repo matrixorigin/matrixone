@@ -245,7 +245,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_embedding,
+		types.T_array_float32, types.T_array_float64,
 	},
 
 	types.T_binary: {
@@ -1418,9 +1418,12 @@ func strTypeToOthers(proc *process.Process,
 		types.T_binary, types.T_varbinary, types.T_blob:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(proc.Ctx, source, rs, length, toType)
-	case types.T_embedding:
+	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToEmbedding(proc.Ctx, source, rs, length, toType)
+		return strToEmbedding[float32](proc.Ctx, source, rs, length, toType)
+	case types.T_array_float64:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToEmbedding[float64](proc.Ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -3778,7 +3781,7 @@ func strToStr(
 	return nil
 }
 
-func strToEmbedding(
+func strToEmbedding[T types.BuiltinNumber](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
@@ -3788,12 +3791,17 @@ func strToEmbedding(
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null || len(v) == 0 {
-			if err := to.AppendEmbedding(nil, true); err != nil {
+			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			s := types.StringToEmbedding(convertByteSliceToString(v))
-			if err := to.AppendEmbedding(s, false); err != nil {
+			//TODO: Improve
+			s, err := types.StringToArray[T](convertByteSliceToString(v))
+			if err != nil {
+				return err
+			}
+			b := types.ArrayToBytes[T](s)
+			if err := to.AppendBytes(b, false); err != nil {
 				return err
 			}
 		}
