@@ -772,7 +772,6 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		if wva[wi].IsSmall() {
 			vva[vi] = wva[wi]
 		} else {
-			//TODO: Need to see if T_embedding will fail or not
 			bs := wva[wi].GetByteSlice(w.area)
 			err = BuildVarlenaFromByteSlice(v, &vva[vi], &bs, mp)
 			if err != nil {
@@ -1396,7 +1395,6 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64:
-		//TODO: Need to check if T_embedding will work here or not.
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {

@@ -544,7 +544,6 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 	default:
 		return false, moerr.NewInternalErrorNoCtx("unsupport compare type")
 	}
-	//TODO: T_embedding won't be used in zonemap.
 	return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 }
 
@@ -708,7 +707,6 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Rowid](vec)
 	case types.T_Blockid:
 		return appendBytesToFixSized[types.Blockid](vec)
-		//TODO: Embedding won't be used in Zonemap
 	}
 	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
 }

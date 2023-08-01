@@ -82,7 +82,7 @@ func StringToArray[T BuiltinNumber](input string) ([]T, error) {
 			}
 			result[i] = *(*T)(unsafe.Pointer(&num))
 		default:
-			panic("not implemented")
+			panic(moerr.NewInternalErrorNoCtx("not implemented"))
 		}
 
 	}

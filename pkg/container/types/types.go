@@ -81,7 +81,7 @@ const (
 	// system family
 	T_tuple T = 201
 
-	// Embedding family
+	// Array family
 	T_array_float32 T = 220
 	T_array_float64 T = 221 //note: max value of uint8 is 255
 )

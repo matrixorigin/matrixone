@@ -1420,10 +1420,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToStr(proc.Ctx, source, rs, length, toType)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToEmbedding[float32](proc.Ctx, source, rs, length, toType)
+		return strToArray[float32](proc.Ctx, source, rs, length, toType)
 	case types.T_array_float64:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToEmbedding[float64](proc.Ctx, source, rs, length, toType)
+		return strToArray[float64](proc.Ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -3781,7 +3781,7 @@ func strToStr(
 	return nil
 }
 
-func strToEmbedding[T types.BuiltinNumber](
+func strToArray[T types.BuiltinNumber](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
