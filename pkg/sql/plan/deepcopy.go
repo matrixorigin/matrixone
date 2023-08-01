@@ -654,7 +654,11 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 		AlterTable := &plan.AlterTable{
 			Database:       df.AlterTable.Database,
 			TableDef:       DeepCopyTableDef(df.AlterTable.TableDef),
+			CopyTableDef:   DeepCopyTableDef(df.AlterTable.CopyTableDef),
 			IsClusterTable: df.AlterTable.IsClusterTable,
+			AlgorithmType:  df.AlterTable.AlgorithmType,
+			CreateTableSql: df.AlterTable.CreateTableSql,
+			InsertDataSql:  df.AlterTable.InsertDataSql,
 			Actions:        make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
 		}
 		for i, action := range df.AlterTable.Actions {
@@ -930,7 +934,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Sub:
 		newExpr.Expr = &plan.Expr_Sub{
 			Sub: &plan.SubqueryRef{
-				NodeId: item.Sub.GetNodeId(),
+				NodeId:  item.Sub.GetNodeId(),
+				Typ:     item.Sub.Typ,
+				Op:      item.Sub.Op,
+				RowSize: item.Sub.RowSize,
+				Child:   DeepCopyExpr(item.Sub.Child),
 			},
 		}
 

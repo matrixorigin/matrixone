@@ -298,14 +298,16 @@ type AlterColPos struct {
 	Pos        int32
 }
 
+// suggest rename: AlterAddColumnPosition
 type AlterAddCol struct {
-	Column *ColumnTableDef
-	Pos    *AlterColPos
+	Column   *ColumnTableDef
+	Position *ColumnPosition
 }
 
 func (node *AlterAddCol) Format(ctx *FmtCtx) {
 	ctx.WriteString("add column ")
 	node.Column.Format(ctx)
+	node.Position.Format(ctx)
 }
 
 type AccountsSetOption struct {
@@ -355,3 +357,181 @@ func (node *AlterPublication) Format(ctx *FmtCtx) {
 
 func (node *AlterPublication) GetStatementType() string { return "Alter Publication" }
 func (node *AlterPublication) GetQueryType() string     { return QueryTypeDCL }
+
+type AlterTableModifyColumnClause struct {
+	alterOptionImpl
+	Typ       AlterTableOptionType
+	NewColumn *ColumnTableDef
+	Position  *ColumnPosition
+}
+
+func (node *AlterTableModifyColumnClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("modify column ")
+	node.NewColumn.Format(ctx)
+	node.Position.Format(ctx)
+}
+
+type AlterTableChangeColumnClause struct {
+	alterOptionImpl
+	Typ           AlterTableOptionType
+	OldColumnName *UnresolvedName
+	NewColumn     *ColumnTableDef
+	Position      *ColumnPosition
+}
+
+func (node *AlterTableChangeColumnClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("change column")
+	ctx.WriteString(" ")
+	node.OldColumnName.Format(ctx)
+	ctx.WriteString(" ")
+	node.NewColumn.Format(ctx)
+	node.Position.Format(ctx)
+}
+
+type AlterTableAddColumnClause struct {
+	alterOptionImpl
+	Typ        AlterTableOptionType
+	NewColumns []*ColumnTableDef
+	Position   *ColumnPosition
+	// when Position is not none, the len(NewColumns) must be one
+}
+
+func (node *AlterTableAddColumnClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("add column ")
+	isFirst := true
+	for _, column := range node.NewColumns {
+		if isFirst {
+			column.Format(ctx)
+			isFirst = false
+		}
+		ctx.WriteString(", ")
+		column.Format(ctx)
+	}
+	node.Position.Format(ctx)
+}
+
+type AlterTableRenameColumnClause struct {
+	alterOptionImpl
+	Typ           AlterTableOptionType
+	OldColumnName *UnresolvedName
+	NewColumnName *UnresolvedName
+}
+
+func (node *AlterTableRenameColumnClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("rename column ")
+	node.OldColumnName.Format(ctx)
+	ctx.WriteString(" to ")
+	node.NewColumnName.Format(ctx)
+}
+
+// AlterColumnOptionType is the type for AlterTableAlterColumn
+type AlterColumnOptionType int
+
+// AlterColumnOptionType types.
+const (
+	AlterColumnOptionSetDefault AlterColumnOptionType = iota
+	AlterColumnOptionSetVisibility
+	AlterColumnOptionDropDefault
+)
+
+type AlterTableAlterColumnClause struct {
+	alterOptionImpl
+	Typ         AlterTableOptionType
+	ColumnName  *UnresolvedName
+	DefalutExpr *AttributeDefault
+	Visibility  VisibleType
+	OptionType  AlterColumnOptionType
+}
+
+func (node *AlterTableAlterColumnClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter column ")
+	node.ColumnName.Format(ctx)
+	if node.OptionType == AlterColumnOptionSetDefault {
+		ctx.WriteString(" set ")
+		node.DefalutExpr.Format(ctx)
+	} else if node.OptionType == AlterColumnOptionSetVisibility {
+		ctx.WriteString(" set")
+		switch node.Visibility {
+		case VISIBLE_TYPE_VISIBLE:
+			ctx.WriteString(" visible")
+		case VISIBLE_TYPE_INVISIBLE:
+			ctx.WriteString(" invisible")
+		}
+	} else {
+		ctx.WriteString(" drop default")
+	}
+}
+
+type AlterTableOrderByColumnClause struct {
+	alterOptionImpl
+	Typ              AlterTableOptionType
+	AlterOrderByList []*AlterColumnOrder
+}
+
+func (node *AlterTableOrderByColumnClause) Format(ctx *FmtCtx) {
+	prefix := "order by "
+	for _, columnOrder := range node.AlterOrderByList {
+		ctx.WriteString(prefix)
+		columnOrder.Format(ctx)
+		prefix = ", "
+	}
+}
+
+type AlterColumnOrder struct {
+	Column    *UnresolvedName
+	Direction Direction
+}
+
+func (node *AlterColumnOrder) Format(ctx *FmtCtx) {
+	node.Column.Format(ctx)
+	if node.Direction != DefaultDirection {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.Direction.String())
+	}
+}
+
+// AlterTableType is the type for AlterTableOptionType.
+type AlterTableOptionType int
+
+// AlterTable types.
+const (
+	AlterTableModifyColumn AlterTableOptionType = iota
+	AlterTableChangeColumn
+	AlterTableRenameColumn
+	AlterTableAlterColumn
+	AlterTableOrderByColumn
+	AlterTableAddConstraint
+	AlterTableAddColumn
+)
+
+// ColumnPositionType is the type for ColumnPosition.
+type ColumnPositionType int
+
+// ColumnPosition Types
+// Do not change the value of a constant, as there are external dependencies
+const (
+	ColumnPositionNone  ColumnPositionType = -1
+	ColumnPositionFirst ColumnPositionType = 0
+	ColumnPositionAfter ColumnPositionType = 1
+)
+
+// ColumnPosition represent the position of the newly added column
+type ColumnPosition struct {
+	NodeFormatter
+	// Tp is either ColumnPositionNone, ColumnPositionFirst or ColumnPositionAfter.
+	Typ ColumnPositionType
+	// RelativeColumn is the column the newly added column after if type is ColumnPositionAfter
+	RelativeColumn *UnresolvedName
+}
+
+func (node *ColumnPosition) Format(ctx *FmtCtx) {
+	switch node.Typ {
+	case ColumnPositionNone:
+		// do nothing
+	case ColumnPositionFirst:
+		ctx.WriteString(" first")
+	case ColumnPositionAfter:
+		ctx.WriteString(" after ")
+		node.RelativeColumn.Format(ctx)
+	}
+}

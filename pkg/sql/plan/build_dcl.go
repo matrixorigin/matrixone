@@ -26,6 +26,10 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
 			return BuildPlan(ctx, stmt, true)
 		}
+	} else if s, ok := stmt.(*tree.Replace); ok {
+		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
+			return BuildPlan(ctx, stmt, true)
+		}
 	}
 
 	switch stmt := stmt.(type) {

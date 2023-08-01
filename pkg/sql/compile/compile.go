@@ -19,8 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"math"
 	"net"
 	"runtime"
@@ -56,7 +54,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -316,6 +316,8 @@ func (c *Compile) run(s *Scope) error {
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
+	case Replace:
+		return s.replace(c)
 	}
 	return nil
 }
@@ -334,6 +336,7 @@ func (c *Compile) Run(_ uint64) error {
 		pool.Put(c)
 	}()
 	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 	if err := c.runOnce(); err != nil {
@@ -416,6 +419,13 @@ func (c *Compile) runOnce() error {
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
+		switch qry.Query.StmtType {
+		case plan.Query_REPLACE:
+			return []*Scope{{
+				Magic: Replace,
+				Plan:  pn,
+			}}, nil
+		}
 		scopes, err := c.compileQuery(ctx, qry.Query)
 		if err != nil {
 			return nil, err
@@ -754,7 +764,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 					}
 				}
 			}
-			if err := evalRowsetData(ctx, proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
+			if err := evalRowsetData(proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
 				bat.Clean(proc.Mp())
 				return nil, err
 			}
@@ -1210,7 +1220,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs.Proc.Reg.MergeReceivers = receivers
 		return []*Scope{rs}, nil
 	case plan.Node_SINK:
-		receivers := c.getStepRegs(step, ns)
+		receivers := c.getStepRegs(step)
 		if len(receivers) == 0 {
 			return nil, moerr.NewInternalError(c.ctx, "no data receiver for sink node")
 		}
@@ -1239,7 +1249,7 @@ func (c *Compile) getNodeReg(step, nodeId int32) *process.WaitRegister {
 	return c.nodeRegs[[2]int32{step, nodeId}]
 }
 
-func (c *Compile) getStepRegs(step int32, ns []*plan.Node) []*process.WaitRegister {
+func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 	wrs := make([]*process.WaitRegister, len(c.stepRegs[step]))
 	for i, sn := range c.stepRegs[step] {
 		wrs[i] = c.nodeRegs[sn]
@@ -3211,11 +3221,12 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
 		WithTxn(c.proc.TxnOperator).
-		WithDatabase(c.db)
+		WithDatabase(c.db).
+		WithTimeZone(c.proc.SessionInfo.TimeZone)
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
-func evalRowsetData(ctx context.Context, proc *process.Process,
+func evalRowsetData(proc *process.Process,
 	exprs []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor) error {
 	var bats []*batch.Batch
 
@@ -3251,12 +3262,18 @@ func evalRowsetData(ctx context.Context, proc *process.Process,
 }
 
 func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
-	ss2 := make([]*Scope, 0, len(ss))
+	// see errors.Join()
+	n := 0
 	for _, s := range ss {
-		if s.IsEnd {
-			continue
+		if !s.IsEnd {
+			n++
 		}
-		ss2 = append(ss2, s)
+	}
+	ss2 := make([]*Scope, 0, n)
+	for _, s := range ss {
+		if !s.IsEnd {
+			ss2 = append(ss2, s)
+		}
 	}
 	insert := &vm.Instruction{
 		Op:  vm.Insert,

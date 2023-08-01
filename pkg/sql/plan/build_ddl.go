@@ -1581,10 +1581,11 @@ func getTableComment(tableDef *plan.TableDef) string {
 	return comment
 }
 
-func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
+func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
 	alterTable := &plan.AlterTable{
-		Actions: make([]*plan.AlterTable_Action, len(stmt.Options)),
+		Actions:       make([]*plan.AlterTable_Action, len(stmt.Options)),
+		AlgorithmType: plan.AlterTable_INPLACE,
 	}
 
 	databaseName := string(stmt.Table.SchemaName)
@@ -1658,7 +1659,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			case tree.AlterTableDropPrimaryKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_PRIMARY_KEY
 				if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-					return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP Primary Key; check that column/key exists")
+					return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), "PRIMARY")
 				}
 				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP exists Primary Key")
 			case tree.AlterTableDropForeignKey:
@@ -1924,8 +1925,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			}
 			colMap[col.Name] = col
 			preName := ""
-			if opt.Pos.PreColName != nil {
-				preName = opt.Pos.PreColName.Parts[0]
+			if opt.Position.RelativeColumn != nil {
+				preName = opt.Position.RelativeColumn.Parts[0]
 			}
 			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], colType, ctx)
 			if err != nil {
@@ -1937,7 +1938,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 						Name:    opt.Column.Name.Parts[0],
 						PreName: preName,
 						Type:    colType,
-						Pos:     opt.Pos.Pos,
+						Pos:     int32(opt.Position.Typ),
 					},
 				},
 			}
