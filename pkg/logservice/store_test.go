@@ -54,7 +54,6 @@ var (
 
 func TestNodeHostConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Fill()
 	cfg.DeploymentID = 1234
 	cfg.DataDir = "lalala"
 	nhConfig := getNodeHostConfig(cfg)
@@ -73,14 +72,11 @@ func getStoreTestConfig() Config {
 	cfg := DefaultConfig()
 	cfg.UUID = uuid.New().String()
 	cfg.RTTMillisecond = 10
-	cfg.GossipAddress = testGossipAddress
-	cfg.GossipAddressV2 = testGossipAddress
-	cfg.GossipListenAddress = testGossipAddress
+	cfg.GossipPort = testGossipPort
 	cfg.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
 	cfg.DeploymentID = 1
 	cfg.FS = vfs.NewStrictMem()
 	cfg.UseTeeLogDB = true
-	cfg.Fill()
 	return cfg
 }
 
@@ -530,11 +526,10 @@ func getTestStores() (*store, *store, error) {
 	cfg1.DeploymentID = 1
 	cfg1.RTTMillisecond = 5
 	cfg1.DataDir = "data-1"
-	cfg1.ServiceAddress = "127.0.0.1:9001"
-	cfg1.RaftAddress = "127.0.0.1:9002"
-	cfg1.GossipAddress = "127.0.0.1:9011"
+	cfg1.LogServicePort = 9001
+	cfg1.RaftPort = 9002
+	cfg1.GossipPort = 9011
 	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
-	cfg1.Fill()
 	store1, err := newLogStore(cfg1, nil, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, nil, err
@@ -545,11 +540,10 @@ func getTestStores() (*store, *store, error) {
 	cfg2.DeploymentID = 1
 	cfg2.RTTMillisecond = 5
 	cfg2.DataDir = "data-1"
-	cfg2.ServiceAddress = "127.0.0.1:9006"
-	cfg2.RaftAddress = "127.0.0.1:9007"
-	cfg2.GossipAddress = "127.0.0.1:9012"
+	cfg2.LogServicePort = 9006
+	cfg2.RaftPort = 9007
+	cfg2.GossipPort = 9012
 	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
-	cfg2.Fill()
 	store2, err := newLogStore(cfg2, nil, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, nil, err

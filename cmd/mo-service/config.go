@@ -118,7 +118,7 @@ func NewConfig() *Config {
 	return &Config{
 		HAKeeperClient: logservice.HAKeeperClientConfig{
 			DiscoveryAddress: "",
-			ServiceAddresses: []string{logservice.DefaultServiceAddress},
+			ServiceAddresses: []string{logservice.DefaultLogServiceServiceAddress},
 			AllocateIDBatch:  100,
 			EnableCompress:   false,
 		},
