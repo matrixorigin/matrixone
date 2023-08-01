@@ -915,11 +915,11 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	// do not support the constant vector.
-	for _, v := range parameters {
-		if v.IsConst() {
-			return moerr.NewConstraintViolation(proc.Ctx, "serial function don't support constant")
-		}
-	}
+	// for _, v := range parameters {
+	// 	if v.IsConst() {
+	// 		return moerr.NewConstraintViolation(proc.Ctx, "serial function don't support constant")
+	// 	}
+	// }
 
 	ps := types.NewPackerArray(length, proc.Mp())
 	defer func() {

@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/google/uuid"
@@ -404,7 +405,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault && syntaxHasColumnNames {
 			return false, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		checkInsertPkDup = len(slt.Rows) > 1
+		checkInsertPkDup = len(slt.Rows) > 50
 		if !checkInsertPkDup {
 			if len(tableDef.Pkey.Names) == 1 {
 				for idx, name := range insertColumns {
