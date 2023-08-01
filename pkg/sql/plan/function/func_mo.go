@@ -437,6 +437,10 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	ses := proc.SessionInfo
 	dbStr := ses.Database
 
+	if len(dbStr) == 0 {
+		return moerr.NewInternalError(proc.Ctx, "not connect to a database")
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		tbl, tblnull := tbls.GetStrValue(i)
 		colName, colnull := colNames.GetStrValue(i)
