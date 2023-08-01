@@ -15,15 +15,18 @@
 package types
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"io"
 	"strconv"
 	"strings"
 	"unsafe"
 )
 
 const (
-	MaxArrayDimension = 16000
+	//MaxArrayDimension Comment: https://github.com/arjunsk/matrixone/pull/35#discussion_r1275713689
+	MaxArrayDimension = 65536
 )
 
 func BytesToArray[T BuiltinNumber](input []byte) (res []T) {
@@ -35,11 +38,14 @@ func ArrayToBytes[T BuiltinNumber](input []T) []byte {
 }
 
 func ArrayToString[T BuiltinNumber](input []T) string {
-	var strValues []string
-	for _, value := range input {
-		strValues = append(strValues, fmt.Sprintf("%v", value))
+	var buffer bytes.Buffer
+	for i, value := range input {
+		if i > 0 {
+			_, _ = io.WriteString(&buffer, ", ")
+		}
+		_, _ = io.WriteString(&buffer, fmt.Sprintf("%v", value))
 	}
-	return "[" + strings.Join(strValues, ", ") + "]"
+	return "[" + buffer.String() + "]"
 }
 
 func ArraysToString[T BuiltinNumber](input [][]T) string {
