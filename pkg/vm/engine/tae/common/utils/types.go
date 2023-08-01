@@ -49,3 +49,8 @@ type NumericSensor[T types.OrderedT] struct {
 	current    atomic.Pointer[T]
 	name       string
 }
+
+type SimpleSensor struct {
+	name  string
+	state atomic.Int32
+}

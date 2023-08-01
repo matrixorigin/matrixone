@@ -130,3 +130,35 @@ func (s *NumericSensor[T]) String() string {
 	_, _ = w.WriteString(fmt.Sprintf(" State:%s", s.State()))
 	return w.String()
 }
+
+// SimpleSensor
+
+func NewSimpleSensor(name string) *SimpleSensor {
+	return &SimpleSensor{
+		name: name,
+	}
+}
+
+func (s *SimpleSensor) IsRed() bool {
+	return s.State() == SensorStateRed
+}
+
+func (s *SimpleSensor) State() SensorState {
+	state := s.state.Load()
+	return SensorState(state)
+}
+
+func (s *SimpleSensor) SetState(state SensorState) {
+	s.state.Store(int32(state))
+}
+
+func (s *SimpleSensor) Name() string {
+	return s.name
+}
+
+func (s *SimpleSensor) String() string {
+	var w bytes.Buffer
+	_, _ = w.WriteString(fmt.Sprintf("SimpleSensor[\"%s\"]", s.name))
+	_, _ = w.WriteString(fmt.Sprintf(" State:%s", s.State()))
+	return w.String()
+}
