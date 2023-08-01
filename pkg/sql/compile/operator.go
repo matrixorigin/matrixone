@@ -1133,7 +1133,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.Argument {
 	arg := new(shuffle.Argument)
 	var expr *plan.Expr
-	cond := node.OnList[node.Stats.ShuffleColIdx]
+	cond := node.OnList[node.Stats.HashmapStats.ShuffleColIdx]
 	switch condImpl := cond.Expr.(type) {
 	case *plan.Expr_F:
 		if left {
@@ -1145,20 +1145,20 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.A
 
 	hashCol, _ := plan2.GetHashColumn(expr)
 	arg.ShuffleColIdx = hashCol.ColPos
-	arg.ShuffleType = int32(node.Stats.ShuffleType)
-	arg.ShuffleColMin = node.Stats.ShuffleColMin
-	arg.ShuffleColMax = node.Stats.ShuffleColMax
+	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
+	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
+	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.AliveRegCnt = int32(len(ss))
 	return arg
 }
 
 func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 	arg := new(shuffle.Argument)
-	hashCol, _ := plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx])
+	hashCol, _ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos
-	arg.ShuffleType = int32(node.Stats.ShuffleType)
-	arg.ShuffleColMin = node.Stats.ShuffleColMin
-	arg.ShuffleColMax = node.Stats.ShuffleColMax
+	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
+	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
+	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.AliveRegCnt = int32(len(ss))
 	return arg
 }
@@ -1166,7 +1166,7 @@ func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 // cross-cn dispath  will send same batch to all register
 func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
-	if node.Stats.Shuffle {
+	if node.Stats.HashmapStats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
 		return arg
 	}
