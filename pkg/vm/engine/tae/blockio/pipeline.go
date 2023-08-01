@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 
@@ -234,8 +235,11 @@ type IoPipeline struct {
 		prefetchDepth *utils.Sensor[float64]
 	}
 
-	stats        *objectio.Stats
-	statsManager *stopper.Stopper
+	stats struct {
+		selectivityStats  *objectio.Stats
+		prefetchDropStats stats.Counter
+	}
+	printer *stopper.Stopper
 }
 
 func NewIOPipeline(
@@ -267,7 +271,7 @@ func NewIOPipeline(
 	p.fetchFun = readColumns
 	p.prefetchFunc = noopPrefetch
 
-	p.statsManager = stopper.NewStopper("PrintStatsRunner")
+	p.printer = stopper.NewStopper("IOPrinter")
 	return p
 }
 
@@ -285,8 +289,8 @@ func (p *IoPipeline) fillDefaults() {
 		p.jobFactory = jobFactory
 	}
 
-	if p.stats == nil {
-		p.stats = objectio.NewStats()
+	if p.stats.selectivityStats == nil {
+		p.stats.selectivityStats = objectio.NewStats()
 	}
 
 	if p.sensors.prefetchDepth == nil {
@@ -316,7 +320,7 @@ func (p *IoPipeline) Start() {
 		p.waitQ.Start()
 		p.fetch.queue.Start()
 		p.prefetch.queue.Start()
-		if err := p.statsManager.RunNamedTask("print-stats-job", p.crontask); err != nil {
+		if err := p.printer.RunNamedTask("io-printer-job", p.crontask); err != nil {
 			panic(err)
 		}
 	})
@@ -324,7 +328,7 @@ func (p *IoPipeline) Start() {
 
 func (p *IoPipeline) Stop() {
 	p.onceStop.Do(func() {
-		p.statsManager.Stop()
+		p.printer.Stop()
 		p.active.Store(false)
 
 		p.prefetch.queue.Stop()
@@ -425,6 +429,7 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 
 	// if the prefetch queue is full, we will drop the prefetch request
 	if p.sensors.prefetchDepth.IsRed() {
+		p.stats.prefetchDropStats.Add(int64(len(items)))
 		return
 	}
 
@@ -468,8 +473,12 @@ func (p *IoPipeline) onWait(jobs ...any) {
 
 func (p *IoPipeline) crontask(ctx context.Context) {
 	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
-		logutil.Info(p.stats.ExportString())
+		logutil.Info(p.stats.selectivityStats.ExportString())
 		logutil.Info(p.sensors.prefetchDepth.String())
+		wdrops := p.stats.prefetchDropStats.SwapW(0)
+		if wdrops > 0 {
+			logutil.Infof("PrefetchDropStats: %d", wdrops)
+		}
 	}, nil)
 	hb.Start()
 	<-ctx.Done()
