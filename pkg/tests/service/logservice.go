@@ -147,7 +147,7 @@ func newLogService(
 	fs fileservice.FileService,
 	opts logOptions,
 ) (LogService, error) {
-	svc, err := logservice.NewWrappedService(cfg, fs, opts...)
+	svc, err := logservice.NewWrappedService(cfg, fs, nil, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -158,17 +158,16 @@ func newLogService(
 func buildLogConfig(
 	index int, opt Options, address serviceAddresses,
 ) logservice.Config {
-	cfg := logservice.Config{
-		UUID:                  uuid.New().String(),
-		FS:                    vfs.NewStrictMem(),
-		DeploymentID:          defaultDeploymentID,
-		RTTMillisecond:        defaultRTTMillisecond,
-		ServiceAddress:        address.getLogListenAddress(index), // hakeeper client use this address
-		RaftAddress:           address.getLogRaftAddress(index),
-		GossipAddress:         address.getLogGossipAddress(index),
-		GossipSeedAddresses:   address.getLogGossipSeedAddresses(),
-		GossipAllowSelfAsSeed: opt.initial.logReplicaNum == 1,
-	}
+	cfg := logservice.DefaultConfig()
+	cfg.UUID = uuid.New().String()
+	cfg.FS = vfs.NewStrictMem()
+	cfg.DeploymentID = defaultDeploymentID
+	cfg.RTTMillisecond = defaultRTTMillisecond
+	cfg.LogServicePort = getPort(address.getLogListenAddress(index)) // hakeeper client use this address
+	cfg.RaftPort = getPort(address.getLogRaftAddress(index))
+	cfg.GossipPort = getPort(address.getLogGossipAddress(index))
+	cfg.GossipSeedAddresses = address.getLogGossipSeedAddresses()
+	cfg.GossipAllowSelfAsSeed = opt.initial.logReplicaNum == 1
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HeartbeatInterval.Duration = opt.heartbeat.log
 	cfg.HAKeeperCheckInterval.Duration = opt.hakeeper.checkInterval
@@ -178,9 +177,6 @@ func buildLogConfig(
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
 	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
 	cfg.HAKeeperConfig.CNStoreTimeout.Duration = opt.hakeeper.cnStoreTimeout
-
-	// we must invoke Fill in order to set default configuration value.
-	cfg.Fill()
 
 	return cfg
 }

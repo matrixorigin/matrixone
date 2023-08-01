@@ -265,6 +265,24 @@ func (p *VectorPool) Used(isUnsafe bool) (int, int) {
 	return cnt, size
 }
 
+// Only for test
+// It is not safe to call Destory
+func (p *VectorPool) Destory() {
+	fixSizedPool := p.fixSizedPool
+	varlenPool := p.varlenPool
+	mp := p.mp
+	p.mp = nil
+	p.fixSizedPool = nil
+	p.varlenPool = nil
+
+	for _, elem := range fixSizedPool {
+		elem.vec.Free(mp)
+	}
+	for _, elem := range varlenPool {
+		elem.vec.Free(mp)
+	}
+}
+
 func newVectorElement(pool *VectorPool, t *types.Type, mp *mpool.MPool) *vectorPoolElement {
 	vec := vector.NewVec(*t)
 	element := &vectorPoolElement{

@@ -295,8 +295,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 				lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 
-				lastNodeId, err := appendDeleteUniqueTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef,
-					indexdef, typMap, posMap, lastNodeId, delCtx.updateColLength)
+				lastNodeId, err := appendDeleteUniqueTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId)
 				if err != nil {
 					return err
 				}
@@ -443,7 +442,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 			for _, fk := range childTableDef.Fkeys {
 				if fk.ForeignTbl == delCtx.tableDef.TblId {
-					// update stmt: update the columns do not contains ref key, skip
+					// update stmt: update the columns do not contain ref key, skip
 					if isUpdate {
 						updateRefColumn := false
 						for _, colId := range fk.ForeignCols {
@@ -480,7 +479,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									Expr: &plan.Expr_Col{
 										Col: &plan.ColRef{
 											RelPos: 0,
-											ColPos: int32(nameIdxMap[originColumnName]),
+											ColPos: nameIdxMap[originColumnName],
 											Name:   originColumnName,
 										},
 									},
@@ -504,7 +503,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									Expr: &plan.Expr_Col{
 										Col: &plan.ColRef{
 											RelPos: 1,
-											ColPos: int32(childPosMap[childColumnName]),
+											ColPos: childPosMap[childColumnName],
 											Name:   childColumnName,
 										},
 									},
@@ -526,7 +525,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					}
 
 					for idx, col := range childTableDef.Cols {
-						if col.Name != catalog.Row_ID {
+						if col.Name != catalog.Row_ID && col.Name != catalog.CPrimaryKeyColName {
 							if pos, ok := updateChildColPosMap[col.Name]; ok {
 								insertColPos = append(insertColPos, pos)
 							} else {
@@ -2090,7 +2089,6 @@ func appendDeleteUniqueTablePlan(
 	typMap map[string]*plan.Type,
 	posMap map[string]int,
 	baseNodeId int32,
-	updateColLength int,
 ) (int32, error) {
 	lastNodeId := baseNodeId
 	var err error
