@@ -122,9 +122,9 @@ func (mh objectMetaV1) SetTombstoneMetaOffset(offset uint32) {
 }
 
 func (mh objectMetaV1) SubMeta(pos uint16) (objectDataMetaV1, bool) {
-	offStart := schemaCountLen + pos*typePosLen + schemaType + schemaBlockCount + metaHeaderLen
-	offEnd := schemaCountLen + pos*typePosLen + typePosLen + metaHeaderLen
-	offset := types.DecodeUint16(mh[offStart:offEnd])
+	offStart := schemaCountLen + uint32(pos)*typePosLen + schemaType + schemaBlockCount + metaHeaderLen
+	offEnd := schemaCountLen + uint32(pos)*typePosLen + typePosLen + metaHeaderLen
+	offset := types.DecodeUint32(mh[offStart:offEnd])
 	return objectDataMetaV1(mh[offset:]), true
 }
 
@@ -172,8 +172,8 @@ func (oh SubMetaIndex) SubMetaCount() uint16 {
 }
 
 func (oh SubMetaIndex) SetSchemaMeta(pos uint16, st uint16, count uint16, offset uint32) {
-	offStart := schemaCountLen + pos*typePosLen
-	offEnd := schemaCountLen + pos*typePosLen + schemaType
+	offStart := schemaCountLen + uint32(pos)*typePosLen
+	offEnd := schemaCountLen + uint32(pos)*typePosLen + schemaType
 	copy(oh[offStart:offEnd], types.EncodeUint16(&st))
 	copy(oh[offStart+schemaType:offEnd+schemaBlockCount], types.EncodeUint16(&count))
 	copy(oh[offStart+schemaType+schemaBlockCount:offEnd+schemaBlockCount+schemaMetaOffset], types.EncodeUint32(&offset))

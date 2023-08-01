@@ -16,7 +16,6 @@ package objectio
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -67,7 +66,6 @@ func (o objectDataMetaV1) BlockIndex() BlockIndex {
 func (o objectDataMetaV1) GetBlockMeta(id uint32) BlockObject {
 	BlockID := id - uint32(o.BlockHeader().StartID())
 	offset, length := o.BlockIndex().BlockMetaPos(BlockID)
-	logutil.Infof("id %d, dddd %d ddd i%d-%d ", id, uint32(o.BlockHeader().StartID()), offset, length)
 	return BlockObject(o[offset : offset+length])
 }
 

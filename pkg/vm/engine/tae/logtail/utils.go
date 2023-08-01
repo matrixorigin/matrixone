@@ -38,7 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
-const CheckpointBlockRows = 10
+const CheckpointBlockRows = 20
 
 const (
 	CheckpointVersion1 uint32 = 1
@@ -438,6 +438,8 @@ func (data *CNCheckpointData) ReadFrom(
 		for _, bat := range bats {
 			if data.bats[idx] == nil {
 				cnBatch := batch.NewWithSize(len(bat.Vecs))
+				cnBatch.Attrs = make([]string, len(bat.Attrs))
+				copy(cnBatch.Attrs, bat.Attrs)
 				for i := range cnBatch.Vecs {
 					cnBatch.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 					if err = cnBatch.Vecs[i].UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, m); err != nil {
@@ -781,11 +783,8 @@ func (data *CheckpointData) WriteTo(
 		if i == int(MetaIDX) {
 			continue
 		}
-		bats := containers.SplitDNBatch(data.bats[i], CheckpointBlockRows)
+		bats := containers.SplitDNBatch(data.bats[i], 10)
 		for _, bat := range bats {
-			//if i == 21 {
-			logutil.Infof("bats111 is %d name is %v", bat.Length(), name)
-			//}
 			if _, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 				return
 			}

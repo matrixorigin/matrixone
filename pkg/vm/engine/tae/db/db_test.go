@@ -4725,7 +4725,6 @@ func TestFlushTable(t *testing.T) {
 }
 
 func TestReadCheckpoint(t *testing.T) {
-	t.Skip("debug")
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 

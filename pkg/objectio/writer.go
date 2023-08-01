@@ -579,7 +579,8 @@ func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, se
 			w.blocks = append(w.blocks, blocks)
 		}
 	}
-	return w.addBlock(&w.blocks[dataType], blockMeta, bat, seqnums)
+	err := w.addBlock(&w.blocks[dataType], blockMeta, bat, seqnums)
+	return err
 }
 
 func (w *objectWriterV1) GetBlock(id uint32) BlockObject {
