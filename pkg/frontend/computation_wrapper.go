@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/mohae/deepcopy"
 
 	"github.com/google/uuid"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -206,6 +208,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
+
+	txnCtx = fileservice.EnsureStatementProfiler(txnCtx, requestCtx)
 
 	// Increase the statement ID and update snapshot TS before build plan, because the
 	// snapshot TS is used when build plan.
