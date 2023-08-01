@@ -89,10 +89,10 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 		}
 		s.logger.Info("applying schedule command", zap.String("command", cmd.LogString()))
 		if cmd.CreateTaskService != nil {
+			s.upgrade()
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
 			s.createProxyUser(cmd.CreateTaskService)
-			s.upgrade()
 		}
 	}
 }
