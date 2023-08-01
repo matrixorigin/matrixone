@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +23,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -36,6 +36,8 @@ const (
 	defaultServiceAddress    = "0.0.0.0:32001"
 	defaultGossipAddress     = "0.0.0.0:32002"
 	defaultGossipSeedAddress = "127.0.0.1:32002"
+	defaultRaftPort          = 32000
+	defaultGossipPort        = 32002
 
 	defaultGossipProbeInterval = 5 * time.Second
 	defaultHeartbeatInterval   = time.Second
@@ -46,8 +48,14 @@ const (
 	// The default value for HAKeeper truncate interval.
 	defaultHAKeeperTruncateInterval = 24 * time.Hour
 
-	// DefaultServiceAddress is exported.
-	DefaultServiceAddress = defaultServiceAddress
+	DefaultListenHost     = "0.0.0.0"
+	DefaultServiceHost    = "127.0.0.1"
+	DefaultLogServicePort = 32001
+)
+
+var (
+	DefaultLogServiceServiceAddress = fmt.Sprintf("%s:%d", DefaultServiceHost, DefaultLogServicePort)
+	DefaultGossipServiceAddress     = fmt.Sprintf("%s:%d", DefaultServiceHost, defaultGossipPort)
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -73,16 +81,27 @@ type Config struct {
 	// already MaxExportedSnapshot exported snapshots, no exported snapshot will
 	// be generated.
 	MaxExportedSnapshot int `toml:"max-exported-snapshot"`
+	// ServiceHost is the host name/IP for the service address of RPC request. There is
+	// no port value in it.
+	ServiceHost string `toml:"service-host"`
 	// ServiceAddress is log service's service address that can be reached by
-	// other nodes such as DN nodes.
+	// other nodes such as DN nodes. It is deprecated and will be removed.
 	ServiceAddress string `toml:"logservice-address"`
 	// ServiceListenAddress is the local listen address of the ServiceAddress.
+	// It is deprecated and will be removed.
 	ServiceListenAddress string `toml:"logservice-listen-address"`
+	// ServicePort is log service's service address port that can be reached by
+	// other nodes such as DN nodes.
+	LogServicePort int `toml:"logservice-port"`
 	// RaftAddress is the address that can be reached by other log service nodes
-	// via their raft layer.
+	// via their raft layer. It is deprecated and will be removed.
 	RaftAddress string `toml:"raft-address"`
 	// RaftListenAddress is the local listen address of the RaftAddress.
+	// It is deprecated and will be removed.
 	RaftListenAddress string `toml:"raft-listen-address"`
+	// RaftPort is the address port that can be reached by other log service nodes
+	// via their raft layer.
+	RaftPort int `toml:"raft-port"`
 	// UseTeeLogDB enables the log service to use tee based LogDB which is backed
 	// by both a pebble and a tan based LogDB. This field should only be set to
 	// true during testing.
@@ -90,12 +109,16 @@ type Config struct {
 	// LogDBBufferSize is the size of the logdb buffer in bytes.
 	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// GossipAddress is the address used for accepting gossip communication.
+	// It is deprecated and will be removed.
 	GossipAddress string `toml:"gossip-address"`
 	// GossipAddressV2 is the address used for accepting gossip communication.
-	// This is for domain name support.
+	// This is for domain name support. It is deprecated and will be removed.
 	GossipAddressV2 string `toml:"gossip-address-v2"`
 	// GossipListenAddress is the local listen address of the GossipAddress
+	// It is deprecated and will be removed.
 	GossipListenAddress string `toml:"gossip-listen-address"`
+	// GossipPort is the port address port used for accepting gossip communication.
+	GossipPort int `toml:"gossip-port"`
 	// GossipSeedAddresses is list of seed addresses that are used for
 	// introducing the local node into the gossip network.
 	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
@@ -269,17 +292,17 @@ func (c *Config) Validate() error {
 	}
 	// when *ListenAddress is not empty and *Address is empty, consider it as an
 	// error
-	if len(c.ServiceAddress) == 0 && len(c.ServiceListenAddress) != 0 {
-		return moerr.NewBadConfigNoCtx("ServiceAddress not set")
+	if len(c.ServiceAddress) == 0 && len(c.ServiceListenAddress) != 0 && c.LogServicePort == 0 {
+		return moerr.NewBadConfigNoCtx("ServiceAddress and LogServicePort not set")
 	}
-	if len(c.RaftAddress) == 0 && len(c.RaftListenAddress) != 0 {
-		return moerr.NewBadConfigNoCtx("RaftAddress not set")
+	if len(c.RaftAddress) == 0 && len(c.RaftListenAddress) != 0 && c.RaftPort == 0 {
+		return moerr.NewBadConfigNoCtx("RaftAddress and RaftPort not set")
 	}
 	if c.LogDBBufferSize == 0 {
 		return moerr.NewBadConfigNoCtx("LogDBBufferSize not set")
 	}
-	if len(c.GossipAddress) == 0 && len(c.GossipListenAddress) != 0 {
-		return moerr.NewBadConfigNoCtx("GossipAddress not set")
+	if len(c.GossipAddress) == 0 && len(c.GossipListenAddress) != 0 && c.GossipPort == 0 {
+		return moerr.NewBadConfigNoCtx("GossipAddress and GossipPort not set")
 	}
 	if len(c.GossipSeedAddresses) == 0 {
 		return moerr.NewBadConfigNoCtx("GossipSeedAddress not set")
@@ -346,10 +369,11 @@ func DefaultConfig() Config {
 		MaxExportedSnapshot:      defaultMaxExportedSnapshot,
 		ServiceAddress:           defaultServiceAddress,
 		RaftAddress:              defaultRaftAddress,
+		ServiceHost:              DefaultServiceHost,
 		UseTeeLogDB:              false,
 		LogDBBufferSize:          defaultLogDBBufferSize,
 		GossipAddress:            defaultGossipAddress,
-		GossipSeedAddresses:      []string{defaultGossipSeedAddress},
+		GossipSeedAddresses:      []string{DefaultGossipServiceAddress},
 		GossipProbeInterval:      toml.Duration{Duration: defaultGossipProbeInterval},
 		GossipAllowSelfAsSeed:    true,
 		HeartbeatInterval:        toml.Duration{Duration: defaultHeartbeatInterval},
@@ -403,7 +427,7 @@ func DefaultConfig() Config {
 		}),
 		HAKeeperClientConfig: HAKeeperClientConfig{
 			DiscoveryAddress: "",
-			ServiceAddresses: []string{defaultServiceAddress},
+			ServiceAddresses: []string{DefaultLogServiceServiceAddress},
 			AllocateIDBatch:  100,
 			EnableCompress:   false,
 		},
@@ -419,7 +443,8 @@ func DefaultConfig() Config {
 	}
 }
 
-// Fill just fills the listen addresses.
+// Fill just fills the listen addresses. This function is deprecated and will be removed
+// as the configurations are all deprecated.
 func (c *Config) Fill() {
 	if len(c.ServiceAddress) == 0 {
 		c.ServiceAddress = defaultServiceAddress
@@ -465,7 +490,7 @@ type HAKeeperClientConfig struct {
 // Validate validates the HAKeeperClientConfig.
 func (c *HAKeeperClientConfig) Validate() error {
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		c.ServiceAddresses = []string{defaultServiceAddress}
+		c.ServiceAddresses = []string{DefaultLogServiceServiceAddress}
 	}
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
@@ -503,7 +528,7 @@ func (c *ClientConfig) Validate() error {
 		return moerr.NewBadConfigNoCtx("DNReplicaID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		c.ServiceAddresses = []string{defaultServiceAddress}
+		c.ServiceAddresses = []string{DefaultLogServiceServiceAddress}
 	}
 	return nil
 }
@@ -518,4 +543,46 @@ func splitAddresses(v string) []string {
 		}
 	}
 	return results
+}
+
+func (c *Config) LogServiceListenAddr() string {
+	if c.LogServicePort != 0 {
+		return fmt.Sprintf("%s:%d", DefaultListenHost, c.LogServicePort)
+	}
+	return c.ServiceListenAddress
+}
+
+func (c *Config) LogServiceServiceAddr() string {
+	if c.LogServicePort != 0 {
+		return fmt.Sprintf("%s:%d", c.ServiceHost, c.LogServicePort)
+	}
+	return c.ServiceAddress
+}
+
+func (c *Config) RaftListenAddr() string {
+	if c.RaftPort != 0 {
+		return fmt.Sprintf("%s:%d", DefaultListenHost, c.RaftPort)
+	}
+	return c.RaftListenAddress
+}
+
+func (c *Config) RaftServiceAddr() string {
+	if c.RaftPort != 0 {
+		return fmt.Sprintf("%s:%d", c.ServiceHost, c.RaftPort)
+	}
+	return c.RaftAddress
+}
+
+func (c *Config) GossipListenAddr() string {
+	if c.GossipPort != 0 {
+		return fmt.Sprintf("%s:%d", DefaultListenHost, c.GossipPort)
+	}
+	return c.GossipListenAddress
+}
+
+func (c *Config) GossipServiceAddr() string {
+	if c.GossipPort != 0 {
+		return fmt.Sprintf("%s:%d", c.ServiceHost, c.GossipPort)
+	}
+	return c.GossipAddress
 }
