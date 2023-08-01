@@ -2,10 +2,10 @@ package upgrade
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -74,7 +74,7 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 
 	// If errors occurred, return them
 	if len(errors) > 0 {
-		return nil, fmt.Errorf("errors occurred while getting current schema: %v", errors)
+		return nil, moerr.NewInternalError(ctx, "can not get the schema", errors)
 	}
 
 	// Construct and return the table
@@ -121,7 +121,7 @@ func (u *Upgrader) GenerateDiff(currentSchema *table.Table, expectedSchema *tabl
 
 func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 	if len(diff.AddedColumns) == 0 {
-		return "", errors.New("No columns to add")
+		return "", moerr.NewInternalError(nil, "no added columns in schema diff", nil)
 	}
 
 	// Get database and table name from the schema diff
