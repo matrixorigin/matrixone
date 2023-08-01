@@ -51,7 +51,9 @@ type statusServer struct {
 }
 
 var registry *prom.Registry
+var internalRegistry *prom.Registry
 var moExporter metric.MetricExporter
+var internalExporter metric.MetricExporter
 var moCollector MetricCollector
 var statsLogWriter *StatsLogWriter
 var statusSvr *statusServer
@@ -69,6 +71,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		withExportInterval(SV.MetricExportInterval),
 		withUpdateInterval(SV.MetricStorageUsageUpdateInterval.Duration),
 		withCheckNewInterval(SV.MetricStorageUsageCheckNewInterval.Duration),
+		WithInternalGatherInterval(SV.MetricInternalGatherInterval.Duration),
 	)
 	for _, opt := range opts {
 		opt.ApplyTo(&initOpts)
@@ -81,7 +84,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	} else {
 		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
-	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
+	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role, WithGatherInterval(metric.GetGatherInterval()))
+	internalRegistry = prom.NewRegistry()
+	internalExporter = newMetricExporter(internalRegistry, moCollector, nodeUUID, role, WithGatherInterval(initOpts.internalGatherInterval))
 	statsLogWriter = newStatsLogWriter(stats.DefaultRegistry, runtime.ProcessLevelRuntime().Logger().Named("StatsLog"), metric.GetStatsGatherInterval())
 
 	// register metrics and create tables
@@ -95,6 +100,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		serviceCtx := context.Background()
 		moCollector.Start(serviceCtx)
 		moExporter.Start(serviceCtx)
+		internalExporter.Start(serviceCtx)
 		statsLogWriter.Start(serviceCtx)
 		metric.SetMetricExporter(moExporter)
 	}
@@ -143,6 +149,12 @@ func StopMetricSync() {
 		}
 		moExporter = nil
 	}
+	if internalExporter != nil {
+		if ch, effect := internalExporter.Stop(true); effect {
+			<-ch
+		}
+		internalExporter = nil
+	}
 	if statsLogWriter != nil {
 		if ch, effect := statsLogWriter.Stop(true); effect {
 			<-ch
@@ -164,8 +176,8 @@ func mustRegiterToProm(collector prom.Collector) {
 	}
 }
 
-func mustRegister(collector metric.Collector) {
-	registry.MustRegister(collector)
+func mustRegister(reg *prom.Registry, collector metric.Collector) {
+	reg.MustRegister(collector)
 	if metric.EnableExportToProm() {
 		mustRegiterToProm(collector.CollectorToProm())
 	} else {
@@ -176,8 +188,15 @@ func mustRegister(collector metric.Collector) {
 // register all defined collector here
 func registerAllMetrics() {
 	for _, c := range metric.InitCollectors {
-		mustRegister(c)
+		mustRegister(registry, c)
 	}
+	for _, c := range metric.InternalCollectors {
+		mustRegister(internalRegistry, c)
+	}
+}
+
+func initConfigByParameter(SV *config.ObservabilityParameters) {
+	metric.SetExportToProm(SV.EnableMetricToProm)
 }
 
 func initConfigByParameterUnit(SV *config.ObservabilityParameters) {
@@ -215,6 +234,9 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 
 	go func() {
 		for _, c := range metric.InitCollectors {
+			c.Describe(descChan)
+		}
+		for _, c := range metric.InternalCollectors {
 			c.Describe(descChan)
 		}
 		close(descChan)
@@ -269,6 +291,8 @@ type InitOptions struct {
 	// checkNewAccountInterval, check new account Internal to collect new account for metric StorageUsage
 	// set by withCheckNewInterval
 	checkNewInterval time.Duration
+	// internalGatherInterval, handle metric.SubSystemMO gather interval
+	internalGatherInterval time.Duration
 }
 
 type InitOption func(*InitOptions)
@@ -305,6 +329,12 @@ func withUpdateInterval(interval time.Duration) InitOption {
 func withCheckNewInterval(interval time.Duration) InitOption {
 	return InitOption(func(opts *InitOptions) {
 		opts.checkNewInterval = interval
+	})
+}
+
+func WithInternalGatherInterval(interval time.Duration) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.internalGatherInterval = interval
 	})
 }
 
