@@ -5490,7 +5490,18 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 	case *tree.Replace:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		entry1 := privilegeEntry{
+			privilegeEntryTyp: privilegeEntryTypeCompound,
+			compound: &compoundEntry{
+				items: []privilegeItem{
+					{privilegeTyp: PrivilegeTypeInsert},
+					{privilegeTyp: PrivilegeTypeDelete},
+				},
+			},
+		}
+
+		extraEntries = append(extraEntries, entry1)
 		writeDatabaseAndTableDirectly = true
 	case *tree.Load:
 		objType = objectTypeTable

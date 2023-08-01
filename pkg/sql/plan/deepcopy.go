@@ -935,7 +935,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Sub:
 		newExpr.Expr = &plan.Expr_Sub{
 			Sub: &plan.SubqueryRef{
-				NodeId: item.Sub.GetNodeId(),
+				NodeId:  item.Sub.GetNodeId(),
+				Typ:     item.Sub.Typ,
+				Op:      item.Sub.Op,
+				RowSize: item.Sub.RowSize,
+				Child:   DeepCopyExpr(item.Sub.Child),
 			},
 		}
 
