@@ -26,7 +26,7 @@ import (
 func (s *service) initCtlService() {
 	cs, err := ctlservice.NewCtlService(
 		s.cfg.UUID,
-		s.cfg.Ctl.Address.ListenAddress,
+		s.ctlServiceListenAddr(),
 		s.cfg.RPC)
 	if err != nil {
 		panic(err)
