@@ -40,15 +40,14 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	cfg.DeploymentID = 1
 	cfg.RTTMillisecond = 5
 	cfg.DataDir = "data-1"
-	cfg.ServiceAddress = "127.0.0.1:9002"
-	cfg.RaftAddress = "127.0.0.1:9000"
-	cfg.GossipAddress = "127.0.0.1:9001"
+	cfg.LogServicePort = 9002
+	cfg.RaftPort = 9000
+	cfg.GossipPort = 9001
 	// below is an unreachable address intentionally set
 	cfg.GossipSeedAddresses = []string{"127.0.0.1:9010"}
 	cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
 	cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
 	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
-	cfg.Fill()
 	service, err := NewService(cfg,
 		newFS(),
 		nil,
