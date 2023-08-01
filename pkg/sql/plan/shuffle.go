@@ -304,7 +304,7 @@ func findShuffleNode(rootID, nodeID int32, builder *QueryBuilder) int32 {
 			}
 		}
 	}
-	if node.NodeId != rootID && node.Stats.HashmapStats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
+	if node.NodeId != rootID && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
 		return node.NodeId
 	}
 	return -1
