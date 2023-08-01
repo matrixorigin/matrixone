@@ -503,16 +503,12 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	sessionId := ""
-	statementId := ""
 	if ses != nil {
-		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
 		if ses.tStmt != nil {
-			statementId = string(ses.tStmt.StatementID[:])
+			fields = append(fields, zap.ByteString("session_id", ses.tStmt.SessionID[:]))
+			fields = append(fields, zap.ByteString("statement_id", ses.tStmt.StatementID[:]))
 		}
 	}
-	fields = append(fields, zap.String("session_id", sessionId))
-	fields = append(fields, zap.String("statement_id", statementId))
 	logutil.Info(msg, fields...)
 }
 
@@ -521,16 +517,12 @@ func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	sessionId := ""
-	statementId := ""
 	if ses != nil {
-		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
 		if ses.tStmt != nil {
-			statementId = string(ses.tStmt.StatementID[:])
+			fields = append(fields, zap.ByteString("session_id", ses.tStmt.SessionID[:]))
+			fields = append(fields, zap.ByteString("statement_id", ses.tStmt.StatementID[:]))
 		}
 	}
-	fields = append(fields, zap.String("session_id", sessionId))
-	fields = append(fields, zap.String("statement_id", statementId))
 	logutil.Debug(msg, fields...)
 }
 
@@ -539,16 +531,12 @@ func logError(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	sessionId := ""
-	statementId := ""
 	if ses != nil {
-		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
 		if ses.tStmt != nil {
-			statementId = string(ses.tStmt.StatementID[:])
+			fields = append(fields, zap.ByteString("session_id", ses.tStmt.SessionID[:]))
+			fields = append(fields, zap.ByteString("statement_id", ses.tStmt.StatementID[:]))
 		}
 	}
-	fields = append(fields, zap.String("session_id", sessionId))
-	fields = append(fields, zap.String("statement_id", statementId))
 	logutil.Error(msg, fields...)
 }
 
