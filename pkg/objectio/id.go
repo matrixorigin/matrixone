@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+	"hash/fnv"
 	"unsafe"
 
 	"github.com/google/uuid"
@@ -119,11 +120,13 @@ func HackSegid2Rowid(id *Segmentid) Rowid {
 
 // used only in some special cases
 func HackBytes2Rowid(bs []byte) Rowid {
+	var rowid types.Rowid
 	if size := len(bs); size <= types.RowidSize {
-		var rowid types.Rowid
 		copy(rowid[:size], bs[:size])
-		return rowid
 	} else {
-		return types.RandomRowid()
+		hasher := fnv.New128()
+		hasher.Write(bs)
+		hasher.Sum(rowid[:0])
 	}
+	return rowid
 }
