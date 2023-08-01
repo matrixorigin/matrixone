@@ -344,8 +344,8 @@ func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 	return SetBytesAt(v, idx, []byte(bs), mp)
 }
 
-func SetArrayAt(v *Vector, idx int, bs []float32, mp *mpool.MPool) error {
-	return SetBytesAt(v, idx, types.ArrayToBytes(bs), mp)
+func SetArrayAt[T types.BuiltinNumber](v *Vector, idx int, bs []T, mp *mpool.MPool) error {
+	return SetBytesAt(v, idx, types.ArrayToBytes[T](bs), mp)
 }
 
 // IsConstNull return true if the vector means a scalar Null.
@@ -2591,14 +2591,14 @@ func AppendMultiFixed[T any](vec *Vector, vals T, isNull bool, cnt int, mp *mpoo
 	return appendMultiFixed[T](vec, vals, isNull, cnt, mp)
 }
 
-func AppendMultiArrays(vec *Vector, vals []float32, isNull bool, cnt int, mp *mpool.MPool) error {
+func AppendMultiArrays[T types.BuiltinNumber](vec *Vector, vals []T, isNull bool, cnt int, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
 	}
 	if mp == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
-	return appendMultiArrays(vec, vals, isNull, cnt, mp)
+	return appendMultiArrays[T](vec, vals, isNull, cnt, mp)
 }
 
 func AppendMultiBytes(vec *Vector, vals []byte, isNull bool, cnt int, mp *mpool.MPool) error {
