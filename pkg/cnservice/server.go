@@ -24,6 +24,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -45,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -82,7 +84,9 @@ func NewService(
 		etlFS:       etlFS,
 		fileService: fileService,
 		sessionMgr:  queryservice.NewSessionManager(),
+		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 	}
+	srv.registerServices()
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
@@ -109,7 +113,7 @@ func NewService(
 		nil,
 		nil,
 		engine.Nodes{engine.Node{
-			Addr: cfg.ServiceAddress,
+			Addr: srv.pipelineServiceServiceAddr(),
 		}})
 	pu.HAKeeperClient = srv._hakeeperClient
 	cfg.Frontend.SetDefaultValues()
@@ -117,7 +121,11 @@ func NewService(
 	frontend.InitServerVersion(pu.SV.MoVersion)
 
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
-	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
+	srv.aicm = &defines.AutoIncrCacheManager{
+		AutoIncrCaches: make(map[string]defines.AutoIncrCache),
+		Mu:             &sync.Mutex{},
+		MaxSize:        pu.SV.AutoIncrCacheSize,
+	}
 
 	srv.pu = pu
 	srv.pu.LockService = srv.lockService
@@ -128,7 +136,7 @@ func NewService(
 		return nil, err
 	}
 
-	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
+	server, err := morpc.NewRPCServer(PipelineService.String(), srv.pipelineServiceListenAddr(),
 		morpc.NewMessageCodec(srv.acquireMessage,
 			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize))),
 		morpc.WithServerLogger(srv.logger),
@@ -168,6 +176,15 @@ func NewService(
 	}
 
 	srv.initCtlService()
+
+	// TODO: global client need to refactor
+	err = cnclient.NewCNClient(
+		srv.pipelineServiceServiceAddr(),
+		&cnclient.ClientConfig{RPC: cfg.RPC})
+	if err != nil {
+		panic(err)
+	}
+
 	return srv, nil
 }
 
@@ -308,7 +325,7 @@ func (s *service) handleRequest(
 	go func() {
 		defer value.Cancel()
 		s.requestHandler(ctx,
-			s.cfg.ServiceAddress,
+			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
 			s.storeEngine,
@@ -548,7 +565,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 }
 
 func (s *service) initLockService() {
-	cfg := s.cfg.getLockServiceConfig()
+	cfg := s.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(cfg)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(cfg.ServiceID, s.lockService)
@@ -599,7 +616,7 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 
 func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 	exec := compile.NewSQLExecutor(
-		s.cfg.ServiceAddress,
+		s.pipelineServiceServiceAddr(),
 		s.storeEngine,
 		mp,
 		s._txnClient,
