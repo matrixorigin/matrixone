@@ -135,6 +135,8 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 
 func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 	if len(r.receiverListener) > 0 {
+		// Remove the proc context.Done waiter because it MUST BE done
+		// when called this function
 		r.receiverListener = r.receiverListener[1:]
 	}
 
