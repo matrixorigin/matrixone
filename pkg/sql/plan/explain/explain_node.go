@@ -514,7 +514,7 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	if ndesc.Node.Stats.HashmapStats.Shuffle {
+	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.Shuffle {
 		idx := ndesc.Node.Stats.HashmapStats.ShuffleColIdx
 		shuffleType := ndesc.Node.Stats.HashmapStats.ShuffleType
 		if shuffleType == plan.ShuffleType_Hash {
@@ -661,7 +661,7 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		if c.Stats.BlockNum > 0 {
 			blockNumStr = " blockNum=" + strconv.FormatInt(int64(c.Stats.BlockNum), 10)
 		}
-		if c.Stats.HashmapStats.HashmapSize > 0 {
+		if c.Stats.HashmapStats != nil && c.Stats.HashmapStats.HashmapSize > 0 {
 			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapStats.HashmapSize, 'f', 2, 64)
 		}
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
