@@ -58,7 +58,6 @@ const (
 	MAX_TXN_COMMIT_LATENCY  = time.Minute * 2
 )
 
-// TODO::GC the abandoned txn.
 type Handle struct {
 	db *db.DB
 	mu struct {
@@ -301,6 +300,14 @@ func (h *Handle) HandlePrepare(
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
 	var txn txnif.AsyncTxn
+	defer func() {
+		if ok {
+			//delete the txn's context.
+			h.mu.Lock()
+			delete(h.mu.txnCtxs, string(meta.GetID()))
+			h.mu.Unlock()
+		}
+	}()
 	if ok {
 		//handle pre-commit write for 2PC
 		txn, err = h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
@@ -322,10 +329,6 @@ func (h *Handle) HandlePrepare(
 	var ts types.TS
 	ts, err = txn.Prepare(ctx)
 	pts = ts.ToTimestamp()
-	//delete the txn's context.
-	h.mu.Lock()
-	delete(h.mu.txnCtxs, string(meta.GetID()))
-	h.mu.Unlock()
 	return
 }
 

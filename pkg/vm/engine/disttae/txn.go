@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"math"
 	"strings"
 	"time"
@@ -643,28 +644,27 @@ func (txn *Transaction) getCachedTable(
 	return nil
 }
 
-func (txn *Transaction) Commit(ctx context.Context) error {
+func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
 	txn.IncrStatementID(ctx, true)
 	defer txn.delTransaction()
 	if txn.readOnly.Load() {
-		return nil
+		return nil, nil
 	}
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := txn.dumpBatchLocked(0); err != nil {
-		return err
+		return nil, err
 	}
 	if err := txn.mergeCompactionLocked(); err != nil {
-		return err
+		return nil, err
 	}
 	reqs, err := genWriteReqs(ctx, txn.writes)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = txn.op.Write(ctx, reqs)
-	return err
+	return reqs, nil
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {

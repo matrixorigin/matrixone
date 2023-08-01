@@ -491,9 +491,14 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if commit {
-		if tc.workspace != nil {
-			if err := tc.workspace.Commit(ctx); err != nil {
+		if len(requests) == 0 && tc.workspace != nil {
+			reqs, err := tc.workspace.Commit(ctx)
+			if err != nil {
 				return nil, errors.Join(err, tc.Rollback(ctx))
+			}
+			requests = reqs
+			for idx := range requests {
+				requests[idx].Method = txn.TxnMethod_Write
 			}
 		}
 		tc.mu.Lock()

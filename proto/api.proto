@@ -28,8 +28,7 @@ option (gogoproto.protosizer_all) = true;
 enum OpCode {
     Nop          = 0;
     OpGetLogTail = 1000;
-    OpWrite      = 1001;
-    OpPreCommit  = 1002;
+    OpPreCommit  = 1001;
 }
 
 message Vector {
