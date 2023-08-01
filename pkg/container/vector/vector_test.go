@@ -1328,7 +1328,7 @@ func TestSetFunction2(t *testing.T) {
 		w := NewConstNull(types.T_varchar.ToType(), 0, mp)
 		v := NewVec(types.T_varchar.ToType())
 		err := AppendBytesList(v, [][]byte{
-			[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
+			[]byte("a"), []byte("abcdefabcdefabcdefabcdef12345"), []byte("c"), []byte("d")},
 			[]bool{false, false, true, true}, mp)
 		require.NoError(t, err)
 
@@ -1351,7 +1351,7 @@ func TestSetFunction2(t *testing.T) {
 			err = sf(w, v, 1, 1)
 			require.NoError(t, err)
 			ws := MustBytesCol(w)
-			require.Equal(t, "b", string(ws[0]))
+			require.Equal(t, "abcdefabcdefabcdefabcdef12345", string(ws[0]))
 		}
 		// set to const null
 		{
