@@ -45,6 +45,21 @@ var PerStatementProfileThreshold = func() time.Duration {
 	return time.Millisecond * time.Duration(n)
 }()
 
+// EnsureStatementProfiler ensure a statement profiler is set in context, if not, copy one from another context
+func EnsureStatementProfiler(ctx context.Context, from context.Context) context.Context {
+	if v := ctx.Value(CtxKeyStatementProfiler); v != nil {
+		// already set
+		return ctx
+	}
+	v := from.Value(CtxKeyStatementProfiler)
+	if v == nil {
+		// not set in from
+		return ctx
+	}
+	ctx = context.WithValue(ctx, CtxKeyStatementProfiler, v)
+	return ctx
+}
+
 func NewStatementProfiler(
 	ctx context.Context,
 ) (
@@ -94,4 +109,22 @@ func NewStatementProfiler(
 	}
 
 	return
+}
+
+func StatementProfileNewSpan(
+	ctx context.Context,
+) (
+	_ context.Context,
+	end func(),
+) {
+	v := ctx.Value(CtxKeyStatementProfiler)
+	if v == nil {
+		return ctx, func() {}
+	}
+	profiler := v.(*SpanProfiler)
+	newProfiler, end := profiler.Begin(1)
+	if newProfiler != profiler {
+		ctx = context.WithValue(ctx, CtxKeyStatementProfiler, newProfiler)
+	}
+	return ctx, end
 }
