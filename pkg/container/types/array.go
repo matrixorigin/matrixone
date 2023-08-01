@@ -66,13 +66,15 @@ func StringToArray[T BuiltinNumber](input string) ([]T, error) {
 			if err != nil {
 				return nil, moerr.NewInternalErrorNoCtx("Error while parsing array : %v", err)
 			}
-			result[i] = *(*T)(unsafe.Pointer(&num))
+			// FIX: https://stackoverflow.com/a/36391858/1609570
+			numf32 := float32(num)
+			result[i] = *(*T)(unsafe.Pointer(&numf32))
 		case float64:
-			t, err := strconv.ParseFloat(numStr, 64)
+			num, err := strconv.ParseFloat(numStr, 64)
 			if err != nil {
 				return nil, moerr.NewInternalErrorNoCtx("Error while parsing array : %v", err)
 			}
-			result[i] = *(*T)(unsafe.Pointer(&t))
+			result[i] = *(*T)(unsafe.Pointer(&num))
 		default:
 			panic("not implemented")
 		}

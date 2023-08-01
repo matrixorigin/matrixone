@@ -128,18 +128,35 @@ func TestStringToArray(t *testing.T) {
 		args args
 		want []T
 	}
-	tests := []testCase[float64]{
+
+	float32tests := []testCase[float32]{
+		{
+			name: "Test3",
+			args: args{input: "[1,2,3]"},
+			want: []float32{1, 2, 3},
+		},
+	}
+	for _, tt := range float32tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, _ := StringToArray[float32](tt.args.input); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("StringToArray() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	float64tests := []testCase[float64]{
 		{
 			name: "Test3",
 			args: args{input: "[1,2,3]"},
 			want: []float64{1, 2, 3},
 		},
 	}
-	for _, tt := range tests {
+	for _, tt := range float64tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got, _ := StringToArray[float64](tt.args.input); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("StringToArray() = %v, want %v", got, tt.want)
 			}
 		})
 	}
+
 }
