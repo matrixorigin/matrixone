@@ -22,12 +22,9 @@ import (
 
 // Column definitions
 var (
-	stmtIDCol  = table.UuidStringColumn("statement_id", "statement uniq id")
-	txnIDCol   = table.UuidStringColumn("transaction_id", "txn uniq id")
-	sesIDCol   = table.UuidStringColumn("session_id", "session uniq id")
-	accountCol = table.StringColumn("account", "account name")
-	roleIdCol  = table.Int64Column("role_id", "role id")
-	userCol    = table.StringColumn("user", "user name")
+	txnIDCol       = table.UuidStringColumn("transaction_id", "txn uniq id")
+	sessionIDCol   = table.SpanIDStringColumn("session_id", "session id")
+	statementIDCol = table.SpanIDStringColumn("statement_id", "statement id")
 )
 
 func TestGenerateDiff(t *testing.T) {
@@ -42,12 +39,12 @@ func TestGenerateDiff(t *testing.T) {
 			currentSchema: &table.Table{
 				Database: "testdb",
 				Table:    "testtable",
-				Columns:  []table.Column{stmtIDCol, txnIDCol},
+				Columns:  []table.Column{txnIDCol},
 			},
 			expectedSchema: &table.Table{
 				Database: "testdb",
 				Table:    "testtable",
-				Columns:  []table.Column{stmtIDCol, txnIDCol},
+				Columns:  []table.Column{txnIDCol},
 			},
 			expectedDiff: table.SchemaDiff{},
 		},
@@ -56,15 +53,15 @@ func TestGenerateDiff(t *testing.T) {
 			currentSchema: &table.Table{
 				Database: "testdb",
 				Table:    "testtable",
-				Columns:  []table.Column{stmtIDCol, txnIDCol},
+				Columns:  []table.Column{txnIDCol},
 			},
 			expectedSchema: &table.Table{
 				Database: "testdb",
 				Table:    "testtable",
-				Columns:  []table.Column{stmtIDCol, txnIDCol, sesIDCol},
+				Columns:  []table.Column{txnIDCol, sessionIDCol, statementIDCol},
 			},
 			expectedDiff: table.SchemaDiff{
-				AddedColumns: []table.Column{sesIDCol},
+				AddedColumns: []table.Column{sessionIDCol, statementIDCol},
 				TableName:    "testtable",
 				DatabaseName: "testdb",
 			},
@@ -98,19 +95,19 @@ func TestGenerateUpgradeSQL(t *testing.T) {
 			currentSchema: &table.Table{
 				Database: "testdb",
 				Table:    "testtable",
-				Columns:  []table.Column{stmtIDCol, txnIDCol},
+				Columns:  []table.Column{txnIDCol},
 			},
 			expectedSchema: &table.Table{
 				Database: "testdb",
 				Table:    "testtable",
-				Columns:  []table.Column{stmtIDCol, txnIDCol, sesIDCol},
+				Columns:  []table.Column{txnIDCol, statementIDCol, sessionIDCol},
 			},
 			expectedDiff: table.SchemaDiff{
-				AddedColumns: []table.Column{sesIDCol},
+				AddedColumns: []table.Column{statementIDCol, sessionIDCol},
 				TableName:    "testtable",
 				DatabaseName: "testdb",
 			},
-			expectedSQL: "ALTER TABLE `testdb`.`testtable` ADD COLUMN `session_id` VARCHAR(36)",
+			expectedSQL: "ALTER TABLE `testdb`.`testtable` ADD COLUMN `statement_id` VARCHAR(16) DEFAULT 0, ADD COLUMN `session_id` VARCHAR(16) DEFAULT 0",
 		},
 	}
 
