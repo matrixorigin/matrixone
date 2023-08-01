@@ -479,14 +479,18 @@ func (h *Handle) prefetchMetadata(ctx context.Context,
 		return nil
 	}
 	//start loading jobs asynchronously,should create a new root context.
+	var objectName objectio.ObjectNameShort
 	for _, meta := range req.MetaLocs {
 		loc, err := blockio.EncodeLocationFromString(meta)
 		if err != nil {
 			return err
 		}
-		err = blockio.PrefetchMeta(h.db.Runtime.Fs.Service, loc)
-		if err != nil {
-			return err
+		if !objectio.IsSameObjectLocVsShort(loc, &objectName) {
+			err := blockio.PrefetchMeta(h.db.Runtime.Fs.Service, loc)
+			if err != nil {
+				return err
+			}
+			objectName = *loc.Name().Short()
 		}
 	}
 	return nil

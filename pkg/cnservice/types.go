@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -54,6 +55,9 @@ var (
 	// defaultTxnIsolation     = txn.TxnIsolation_SI
 	defaultTxnMode             = txn.TxnMode_Optimistic
 	maxForMaxPreparedStmtCount = 1000000
+
+	// Service ports related.
+	defaultServiceHost = "127.0.0.1"
 )
 
 type Service interface {
@@ -92,6 +96,17 @@ type Config struct {
 	ServiceAddress string `toml:"service-address"`
 	// SQLAddress service address for receiving external sql client
 	SQLAddress string `toml:"sql-address"`
+
+	// PortBase is the base port for the service. We reserve reservedPorts for
+	// the service to start internal server inside it.
+	//
+	// TODO(volgariver6): The value of this field is also used to determine the version
+	// of MO. If it is not set, we use the old listen-address/service-address fields, and
+	// if it is set, we use the new policy to distribute the ports to all services.
+	PortBase int `toml:"port-base"`
+	// ServiceHost is the host name/IP for the service address of RPC request. There is
+	// no port value in it.
+	ServiceHost string `toml:"service-host"`
 
 	// FileService file service configuration
 
@@ -349,16 +364,23 @@ func (c *Config) Validate() error {
 	}
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
+	if c.PortBase != 0 {
+		if c.ServiceHost == "" {
+			c.ServiceHost = defaultServiceHost
+		}
+	}
+
 	// TODO: remove this if rc is stable
 	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
 		c.Txn.EnableCheckRCInvalidError)
 	return nil
 }
 
-func (c *Config) getLockServiceConfig() lockservice.Config {
-	c.LockService.ServiceID = c.UUID
-	c.LockService.RPC = c.RPC
-	return c.LockService
+func (s *service) getLockServiceConfig() lockservice.Config {
+	s.cfg.LockService.ServiceID = s.cfg.UUID
+	s.cfg.LockService.RPC = s.cfg.RPC
+	s.cfg.LockService.ListenAddress = s.lockServiceListenAddr()
+	return s.cfg.LockService
 }
 
 type service struct {
@@ -408,4 +430,6 @@ type service struct {
 		runner         taskservice.TaskRunner
 		storageFactory taskservice.TaskStorageFactory
 	}
+
+	addressMgr address.AddressManager
 }

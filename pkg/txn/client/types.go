@@ -205,4 +205,7 @@ type Workspace interface {
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
 	Rollback(ctx context.Context) error
+
+	IncrSQLCount()
+	GetSQLCount() uint64
 }

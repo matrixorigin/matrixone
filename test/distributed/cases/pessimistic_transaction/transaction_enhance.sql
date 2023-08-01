@@ -188,7 +188,6 @@ select * from atomic_table_12_5;
 commit;
 show index from atomic_table_12_5;
 
--- @bvt:issue#10867
 -- w-w conflict
 drop table if exists atomic_table_14;
 create table atomic_table_14(c1 int,c2 varchar(25));
@@ -204,7 +203,6 @@ insert into atomic_table_14 values (6,"a"),(7,"b");
 select * from atomic_table_14;
 commit;
 select * from atomic_table_14;
--- @bvt:issue
 
 -- @bvt:issue#10316
 drop table if exists atomic_table_15;
