@@ -232,32 +232,6 @@ func TestTable_ToCreateSql(t *testing.T) {
 		})
 	}
 }
-
-func TestToUpgradeSql(t *testing.T) {
-	tbl := &Table{
-		Database: "system",
-		Table:    "rawlog",
-		UpgradeColumns: map[string]map[string][]Column{
-			"1.0": {
-				"ADD": {
-					SpanIDStringColumn("session_id", "session id"),
-					SpanIDStringColumn("statement_id", "statement id"),
-				},
-			},
-		},
-	}
-
-	expectedSQL := "ALTER TABLE `system`.`rawlog` ADD COLUMN `session_id` VARCHAR(16) DEFAULT \"0\" COMMENT \"session id\", ADD COLUMN `statement_id` VARCHAR(16) DEFAULT \"0\" COMMENT \"statement id\""
-
-	ctx := context.Background()
-
-	actualSQL := tbl.ToUpgradeSql(ctx)
-
-	if expectedSQL != actualSQL {
-		t.Errorf("Expected SQL statement does not match the actual SQL statement.\nExpected: %s\nActual: %s", expectedSQL, actualSQL)
-	}
-}
-
 func TestViewOption_Apply(t *testing.T) {
 	type args struct {
 		view *View

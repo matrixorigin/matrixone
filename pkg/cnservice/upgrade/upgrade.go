@@ -171,7 +171,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 
 		// Execute upgrade SQL
 		if err := exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
-			return fmt.Errorf("failed to upgrade table: %v, sql: %s", err, upgradeSQL)
+			return moerr.NewInternalError(ctx, "failed to upgrade", []error{err})
 		}
 	}
 
