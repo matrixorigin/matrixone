@@ -31,8 +31,7 @@ type OpCode int32
 const (
 	OpCode_Nop          OpCode = 0
 	OpCode_OpGetLogTail OpCode = 1000
-	//OpWrite      = 1001;
-	OpCode_OpPreCommit OpCode = 1001
+	OpCode_OpPreCommit  OpCode = 1001
 )
 
 var OpCode_name = map[int32]string{
