@@ -1,0 +1,322 @@
+set global enable_privilege_cache = off;
+drop account if exists  acc1;
+create account if not exists acc1 ADMIN_NAME 'admin' IDENTIFIED BY '123';
+alter account acc1 restricted;
+show databases;
+Database
+mo_catalog
+system
+system_metrics
+information_schema
+mysql
+create table r_test(c1 int);
+internal error: do not have privilege to execute the statement
+insert into r_test values(3);
+internal error: do not have privilege to execute the statement
+update r_test set c1=5;
+internal error: do not have privilege to execute the statement
+truncate table r_test;
+internal error: do not have privilege to execute the statement
+drop table r_test;
+internal error: do not have privilege to execute the statement
+drop account if exists acc1;
+create account if not exists acc1 ADMIN_NAME 'admin' IDENTIFIED BY '123efg' comment 'account comment';
+create database res_test;
+use res_test;
+create table r_test(c1 int,c2 varchar(20), unique index ui(c1));
+insert into r_test values(3,'a'),(4,'b'),(7,'h');
+update r_test set c1=2 where c2='a';
+alter account acc1 restricted;
+create database rdb;
+internal error: do not have privilege to execute the statement
+drop database rdb;
+internal error: do not have privilege to execute the statement
+create table r1(c1 int,c2 varchar(20));
+internal error: do not have privilege to execute the statement
+insert into r_test values(8,'c');
+internal error: do not have privilege to execute the statement
+load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test;
+internal error: do not have privilege to execute the statement
+update r_test set c1=5 where c2='h';
+internal error: do not have privilege to execute the statement
+delete from r_test where c1=4;
+select * from r_test;
+c1    c2
+7    h
+2    a
+truncate table r_test;
+internal error: do not have privilege to execute the statement
+create view r_view as select * from r_test;
+internal error: do not have privilege to execute the statement
+drop view r_view;
+internal error: do not have privilege to execute the statement
+create  table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+internal error: do not have privilege to execute the statement
+create  table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+internal error: do not have privilege to execute the statement
+insert into ti1 values (1,1,1), (2,2,2);
+internal error: do not have privilege to execute the statement
+insert into ti2 values (1,1,1), (2,2,2);
+internal error: do not have privilege to execute the statement
+alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
+internal error: do not have privilege to execute the statement
+show databases;
+Database
+mo_catalog
+system
+system_metrics
+information_schema
+mysql
+res_test
+use res_test;
+desc r_test;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    INT(32)    YES        null        
+c2    VARCHAR(20)    YES        null        
+show tables;
+Tables_in_res_test
+r_test
+show create table r_test;
+Table    Create Table
+r_test    CREATE TABLE `r_test` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(20) DEFAULT NULL,\nUNIQUE KEY `ui` (`c1`)\n)
+show columns from r_test;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    INT(32)    YES        null        
+c2    VARCHAR(20)    YES        null        
+show full columns from r_test;
+Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
+c1    INT(32)    null    YES        null        select,insert,update,references    
+c2    VARCHAR(20)    null    YES        null        select,insert,update,references    
+show variables where value = 'MatrixOne';
+Variable_name    Value
+version_comment    MatrixOne
+show grants;
+Grants for admin@localhost
+GRANT create user ON account  `admin`@`localhost`
+GRANT drop user ON account  `admin`@`localhost`
+GRANT alter user ON account  `admin`@`localhost`
+GRANT create role ON account  `admin`@`localhost`
+GRANT drop role ON account  `admin`@`localhost`
+GRANT create database ON account  `admin`@`localhost`
+GRANT drop database ON account  `admin`@`localhost`
+GRANT show databases ON account  `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+GRANT manage grants ON account  `admin`@`localhost`
+GRANT account all ON account  `admin`@`localhost`
+GRANT show tables ON database * `admin`@`localhost`
+GRANT create table ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
+GRANT create view ON database * `admin`@`localhost`
+GRANT drop view ON database * `admin`@`localhost`
+GRANT alter view ON database * `admin`@`localhost`
+GRANT database all ON database * `admin`@`localhost`
+GRANT database ownership ON database * `admin`@`localhost`
+GRANT select ON table *.* `admin`@`localhost`
+GRANT insert ON table *.* `admin`@`localhost`
+GRANT update ON table *.* `admin`@`localhost`
+GRANT truncate ON table *.* `admin`@`localhost`
+GRANT delete ON table *.* `admin`@`localhost`
+GRANT reference ON table *.* `admin`@`localhost`
+GRANT index ON table *.* `admin`@`localhost`
+GRANT table all ON table *.* `admin`@`localhost`
+GRANT table ownership ON table *.* `admin`@`localhost`
+GRANT values ON table *.* `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+show grants for 'admin'@'localhost';
+Grants for admin@localhost
+GRANT create user ON account  `admin`@`localhost`
+GRANT drop user ON account  `admin`@`localhost`
+GRANT alter user ON account  `admin`@`localhost`
+GRANT create role ON account  `admin`@`localhost`
+GRANT drop role ON account  `admin`@`localhost`
+GRANT create database ON account  `admin`@`localhost`
+GRANT drop database ON account  `admin`@`localhost`
+GRANT show databases ON account  `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+GRANT manage grants ON account  `admin`@`localhost`
+GRANT account all ON account  `admin`@`localhost`
+GRANT show tables ON database * `admin`@`localhost`
+GRANT create table ON database * `admin`@`localhost`
+GRANT drop table ON database * `admin`@`localhost`
+GRANT alter table ON database * `admin`@`localhost`
+GRANT create view ON database * `admin`@`localhost`
+GRANT drop view ON database * `admin`@`localhost`
+GRANT alter view ON database * `admin`@`localhost`
+GRANT database all ON database * `admin`@`localhost`
+GRANT database ownership ON database * `admin`@`localhost`
+GRANT select ON table *.* `admin`@`localhost`
+GRANT insert ON table *.* `admin`@`localhost`
+GRANT update ON table *.* `admin`@`localhost`
+GRANT truncate ON table *.* `admin`@`localhost`
+GRANT delete ON table *.* `admin`@`localhost`
+GRANT reference ON table *.* `admin`@`localhost`
+GRANT index ON table *.* `admin`@`localhost`
+GRANT table all ON table *.* `admin`@`localhost`
+GRANT table ownership ON table *.* `admin`@`localhost`
+GRANT values ON table *.* `admin`@`localhost`
+GRANT connect ON account  `admin`@`localhost`
+SHOW CREATE TABLE information_schema.columns;
+View    Create View
+columns    CREATE VIEW COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'YES' else 'NO' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'
+show index from r_test;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+r_test    0    ui    1    c1    A    0    NULL    NULL    YES                YES    NULL
+show node list;
+1
+show locks;
+1
+show table_values from r_test;
+max(c1)    min(c1)    max(c2)    min(c2)
+7    2    h    a
+show column_number from r_test;
+Number of columns in r_test
+4
+show TRIGGERS;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+show TRIGGERS like '*%';
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show full tables;
+Tables_in_res_test    Table_type
+r_test    BASE TABLE
+show full tables from res_test;;
+Tables_in_res_test    Table_type
+r_test    BASE TABLE
+select version();
+version()
+0.7
+alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
+internal error: do not have privilege to execute the statement
+select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
+privilege_name    obj_type    privilege_level
+values    table    *.*
+select user_name from mo_catalog.mo_user;
+user_name
+admin
+create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+internal error: do not have privilege to execute the statement
+alter table r_test drop index ui;
+internal error: do not have privilege to execute the statement
+create role role1;
+internal error: do not have privilege to execute the statement
+grant all on table *.* to role1;
+internal error: do not have privilege to execute the statement
+grant create table, drop table on database *.* to role1;
+internal error: do not have privilege to execute the statement
+create user user1 identified by 'pass1';
+internal error: do not have privilege to execute the statement
+grant role1 to user1;
+internal error: do not have privilege to execute the statement
+drop user user1;
+internal error: do not have privilege to execute the statement
+drop role role1;
+internal error: do not have privilege to execute the statement
+drop database account_res;
+internal error: do not have privilege to execute the statement
+alter account acc1 suspend;
+select account_name,status,comments from mo_catalog.mo_account where account_name='acc1';
+account_name    status    comments
+acc1    suspend    account comment
+alter account acc1 open;
+select account_name,status,comments from mo_catalog.mo_account where account_name='acc1';
+account_name    status    comments
+acc1    open    account comment
+create database rdb;
+use rdb;
+create table r1(c1 int,c2 varchar(20));
+insert into res_test.r_test values(8,'c');
+update res_test.r_test set c1=5 where c2='h';
+delete from res_test.r_test where c1=4;
+delete from system.statement_info;
+internal error: do not have privilege to execute the statement
+select * from res_test.r_test;
+c1    c2
+2    a
+8    c
+5    h
+truncate table res_test.r_test;
+create view r_view as select * from res_test.r_test;
+drop view r_view;
+show databases;
+Database
+mo_catalog
+system
+system_metrics
+information_schema
+mysql
+res_test
+rdb
+use res_test;
+show tables;
+Tables_in_res_test
+r_test
+show create table r_test;
+Table    Create Table
+r_test    CREATE TABLE `r_test` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(20) DEFAULT NULL,\nUNIQUE KEY `ui` (`c1`)\n)
+show columns from r_test;
+Field    Type    Null    Key    Default    Extra    Comment
+c1    INT(32)    YES        null        
+c2    VARCHAR(20)    YES        null        
+show full columns from r_test;
+Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
+c1    INT(32)    null    YES        null        select,insert,update,references    
+c2    VARCHAR(20)    null    YES        null        select,insert,update,references    
+show variables where value = 'MatrixOne';
+Variable_name    Value
+version_comment    MatrixOne
+show grants for 'hnadmin'@'localhost';
+Grants for hnadmin@localhost
+SHOW CREATE TABLE information_schema.columns;
+View    Create View
+columns    CREATE VIEW COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'YES' else 'NO' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'
+show index from r_test;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+r_test    0    ui    1    c1    A    0    NULL    NULL    YES                YES    NULL
+show node list;
+1
+show locks;
+1
+show table_values from r_test;
+max(c1)    min(c1)    max(c2)    min(c2)
+null    null    null    null
+show column_number from r_test;
+Number of columns in r_test
+4
+show TRIGGERS;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+show TRIGGERS like '*%';
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    off
+show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show full tables;
+Tables_in_res_test    Table_type
+r_test    BASE TABLE
+show full tables from account_res;
+invalid database account_res
+select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
+privilege_name    obj_type    privilege_level
+values    table    *.*
+select user_name from mo_catalog.mo_user;
+user_name
+admin
+create role role1;
+grant all on table *.* to role1;
+grant create table, drop table on database *.* to role1;
+create user user1 identified by 'pass1';
+grant role1 to user1;
+drop user user1;
+drop role role1;
+drop database rdb;
+drop database res_test;
+drop account if exists acc1;
+set global enable_privilege_cache = on;
