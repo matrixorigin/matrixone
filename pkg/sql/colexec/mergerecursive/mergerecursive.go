@@ -110,6 +110,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 
 	if sb.End() {
+		sb.Clean(proc.Mp())
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}

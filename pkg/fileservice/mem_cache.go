@@ -137,6 +137,7 @@ func (m *MemCache) Read(
 			vector.Entries[i].ObjectBytes = bs
 			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].done = true
+			vector.Entries[i].fromCache = m
 			numHit++
 			m.cacheHit(time.Nanosecond)
 		}
@@ -167,6 +168,10 @@ func (m *MemCache) Update(
 		if entry.ObjectBytes == nil {
 			continue
 		}
+		if entry.fromCache == m {
+			continue
+		}
+
 		key := IOVectorCacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
