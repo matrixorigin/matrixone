@@ -70,6 +70,7 @@ Main workflow:
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sort"
 	"strconv"
 	"strings"
@@ -729,8 +730,10 @@ func LoadCheckpointEntries(
 	}
 
 	closeCBs := make([]func(), 0)
+	var bats []*batch.Batch
+	var err error
 	for i, data := range datas {
-		err := data.ReadFrom(ctx, tableID, readers[i], versions[i], mp)
+		bats, err = data.ReadFromData(ctx, tableID, readers[i], versions[i], mp)
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
 			return nil, closeCBs, err
@@ -740,7 +743,7 @@ func LoadCheckpointEntries(
 	entries := make([]*api.Entry, 0)
 	for i := range objectLocations {
 		data := datas[i]
-		ins, del, cnIns, segDel, err := data.GetTableData(tableID)
+		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats)
 		if err != nil {
 			return nil, closeCBs, err
 		}

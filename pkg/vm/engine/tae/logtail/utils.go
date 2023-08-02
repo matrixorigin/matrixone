@@ -277,6 +277,7 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) fu
 }
 
 type BlockLocation struct {
+	id       uint16
 	offset   *common.ClosedInterval
 	location objectio.Location
 }
@@ -351,50 +352,6 @@ func (m *CheckpointMeta) DecodeFromString(keys []string) (err error) {
 		}
 	}
 	return
-}
-
-func (m *CheckpointMeta) UpdateLocations(locationIDX int, start, end uint32) (metaLocs []*BlockLocation) {
-	metaLocs = make([]*BlockLocation, 0)
-	blkOffsetStart := start / CheckpointBlockRows
-	blkOffsetEnd := end / CheckpointBlockRows
-	var lastLocation *BlockLocation
-	if len(m.tables[locationIDX].BlockLocation) != 0 {
-		lastLocation = m.tables[locationIDX].BlockLocation[len(m.tables[locationIDX].BlockLocation)-1]
-	}
-	if blkOffsetStart == blkOffsetEnd {
-		startOffset := start % CheckpointBlockRows
-		endOffset := end % CheckpointBlockRows
-		loc := newMetaLocation(blkOffsetStart, &common.ClosedInterval{uint64(startOffset), uint64(endOffset)})
-
-		if lastLocation != nil {
-			merged := lastLocation.tryMerge(loc)
-			if !merged {
-				m.locations[locationIDX] = append(m.locations[locationIDX], loc)
-				metaLocs = append(metaLocs, loc)
-			}
-		}
-		return
-	} else {
-		startOffset := start % CheckpointBlockRows
-		loc := newMetaLocation(blkOffsetStart, &common.ClosedInterval{uint64(startOffset), uint64(CheckpointBlockRows)})
-		if lastLocation != nil {
-			merged := lastLocation.tryMerge(loc)
-			if !merged {
-				m.locations[locationIDX] = append(m.locations[locationIDX], loc)
-				metaLocs = append(metaLocs, loc)
-			}
-		}
-		for i := blkOffsetStart + 1; i < blkOffsetEnd; i++ {
-			loc := newMetaLocation(blkOffsetStart, &common.ClosedInterval{0, uint64(CheckpointBlockRows)})
-			m.locations[locationIDX] = append(m.locations[locationIDX], loc)
-			metaLocs = append(metaLocs, loc)
-		}
-		endOffset := end % CheckpointBlockRows
-		loc2 := newMetaLocation(blkOffsetStart, &common.ClosedInterval{0, uint64(endOffset)})
-		m.locations[locationIDX] = append(m.locations[locationIDX], loc2)
-		metaLocs = append(metaLocs, loc2)
-		return
-	}
 }
 
 type CheckpointData struct {
@@ -503,53 +460,36 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 		meta = data.meta[tableID]
 		return
 	}
-
 	tidVec := vector.MustFixedCol[uint64](data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX])
-	insStartVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_Start_IDX])
-	insEndVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_End_IDX])
-	delStartVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_Start_IDX])
-	delEndVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_End_IDX])
-	segDelStartVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_Start_IDX])
-	segDelEndVec := vector.MustFixedCol[int32](data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_End_IDX])
+	blkIns := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_LOC_IDX]
+	blkCNIns := data.bats[MetaIDX].Vecs[Checkpoint_Meta_CN_Delete_Block_LOC_IDX]
+	blkDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_LOC_IDX]
+	segDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_LOC_IDX]
 
 	for i := 0; i < data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX].Length(); i++ {
 		tid := tidVec[i]
-		insStart := insStartVec[i]
-		insEnd := insEndVec[i]
-		delStart := delStartVec[i]
-		delEnd := delEndVec[i]
-		segDelStart := segDelStartVec[i]
-		segDelEnd := segDelEndVec[i]
+		blkInsStr := blkIns.GetBytesAt(i)
+		blkCNInsStr := blkCNIns.GetBytesAt(i)
+		blkDelStr := blkDel.GetBytesAt(i)
+		segDelStr := segDel.GetBytesAt(i)
 		tableMeta := NewCheckpointMeta()
-		if insStart != -1 {
+		if len(blkInsStr) > 0 {
 			blkInsertTableMeta := NewTableMeta()
+			blkInsertTableMeta.DecodeFromString(string(blkInsStr))
 			// blkInsertOffset
-			blkInsertTableMeta.offset = &common.ClosedInterval{
-				Start: uint64(insStart),
-				End:   uint64(insEnd),
-			}
 			tableMeta.tables[BlockInsert] = blkInsertTableMeta
 		}
-		if delStart != -1 {
+		if len(blkCNInsStr) > 0 {
 			blkDeleteTableMeta := NewTableMeta()
-			blkDeleteTableMeta.offset = &common.ClosedInterval{
-				Start: uint64(delStart),
-				End:   uint64(delEnd),
-			}
+			blkDeleteTableMeta.DecodeFromString(string(blkDelStr))
 			tableMeta.tables[BlockDelete] = blkDeleteTableMeta
 			cnBlkInsTableMeta := NewTableMeta()
-			cnBlkInsTableMeta.offset = &common.ClosedInterval{
-				Start: uint64(delStart),
-				End:   uint64(delEnd),
-			}
+			cnBlkInsTableMeta.DecodeFromString(string(blkCNInsStr))
 			tableMeta.tables[CNBlockInsert] = cnBlkInsTableMeta
 		}
-		if segDelStart != -1 {
+		if len(segDelStr) > 0 {
 			segDeleteTableMeta := NewTableMeta()
-			segDeleteTableMeta.offset = &common.ClosedInterval{
-				Start: uint64(segDelStart),
-				End:   uint64(segDelEnd),
-			}
+			segDeleteTableMeta.DecodeFromString(string(segDelStr))
 			tableMeta.tables[SegmentDelete] = segDeleteTableMeta
 		}
 
@@ -622,7 +562,7 @@ func (data *CNCheckpointData) ReadFromData(
 			length := len(versionVec)
 			vec := vector.NewVec(types.T_uint32.ToType())
 			for i := 0; i < length; i++ {
-				err := vector.AppendFixed[uint32](vec, pkgcatalog.CatalogVersion_V1, false, m)
+				err = vector.AppendFixed[uint32](vec, pkgcatalog.CatalogVersion_V1, false, m)
 				if err != nil {
 					return
 				}
@@ -640,7 +580,7 @@ func (data *CNCheckpointData) ReadFromData(
 				length := len(rowIDVec)
 				pkVec := vector.NewVec(types.T_uint64.ToType())
 				for i := 0; i < length; i++ {
-					err := vector.AppendFixed[uint64](pkVec, rowIDToU64(rowIDVec[i]), false, m)
+					err = vector.AppendFixed[uint64](pkVec, rowIDToU64(rowIDVec[i]), false, m)
 					if err != nil {
 						return
 					}
@@ -656,7 +596,7 @@ func (data *CNCheckpointData) ReadFromData(
 				length := len(rowIDVec)
 				pkVec2 := vector.NewVec(types.T_uint64.ToType())
 				for i := 0; i < length; i++ {
-					err := vector.AppendFixed[uint64](pkVec2, rowIDToU64(rowIDVec[i]), false, m)
+					err = vector.AppendFixed[uint64](pkVec2, rowIDToU64(rowIDVec[i]), false, m)
 					if err != nil {
 						return
 					}
@@ -823,6 +763,11 @@ func (data *CheckpointData) PrintData() {
 	logutil.Info(BatchToString("BLK-META-INS-BAT", data.bats[BLKMetaInsertIDX], true))
 }
 
+type blockIndex struct {
+	offset *common.ClosedInterval
+	id     []uint32
+}
+
 func (data *CheckpointData) WriteTo(
 	fs fileservice.FileService,
 ) (location objectio.Location, err error) {
@@ -832,30 +777,78 @@ func (data *CheckpointData) WriteTo(
 	if err != nil {
 		return
 	}
-	schemaIdxes := make([]int, 0)
+	blockIndexs := make([][]*BlockLocation, MetaIDX)
 	for i := range checkpointDataSchemas_Curr {
 		if i == int(MetaIDX) {
 			continue
 		}
+		rows := 0
 		bats := containers.SplitDNBatch(data.bats[i], 10)
 		for _, bat := range bats {
-			if _, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
+			var block objectio.BlockObject
+			if block, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 				return
 			}
-			schemaIdxes = append(schemaIdxes, i)
+			blockLoc := &BlockLocation{
+				id:     block.GetID(),
+				offset: new(common.ClosedInterval),
+			}
+			blockLoc.offset.Start = uint64(rows)
+			rows += bat.Length()
+			blockLoc.offset.End = uint64(rows)
+			blockIndexs[i] = append(blockIndexs[i], blockLoc)
+
 		}
 	}
 	blks, _, err := writer.Sync(context.Background())
-	for i, blk := range blks {
-		location = objectio.BuildLocation(name, blk.GetExtent(), 0, blk.GetID())
-		schemaIdx := schemaIdxes[i]
-		batchType := BatchType[uint16(schemaIdx)]
-		switch batchType {
-		case NormalBatch:
 
-			data.metaLocs[uint16(schemaIdx)] = append(data.metaLocs[uint16(schemaIdx)], location)
+	for _, mate := range data.meta {
+		for idx, table := range mate.tables {
+			for _, block := range blockIndexs[idx] {
+				if table.offset.End < block.offset.Start {
+					break
+				}
+				if table.offset.Contains(*block.offset) {
+					blockLoc := &BlockLocation{
+						offset: &common.ClosedInterval{
+							Start: 0,
+							End:   block.offset.End - block.offset.Start,
+						},
+						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
+					}
+					table.BlockLocation = append(table.BlockLocation, blockLoc)
+				} else if block.offset.Contains(*table.offset) {
+					blockLoc := &BlockLocation{
+						offset: &common.ClosedInterval{
+							Start: table.offset.Start - block.offset.Start,
+							End:   block.offset.End - table.offset.End,
+						},
+						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
+					}
+					table.BlockLocation = append(table.BlockLocation, blockLoc)
+				} else if table.offset.Start <= block.offset.End && table.offset.Start >= block.offset.Start {
+					blockLoc := &BlockLocation{
+						offset: &common.ClosedInterval{
+							Start: table.offset.Start - block.offset.Start,
+							End:   block.offset.End - block.offset.Start,
+						},
+						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
+					}
+					table.BlockLocation = append(table.BlockLocation, blockLoc)
+				} else if table.offset.End <= block.offset.End && table.offset.End >= block.offset.Start {
+					blockLoc := &BlockLocation{
+						offset: &common.ClosedInterval{
+							Start: 0,
+							End:   block.offset.End - table.offset.End,
+						},
+						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
+					}
+					table.BlockLocation = append(table.BlockLocation, blockLoc)
+				}
+			}
 		}
 	}
+
 	data.prepareMeta()
 	if err != nil {
 		return

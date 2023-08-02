@@ -17,6 +17,7 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sync"
 	"time"
 
@@ -214,10 +215,11 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 	/*if err = data.PrefetchFrom(ctx, e.version, fs.Service, e.location); err != nil {
 		return
 	}*/
-	if err = data.ReadFrom(ctx, reader, e.version, common.DefaultAllocator); err != nil {
+	var bats []*batch.Batch
+	if bats, err = data.ReadFromData(ctx, tid, reader, e.version, common.DefaultAllocator); err != nil {
 		return
 	}
-	ins, del, cnIns, segDel, err = data.GetTableData(tid)
+	ins, del, cnIns, segDel, err = data.GetTableDataFromBats(tid, bats)
 	return
 }
 
