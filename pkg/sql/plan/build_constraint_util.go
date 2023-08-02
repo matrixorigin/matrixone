@@ -34,6 +34,7 @@ import (
 )
 
 const derivedTableName = "_t"
+const maxRowThenUnusePkFilterExpr = 20
 
 type dmlSelectInfo struct {
 	typ string
@@ -405,8 +406,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault && syntaxHasColumnNames {
 			return false, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		checkInsertPkDup = len(slt.Rows) > 50
-		if !checkInsertPkDup {
+		checkInsertPkDup = len(slt.Rows) > 1
+		if CNPrimaryCheck && len(slt.Rows) <= maxRowThenUnusePkFilterExpr {
 			if len(tableDef.Pkey.Names) == 1 {
 				for idx, name := range insertColumns {
 					if name == tableDef.Pkey.PkeyColName {

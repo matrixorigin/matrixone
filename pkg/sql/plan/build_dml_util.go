@@ -1230,17 +1230,28 @@ func makeInsertPlan(
 			}
 
 			if !isUpdate && !builder.qry.LoadTag { // insert stmt but not load
-				if !checkInsertPkDup && len(pkFilterExprs) > 0 {
+				if len(pkFilterExprs) > 0 {
 					scanTableDef := DeepCopyTableDef(tableDef)
 					// scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
-					var newCols *ColDef
-					for _, col := range scanTableDef.Cols {
-						if col.Name == scanTableDef.Pkey.PkeyColName {
-							newCols = col
-							break
+					pkNameMap := make(map[string]int)
+					for i, n := range tableDef.Pkey.Names {
+						pkNameMap[n] = i
+					}
+					newCols := make([]*ColDef, len(scanTableDef.Pkey.Names))
+					for _, def := range scanTableDef.Cols {
+						if i, ok := pkNameMap[def.Name]; ok {
+							newCols[i] = def
 						}
 					}
-					scanTableDef.Cols = []*ColDef{newCols}
+					if len(newCols) > 1 {
+						for _, col := range scanTableDef.Cols {
+							if col.Name == scanTableDef.Pkey.PkeyColName {
+								newCols = append(newCols, col)
+								break
+							}
+						}
+					}
+					scanTableDef.Cols = newCols
 					scanNode := &plan.Node{
 						NodeType: plan.Node_TABLE_SCAN,
 						Stats:    &plan.Stats{},
@@ -1250,7 +1261,7 @@ func makeInsertPlan(
 							Typ: pkTyp,
 							Expr: &plan.Expr_Col{
 								Col: &ColRef{
-									ColPos: 0,
+									ColPos: int32(len(scanTableDef.Cols) - 1),
 									Name:   tableDef.Pkey.PkeyColName,
 								},
 							},
