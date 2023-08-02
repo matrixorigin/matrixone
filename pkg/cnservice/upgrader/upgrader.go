@@ -134,7 +134,7 @@ func (u *Upgrader) GenerateDiff(currentSchema *table.Table, expectedSchema *tabl
 }
 func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 	if len(diff.AddedColumns) == 0 {
-		return "", moerr.NewInternalError(nil, "no added columns in schema diff")
+		return "", moerr.NewInternalError(context.Background(), "no added columns in schema diff")
 	}
 
 	// Get database and table name from the schema diff
