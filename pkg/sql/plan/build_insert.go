@@ -261,6 +261,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		Expr: &plan.Expr_Col{
 			Col: &ColRef{
 				ColPos: 0,
+				Name:   tableDef.Pkey.PkeyColName,
 			},
 		},
 	}, {
@@ -277,79 +278,4 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		return nil
 	}
 	return []*Expr{expr}
-
-	// pkValueExprs := make([]*Expr, len(pkPosInValues))
-	// for idx, cols := range node.RowsetData.Cols {
-	// 	pkColIdx, ok := pkPosInValues[idx]
-	// 	if !ok {
-	// 		continue
-	// 	}
-	// 	if len(cols.Data) == 1 {
-	// 		rowExpr := DeepCopyExpr(cols.Data[0].Expr)
-	// 		e, err := forceCastExpr(builder.GetContext(), rowExpr, tableDef.Cols[idx].Typ)
-	// 		if err != nil {
-	// 			return nil
-	// 		}
-	// 		expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-	// 			Typ: tableDef.Cols[idx].Typ,
-	// 			Expr: &plan.Expr_Col{
-	// 				Col: &ColRef{
-	// 					ColPos: int32(pkColIdx),
-	// 				},
-	// 			},
-	// 		}, e})
-	// 		if err != nil {
-	// 			return nil
-	// 		}
-	// 		pkValueExprs[pkColIdx] = expr
-	// 	}
-	// }
-	// proc := ctx.GetProcess()
-	// var bat *batch.Batch
-	// if builder.isPrepareStatement {
-	// 	bat = proc.GetPrepareBatch()
-	// } else {
-	// 	bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
-	// }
-	// if bat != nil {
-	// 	for insertRowIdx, pkColIdx := range pkPosInValues {
-	// 		if pkValueExprs[pkColIdx] == nil {
-	// 			constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, 0)
-	// 			if constExpr == nil {
-	// 				return nil
-	// 			}
-	// 			typ := makePlan2Type(bat.Vecs[insertRowIdx].GetType())
-
-	// 			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-	// 				Typ: typ,
-	// 				Expr: &plan.Expr_Col{
-	// 					Col: &ColRef{
-	// 						ColPos: int32(pkColIdx),
-	// 					},
-	// 				},
-	// 			}, &plan.Expr{
-	// 				Typ: typ,
-	// 				Expr: &plan.Expr_C{
-	// 					C: constExpr,
-	// 				},
-	// 			}})
-	// 			if err != nil {
-	// 				return nil
-	// 			}
-
-	// 			pkValueExprs[pkColIdx] = expr
-	// 		}
-	// 	}
-	// }
-	// return pkValueExprs
-
-	// if len(pkValueExprs) == 1 {
-	// 	return pkValueExprs[0]
-	// } else {
-	// 	pkValueExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", pkValueExprs)
-	// 	if err != nil {
-	// 		return nil
-	// 	}
-	// 	return pkValueExpr
-	// }
 }
