@@ -16,9 +16,11 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -54,6 +56,14 @@ func NewTimestampWaiter() TimestampWaiter {
 }
 
 func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	st := time.Now()
+	defer func() {
+		cost := time.Since(st)
+		if cost > time.Millisecond*100 {
+			fmt.Printf("wait logtail, cost: %+v\n", cost)
+		}
+	}()
+
 	latest := tw.latestTS.Load()
 	if latest != nil && latest.GreaterEq(ts) {
 		return latest.Next(), nil
