@@ -124,22 +124,22 @@ func runCatalog(arg *catalogArg, respWriter io.Writer) {
 }
 
 type compactPolicyArg struct {
-	ctx                  *inspectContext
-	db, table            string
-	enableFlushTableTail bool
-	flushGapDuration     time.Duration
+	ctx              *inspectContext
+	db, table        string
+	flushGapDuration time.Duration
+	flushCapacity    int
 }
 
 func (c *compactPolicyArg) fromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-	address, _ := cmd.Flags().GetString("dbtable")
+	address, _ := cmd.Flags().GetString("target")
 	parts := strings.Split(address, ".")
 	if len(parts) != 2 {
 		return moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
 	}
 	c.db, c.table = parts[0], parts[1]
-	c.enableFlushTableTail, _ = cmd.Flags().GetBool("enable")
-	c.flushGapDuration, _ = cmd.Flags().GetDuration("flushgap")
+	c.flushGapDuration, _ = cmd.Flags().GetDuration("flushInterval")
+	c.flushCapacity, _ = cmd.Flags().GetInt("flushCapacity")
 	return nil
 }
 
@@ -157,8 +157,10 @@ func runCompactPolicy(arg *compactPolicyArg) error {
 	meta.Stats.Lock()
 	defer meta.Stats.Unlock()
 
-	meta.Stats.FlushTableTailEnabled = arg.enableFlushTableTail
+	meta.Stats.Inited = true
+	meta.Stats.FlushTableTailEnabled = true
 	meta.Stats.FlushGapDuration = arg.flushGapDuration
+	meta.Stats.FlushMemCapacity = arg.flushCapacity
 	return nil
 
 }
@@ -196,8 +198,9 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 			} else {
 				cmd.OutOrStdout().Write([]byte(
 					fmt.Sprintf(
-						"success. [%s.%s] enable %v, flush_gap %v",
-						arg.db, arg.table, arg.enableFlushTableTail, arg.flushGapDuration,
+						"success. [%s.%s] flush_cap %v, flush_gap %v",
+						arg.db, arg.table,
+						arg.flushCapacity, arg.flushGapDuration,
 					)))
 			}
 		},
@@ -215,9 +218,9 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	catalogCmd.Flags().StringP("table", "t", "", "table name")
 	rootCmd.AddCommand(catalogCmd)
 
-	policyCmd.Flags().StringP("dbtable", "d", "", "database.table")
-	policyCmd.Flags().BoolP("enable", "e", false, "enable flush table tail")
-	policyCmd.Flags().DurationP("flushgap", "g", 1*time.Minute, "flush gap duration")
+	policyCmd.Flags().StringP("target", "t", "", "target table, input format: database.table")
+	policyCmd.Flags().DurationP("flushInterval", "i", 1*time.Minute, "flush interval duration")
+	policyCmd.Flags().IntP("flushCapacity", "c", 20*(1<<20), "flush table exceeds capacity in bytes")
 	rootCmd.AddCommand(policyCmd)
 
 	return rootCmd
