@@ -21,6 +21,8 @@ const constTenantKey = "account"
 // this constant lable is used for sys_* and process_* table
 var sysTenantID = prom.Labels{constTenantKey: "sys"}
 
+// InitCollectors contains all the collectors that belong to SubSystemSql, SubSystemServer, SubSystemProcess and
+// SubSystemStatement.
 var InitCollectors = []Collector{
 	// sql metric
 	StatementCounterFactory,
@@ -36,6 +38,7 @@ var InitCollectors = []Collector{
 	hardwareStatsCollector,
 }
 
+// InternalCollectors contains all the collectors that belong to SubSystemMO
 var InternalCollectors = []Collector{
 	// mo metric
 	MOLogMessageFactory,

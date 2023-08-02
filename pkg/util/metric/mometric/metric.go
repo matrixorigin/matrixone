@@ -51,12 +51,14 @@ type statusServer struct {
 }
 
 var registry *prom.Registry
-var internalRegistry *prom.Registry
 var moExporter metric.MetricExporter
-var internalExporter metric.MetricExporter
 var moCollector MetricCollector
 var statsLogWriter *StatsLogWriter
 var statusSvr *statusServer
+
+// internalRegistry is the registry for metric.InternalCollectors, cooperated with internalExporter.
+var internalRegistry *prom.Registry
+var internalExporter metric.MetricExporter
 
 var enable bool
 var inited uint32
