@@ -166,7 +166,7 @@ func TestBatchSpliter(t *testing.T) {
 	vecTypes := types.MockColTypes(17)
 	bat := MockBatch(vecTypes, 11, 3, nil)
 	defer bat.Close()
-	spliter := NewBatchSpliter(bat, 5)
+	spliter := NewBatchSplitter(bat, 5)
 	expects_1 := []int{5, 5, 1}
 	var actuals_1 []int
 	for {
@@ -180,7 +180,7 @@ func TestBatchSpliter(t *testing.T) {
 
 	bat2 := MockBatch(vecTypes, 10, 3, nil)
 	defer bat2.Close()
-	spliter = NewBatchSpliter(bat2, 5)
+	spliter = NewBatchSplitter(bat2, 5)
 	expects_2 := []int{5, 5}
 	var actuals_2 []int
 	for {

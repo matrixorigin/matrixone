@@ -511,17 +511,17 @@ func (b *BatchWithVersion) Less(i, j int) bool {
 	return b.Seqnums[i] < b.Seqnums[j]
 }
 
-func NewBatchSpliter(bat *Batch, sliceSize int) *BatchSpliter {
+func NewBatchSplitter(bat *Batch, sliceSize int) *BatchSplitter {
 	if sliceSize <= 0 || bat == nil {
 		panic("sliceSize should not be 0 and bat should not be nil")
 	}
-	return &BatchSpliter{
+	return &BatchSplitter{
 		internal:  bat,
 		sliceSize: sliceSize,
 	}
 }
 
-func (bs *BatchSpliter) Next() (*Batch, error) {
+func (bs *BatchSplitter) Next() (*Batch, error) {
 	if bs.offset == bs.internal.Length() {
 		return nil, moerr.GetOkExpectedEOB()
 	}
