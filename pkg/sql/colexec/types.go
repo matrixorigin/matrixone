@@ -19,12 +19,21 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+type receiverType int
+
+const (
+	SingleReceiver receiverType = iota
+	JoinReceiver
+	MergeReceiver
 )
 
 type ResultPos struct {
@@ -84,8 +93,17 @@ type ReceiverOperator struct {
 	//
 	// Merge/MergeGroup/MergeLimit ... are Merge-Type
 	// while Join/Intersect/Minus ... are not
-	aliveMergeReceiver int
-	receiverListener   []reflect.SelectCase
+	aliveMR       int
+	mergeListener []reflect.SelectCase
+
+	typ receiverType
+
+	*JoinReceiverOperator
+}
+
+type JoinReceiverOperator struct {
+	ReceiveProbe func(ap process.Analyze) (*batch.Batch, bool, error)
+	ReceiveBuild func(ap process.Analyze) (*batch.Batch, bool, error)
 }
 
 type RuntimeFilterChan struct {
