@@ -133,6 +133,9 @@ type IOEntry struct {
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache
 	done bool
+
+	// fromCache indicates which cache filled the entry
+	fromCache IOVectorCache
 }
 
 // DirEntry is a file or dir
