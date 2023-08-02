@@ -17,34 +17,61 @@ package lruobjcache
 import (
 	"container/list"
 	"sync"
+	"time"
 )
 
 type LRU struct {
-	sync.Mutex
+	sync.RWMutex
 	capacity  int64
 	size      int64
 	evicts    *list.List
 	kv        map[any]*list.Element
 	postSet   func(key any, value []byte, sz int64, isNewEntry bool)
 	postEvict func(key any, value []byte, sz int64)
+	jobsChan  chan func()
+	closed    chan struct{}
 }
 
 type lruItem struct {
-	Key   any
-	Value []byte
-	Size  int64
+	Key          any
+	Value        []byte
+	Size         int64
+	LastPromoted time.Time
 }
+
+var (
+	minPromotionInterval = time.Second * 60
+)
 
 func New(capacity int64,
 	postSet func(keySet any, valSet []byte, szSet int64, isNewEntry bool),
 	postEvict func(keyEvicted any, valEvicted []byte, szEvicted int64)) *LRU {
+	ch := make(chan func(), 32)
+	closed := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case fn := <-ch:
+				fn()
+			case <-closed:
+				return
+			}
+		}
+	}()
 	return &LRU{
 		capacity:  capacity,
 		evicts:    list.New(),
 		kv:        make(map[any]*list.Element),
 		postSet:   postSet,
 		postEvict: postEvict,
+		jobsChan:  ch,
+		closed:    closed,
 	}
+}
+
+func (l *LRU) Close() error {
+	close(l.closed)
+	return nil
 }
 
 func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
@@ -118,16 +145,36 @@ func (l *LRU) evict() {
 }
 
 func (l *LRU) Get(key any, preloading bool) (value []byte, size int64, ok bool) {
-	l.Lock()
-	defer l.Unlock()
-	if elem, ok := l.kv[key]; ok {
-		if !preloading {
-			l.evicts.MoveToFront(elem)
-		}
-		item := elem.Value.(*lruItem)
-		return item.Value, item.Size, true
+	l.RLock()
+	elem, ok := l.kv[key]
+	if !ok {
+		l.RUnlock()
+		return nil, 0, false
 	}
-	return nil, 0, false
+
+	item := elem.Value.(*lruItem)
+	value = item.Value
+	size = item.Size
+	ok = true
+	lastPromoted := item.LastPromoted
+	l.RUnlock()
+
+	if !preloading && time.Since(lastPromoted) > minPromotionInterval {
+		select {
+		case l.jobsChan <- func() {
+			l.Lock()
+			item.LastPromoted = time.Now()
+			l.evicts.MoveToFront(elem)
+			l.Unlock()
+		}:
+		case <-l.closed:
+			return
+		default:
+			// skip promotion if busy
+		}
+	}
+
+	return
 }
 
 func (l *LRU) Flush() {

@@ -108,3 +108,15 @@ func BenchmarkLRUParallelSetOrGet(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkLRUParallelGet(b *testing.B) {
+	const capacity = 1024
+	l := New(capacity, nil, nil)
+	l.Set(1, []byte{42}, 1, false)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			l.Get(1, false)
+		}
+	})
+}
