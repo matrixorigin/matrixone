@@ -288,15 +288,10 @@ func addAnyValueForNonPKInPlan(nodeID int32, exceptID int32, cols []*plan.Expr_C
 func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
 	//rightcol must be primary key of right table
 	// or we  add rowid in group by, implement this in the future
-	rightBinding := builder.ctxByNode[rightScan.NodeId].bindingByTag[rightScan.BindingTags[0]]
 	if rightScan.TableDef.Pkey == nil {
 		return false
 	}
 	pkNames := rightScan.TableDef.Pkey.Names
-	pks := make([]int32, len(pkNames))
-	for i := range pkNames {
-		pks[i] = rightBinding.FindColumn(pkNames[i])
-	}
 
 	if len(join.OnList) != len(pkNames) || len(join.OnList) != len(agg.GroupBy) || !builder.IsEquiJoin(join) {
 		return false
@@ -321,7 +316,7 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 		leftColPos[i] = leftCol.Col.ColPos
 		groupColsInAgg[i] = groupColInAgg
 	}
-	if !containsAllPKs(leftColPos, pks) {
+	if !containsAllPKs(leftColPos, rightScan.TableDef) {
 		return false
 	}
 

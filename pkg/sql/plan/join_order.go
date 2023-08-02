@@ -526,11 +526,18 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 	}
 }
 
-func containsAllPKs(cols, pks []int32) bool {
+func containsAllPKs(cols []int32, tableDef *plan.TableDef) bool {
+	if tableDef.Pkey == nil {
+		return false
+	}
+	pkNames := tableDef.Pkey.Names
+	pks := make([]int32, len(pkNames))
+	for i := range pkNames {
+		pks[i] = tableDef.Name2ColIndex[pkNames[i]]
+	}
 	if len(pks) == 0 {
 		return false
 	}
-
 	for _, pk := range pks {
 		found := false
 		for _, col := range cols {
@@ -539,12 +546,10 @@ func containsAllPKs(cols, pks []int32) bool {
 				break
 			}
 		}
-
 		if !found {
 			return false
 		}
 	}
-
 	return true
 }
 
