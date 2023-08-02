@@ -76,8 +76,6 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 // checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
 func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCol *ColDef, pos *tree.ColumnPosition) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
-		newCol.ColId = oldCol.ColId
-		newCol.Primary = oldCol.Primary
 		// detete old column
 		originIndex := -1
 		for i, col := range tableDef.Cols {
@@ -94,8 +92,6 @@ func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCo
 		}
 		tableDef.Cols = append(tableDef.Cols[:targetPos], append([]*ColDef{newCol}, tableDef.Cols[targetPos:]...)...)
 	} else {
-		newCol.ColId = oldCol.ColId
-		newCol.Primary = oldCol.Primary
 		for i, col := range tableDef.Cols {
 			if strings.EqualFold(col.Name, oldCol.Name) {
 				tableDef.Cols[i] = newCol
@@ -146,7 +142,9 @@ func checkChangeTypeCompatible(ctx context.Context, origin *plan.Type, to *plan.
 // CheckModifyColumnForeignkeyConstraint check for table column foreign key dependencies, including
 // the foreign keys of the table itself and being dependent on foreign keys of other tables
 func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, originalCol, newCol *ColDef) error {
-	if newCol.Typ.GetId() == originalCol.Typ.GetId() && newCol.Typ.Width == originalCol.Typ.Width {
+	if newCol.Typ.GetId() == originalCol.Typ.GetId() &&
+		newCol.Typ.GetWidth() == originalCol.Typ.GetWidth() &&
+		newCol.Typ.GetAutoIncr() == originalCol.Typ.GetAutoIncr() {
 		return nil
 	}
 
@@ -188,27 +186,33 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 			}
 		}
 
-		for i, colId := range referredFK.Cols {
+		for i, _ := range referredFK.Cols {
 			if referredFK.ForeignCols[i] == originalCol.ColId {
-				childCol := FindColumnByColId(refTableDef.Cols, colId)
-				if childCol == nil {
-					continue
-				}
-
-				if newCol.Typ.GetId() != childCol.Typ.GetId() {
-					return moerr.NewErrFKIncompatibleColumns(ctx.GetContext(), childCol.Name, originalCol.Name, referredFK.Name)
-				}
-
-				if newCol.Typ.GetWidth() < childCol.Typ.GetWidth() ||
-					newCol.Typ.GetWidth() < originalCol.Typ.GetWidth() {
+				if originalCol.Name != newCol.Name {
+					return moerr.NewErrAlterOperationNotSupportedReasonFkRename(ctx.GetContext())
+				} else {
 					return moerr.NewErrForeignKeyColumnCannotChangeChild(ctx.GetContext(), originalCol.Name, referredFK.Name, refObjRef.SchemaName+"."+refTableDef.Name)
 				}
+
+				//childCol := FindColumnByColId(refTableDef.Cols, colId)
+				//if childCol == nil {
+				//	continue
+				//}
+				//
+				//if newCol.Typ.GetId() != childCol.Typ.GetId() {
+				//	return moerr.NewErrFKIncompatibleColumns(ctx.GetContext(), childCol.Name, originalCol.Name, referredFK.Name)
+				//}
+				//
+				//if newCol.Typ.GetWidth() < childCol.Typ.GetWidth() ||
+				//	newCol.Typ.GetWidth() < originalCol.Typ.GetWidth() {
+				//	return moerr.NewErrForeignKeyColumnCannotChangeChild(ctx.GetContext(), originalCol.Name, referredFK.Name, refObjRef.SchemaName+"."+refTableDef.Name)
+				//}
 			}
 		}
 	}
 	// Note: If a column in a table is dependent on a foreign key in another table, modifying it is currently not supported
-	if len(tbInfo.RefChildTbls) > 0 {
-		return moerr.NewNotSupported(ctx.GetContext(), "Currently, modifying tables that are dependent on foreign keys is not supported")
-	}
+	//if len(tbInfo.RefChildTbls) > 0 {
+	//	return moerr.NewNotSupported(ctx.GetContext(), "Currently, modifying tables that are dependent on foreign keys is not supported")
+	//}
 	return nil
 }
