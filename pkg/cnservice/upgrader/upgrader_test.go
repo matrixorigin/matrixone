@@ -107,7 +107,7 @@ func TestGenerateUpgradeSQL(t *testing.T) {
 				TableName:    "testtable",
 				DatabaseName: "testdb",
 			},
-			expectedSQL: "ALTER TABLE `testdb`.`testtable` ADD COLUMN `statement_id` VARCHAR(16) DEFAULT 0, ADD COLUMN `session_id` VARCHAR(16) DEFAULT 0",
+			expectedSQL: "BEGIN;\nALTER TABLE `testdb`.`testtable` ADD COLUMN `statement_id` VARCHAR(16) DEFAULT 0;\nALTER TABLE `testdb`.`testtable` ADD COLUMN `session_id` VARCHAR(16) DEFAULT 0;\nCOMMIT;",
 		},
 	}
 

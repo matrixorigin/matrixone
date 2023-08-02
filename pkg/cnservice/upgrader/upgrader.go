@@ -25,32 +25,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
-var registeredTable = []*table.Table{motrace.SingleStatementTable, motrace.SingleRowLogTable}
+var registeredTable = []*table.Table{motrace.SingleRowLogTable}
 
 type Upgrader struct {
 	IEFactory func() ie.InternalExecutor
 }
 
 func ParseDataTypeToColType(dataType string) table.ColType {
-	switch dataType {
-	case "datetime":
+	switch {
+	case strings.Contains(strings.ToLower(dataType), "datetime"):
 		return table.TDatetime
-	case "bigint":
-		if strings.Contains(dataType, "unsigned") {
+	case strings.Contains(strings.ToLower(dataType), "bigint"):
+		if strings.Contains(strings.ToLower(dataType), "unsigned") {
 			return table.TUint64
 		}
 		return table.TInt64
-	case "double":
+	case strings.Contains(strings.ToLower(dataType), "double"):
 		return table.TFloat64
-	case "json":
+	case strings.Contains(strings.ToLower(dataType), "json"):
 		return table.TJson
-	case "text":
+	case strings.Contains(strings.ToLower(dataType), "text"):
 		return table.TText
-	case "varchar":
+	case strings.Contains(strings.ToLower(dataType), "varchar"):
 		return table.TVarchar
-	case "bytes":
+	case strings.Contains(strings.ToLower(dataType), "bytes"):
 		return table.TBytes
-	case "uuid":
+	case strings.Contains(strings.ToLower(dataType), "uuid"):
 		return table.TUuid
 	default:
 		panic("Unknown data type: " + dataType)
@@ -73,12 +73,12 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 	cols := []table.Column{}
 	errors := []error{}
 	for i := uint64(0); i < result.RowCount(); i++ {
-		name, err := result.StringValueByName(ctx, i, "COLUMN_NAME")
+		name, err := result.StringValueByName(ctx, i, "column_name")
 		if err != nil {
 			errors = append(errors, err)
 			continue
 		}
-		dataType, err := result.StringValueByName(ctx, i, "DATA_TYPE")
+		dataType, err := result.StringValueByName(ctx, i, "data_type")
 		if err != nil {
 			errors = append(errors, err)
 			continue
@@ -132,7 +132,6 @@ func (u *Upgrader) GenerateDiff(currentSchema *table.Table, expectedSchema *tabl
 	// If no differences, return an empty SchemaDiff and nil error
 	return table.SchemaDiff{}, nil
 }
-
 func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 	if len(diff.AddedColumns) == 0 {
 		return "", moerr.NewInternalError(nil, "no added columns in schema diff")
@@ -142,23 +141,28 @@ func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 	databaseName := diff.DatabaseName
 	tableName := diff.TableName
 
-	// Generate the ALTER TABLE command
-	command := fmt.Sprintf("ALTER TABLE `%s`.`%s` ", databaseName, tableName)
+	// Initialize the commands slice with the beginning of a transaction
+	commands := []string{"BEGIN;"}
 
-	for i, column := range diff.AddedColumns {
-		if i > 0 {
-			command += ", "
-		}
-
-		command += fmt.Sprintf("ADD COLUMN `%s` %s", column.Name, column.ColType.String(column.Scale))
+	// Generate the ALTER TABLE command for each added column
+	for _, column := range diff.AddedColumns {
+		command := fmt.Sprintf("ALTER TABLE `%s`.`%s` ADD COLUMN `%s` %s", databaseName, tableName, column.Name, column.ColType.String(column.Scale))
 
 		// If there's a default value, include it
 		if column.Default != "" {
-			command += fmt.Sprintf(" DEFAULT %s", column.Default)
+			command += fmt.Sprintf(" DEFAULT %s;", column.Default)
+		} else {
+			command += ";"
 		}
+
+		commands = append(commands, command)
 	}
 
-	return command, nil
+	// Add the end of the transaction to the commands
+	commands = append(commands, "COMMIT;")
+
+	// Join all commands into a single string
+	return strings.Join(commands, "\n"), nil
 }
 
 func (u *Upgrader) Upgrade(ctx context.Context) error {
@@ -185,7 +189,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 
 		// Execute upgrade SQL
 		if err := exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
-			return moerr.NewInternalError(ctx, "failed to upgrade")
+			return err
 		}
 	}
 
