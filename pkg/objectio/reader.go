@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"sync/atomic"
 
@@ -174,6 +175,7 @@ func (r *objectReaderV1) ReadSubBlock(
 		return
 	}
 	meta, _ := metaHeader.SubMeta(blk)
+	logutil.Infof("meta is %d", meta.BlockCount())
 	ioVecs = make([]*fileservice.IOVector, 0)
 	for i := uint32(0); i < meta.BlockCount(); i++ {
 		var ioVec *fileservice.IOVector

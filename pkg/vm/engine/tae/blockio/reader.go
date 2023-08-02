@@ -177,7 +177,7 @@ func (r *BlockReader) LoadOneSubColumns(
 		return
 	}
 	var ioVectors []*fileservice.IOVector
-	ioVectors, err = r.reader.ReadSubBlock(ctx, cols, typs, blk, m)
+	ioVectors, err = r.reader.ReadSubBlock(ctx, cols, typs, dataType, m)
 	if err != nil {
 		return
 	}

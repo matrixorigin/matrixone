@@ -210,26 +210,16 @@ var (
 	}
 	MetaSchemaAttr = []string{
 		SnapshotAttr_TID,
-		SnapshotMetaAttr_BlockInsertBatchStart,
-		SnapshotMetaAttr_BlockInsertBatchEnd,
 		SnapshotMetaAttr_BlockInsertBatchLocation,
-		SnapshotMetaAttr_BlockDeleteBatchStart,
-		SnapshotMetaAttr_BlockDeleteBatchEnd,
+		SnapshotMetaAttr_BlockCNInsertBatchLocation,
 		SnapshotMetaAttr_BlockDeleteBatchLocation,
-		SnapshotMetaAttr_SegDeleteBatchStart,
-		SnapshotMetaAttr_SegDeleteBatchEnd,
 		SnapshotMetaAttr_SegDeleteBatchLocation,
 	}
 	MetaShcemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_int32, 0, 0),
-		types.New(types.T_int32, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-		types.New(types.T_int32, 0, 0),
-		types.New(types.T_int32, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-		types.New(types.T_int32, 0, 0),
-		types.New(types.T_int32, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
 	DBDelSchemaAttr = []string{
