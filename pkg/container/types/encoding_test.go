@@ -284,6 +284,7 @@ func BenchmarkEncodeType(b *testing.B) {
 		}
 	}
 }
+
 func BenchmarkEncodeTypeWithEnum(b *testing.B) {
 	v := New(10, 10, 10)
 	v.EnumValues = []string{"asdadfasdf", "asdfadsfadf", "asdfasdfadfa",
@@ -291,6 +292,20 @@ func BenchmarkEncodeTypeWithEnum(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		x, _ := EncodeType(&v)
 		y := DecodeType(x)
+		if !y.TypeEqual(&v) {
+			panic("Encode decode error")
+		}
+	}
+}
+
+func BenchmarkTypeEncode(b *testing.B) {
+	v := New(10, 10, 10)
+	v.EnumValues = []string{"asdadfasdf", "asdfadsfadf", "asdfasdfadfa",
+		"asdfajfalksdjflka", "kkkkkkkkkkkkkkmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"}
+	for i := 0; i < b.N; i++ {
+		x, _ := v.Marshal()
+		var y Type
+		y.Unmarshal(x)
 		if !y.TypeEqual(&v) {
 			panic("Encode decode error")
 		}
