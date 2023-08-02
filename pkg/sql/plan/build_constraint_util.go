@@ -426,6 +426,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					}
 				}
 			}
+			// one of pk cols is incr col and this col was not in values.
+			// we can not use the values of other cols as filterExpr.
+			if len(tableDef.Pkey.Names) != len(pkPosInValues) {
+				pkPosInValues = make(map[int]int)
+			}
 		}
 
 		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx)
