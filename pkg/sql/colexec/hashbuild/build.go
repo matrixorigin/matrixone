@@ -16,8 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -141,9 +139,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.RowCount()
 
-	//resize to improve performance
+	//preAlloc to improve performance and reduce memory reAlloc
 	if ap.HashOnPK {
-		logutil.Infof("prealloc hashmap to size %v", count)
 		err := ctr.mp.PreAlloc(uint64(count), proc.Mp())
 		if err != nil {
 			return err
