@@ -440,9 +440,26 @@ enum ShuffleType {
 }
 
 enum ShuffleMethod {
-	Noraml = 0;
-	Follow = 1;
+	Normal = 0;
+	Reuse = 1;
 	Reshuffle = 2;
+}
+
+message HashMapStats{
+	// hashmap size for nodes which build a hashmap
+	double hashmap_size		= 1;
+	bool hashOnPK = 2;
+
+	// for group by and join node with big hashmap, use shuffle
+	// shuffle on which column. choose a column with max ndv
+	bool shuffle = 3;
+	int32 shuffleColIdx = 4;
+	// shuffle type
+	ShuffleType shuffleType = 5;
+	// for range shuffle on integer column, need to know its min and max value
+	int64 shuffleColMin = 6;
+	int64 shuffleColMax = 7;
+	ShuffleMethod shuffleMethod = 8;
 }
 
 message Stats {
@@ -455,25 +472,12 @@ message Stats {
 	double outcnt			= 3;
 	// average size of one row, currently not used
 	double rowsize	        = 4;
-	// hashmap size for nodes which build a hashmap
-	double hashmap_size		= 5;
 	//for scan, this means total count of all table, before filtering
-	double table_cnt = 6;
+	double table_cnt = 5;
 	//for scan, selectivity means outcnt divide total count
-	double selectivity = 7;
+	double selectivity = 6;
 
-	// for group by and join node with big hashmap, use shuffle
-	// shuffle on which column. choose a column with max ndv
-	bool shuffle = 8;
-	int32 shuffleColIdx = 9;
-	// shuffle type
-	ShuffleType shuffleType = 10;
-	// for range shuffle on integer column, need to know its min and max value
-	int64 shuffleColMin = 11;
-	int64 shuffleColMax = 12;
-	ShuffleMethod shuffleMethod = 13;
-	//not used for now
-	int32   parallelism = 14;
+	HashMapStats hashmapStats = 7;
 }
 
 message RowsetExpr {

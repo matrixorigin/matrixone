@@ -15,7 +15,14 @@
 package address
 
 import (
+	"fmt"
 	"strings"
+	"sync"
+)
+
+const (
+	defaultListenAddressHost = "0.0.0.0"
+	defaultReservedSlots     = 20
 )
 
 // Address is used to describe the address of a MO running service, divided into 2 addresses,
@@ -61,4 +68,72 @@ func replaceHost(
 		panic("address's host not found: " + address)
 	}
 	return strings.Replace(address, oldHost, newHost, 1)
+}
+
+// AddressManager manages all service names and ports. It uses unified
+// listen address and service address. The port of each service is generated
+// by port base and the port slot.
+type AddressManager interface {
+	// Register registers a service by its name and port slot.
+	Register(portSlot int)
+	// ListenAddress returns the service address of the service.
+	ListenAddress(slot int) string
+	// ServiceAddress returns the service address of the service.
+	ServiceAddress(slot int) string
+}
+
+type addressManager struct {
+	portBase      int
+	reservedSlots int
+	address       Address
+	mu            struct {
+		sync.Mutex
+		services map[int]struct{}
+	}
+}
+
+func NewAddressManager(serviceAddress string, portBase int) AddressManager {
+	am := &addressManager{
+		address: Address{
+			ListenAddress:  defaultListenAddressHost,
+			ServiceAddress: serviceAddress,
+		},
+		portBase:      portBase,
+		reservedSlots: defaultReservedSlots,
+	}
+	am.mu.services = make(map[int]struct{})
+	return am
+}
+
+// Register implements the AddressManager interface.
+func (m *addressManager) Register(portSlot int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if portSlot > m.reservedSlots {
+		panic("the number of requested ports exceeds the limit")
+	}
+	if _, ok := m.mu.services[portSlot]; ok {
+		panic(fmt.Sprintf("slot %d has already been registered", portSlot))
+	}
+	m.mu.services[portSlot] = struct{}{}
+}
+
+// ListenAddress implements the AddressManager interface.
+func (m *addressManager) ListenAddress(slot int) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.mu.services[slot]; !ok {
+		panic(fmt.Sprintf("slot %d has not been registered yet", slot))
+	}
+	return fmt.Sprintf("%s:%d", m.address.ListenAddress, m.portBase+slot)
+}
+
+// ServiceAddress implements the AddressManager interface.
+func (m *addressManager) ServiceAddress(slot int) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.mu.services[slot]; !ok {
+		panic(fmt.Sprintf("slot %d has not been registered yet", slot))
+	}
+	return fmt.Sprintf("%s:%d", m.address.ServiceAddress, m.portBase+slot)
 }

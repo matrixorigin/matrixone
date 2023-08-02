@@ -17,7 +17,6 @@ package logtail
 import (
 	"bytes"
 	"fmt"
-	"hash/fnv"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -76,41 +75,6 @@ func BatchToString(name string, bat *containers.Batch, isSpecialRowID bool) stri
 		_ = w.WriteByte('\n')
 	}
 	return w.String()
-}
-
-func u64ToRowID(v uint64) types.Rowid {
-	var rowid types.Rowid
-	bs := types.EncodeUint64(&v)
-	copy(rowid[0:], bs)
-	return rowid
-}
-
-func rowIDToU64(v types.Rowid) uint64 {
-	return types.DecodeUint64(v[:])
-}
-
-func blockid2rowid(bid *types.Blockid) types.Rowid {
-	var rowid types.Rowid
-	copy(rowid[:], bid[:])
-	return rowid
-}
-
-func segid2rowid(sid *types.Uuid) types.Rowid {
-	var rowid types.Rowid
-	copy(rowid[:], sid[:])
-	return rowid
-}
-
-func bytesToRowID(bs []byte) types.Rowid {
-	var rowid types.Rowid
-	if size := len(bs); size <= types.RowidSize {
-		copy(rowid[:size], bs[:size])
-	} else {
-		hasher := fnv.New128()
-		hasher.Write(bs)
-		hasher.Sum(rowid[:0])
-	}
-	return rowid
 }
 
 // make batch, append necessary field like commit ts
