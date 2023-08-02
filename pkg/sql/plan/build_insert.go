@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -261,28 +260,54 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			}
 			return []*Expr{expr}
 		} else {
-			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
-				Typ: colTyp,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						ColPos: 0,
-						Name:   tableDef.Pkey.PkeyColName,
+			var orExpr *Expr
+			for i := 0; i < rowsCount; i++ {
+				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkColIdx),
+							Name:   tableDef.Pkey.PkeyColName,
+						},
 					},
-				},
-			}, {
-				Expr: &plan.Expr_List{
-					List: &plan.ExprList{
-						List: colExprs[0],
-					},
-				},
-				Typ: &plan.Type{
-					Id: int32(types.T_tuple),
-				},
-			}})
-			if err != nil {
-				return nil
+				}, colExprs[0][i]})
+				if err != nil {
+					return nil
+				}
+
+				if i == 0 {
+					orExpr = expr
+				} else {
+					orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
+					if err != nil {
+						return nil
+					}
+				}
 			}
-			return []*Expr{expr}
+			return []*Expr{orExpr}
+			// args in list must be constant
+			// expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
+			// 	Typ: colTyp,
+			// 	Expr: &plan.Expr_Col{
+			// 		Col: &ColRef{
+			// 			ColPos: 0,
+			// 			Name:   tableDef.Pkey.PkeyColName,
+			// 		},
+			// 	},
+			// }, {
+			// 	Expr: &plan.Expr_List{
+			// 		List: &plan.ExprList{
+			// 			List: colExprs[0],
+			// 		},
+			// 	},
+			// 	Typ: &plan.Type{
+			// 		Id: int32(types.T_tuple),
+			// 	},
+			// }})
+			// if err != nil {
+			// 	return nil
+			// }
+			// return []*Expr{expr}
 		}
 
 	} else {
