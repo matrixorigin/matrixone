@@ -36,6 +36,8 @@ import (
 )
 
 const (
+	testServicePort        = 9000
+	testGossipPort         = 9010
 	testServiceAddress     = "127.0.0.1:9000"
 	testGossipAddress      = "127.0.0.1:9010"
 	dummyGossipSeedAddress = "127.0.0.1:9100"
@@ -46,17 +48,14 @@ func getServiceTestConfig() Config {
 	c := DefaultConfig()
 	c.UUID = uuid.New().String()
 	c.RTTMillisecond = 10
-	c.GossipAddress = testGossipAddress
-	c.GossipListenAddress = testGossipAddress
+	c.GossipPort = testGossipPort
 	c.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
 	c.DeploymentID = 1
 	c.FS = vfs.NewStrictMem()
-	c.ServiceListenAddress = testServiceAddress
-	c.ServiceAddress = testServiceAddress
+	c.LogServicePort = testServicePort
 	c.DisableWorkers = true
 	c.UseTeeLogDB = true
 	c.RPC.MaxMessageSize = testServerMaxMsgSize
-	c.Fill()
 	return c
 }
 
@@ -521,24 +520,22 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	cfg1.DeploymentID = 1
 	cfg1.RTTMillisecond = 5
 	cfg1.DataDir = "data-1"
-	cfg1.ServiceAddress = "127.0.0.1:9002"
-	cfg1.RaftAddress = "127.0.0.1:9000"
-	cfg1.GossipAddress = "127.0.0.1:9001"
+	cfg1.LogServicePort = 9002
+	cfg1.RaftPort = 9000
+	cfg1.GossipPort = 9001
 	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011"}
 	cfg1.DisableWorkers = true
-	cfg1.Fill()
 	cfg2 := DefaultConfig()
 	cfg2.UUID = uuid.New().String()
 	cfg2.FS = vfs.NewStrictMem()
 	cfg2.DeploymentID = 1
 	cfg2.RTTMillisecond = 5
 	cfg2.DataDir = "data-2"
-	cfg2.ServiceAddress = "127.0.0.1:9012"
-	cfg2.RaftAddress = "127.0.0.1:9010"
-	cfg2.GossipAddress = "127.0.0.1:9011"
+	cfg2.LogServicePort = 9012
+	cfg2.RaftPort = 9010
+	cfg2.GossipPort = 9011
 	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
 	cfg2.DisableWorkers = true
-	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		newFS(),
 		nil,
@@ -589,7 +586,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		ri, ok := si1.Replicas[1]
 		assert.True(t, ok)
 		assert.Equal(t, nhID1, ri.UUID)
-		assert.Equal(t, cfg1.ServiceAddress, ri.ServiceAddress)
+		assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
 
 		si2, ok := service1.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
@@ -602,7 +599,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		ri, ok = si2.Replicas[1]
 		assert.True(t, ok)
 		assert.Equal(t, nhID2, ri.UUID)
-		assert.Equal(t, cfg2.ServiceAddress, ri.ServiceAddress)
+		assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
 
 		si1, ok = service2.getShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
@@ -615,7 +612,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		ri, ok = si1.Replicas[1]
 		assert.True(t, ok)
 		assert.Equal(t, nhID1, ri.UUID)
-		assert.Equal(t, cfg1.ServiceAddress, ri.ServiceAddress)
+		assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
 
 		si2, ok = service2.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
@@ -628,7 +625,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		ri, ok = si2.Replicas[1]
 		assert.True(t, ok)
 		assert.Equal(t, nhID2, ri.UUID)
-		assert.Equal(t, cfg2.ServiceAddress, ri.ServiceAddress)
+		assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
 
 		done = true
 		break
@@ -651,9 +648,9 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		cfg.DeploymentID = 1
 		cfg.RTTMillisecond = 200
 		cfg.DataDir = fmt.Sprintf("data-%d", i)
-		cfg.ServiceAddress = fmt.Sprintf("127.0.0.1:%d", 26000+10*i)
-		cfg.RaftAddress = fmt.Sprintf("127.0.0.1:%d", 26000+10*i+1)
-		cfg.GossipAddress = fmt.Sprintf("127.0.0.1:%d", 26000+10*i+2)
+		cfg.LogServicePort = 26000 + 10*i
+		cfg.RaftPort = 26000 + 10*i + 1
+		cfg.GossipPort = 26000 + 10*i + 2
 		cfg.GossipSeedAddresses = []string{
 			"127.0.0.1:26002",
 			"127.0.0.1:26012",

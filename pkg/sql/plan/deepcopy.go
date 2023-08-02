@@ -253,15 +253,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.TableDefVec[i] = DeepCopyTableDef(tbl)
 	}
 
-	if node.Stats != nil {
-		newNode.Stats = &plan.Stats{
-			BlockNum:    node.Stats.BlockNum,
-			Rowsize:     node.Stats.Rowsize,
-			HashmapSize: node.Stats.HashmapSize,
-			Cost:        node.Stats.Cost,
-			Outcnt:      node.Stats.Outcnt,
-		}
-	}
+	newNode.Stats = DeepCopyStats(node.Stats)
 
 	newNode.ObjRef = DeepCopyObjectRef(node.ObjRef)
 
@@ -934,7 +926,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Sub:
 		newExpr.Expr = &plan.Expr_Sub{
 			Sub: &plan.SubqueryRef{
-				NodeId: item.Sub.GetNodeId(),
+				NodeId:  item.Sub.GetNodeId(),
+				Typ:     item.Sub.Typ,
+				Op:      item.Sub.Op,
+				RowSize: item.Sub.RowSize,
+				Child:   DeepCopyExpr(item.Sub.Child),
 			},
 		}
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -184,9 +185,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 	err := s.remoteRun(c)
-	// tell connect operator that it's over
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
-	arg.Free(s.Proc, err != nil)
 	return err
 }
 
@@ -385,7 +383,10 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope := newParallelScope(s, ss)
+	newScope, err := newParallelScope(s, ss)
+	if err != nil {
+		return err
+	}
 	newScope.SetContextRecursively(s.Proc.Ctx)
 	return newScope.MergeRun(c)
 }
@@ -438,7 +439,11 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
 	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
-	s = newParallelScope(s, ss)
+	var err error
+	s, err = newParallelScope(s, ss)
+	if err != nil {
+		return err
+	}
 
 	if isRight {
 		channel := make(chan *bitmap.Bitmap, mcpu)
@@ -496,12 +501,15 @@ func (s *Scope) LoadRun(c *Compile) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope := newParallelScope(s, ss)
+	newScope, err := newParallelScope(s, ss)
+	if err != nil {
+		return err
+	}
 
 	return newScope.MergeRun(c)
 }
 
-func newParallelScope(s *Scope, ss []*Scope) *Scope {
+func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 
 	for i, in := range s.Instructions {
@@ -635,6 +643,14 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: &merge.Argument{},
 		}
+		//Add log for cn panic which reported on issue 10656
+		//If you find this log is printed, please report the repro details
+		if len(s.Instructions) < 2 {
+			logutil.Error("the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
+				zap.String("stack", string(debug.Stack())),
+			)
+			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")
+		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
 		s.Instructions = s.Instructions[:2]
 	}
@@ -668,7 +684,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 			j++
 		}
 	}
-	return s
+	return s, nil
 }
 
 func (s *Scope) appendInstruction(in vm.Instruction) {
