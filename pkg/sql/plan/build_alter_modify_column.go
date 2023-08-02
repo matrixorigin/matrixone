@@ -210,9 +210,5 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 			}
 		}
 	}
-	// Note: If a column in a table is dependent on a foreign key in another table, modifying it is currently not supported
-	//if len(tbInfo.RefChildTbls) > 0 {
-	//	return moerr.NewNotSupported(ctx.GetContext(), "Currently, modifying tables that are dependent on foreign keys is not supported")
-	//}
 	return nil
 }

@@ -85,7 +85,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	//---------------------------------------------------------------------------------
 	// get and update the change mapping information of table colIds
 	if err = updateNewTableColId(c, copyRel, qry.ChangeTblColIdMap); err != nil {
 		return err
@@ -112,7 +111,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			}
 		}
 	}
-	//---------------------------------------------------------------------------------
+
 	var alterKind []api.AlterKind
 	alterKind = addAlterKind(alterKind, api.AlterKind_RenameTable)
 	oldName := copyRel.GetTableName()
@@ -153,6 +152,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 	}
 }
 
+// updateTableForeignKeyColId update foreign key colid of child table references
 func updateTableForeignKeyColId(c *Compile, changColDefMap map[uint64]*plan.ColDef, childTblId uint64, oldParentTblId uint64, newParentTblId uint64) error {
 	_, _, childRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childTblId)
 	if err != nil {
@@ -205,6 +205,7 @@ func updateNewTableColId(c *Compile, copyRel engine.Relation, changColDefMap map
 	return nil
 }
 
+// restoreNewTableRefChildTbls Restore the original table's foreign key child table ids to the copy table definition
 func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTbls []uint64) error {
 	copyTableDef, err := copyRel.TableDefs(c.ctx)
 	if err != nil {
@@ -223,10 +224,13 @@ func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTb
 			Cts: []engine.Constraint{},
 		}
 	}
-	oldCt.Cts = append(oldCt.Cts, &engine.RefChildTableDef{refChildTbls})
+	oldCt.Cts = append(oldCt.Cts, &engine.RefChildTableDef{
+		Tables: refChildTbls,
+	})
 	return copyRel.UpdateConstraint(c.ctx, oldCt)
 }
 
+// notifyParentTableFkTableIdChange Notify the parent table of changes in the tableid of the foreign key table
 func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldTableId uint64, newTableId uint64) error {
 	foreignTblId := fkey.ForeignTbl
 	_, _, fatherRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, foreignTblId)
