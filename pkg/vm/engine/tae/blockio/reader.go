@@ -163,6 +163,37 @@ func (r *BlockReader) LoadSubColumns(
 	return
 }
 
+// LoadColumns needs typs to generate columns, if the target table has no schema change, nil can be passed.
+func (r *BlockReader) LoadOneSubColumns(
+	ctx context.Context,
+	cols []uint16,
+	typs []types.Type,
+	dataType uint16,
+	blk uint16,
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
+	metaExt := r.reader.GetMetaExtent()
+	if metaExt == nil || metaExt.End() == 0 {
+		return
+	}
+	var ioVectors []*fileservice.IOVector
+	ioVectors, err = r.reader.ReadSubBlock(ctx, cols, typs, blk, m)
+	if err != nil {
+		return
+	}
+	bat = batch.NewWithSize(len(cols))
+	var obj any
+	for i := range cols {
+		obj, err = objectio.Decode(ioVectors[0].Entries[i].ObjectBytes)
+		if err != nil {
+			return
+		}
+		bat.Vecs[i] = obj.(*vector.Vector)
+		bat.SetRowCount(bat.Vecs[i].Length())
+	}
+	return
+}
+
 func (r *BlockReader) LoadAllColumns(
 	ctx context.Context,
 	idxs []uint16,

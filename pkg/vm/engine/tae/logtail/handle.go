@@ -730,7 +730,7 @@ func LoadCheckpointEntries(
 
 	closeCBs := make([]func(), 0)
 	for i, data := range datas {
-		err := data.ReadFrom(ctx, readers[i], versions[i], mp)
+		err := data.ReadFrom(ctx, tableID, readers[i], versions[i], mp)
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
 			return nil, closeCBs, err

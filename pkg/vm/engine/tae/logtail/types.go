@@ -35,22 +35,23 @@ const (
 )
 
 const (
-	SnapshotAttr_TID                          = catalog.SnapshotAttr_TID
-	SnapshotAttr_DBID                         = catalog.SnapshotAttr_DBID
-	SegmentAttr_ID                            = catalog.SegmentAttr_ID
-	SegmentAttr_CreateAt                      = catalog.SegmentAttr_CreateAt
-	SegmentAttr_SegNode                       = catalog.SegmentAttr_SegNode
-	SnapshotAttr_BlockMaxRow                  = catalog.SnapshotAttr_BlockMaxRow
-	SnapshotAttr_SegmentMaxBlock              = catalog.SnapshotAttr_SegmentMaxBlock
-	SnapshotMetaAttr_BlockInsertBatchStart    = "block_insert_batch_start"
-	SnapshotMetaAttr_BlockInsertBatchEnd      = "block_insert_batch_end"
-	SnapshotMetaAttr_BlockInsertBatchLocation = "block_insert_batch_location"
-	SnapshotMetaAttr_BlockDeleteBatchStart    = "block_delete_batch_start"
-	SnapshotMetaAttr_BlockDeleteBatchEnd      = "block_delete_batch_end"
-	SnapshotMetaAttr_BlockDeleteBatchLocation = "block_delete_batch_location"
-	SnapshotMetaAttr_SegDeleteBatchStart      = "seg_delete_batch_start"
-	SnapshotMetaAttr_SegDeleteBatchEnd        = "seg_delete_batch_end"
-	SnapshotMetaAttr_SegDeleteBatchLocation   = "seg_delete_batch_location"
+	SnapshotAttr_TID                            = catalog.SnapshotAttr_TID
+	SnapshotAttr_DBID                           = catalog.SnapshotAttr_DBID
+	SegmentAttr_ID                              = catalog.SegmentAttr_ID
+	SegmentAttr_CreateAt                        = catalog.SegmentAttr_CreateAt
+	SegmentAttr_SegNode                         = catalog.SegmentAttr_SegNode
+	SnapshotAttr_BlockMaxRow                    = catalog.SnapshotAttr_BlockMaxRow
+	SnapshotAttr_SegmentMaxBlock                = catalog.SnapshotAttr_SegmentMaxBlock
+	SnapshotMetaAttr_BlockInsertBatchStart      = "block_insert_batch_start"
+	SnapshotMetaAttr_BlockInsertBatchEnd        = "block_insert_batch_end"
+	SnapshotMetaAttr_BlockInsertBatchLocation   = "block_insert_batch_location"
+	SnapshotMetaAttr_BlockDeleteBatchStart      = "block_delete_batch_start"
+	SnapshotMetaAttr_BlockDeleteBatchEnd        = "block_delete_batch_end"
+	SnapshotMetaAttr_BlockDeleteBatchLocation   = "block_delete_batch_location"
+	SnapshotMetaAttr_BlockCNInsertBatchLocation = "block_cn_insert_batch_location"
+	SnapshotMetaAttr_SegDeleteBatchStart        = "seg_delete_batch_start"
+	SnapshotMetaAttr_SegDeleteBatchEnd          = "seg_delete_batch_end"
+	SnapshotMetaAttr_SegDeleteBatchLocation     = "seg_delete_batch_location"
 
 	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
