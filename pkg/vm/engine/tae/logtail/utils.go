@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -245,10 +244,65 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) fu
 	}
 }
 
-type BlockLocation struct {
-	common.ClosedInterval
-	id       uint16
-	location objectio.Location
+/*
+Location is a fixed-length unmodifiable byte array.
+Layout:  Location(objectio.Location) | StartOffset(uint64) | EndOffset(uint64)
+*/
+const (
+	LocationOffset      = 0
+	LocationLength      = objectio.LocationLen
+	StartOffsetOffset   = LocationOffset + LocationLength
+	StartOffsetLength   = 8
+	EndOffsetOffset     = StartOffsetOffset + StartOffsetLength
+	EndOffsetLength     = 8
+	BlockLocationLength = EndOffsetOffset + EndOffsetLength
+)
+
+type BlockLocation []byte
+
+func BuildBlockLoaction(id uint16, start, end uint64) BlockLocation {
+	buf := make([]byte, BlockLocationLength)
+	copy(buf[StartOffsetOffset:StartOffsetOffset+StartOffsetLength], types.EncodeUint64(&start))
+	copy(buf[EndOffsetLength:EndOffsetOffset+EndOffsetLength], types.EncodeUint64(&start))
+	blkLoc := BlockLocation(buf)
+	blkLoc.SetID(id)
+	return blkLoc
+}
+func BuildBlockLoactionWithLocation(name objectio.ObjectName, extent objectio.Extent, rows uint32, id uint16, start, end uint64) BlockLocation {
+	buf := make([]byte, BlockLocationLength)
+	location := objectio.BuildLocation(name, extent, rows, id)
+	copy(buf[LocationOffset:LocationOffset+LocationLength], location)
+	copy(buf[StartOffsetOffset:StartOffsetOffset+StartOffsetLength], types.EncodeUint64(&start))
+	copy(buf[EndOffsetLength:EndOffsetOffset+EndOffsetLength], types.EncodeUint64(&start))
+	return buf
+}
+func (l BlockLocation) GetID() uint16 {
+	return l.GetLocation().ID()
+}
+func (l BlockLocation) GetLocation() objectio.Location {
+	return (objectio.Location)(l[LocationOffset : LocationOffset+LocationLength])
+}
+func (l BlockLocation) GetStartOffset() uint64 {
+	return types.DecodeUint64(l[StartOffsetOffset : StartOffsetOffset+StartOffsetLength])
+}
+func (l BlockLocation) GetEndOffset() uint64 {
+	return types.DecodeUint64(l[EndOffsetOffset : EndOffsetOffset+EndOffsetLength])
+}
+func (l BlockLocation) SetID(id uint16) {
+	l.GetLocation().SetID(id)
+}
+func (l BlockLocation) SetLocation(location objectio.Location) {
+	copy(l[LocationOffset:LocationOffset+LocationLength], location)
+}
+func (l BlockLocation) SetStartOffset(start uint64) {
+	copy(l[StartOffsetOffset:StartOffsetOffset+StartOffsetLength], types.EncodeUint64(&start))
+}
+func (l BlockLocation) SetEndOffset(end uint64) {
+	copy(l[EndOffsetOffset:EndOffsetOffset+EndOffsetLength], types.EncodeUint64(&end))
+}
+func (l BlockLocation) Contains(i common.ClosedInterval) bool {
+	return l.GetStartOffset() <= i.Start && l.GetEndOffset() >= i.End
+
 }
 
 type TableMeta struct {
@@ -262,36 +316,14 @@ func (t *TableMeta) EncodeToString() string {
 		return ""
 	}
 	for _, location := range t.BlockLocation {
-		strs += fmt.Sprintf("%s:%d:%d", location.location, location.Start, location.End) + ";"
+		strs += string(*location) + ";"
 	}
 	return strs
 }
 
 func (t *TableMeta) DecodeFromString(key string) error {
-	strs := strings.Split(key, ":")
-
-	location, err := blockio.EncodeLocationFromString(strs[0])
-	if err != nil {
-		return err
-	}
-	Start, err := strconv.ParseUint(strs[1], 10, 32)
-	if err != nil {
-		return err
-	}
-	end := strings.Trim(strs[2], ";")
-	End, err := strconv.ParseUint(end, 10, 32)
-	if err != nil {
-		return err
-	}
-
-	t.BlockLocation = append(t.BlockLocation, &BlockLocation{
-		ClosedInterval: common.ClosedInterval{
-			Start: Start,
-			End:   End,
-		},
-		location: location,
-	})
-
+	blockLocation := (BlockLocation)([]byte(key))
+	t.BlockLocation = append(t.BlockLocation, &blockLocation)
 	return nil
 }
 
@@ -549,12 +581,12 @@ func (data *CNCheckpointData) ReadFromData(
 		for _, block := range table.BlockLocation {
 			var bat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
-			reader, err = blockio.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), block.location)
-			bat, err = LoadCNSubBlkColumnsByMetaWithId(ctx, schema.types, schema.attrs, uint16(idx), block.location.ID(), reader, m)
+			reader, err = blockio.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
+			bat, err = LoadCNSubBlkColumnsByMetaWithId(ctx, schema.types, schema.attrs, uint16(idx), block.GetID(), reader, m)
 			if err != nil {
 				return
 			}
-			windowCNBatch(bat, block.Start, block.End)
+			windowCNBatch(bat, block.GetStartOffset(), block.GetEndOffset())
 			if dataBats[uint32(i)] == nil {
 				cnBatch := batch.NewWithSize(len(bat.Vecs))
 				cnBatch.Attrs = make([]string, len(bat.Attrs))
@@ -854,13 +886,9 @@ func (data *CheckpointData) WriteTo(
 			if block, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 				return
 			}
-			blockLoc := &BlockLocation{
-				id: block.GetID(),
-			}
-			blockLoc.Start = uint64(offset)
-			offset += bat.Length()
-			blockLoc.End = uint64(offset)
-			blockIndexs[i] = append(blockIndexs[i], blockLoc)
+			Endoffset := offset + bat.Length()
+			blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(Endoffset))
+			blockIndexs[i] = append(blockIndexs[i], &blockLoc)
 		}
 	}
 	blks, _, err := writer.Sync(context.Background())
@@ -909,45 +937,29 @@ func (data *CheckpointData) WriteTo(
 				}
 			}
 			for _, block := range blockIndexs[idx] {
-				if table.End < block.Start {
+				if table.End < block.GetStartOffset() {
 					break
 				}
-				if table.Contains(block.ClosedInterval) {
-					blockLoc := &BlockLocation{
-						ClosedInterval: common.ClosedInterval{
-							Start: 0,
-							End:   block.End - block.Start,
-						},
-						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
-					}
-					table.BlockLocation = append(table.BlockLocation, blockLoc)
+				if table.Uint64Contains(block.GetStartOffset(), block.GetEndOffset()) {
+					blockLoc := BuildBlockLoactionWithLocation(
+						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
+						0, block.GetEndOffset()-block.GetStartOffset())
+					table.BlockLocation = append(table.BlockLocation, &blockLoc)
 				} else if block.Contains(table.ClosedInterval) {
-					blockLoc := &BlockLocation{
-						ClosedInterval: common.ClosedInterval{
-							Start: table.Start - block.Start,
-							End:   block.End - table.End,
-						},
-						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
-					}
-					table.BlockLocation = append(table.BlockLocation, blockLoc)
-				} else if table.Start <= block.End && table.Start >= block.Start {
-					blockLoc := &BlockLocation{
-						ClosedInterval: common.ClosedInterval{
-							Start: table.Start - block.Start,
-							End:   block.End - block.Start,
-						},
-						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
-					}
-					table.BlockLocation = append(table.BlockLocation, blockLoc)
-				} else if table.End <= block.End && table.End >= block.Start {
-					blockLoc := &BlockLocation{
-						ClosedInterval: common.ClosedInterval{
-							Start: 0,
-							End:   block.End - table.End,
-						},
-						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
-					}
-					table.BlockLocation = append(table.BlockLocation, blockLoc)
+					blockLoc := BuildBlockLoactionWithLocation(
+						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
+						table.Start-block.GetStartOffset(), table.End-block.GetEndOffset())
+					table.BlockLocation = append(table.BlockLocation, &blockLoc)
+				} else if table.Start <= block.GetEndOffset() && table.Start >= block.GetStartOffset() {
+					blockLoc := BuildBlockLoactionWithLocation(
+						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
+						table.Start-block.GetStartOffset(), block.GetEndOffset()-block.GetStartOffset())
+					table.BlockLocation = append(table.BlockLocation, &blockLoc)
+				} else if table.End <= block.GetEndOffset() && table.End >= block.GetStartOffset() {
+					blockLoc := BuildBlockLoactionWithLocation(
+						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
+						0, block.GetEndOffset()-table.End)
+					table.BlockLocation = append(table.BlockLocation, &blockLoc)
 				}
 			}
 		}
@@ -1209,8 +1221,8 @@ func (data *CheckpointData) replayMetaBatch() {
 	for _, meta := range data.meta {
 		for _, table := range meta.tables {
 			for _, block := range table.BlockLocation {
-				if !block.location.IsEmpty() {
-					data.locations[block.location.String()] = block.location
+				if !block.GetLocation().IsEmpty() {
+					data.locations[block.GetLocation().String()] = block.GetLocation()
 					return
 				}
 			}

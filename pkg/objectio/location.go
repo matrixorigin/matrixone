@@ -75,6 +75,10 @@ func (l Location) ID() uint16 {
 	return types.DecodeUint16(l[BlockIDOff : BlockIDOff+BlockIDLen])
 }
 
+func (l Location) SetID(id uint16) {
+	copy(l[BlockIDOff:BlockIDOff+BlockIDLen], types.EncodeUint16(&id))
+}
+
 func (l Location) IsEmpty() bool {
 	return len(l) < LocationLen || types.DecodeInt64(l[:ObjectNameLen]) == 0
 }
