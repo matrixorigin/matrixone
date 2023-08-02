@@ -57,7 +57,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -317,6 +319,8 @@ func (c *Compile) run(s *Scope) error {
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
+	case Replace:
+		return s.replace(c)
 	}
 	return nil
 }
@@ -335,6 +339,7 @@ func (c *Compile) Run(_ uint64) error {
 		pool.Put(c)
 	}()
 	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 	if err := c.runOnce(); err != nil {
@@ -417,6 +422,13 @@ func (c *Compile) runOnce() error {
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
+		switch qry.Query.StmtType {
+		case plan.Query_REPLACE:
+			return []*Scope{{
+				Magic: Replace,
+				Plan:  pn,
+			}}, nil
+		}
 		scopes, err := c.compileQuery(ctx, qry.Query)
 		if err != nil {
 			return nil, err
@@ -755,7 +767,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 					}
 				}
 			}
-			if err := evalRowsetData(ctx, proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
+			if err := evalRowsetData(proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
 				bat.Clean(proc.Mp())
 				return nil, err
 			}
@@ -812,7 +824,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		if n.Stats.Shuffle {
+		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 			ss = c.compileShuffleGroup(n, ss, ns)
 			return c.compileSort(n, ss), nil
 		} else {
@@ -1211,7 +1223,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs.Proc.Reg.MergeReceivers = receivers
 		return []*Scope{rs}, nil
 	case plan.Node_SINK:
-		receivers := c.getStepRegs(step, ns)
+		receivers := c.getStepRegs(step)
 		if len(receivers) == 0 {
 			return nil, moerr.NewInternalError(c.ctx, "no data receiver for sink node")
 		}
@@ -1240,7 +1252,7 @@ func (c *Compile) getNodeReg(step, nodeId int32) *process.WaitRegister {
 	return c.nodeRegs[[2]int32{step, nodeId}]
 }
 
-func (c *Compile) getStepRegs(step int32, ns []*plan.Node) []*process.WaitRegister {
+func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 	wrs := make([]*process.WaitRegister, len(c.stepRegs[step]))
 	for i, sn := range c.stepRegs[step] {
 		wrs[i] = c.nodeRegs[sn]
@@ -1706,12 +1718,12 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 }
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	if node.Stats.Shuffle {
+	if node.Stats.HashmapStats.Shuffle {
 		if len(c.cnList) == 1 {
 			return c.compileShuffleJoin(ctx, node, left, right, ss, children)
 		} else {
 			// only support shuffle join on standalone for now. will fix this in the future
-			node.Stats.Shuffle = false
+			node.Stats.HashmapStats.Shuffle = false
 		}
 	}
 	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
@@ -2202,11 +2214,11 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	c.anal.isFirst = false
 
 	if len(c.cnList) > 1 {
-		n.Stats.ShuffleMethod = plan.ShuffleMethod_Noraml
+		n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
 	}
 
-	switch n.Stats.ShuffleMethod {
-	case plan.ShuffleMethod_Follow:
+	switch n.Stats.HashmapStats.ShuffleMethod {
+	case plan.ShuffleMethod_Reuse:
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.Group,
@@ -2294,9 +2306,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
-
 		children = c.compileProjection(n, c.compileRestrict(n, children))
-
 		// recovery the children's last operator
 		for i := range children {
 			children[i].appendInstruction(lastOperator[i])
@@ -3041,7 +3051,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
-	if n.Stats.Shuffle && n.Stats.ShuffleType == plan.ShuffleType_Range {
+	if n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
 			return nil, err
@@ -3097,8 +3107,8 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 			}
 		}
 		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
-		zm := blkMeta.MustGetColumn(uint16(n.Stats.ShuffleColIdx)).ZoneMap()
-		index := plan2.GetRangeShuffleIndexForZM(n.Stats.ShuffleColMin, n.Stats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
+		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	return nil
@@ -3230,7 +3240,7 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
-func evalRowsetData(ctx context.Context, proc *process.Process,
+func evalRowsetData(proc *process.Process,
 	exprs []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor) error {
 	var bats []*batch.Batch
 
@@ -3266,12 +3276,18 @@ func evalRowsetData(ctx context.Context, proc *process.Process,
 }
 
 func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
-	ss2 := make([]*Scope, 0, len(ss))
+	// see errors.Join()
+	n := 0
 	for _, s := range ss {
-		if s.IsEnd {
-			continue
+		if !s.IsEnd {
+			n++
 		}
-		ss2 = append(ss2, s)
+	}
+	ss2 := make([]*Scope, 0, n)
+	for _, s := range ss {
+		if !s.IsEnd {
+			ss2 = append(ss2, s)
+		}
 	}
 	insert := &vm.Instruction{
 		Op:  vm.Insert,

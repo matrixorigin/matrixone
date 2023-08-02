@@ -101,8 +101,10 @@ func (w *Ws) Adjust() error {
 	return nil
 }
 
-func (w *Ws) StartStatement() {}
-func (w *Ws) EndStatement()   {}
+func (w *Ws) StartStatement()     {}
+func (w *Ws) EndStatement()       {}
+func (w *Ws) IncrSQLCount()       {}
+func (w *Ws) GetSQLCount() uint64 { return 0 }
 
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
