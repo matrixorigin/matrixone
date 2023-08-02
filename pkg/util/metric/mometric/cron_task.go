@@ -192,6 +192,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	var err error
 	ctx, span := trace.Start(ctx, "checkNewAccountSize")
 	defer span.End()
+	logger.Info("started")
 	defer func() {
 		logger.Info("checkNewAccountSize exit", zap.Error(err))
 	}()
@@ -226,9 +227,16 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		// more details in pkg/frontend/authenticate.go, function frontend.createTablesInMoCatalog
 		sql := fmt.Sprintf("select account_name, created_time from mo_catalog.mo_account where created_time >= %q;",
 			table.Time2DatetimeString(lastCheckTime.UTC()))
-		logger.Debug("query new account", zap.String("sql", sql))
+		getNewAccounts := func(ctx context.Context, sql string, lastCheck, now time.Time) ie.InternalExecResult {
+			ctx, spanQ := trace.Start(ctx, "QueryStorageStorage.getNewAccounts")
+			defer spanQ.End()
+			spanQ.AddExtraFields(zap.Time("last_check_time", lastCheckTime))
+			spanQ.AddExtraFields(zap.Time("now", now))
+			logger.Debug("query new account", zap.String("sql", sql))
+			return executor.Query(ctx, ShowAllAccountSQL, opts)
+		}
+		result := getNewAccounts(ctx, sql, lastCheckTime, now)
 		lastCheckTime = now
-		result := executor.Query(ctx, sql, opts)
 		err = result.Error()
 		if err != nil {
 			logger.Error("failed to fetch new created account", zap.Error(err), zap.String("sql", sql))
@@ -255,7 +263,14 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 
 			// query single account's storage
 			showSql := fmt.Sprintf(ShowAccountSQL, account)
-			showRet := executor.Query(ctx, showSql, opts)
+			getOneAccount := func(ctx context.Context, sql string) ie.InternalExecResult {
+				ctx, spanQ := trace.Start(ctx, "QueryStorageStorage.getOneAccount")
+				defer spanQ.End()
+				spanQ.AddExtraFields(zap.String("account", account))
+				logger.Debug("query one account", zap.String("sql", sql))
+				return executor.Query(ctx, ShowAllAccountSQL, opts)
+			}
+			showRet := getOneAccount(ctx, showSql)
 			err = showRet.Error()
 			if err != nil {
 				logger.Error("failed to exec query sql",
