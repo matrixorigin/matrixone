@@ -28,9 +28,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
