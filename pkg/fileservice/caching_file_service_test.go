@@ -30,7 +30,7 @@ func testCachingFileService(
 ) {
 
 	fs := newFS()
-	fs.SetAsyncUpdate(false)
+	fs.SetAsyncCacheUpdate(false)
 	ctx := context.Background()
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)

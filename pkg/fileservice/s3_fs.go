@@ -49,10 +49,8 @@ type S3FS struct {
 	bucket    string
 	keyPrefix string
 
-	memCache              *MemCache
-	diskCache             *DiskCache
-	asyncUpdate           bool
-	writeDiskCacheOnWrite bool
+	caches           []IOVectorCache
+	asyncCacheUpdate bool
 
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int32
@@ -139,10 +137,10 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
-		s.memCache = NewMemCache(
+		s.caches = append(s.caches, NewMemCache(
 			WithLRU(int64(*config.MemoryCapacity)),
 			WithPerfCounterSets(s.perfCounterSets),
-		)
+		))
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", s.name),
 			zap.Any("capacity", config.MemoryCapacity),
@@ -152,7 +150,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// disk cache
 	if *config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
 		var err error
-		s.diskCache, err = NewDiskCache(
+		cache, err := NewDiskCache(
 			ctx,
 			*config.DiskPath,
 			int64(*config.DiskCapacity),
@@ -163,6 +161,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 		if err != nil {
 			return err
 		}
+		s.caches = append(s.caches, cache)
 		logutil.Info("fileservice: disk cache initialized",
 			zap.Any("fs-name", s.name),
 			zap.Any("config", config),
@@ -347,29 +346,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 
 	// content
 	var content []byte
-	if s.writeDiskCacheOnWrite && s.diskCache != nil {
-		// also write to disk cache
-		w, done, closeW, err := s.diskCache.newFileContentWriter(vector.FilePath)
-		if err != nil {
-			return err
-		}
-		defer closeW()
-		defer func() {
-			if err != nil {
-				return
-			}
-			err = done(ctx)
-		}()
-		r := io.TeeReader(
-			newIOEntriesReader(ctx, vector.Entries),
-			w,
-		)
-		content, err = io.ReadAll(r)
-		if err != nil {
-			return err
-		}
-
-	} else if len(vector.Entries) == 1 &&
+	if len(vector.Entries) == 1 &&
 		vector.Entries[0].Size > 0 &&
 		int(vector.Entries[0].Size) == len(vector.Entries[0].Data) {
 		// one piece of data
@@ -426,27 +403,16 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	if s.memCache != nil {
-		if err := s.memCache.Read(ctx, vector); err != nil {
+	for _, cache := range s.caches {
+		cache := cache
+		if err := cache.Read(ctx, vector); err != nil {
 			return err
 		}
 		defer func() {
 			if err != nil {
 				return
 			}
-			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
-		}()
-	}
-
-	if s.diskCache != nil {
-		if err := s.diskCache.Read(ctx, vector); err != nil {
-			return err
-		}
-		defer func() {
-			if err != nil {
-				return
-			}
-			err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+			err = cache.Update(ctx, vector, s.asyncCacheUpdate)
 		}()
 	}
 
@@ -495,9 +461,13 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
 
-		// try to load from disk cache
-		if s.diskCache != nil {
-			r, err := s.diskCache.GetFileContent(ctx, vector.FilePath, min)
+		// try to load from file content cache
+		for _, cache := range s.caches {
+			contentCache, ok := cache.(FileContentCache)
+			if !ok {
+				continue
+			}
+			r, err := contentCache.GetFileContent(ctx, vector.FilePath, min)
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
 				os.IsNotExist(err) {
 				err = nil
@@ -708,8 +678,12 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) Preload(ctx context.Context, filePath string) error {
-	if s.diskCache != nil {
-		err := s.diskCache.SetFileContent(ctx, filePath, s.read)
+	for _, cache := range s.caches {
+		contentCache, ok := cache.(FileContentCache)
+		if !ok {
+			continue
+		}
+		err := contentCache.SetFileContent(ctx, filePath, s.read)
 		if err != nil {
 			return err
 		}
@@ -836,13 +810,13 @@ func (*S3FS) ETLCompatible() {}
 var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) FlushCache() {
-	if s.memCache != nil {
-		s.memCache.Flush()
+	for _, cache := range s.caches {
+		cache.Flush()
 	}
 }
 
-func (s *S3FS) SetAsyncUpdate(b bool) {
-	s.asyncUpdate = b
+func (s *S3FS) SetAsyncCacheUpdate(b bool) {
+	s.asyncCacheUpdate = b
 }
 
 func newS3FS(arguments []string) (*S3FS, error) {
@@ -1036,11 +1010,11 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	)
 
 	fs := &S3FS{
-		name:        name,
-		s3Client:    client,
-		bucket:      bucket,
-		keyPrefix:   prefix,
-		asyncUpdate: true,
+		name:             name,
+		s3Client:         client,
+		bucket:           bucket,
+		keyPrefix:        prefix,
+		asyncCacheUpdate: true,
 	}
 
 	// head bucket to validate

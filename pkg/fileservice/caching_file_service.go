@@ -22,5 +22,5 @@ type CachingFileService interface {
 	FlushCache()
 
 	// SetAsyncUpdate sets cache update operation to async mode
-	SetAsyncUpdate(bool)
+	SetAsyncCacheUpdate(bool)
 }

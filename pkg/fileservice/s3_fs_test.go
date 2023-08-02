@@ -452,8 +452,8 @@ func BenchmarkS3FS(b *testing.B) {
 
 	b.ResetTimer()
 
-	benchmarkFileService(b, func() FileService {
-		ctx := context.Background()
+	ctx := context.Background()
+	benchmarkFileService(ctx, b, func() FileService {
 		fs, err := NewS3FS(
 			ctx,
 			"",
