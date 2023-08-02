@@ -1316,7 +1316,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, isDup bool) *hashbuild.Argument {
+func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, isDup, hashOnPK bool) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 
@@ -1346,6 +1346,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 			IsDup:       isDup,
+			HashOnPK:    hashOnPK,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {

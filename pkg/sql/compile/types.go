@@ -113,6 +113,9 @@ type Scope struct {
 	// IsRemote means the pipeline is load
 	IsLoad bool
 
+	// hashTable on primary key. this is used to improve performance
+	HashOnPK bool
+
 	Plan *plan.Plan
 	// DataSource stores information about data source.
 	DataSource *Source

@@ -2601,6 +2601,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 		rs[i] = new(Scope)
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
+		rs[i].HashOnPK = n.Stats.HashmapStats.HashOnPK
 		rs[i].NodeInfo = ss[i].NodeInfo
 		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
@@ -2634,21 +2635,22 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 	joinScopes := make([]*Scope, 0, len(c.cnList))
 	idx := 0
 	cnt := 0
-	for _, n := range c.cnList {
-		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+	for _, cn := range c.cnList {
+		dop := c.generateCPUNumber(cn.Mcpu, plan2.GetShuffleDop())
 		ss := make([]*Scope, dop)
 		for i := range ss {
 			ss[i] = new(Scope)
 			ss[i].Magic = Remote
 			ss[i].IsJoin = true
-			ss[i].NodeInfo.Addr = n.Addr
+			ss[i].HashOnPK = n.Stats.HashmapStats.HashOnPK
+			ss[i].NodeInfo.Addr = cn.Addr
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *batch.Batch, 16)
 			}
 		}
-		if isSameCN(n.Addr, c.addr) {
+		if isSameCN(cn.Addr, c.addr) {
 			idx = cnt
 		}
 		joinScopes = append(joinScopes, ss...)
@@ -2719,7 +2721,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Op:      vm.HashBuild,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, ss != nil),
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, ss != nil, s.HashOnPK),
 	})
 
 	if ss == nil { // unparallel, send the hashtable to s directly

@@ -430,6 +430,8 @@ message Pipeline {
   int32 children_count = 12;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 13;
+
+  bool hashOnPK = 14;
 }
 
 message WrapNode {
