@@ -336,6 +336,7 @@ func (c *Compile) Run(_ uint64) error {
 		pool.Put(c)
 	}()
 	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 	if err := c.runOnce(); err != nil {
@@ -820,9 +821,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		if n.Stats.Shuffle {
+		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 			ss = c.compileShuffleGroup(n, ss, ns)
-			return c.compileSort(n, ss), nil
+			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 		} else {
 			ss = c.compileMergeGroup(n, ss, ns)
 			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
@@ -1714,12 +1715,12 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 }
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	if node.Stats.Shuffle {
+	if node.Stats.HashmapStats.Shuffle {
 		if len(c.cnList) == 1 {
 			return c.compileShuffleJoin(ctx, node, left, right, ss, children)
 		} else {
 			// only support shuffle join on standalone for now. will fix this in the future
-			node.Stats.Shuffle = false
+			node.Stats.HashmapStats.Shuffle = false
 		}
 	}
 	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
@@ -2210,11 +2211,11 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	c.anal.isFirst = false
 
 	if len(c.cnList) > 1 {
-		n.Stats.ShuffleMethod = plan.ShuffleMethod_Noraml
+		n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
 	}
 
-	switch n.Stats.ShuffleMethod {
-	case plan.ShuffleMethod_Follow:
+	switch n.Stats.HashmapStats.ShuffleMethod {
+	case plan.ShuffleMethod_Reuse:
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.Group,
@@ -2223,7 +2224,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
-		ss = c.compileProjection(n, c.compileRestrict(n, ss))
 		return ss
 
 	case plan.ShuffleMethod_Reshuffle:
@@ -2247,7 +2247,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
-		children = c.compileProjection(n, c.compileRestrict(n, children))
 		// recovery the children's last operator
 		for i := range children {
 			children[i].appendInstruction(lastOperator[i])
@@ -2302,8 +2301,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
-
-		children = c.compileProjection(n, c.compileRestrict(n, children))
 
 		// recovery the children's last operator
 		for i := range children {
@@ -3037,7 +3034,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
-	if n.Stats.Shuffle && n.Stats.ShuffleType == plan.ShuffleType_Range {
+	if n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
 			return nil, err
@@ -3093,8 +3090,8 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 			}
 		}
 		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
-		zm := blkMeta.MustGetColumn(uint16(n.Stats.ShuffleColIdx)).ZoneMap()
-		index := plan2.GetRangeShuffleIndexForZM(n.Stats.ShuffleColMin, n.Stats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
+		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	return nil

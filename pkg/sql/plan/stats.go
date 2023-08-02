@@ -471,6 +471,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				pred.Ndv = getExprNdv(pred, builder)
 			}
 		}
+		hashmapStats := &plan.HashMapStats{
+			HashmapSize: rightStats.Outcnt,
+		}
 
 		switch node.JoinType {
 		case plan.Node_INNER:
@@ -482,60 +485,60 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				outcnt = rightStats.Outcnt
 			}
 			node.Stats = &plan.Stats{
-				Outcnt:      outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Outcnt:       outcnt,
+				Cost:         leftStats.Cost + rightStats.Cost,
+				HashmapStats: hashmapStats,
+				Selectivity:  selectivity_out,
 			}
 
 		case plan.Node_LEFT:
 			outcnt := leftStats.Outcnt
 			node.Stats = &plan.Stats{
-				Outcnt:      outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Outcnt:       outcnt,
+				Cost:         leftStats.Cost + rightStats.Cost,
+				HashmapStats: hashmapStats,
+				Selectivity:  selectivity_out,
 			}
 
 		case plan.Node_RIGHT:
 			outcnt := rightStats.Outcnt
 			node.Stats = &plan.Stats{
-				Outcnt:      outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Outcnt:       outcnt,
+				Cost:         leftStats.Cost + rightStats.Cost,
+				HashmapStats: hashmapStats,
+				Selectivity:  selectivity_out,
 			}
 
 		case plan.Node_OUTER:
 			outcnt := leftStats.Outcnt + rightStats.Outcnt
 			node.Stats = &plan.Stats{
-				Outcnt:      outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Outcnt:       outcnt,
+				Cost:         leftStats.Cost + rightStats.Cost,
+				HashmapStats: hashmapStats,
+				Selectivity:  selectivity_out,
 			}
 
 		case plan.Node_SEMI:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * selectivity,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Outcnt:       leftStats.Outcnt * selectivity,
+				Cost:         leftStats.Cost + rightStats.Cost,
+				HashmapStats: hashmapStats,
+				Selectivity:  selectivity_out,
 			}
 		case plan.Node_ANTI:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out * 0.5,
+				Outcnt:       leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5,
+				Cost:         leftStats.Cost + rightStats.Cost,
+				HashmapStats: hashmapStats,
+				Selectivity:  selectivity_out * 0.5,
 			}
 
 		case plan.Node_SINGLE, plan.Node_MARK:
 			node.Stats = &plan.Stats{
-				Outcnt:      leftStats.Outcnt,
-				Cost:        leftStats.Cost + rightStats.Cost,
-				HashmapSize: rightStats.Outcnt,
-				Selectivity: selectivity_out,
+				Outcnt:       leftStats.Outcnt,
+				Cost:         leftStats.Cost + rightStats.Cost,
+				HashmapStats: hashmapStats,
+				Selectivity:  selectivity_out,
 			}
 		}
 
@@ -553,30 +556,40 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if outcnt > incnt {
 				outcnt = math.Min(incnt, outcnt*math.Pow(childStats.Selectivity, 0.8))
 			}
-			node.Stats = &plan.Stats{
-				Outcnt:      outcnt,
-				Cost:        incnt + outcnt,
+			hashmapStats := &plan.HashMapStats{
 				HashmapSize: outcnt,
-				Selectivity: 1,
+			}
+			node.Stats = &plan.Stats{
+				Outcnt:       outcnt,
+				Cost:         incnt + outcnt,
+				HashmapStats: hashmapStats,
+				Selectivity:  1,
 			}
 			if len(node.FilterList) > 0 {
 				node.Stats.Outcnt *= 0.05
 				node.Stats.Selectivity *= 0.05
 			}
 		} else {
+			hashmapStats := &plan.HashMapStats{
+				HashmapSize: 1,
+			}
 			node.Stats = &plan.Stats{
-				Outcnt:      1,
-				Cost:        childStats.Cost,
-				Selectivity: 1,
+				Outcnt:       1,
+				Cost:         childStats.Cost,
+				Selectivity:  1,
+				HashmapStats: hashmapStats,
 			}
 		}
 
 	case plan.Node_UNION:
-		node.Stats = &plan.Stats{
-			Outcnt:      (leftStats.Outcnt + rightStats.Outcnt) * 0.7,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+		hashmapStats := &plan.HashMapStats{
 			HashmapSize: rightStats.Outcnt,
-			Selectivity: 1,
+		}
+		node.Stats = &plan.Stats{
+			Outcnt:       (leftStats.Outcnt + rightStats.Outcnt) * 0.7,
+			Cost:         leftStats.Outcnt + rightStats.Outcnt,
+			HashmapStats: hashmapStats,
+			Selectivity:  1,
 		}
 	case plan.Node_UNION_ALL:
 		node.Stats = &plan.Stats{
@@ -585,34 +598,46 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			Selectivity: 1,
 		}
 	case plan.Node_INTERSECT:
-		node.Stats = &plan.Stats{
-			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+		hashmapStats := &plan.HashMapStats{
 			HashmapSize: rightStats.Outcnt,
-			Selectivity: 1,
+		}
+		node.Stats = &plan.Stats{
+			Outcnt:       math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5,
+			Cost:         leftStats.Outcnt + rightStats.Outcnt,
+			HashmapStats: hashmapStats,
+			Selectivity:  1,
 		}
 	case plan.Node_INTERSECT_ALL:
-		node.Stats = &plan.Stats{
-			Outcnt:      math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+		hashmapStats := &plan.HashMapStats{
 			HashmapSize: rightStats.Outcnt,
-			Selectivity: 1,
+		}
+		node.Stats = &plan.Stats{
+			Outcnt:       math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7,
+			Cost:         leftStats.Outcnt + rightStats.Outcnt,
+			HashmapStats: hashmapStats,
+			Selectivity:  1,
 		}
 	case plan.Node_MINUS:
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
-		node.Stats = &plan.Stats{
-			Outcnt:      minus * 0.5,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+		hashmapStats := &plan.HashMapStats{
 			HashmapSize: rightStats.Outcnt,
-			Selectivity: 1,
+		}
+		node.Stats = &plan.Stats{
+			Outcnt:       minus * 0.5,
+			Cost:         leftStats.Outcnt + rightStats.Outcnt,
+			HashmapStats: hashmapStats,
+			Selectivity:  1,
 		}
 	case plan.Node_MINUS_ALL:
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
-		node.Stats = &plan.Stats{
-			Outcnt:      minus * 0.7,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
+		hashmapStats := &plan.HashMapStats{
 			HashmapSize: rightStats.Outcnt,
-			Selectivity: 1,
+		}
+		node.Stats = &plan.Stats{
+			Outcnt:       minus * 0.7,
+			Cost:         leftStats.Outcnt + rightStats.Outcnt,
+			HashmapStats: hashmapStats,
+			Selectivity:  1,
 		}
 
 	case plan.Node_VALUE_SCAN:
@@ -880,4 +905,32 @@ func PrintStats(qry *plan.Query) string {
 		}
 	}
 	return buf.String()
+}
+
+func DeepCopyStats(stats *plan.Stats) *plan.Stats {
+	if stats == nil {
+		return nil
+	}
+	var hashmapStats *plan.HashMapStats
+	if stats.HashmapStats != nil {
+		hashmapStats = &plan.HashMapStats{
+			HashmapSize:   stats.HashmapStats.HashmapSize,
+			HashOnPK:      stats.HashmapStats.HashOnPK,
+			Shuffle:       stats.HashmapStats.Shuffle,
+			ShuffleColIdx: stats.HashmapStats.ShuffleColIdx,
+			ShuffleType:   stats.HashmapStats.ShuffleType,
+			ShuffleColMin: stats.HashmapStats.ShuffleColMin,
+			ShuffleColMax: stats.HashmapStats.ShuffleColMax,
+			ShuffleMethod: stats.HashmapStats.ShuffleMethod,
+		}
+	}
+	return &plan.Stats{
+		BlockNum:     stats.BlockNum,
+		Rowsize:      stats.Rowsize,
+		Cost:         stats.Cost,
+		Outcnt:       stats.Outcnt,
+		TableCnt:     stats.TableCnt,
+		Selectivity:  stats.Selectivity,
+		HashmapStats: hashmapStats,
+	}
 }
