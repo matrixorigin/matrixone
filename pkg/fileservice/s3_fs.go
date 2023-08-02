@@ -851,7 +851,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	}
 
 	// arguments
-	var endpoint, region, bucket, apiKey, apiSecret, prefix, roleARN, externalID, name, sharedConfigProfile, isMinio string
+	var endpoint, region, bucket, apiKey, apiSecret, sessionToken, prefix, roleARN, externalID, name, sharedConfigProfile, isMinio string
 	for _, pair := range arguments {
 		key, value, ok := strings.Cut(pair, "=")
 		if !ok {
@@ -868,6 +868,8 @@ func newS3FS(arguments []string) (*S3FS, error) {
 			apiKey = value
 		case "secret":
 			apiSecret = value
+		case "token":
+			sessionToken = value
 		case "prefix":
 			prefix = value
 		case "role-arn":
@@ -941,6 +943,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		region,
 		apiKey,
 		apiSecret,
+		sessionToken,
 		roleARN,
 		externalID,
 	)

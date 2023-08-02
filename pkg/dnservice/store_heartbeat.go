@@ -56,12 +56,12 @@ func (s *store) heartbeat(ctx context.Context) {
 
 	hb := logservicepb.DNStoreHeartbeat{
 		UUID:                 s.cfg.UUID,
-		ServiceAddress:       s.cfg.ServiceAddress,
+		ServiceAddress:       s.txnServiceServiceAddr(),
 		Shards:               s.getDNShardInfo(),
 		TaskServiceCreated:   s.taskServiceCreated(),
-		LogtailServerAddress: s.cfg.LogtailServer.ServiceAddress,
-		LockServiceAddress:   s.cfg.LockService.ServiceAddress,
-		CtlAddress:           s.cfg.Ctl.Address.ServiceAddress,
+		LogtailServerAddress: s.logtailServiceServiceAddr(),
+		LockServiceAddress:   s.lockServiceServiceAddr(),
+		CtlAddress:           s.ctlServiceServiceAddr(),
 	}
 	cb, err := s.hakeeperClient.SendDNHeartbeat(ctx2, hb)
 	if err != nil {
@@ -118,7 +118,9 @@ func (s *store) handleRemoveReplica(cmd logservicepb.ScheduleCommand) {
 }
 
 func (s *store) handleShutdownStore(_ logservicepb.ScheduleCommand) {
-	if err := s.Close(); err != nil {
-		s.rt.Logger().Error("failed to shutdown store", zap.Error(err))
+	// notify main routine that have received shutdown cmd
+	select {
+	case s.shutdownC <- struct{}{}:
+	default:
 	}
 }

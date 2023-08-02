@@ -172,6 +172,7 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
+
 -- @bvt:issue#9447
 insert into t select * from t;
 begin;
@@ -208,4 +209,11 @@ delete from t where a = 1;
 select count(*) from t;
 commit;
 select count(*) from t;
+
+drop table if exists t2;
+create table t2 (a int, b int unique key, c int, d int, primary key(c,d));
+insert into t2 values (1,2,1,2);
+delete from t2 where b in (c in (select 1) and d in (select 1));
+select * from t2;
+
 drop database if exists `delete`;

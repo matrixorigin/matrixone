@@ -118,11 +118,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 			resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.RowCount(), proc.GetMPool()))
 
 			proc.SetInputBatch(resBat)
-		} else {
-			// ToDo: need ouyuaning to make sure there are only one table
-			// in a deletion operator
-			// do compaction here
-			p.DeleteCtx.Source.Delete(proc.Ctx, nil, catalog.Row_ID)
 		}
 		return process.ExecStop, nil
 	}
@@ -148,7 +143,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 	delCtx := p.DeleteCtx
 
 	if len(delCtx.PartitionTableIDs) > 0 {
-		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs))
+		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch,
+			len(delCtx.PartitionTableIDs), delCtx.PrimaryKeyIdx)
 		if err != nil {
 			return process.ExecNext, err
 		}
@@ -166,7 +162,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 			}
 		}
 	} else {
-		delBatch, err := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
+		delBatch, err := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx,
+			delCtx.PrimaryKeyIdx)
 		if err != nil {
 			return process.ExecNext, err
 		}

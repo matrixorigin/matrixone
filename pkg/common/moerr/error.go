@@ -80,53 +80,72 @@ const (
 	ErrWrongDatetimeSpec    uint16 = 20310
 
 	// Group 4: unexpected state and io errors
-	ErrInvalidState                 uint16 = 20400
-	ErrLogServiceNotReady           uint16 = 20401
-	ErrBadDB                        uint16 = 20402
-	ErrNoSuchTable                  uint16 = 20403
-	ErrEmptyVector                  uint16 = 20404
-	ErrFileNotFound                 uint16 = 20405
-	ErrFileAlreadyExists            uint16 = 20406
-	ErrUnexpectedEOF                uint16 = 20407
-	ErrEmptyRange                   uint16 = 20408
-	ErrSizeNotMatch                 uint16 = 20409
-	ErrNoProgress                   uint16 = 20410
-	ErrInvalidPath                  uint16 = 20411
-	ErrShortWrite                   uint16 = 20412
-	ErrInvalidWrite                 uint16 = 20413
-	ErrShortBuffer                  uint16 = 20414
-	ErrNoDB                         uint16 = 20415
-	ErrNoWorkingStore               uint16 = 20416
-	ErrNoHAKeeper                   uint16 = 20417
-	ErrInvalidTruncateLsn           uint16 = 20418
-	ErrNotLeaseHolder               uint16 = 20419
-	ErrDBAlreadyExists              uint16 = 20420
-	ErrTableAlreadyExists           uint16 = 20421
-	ErrNoService                    uint16 = 20422
-	ErrDupServiceName               uint16 = 20423
-	ErrWrongService                 uint16 = 20424
-	ErrBadS3Config                  uint16 = 20425
-	ErrBadView                      uint16 = 20426
-	ErrInvalidTask                  uint16 = 20427
-	ErrInvalidServiceIndex          uint16 = 20428
-	ErrDragonboatTimeout            uint16 = 20429
-	ErrDragonboatTimeoutTooSmall    uint16 = 20430
-	ErrDragonboatInvalidDeadline    uint16 = 20431
-	ErrDragonboatRejected           uint16 = 20432
-	ErrDragonboatInvalidPayloadSize uint16 = 20433
-	ErrDragonboatShardNotReady      uint16 = 20434
-	ErrDragonboatSystemClosed       uint16 = 20435
-	ErrDragonboatInvalidRange       uint16 = 20436
-	ErrDragonboatShardNotFound      uint16 = 20437
-	ErrDragonboatOtherSystemError   uint16 = 20438
-	ErrDropNonExistsDB              uint16 = 20439
-	ErrResultFileNotFound           uint16 = 20440
-	ErrFunctionAlreadyExists        uint16 = 20441
-	ErrDropNonExistsFunction        uint16 = 20442
-	ErrNoConfig                     uint16 = 20443
-	ErrNoSuchSequence               uint16 = 20444
-	ErrProcedureAlreadyExists       uint16 = 20445
-	ErrForeignKeyOnPartitioned      uint16 = 20446
+	ErrInvalidState                      uint16 = 20400
+	ErrLogServiceNotReady                uint16 = 20401
+	ErrBadDB                             uint16 = 20402
+	ErrNoSuchTable                       uint16 = 20403
+	ErrEmptyVector                       uint16 = 20404
+	ErrFileNotFound                      uint16 = 20405
+	ErrFileAlreadyExists                 uint16 = 20406
+	ErrUnexpectedEOF                     uint16 = 20407
+	ErrEmptyRange                        uint16 = 20408
+	ErrSizeNotMatch                      uint16 = 20409
+	ErrNoProgress                        uint16 = 20410
+	ErrInvalidPath                       uint16 = 20411
+	ErrShortWrite                        uint16 = 20412
+	ErrInvalidWrite                      uint16 = 20413
+	ErrShortBuffer                       uint16 = 20414
+	ErrNoDB                              uint16 = 20415
+	ErrNoWorkingStore                    uint16 = 20416
+	ErrNoHAKeeper                        uint16 = 20417
+	ErrInvalidTruncateLsn                uint16 = 20418
+	ErrNotLeaseHolder                    uint16 = 20419
+	ErrDBAlreadyExists                   uint16 = 20420
+	ErrTableAlreadyExists                uint16 = 20421
+	ErrNoService                         uint16 = 20422
+	ErrDupServiceName                    uint16 = 20423
+	ErrWrongService                      uint16 = 20424
+	ErrBadS3Config                       uint16 = 20425
+	ErrBadView                           uint16 = 20426
+	ErrInvalidTask                       uint16 = 20427
+	ErrInvalidServiceIndex               uint16 = 20428
+	ErrDragonboatTimeout                 uint16 = 20429
+	ErrDragonboatTimeoutTooSmall         uint16 = 20430
+	ErrDragonboatInvalidDeadline         uint16 = 20431
+	ErrDragonboatRejected                uint16 = 20432
+	ErrDragonboatInvalidPayloadSize      uint16 = 20433
+	ErrDragonboatShardNotReady           uint16 = 20434
+	ErrDragonboatSystemClosed            uint16 = 20435
+	ErrDragonboatInvalidRange            uint16 = 20436
+	ErrDragonboatShardNotFound           uint16 = 20437
+	ErrDragonboatOtherSystemError        uint16 = 20438
+	ErrDropNonExistsDB                   uint16 = 20439
+	ErrResultFileNotFound                uint16 = 20440
+	ErrFunctionAlreadyExists             uint16 = 20441
+	ErrDropNonExistsFunction             uint16 = 20442
+	ErrNoConfig                          uint16 = 20443
+	ErrNoSuchSequence                    uint16 = 20444
+	ErrProcedureAlreadyExists            uint16 = 20445
+	ErrTooManyFields                     uint16 = 20446
+	ErrDupFieldName                      uint16 = 20447
+	ErrMultiplePriKey                    uint16 = 20448
+	ErrTooManyKeys                       uint16 = 20449
+	ErrTooManyKeyParts                   uint16 = 20450
+	ErrWrongColumnName                   uint16 = 20451
+	ErrWrongNameForIndex                 uint16 = 20452
+	ErrInvalidDefault                    uint16 = 20453
+	ErrDropIndexNeededInForeignKey       uint16 = 20454
+	ErrFKIncompatibleColumns             uint16 = 20455
+	ErrForeignKeyColumnCannotChangeChild uint16 = 20456
+	ErrForeignKeyColumnCannotChange      uint16 = 20457
+	ErrForeignKeyOnPartitioned           uint16 = 20458
+	ErrKeyColumnDoesNotExits             uint16 = 20459
+	ErrCantDropFieldOrKey                uint16 = 20460
+	ErrTableMustHaveColumns              uint16 = 20461
+	ErrCantRemoveAllFields               uint16 = 20462
+	ErrFkColumnCannotDrop                uint16 = 20463
+	ErrFkColumnCannotDropChild           uint16 = 20464
+	ErrDependentByPartitionFunction      uint16 = 20465
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -179,6 +198,7 @@ const (
 	ErrTAEDebug                  uint16 = 20626
 	ErrDuplicateKey              uint16 = 20627
 	ErrTxnNeedRetry              uint16 = 20628
+	ErrTAENeedRetry              uint16 = 20629
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -207,6 +227,7 @@ const (
 	ErrUniqueKeyNeedAllFieldsInPf          uint16 = 20816
 	ErrPartitionMaxvalue                   uint16 = 20817
 	ErrRangeNotIncreasing                  uint16 = 20818
+	ErrCheckRecursiveLevel                 uint16 = 20819
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -259,53 +280,72 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 
 	// Group 4: unexpected state or file io error
-	ErrInvalidState:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
-	ErrLogServiceNotReady:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "log service not ready"},
-	ErrBadDB:                        {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "invalid database %s"},
-	ErrNoSuchTable:                  {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
-	ErrNoSuchSequence:               {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such sequence %s.%s"},
-	ErrEmptyVector:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
-	ErrFileNotFound:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s is not found"},
-	ErrFileAlreadyExists:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s already exists"},
-	ErrUnexpectedEOF:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unexpected end of file %s"},
-	ErrEmptyRange:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty range of file %s"},
-	ErrSizeNotMatch:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s size does not match"},
-	ErrNoProgress:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s has no io progress"},
-	ErrInvalidPath:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid file path %s"},
-	ErrShortWrite:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short write"},
-	ErrInvalidWrite:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io invalid write"},
-	ErrShortBuffer:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short buffer"},
-	ErrNoDB:                         {ER_NO_DB_ERROR, []string{MySQLDefaultSqlState}, "not connect to a database"},
-	ErrNoWorkingStore:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no working store"},
-	ErrNoHAKeeper:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot locate ha keeper"},
-	ErrInvalidTruncateLsn:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn, shard %d already truncated to %d"},
-	ErrNotLeaseHolder:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not lease holder, current lease holder ID %d"},
-	ErrDBAlreadyExists:              {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
-	ErrTableAlreadyExists:           {ER_TABLE_EXISTS_ERROR, []string{MySQLDefaultSqlState}, "table %s already exists"},
-	ErrFunctionAlreadyExists:        {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
-	ErrProcedureAlreadyExists:       {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "procedure %s already exists"},
-	ErrDropNonExistsFunction:        {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
-	ErrNoService:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
-	ErrDupServiceName:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
-	ErrWrongService:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "wrong service, expecting %s, got %s"},
-	ErrBadS3Config:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "bad s3 config: %s"},
-	ErrBadView:                      {ER_VIEW_INVALID, []string{MySQLDefaultSqlState}, "invalid view '%s.%s'"},
-	ErrInvalidTask:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid task, task runner %s, id %d"},
-	ErrInvalidServiceIndex:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid service idx %d"},
-	ErrDragonboatTimeout:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDragonboatTimeoutTooSmall:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDragonboatInvalidDeadline:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDragonboatRejected:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDragonboatInvalidPayloadSize: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDragonboatShardNotReady:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDragonboatSystemClosed:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDragonboatInvalidRange:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDragonboatShardNotFound:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDragonboatOtherSystemError:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
-	ErrDropNonExistsDB:              {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-	ErrResultFileNotFound:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
-	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
-	ErrForeignKeyOnPartitioned:      {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
+	ErrInvalidState:                      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
+	ErrLogServiceNotReady:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "log service not ready"},
+	ErrBadDB:                             {ER_BAD_DB_ERROR, []string{MySQLDefaultSqlState}, "invalid database %s"},
+	ErrNoSuchTable:                       {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such table %s.%s"},
+	ErrNoSuchSequence:                    {ER_NO_SUCH_TABLE, []string{MySQLDefaultSqlState}, "no such sequence %s.%s"},
+	ErrEmptyVector:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
+	ErrFileNotFound:                      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s is not found"},
+	ErrFileAlreadyExists:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s already exists"},
+	ErrUnexpectedEOF:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unexpected end of file %s"},
+	ErrEmptyRange:                        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty range of file %s"},
+	ErrSizeNotMatch:                      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s size does not match"},
+	ErrNoProgress:                        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s has no io progress"},
+	ErrInvalidPath:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid file path %s"},
+	ErrShortWrite:                        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short write"},
+	ErrInvalidWrite:                      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io invalid write"},
+	ErrShortBuffer:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s io short buffer"},
+	ErrNoDB:                              {ER_NO_DB_ERROR, []string{MySQLDefaultSqlState}, "not connect to a database"},
+	ErrNoWorkingStore:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no working store"},
+	ErrNoHAKeeper:                        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot locate ha keeper"},
+	ErrInvalidTruncateLsn:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn, shard %d already truncated to %d"},
+	ErrNotLeaseHolder:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not lease holder, current lease holder ID %d"},
+	ErrDBAlreadyExists:                   {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
+	ErrTableAlreadyExists:                {ER_TABLE_EXISTS_ERROR, []string{MySQLDefaultSqlState}, "table %s already exists"},
+	ErrFunctionAlreadyExists:             {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
+	ErrProcedureAlreadyExists:            {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "procedure %s already exists"},
+	ErrDropNonExistsFunction:             {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
+	ErrNoService:                         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
+	ErrDupServiceName:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
+	ErrWrongService:                      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "wrong service, expecting %s, got %s"},
+	ErrBadS3Config:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "bad s3 config: %s"},
+	ErrBadView:                           {ER_VIEW_INVALID, []string{MySQLDefaultSqlState}, "invalid view '%s.%s'"},
+	ErrInvalidTask:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid task, task runner %s, id %d"},
+	ErrInvalidServiceIndex:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid service idx %d"},
+	ErrDragonboatTimeout:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDragonboatTimeoutTooSmall:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDragonboatInvalidDeadline:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDragonboatRejected:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDragonboatInvalidPayloadSize:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDragonboatShardNotReady:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDragonboatSystemClosed:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDragonboatInvalidRange:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDragonboatShardNotFound:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDragonboatOtherSystemError:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDropNonExistsDB:                   {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
+	ErrResultFileNotFound:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
+	ErrNoConfig:                          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
+	ErrTooManyFields:                     {ER_TOO_MANY_FIELDS, []string{MySQLDefaultSqlState}, "Too many columns"},
+	ErrDupFieldName:                      {ER_DUP_FIELDNAME, []string{MySQLDefaultSqlState}, "Duplicate column name '%-.192s'"},
+	ErrMultiplePriKey:                    {ER_MULTIPLE_PRI_KEY, []string{MySQLDefaultSqlState}, "Multiple primary key defined"},
+	ErrTooManyKeys:                       {ER_TOO_MANY_KEYS, []string{MySQLDefaultSqlState}, "Too many keys specified; max %d keys allowed"},
+	ErrTooManyKeyParts:                   {ER_TOO_MANY_KEY_PARTS, []string{MySQLDefaultSqlState}, "Too many key parts specified; max %d parts allowed"},
+	ErrWrongColumnName:                   {ER_WRONG_COLUMN_NAME, []string{MySQLDefaultSqlState}, "Incorrect column name '%-.100s'"},
+	ErrWrongNameForIndex:                 {ER_WRONG_NAME_FOR_INDEX, []string{MySQLDefaultSqlState}, "Incorrect index name '%-.100s'"},
+	ErrInvalidDefault:                    {ER_INVALID_DEFAULT, []string{MySQLDefaultSqlState}, "Invalid default value for '%-.192s'"},
+	ErrDropIndexNeededInForeignKey:       {ER_DROP_INDEX_FK, []string{MySQLDefaultSqlState}, "Cannot drop index '%-.192s': needed in a foreign key constraint"},
+	ErrFKIncompatibleColumns:             {ER_FK_INCOMPATIBLE_COLUMNS, []string{MySQLDefaultSqlState}, "Referencing column '%s' and referenced column '%s' in foreign key constraint '%s' are incompatible."},
+	ErrForeignKeyColumnCannotChangeChild: {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
+	ErrForeignKeyColumnCannotChange:      {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
+	ErrForeignKeyOnPartitioned:           {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
+	ErrKeyColumnDoesNotExits:             {ER_KEY_COLUMN_DOES_NOT_EXITS, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
+	ErrCantDropFieldOrKey:                {ER_CANT_DROP_FIELD_OR_KEY, []string{MySQLDefaultSqlState}, "Can't DROP '%-.192s'; check that column/key exists"},
+	ErrTableMustHaveColumns:              {ER_TABLE_MUST_HAVE_COLUMNS, []string{MySQLDefaultSqlState}, "A table must have at least 1 column"},
+	ErrCantRemoveAllFields:               {ER_CANT_REMOVE_ALL_FIELDS, []string{MySQLDefaultSqlState}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},
+	ErrFkColumnCannotDrop:                {ER_FK_COLUMN_CANNOT_DROP, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s'"},
+	ErrFkColumnCannotDropChild:           {ER_FK_COLUMN_CANNOT_DROP_CHILD, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s' of table '%-.192s'"},
+	ErrDependentByPartitionFunction:      {ER_DEPENDENT_BY_PARTITION_FUNC, []string{MySQLDefaultSqlState}, "Column '%s' has a partitioning function dependency and cannot be dropped or renamed"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -345,6 +385,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 	ErrTxnNeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
+	ErrTAENeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae need retry"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -370,6 +411,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrUniqueKeyNeedAllFieldsInPf:          {ER_UNIQUE_KEY_NEED_ALL_FIELDS_IN_PF, []string{MySQLDefaultSqlState}, "A %-.192s must include all columns in the table's partitioning function"},
 	ErrPartitionMaxvalue:                   {ER_PARTITION_MAXVALUE_ERROR, []string{MySQLDefaultSqlState}, "MAXVALUE can only be used in last partition definition"},
 	ErrRangeNotIncreasing:                  {ER_RANGE_NOT_INCREASING_ERROR, []string{MySQLDefaultSqlState}, "VALUES LESS THAN value must be strictly increasing for each partition"},
+	ErrCheckRecursiveLevel:                 {ErrCheckRecursiveLevel, []string{MySQLDefaultSqlState}, "recursive level out of range"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1061,6 +1103,85 @@ func NewErrRangeNotIncreasing(ctx context.Context) *Error {
 
 func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
 	return newError(ctx, ErrForeignKeyOnPartitioned)
+}
+func NewCheckRecursiveLevel(ctx context.Context) *Error {
+	return newError(ctx, ErrCheckRecursiveLevel)
+}
+
+func NewErrTooManyFields(ctx context.Context) *Error {
+	return newError(ctx, ErrTooManyFields)
+}
+
+func NewErrDupFieldName(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrDupFieldName, k)
+}
+
+func NewErrKeyColumnDoesNotExits(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrKeyColumnDoesNotExits, k)
+}
+
+func NewErrCantDropFieldOrKey(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrCantDropFieldOrKey, k)
+}
+
+func NewErrMultiplePriKey(ctx context.Context) *Error {
+	return newError(ctx, ErrMultiplePriKey)
+}
+
+func NewErrTooManyKeys(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrTooManyKeys, k)
+}
+
+func NewErrTooManyKeyParts(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrTooManyKeyParts, k)
+}
+
+func NewErrWrongColumnName(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrWrongColumnName, k)
+}
+
+func NewErrWrongNameForIndex(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrWrongNameForIndex, k)
+}
+
+func NewErrInvalidDefault(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrInvalidDefault, k)
+}
+
+func NewErrDropIndexNeededInForeignKey(ctx context.Context, args1 any) *Error {
+	return newError(ctx, ErrDropIndexNeededInForeignKey, args1)
+}
+
+func NewErrFKIncompatibleColumns(ctx context.Context, oriColName any, refColName any, fkName any) *Error {
+	return newError(ctx, ErrFKIncompatibleColumns, oriColName, refColName, fkName)
+}
+
+func NewErrForeignKeyColumnCannotChangeChild(ctx context.Context, args1 any, args2 any, args3 any) *Error {
+	return newError(ctx, ErrForeignKeyColumnCannotChangeChild, args1, args2, args3)
+}
+
+func NewErrForeignKeyColumnCannotChange(ctx context.Context, oriColName any, fkName any) *Error {
+	return newError(ctx, ErrForeignKeyColumnCannotChange, oriColName, fkName)
+}
+
+func NewErrTableMustHaveColumns(ctx context.Context) *Error {
+	return newError(ctx, ErrTableMustHaveColumns)
+}
+
+func NewErrCantRemoveAllFields(ctx context.Context) *Error {
+	return newError(ctx, ErrCantRemoveAllFields)
+}
+
+func NewErrFkColumnCannotDropChild(ctx context.Context, oriColName any, childFKName any, childTableName any) *Error {
+	return newError(ctx, ErrFkColumnCannotDropChild, oriColName, childFKName, childTableName)
+}
+
+func NewErrFkColumnCannotDrop(ctx context.Context, colName any, fKName any) *Error {
+	return newError(ctx, ErrFkColumnCannotDrop, colName, fKName)
+}
+
+func NewErrDependentByPartitionFunction(ctx context.Context, colName any) *Error {
+	return newError(ctx, ErrDependentByPartitionFunction, colName)
 }
 
 var contextFunc atomic.Value

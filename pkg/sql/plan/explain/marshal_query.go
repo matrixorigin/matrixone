@@ -82,11 +82,15 @@ func NewMarshalNodeImpl(node *plan.Node) *MarshalNodeImpl {
 
 func (m MarshalNodeImpl) GetStats() Stats {
 	if m.node.Stats != nil {
+		var hashmapSize float64
+		if m.node.Stats.HashmapStats != nil {
+			hashmapSize = m.node.Stats.HashmapStats.HashmapSize
+		}
 		return Stats{
 			BlockNum:    m.node.Stats.BlockNum,
 			Cost:        m.node.Stats.Cost,
 			Outcnt:      m.node.Stats.Outcnt,
-			HashmapSize: m.node.Stats.HashmapSize,
+			HashmapSize: hashmapSize,
 			Rowsize:     m.node.Stats.Rowsize,
 		}
 	} else {
@@ -177,6 +181,10 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "sink", nil
 	case plan.Node_SINK_SCAN:
 		return "sink_scan", nil
+	case plan.Node_RECURSIVE_SCAN:
+		return "recursive_scan", nil
+	case plan.Node_RECURSIVE_CTE:
+		return "cte_scan", nil
 	case plan.Node_ON_DUPLICATE_KEY:
 		return "on_duplicate_key", nil
 	case plan.Node_LOCK_OP:
@@ -441,6 +449,16 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_SINK_SCAN:
 		labels = append(labels, Label{
 			Name:  Label_Sink_Scan, //"sink scan",
+			Value: []string{},
+		})
+	case plan.Node_RECURSIVE_SCAN:
+		labels = append(labels, Label{
+			Name:  Label_Recursive_SCAN, //"sink scan",
+			Value: []string{},
+		})
+	case plan.Node_RECURSIVE_CTE:
+		labels = append(labels, Label{
+			Name:  Label_Recursive_SCAN, //"sink scan",
 			Value: []string{},
 		})
 	case plan.Node_LOCK_OP:

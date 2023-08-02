@@ -20,7 +20,7 @@ import (
 
 func (s *service) initQueryService() {
 	svc, err := queryservice.NewQueryService(s.cfg.UUID,
-		s.cfg.QueryServiceConfig.Address.ListenAddress, s.cfg.RPC, s.sessionMgr)
+		s.queryServiceListenAddr(), s.cfg.RPC, s.sessionMgr)
 	if err != nil {
 		panic(err)
 	}

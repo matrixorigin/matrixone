@@ -188,6 +188,11 @@ type TimestampWaiter interface {
 }
 
 type Workspace interface {
+	// StartStatement tag a statement is running
+	StartStatement()
+	// EndStatement tag end a statement is completed
+	EndStatement()
+
 	// IncrStatementID incr the execute statement id. It maintains the statement id, first statement is 1,
 	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
 	// workspace will update snapshot data for later read request.
@@ -195,6 +200,12 @@ type Workspace interface {
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 
+	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
+	Adjust() error
+
 	Commit(ctx context.Context) error
 	Rollback(ctx context.Context) error
+
+	IncrSQLCount()
+	GetSQLCount() uint64
 }

@@ -54,7 +54,7 @@ insert into t1 values(5, '1981-09-28','bcvdf', 25);
 insert into t1 values(6, '1981-05-01','green', 26);
 ALTER TABLE t1 ADD UNIQUE idx1 (col2, col3);
 insert into t1 values(7, '1981-05-01','green', 26);
-Duplicate entry '41170b09644601677265656e00' for key '__mo_index_idx_col'
+Duplicate entry ('\(\d{4}-\d{2}-\d{2},\w{5}\)'|'\d{5}\w\d{17}\w\d{2}') for key '__mo_index_idx_col'
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
@@ -397,7 +397,7 @@ create table t5(a tinyint, b smallint, primary key(a))partition by hash(a) parti
 alter table t5 add column c int;
 invalid input: can't add/drop column for partition table now
 alter table t5 drop column a;
-invalid input: can't drop column a with primary key covered now
+invalid input: can't add/drop column for partition table now
 drop table t5;
 create table t5(a int, b int) cluster by a;
 alter table t5 add column c int;
