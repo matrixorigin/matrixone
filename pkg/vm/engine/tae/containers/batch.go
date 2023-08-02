@@ -76,28 +76,6 @@ func NewBatchWithCapacity(cap int) *Batch {
 	}
 }
 
-func NewBatchWithPool(
-	colAttrs []string,
-	colTypes []types.Type,
-	pool *VectorPool,
-) *Batch {
-	if len(colAttrs) != len(colTypes) {
-		panic(fmt.Sprintf("colAttrs and colTypes length not match: %d, %d", len(colAttrs), len(colTypes)))
-	}
-	retBat := &Batch{
-		Attrs:   colAttrs,
-		Nameidx: make(map[string]int),
-		Vecs:    make([]Vector, 0, len(colAttrs)),
-		Pool:    pool,
-	}
-	for i, t := range colTypes {
-		retBat.Nameidx[colAttrs[i]] = i
-		vec := pool.GetVector(&t)
-		retBat.Vecs = append(retBat.Vecs, vec)
-	}
-	return retBat
-}
-
 func (bat *Batch) AddVector(attr string, vec Vector) {
 	if _, exist := bat.Nameidx[attr]; exist {
 		panic(moerr.NewInternalErrorNoCtx("duplicate vector %s", attr))
@@ -531,4 +509,29 @@ func (b *BatchWithVersion) Swap(i, j int) {
 // Sort by seqnum
 func (b *BatchWithVersion) Less(i, j int) bool {
 	return b.Seqnums[i] < b.Seqnums[j]
+}
+
+func NewBatchSpliter(bat *Batch, sliceSize int) *BatchSpliter {
+	if sliceSize <= 0 || bat == nil {
+		panic("sliceSize should not be 0 and bat should not be nil")
+	}
+	return &BatchSpliter{
+		internal:  bat,
+		sliceSize: sliceSize,
+	}
+}
+
+func (bs *BatchSpliter) Next() (*Batch, error) {
+	if bs.offset == bs.internal.Length() {
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	length := bs.sliceSize
+	nextOffset := bs.offset + bs.sliceSize
+	if nextOffset >= bs.internal.Length() {
+		nextOffset = bs.internal.Length()
+		length = nextOffset - bs.offset
+	}
+	bat := bs.internal.Window(bs.offset, length)
+	bs.offset = nextOffset
+	return bat, nil
 }

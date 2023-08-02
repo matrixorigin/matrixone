@@ -97,6 +97,12 @@ type Batch struct {
 	// refidx  map[int]int
 }
 
+type BatchSpliter struct {
+	internal  *Batch
+	sliceSize int
+	offset    int
+}
+
 type BatchWithVersion struct {
 	*Batch
 	Seqnums    []uint16
