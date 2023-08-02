@@ -1099,7 +1099,7 @@ var (
 			comment,
 			character_set_client,
 			collation_connection,
-			database_collation) values ("%s",%d,'%s',"%s",$$%s$$,"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
@@ -8403,11 +8403,14 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return err
 	}
 
+	body := strconv.Quote(cf.Body)
+	body = body[1 : len(body)-1]
+
 	initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
 		string(cf.Name.Name.ObjectName),
 		ses.GetTenantInfo().GetDefaultRoleID(),
 		string(argsJson),
-		retTypeStr, cf.Body, cf.Language, dbName,
+		retTypeStr, body, cf.Language, dbName,
 		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	err = bh.Exec(ctx, initMoUdf)
 	if err != nil {
