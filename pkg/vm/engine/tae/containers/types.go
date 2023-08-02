@@ -97,6 +97,8 @@ type Batch struct {
 	// refidx  map[int]int
 }
 
+// BatchSpliter is used to split a batch into several batches
+// with the same size.
 type BatchSpliter struct {
 	internal  *Batch
 	sliceSize int
