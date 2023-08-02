@@ -127,6 +127,10 @@ type Scope struct {
 	Reg *process.WaitRegister
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
+
+	// buildIdx indicates the starting position of the Proc's WaitRegister used for build hash
+	// only for join
+	buildIdx int
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.

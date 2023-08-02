@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
 	"sync"
 
@@ -414,10 +415,12 @@ func (s *Scope) PushdownRun() error {
 func (s *Scope) JoinRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
 	if mcpu <= 1 { // no need to parallel
+		fmt.Printf("[JoinRun] noparallel join\n")
 		buildScope := c.newJoinBuildScope(s, nil)
 		s.PreScopes = append(s.PreScopes, buildScope)
 		return s.MergeRun(c)
 	}
+	fmt.Printf("[JoinRun] parallel join\n")
 
 	isRight := s.isRight()
 
@@ -468,6 +471,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 	s.PreScopes = append(s.PreScopes, chp...)
 	s.PreScopes = append(s.PreScopes, build_scope)
 	s.PreScopes = append(s.PreScopes, probe_scope)
+
+	fmt.Printf("[JoinRun] buildIdx = %d\n %s\n", s.buildIdx, DebugShowScopes([]*Scope{s}))
 
 	return s.MergeRun(c)
 }

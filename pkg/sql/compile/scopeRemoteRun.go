@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -261,6 +262,7 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 // 2. Message with end flag and analysis result
 // 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
+	fmt.Printf("is remote run\n")
 	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
 	n := len(s.Instructions) - 1
 	con := s.Instructions[n]
@@ -409,6 +411,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.IsJoin = s.IsJoin
 	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
+	p.BuildIdx = int32(s.buildIdx)
 
 	// Plan
 	if ctxId == 1 {
@@ -540,6 +543,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		IsLoad:   p.IsLoad,
 		Plan:     ctx.plan,
 		IsRemote: isRemote,
+		buildIdx: int(p.BuildIdx),
 	}
 	if err := convertPipelineUuid(p, s); err != nil {
 		return s, err

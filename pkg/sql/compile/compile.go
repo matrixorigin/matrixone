@@ -19,8 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"math"
 	"net"
 	"runtime"
@@ -29,6 +27,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1851,7 +1852,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, ss), ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightSemi,
@@ -1898,7 +1899,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
+			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, ss), ss, children, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
@@ -1929,7 +1930,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	case plan.Node_ANTI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, ss), ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightAnti,
@@ -2488,7 +2489,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 	return ss
 }
 
-func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scope) []*Scope {
+func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScopes []*Scope) []*Scope {
 	/*
 		ss := make([]*Scope, 0, len(leftScopes))
 		for i := range leftScopes {
@@ -2514,6 +2515,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scop
 		Magic:    Remote,
 		IsJoin:   true,
 		Proc:     process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes()),
+		buildIdx: bIdx,
 		NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, maxCpuNum)},
 	}
 	return ss
@@ -2583,25 +2585,26 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 //return rs
 //}
 
-func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *plan.Node) []*Scope {
-	length := len(ss)
+func (c *Compile) newBroadcastJoinScopeList(lefts []*Scope, rights []*Scope, n *plan.Node) []*Scope {
+	length := len(lefts)
 	rs := make([]*Scope, length)
 	idx := 0
-	for i := range ss {
-		if ss[i].IsEnd {
-			rs[i] = ss[i]
+	for i := range lefts {
+		if lefts[i].IsEnd {
+			rs[i] = lefts[i]
 			continue
 		}
 		rs[i] = new(Scope)
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
-		rs[i].NodeInfo = ss[i].NodeInfo
+		rs[i].NodeInfo = lefts[i].NodeInfo
 		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
 		}
-		rs[i].PreScopes = []*Scope{ss[i]}
+		rs[i].PreScopes = []*Scope{lefts[i]}
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-		ss[i].appendInstruction(vm.Instruction{
+		rs[i].buildIdx = 1
+		lefts[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
 				Reg: rs[i].Proc.Reg.MergeReceivers[0],
@@ -2612,7 +2615,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	// all join's first flag will setting in newLeftScope and newRightScope
 	// so we set it to false now
 	c.anal.isFirst = false
-	mergeChildren := c.newMergeScope(children)
+	mergeChildren := c.newMergeScope(rights)
 
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -2638,6 +2641,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 			ss[i].NodeInfo.Addr = n.Addr
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+			ss[i].buildIdx = 1
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *batch.Batch, 16)
 			}
@@ -2697,8 +2701,10 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		Arg: constructDispatchLocal(false, false, extraRegisters(ss, 0)),
 	})
 	rs.IsEnd = true
-	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
-	regTransplant(s, rs, 0, 0)
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, s.buildIdx, c.anal.Nodes())
+	for i := 0; i < s.buildIdx; i++ {
+		regTransplant(s, rs, i, i)
+	}
 	return rs
 }
 
@@ -2706,8 +2712,13 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
 	}
-	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
-	regTransplant(s, rs, 1, 0)
+	buildLen := len(s.Proc.Reg.MergeReceivers) - s.buildIdx
+	fmt.Printf("[newJoinBuildScope] origin len = %d, buildlen = %d\n", len(s.Proc.Reg.MergeReceivers), buildLen)
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, buildLen, c.anal.Nodes())
+	for i := 0; i < buildLen; i++ {
+		regTransplant(s, rs, i+s.buildIdx, i)
+		//regTransplant(s, rs, 1, 0)
+	}
 
 	rs.appendInstruction(vm.Instruction{
 		Op:      vm.HashBuild,
@@ -2716,21 +2727,23 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, ss != nil),
 	})
 
-	if ss == nil { // unparallel, send the hashtable to s directly
-		s.Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
+	if ss == nil { // unparallel, send the hashtable to join scope directly
+		s.Proc.Reg.MergeReceivers[s.buildIdx] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
 			Ch:  make(chan *batch.Batch, 1),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
-				Reg: s.Proc.Reg.MergeReceivers[1],
+				Reg: s.Proc.Reg.MergeReceivers[s.buildIdx],
 			},
 		})
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.buildIdx+1]
+		fmt.Printf("[newJoinBuildScope] s.Proc.Reg.MergeReceivers len = %d\n", len(s.Proc.Reg.MergeReceivers))
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, false, extraRegisters(ss, 1)),
+			Arg: constructDispatchLocal(true, false, extraRegisters(ss, s.buildIdx)),
 		})
 	}
 	rs.IsEnd = true
@@ -3161,6 +3174,7 @@ func isLaunchMode(cnlist engine.Nodes) bool {
 }
 
 func isSameCN(addr string, currentCNAddr string) bool {
+	return addr == currentCNAddr
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
