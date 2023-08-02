@@ -2085,7 +2085,7 @@ func integerToEnum[T constraints.Integer](
 			if vI64 < 1 || vI64 > types.MaxEnumLen {
 				return moerr.NewOutOfRange(ctx, "enum", "value %d", v)
 			}
-			result, err := types.ParseInt64ToEnum(vI64)
+			result, err := types.ParseIntToEnum(vI64)
 			if err != nil {
 				return err
 			}

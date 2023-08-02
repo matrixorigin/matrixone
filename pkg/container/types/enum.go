@@ -16,9 +16,9 @@ package types
 
 import "github.com/matrixorigin/matrixone/pkg/common/moerr"
 
-func ParseInt64ToEnum(input int64) (Enum, error) {
+func ParseIntToEnum(input int64) (Enum, error) {
 	if input < 1 || input > MaxEnumLen {
-		return Enum(0), moerr.NewInvalidInputNoCtx("invalid time value %d", input)
+		return Enum(0), moerr.NewInvalidInputNoCtx("invalid enum value %d", input)
 	}
 	return Enum(input), nil
 }
