@@ -266,14 +266,14 @@ func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partiti
 	return partition
 }
 
-func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
+func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
 	part := e.getPartition(tbl.db.databaseId, tbl.tableId)
 
 	select {
 	case <-part.Lock():
 		defer part.Unlock()
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 
 	state, doneMutate := part.MutateState()
@@ -303,12 +303,12 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
 	doneMutate()
 
-	return nil
+	return part, nil
 }
 
 func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {

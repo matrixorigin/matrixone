@@ -38,16 +38,20 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	defer anal.Stop()
 	ap := arg.(*Argument)
 	ctr := ap.ctr
+	var bat *batch.Batch
+	var end bool
 
-	bat, end, _ := ctr.ReceiveFromAllRegs(anal)
-	if end {
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
-	}
+	for {
+		bat, end, _ = ctr.ReceiveFromAllRegs(anal)
+		if end {
+			proc.SetInputBatch(nil)
+			return process.ExecStop, nil
+		}
 
-	if bat.Last() && ap.SinkScan {
-		bat.Clean(proc.Mp())
-		bat = batch.EmptyBatch
+		if bat.Last() && ap.SinkScan {
+			continue
+		}
+		break
 	}
 
 	anal.Input(bat, isFirst)
