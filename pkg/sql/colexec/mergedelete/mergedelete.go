@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,14 +37,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	ap := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
-		// ToDo:
-		// start to do compaction for cn blocks
-		// there are three strageties:
-		// 1.do compaction at deletion operator
-		// 2.do compaction here
-		// 3.do compaction when read
-		// choose which one depends on next pr
-		ap.DelSource.Delete(proc.Ctx, nil, catalog.BlockMeta_Delete_ID)
 		return process.ExecStop, nil
 	}
 

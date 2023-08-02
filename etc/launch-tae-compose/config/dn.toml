@@ -40,12 +40,8 @@ service-addresses = ["logservice:32001"]
 
 [dn]
 uuid = "713F97B0-1E28-4F80-849D-FE0979AE734A"
-service-address = "dn:41010"
-listen-address = "0.0.0.0:41010"
-
-[dn.lockservice]
-listen-address = "0.0.0.0:17001"
-service-address = "dn:17001"
+port-base = 19000
+service-host = "dn"
 
 [dn.Txn]
 
@@ -62,8 +58,6 @@ incremental-interval = "180s"
 global-min-count = 60
 
 [dn.LogtailServer]
-listen-address = "0.0.0.0:32003"
-service-address = "dn:32003"
 rpc-max-message-size = "16KiB"
 rpc-payload-copy-buffer-size = "16KiB"
 rpc-enable-checksum = true

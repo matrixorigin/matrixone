@@ -76,6 +76,28 @@ func NewBatchWithCapacity(cap int) *Batch {
 	}
 }
 
+func NewBatchWithPool(
+	colAttrs []string,
+	colTypes []types.Type,
+	pool *VectorPool,
+) *Batch {
+	if len(colAttrs) != len(colTypes) {
+		panic(fmt.Sprintf("colAttrs and colTypes length not match: %d, %d", len(colAttrs), len(colTypes)))
+	}
+	retBat := &Batch{
+		Attrs:   colAttrs,
+		Nameidx: make(map[string]int),
+		Vecs:    make([]Vector, 0, len(colAttrs)),
+		Pool:    pool,
+	}
+	for i, t := range colTypes {
+		retBat.Nameidx[colAttrs[i]] = i
+		vec := pool.GetVector(&t)
+		retBat.Vecs = append(retBat.Vecs, vec)
+	}
+	return retBat
+}
+
 func (bat *Batch) AddVector(attr string, vec Vector) {
 	if _, exist := bat.Nameidx[attr]; exist {
 		panic(moerr.NewInternalErrorNoCtx("duplicate vector %s", attr))
@@ -229,6 +251,23 @@ func (bat *Batch) Close() {
 	for _, vec := range bat.Vecs {
 		vec.Close()
 	}
+}
+
+func (bat *Batch) Reset() {
+	for i, vec := range bat.Vecs {
+		var newVec Vector
+		if bat.Pool != nil {
+			newVec = bat.Pool.GetVector(vec.GetType())
+		} else {
+			opts := Options{
+				Allocator: vec.GetAllocator(),
+			}
+			newVec = NewVector(*vec.GetType(), opts)
+		}
+		vec.Close()
+		bat.Vecs[i] = newVec
+	}
+	bat.Deletes = nil
 }
 
 func (bat *Batch) Equals(o *Batch) bool {

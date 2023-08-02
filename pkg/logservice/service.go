@@ -68,6 +68,7 @@ type Service struct {
 	stopper     *stopper.Stopper
 	haClient    LogHAKeeperClient
 	fileService fileservice.FileService
+	shutdownC   chan struct{}
 
 	options struct {
 		// morpc client would filter remote backend via this
@@ -85,6 +86,7 @@ type Service struct {
 func NewService(
 	cfg Config,
 	fileService fileservice.FileService,
+	shutdownC chan struct{},
 	opts ...Option,
 ) (*Service, error) {
 	cfg.Fill()
@@ -96,6 +98,7 @@ func NewService(
 		cfg:         cfg,
 		stopper:     stopper.NewStopper("log-service"),
 		fileService: fileService,
+		shutdownC:   shutdownC,
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -140,7 +143,7 @@ func NewService(
 
 	// TODO: check and fix all these magic numbers
 	codec := morpc.NewMessageCodec(mf, codecOpts...)
-	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
+	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.LogServiceListenAddr(), codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			msg := i.(morpc.RPCMessage)
 			if !msg.InternalMessage() {

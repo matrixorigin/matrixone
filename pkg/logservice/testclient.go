@@ -28,15 +28,14 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	cfg := DefaultConfig()
 	cfg.UUID = uuid.New().String()
 	cfg.RTTMillisecond = 10
-	cfg.GossipSeedAddresses = []string{defaultGossipSeedAddress}
+	cfg.GossipSeedAddresses = []string{DefaultGossipServiceAddress}
 	cfg.DeploymentID = 1
 	cfg.FS = fs
-	cfg.ServiceListenAddress = addr[0]
-	cfg.ServiceAddress = addr[0]
+	cfg.LogServicePort = 9000
 	cfg.DisableWorkers = true
-	cfg.Fill()
 	service, err := NewService(cfg,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

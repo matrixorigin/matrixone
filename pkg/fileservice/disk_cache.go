@@ -171,6 +171,8 @@ func (d *DiskCache) Read(
 			continue
 		}
 
+		entry.done = true
+		entry.fromCache = d
 		vector.Entries[i] = entry
 		numHit++
 		d.cacheHit(time.Since(t0))
@@ -225,6 +227,12 @@ func (d *DiskCache) Update(
 		}
 	}
 
+	// callback
+	var onWritten []OnDiskCacheWrittenFunc
+	if v := ctx.Value(CtxKeyDiskCacheCallbacks); v != nil {
+		onWritten = v.(*DiskCacheCallbacks).OnWritten
+	}
+
 	for _, entry := range vector.Entries {
 		if len(entry.Data) == 0 {
 			// no data
@@ -232,6 +240,10 @@ func (d *DiskCache) Update(
 		}
 		if entry.Size < 0 {
 			// ignore size unknown entry
+			continue
+		}
+		if entry.fromCache == d {
+			// no need to update
 			continue
 		}
 
@@ -285,6 +297,11 @@ func (d *DiskCache) Update(
 			numWrite++
 			d.triggerEvict(ctx, int64(n))
 			d.fileExists.Store(entryFilePath, true)
+
+			for _, fn := range onWritten {
+				fn(vector.FilePath, entry)
+			}
+
 		}()
 
 	}
@@ -395,6 +412,12 @@ func (d *DiskCache) evict(ctx context.Context) {
 		}
 	}()
 	target := int64(float64(d.capacity) * d.evictTarget)
+
+	var onEvict []OnDiskCacheEvictFunc
+	if v := ctx.Value(CtxKeyDiskCacheCallbacks); v != nil {
+		onEvict = v.(*DiskCacheCallbacks).OnEvict
+	}
+
 	for path, size := range paths {
 		if sumSize <= target {
 			break
@@ -406,6 +429,11 @@ func (d *DiskCache) evict(ctx context.Context) {
 		sumSize -= size
 		numDeleted++
 		bytesDeleted += size
+
+		for _, fn := range onEvict {
+			fn(path)
+		}
+
 	}
 }
 

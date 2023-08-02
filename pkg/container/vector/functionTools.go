@@ -102,8 +102,8 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 		}
 	}
 
-	if !v.GetNulls().EmptyByFlag() {
-		if v.typ.Width != 0 && v.typ.Width <= types.VarlenaInlineSize {
+	if !v.nsp.IsEmpty() {
+		if len(v.area) == 0 {
 			return &FunctionParameterNormalSpecial1[types.Varlena]{
 				typ:          *t,
 				sourceVector: v,
@@ -119,7 +119,7 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 			nullMap:      v.GetNulls().GetBitmap(),
 		}
 	}
-	if v.typ.Width != 0 && v.typ.Width <= types.VarlenaInlineSize {
+	if len(v.area) == 0 {
 		return &FunctionParameterWithoutNullSpecial1[types.Varlena]{
 			typ:          *t,
 			sourceVector: v,

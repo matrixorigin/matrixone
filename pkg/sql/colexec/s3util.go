@@ -558,17 +558,17 @@ func (w *S3Writer) GenerateWriter(proc *process.Process) (objectio.ObjectName, e
 func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
-	segId := Srv.GenerateSegment()
+	obj := Srv.GenerateObject()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
-	w.writer, err = blockio.NewBlockWriterNew(s3, segId, w.schemaVersion, w.seqnums)
+	w.writer, err = blockio.NewBlockWriterNew(s3, obj, w.schemaVersion, w.seqnums)
 	if err != nil {
 		return nil, err
 	}
 	w.lengths = w.lengths[:0]
-	return segId, err
+	return obj, err
 }
 
 // reference to pkg/sql/colexec/order/order.go logic

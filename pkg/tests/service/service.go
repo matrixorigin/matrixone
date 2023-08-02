@@ -1293,7 +1293,7 @@ func (c *testCluster) buildLogConfigs(
 		cfg := buildLogConfig(i, c.opt, address)
 		cfgs = append(cfgs, cfg)
 
-		localAddr := cfg.ServiceAddress
+		localAddr := cfg.LogServiceServiceAddr()
 		opt := buildLogOptions(cfg, c.backendFilterFactory(localAddr))
 		opts = append(opts, opt)
 	}
