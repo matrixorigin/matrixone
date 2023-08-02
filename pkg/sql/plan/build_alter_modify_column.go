@@ -186,7 +186,7 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 			}
 		}
 
-		for i, _ := range referredFK.Cols {
+		for i := range referredFK.Cols {
 			if referredFK.ForeignCols[i] == originalCol.ColId {
 				if originalCol.Name != newCol.Name {
 					return moerr.NewErrAlterOperationNotSupportedReasonFkRename(ctx.GetContext())
