@@ -277,20 +277,20 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) fu
 }
 
 type BlockLocation struct {
+	common.ClosedInterval
 	id       uint16
-	offset   *common.ClosedInterval
 	location objectio.Location
 }
 
 type TableMeta struct {
-	offset        *common.ClosedInterval
+	common.ClosedInterval
 	BlockLocation []*BlockLocation
 }
 
 func (t *TableMeta) EncodeToString() string {
 	var strs string
 	for _, location := range t.BlockLocation {
-		strs += fmt.Sprintf("%s_%d_%d", location.location, location.offset.Start, location.offset.End) + ";"
+		strs += fmt.Sprintf("%s_%d_%d", location.location, location.Start, location.End) + ";"
 	}
 	return strs
 }
@@ -309,7 +309,7 @@ func (t *TableMeta) DecodeFromString(key string) error {
 	}
 
 	t.BlockLocation = append(t.BlockLocation, &BlockLocation{
-		offset: &common.ClosedInterval{
+		ClosedInterval: common.ClosedInterval{
 			Start: Start,
 			End:   End,
 		},
@@ -529,7 +529,7 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
-			windowCNBatch(bat, block.offset.Start, block.offset.End)
+			windowCNBatch(bat, block.Start, block.End)
 			if dataBats[uint32(idx)] == nil {
 				cnBatch := batch.NewWithSize(len(bat.Vecs))
 				cnBatch.Attrs = make([]string, len(bat.Attrs))
@@ -720,19 +720,21 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 	}
 	if delEnd >= delStart {
 		if meta.tables[BlockDelete] == nil {
-			meta.tables[BlockDelete].offset = &common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}
+			meta.tables[BlockDelete].Start = uint64(delStart)
+			meta.tables[BlockDelete].End = uint64(delEnd)
 		} else {
-			if !meta.tables[BlockDelete].offset.TryMerge(common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}) {
-				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[BlockDelete].offset, delStart, delEnd))
+			if !meta.tables[BlockDelete].TryMerge(common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}) {
+				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[BlockDelete].ClosedInterval, delStart, delEnd))
 			}
 		}
 	}
 	if insEnd >= insStart {
 		if meta.tables[BlockInsert] == nil {
-			meta.tables[BlockInsert].offset = &common.ClosedInterval{Start: uint64(insStart), End: uint64(insEnd)}
+			meta.tables[BlockInsert].Start = uint64(insStart)
+			meta.tables[BlockInsert].End = uint64(insEnd)
 		} else {
-			if !meta.tables[BlockInsert].offset.TryMerge(common.ClosedInterval{Start: uint64(insStart), End: uint64(insEnd)}) {
-				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[BlockInsert].offset, insStart, insEnd))
+			if !meta.tables[BlockInsert].TryMerge(common.ClosedInterval{Start: uint64(insStart), End: uint64(insEnd)}) {
+				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[BlockInsert].ClosedInterval, insStart, insEnd))
 			}
 		}
 	}
@@ -749,10 +751,11 @@ func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 	}
 	if delEnd >= delStart {
 		if meta.tables[SegmentDelete] == nil {
-			meta.tables[SegmentDelete].offset = &common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}
+			meta.tables[SegmentDelete].Start = uint64(delStart)
+			meta.tables[SegmentDelete].End = uint64(delEnd)
 		} else {
-			if !meta.tables[SegmentDelete].offset.TryMerge(common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}) {
-				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[SegmentDelete].offset, delStart, delEnd))
+			if !meta.tables[SegmentDelete].TryMerge(common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}) {
+				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[SegmentDelete].ClosedInterval, delStart, delEnd))
 			}
 		}
 	}
@@ -782,7 +785,7 @@ func (data *CheckpointData) WriteTo(
 		if i == int(MetaIDX) {
 			continue
 		}
-		rows := 0
+		offset := 0
 		bats := containers.SplitDNBatch(data.bats[i], 10)
 		for _, bat := range bats {
 			var block objectio.BlockObject
@@ -790,56 +793,54 @@ func (data *CheckpointData) WriteTo(
 				return
 			}
 			blockLoc := &BlockLocation{
-				id:     block.GetID(),
-				offset: new(common.ClosedInterval),
+				id: block.GetID(),
 			}
-			blockLoc.offset.Start = uint64(rows)
-			rows += bat.Length()
-			blockLoc.offset.End = uint64(rows)
+			blockLoc.Start = uint64(offset)
+			offset += bat.Length()
+			blockLoc.End = uint64(offset)
 			blockIndexs[i] = append(blockIndexs[i], blockLoc)
-
 		}
 	}
 	blks, _, err := writer.Sync(context.Background())
 
-	for _, mate := range data.meta {
-		for idx, table := range mate.tables {
+	for _, mata := range data.meta {
+		for idx, table := range mata.tables {
 			for _, block := range blockIndexs[idx] {
-				if table.offset.End < block.offset.Start {
+				if table.End < block.Start {
 					break
 				}
-				if table.offset.Contains(*block.offset) {
+				if table.Contains(block.ClosedInterval) {
 					blockLoc := &BlockLocation{
-						offset: &common.ClosedInterval{
+						ClosedInterval: common.ClosedInterval{
 							Start: 0,
-							End:   block.offset.End - block.offset.Start,
+							End:   block.End - block.Start,
 						},
 						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
 					}
 					table.BlockLocation = append(table.BlockLocation, blockLoc)
-				} else if block.offset.Contains(*table.offset) {
+				} else if block.Contains(table.ClosedInterval) {
 					blockLoc := &BlockLocation{
-						offset: &common.ClosedInterval{
-							Start: table.offset.Start - block.offset.Start,
-							End:   block.offset.End - table.offset.End,
+						ClosedInterval: common.ClosedInterval{
+							Start: table.Start - block.Start,
+							End:   block.End - table.End,
 						},
 						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
 					}
 					table.BlockLocation = append(table.BlockLocation, blockLoc)
-				} else if table.offset.Start <= block.offset.End && table.offset.Start >= block.offset.Start {
+				} else if table.Start <= block.End && table.Start >= block.Start {
 					blockLoc := &BlockLocation{
-						offset: &common.ClosedInterval{
-							Start: table.offset.Start - block.offset.Start,
-							End:   block.offset.End - block.offset.Start,
+						ClosedInterval: common.ClosedInterval{
+							Start: table.Start - block.Start,
+							End:   block.End - block.Start,
 						},
 						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
 					}
 					table.BlockLocation = append(table.BlockLocation, blockLoc)
-				} else if table.offset.End <= block.offset.End && table.offset.End >= block.offset.Start {
+				} else if table.End <= block.End && table.End >= block.Start {
 					blockLoc := &BlockLocation{
-						offset: &common.ClosedInterval{
+						ClosedInterval: common.ClosedInterval{
 							Start: 0,
-							End:   block.offset.End - table.offset.End,
+							End:   block.End - table.End,
 						},
 						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
 					}
