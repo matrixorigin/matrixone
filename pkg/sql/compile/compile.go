@@ -393,7 +393,6 @@ func (c *Compile) Run(_ uint64) error {
 
 // run once
 func (c *Compile) runOnce() error {
-	fmt.Printf("[cccompile] sql %s - %s\n", c.sql, DebugShowScopes(c.scope))
 	var wg sync.WaitGroup
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
@@ -2676,9 +2675,6 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			panic("Could not append right !!!!!")
 		}
 	}
-
-	fmt.Printf("[compileshufflejoin(pre)] %s\n", DebugShowScopes(parent))
-
 	return parent, children
 }
 
