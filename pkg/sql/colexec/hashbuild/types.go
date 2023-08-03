@@ -78,6 +78,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
+		ctr.FreeMergeTypeOperator(pipelineFailed)
 		if ctr.isMerge {
 			ctr.FreeMergeTypeOperator(pipelineFailed)
 		} else {

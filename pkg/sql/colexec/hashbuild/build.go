@@ -118,9 +118,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	for {
 		var bat *batch.Batch
 		if ap.ctr.isMerge {
-			bat, _, err = ctr.ReceiveFromSingleReg(0, anal)
-		} else {
 			bat, _, err = ctr.ReceiveFromAllRegs(anal)
+		} else {
+			bat, _, err = ctr.ReceiveFromSingleReg(0, anal)
 		}
 
 		if err != nil {
