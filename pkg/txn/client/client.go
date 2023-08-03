@@ -17,7 +17,6 @@ package client
 import (
 	"bytes"
 	"context"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -142,8 +141,6 @@ type txnClient struct {
 		state status
 		// order by snapshot ts
 		activeTxns []*txnOperator
-		// Minimum Active Transaction Timestamp
-		minTS timestamp.Timestamp
 	}
 }
 
@@ -230,7 +227,14 @@ func (client *txnClient) MinTimestamp() timestamp.Timestamp {
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 
-	return client.mu.minTS
+	min := timestamp.Timestamp{}
+	for _, op := range client.mu.activeTxns {
+		if min.IsEmpty() ||
+			op.Txn().SnapshotTS.Less(min) {
+			min = op.Txn().SnapshotTS
+		}
+	}
+	return min
 }
 
 func (client *txnClient) WaitLogTailAppliedAt(
@@ -339,9 +343,6 @@ func (client *txnClient) popTransaction(txn txn.TxnMeta) {
 	if i > 0 {
 		client.mu.activeTxns = append(client.mu.activeTxns[:i], client.mu.activeTxns[i+1:]...)
 	}
-	if len(client.mu.activeTxns) == 0 {
-		client.mu.minTS = timestamp.Timestamp{}
-	}
 	client.removeFromLeakCheck(txn.ID)
 }
 
@@ -351,9 +352,6 @@ func (client *txnClient) addActiveTxn(op *txnOperator) error {
 
 	if client.mu.state == normal {
 		client.mu.activeTxns = append(client.mu.activeTxns, op)
-		sort.Slice(client.mu.activeTxns, func(i, j int) bool {
-			return client.mu.activeTxns[i].Txn().SnapshotTS.Less(client.mu.activeTxns[j].Txn().SnapshotTS)
-		})
 		client.addToLeakCheck(op)
 		return nil
 	}
@@ -381,7 +379,6 @@ func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
 	ops = append(ops, client.mu.activeTxns...)
 	client.mu.activeTxns = client.mu.activeTxns[:0]
-	client.mu.minTS = timestamp.Timestamp{}
 	client.mu.Unlock()
 
 	for _, op := range ops {
