@@ -117,8 +117,9 @@ type Transaction struct {
 	// blockId uint64
 
 	// local timestamp for workspace operations
-	meta *txn.TxnMeta
-	op   client.TxnOperator
+	meta     *txn.TxnMeta
+	op       client.TxnOperator
+	sqlCount atomic.Uint64
 
 	// writes cache stores any writes done by txn
 	writes []Entry
@@ -183,7 +184,9 @@ type Transaction struct {
 }
 
 type Pos struct {
-	idx     int
+	bat     *batch.Batch
+	tbName  string
+	dbName  string
 	offset  int64
 	blkInfo catalog.BlockInfo
 }
@@ -216,14 +219,6 @@ func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid, offsets
 	defer b.RUnlock()
 	res := b.offsets[*blockID]
 	*offsets = append(*offsets, res...)
-}
-
-func (b *deletedBlocks) removeBlockDeletedInfos(ids []*types.Blockid) {
-	b.Lock()
-	defer b.Unlock()
-	for _, id := range ids {
-		delete(b.offsets, *id)
-	}
 }
 
 func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
@@ -282,7 +277,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	// For RC isolation, update the snapshot TS of transaction for each statement including
 	// the first one. Means that, the timestamp of the first statement is not the transaction's
 	// begin timestamp, but its own timestamp.
-	if !commit && txn.meta.IsRCIsolation() {
+	if !commit && txn.meta.IsRCIsolation() && txn.GetSQLCount() > 0 {
 		if err := txn.op.UpdateSnapshot(
 			ctx,
 			timestamp.Timestamp{}); err != nil {
@@ -365,6 +360,14 @@ func (txn *Transaction) resetSnapshot() error {
 		return true
 	})
 	return nil
+}
+
+func (txn *Transaction) IncrSQLCount() {
+	txn.sqlCount.Add(1)
+}
+
+func (txn *Transaction) GetSQLCount() uint64 {
+	return txn.sqlCount.Load()
 }
 
 // Entry represents a delete/insert

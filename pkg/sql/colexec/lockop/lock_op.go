@@ -437,8 +437,8 @@ func doLock(
 			fn = hasNewVersionInRange
 		}
 
-		// if [snapshotTS, lockedTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
+		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
+		changed, err := fn(proc, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, timestamp.Timestamp{}, err
 		}
@@ -702,42 +702,13 @@ func hasNewVersionInRange(
 	if vec == nil {
 		return false, nil
 	}
-	txnClient := proc.TxnClient
-	txnOp, err := txnClient.New(proc.Ctx, to.Prev())
-	if err != nil {
-		return false, err
-	}
-	defer func() {
-		_ = txnOp.Rollback(proc.Ctx)
-	}()
-	if err := eng.New(proc.Ctx, txnOp); err != nil {
-		return false, err
-	}
-	//txnOp is a new transaction, so we need to start a new statement
-	txnOp.GetWorkspace().StartStatement()
-	defer func() {
-		txnOp.GetWorkspace().EndStatement()
-	}()
-	dbName, tableName, _, err := eng.GetRelationById(proc.Ctx, txnOp, tableID)
+
+	txnOp := proc.TxnOperator
+	_, _, rel, err := eng.GetRelationById(proc.Ctx, txnOp, tableID)
 	if err != nil {
 		if strings.Contains(err.Error(), "can not find table by id") {
 			return false, nil
 		}
-		return false, err
-	}
-	db, err := eng.Database(proc.Ctx, dbName, txnOp)
-	if err != nil {
-		return false, err
-	}
-	rel, err := db.Relation(proc.Ctx, tableName, proc)
-	if err != nil {
-		return false, err
-	}
-	if err := txnOp.GetWorkspace().IncrStatementID(proc.Ctx, false); err != nil {
-		return false, nil
-	}
-	_, err = rel.Ranges(proc.Ctx, nil)
-	if err != nil {
 		return false, err
 	}
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
