@@ -95,9 +95,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if bat == nil {
 		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+	if bat.Last() {
+		if !ap.ctr.hasData {
+			bat.SetEnd()
+		} else {
+			ap.ctr.hasData = false
+		}
+	} else if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		return process.ExecNext, nil
+	} else {
+		ap.ctr.hasData = true
 	}
 	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {
@@ -143,7 +151,7 @@ func (arg *Argument) prepareRemote(proc *process.Process) {
 		if arg.FuncId == ShuffleToAllFunc {
 			arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
 		}
-		colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc)
+		colexec.Srv.PutProcIntoUuidMap(rr.Uuid, proc)
 	}
 }
 

@@ -60,6 +60,44 @@ func TestAddReplica(t *testing.T) {
 	})
 }
 
+func TestHandleShutdown(t *testing.T) {
+	fn := func(s *store) {
+		cmd := logservicepb.ScheduleCommand{
+			UUID: s.cfg.UUID,
+			ShutdownStore: &logservicepb.ShutdownStore{
+				StoreID: s.cfg.UUID,
+			},
+			ServiceType: logservicepb.DNService,
+		}
+
+		shutdownC := make(chan struct{})
+		exit := atomic.Bool{}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer func() {
+				cancel()
+				exit.Store(true)
+			}()
+
+			select {
+			case <-ctx.Done():
+				panic("deadline reached")
+			case <-shutdownC:
+				runtime.DefaultRuntime().Logger().Info("received shutdown command")
+			}
+		}()
+
+		s.shutdownC = shutdownC
+
+		for !exit.Load() {
+			s.handleCommands([]logservicepb.ScheduleCommand{cmd})
+			time.Sleep(time.Millisecond)
+		}
+
+	}
+	runDNStoreTest(t, fn)
+}
+
 func TestStartWithReplicas(t *testing.T) {
 	localFS, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
@@ -263,7 +301,9 @@ func newTestStore(
 		CounterSet,
 		c,
 		rt,
-		fs, options...)
+		fs,
+		nil,
+		options...)
 	assert.NoError(t, err)
 	return s.(*store)
 }

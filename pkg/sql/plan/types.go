@@ -26,11 +26,19 @@ import (
 
 const (
 	JoinSideNone       int8 = 0
-	JoinSideLeft            = 1 << iota
-	JoinSideRight           = 1 << iota
+	JoinSideLeft            = 1 << 1
+	JoinSideRight           = 1 << 2
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
-	JoinSideMark            = 1 << iota
-	JoinSideCorrelated      = 1 << iota
+	JoinSideMark            = 1 << 3
+	JoinSideCorrelated      = 1 << 4
+)
+
+type ExpandAliasMode int8
+
+const (
+	NoAlias ExpandAliasMode = iota
+	AliasBeforeColumn
+	AliasAfterColumn
 )
 
 type TableDefType = plan.TableDef_DefType
@@ -167,15 +175,27 @@ type QueryBuilder struct {
 
 type CTERef struct {
 	defaultDatabase string
+	isRecursive     bool
 	ast             *tree.CTE
 	maskedCTEs      map[string]any
+}
+
+type aliasItem struct {
+	idx     int32
+	astExpr tree.Expr
 }
 
 type BindContext struct {
 	binder Binder
 
-	cteByName  map[string]*CTERef
-	maskedCTEs map[string]any
+	cteByName              map[string]*CTERef
+	maskedCTEs             map[string]any
+	initSelect             bool
+	recSelect              bool
+	finalSelect            bool
+	unionSelect            bool
+	recRecursiveScanNodeId int32
+	isTryBindingCTE        bool
 
 	cteName  string
 	headings []string
@@ -184,6 +204,7 @@ type BindContext struct {
 	aggregateTag int32
 	projectTag   int32
 	resultTag    int32
+	sinkTag      int32
 	windowTag    int32
 
 	groups     []*plan.Expr
@@ -197,7 +218,7 @@ type BindContext struct {
 	windowByAst    map[string]int32
 	projectByExpr  map[string]int32
 
-	aliasMap map[string]int32
+	aliasMap map[string]*aliasItem
 
 	bindings       []*Binding
 	bindingByTag   map[int32]*Binding //rel_pos

@@ -64,12 +64,14 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "External Function"
 	case plan.Node_MATERIAL:
 		pname = "Material"
-	case plan.Node_RECURSIVE_CTE:
-		pname = "Recursive CTE"
 	case plan.Node_SINK:
 		pname = "Sink"
 	case plan.Node_SINK_SCAN:
 		pname = "Sink Scan"
+	case plan.Node_RECURSIVE_SCAN:
+		pname = "Recursive Scan"
+	case plan.Node_RECURSIVE_CTE:
+		pname = "CTE Scan"
 	case plan.Node_AGG:
 		pname = "Aggregate"
 	case plan.Node_DISTINCT:
@@ -370,9 +372,9 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 		return "", err
 	}
 
-	if ndesc.Node.Stats.Shuffle {
-		idx := ndesc.Node.Stats.ShuffleColIdx
-		shuffleType := ndesc.Node.Stats.ShuffleType
+	if ndesc.Node.Stats.HashmapStats.Shuffle {
+		idx := ndesc.Node.Stats.HashmapStats.ShuffleColIdx
+		shuffleType := ndesc.Node.Stats.HashmapStats.ShuffleType
 		var hashCol *plan.Expr
 		switch exprImpl := ndesc.Node.OnList[idx].Expr.(type) {
 		case *plan.Expr_F:
@@ -512,9 +514,9 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	if ndesc.Node.Stats.Shuffle {
-		idx := ndesc.Node.Stats.ShuffleColIdx
-		shuffleType := ndesc.Node.Stats.ShuffleType
+	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.Shuffle {
+		idx := ndesc.Node.Stats.HashmapStats.ShuffleColIdx
+		shuffleType := ndesc.Node.Stats.HashmapStats.ShuffleType
 		if shuffleType == plan.ShuffleType_Hash {
 			buf.WriteString(" shuffle: hash(")
 			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
@@ -659,8 +661,8 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		if c.Stats.BlockNum > 0 {
 			blockNumStr = " blockNum=" + strconv.FormatInt(int64(c.Stats.BlockNum), 10)
 		}
-		if c.Stats.HashmapSize > 0 {
-			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapSize, 'f', 2, 64)
+		if c.Stats.HashmapStats != nil && c.Stats.HashmapStats.HashmapSize > 0 {
+			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapStats.HashmapSize, 'f', 2, 64)
 		}
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +

@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 
+	"github.com/mohae/deepcopy"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -206,14 +209,22 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		return nil, err
 	}
 
+	txnCtx = fileservice.EnsureStatementProfiler(txnCtx, requestCtx)
+
 	// Increase the statement ID and update snapshot TS before build plan, because the
 	// snapshot TS is used when build plan.
 	// NB: In internal executor, we should also do the same action, which is increasing
 	// statement ID and updating snapshot TS.
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
-	txnOp := cwft.GetProcess().TxnOperator
-	if txnOp != nil {
-		err := txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
+	txnOp := cwft.proc.TxnOperator
+	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
+		ok, _ := cwft.ses.GetTxnHandler().calledStartStmt()
+		if !ok {
+			txnOp.GetWorkspace().StartStatement()
+			cwft.ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		}
+
+		err = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -339,7 +350,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.proc,
 		cwft.stmt,
 		cwft.ses.isInternal,
-		cwft.ses.getCNLabels(),
+		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
 	)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {

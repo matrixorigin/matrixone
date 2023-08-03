@@ -1286,6 +1286,20 @@ func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 	return m.recorder
 }
 
+// Adjust mocks base method.
+func (m *MockWorkspace) Adjust() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Adjust")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Adjust indicates an expected call of Adjust.
+func (mr *MockWorkspaceMockRecorder) Adjust() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust))
+}
+
 // Commit mocks base method.
 func (m *MockWorkspace) Commit(ctx context.Context) error {
 	m.ctrl.T.Helper()
@@ -1298,6 +1312,44 @@ func (m *MockWorkspace) Commit(ctx context.Context) error {
 func (mr *MockWorkspaceMockRecorder) Commit(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockWorkspace)(nil).Commit), ctx)
+}
+
+// EndStatement mocks base method.
+func (m *MockWorkspace) EndStatement() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "EndStatement")
+}
+
+// EndStatement indicates an expected call of EndStatement.
+func (mr *MockWorkspaceMockRecorder) EndStatement() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EndStatement", reflect.TypeOf((*MockWorkspace)(nil).EndStatement))
+}
+
+// GetSQLCount mocks base method.
+func (m *MockWorkspace) GetSQLCount() uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSQLCount")
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// GetSQLCount indicates an expected call of GetSQLCount.
+func (mr *MockWorkspaceMockRecorder) GetSQLCount() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSQLCount", reflect.TypeOf((*MockWorkspace)(nil).GetSQLCount))
+}
+
+// IncrSQLCount mocks base method.
+func (m *MockWorkspace) IncrSQLCount() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "IncrSQLCount")
+}
+
+// IncrSQLCount indicates an expected call of IncrSQLCount.
+func (mr *MockWorkspaceMockRecorder) IncrSQLCount() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrSQLCount", reflect.TypeOf((*MockWorkspace)(nil).IncrSQLCount))
 }
 
 // IncrStatementID mocks base method.
@@ -1340,4 +1392,16 @@ func (m *MockWorkspace) RollbackLastStatement(ctx context.Context) error {
 func (mr *MockWorkspaceMockRecorder) RollbackLastStatement(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RollbackLastStatement", reflect.TypeOf((*MockWorkspace)(nil).RollbackLastStatement), ctx)
+}
+
+// StartStatement mocks base method.
+func (m *MockWorkspace) StartStatement() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "StartStatement")
+}
+
+// StartStatement indicates an expected call of StartStatement.
+func (mr *MockWorkspaceMockRecorder) StartStatement() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement))
 }

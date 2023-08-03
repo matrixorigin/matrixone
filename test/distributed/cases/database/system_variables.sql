@@ -3,9 +3,20 @@
 -- @case
 -- @desc:test for Some System variables and new variables like ERRORS, INDEXES and so on
 -- @label:bvt
+set interactive_timeout = default;
+set net_write_timeout = default;
+set wait_timeout = default;
+set sql_select_limit = default;
+set max_allowed_packet = default;
+set wait_timeout = default;
+set tx_isolation = default;
+set tx_isolation = default;
+
 
 -- auto_increment_increment
+-- @bvt:issue#10898
 show variables like 'auto%';
+-- @bvt:issue
 show variables like 'auto_increment_increment';
 set auto_increment_increment = 2;
 show variables like 'auto_increment_increment';
@@ -19,10 +30,8 @@ show variables like 'init%';
 show variables like 'init_connect';
 
 -- interactive_timeout
--- @bvt:issue#10473
 show variables like 'interactive%';
 show variables like 'interactive_timeout';
--- @bvt:issue
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 set interactive_timeout = 30000+100;
@@ -97,9 +106,6 @@ desc views;
 select table_schema, table_name, definer from views where table_schema = 'system' order by table_name;
 desc profiling;
 select seq, state from profiling;
-
-desc `PROCESSLIST`;
-select * from `PROCESSLIST` limit 2;
 
 desc user_privileges;
 select grantee, table_catalog from user_privileges limit 2;

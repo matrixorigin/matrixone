@@ -183,7 +183,7 @@ type Client interface {
 }
 
 // RequestHandleFunc request handle func
-type RequestHandleFunc func(context.Context, *pb.Request, *pb.Response, morpc.ClientSession)
+type RequestHandleFunc func(context.Context, context.CancelFunc, *pb.Request, *pb.Response, morpc.ClientSession)
 
 // ServerOption server option
 type ServerOption func(*server)

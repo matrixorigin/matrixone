@@ -15,6 +15,8 @@
 package logservice
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,24 +34,23 @@ import (
 
 func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := Config{
-		UUID:           uuid.New().String(),
-		FS:             vfs.NewStrictMem(),
-		DeploymentID:   1,
-		RTTMillisecond: 5,
-		DataDir:        "data-1",
-		ServiceAddress: "127.0.0.1:9002",
-		RaftAddress:    "127.0.0.1:9000",
-		GossipAddress:  "127.0.0.1:9001",
-		// below is an unreachable address intentionally set
-		GossipSeedAddresses: []string{"127.0.0.1:9010"},
-	}
+	cfg := DefaultConfig()
+	cfg.UUID = uuid.New().String()
+	cfg.FS = vfs.NewStrictMem()
+	cfg.DeploymentID = 1
+	cfg.RTTMillisecond = 5
+	cfg.DataDir = "data-1"
+	cfg.LogServicePort = 9002
+	cfg.RaftPort = 9000
+	cfg.GossipPort = 9001
+	// below is an unreachable address intentionally set
+	cfg.GossipSeedAddresses = []string{"127.0.0.1:9010"}
 	cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
 	cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
 	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
-	cfg.Fill()
 	service, err := NewService(cfg,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -233,4 +234,42 @@ func checkReplicaCount(s *store, shardID uint64) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func TestHandleShutdown(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cmd := pb.ScheduleCommand{
+			UUID: s.ID(),
+			ShutdownStore: &pb.ShutdownStore{
+				StoreID: s.ID(),
+			},
+			ServiceType: pb.LogService,
+		}
+
+		shutdownC := make(chan struct{})
+		exit := atomic.Bool{}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer func() {
+				cancel()
+				exit.Store(true)
+			}()
+
+			select {
+			case <-ctx.Done():
+				panic("deadline reached")
+			case <-shutdownC:
+				runtime.DefaultRuntime().Logger().Info("received shutdown command")
+			}
+		}()
+
+		s.shutdownC = shutdownC
+
+		for !exit.Load() {
+			s.handleCommands([]pb.ScheduleCommand{cmd})
+			time.Sleep(time.Millisecond)
+		}
+
+	}
+	runServiceTest(t, false, true, fn)
 }

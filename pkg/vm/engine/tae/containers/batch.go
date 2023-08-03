@@ -231,6 +231,23 @@ func (bat *Batch) Close() {
 	}
 }
 
+func (bat *Batch) Reset() {
+	for i, vec := range bat.Vecs {
+		var newVec Vector
+		if bat.Pool != nil {
+			newVec = bat.Pool.GetVector(vec.GetType())
+		} else {
+			opts := Options{
+				Allocator: vec.GetAllocator(),
+			}
+			newVec = NewVector(*vec.GetType(), opts)
+		}
+		vec.Close()
+		bat.Vecs[i] = newVec
+	}
+	bat.Deletes = nil
+}
+
 func (bat *Batch) Equals(o *Batch) bool {
 	if bat.Length() != o.Length() {
 		return false
@@ -492,4 +509,29 @@ func (b *BatchWithVersion) Swap(i, j int) {
 // Sort by seqnum
 func (b *BatchWithVersion) Less(i, j int) bool {
 	return b.Seqnums[i] < b.Seqnums[j]
+}
+
+func NewBatchSplitter(bat *Batch, sliceSize int) *BatchSplitter {
+	if sliceSize <= 0 || bat == nil {
+		panic("sliceSize should not be 0 and bat should not be nil")
+	}
+	return &BatchSplitter{
+		internal:  bat,
+		sliceSize: sliceSize,
+	}
+}
+
+func (bs *BatchSplitter) Next() (*Batch, error) {
+	if bs.offset == bs.internal.Length() {
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	length := bs.sliceSize
+	nextOffset := bs.offset + bs.sliceSize
+	if nextOffset >= bs.internal.Length() {
+		nextOffset = bs.internal.Length()
+		length = nextOffset - bs.offset
+	}
+	bat := bs.internal.Window(bs.offset, length)
+	bs.offset = nextOffset
+	return bat, nil
 }

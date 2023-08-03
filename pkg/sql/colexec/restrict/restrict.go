@@ -17,7 +17,6 @@ package restrict
 import (
 	"bytes"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,7 +46,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if bat == nil {
 		return process.ExecStop, nil
 	}
-	if bat.Length() == 0 {
+	if bat.Last() {
+		proc.SetInputBatch(bat)
+		return process.ExecNext, nil
+	}
+	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
@@ -60,7 +63,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 
 	var sels []int64
 	for i := range ap.ctr.executors {
-		if bat.Length() == 0 {
+		if bat.IsEmpty() {
 			break
 		}
 

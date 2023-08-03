@@ -36,7 +36,6 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.bat = batch.NewWithSize(len(ap.RightTypes))
-	ap.ctr.bat.Zs = proc.Mp().GetSels()
 	for i, typ := range ap.RightTypes {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
@@ -83,17 +82,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = SendLast
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.IsEmpty() {
 				bat.Clean(proc.Mp())
 				continue
 			}
 
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
+			if ctr.bat == nil || ctr.bat.IsEmpty() {
 				proc.PutBatch(bat)
 				continue
 			}
 
-			if err := ctr.probe(bat, ap, proc, analyze, isFirst, isLast); err != nil {
+			if err = ctr.probe(bat, ap, proc, analyze, isFirst, isLast); err != nil {
 				return process.ExecNext, err
 			}
 
@@ -129,7 +128,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(bat.Length())
+		ctr.matched.InitWithSize(bat.RowCount())
 		analyze.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
@@ -156,13 +155,12 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	}
 
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
 	}
 
-	count := ctr.bat.Length() - ctr.matched.Count()
+	count := ctr.bat.RowCount() - ctr.matched.Count()
 	sels := make([]int32, 0, count)
 	itr := ctr.matched.Iterator()
 	for itr.HasNext() {
@@ -176,9 +174,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 			return false, err
 		}
 	}
-	for _, sel := range sels {
-		rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
-	}
+	rbat.AddRowCount(len(sels))
 
 	analyze.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
@@ -198,7 +194,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	if ctr.joinBat2 == nil {
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
 	}
-	count := bat.Length()
+	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {

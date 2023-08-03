@@ -111,10 +111,11 @@ func callNonBlocking(
 	proc *process.Process,
 	arg *Argument) (bool, error) {
 	bat := proc.InputBatch()
+
 	if bat == nil {
 		return true, arg.rt.retryError
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
@@ -157,7 +158,7 @@ func callBlocking(
 		}
 
 		// skip empty batch
-		if bat.Length() == 0 {
+		if bat.RowCount() == 0 {
 			bat.Clean(proc.Mp())
 			return false, nil
 		}
@@ -181,6 +182,7 @@ func callBlocking(
 		if len(arg.rt.cachedBatches) == 0 {
 			arg.rt.step = stepEnd
 		}
+
 		proc.SetInputBatch(bat)
 		return false, nil
 	case stepEnd:
@@ -435,8 +437,8 @@ func doLock(
 			fn = hasNewVersionInRange
 		}
 
-		// if [snapshotTS, lockedTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
+		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
+		changed, err := fn(proc, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, timestamp.Timestamp{}, err
 		}
@@ -700,38 +702,13 @@ func hasNewVersionInRange(
 	if vec == nil {
 		return false, nil
 	}
-	txnClient := proc.TxnClient
-	txnOp, err := txnClient.New(proc.Ctx, to.Prev())
-	if err != nil {
-		return false, err
-	}
-	defer func() {
-		_ = txnOp.Rollback(proc.Ctx)
-	}()
-	if err := eng.New(proc.Ctx, txnOp); err != nil {
-		return false, err
-	}
 
-	dbName, tableName, _, err := eng.GetRelationById(proc.Ctx, txnOp, tableID)
+	txnOp := proc.TxnOperator
+	_, _, rel, err := eng.GetRelationById(proc.Ctx, txnOp, tableID)
 	if err != nil {
 		if strings.Contains(err.Error(), "can not find table by id") {
 			return false, nil
 		}
-		return false, err
-	}
-	db, err := eng.Database(proc.Ctx, dbName, txnOp)
-	if err != nil {
-		return false, err
-	}
-	rel, err := db.Relation(proc.Ctx, tableName, proc)
-	if err != nil {
-		return false, err
-	}
-	if err := txnOp.GetWorkspace().IncrStatementID(proc.Ctx, false); err != nil {
-		return false, nil
-	}
-	_, err = rel.Ranges(proc.Ctx, nil)
-	if err != nil {
 		return false, err
 	}
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)

@@ -43,6 +43,9 @@ type handler struct {
 	counterSet *counterSet
 	// haKeeperClient is the client to communicate with HAKeeper.
 	haKeeperClient logservice.ClusterHAKeeperClient
+	// SQLWorker works for the SQL selection. It connects to some
+	// CN server and query for some information.
+	sqlWorker SQLWorker
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -55,6 +58,7 @@ func newProxyHandler(
 	st *stopper.Stopper,
 	cs *counterSet,
 	testHAKeeperClient logservice.ClusterHAKeeperClient,
+	test bool,
 ) (*handler, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -87,7 +91,15 @@ func newProxyHandler(
 		return nil, err
 	}
 
-	ru := newRouter(mc, re, false)
+	// The SQL worker is mainly used in router currently.
+	sw := newSQLWorker()
+
+	var ru Router
+	if test {
+		ru = newRouter(mc, re, re.connManager, false)
+	} else {
+		ru = newRouter(mc, re, sw, false)
+	}
 	// Decorate the router if plugin is enabled
 	if cfg.Plugin != nil {
 		p, err := newRPCPlugin(cfg.Plugin.Backend, cfg.Plugin.Timeout)
@@ -105,6 +117,7 @@ func newProxyHandler(
 		counterSet:     cs,
 		router:         ru,
 		haKeeperClient: c,
+		sqlWorker:      sw,
 	}, nil
 }
 

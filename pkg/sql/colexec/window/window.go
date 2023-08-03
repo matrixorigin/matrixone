@@ -70,6 +70,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (proces
 		if err != nil {
 			return process.ExecNext, err
 		}
+
 		if end {
 			break
 		}
@@ -86,7 +87,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (proces
 				return process.ExecNext, err
 			}
 		}
-		ctr.bat.Zs = append(ctr.bat.Zs, bat.Zs...)
+		ctr.bat.AddRowCount(bat.RowCount())
 	}
 
 	// init agg frame
@@ -136,6 +137,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (proces
 	}
 
 	anal.Output(ctr.bat, isLast)
+
 	proc.SetInputBatch(ctr.bat)
 	return process.ExecStop, nil
 }
@@ -169,7 +171,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 
 				if ctr.os[o] <= ctr.ps[p] {
 
-					if err = ctr.bat.Aggs[idx].Fill(int64(p-1), int64(o), 1, []*vector.Vector{vec}); err != nil {
+					if err = ctr.bat.Aggs[idx].Fill(int64(p-1), int64(o), []*vector.Vector{vec}); err != nil {
 						return err
 					}
 
@@ -199,7 +201,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			if right < start || left > end || left >= right {
-				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(0), 1, []*vector.Vector{nullVec}); err != nil {
+				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(0), []*vector.Vector{nullVec}); err != nil {
 					return err
 				}
 				continue
@@ -213,7 +215,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			for k := left; k < right; k++ {
-				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(k), 1, []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
+				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(k), []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
 					return err
 				}
 			}
@@ -408,10 +410,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	ovec := ctr.orderVecs[0].vec
 	var strCol []string
 
+	rowCount := bat.RowCount()
 	if ctr.sels == nil {
-		ctr.sels = make([]int64, len(bat.Zs))
+		ctr.sels = make([]int64, rowCount)
 	}
-	for i := 0; i < len(bat.Zs); i++ {
+	for i := 0; i < rowCount; i++ {
 		ctr.sels[i] = int64(i)
 	}
 
@@ -483,9 +486,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	}
 
 	// shuffle agg vector
-	if ctr.aggVecs[idx].vec != nil && !ctr.aggVecs[idx].executor.IsColumnExpr() {
-		if err := ctr.aggVecs[idx].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
-			panic(err)
+	for k := idx; k < len(ctr.aggVecs); k++ {
+		if ctr.aggVecs[k].vec != nil && !ctr.aggVecs[k].executor.IsColumnExpr() {
+			if err := ctr.aggVecs[k].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
+				panic(err)
+			}
 		}
 	}
 

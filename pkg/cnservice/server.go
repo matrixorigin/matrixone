@@ -24,6 +24,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,10 +41,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -80,7 +83,15 @@ func NewService(
 		metadataFS:  metadataFS,
 		etlFS:       etlFS,
 		fileService: fileService,
+		sessionMgr:  queryservice.NewSessionManager(),
+		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 	}
+	srv.registerServices()
+	if _, err = srv.getHAKeeperClient(); err != nil {
+		return nil, err
+	}
+	srv.initQueryService()
+
 	for _, opt := range options {
 		opt(srv)
 	}
@@ -97,16 +108,12 @@ func NewService(
 		},
 	}
 
-	if _, err = srv.getHAKeeperClient(); err != nil {
-		return nil, err
-	}
-
 	pu := config.NewParameterUnit(
 		&cfg.Frontend,
 		nil,
 		nil,
 		engine.Nodes{engine.Node{
-			Addr: cfg.ServiceAddress,
+			Addr: srv.pipelineServiceServiceAddr(),
 		}})
 	pu.HAKeeperClient = srv._hakeeperClient
 	cfg.Frontend.SetDefaultValues()
@@ -114,19 +121,22 @@ func NewService(
 	frontend.InitServerVersion(pu.SV.MoVersion)
 
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
-	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
-
-	if _, err = srv.getHAKeeperClient(); err != nil {
-		return nil, err
+	srv.aicm = &defines.AutoIncrCacheManager{
+		AutoIncrCaches: make(map[string]defines.AutoIncrCache),
+		Mu:             &sync.Mutex{},
+		MaxSize:        pu.SV.AutoIncrCacheSize,
 	}
+
 	srv.pu = pu
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
+	srv.pu.QueryService = srv.queryService
+
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
 
-	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
+	server, err := morpc.NewRPCServer(PipelineService.String(), srv.pipelineServiceListenAddr(),
 		morpc.NewMessageCodec(srv.acquireMessage,
 			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize))),
 		morpc.WithServerLogger(srv.logger),
@@ -155,6 +165,7 @@ func NewService(
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
+		queryService queryservice.QueryService,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
@@ -165,12 +176,25 @@ func NewService(
 	}
 
 	srv.initCtlService()
+
+	// TODO: global client need to refactor
+	err = cnclient.NewCNClient(
+		srv.pipelineServiceServiceAddr(),
+		&cnclient.ClientConfig{RPC: cfg.RPC})
+	if err != nil {
+		panic(err)
+	}
+
 	return srv, nil
 }
 
 func (s *service) Start() error {
 	s.initTaskServiceHolder()
 	s.initSqlWriterFactory()
+
+	if err := s.queryService.Start(); err != nil {
+		return err
+	}
 
 	if err := s.ctlservice.Start(); err != nil {
 		return err
@@ -202,6 +226,21 @@ func (s *service) Close() error {
 	// stop I/O pipeline
 	blockio.Stop()
 	return s.server.Close()
+}
+
+// ID implements the frontend.BaseService interface.
+func (s *service) ID() string {
+	return s.cfg.UUID
+}
+
+// SQLAddress implements the frontend.BaseService interface.
+func (s *service) SQLAddress() string {
+	return s.cfg.SQLAddress
+}
+
+// SessionMgr implements the frontend.BaseService interface.
+func (s *service) SessionMgr() *queryservice.SessionManager {
+	return s.sessionMgr
 }
 
 func (s *service) stopFrontend() error {
@@ -238,6 +277,11 @@ func (s *service) stopRPCs() error {
 	}
 	if s.ctlservice != nil {
 		if err := s.ctlservice.Close(); err != nil {
+			return err
+		}
+	}
+	if s.queryService != nil {
+		if err := s.queryService.Close(); err != nil {
 			return err
 		}
 	}
@@ -281,12 +325,13 @@ func (s *service) handleRequest(
 	go func() {
 		defer value.Cancel()
 		s.requestHandler(ctx,
-			s.cfg.ServiceAddress,
+			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
 			s.storeEngine,
 			s.fileService,
 			s.lockService,
+			s.queryService,
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
@@ -309,7 +354,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu, aicm)
+	s.createMOServer(cancelMoServerCtx, pu, aicm, s)
 	return nil
 }
 
@@ -343,10 +388,15 @@ func (s *service) initEngine(
 	return s.bootstrap()
 }
 
-func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) {
+func (s *service) createMOServer(
+	inputCtx context.Context,
+	pu *config.ParameterUnit,
+	aicm *defines.AutoIncrCacheManager,
+	baseService frontend.BaseService,
+) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
-	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm)
+	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm, baseService)
 }
 
 func (s *service) runMoServer() error {
@@ -515,7 +565,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 }
 
 func (s *service) initLockService() {
-	cfg := s.cfg.getLockServiceConfig()
+	cfg := s.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(cfg)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(cfg.ServiceID, s.lockService)
@@ -566,11 +616,12 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 
 func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 	exec := compile.NewSQLExecutor(
-		s.cfg.ServiceAddress,
+		s.pipelineServiceServiceAddr(),
 		s.storeEngine,
 		mp,
 		s._txnClient,
 		s.fileService,
+		s.queryService,
 		s.aicm)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
 }

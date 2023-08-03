@@ -1,0 +1,70 @@
+drop table if exists t1;
+create table t1(a bigint primary key, b int unique key);
+insert into t1 values (1, 2), (3, 4), (5, 6);
+drop table if exists t3;
+create table t3(a bigint, b int);
+insert into t3 values (1, 2), (3, 4), (5, 6);
+drop table if exists t2;
+create table t2(a bigint, b int);
+insert into t2 values (1, 2), (3, 4), (5, 6);
+with recursive c as (select a from t1 union all select a+1 from c where a < 2) select * from c order by a;
+a
+1
+2
+3
+5
+with recursive c as (select a from t1 union all select a+1 from c where a < 200) select * from c;
+recursive level out of range
+with recursive c as (select a from t1 union all select c.a+1 from c, t1 as k1, t1 as k2 where c.a = k1.a and c.a = k2.a) select * from c order by a;
+a
+1
+2
+3
+4
+5
+6
+with recursive c as (select t1.a from t1, t2, t3 where t1.a = t2.a or t1.a = t3.a union all select a+1 from c where a < 6) select count(*) from c;
+count(*)
+60
+with recursive c as (select t1.a from t1, t2, t3 where t1.a = t2.a or t1.a = t3.a union all select c.a+1 from c, t2, t3 where c.a = t2.a and c.a = t3.a and c.a < 6) select count(*) from c;
+count(*)
+30
+with recursive c as (select t1.a from t1 union all select c.a+1 from c, t3 where c.a = t3.a and c.a < 2) select count(*) from c;
+count(*)
+4
+with recursive c as (select a from t1 union all select a+1 from c where a < 3 union all select a+1 from c where a < 4) select count(*) from c;
+count(*)
+14
+with recursive c as (select a from t1 union all select a+1 from c where a < 4) select * from c order by a;
+a
+1
+2
+3
+3
+4
+4
+5
+with recursive c as (select a from t1 union all select a+1 from c where a < 3) select * from c order by a;
+a
+1
+2
+3
+3
+5
+with recursive c as (select t1.a, 0 as level from t1 union all select t1.a, 0 as level from t1 join t2 on t1.a = t2.a where t1.a = 1 union all select c.a, c.level + 1 from c join t3 on c.a = t3.a where c.level < 6) select count(*) from c;
+count(*)
+28
+with recursive c as (select t1.a, 0 as level from t1 union all select t1.a, 0 as level from t1 join t2 on t1.a = t2.a where t1.a = 1 union all select c.a, c.level + 1 from c join t3 on c.a = t3.a where c.level < 6) select count(*) from c;
+count(*)
+28
+with recursive c as (select t1.a, 0 as level from t1 union all select t1.a, 0 as level from t1 join t2 on t1.a = t2.a where t1.a = 1 union all select c.a, c.level + 1 from c join t3 on c.a = t3.a where c.level < 6) select count(*) from c;
+count(*)
+28
+CREATE TABLE Person(ID int, Name VARCHAR(30), Mother INT, Father INT);
+INSERT Person VALUES(1, 'Sue', NULL, NULL),(2, 'Ed', NULL, NULL),(3, 'Emma', 1, 2),(4, 'Jack', 1, 2),(5, 'Jane', NULL, NULL),(6, 'Bonnie', 5, 4),(7, 'Bill', 5, 4);
+WITH recursive Generation (ID) AS (SELECT Mother FROM Person WHERE Name = 'Bonnie' UNION SELECT Father FROM Person WHERE Name = 'Bonnie' UNION ALL SELECT Person.Father FROM Generation, Person WHERE Generation.ID=Person.ID UNION ALL SELECT Person.Mother FROM Generation, Person WHERE Generation.ID=Person.ID) SELECT Person.ID, Person.Name, Person.Mother, Person.Father FROM Generation, Person WHERE Generation.ID = Person.ID order by person.ID;
+id    name    mother    father
+1    Sue    null    null
+2    Ed    null    null
+4    Jack    1    2
+5    Jane    null    null

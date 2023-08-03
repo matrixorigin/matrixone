@@ -116,7 +116,14 @@ type Config struct {
 // NewConfig return Config with default values.
 func NewConfig() *Config {
 	return &Config{
+		HAKeeperClient: logservice.HAKeeperClientConfig{
+			DiscoveryAddress: "",
+			ServiceAddresses: []string{logservice.DefaultLogServiceServiceAddress},
+			AllocateIDBatch:  100,
+			EnableCompress:   false,
+		},
 		Observability: *config.NewObservabilityParameters(),
+		LogService:    logservice.DefaultConfig(),
 	}
 }
 

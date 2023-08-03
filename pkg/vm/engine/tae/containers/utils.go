@@ -610,18 +610,42 @@ func ForeachWindowFixed[T any](
 		} else {
 			v = movec.GetFixedAt[T](vec, 0)
 		}
-		for i := 0; i < length; i++ {
-			if op != nil {
-				if err = op(v, isnull, i+start); err != nil {
-					break
+		if sels.IsEmpty() {
+			for i := 0; i < length; i++ {
+				if op != nil {
+					if err = op(v, isnull, i+start); err != nil {
+						break
+					}
+				}
+				if opAny != nil {
+					if err = opAny(v, isnull, i+start); err != nil {
+						break
+					}
 				}
 			}
-			if opAny != nil {
-				if err = opAny(v, isnull, i+start); err != nil {
+		} else {
+			end := start + length
+			it := sels.GetBitmap().Iterator()
+			for it.HasNext() {
+				idx := uint32(it.Next())
+				if int(idx) < start {
+					continue
+				} else if int(idx) >= end {
 					break
+				}
+				if op != nil {
+					if err = op(v, isnull, int(idx)); err != nil {
+						break
+					}
+				}
+				if opAny != nil {
+					if err = opAny(v, isnull, int(idx)); err != nil {
+						break
+					}
 				}
 			}
 		}
+
 		return
 	}
 	slice := movec.MustFixedCol[T](vec)[start : start+length]

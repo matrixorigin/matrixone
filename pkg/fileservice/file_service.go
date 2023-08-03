@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"hash"
 	"io"
 	"time"
 )
@@ -76,6 +77,15 @@ type IOVector struct {
 	NoCache bool
 	// Preloading indicates whether the I/O is for preloading
 	Preloading bool
+
+	// Hash stores hash sum of written file if both Sum and New is not null
+	// Hash.Sum may be incorrect if Write fails
+	Hash Hash
+}
+
+type Hash struct {
+	Sum *[]byte
+	New func() hash.Hash
 }
 
 type IOEntry struct {
@@ -123,6 +133,9 @@ type IOEntry struct {
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache
 	done bool
+
+	// fromCache indicates which cache filled the entry
+	fromCache IOVectorCache
 }
 
 // DirEntry is a file or dir

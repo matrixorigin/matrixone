@@ -220,12 +220,14 @@ func NewCatalogLogtailRespBuilder(ctx context.Context, scope Scope, ckp string, 
 	switch scope {
 	case ScopeDatabases:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemDBSchema)
+		b.delBatch = makeRespBatchFromSchema(DBDelSchema)
 	case ScopeTables:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemTableSchema)
+		b.delBatch = makeRespBatchFromSchema(TblDelSchema)
 	case ScopeColumns:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema)
+		b.delBatch = makeRespBatchFromSchema(ColumnDelSchema)
 	}
-	b.delBatch = makeRespBatchFromSchema(DelSchema)
 	b.DatabaseFn = b.VisitDB
 	b.TableFn = b.VisitTbl
 
@@ -259,9 +261,9 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		dbNode := node
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
-			catalogEntry2Batch(b.delBatch, entry, dbNode, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
+			catalogEntry2Batch(b.delBatch, entry, dbNode, DBDelSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(entry.GetID()), dbNode.GetEnd())
 		} else {
-			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd())
+			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(entry.GetID()), dbNode.GetEnd())
 		}
 	}
 	return nil
@@ -290,8 +292,9 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 				}
 				// send dropped column del
 				for _, name := range node.BaseNode.Schema.Extra.DroppedAttrs {
-					b.delBatch.GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
+					b.delBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
 					b.delBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.GetEnd(), false)
+					b.delBatch.GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name)), false)
 				}
 			} else {
 				dstBatch = b.delBatch
@@ -303,14 +306,14 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			tableID := entry.GetID()
 			commitTs := node.GetEnd()
 			for _, usercol := range node.BaseNode.Schema.ColDefs {
-				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))), false)
+				rowidVec.Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))), false)
 				commitVec.Append(commitTs, false)
 			}
 		} else {
 			if node.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, node, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), node.GetEnd())
+				catalogEntry2Batch(b.delBatch, entry, node, TblDelSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(entry.GetID()), node.GetEnd())
 			} else {
-				catalogEntry2Batch(b.insBatch, entry, node, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), node.GetEnd())
+				catalogEntry2Batch(b.insBatch, entry, node, catalog.SystemTableSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(entry.GetID()), node.GetEnd())
 			}
 		}
 	}
@@ -470,7 +473,7 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 		if node.HasDropCommitted() {
 			// send segment deletation event
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
-			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(segid2rowid(&e.ID), false)
+			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackSegid2Rowid(&e.ID), false)
 		}
 	}
 	return nil
@@ -539,7 +542,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID, false)
 	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts, false)
-	insBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID), false)
+	insBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(&e.ID), false)
 
 	// if block is deleted, send both Insert and Delete api entry
 	// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-deletion-invalidate-table-data
@@ -548,7 +551,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
 		}
 		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets, false)
-		delBatch.GetVectorByName(catalog.AttrRowID).Append(blockid2rowid(&e.ID), false)
+		delBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(&e.ID), false)
 	}
 
 }
@@ -576,6 +579,9 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.B
 		return
 	}
 	if delBatch != nil && delBatch.Length() > 0 {
+		if len(b.dataDelBatch.Vecs) == 2 {
+			b.dataDelBatch.AddVector(delBatch.Attrs[2], containers.MakeVector(*delBatch.Vecs[2].GetType()))
+		}
 		b.dataDelBatch.Extend(delBatch)
 		// delBatch is freed, don't use anymore
 	}

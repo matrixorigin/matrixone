@@ -97,6 +97,15 @@ func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
+func (w *Ws) Adjust() error {
+	return nil
+}
+
+func (w *Ws) StartStatement()     {}
+func (w *Ws) EndStatement()       {}
+func (w *Ws) IncrSQLCount()       {}
+func (w *Ws) GetSQLCount() uint64 { return 0 }
+
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)
@@ -121,8 +130,7 @@ func TestCompile(t *testing.T) {
 		require.NoError(t, err)
 		// Enable memory check
 		tc.proc.FreeVectors()
-		// XXX I have no idea why.
-		// require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 

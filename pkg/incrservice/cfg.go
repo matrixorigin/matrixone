@@ -15,7 +15,7 @@
 package incrservice
 
 const (
-	defaultCountPerAllocate = 10000
+	defaultCountPerAllocate = 3000000
 )
 
 // Config auto increment config

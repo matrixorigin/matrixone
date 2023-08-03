@@ -105,7 +105,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 		}
 
 		// just an empty batch.
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -146,8 +146,12 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		if bat == nil {
 			return true, nil
 		}
+		if bat.Last() {
+			proc.SetInputBatch(bat)
+			return false, nil
+		}
 		// just an empty batch.
-		if len(bat.Zs) == 0 {
+		if bat.IsEmpty() {
 			bat.Clean(proc.Mp())
 			continue
 		}
@@ -179,9 +183,9 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 					// ensure that the same value will only be inserted once.
 					rows++
 					inserted[j] = 1
-					ctr.bat.Zs = append(ctr.bat.Zs, 1)
 				}
 			}
+			ctr.bat.AddRowCount(int(rows - oldHashGroup))
 
 			newHashGroup := ctr.hashTable.GroupCount()
 			insertCount := int(newHashGroup - oldHashGroup)

@@ -56,7 +56,7 @@ func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
 	return srv.id
 }
 
-func (srv *Server) GetNotifyChByUuid(u uuid.UUID) (*process.Process, bool) {
+func (srv *Server) GetProcByUuid(u uuid.UUID) (*process.Process, bool) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	p, ok := srv.uuidCsChanMap.mp[u]
@@ -66,11 +66,19 @@ func (srv *Server) GetNotifyChByUuid(u uuid.UUID) (*process.Process, bool) {
 	return p, true
 }
 
-func (srv *Server) PutNotifyChIntoUuidMap(u uuid.UUID, p *process.Process) error {
+func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	srv.uuidCsChanMap.mp[u] = p
 	return nil
+}
+
+func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
+	srv.uuidCsChanMap.Lock()
+	defer srv.uuidCsChanMap.Unlock()
+	for i := range uuids {
+		delete(srv.uuidCsChanMap.mp, uuids[i])
+	}
 }
 
 func (srv *Server) PutCnSegment(sid *objectio.Segmentid, segmentType int32) {
@@ -104,7 +112,7 @@ func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid) int32 {
 }
 
 // SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
-func (srv *Server) GenerateSegment() objectio.ObjectName {
+func (srv *Server) GenerateObject() objectio.ObjectName {
 	srv.Lock()
 	defer srv.Unlock()
 	return objectio.BuildObjectName(objectio.NewSegmentid(), 0)

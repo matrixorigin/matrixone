@@ -22,6 +22,7 @@ func init() {
 		"account":                    ACCOUNT,
 		"accounts":                   ACCOUNTS,
 		"add":                        ADD,
+		"modify":                     MODIFY,
 		"action":                     ACTION,
 		"against":                    AGAINST,
 		"all":                        ALL,
@@ -60,7 +61,7 @@ func init() {
 		"cascade":                    CASCADE,
 		"case":                       CASE,
 		"cast":                       CAST,
-		"change":                     UNUSED,
+		"change":                     CHANGE,
 		"char":                       CHAR,
 		"character":                  CHARACTER,
 		"charset":                    CHARSET,
@@ -365,6 +366,7 @@ func init() {
 		"require":                    REQUIRE,
 		"resignal":                   UNUSED,
 		"restrict":                   RESTRICT,
+		"recursive":                  RECURSIVE,
 		"return":                     UNUSED,
 		"revoke":                     REVOKE,
 		"reverse":                    REVERSE,
@@ -581,6 +583,7 @@ func init() {
 		"backend":                    BACKEND,
 		"servers":                    SERVERS,
 		"stage":                      STAGE,
+		"stages":                     STAGES,
 		"credentials":                CREDENTIALS,
 	}
 }

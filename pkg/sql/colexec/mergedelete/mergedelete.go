@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,18 +37,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	ap := arg.(*Argument)
 	bat := proc.Reg.InputBatch
 	if bat == nil {
-		// ToDo:
-		// start to do compaction for cn blocks
-		// there are three strageties:
-		// 1.do compaction at deletion operator
-		// 2.do compaction here
-		// 3.do compaction when read
-		// choose which one depends on next pr
-		ap.DelSource.Delete(proc.Ctx, nil, catalog.BlockMeta_Delete_ID)
 		return process.ExecStop, nil
 	}
 
-	if len(bat.Zs) == 0 {
+	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		return process.ExecNext, nil
 	}
@@ -67,7 +58,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	// If the target table is a partition table, Traverse partition subtables for separate processing
 	if len(ap.PartitionSources) > 0 {
 		partitionIdxs := vector.MustFixedCol[int32](bat.GetVector(3))
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
 			bat := &batch.Batch{}
 			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
@@ -82,7 +73,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		}
 	} else {
 		// If the target table is a general table
-		for i := 0; i < bat.Length(); i++ {
+		for i := 0; i < bat.RowCount(); i++ {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
 			bat := &batch.Batch{}
 			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {

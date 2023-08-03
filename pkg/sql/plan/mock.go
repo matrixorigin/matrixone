@@ -397,6 +397,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 	}
 
+	moSchema["mo_stages"] = &Schema{
+		cols: []col{
+			{"stage_id", types.T_uint64, false, 100, 0},
+			{"stage_name", types.T_varchar, false, 64, 0},
+			{"url", types.T_varchar, false, 50, 0},
+			{"stage_credentials", types.T_varchar, false, 50, 0},
+			{"stage_status", types.T_varchar, false, 50, 0},
+			{"created_time", types.T_timestamp, false, 0, 0},
+			{"comment", types.T_varchar, false, 2048, 0},
+		},
+	}
+
 	//---------------------------------------------constraint test schema---------------------------------------------------------
 	/*
 		create table emp(
@@ -571,6 +583,16 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks:    []int{0},
 		outcnt: 12,
+	}
+
+	constraintTestSchema["t1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 0, 0},
+			{"b", types.T_varchar, false, 1, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
 	}
 
 	objects := make(map[string]*ObjectRef)

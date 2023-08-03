@@ -26,13 +26,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	taeCatalog "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 )
@@ -416,7 +421,7 @@ func genCreateColumnTuple(
 ) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_uniq_name
@@ -646,7 +651,7 @@ func genCreateTableTuple(
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
-	bat.SetZs(1, m)
+	bat.SetRowCount(1)
 	{
 		idx := catalog.MO_TABLES_REL_ID_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // rel_id
@@ -774,4 +779,36 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 		rbat.Vecs = append(rbat.Vecs, pbVector)
 	}
 	return rbat, nil
+}
+
+func mockCNDeleteInS3(fs *objectio.ObjectFS, blk data.Block, schema *taeCatalog.Schema, txn txnif.AsyncTxn, deleteRows []uint32) (location objectio.Location, err error) {
+	pkDef := schema.GetPrimaryKey()
+	view, err := blk.GetColumnDataById(context.Background(), txn, schema, pkDef.Idx)
+	pkVec := containers.MakeVector(pkDef.Type)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType())
+	blkID := &blk.GetMeta().(*taeCatalog.BlockEntry).ID
+	if err != nil {
+		return
+	}
+	for _, row := range deleteRows {
+		pkVal := view.GetData().Get(int(row))
+		pkVec.Append(pkVal, false)
+		rowID := objectio.NewRowid(blkID, row)
+		rowIDVec.Append(*rowID, false)
+	}
+	bat := containers.NewBatch()
+	bat.AddVector(taeCatalog.AttrRowID, rowIDVec)
+	bat.AddVector("pk", pkVec)
+	name := objectio.MockObjectName()
+	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil)
+	if err != nil {
+		return
+	}
+	_, err = writer.WriteBatchWithOutIndex(containers.ToCNBatch(bat))
+	if err != nil {
+		return
+	}
+	blks, _, err := writer.Sync(context.Background())
+	location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
+	return
 }

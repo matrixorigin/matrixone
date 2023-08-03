@@ -55,7 +55,6 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		case reg.Ch <- bat:
 		}
 	}
-
 	return false, nil
 }
 
@@ -90,7 +89,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 	for i, reg := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex == batIndex {
-			if bat != nil && bat.Length() != 0 {
+			if bat != nil && bat.RowCount() != 0 {
 				select {
 				case <-reg.Ctx.Done():
 					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
@@ -102,8 +101,10 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := uint32(ap.ctr.remoteToIdx[r.uuid])
 		if regIndex == batIndex {
-			if bat != nil && bat.Length() != 0 {
+			if bat != nil && bat.RowCount() != 0 {
 				encodeData, errEncode := types.Encode(bat)
+				// in shuffle dispatch, this batch only send to remote CN, we can safely put it back into pool
+				defer proc.PutBatch(bat)
 				if errEncode != nil {
 					return errEncode
 				}

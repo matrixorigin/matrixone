@@ -56,11 +56,17 @@ func ReadByFilter(
 	// merge persisted deletes
 	if !info.DeltaLocation().IsEmpty() {
 		var persistedDeletes *batch.Batch
+		var persistedByCN bool
 		// load from storage
-		if persistedDeletes, err = readBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+		if persistedDeletes, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
 			return
 		}
-		rows := evalDeleteRowsByTimestamp(persistedDeletes, ts)
+		var rows *nulls.Nulls
+		if persistedByCN {
+			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
+		} else {
+			rows = evalDeleteRowsByTimestamp(persistedDeletes, ts)
+		}
 		deleteMask.Merge(rows)
 	}
 
@@ -142,8 +148,7 @@ func BlockRead(
 		return nil, err
 	}
 
-	columnBatch.SetZs(columnBatch.Vecs[0].Length(), mp)
-
+	columnBatch.SetRowCount(columnBatch.Vecs[0].Length())
 	return columnBatch, nil
 }
 
@@ -182,7 +187,7 @@ func BlockCompactionRead(
 		}
 		return nil, err
 	}
-	result.SetZs(result.Vecs[0].Length(), mp)
+	result.SetRowCount(result.Vecs[0].Length())
 	return result, nil
 }
 
@@ -257,13 +262,19 @@ func BlockReadInner(
 	// read deletes from storage specified by delta location
 	if !info.DeltaLocation().IsEmpty() {
 		var deletes *batch.Batch
+		var persistedByCN bool
 		// load from storage
-		if deletes, err = readBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+		if deletes, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
 			return
 		}
 
 		// eval delete rows by timestamp
-		rows := evalDeleteRowsByTimestamp(deletes, ts)
+		var rows *nulls.Nulls
+		if persistedByCN {
+			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
+		} else {
+			rows = evalDeleteRowsByTimestamp(deletes, ts)
+		}
 
 		// merge delete rows
 		deleteMask.Merge(rows)
@@ -271,7 +282,7 @@ func BlockReadInner(
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debugf(
 				"blockread %s read delete %d: base %s filter out %v\n",
-				info.BlockID.String(), deletes.Length(), ts.ToString(), deleteMask.Count())
+				info.BlockID.String(), deletes.RowCount(), ts.ToString(), deleteMask.Count())
 		}
 	}
 
@@ -462,12 +473,34 @@ func readBlockData(
 	return
 }
 
-func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (*batch.Batch, error) {
-	bat, err := LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
+func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, err error) {
+	isPersistedByCN, err = persistedByCN(ctx, deltaloc, fs)
 	if err != nil {
-		return nil, err
+		return
 	}
-	return bat, nil
+	if isPersistedByCN {
+		bat, err = LoadColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
+		if err != nil {
+			return
+		}
+		return
+	} else {
+		bat, err = LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
+		if err != nil {
+			return
+		}
+		return
+	}
+}
+
+func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bool, error) {
+	meta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, fs)
+	if err != nil {
+		return false, err
+	}
+	blkmeta := meta.GetBlockMeta(uint32(deltaloc.ID()))
+	columnCount := blkmeta.GetColumnCount()
+	return columnCount == 2, nil
 }
 
 func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows *nulls.Bitmap) {
@@ -484,6 +517,21 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows *nulls.B
 		if aborts[i] || tss[i].Greater(ts) {
 			continue
 		}
+		row := rowid.GetRowOffset()
+		rows.Add(uint64(row))
+	}
+	return
+}
+
+func evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts types.TS, committs types.TS) (rows *nulls.Bitmap) {
+	if deletes == nil || ts.Less(committs) {
+		return
+	}
+	// record visible delete rows
+	rows = nulls.NewWithSize(0)
+	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
+
+	for _, rowid := range rowids {
 		row := rowid.GetRowOffset()
 		rows.Add(uint64(row))
 	}
@@ -521,17 +569,17 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 }
 
 func RecordReadFilterSelectivity(hit, total int) {
-	pipeline.stats.RecordReadFilterSelectivity(hit, total)
+	pipeline.stats.selectivityStats.RecordReadFilterSelectivity(hit, total)
 }
 
 func RecordBlockSelectivity(hit, total int) {
-	pipeline.stats.RecordBlockSelectivity(hit, total)
+	pipeline.stats.selectivityStats.RecordBlockSelectivity(hit, total)
 }
 
 func RecordColumnSelectivity(hit, total int) {
-	pipeline.stats.RecordColumnSelectivity(hit, total)
+	pipeline.stats.selectivityStats.RecordColumnSelectivity(hit, total)
 }
 
 func ExportSelectivityString() string {
-	return pipeline.stats.ExportString()
+	return pipeline.stats.selectivityStats.ExportString()
 }

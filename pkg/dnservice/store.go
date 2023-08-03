@@ -16,10 +16,9 @@ package dnservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,12 +33,13 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
 
@@ -96,6 +96,7 @@ type store struct {
 	ctlservice          ctlservice.CtlService
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
+	shutdownC           chan struct{}
 
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
@@ -115,6 +116,8 @@ type store struct {
 		serviceHolder  taskservice.TaskServiceHolder
 		storageFactory taskservice.TaskStorageFactory
 	}
+
+	addressMgr address.AddressManager
 }
 
 // NewService create DN Service
@@ -123,6 +126,7 @@ func NewService(
 	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
+	shutdownC chan struct{},
 	opts ...Option) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -146,10 +150,13 @@ func NewService(
 		rt:                  rt,
 		fileService:         fileService,
 		metadataFileService: metadataFS,
+		shutdownC:           shutdownC,
+		addressMgr:          address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.registerServices()
 	s.replicas = &sync.Map{}
 	s.stopper = stopper.NewStopper("dn-store",
 		stopper.WithLogger(s.rt.Logger().RawLogger()))
@@ -200,27 +207,18 @@ func (s *store) Start() error {
 
 func (s *store) Close() error {
 	s.stopper.Stop()
-	var err error
 	s.moCluster.Close()
-	if e := s.ctlservice.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
-	if e := s.hakeeperClient.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
-	if e := s.sender.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
-	if e := s.server.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
-	if e := s.lockTableAllocator.Close(); e != nil {
-		err = multierr.Append(e, err)
-	}
+	err := errors.Join(
+		s.ctlservice.Close(),
+		s.hakeeperClient.Close(),
+		s.sender.Close(),
+		s.server.Close(),
+		s.lockTableAllocator.Close(),
+	)
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
 		if e := r.close(false); e != nil {
-			err = multierr.Append(e, err)
+			err = errors.Join(e, err)
 		}
 		return true
 	})
@@ -228,7 +226,7 @@ func (s *store) Close() error {
 	ts := s.task.serviceHolder
 	s.task.RUnlock()
 	if ts != nil {
-		err = ts.Close()
+		err = errors.Join(err, ts.Close())
 	}
 	// stop I/O pipeline
 	blockio.Stop()
@@ -293,13 +291,7 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 					continue
 				}
 
-				err = r.start(service.NewTxnService(
-					r.rt,
-					shard,
-					storage,
-					s.sender,
-					s.cfg.Txn.ZombieTimeout.Duration,
-					s.lockTableAllocator))
+				err = r.start(service.NewTxnService(shard, storage, s.sender, s.cfg.Txn.ZombieTimeout.Duration, s.lockTableAllocator))
 				if err != nil {
 					r.logger.Fatal("start DNShard failed",
 						zap.Error(err))
@@ -352,7 +344,7 @@ func (s *store) initTxnSender() error {
 
 func (s *store) initTxnServer() error {
 	server, err := rpc.NewTxnServer(
-		s.cfg.ListenAddress,
+		s.txnServiceListenAddr(),
 		s.rt,
 		rpc.WithServerQueueBufferSize(s.cfg.RPC.ServerBufferQueueSize),
 		rpc.WithServerQueueWorkers(s.cfg.RPC.ServerWorkers),
@@ -375,7 +367,7 @@ func (s *store) initClocker() error {
 
 func (s *store) initLockTableAllocator() error {
 	s.lockTableAllocator = lockservice.NewLockTableAllocator(
-		s.cfg.LockService.ListenAddress,
+		s.lockServiceListenAddr(),
 		s.cfg.LockService.KeepBindTimeout.Duration,
 		s.cfg.RPC)
 	return nil

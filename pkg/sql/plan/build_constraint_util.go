@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
@@ -26,13 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 const derivedTableName = "_t"
+const maxRowThenUnusePkFilterExpr = 20
 
 type dmlSelectInfo struct {
 	typ string
@@ -405,7 +407,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return false, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 		checkInsertPkDup = len(slt.Rows) > 1
-		if !checkInsertPkDup {
+		if CNPrimaryCheck && len(slt.Rows) <= maxRowThenUnusePkFilterExpr {
 			if len(tableDef.Pkey.Names) == 1 {
 				for idx, name := range insertColumns {
 					if name == tableDef.Pkey.PkeyColName {
@@ -423,6 +425,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 						pkPosInValues[idx] = pkIdx
 					}
 				}
+			}
+			// one of pk cols is incr col and this col was not in values.
+			// we can not use the values of other cols as filterExpr.
+			if len(tableDef.Pkey.Names) != len(pkPosInValues) {
+				pkPosInValues = make(map[int]int)
 			}
 		}
 
@@ -1005,7 +1012,7 @@ func buildValueScan(
 		projectList[i] = expr
 	}
 
-	bat.SetZs(len(slt.Rows), proc.Mp())
+	bat.SetRowCount(len(slt.Rows))
 	nodeId, _ := uuid.NewUUID()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_VALUE_SCAN,

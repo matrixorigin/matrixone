@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/ctlservice"
@@ -35,10 +36,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -46,17 +49,22 @@ import (
 )
 
 var (
-	defaultListenAddress    = "127.0.0.1:6002"
-	defaultCtlListenAddress = "127.0.0.1:19958"
+	defaultListenAddress             = "127.0.0.1:6002"
+	defaultCtlListenAddress          = "127.0.0.1:19958"
+	defaultQueryServiceListenAddress = "0.0.0.0:19998"
 	// defaultTxnIsolation     = txn.TxnIsolation_SI
 	defaultTxnMode             = txn.TxnMode_Optimistic
 	maxForMaxPreparedStmtCount = 1000000
+
+	// Service ports related.
+	defaultServiceHost = "127.0.0.1"
 )
 
 type Service interface {
 	Start() error
 	Close() error
-
+	// ID returns UUID of the service.
+	ID() string
 	GetTaskRunner() taskservice.TaskRunner
 	GetTaskService() (taskservice.TaskService, bool)
 	WaitSystemInitCompleted(ctx context.Context) error
@@ -88,6 +96,17 @@ type Config struct {
 	ServiceAddress string `toml:"service-address"`
 	// SQLAddress service address for receiving external sql client
 	SQLAddress string `toml:"sql-address"`
+
+	// PortBase is the base port for the service. We reserve reservedPorts for
+	// the service to start internal server inside it.
+	//
+	// TODO(volgariver6): The value of this field is also used to determine the version
+	// of MO. If it is not set, we use the old listen-address/service-address fields, and
+	// if it is set, we use the new policy to distribute the ports to all services.
+	PortBase int `toml:"port-base"`
+	// ServiceHost is the host name/IP for the service address of RPC request. There is
+	// no port value in it.
+	ServiceHost string `toml:"service-host"`
 
 	// FileService file service configuration
 
@@ -195,6 +214,9 @@ type Config struct {
 		EnableLeakCheck int `toml:"enable-leak-check"`
 		// MaxActiveAges a txn max active duration
 		MaxActiveAges toml.Duration `toml:"max-active-ages"`
+		// EnableCheckRCInvalidError this config is used to check and find RC bugs in pessimistic mode.
+		// Will remove it later version.
+		EnableCheckRCInvalidError bool `toml:"enable-check-rc-invalid-error"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
@@ -202,6 +224,9 @@ type Config struct {
 
 	// AutoIncrement auto increment config
 	AutoIncrement incrservice.Config `toml:"auto-increment"`
+
+	// QueryServiceConfig is the config for query service.
+	QueryServiceConfig queryservice.Config `toml:"query-service"`
 
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
@@ -337,13 +362,25 @@ func (c *Config) Validate() error {
 	} else {
 		frontend.MaxPrepareNumberInOneSession = 100000
 	}
+	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
+
+	if c.PortBase != 0 {
+		if c.ServiceHost == "" {
+			c.ServiceHost = defaultServiceHost
+		}
+	}
+
+	// TODO: remove this if rc is stable
+	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
+		c.Txn.EnableCheckRCInvalidError)
 	return nil
 }
 
-func (c *Config) getLockServiceConfig() lockservice.Config {
-	c.LockService.ServiceID = c.UUID
-	c.LockService.RPC = c.RPC
-	return c.LockService
+func (s *service) getLockServiceConfig() lockservice.Config {
+	s.cfg.LockService.ServiceID = s.cfg.UUID
+	s.cfg.LockService.RPC = s.cfg.RPC
+	s.cfg.LockService.ListenAddress = s.lockServiceListenAddr()
+	return s.cfg.LockService
 }
 
 type service struct {
@@ -359,6 +396,7 @@ type service struct {
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
+		queryService queryservice.QueryService,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
@@ -379,6 +417,9 @@ type service struct {
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
 	ctlservice             ctlservice.CtlService
+	sessionMgr             *queryservice.SessionManager
+	// queryService is used to send query request between CN services.
+	queryService queryservice.QueryService
 
 	stopper *stopper.Stopper
 	aicm    *defines.AutoIncrCacheManager
@@ -389,4 +430,6 @@ type service struct {
 		runner         taskservice.TaskRunner
 		storageFactory taskservice.TaskStorageFactory
 	}
+
+	addressMgr address.AddressManager
 }

@@ -66,11 +66,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = End
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.RowCount() == 0 {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
+			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
 				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
@@ -108,7 +108,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			return err
 		}
 	}
-	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	rbat.AddRowCount(bat.RowCount())
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -117,17 +117,18 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
-	count := bat.Length()
+	count := bat.RowCount()
 	if ctr.joinBat == nil {
 		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
 	}
+
+	rowCountIncrease := 0
 	for i := 0; i < count; i++ {
 		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
-			ctr.bat.Length(), ctr.cfs); err != nil {
+			ctr.bat.RowCount(), ctr.cfs); err != nil {
 			rbat.Clean(proc.Mp())
 			return err
 		}
@@ -154,10 +155,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					return err
 				}
 			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i])
+			rowCountIncrease++
 		}
 	}
+	rbat.SetRowCount(rbat.RowCount() + rowCountIncrease)
 	anal.Output(rbat, isLast)
+
 	proc.SetInputBatch(rbat)
 	return nil
 }

@@ -283,33 +283,31 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 
 func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAKeeperClient)) {
 	defer leaktest.AfterTest(t)()
-	cfg1 := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9002",
-		RaftAddress:         "127.0.0.1:9000",
-		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: []string{"127.0.0.1:9011"},
-		DisableWorkers:      true,
-	}
-	cfg2 := Config{
-		UUID:                uuid.New().String(),
-		FS:                  vfs.NewStrictMem(),
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-2",
-		ServiceAddress:      "127.0.0.1:9012",
-		RaftAddress:         "127.0.0.1:9010",
-		GossipAddress:       "127.0.0.1:9011",
-		GossipSeedAddresses: []string{"127.0.0.1:9001"},
-		DisableWorkers:      true,
-	}
-	cfg1.Fill()
+	cfg1 := DefaultConfig()
+	cfg1.UUID = uuid.New().String()
+	cfg1.FS = vfs.NewStrictMem()
+	cfg1.DeploymentID = 1
+	cfg1.RTTMillisecond = 5
+	cfg1.DataDir = "data-1"
+	cfg1.LogServicePort = 9002
+	cfg1.RaftPort = 9000
+	cfg1.GossipPort = 9001
+	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011"}
+	cfg1.DisableWorkers = true
+	cfg2 := DefaultConfig()
+	cfg2.UUID = uuid.New().String()
+	cfg2.FS = vfs.NewStrictMem()
+	cfg2.DeploymentID = 1
+	cfg2.RTTMillisecond = 5
+	cfg2.DataDir = "data-2"
+	cfg2.LogServicePort = 9012
+	cfg2.RaftPort = 9010
+	cfg2.GossipPort = 9011
+	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
+	cfg2.DisableWorkers = true
 	service1, err := NewService(cfg1,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -318,9 +316,9 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	defer func() {
 		assert.NoError(t, service1.Close())
 	}()
-	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -343,7 +341,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 		return &RPCResponse{pool: respPool}
 	}
 	cfg := HAKeeperClientConfig{
-		ServiceAddresses: []string{cfg1.ServiceAddress, cfg2.ServiceAddress},
+		ServiceAddresses: []string{cfg1.LogServiceServiceAddr(), cfg2.LogServiceServiceAddr()},
 	}
 	c := &hakeeperClient{
 		cfg:      cfg,
@@ -352,9 +350,9 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	cc, err := getRPCClient(ctx, cfg1.ServiceAddress, c.respPool, defaultMaxMessageSize, false)
+	cc, err := getRPCClient(ctx, cfg1.LogServiceServiceAddr(), c.respPool, defaultMaxMessageSize, false)
 	require.NoError(t, err)
-	c.addr = cfg1.ServiceAddress
+	c.addr = cfg1.LogServiceServiceAddr()
 	c.client = cc
 	client := &managedHAKeeperClient{cfg: cfg}
 	client.mu.client = c

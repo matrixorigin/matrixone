@@ -32,7 +32,6 @@ show events;
 show plugins;
 show profiles;
 show privileges;
-show processlist;
 show tables;
 show collation;
 show collation like '%';
@@ -117,7 +116,6 @@ show events;
 show plugins;
 show profiles;
 show privileges;
-show processlist;
 show tables;
 show index from test_table;
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
@@ -162,8 +160,8 @@ select sleep(1);
 
 -- RESULT CHECK: part 1
 select sleep(15);
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 99;
-
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 96;
+-- @bvt:issue
 
 -- CASE: part 2
 -- test cloud_user_sql type
@@ -189,7 +187,6 @@ select statement,query_type,sql_source_type from  system.statement_info where ac
 /* cloud_user */ show plugins;
 /* cloud_user */ show profiles;
 /* cloud_user */ show privileges;
-/* cloud_user */ show processlist;
 /* cloud_user */ show tables;
 /* cloud_user */ show collation;
 /* cloud_user */ show collation like '%';
@@ -248,7 +245,7 @@ select statement,query_type,sql_source_type from  system.statement_info where ac
 -- @session:id=1&user=bvt_query_type:admin:accountadmin&password=123456
 select sleep(15);
 -- @session
-/* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
+/* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 67;
 
 -- CASE: part 3
 -- test cloud_no_user_sql type
@@ -274,7 +271,6 @@ select sleep(15);
 /* cloud_nonuser */ show plugins;
 /* cloud_nonuser */ show profiles;
 /* cloud_nonuser */ show privileges;
-/* cloud_nonuser */ show processlist;
 /* cloud_nonuser */ show tables;
 /* cloud_nonuser */ show collation;
 /* cloud_nonuser */ show collation like '%';
@@ -332,7 +328,7 @@ select sleep(15);
 -- @session:id=1&user=bvt_query_type:admin:accountadmin&password=123456
 select sleep(15);
 -- @session
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 67;
 
 -- CASE: last
 begin;

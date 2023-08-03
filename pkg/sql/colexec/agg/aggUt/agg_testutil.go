@@ -84,7 +84,7 @@ func RunBaseTest(t *testing.T, c *testCase) {
 		vec, l := GetVector(c.inputTyp, c.input, c.inputNsp)
 		if l > 0 && vec != nil {
 			for i := 0; i < l; i++ {
-				agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
+				agg0.Fill(0, int64(i), []*vector.Vector{vec})
 			}
 		}
 
@@ -112,7 +112,7 @@ func RunBaseTest(t *testing.T, c *testCase) {
 		vec, l := GetVector(c.inputTyp, c.input, c.inputNsp)
 		if l > 0 && vec != nil {
 			for i := 0; i < l; i++ {
-				agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
+				agg0.Fill(0, int64(i), []*vector.Vector{vec})
 			}
 		}
 
@@ -122,7 +122,7 @@ func RunBaseTest(t *testing.T, c *testCase) {
 		vec2, l2 := GetVector(c.inputTyp, c.mergeInput, c.inputNsp)
 		if l2 > 0 && vec2 != nil {
 			for i := 0; i < l2; i++ {
-				agg1.Fill(0, int64(i), 1, []*vector.Vector{vec2})
+				agg1.Fill(0, int64(i), []*vector.Vector{vec2})
 			}
 		}
 
@@ -163,7 +163,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		mid := l / 2
 		if mid > 0 && vec != nil {
 			for i := 0; i < mid; i++ {
-				agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
+				agg0.Fill(0, int64(i), []*vector.Vector{vec})
 			}
 		}
 
@@ -178,7 +178,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		// Fill() after marshal and unmarshal
 		if l > 0 && vec != nil {
 			for i := mid; i < l; i++ {
-				agg1.Fill(0, int64(i), 1, []*vector.Vector{vec})
+				agg1.Fill(0, int64(i), []*vector.Vector{vec})
 			}
 		}
 
@@ -200,7 +200,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		vec, l := GetVector(c.inputTyp, c.input, c.inputNsp)
 		if l != 0 && vec != nil {
 			for i := 0; i < l; i++ {
-				agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
+				agg0.Fill(0, int64(i), []*vector.Vector{vec})
 			}
 		}
 
@@ -210,7 +210,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		vec2, l2 := GetVector(c.inputTyp, c.mergeInput, c.mergeNsp)
 		if l2 != 0 && vec2 != nil {
 			for i := 0; i < l2; i++ {
-				agg1.Fill(0, int64(i), 1, []*vector.Vector{vec2})
+				agg1.Fill(0, int64(i), []*vector.Vector{vec2})
 			}
 		}
 

@@ -19,6 +19,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const shuffleBatchSize = 8192
+
+const (
+	input = iota
+	outPut
+)
+
 type Argument struct {
 	ctr           *container
 	ShuffleColIdx int32
@@ -29,10 +36,17 @@ type Argument struct {
 }
 
 type container struct {
+	state        int
 	sels         [][]int32
 	shuffledBats []*batch.Batch
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-
+	for i := range arg.ctr.shuffledBats {
+		if arg.ctr.shuffledBats[i] != nil {
+			arg.ctr.shuffledBats[i].Clean(proc.Mp())
+			arg.ctr.shuffledBats[i] = nil
+		}
+	}
+	arg.ctr.sels = nil
 }

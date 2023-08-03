@@ -70,11 +70,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = End
 				continue
 			}
-			if bat.Length() == 0 {
+			if bat.Last() {
+				proc.SetInputBatch(bat)
+				return process.ExecNext, nil
+			}
+			if bat.IsEmpty() {
 				bat.Clean(proc.Mp())
 				continue
 			}
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
+
+			if ctr.bat == nil || ctr.bat.IsEmpty() {
 				err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast)
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
@@ -107,11 +112,10 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
-	count := bat.Length()
+	count := bat.RowCount()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -124,8 +128,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 					return err
 				}
 			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
+		rbat.SetRowCount(rbat.RowCount() + n)
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
@@ -136,11 +140,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.Mp().GetSels()
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
-	if (ctr.bat.Length() == 1 && ctr.hasNull) || ctr.bat.Length() == 0 {
+	if (ctr.bat.RowCount() == 1 && ctr.hasNull) || ctr.bat.RowCount() == 0 {
 		anal.Output(rbat, isLast)
 		proc.SetInputBatch(rbat)
 		return nil
@@ -157,7 +160,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
 	}
 
-	count := bat.Length()
+	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
 	eligible := make([]int32, 0, hashmap.UnitLimit)
@@ -168,13 +171,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
 		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+
+		rowCountIncrease := 0
 		for k := 0; k < n; k++ {
 			if ctr.inBuckets[k] == 0 || zvals[k] == 0 {
 				continue
 			}
 			if vals[k] == 0 {
 				eligible = append(eligible, int32(i+k))
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				rowCountIncrease++
 				continue
 			}
 			if ap.Cond != nil {
@@ -206,9 +211,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					continue
 				}
 				eligible = append(eligible, int32(i+k))
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+				rowCountIncrease++
 			}
 		}
+		rbat.SetRowCount(rbat.RowCount() + rowCountIncrease)
+
 		for j, pos := range ap.Result {
 			if err := rbat.Vecs[j].Union(bat.Vecs[pos], eligible, proc.Mp()); err != nil {
 				rbat.Clean(proc.Mp())

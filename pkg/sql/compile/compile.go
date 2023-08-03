@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -53,7 +54,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -103,8 +106,8 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.proc = proc
 	c.stmt = stmt
 	c.addr = addr
-	c.nodeRegs = make(map[int32]*process.WaitRegister)
-	c.stepRegs = make(map[int32][]int32)
+	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
+	c.stepRegs = make(map[int32][][2]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
@@ -141,6 +144,7 @@ func (c *Compile) clear() {
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
+	c.s3CounterSet.FileService.ResetS3()
 }
 
 // helper function to judge if init temporary engine is needed
@@ -312,6 +316,8 @@ func (c *Compile) run(s *Scope) error {
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
+	case Replace:
+		return s.replace(c)
 	}
 	return nil
 }
@@ -330,9 +336,12 @@ func (c *Compile) Run(_ uint64) error {
 		pool.Put(c)
 	}()
 	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 	if err := c.runOnce(); err != nil {
+		c.fatalLog(0, err)
+
 		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 			c.proc.TxnOperator.Txn().IsRCIsolation() {
@@ -362,16 +371,21 @@ func (c *Compile) Run(_ uint64) error {
 				c.isInternal,
 				c.cnLabel)
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+				c.fatalLog(1, err)
 				return err
 			}
 			if err := cc.runOnce(); err != nil {
+				c.fatalLog(1, err)
 				return err
 			}
 			// set affectedRows to old compile to return
 			c.setAffectedRows(cc.GetAffectedRows())
-			return nil
+			return c.proc.TxnOperator.GetWorkspace().Adjust()
 		}
 		return err
+	}
+	if c.proc.TxnOperator != nil {
+		return c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
 	return nil
 }
@@ -379,7 +393,6 @@ func (c *Compile) Run(_ uint64) error {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
-
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -406,6 +419,13 @@ func (c *Compile) runOnce() error {
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
+		switch qry.Query.StmtType {
+		case plan.Query_REPLACE:
+			return []*Scope{{
+				Magic: Replace,
+				Plan:  pn,
+			}}, nil
+		}
 		scopes, err := c.compileQuery(ctx, qry.Query)
 		if err != nil {
 			return nil, err
@@ -636,7 +656,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		if err != nil {
 			return nil, err
 		}
-		scope, err := c.compileApQuery(qry, scopes)
+		scope, err := c.compileApQuery(qry, scopes, qry.Steps[i])
 		if err != nil {
 			return nil, err
 		}
@@ -658,26 +678,31 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 		}
 	}
 
-	if n.NodeType == plan.Node_SINK_SCAN {
-		var wr *process.WaitRegister
-		if c.anal.qry.LoadTag {
-			wr = &process.WaitRegister{
-				Ctx: c.ctx,
-				Ch:  make(chan *batch.Batch, ncpu),
-			}
-		} else {
-			wr = &process.WaitRegister{
-				Ctx: c.ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
+	if n.NodeType == plan.Node_SINK_SCAN || n.NodeType == plan.Node_RECURSIVE_SCAN || n.NodeType == plan.Node_RECURSIVE_CTE {
+		for _, s := range n.SourceStep {
+			var wr *process.WaitRegister
+			if c.anal.qry.LoadTag {
+				wr = &process.WaitRegister{
+					Ctx: c.ctx,
+					Ch:  make(chan *batch.Batch, ncpu),
+				}
+			} else {
+				wr = &process.WaitRegister{
+					Ctx: c.ctx,
+					Ch:  make(chan *batch.Batch, 1),
+				}
 
+			}
+			c.appendStepRegs(s, nodeId, wr)
 		}
-		c.appendStepRegs(n.SourceStep, nodeId, wr)
 	}
 	return nil
 }
 
-func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
+func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Scope, error) {
+	if qry.Nodes[step].NodeType == plan.Node_SINK {
+		return ss[0], nil
+	}
 	var rs *Scope
 	switch qry.StmtType {
 	case plan.Query_DELETE:
@@ -708,7 +733,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 		return bat, nil
 	}
 	// select * from (values row(1,1), row(2,2), row(3,3)) a;
@@ -743,7 +768,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 					}
 				}
 			}
-			if err := evalRowsetData(ctx, proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
+			if err := evalRowsetData(proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
 				bat.Clean(proc.Mp())
 				return nil, err
 			}
@@ -800,7 +825,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		if n.Stats.Shuffle {
+		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 			ss = c.compileShuffleGroup(n, ss, ns)
 			return c.compileSort(n, ss), nil
 		} else {
@@ -902,6 +927,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if nodeStats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) &&
 			!arg.DeleteCtx.CanTruncate {
+			logutil.Infof("delete of '%s' write s3\n", c.sql)
 			rs := c.newDeleteMergeScope(arg, ss)
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeDelete,
@@ -1002,6 +1028,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
 
 		if toWriteS3 {
+			logutil.Infof("insert of '%s' write s3\n", c.sql)
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
 				insertArg, err := constructInsert(n, c.e, c.proc)
 				if err != nil {
@@ -1138,21 +1165,66 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss)))), nil
 	case plan.Node_SINK_SCAN:
+		receivers := make([]*process.WaitRegister, len(n.SourceStep))
+		for i, step := range n.SourceStep {
+			receivers[i] = c.getNodeReg(step, curNodeIdx)
+			if receivers[i] == nil {
+				return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
+			}
+		}
 		rs := &Scope{
 			Magic:        Merge,
 			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: ncpu},
 			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
-			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
+			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{SinkScan: true}}},
 		}
-		receiver, ok := c.getNodeReg(curNodeIdx)
-		if !ok {
-			return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
+		for _, r := range receivers {
+			r.Ctx = rs.Proc.Ctx
 		}
-		receiver.Ctx = rs.Proc.Ctx
-		rs.Proc.Reg.MergeReceivers[0] = receiver
+		rs.Proc.Reg.MergeReceivers = receivers
+		return []*Scope{rs}, nil
+	case plan.Node_RECURSIVE_SCAN:
+		receivers := make([]*process.WaitRegister, len(n.SourceStep))
+		for i, step := range n.SourceStep {
+			receivers[i] = c.getNodeReg(step, curNodeIdx)
+			if receivers[i] == nil {
+				return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
+			}
+		}
+		rs := &Scope{
+			Magic:        Merge,
+			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: 1},
+			Proc:         process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes()),
+			Instructions: []vm.Instruction{{Op: vm.MergeRecursive, Arg: &mergerecursive.Argument{}}},
+		}
+
+		for _, r := range receivers {
+			r.Ctx = rs.Proc.Ctx
+		}
+		rs.Proc.Reg.MergeReceivers = receivers
+		return []*Scope{rs}, nil
+	case plan.Node_RECURSIVE_CTE:
+		receivers := make([]*process.WaitRegister, len(n.SourceStep))
+		for i, step := range n.SourceStep {
+			receivers[i] = c.getNodeReg(step, curNodeIdx)
+			if receivers[i] == nil {
+				return nil, moerr.NewInternalError(c.ctx, "no data sender for sinkScan node")
+			}
+		}
+		rs := &Scope{
+			Magic:        Merge,
+			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: ncpu},
+			Proc:         process.NewWithAnalyze(c.proc, c.ctx, len(receivers), c.anal.Nodes()),
+			Instructions: []vm.Instruction{{Op: vm.MergeCTE, Arg: &mergecte.Argument{}}},
+		}
+
+		for _, r := range receivers {
+			r.Ctx = rs.Proc.Ctx
+		}
+		rs.Proc.Reg.MergeReceivers = receivers
 		return []*Scope{rs}, nil
 	case plan.Node_SINK:
-		receivers := c.getStepRegs(step, ns)
+		receivers := c.getStepRegs(step)
 		if len(receivers) == 0 {
 			return nil, moerr.NewInternalError(c.ctx, "no data receiver for sink node")
 		}
@@ -1172,35 +1244,21 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	}
 }
 
-func (c *Compile) appendStepRegs(step int32, nodeId int32, reg *process.WaitRegister) {
-	if _, ok := c.nodeRegs[nodeId]; !ok {
-		c.nodeRegs[nodeId] = reg
-	}
-	if _, ok := c.stepRegs[step]; !ok {
-		c.stepRegs[step] = []int32{nodeId}
-	} else {
-		c.stepRegs[step] = append(c.stepRegs[step], nodeId)
-	}
+func (c *Compile) appendStepRegs(step, nodeId int32, reg *process.WaitRegister) {
+	c.nodeRegs[[2]int32{step, nodeId}] = reg
+	c.stepRegs[step] = append(c.stepRegs[step], [2]int32{step, nodeId})
 }
 
-func (c *Compile) getNodeReg(nodeId int32) (*process.WaitRegister, bool) {
-	if channels, ok := c.nodeRegs[nodeId]; !ok {
-		return nil, false
-	} else {
-		return channels, true
-	}
+func (c *Compile) getNodeReg(step, nodeId int32) *process.WaitRegister {
+	return c.nodeRegs[[2]int32{step, nodeId}]
 }
 
-func (c *Compile) getStepRegs(step int32, ns []*plan.Node) []*process.WaitRegister {
-	if _, ok := c.stepRegs[step]; !ok {
-		return nil
-	} else {
-		var wrs []*process.WaitRegister
-		for _, nodeId := range c.stepRegs[step] {
-			wrs = append(wrs, c.nodeRegs[nodeId])
-		}
-		return wrs
+func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
+	wrs := make([]*process.WaitRegister, len(c.stepRegs[step]))
+	for i, sn := range c.stepRegs[step] {
+		wrs[i] = c.nodeRegs[sn]
 	}
+	return wrs
 }
 
 func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
@@ -1215,7 +1273,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	bat := batch.NewWithSize(1)
 	{
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
-		bat.InitZsOne(1)
+		bat.SetRowCount(1)
 	}
 	ds.DataSource = &Source{Bat: bat}
 	return ds
@@ -1661,6 +1719,108 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 }
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	if node.Stats.HashmapStats.Shuffle {
+		if len(c.cnList) == 1 {
+			return c.compileShuffleJoin(ctx, node, left, right, ss, children)
+		} else {
+			// only support shuffle join on standalone for now. will fix this in the future
+			node.Stats.HashmapStats.Shuffle = false
+		}
+	}
+	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
+}
+
+func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	var rs []*Scope
+	isEq := plan2.IsEquiJoin2(node.OnList)
+	if !isEq {
+		panic("shuffle join only support equal join for now!")
+	}
+
+	rightTyps := make([]types.Type, len(right.ProjectList))
+	for i, expr := range right.ProjectList {
+		rightTyps[i] = dupType(expr.Typ)
+	}
+
+	leftTyps := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		leftTyps[i] = dupType(expr.Typ)
+	}
+
+	rs = c.newShuffleJoinScopeList(ss, children, node)
+	switch node.JoinType {
+	case plan.Node_INNER:
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.Join,
+				Idx: c.anal.curr,
+				Arg: constructJoin(node, rightTyps, c.proc),
+			})
+		}
+
+	case plan.Node_ANTI:
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightAnti,
+					Idx: c.anal.curr,
+					Arg: constructRightAnti(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Anti,
+					Idx: c.anal.curr,
+					Arg: constructAnti(node, rightTyps, c.proc),
+				})
+			}
+		}
+
+	case plan.Node_SEMI:
+		if node.BuildOnLeft {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.RightSemi,
+					Idx: c.anal.curr,
+					Arg: constructRightSemi(node, rightTyps, 0, 0, c.proc),
+				})
+			}
+		} else {
+			for i := range rs {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Semi,
+					Idx: c.anal.curr,
+					Arg: constructSemi(node, rightTyps, c.proc),
+				})
+			}
+		}
+
+	case plan.Node_LEFT:
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.Left,
+				Idx: c.anal.curr,
+				Arg: constructLeft(node, rightTyps, c.proc),
+			})
+		}
+
+	case plan.Node_RIGHT:
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.Right,
+				Idx: c.anal.curr,
+				Arg: constructRight(node, leftTyps, rightTyps, 0, 0, c.proc),
+			})
+		}
+
+	default:
+		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
+	}
+	return rs
+}
+
+func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
 
@@ -2037,7 +2197,7 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Shuffle,
-				Arg: constructShuffleArg(children, n),
+				Arg: constructShuffleGroupArg(children, n),
 			})
 
 			ss[i].appendInstruction(vm.Instruction{
@@ -2053,51 +2213,123 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
-	dop := plan2.GetShuffleDop()
-	parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
 
-	c.constructShuffleAndDispatch(ss, children, n)
-
-	// saving the last operator of all children to make sure the connector setting in
-	// the right place
-	lastOperator := make([]vm.Instruction, 0, len(children))
-	for i := range children {
-		ilen := len(children[i].Instructions) - 1
-		lastOperator = append(lastOperator, children[i].Instructions[ilen])
-		children[i].Instructions = children[i].Instructions[:ilen]
+	if len(c.cnList) > 1 {
+		n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
 	}
 
-	for i := range children {
-		children[i].appendInstruction(vm.Instruction{
-			Op:      vm.Group,
+	switch n.Stats.HashmapStats.ShuffleMethod {
+	case plan.ShuffleMethod_Reuse:
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.Group,
+				Idx:     c.anal.curr,
+				IsFirst: c.anal.isFirst,
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			})
+		}
+		ss = c.compileProjection(n, c.compileRestrict(n, ss))
+		return ss
+
+	case plan.ShuffleMethod_Reshuffle:
+
+		dop := plan2.GetShuffleDop()
+		parent, children := c.newScopeListForShuffleGroup(1, dop)
+		// saving the last operator of all children to make sure the connector setting in
+		// the right place
+		lastOperator := make([]vm.Instruction, 0, len(children))
+		for i := range children {
+			ilen := len(children[i].Instructions) - 1
+			lastOperator = append(lastOperator, children[i].Instructions[ilen])
+			children[i].Instructions = children[i].Instructions[:ilen]
+		}
+
+		for i := range children {
+			children[i].appendInstruction(vm.Instruction{
+				Op:      vm.Group,
+				Idx:     c.anal.curr,
+				IsFirst: currentIsFirst,
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			})
+		}
+		children = c.compileProjection(n, c.compileRestrict(n, children))
+		// recovery the children's last operator
+		for i := range children {
+			children[i].appendInstruction(lastOperator[i])
+		}
+
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.Shuffle,
+				Idx:     c.anal.curr,
+				IsFirst: currentIsFirst,
+				Arg:     constructShuffleGroupArg(children, n),
+			})
+		}
+
+		mergeScopes := c.newMergeScope(ss)
+		mergeScopes.appendInstruction(vm.Instruction{
+			Op:      vm.Dispatch,
 			Idx:     c.anal.curr,
 			IsFirst: currentIsFirst,
-			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			Arg:     constructDispatch(0, children, c.addr, n),
 		})
-	}
 
-	children = c.compileProjection(n, c.compileRestrict(n, children))
-
-	// recovery the children's last operator
-	for i := range children {
-		children[i].appendInstruction(lastOperator[i])
-	}
-
-	for i := range ss {
-		appended := false
-		for j := range children {
-			if children[j].NodeInfo.Addr == ss[i].NodeInfo.Addr {
-				children[j].PreScopes = append(children[j].PreScopes, ss[i])
-				appended = true
+		appendIdx := 0
+		for i := range children {
+			if isSameCN(mergeScopes.NodeInfo.Addr, children[i].NodeInfo.Addr) {
+				appendIdx = i
 				break
 			}
 		}
-		if !appended {
-			children[0].PreScopes = append(children[0].PreScopes, ss[i])
-		}
-	}
+		children[appendIdx].PreScopes = append(children[appendIdx].PreScopes, mergeScopes)
 
-	return []*Scope{c.newMergeScope(parent)}
+		return parent
+	default:
+		dop := plan2.GetShuffleDop()
+		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
+		c.constructShuffleAndDispatch(ss, children, n)
+
+		// saving the last operator of all children to make sure the connector setting in
+		// the right place
+		lastOperator := make([]vm.Instruction, 0, len(children))
+		for i := range children {
+			ilen := len(children[i].Instructions) - 1
+			lastOperator = append(lastOperator, children[i].Instructions[ilen])
+			children[i].Instructions = children[i].Instructions[:ilen]
+		}
+
+		for i := range children {
+			children[i].appendInstruction(vm.Instruction{
+				Op:      vm.Group,
+				Idx:     c.anal.curr,
+				IsFirst: currentIsFirst,
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+			})
+		}
+		children = c.compileProjection(n, c.compileRestrict(n, children))
+		// recovery the children's last operator
+		for i := range children {
+			children[i].appendInstruction(lastOperator[i])
+		}
+
+		for i := range ss {
+			appended := false
+			for j := range children {
+				if isSameCN(children[j].NodeInfo.Addr, ss[i].NodeInfo.Addr) {
+					children[j].PreScopes = append(children[j].PreScopes, ss[i])
+					appended = true
+					break
+				}
+			}
+			if !appended {
+				children[0].PreScopes = append(children[0].PreScopes, ss[i])
+			}
+		}
+
+		return parent
+		//return []*Scope{c.newMergeScope(parent)}
+	}
 }
 
 //func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
@@ -2394,9 +2626,6 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	c.anal.isFirst = false
 	mergeChildren := c.newMergeScope(children)
 
-	// a hack here to stop shuffle join, delete this in the future
-	n.Stats.Shuffle = false
-
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: constructDispatch(1, rs, c.addr, n),
@@ -2405,6 +2634,64 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 
 	return rs
+}
+
+func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []*Scope {
+	joinScopes := make([]*Scope, 0, len(c.cnList))
+	idx := 0
+	cnt := 0
+	for _, n := range c.cnList {
+		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
+		ss := make([]*Scope, dop)
+		for i := range ss {
+			ss[i] = new(Scope)
+			ss[i].Magic = Remote
+			ss[i].IsJoin = true
+			ss[i].NodeInfo.Addr = n.Addr
+			ss[i].NodeInfo.Mcpu = 1
+			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+				rr.Ch = make(chan *batch.Batch, 16)
+			}
+		}
+		if isSameCN(n.Addr, c.addr) {
+			idx = cnt
+		}
+		joinScopes = append(joinScopes, ss...)
+		cnt += dop
+	}
+
+	currentFirstFlag := c.anal.isFirst
+	for i := range left {
+		left[i].appendInstruction(vm.Instruction{
+			Op:  vm.Shuffle,
+			Arg: constructShuffleJoinArg(joinScopes, n, true),
+		})
+	}
+	leftMerge := c.newMergeScope(left)
+	leftMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(0, joinScopes, c.addr, n),
+	})
+	leftMerge.IsEnd = true
+
+	c.anal.isFirst = currentFirstFlag
+	for i := range right {
+		right[i].appendInstruction(vm.Instruction{
+			Op:  vm.Shuffle,
+			Arg: constructShuffleJoinArg(joinScopes, n, false),
+		})
+	}
+	rightMerge := c.newMergeScope(right)
+	rightMerge.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: constructDispatch(1, joinScopes, c.addr, n),
+	})
+	rightMerge.IsEnd = true
+
+	joinScopes[idx].PreScopes = append(joinScopes[idx].PreScopes, leftMerge, rightMerge)
+
+	return joinScopes
 }
 
 func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
@@ -2753,7 +3040,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
-	if n.Stats.Shuffle && n.Stats.ShuffleType == plan.ShuffleType_Range {
+	if n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
 			return nil, err
@@ -2809,8 +3096,8 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 			}
 		}
 		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
-		zm := blkMeta.MustGetColumn(uint16(n.Stats.ShuffleColIdx)).ZoneMap()
-		index := plan2.GetRangeShuffleIndexForZM(n.Stats.ShuffleColMin, n.Stats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
+		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	return nil
@@ -2904,6 +3191,9 @@ func (s *Scope) affectedRows() uint64 {
 }
 
 func (c *Compile) runSql(sql string) error {
+	if sql == "" {
+		return nil
+	}
 	res, err := c.runSqlWithResult(sql)
 	if err != nil {
 		return err
@@ -2919,12 +3209,16 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	}
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
 		WithTxn(c.proc.TxnOperator).
-		WithDatabase(c.db)
+		WithDatabase(c.db).
+		WithTimeZone(c.proc.SessionInfo.TimeZone)
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
-func evalRowsetData(ctx context.Context, proc *process.Process,
+func evalRowsetData(proc *process.Process,
 	exprs []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor) error {
 	var bats []*batch.Batch
 
@@ -2960,12 +3254,18 @@ func evalRowsetData(ctx context.Context, proc *process.Process,
 }
 
 func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
-	ss2 := make([]*Scope, 0, len(ss))
+	// see errors.Join()
+	n := 0
 	for _, s := range ss {
-		if s.IsEnd {
-			continue
+		if !s.IsEnd {
+			n++
 		}
-		ss2 = append(ss2, s)
+	}
+	ss2 := make([]*Scope, 0, n)
+	for _, s := range ss {
+		if !s.IsEnd {
+			ss2 = append(ss2, s)
+		}
 	}
 	insert := &vm.Instruction{
 		Op:  vm.Insert,
@@ -2975,4 +3275,31 @@ func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope 
 		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
 	}
 	return c.newMergeScope(ss2)
+}
+
+func (c *Compile) fatalLog(retry int, err error) {
+	if err == nil {
+		return
+	}
+	v, ok := moruntime.ProcessLevelRuntime().
+		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+	if !ok || !v.(bool) {
+		return
+	}
+	fatal := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+		moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) ||
+		moerr.IsMoErrCode(err, moerr.ER_DUP_ENTRY) ||
+		moerr.IsMoErrCode(err, moerr.ER_DUP_ENTRY_WITH_KEY_NAME)
+	if !fatal {
+		return
+	}
+	if retry == 0 && moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+		return
+	}
+
+	logutil.Fatalf("BUG(RC): txn %s retry %d, error %+v\n",
+		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
+		retry,
+		err.Error())
 }

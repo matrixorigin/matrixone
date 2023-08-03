@@ -25,19 +25,17 @@ import (
 
 func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	addr := []string{"localhost:9000"}
-	cfg := Config{
-		UUID:                 uuid.New().String(),
-		RTTMillisecond:       10,
-		GossipSeedAddresses:  []string{defaultGossipSeedAddress},
-		DeploymentID:         1,
-		FS:                   fs,
-		ServiceListenAddress: addr[0],
-		ServiceAddress:       addr[0],
-		DisableWorkers:       true,
-	}
-	cfg.Fill()
+	cfg := DefaultConfig()
+	cfg.UUID = uuid.New().String()
+	cfg.RTTMillisecond = 10
+	cfg.GossipSeedAddresses = []string{DefaultGossipServiceAddress}
+	cfg.DeploymentID = 1
+	cfg.FS = fs
+	cfg.LogServicePort = 9000
+	cfg.DisableWorkers = true
 	service, err := NewService(cfg,
 		newFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

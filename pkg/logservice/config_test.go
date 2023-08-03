@@ -17,26 +17,20 @@ package logservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 )
 
 func getTestConfig() Config {
-	c := Config{
-		UUID:                 "uuid",
-		DeploymentID:         100,
-		DataDir:              "/mydata/dir",
-		ServiceAddress:       "localhost:9000",
-		ServiceListenAddress: "localhost:9000",
-		RaftAddress:          "localhost:9001",
-		RaftListenAddress:    "localhost:9001",
-		GossipAddress:        "localhost:9002",
-		GossipListenAddress:  "localhost:9002",
-		GossipSeedAddresses:  []string{"localhost:9002"},
-	}
+	c := DefaultConfig()
+	c.UUID = "uuid"
+	c.DeploymentID = 100
+	c.DataDir = "/mydata/dir"
+	c.LogServicePort = 9000
+	c.RaftPort = 9001
+	c.GossipPort = 9002
+	c.GossipSeedAddresses = []string{"localhost:9002"}
 	c.Fill()
 	return c
 }
@@ -113,16 +107,19 @@ func TestConfigCanBeValidated(t *testing.T) {
 
 	c2 := c
 	c2.ServiceAddress = ""
+	c2.LogServicePort = 0
 	err = c2.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c3 := c
 	c3.RaftAddress = ""
+	c3.RaftPort = 0
 	err = c2.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c4 := c
 	c4.GossipAddress = ""
+	c4.GossipPort = 0
 	err = c4.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
@@ -167,42 +164,6 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 	c4.BootstrapConfig.NumOfLogShardReplicas = 2
 	err = c4.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
-}
-
-func TestFillConfig(t *testing.T) {
-	c := Config{}
-	c.Fill()
-
-	assert.Equal(t, uint64(0), c.DeploymentID)
-	assert.Equal(t, defaultDataDir, c.DataDir)
-	assert.Equal(t, defaultSnapshotExportDir, c.SnapshotExportDir)
-	assert.Equal(t, defaultMaxExportedSnapshot, c.MaxExportedSnapshot)
-	assert.Equal(t, defaultServiceAddress, c.ServiceAddress)
-	assert.Equal(t, defaultServiceAddress, c.ServiceListenAddress)
-	assert.Equal(t, defaultRaftAddress, c.RaftAddress)
-	assert.Equal(t, defaultRaftAddress, c.RaftListenAddress)
-	assert.Equal(t, defaultGossipAddress, c.GossipAddress)
-	assert.Equal(t, defaultGossipAddress, c.GossipListenAddress)
-	assert.Equal(t, 1, len(c.GossipSeedAddresses))
-	assert.Equal(t, hakeeper.DefaultTickPerSecond, c.HAKeeperConfig.TickPerSecond)
-	assert.Equal(t, hakeeper.DefaultLogStoreTimeout, c.HAKeeperConfig.LogStoreTimeout.Duration)
-	assert.Equal(t, hakeeper.DefaultDNStoreTimeout, c.HAKeeperConfig.DNStoreTimeout.Duration)
-}
-
-func TestListenAddressCanBeFilled(t *testing.T) {
-	cfg := Config{
-		DeploymentID:        1,
-		RTTMillisecond:      5,
-		DataDir:             "data-1",
-		ServiceAddress:      "127.0.0.1:9002",
-		RaftAddress:         "127.0.0.1:9000",
-		GossipAddress:       "127.0.0.1:9001",
-		GossipSeedAddresses: []string{"127.0.0.1:9011"},
-	}
-	cfg.Fill()
-	assert.Equal(t, cfg.ServiceAddress, cfg.ServiceListenAddress)
-	assert.Equal(t, cfg.RaftAddress, cfg.RaftListenAddress)
-	assert.Equal(t, cfg.GossipAddress, cfg.GossipListenAddress)
 }
 
 func TestClientConfigValidate(t *testing.T) {
@@ -273,14 +234,4 @@ func TestHAKeeperClientConfigValidate(t *testing.T) {
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 		}
 	}
-}
-
-func TestGossipAddressV2IsUsed(t *testing.T) {
-	cfg := Config{
-		GossipAddress:   "127.0.0.1:9001",
-		GossipAddressV2: "localhost:9002",
-	}
-	cfg.Fill()
-	assert.Equal(t, cfg.GossipAddress, cfg.GossipAddressV2)
-	assert.Equal(t, cfg.GossipAddress, cfg.GossipListenAddress)
 }

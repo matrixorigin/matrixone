@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"golang.org/x/exp/slices"
 )
 
 var CNPrimaryCheck = false
@@ -124,29 +125,20 @@ func buildInsertPlans(
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
 
-	pkPos, _ := getPkPos(tableDef, true)
-	if pkPos == -1 && len(tableDef.Fkeys) == 0 && !haveUniqueKey(tableDef) {
-		lastNodeId = appendInsertNode(ctx, builder, bindCtx, objRef, tableDef, lastNodeId, true)
-		builder.appendStep(lastNodeId)
-		return nil
-	} else {
-		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-		sourceStep := builder.appendStep(lastNodeId)
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	sourceStep := builder.appendStep(lastNodeId)
 
-		// make insert plans
-		insertBindCtx := NewBindContext(builder, nil)
-		err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr)
-		return err
-	}
+	// make insert plans
+	insertBindCtx := NewBindContext(builder, nil)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr)
+	return err
 }
 
 // buildUpdatePlans  build update plan.
-func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, lastNodeId int32) error {
+func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx) error {
 	var err error
 	// sink_scan -> project -> [agg] -> [filter] -> sink
-	if updatePlanCtx.sourceStep != -1 {
-		lastNodeId = appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
-	}
+	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
 	lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
 	if err != nil {
 		return err
@@ -156,7 +148,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	updatePlanCtx.sourceStep = nextSourceStep
 
 	// build delete plans
-	err = buildDeletePlans(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
+	err = buildDeletePlans(ctx, builder, bindCtx, updatePlanCtx)
 	if err != nil {
 		return err
 	}
@@ -210,23 +202,16 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	//append preinsert node
 	lastNodeId = appendPreInsertNode(builder, bindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, lastNodeId, true)
 
-	pkPos, _ := getPkPos(updatePlanCtx.tableDef, true)
-	if pkPos == -1 && len(updatePlanCtx.tableDef.Fkeys) == 0 && !haveUniqueKey(updatePlanCtx.tableDef) {
-		lastNodeId = appendInsertNode(ctx, builder, bindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, lastNodeId, false)
-		builder.appendStep(lastNodeId)
-		return nil
-	} else {
-		//append sink node
-		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-		sourceStep := builder.appendStep(lastNodeId)
+	//append sink node
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	sourceStep := builder.appendStep(lastNodeId)
 
-		// build insert plan.
-		insertBindCtx := NewBindContext(builder, nil)
-		err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-			sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs)
+	// build insert plan.
+	insertBindCtx := NewBindContext(builder, nil)
+	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
+		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs)
 
-		return err
-	}
+	return err
 }
 
 func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
@@ -253,7 +238,7 @@ func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
 [o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*] -> sink ...(like delete)   // delete stmt: if have refChild table with cascade
 [o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
 */
-func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, lastNodeId int32) error {
+func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
 	if sinkOrUnionNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
 		sinkOrUnionNode := builder.qry.Nodes[sinkOrUnionNodeId]
 		if sinkOrUnionNode.NodeType == plan.Node_SINK {
@@ -274,8 +259,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
 			endStep := builder.appendStep(newSinkNodeId)
 			for i, n := range builder.qry.Nodes {
-				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
-					n.SourceStep = endStep
+				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
+					n.SourceStep[0] = endStep
 				}
 			}
 			builder.deleteNode[delCtx.tableDef.TblId] = unionNodeId
@@ -287,9 +272,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		return nil
 	} else {
-		if delCtx.sourceStep != -1 {
-			builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
-		}
+		builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
 	}
 	isUpdate := delCtx.updateColLength > 0
 
@@ -312,8 +295,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 				lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 
-				lastNodeId, err := appendDeleteUniqueTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef,
-					indexdef, typMap, posMap, lastNodeId, delCtx.updateColLength)
+				lastNodeId, err := appendDeleteUniqueTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId)
 				if err != nil {
 					return err
 				}
@@ -390,9 +372,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 
 	// delete origin table
-	if delCtx.sourceStep != -1 {
-		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-	}
+	lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 	partExprIdx := -1
 	if delCtx.tableDef.Partition != nil {
 		partExprIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
@@ -462,7 +442,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 			for _, fk := range childTableDef.Fkeys {
 				if fk.ForeignTbl == delCtx.tableDef.TblId {
-					// update stmt: update the columns do not contains ref key, skip
+					// update stmt: update the columns do not contain ref key, skip
 					if isUpdate {
 						updateRefColumn := false
 						for _, colId := range fk.ForeignCols {
@@ -499,7 +479,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									Expr: &plan.Expr_Col{
 										Col: &plan.ColRef{
 											RelPos: 0,
-											ColPos: int32(nameIdxMap[originColumnName]),
+											ColPos: nameIdxMap[originColumnName],
 											Name:   originColumnName,
 										},
 									},
@@ -523,7 +503,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									Expr: &plan.Expr_Col{
 										Col: &plan.ColRef{
 											RelPos: 1,
-											ColPos: int32(childPosMap[childColumnName]),
+											ColPos: childPosMap[childColumnName],
 											Name:   childColumnName,
 										},
 									},
@@ -545,7 +525,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					}
 
 					for idx, col := range childTableDef.Cols {
-						if col.Name != catalog.Row_ID {
+						if col.Name != catalog.Row_ID && col.Name != catalog.CPrimaryKeyColName {
 							if pos, ok := updateChildColPosMap[col.Name]; ok {
 								insertColPos = append(insertColPos, pos)
 							} else {
@@ -642,22 +622,23 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							Children:    []int32{lastNodeId},
 							ProjectList: projectProjection,
 						}, bindCtx)
-						// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-						// newSourceStep := builder.appendStep(lastNodeId)
+						lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+						newSourceStep := builder.appendStep(lastNodeId)
+
 						upPlanCtx := getDmlPlanCtx()
 						upPlanCtx.objRef = childObjRef
 						upPlanCtx.tableDef = childTableDef
 						upPlanCtx.updateColLength = len(rightConds)
 						upPlanCtx.isMulti = false
 						upPlanCtx.rowIdPos = childRowIdPos
-						upPlanCtx.sourceStep = -1
+						upPlanCtx.sourceStep = newSourceStep
 						upPlanCtx.beginIdx = 0
 						upPlanCtx.updateColPosMap = updateChildColPosMap
 						upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 
-						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, lastNodeId)
+						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
 						putDmlPlanCtx(upPlanCtx)
 						if err != nil {
 							return err
@@ -683,8 +664,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								OnList:      joinConds,
 								ProjectList: joinProjection,
 							}, bindCtx)
-							// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-							// newSourceStep := builder.appendStep(lastNodeId)
+							lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+							newSourceStep := builder.appendStep(lastNodeId)
 
 							upPlanCtx := getDmlPlanCtx()
 							upPlanCtx.objRef = childObjRef
@@ -692,14 +673,14 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							upPlanCtx.updateColLength = len(rightConds)
 							upPlanCtx.isMulti = false
 							upPlanCtx.rowIdPos = childRowIdPos
-							upPlanCtx.sourceStep = -1
+							upPlanCtx.sourceStep = newSourceStep
 							upPlanCtx.beginIdx = 0
 							upPlanCtx.updateColPosMap = updateChildColPosMap
 							upPlanCtx.insertColPos = insertColPos
 							upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 							upPlanCtx.isFkRecursionCall = true
 
-							err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, lastNodeId)
+							err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
 							putDmlPlanCtx(upPlanCtx)
 							if err != nil {
 								return err
@@ -729,7 +710,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							upPlanCtx.beginIdx = 0
 							upPlanCtx.allDelTableIDs = allDelTableIDs
 
-							err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx, lastNodeId)
+							err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
 							putDmlPlanCtx(upPlanCtx)
 							if err != nil {
 								return err
@@ -1249,7 +1230,7 @@ func makeInsertPlan(
 			}
 
 			if !isUpdate && !builder.qry.LoadTag { // insert stmt but not load
-				if !checkInsertPkDup && pkFilterExprs != nil {
+				if len(pkFilterExprs) > 0 {
 					scanTableDef := DeepCopyTableDef(tableDef)
 					// scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
 					pkNameMap := make(map[string]int)
@@ -1280,7 +1261,7 @@ func makeInsertPlan(
 							Typ: pkTyp,
 							Expr: &plan.Expr_Col{
 								Col: &ColRef{
-									ColPos: int32(len(newCols) - 1),
+									ColPos: int32(len(scanTableDef.Cols) - 1),
 									Name:   tableDef.Pkey.PkeyColName,
 								},
 							},
@@ -1501,6 +1482,32 @@ func getProjectionByLastNode(builder *QueryBuilder, lastNodeId int32) []*Expr {
 	return projection
 }
 
+func getProjectionByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32) []*Expr {
+	lastNode := builder.qry.Nodes[lastNodeId]
+	projLength := len(lastNode.ProjectList)
+	if projLength == 0 {
+		return getProjectionByLastNodeWithTag(builder, lastNode.Children[0], tag)
+	}
+	projection := make([]*Expr, len(lastNode.ProjectList))
+	for i, expr := range lastNode.ProjectList {
+		name := ""
+		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		projection[i] = &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: lastNode.BindingTags[0],
+					ColPos: int32(i),
+					Name:   name,
+				},
+			},
+		}
+	}
+	return projection
+}
+
 func haveUniqueKey(tableDef *TableDef) bool {
 	for _, indexdef := range tableDef.Indexes {
 		if indexdef.Unique {
@@ -1560,10 +1567,52 @@ func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep 
 	sinkScanProject := getProjectionByLastNode(builder, lastNodeId)
 	sinkScanNode := &Node{
 		NodeType:    plan.Node_SINK_SCAN,
-		SourceStep:  sourceStep,
+		SourceStep:  []int32{sourceStep},
 		ProjectList: sinkScanProject,
 	}
 	lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
+	return lastNodeId
+}
+
+func appendSinkScanNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, sourceStep, tag int32) int32 {
+	lastNodeId := builder.qry.Steps[sourceStep]
+	// lastNode := builder.qry.Nodes[lastNodeId]
+	sinkScanProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	sinkScanNode := &Node{
+		NodeType:    plan.Node_SINK_SCAN,
+		SourceStep:  []int32{sourceStep},
+		ProjectList: sinkScanProject,
+		BindingTags: []int32{tag},
+	}
+	lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
+	return lastNodeId
+}
+
+func appendRecursiveScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep, tag int32) int32 {
+	lastNodeId := builder.qry.Steps[sourceStep]
+	// lastNode := builder.qry.Nodes[lastNodeId]
+	recursiveScanProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	recursiveScanNode := &Node{
+		NodeType:    plan.Node_RECURSIVE_SCAN,
+		SourceStep:  []int32{sourceStep},
+		ProjectList: recursiveScanProject,
+		BindingTags: []int32{tag},
+	}
+	lastNodeId = builder.appendNode(recursiveScanNode, bindCtx)
+	return lastNodeId
+}
+
+func appendCTEScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep, tag int32) int32 {
+	lastNodeId := builder.qry.Steps[sourceStep]
+	// lastNode := builder.qry.Nodes[lastNodeId]
+	recursiveScanProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	recursiveScanNode := &Node{
+		NodeType:    plan.Node_RECURSIVE_CTE,
+		SourceStep:  []int32{sourceStep},
+		ProjectList: recursiveScanProject,
+		BindingTags: []int32{tag},
+	}
+	lastNodeId = builder.appendNode(recursiveScanNode, bindCtx)
 	return lastNodeId
 }
 
@@ -1573,6 +1622,18 @@ func appendSinkNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int3
 		NodeType:    plan.Node_SINK,
 		Children:    []int32{lastNodeId},
 		ProjectList: sinkProject,
+	}
+	lastNodeId = builder.appendNode(sinkNode, bindCtx)
+	return lastNodeId
+}
+
+func appendSinkNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, lastNodeId, tag int32) int32 {
+	sinkProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	sinkNode := &Node{
+		NodeType:    plan.Node_SINK,
+		Children:    []int32{lastNodeId},
+		ProjectList: sinkProject,
+		BindingTags: []int32{tag},
 	}
 	lastNodeId = builder.appendNode(sinkNode, bindCtx)
 	return lastNodeId
@@ -2028,7 +2089,6 @@ func appendDeleteUniqueTablePlan(
 	typMap map[string]*plan.Type,
 	posMap map[string]int,
 	baseNodeId int32,
-	updateColLength int,
 ) (int32, error) {
 	lastNodeId := baseNodeId
 	var err error
@@ -2334,65 +2394,6 @@ func makePreUpdateDeletePlan(
 // 	}
 // }
 
-func appendInsertNode(
-	ctx CompilerContext,
-	builder *QueryBuilder,
-	bindCtx *BindContext,
-	objRef *ObjectRef,
-	tableDef *TableDef,
-	lastNodeId int32,
-	addAffectedRows bool) int32 {
-
-	// Get table partition information
-	paritionTableIds, paritionTableNames := getPartTableIdsAndNames(ctx, objRef, tableDef)
-	partitionIdx := -1
-
-	// append project node
-	projectProjection := getProjectionByLastNode(builder, lastNodeId)
-	if len(projectProjection) > len(tableDef.Cols) || tableDef.Partition != nil {
-		if len(projectProjection) > len(tableDef.Cols) {
-			projectProjection = projectProjection[:len(tableDef.Cols)]
-		}
-		partitionIdx = len(tableDef.Cols)
-		if tableDef.Partition != nil {
-			partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
-			projectProjection = append(projectProjection, partitionExpr)
-		}
-
-		projectNode := &Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{lastNodeId},
-			ProjectList: projectProjection,
-		}
-		lastNodeId = builder.appendNode(projectNode, bindCtx)
-	}
-
-	// append insert node
-	insertProjection := getProjectionByLastNode(builder, lastNodeId)
-	// in this case. insert columns in front of batch
-	if len(insertProjection) > len(tableDef.Cols) {
-		insertProjection = insertProjection[:len(tableDef.Cols)]
-	}
-
-	insertNode := &Node{
-		NodeType: plan.Node_INSERT,
-		Children: []int32{lastNodeId},
-		ObjRef:   objRef,
-		InsertCtx: &plan.InsertCtx{
-			Ref:                 objRef,
-			AddAffectedRows:     addAffectedRows,
-			IsClusterTable:      tableDef.TableType == catalog.SystemClusterRel,
-			TableDef:            tableDef,
-			PartitionTableIds:   paritionTableIds,
-			PartitionTableNames: paritionTableNames,
-			PartitionIdx:        int32(partitionIdx),
-		},
-		ProjectList: insertProjection,
-	}
-	lastNodeId = builder.appendNode(insertNode, bindCtx)
-	return lastNodeId
-}
-
 func appendLockNode(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
@@ -2436,4 +2437,113 @@ func appendLockNode(
 	}
 	lastNodeId = builder.appendNode(lockNode, bindCtx)
 	return lastNodeId, true
+}
+
+type sinkMeta struct {
+	step  int
+	scans []*sinkScanMeta
+}
+
+type sinkScanMeta struct {
+	step           int
+	nodeId         int32
+	sinkNodeId     int32
+	preNodeId      int32
+	preNodeIsUnion bool //if preNode is Union, one sinkScan to one sink is fine
+}
+
+func reduceSinkSinkScanNodes(qry *Query) {
+	if len(qry.Steps) == 1 {
+		return
+	}
+	stepMaps := make(map[int]int32)
+	sinks := make(map[int32]*sinkMeta)
+	for i, nodeId := range qry.Steps {
+		stepMaps[i] = nodeId
+		collectSinkAndSinkScanMeta(qry, sinks, i, nodeId, -1)
+	}
+
+	// merge one sink to one sinkScan
+	pointToNodeMap := make(map[int32][]int32)
+	for sinkNodeId, meta := range sinks {
+		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion {
+			// one sink to one sinkScan
+			sinkNode := qry.Nodes[sinkNodeId]
+			sinkScanPreNode := qry.Nodes[meta.scans[0].preNodeId]
+			sinkScanPreNode.Children = sinkNode.Children
+			delete(stepMaps, meta.step)
+		} else {
+			for _, scanMeta := range meta.scans {
+				if _, ok := pointToNodeMap[sinkNodeId]; !ok {
+					pointToNodeMap[sinkNodeId] = []int32{scanMeta.nodeId}
+				} else {
+					pointToNodeMap[sinkNodeId] = append(pointToNodeMap[sinkNodeId], scanMeta.nodeId)
+				}
+			}
+		}
+	}
+
+	newStepLength := len(stepMaps)
+	if len(qry.Steps) > newStepLength {
+		// reset steps & some sinkScan's sourceStep
+		newSteps := make([]int32, 0, newStepLength)
+		keys := make([]int, 0, newStepLength)
+		for key := range stepMaps {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		for _, key := range keys {
+			nodeId := stepMaps[key]
+			newStepIdx := len(newSteps)
+			newSteps = append(newSteps, nodeId)
+			if sinkScanNodeIds, ok := pointToNodeMap[nodeId]; ok {
+				for _, sinkScanNodeId := range sinkScanNodeIds {
+					qry.Nodes[sinkScanNodeId].SourceStep = []int32{int32(newStepIdx)}
+				}
+			}
+		}
+		qry.Steps = newSteps
+	}
+}
+
+func collectSinkAndSinkScanMeta(
+	qry *Query,
+	sinks map[int32]*sinkMeta,
+	oldStep int,
+	nodeId int32,
+	preNodeId int32) {
+	node := qry.Nodes[nodeId]
+
+	if node.NodeType == plan.Node_SINK {
+		if _, ok := sinks[nodeId]; !ok {
+			sinks[nodeId] = &sinkMeta{
+				step:  oldStep,
+				scans: make([]*sinkScanMeta, 0, len(qry.Steps)),
+			}
+		} else {
+			sinks[nodeId].step = oldStep
+		}
+	} else if node.NodeType == plan.Node_SINK_SCAN {
+		sinkNodeId := qry.Steps[node.SourceStep[0]]
+		if _, ok := sinks[sinkNodeId]; !ok {
+			sinks[sinkNodeId] = &sinkMeta{
+				step:  -1,
+				scans: make([]*sinkScanMeta, 0, len(qry.Steps)),
+			}
+		}
+
+		meta := &sinkScanMeta{
+			step:           oldStep,
+			nodeId:         nodeId,
+			sinkNodeId:     sinkNodeId,
+			preNodeId:      preNodeId,
+			preNodeIsUnion: qry.Nodes[preNodeId].NodeType == plan.Node_UNION,
+		}
+		sinks[sinkNodeId].scans = append(sinks[sinkNodeId].scans, meta)
+	}
+
+	for _, childId := range node.Children {
+		collectSinkAndSinkScanMeta(qry, sinks, oldStep, childId, nodeId)
+	}
+
 }

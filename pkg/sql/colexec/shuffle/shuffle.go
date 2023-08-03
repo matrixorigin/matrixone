@@ -38,21 +38,18 @@ func Prepare(proc *process.Process, arg any) error {
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
+
+	if ap.ctr.state == outPut {
+		return sendOneBatch(ap, proc, false), nil
+	}
+
 	bat := proc.InputBatch()
 	if bat == nil {
-		for i := range ap.ctr.shuffledBats {
-			if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > 0 {
-				proc.SetInputBatch(ap.ctr.shuffledBats[i])
-				ap.ctr.shuffledBats[i] = nil
-				return process.ExecHasMore, nil
-			}
-		}
-		return process.ExecStop, nil
+		return sendOneBatch(ap, proc, true), nil
 	}
-	if bat.Length() == 0 {
+	if bat.RowCount() == 0 {
 		bat.Clean(proc.Mp())
-		sendOneBatch(ap, proc)
-		return process.ExecNext, nil
+		return sendOneBatch(ap, proc, false), nil
 	}
 	if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
 		return hashShuffle(bat, ap, proc)
@@ -67,7 +64,7 @@ func (arg *Argument) initShuffle() {
 	if arg.ctr.sels == nil {
 		arg.ctr.sels = make([][]int32, arg.AliveRegCnt)
 		for i := 0; i < int(arg.AliveRegCnt); i++ {
-			arg.ctr.sels[i] = make([]int32, 8192)
+			arg.ctr.sels[i] = make([]int32, shuffleBatchSize/arg.AliveRegCnt*2)
 		}
 		arg.ctr.shuffledBats = make([]*batch.Batch, arg.AliveRegCnt)
 	}
@@ -133,16 +130,23 @@ func getShuffledSelsByHash(ap *Argument, bat *batch.Batch) [][]int32 {
 	return sels
 }
 
-func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, regIndex int) {
+func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, regIndex int) error {
 	lenVecs := len(bat.Vecs)
 	shuffledBats := ap.ctr.shuffledBats
 
 	shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
 	shuffledBats[regIndex].ShuffleIDX = regIndex
-	shuffledBats[regIndex].Zs = proc.Mp().GetSels()
 	for j := range shuffledBats[regIndex].Vecs {
-		shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
+		v := proc.GetVector(*bat.Vecs[j].GetType())
+		if v.Capacity() < shuffleBatchSize {
+			err := v.PreExtend(shuffleBatchSize, proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+		shuffledBats[regIndex].Vecs[j] = v
 	}
+	return nil
 }
 
 func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process) error {
@@ -157,7 +161,10 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 		if lenSels > 0 {
 			b := shuffledBats[regIndex]
 			if b == nil {
-				initShuffledBats(ap, bat, proc, regIndex)
+				err := initShuffledBats(ap, bat, proc, regIndex)
+				if err != nil {
+					return err
+				}
 				b = shuffledBats[regIndex]
 			}
 			for vecIndex := range b.Vecs {
@@ -167,35 +174,39 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 					return err
 				}
 			}
-			for i := 0; i < lenSels; i++ {
-				b.Zs = append(b.Zs, bat.Zs[sels[regIndex][i]])
-			}
+			b.AddRowCount(lenSels)
 		}
 	}
 
 	return nil
 }
 
-func findBatchToSend(ap *Argument) int {
-	maxSize := 0
-	maxIndex := -1
+func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) process.ExecStatus {
+	threshHold := shuffleBatchSize * 3 / 4
+	if isEnding {
+		threshHold = 0
+	}
+	var findOneBatch bool
 	for i := range ap.ctr.shuffledBats {
-		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].Length() > maxSize {
-			maxSize = ap.ctr.shuffledBats[i].Length()
-			maxIndex = i
+		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].RowCount() > threshHold {
+			if !findOneBatch {
+				findOneBatch = true
+				proc.SetInputBatch(ap.ctr.shuffledBats[i])
+				ap.ctr.shuffledBats[i] = nil
+			} else {
+				ap.ctr.state = outPut
+				return process.ExecHasMore
+			}
 		}
 	}
-	return maxIndex
-}
-
-func sendOneBatch(ap *Argument, proc *process.Process) {
-	regIndex := findBatchToSend(ap)
-	if regIndex >= 0 {
-		proc.SetInputBatch(ap.ctr.shuffledBats[regIndex])
-		ap.ctr.shuffledBats[regIndex] = nil
-	} else {
+	if !findOneBatch {
 		proc.SetInputBatch(batch.EmptyBatch)
 	}
+	ap.ctr.state = input
+	if isEnding {
+		return process.ExecStop
+	}
+	return process.ExecNext
 }
 
 func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (process.ExecStatus, error) {
@@ -203,8 +214,7 @@ func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (process
 	if err != nil {
 		return process.ExecNext, err
 	}
-	sendOneBatch(ap, proc)
-	return process.ExecNext, nil
+	return sendOneBatch(ap, proc, false), nil
 }
 
 func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
@@ -319,7 +329,10 @@ func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, proc *process.Proces
 		if lenSels > 0 {
 			b := shuffledBats[regIndex]
 			if b == nil {
-				initShuffledBats(ap, bat, proc, regIndex)
+				err := initShuffledBats(ap, bat, proc, regIndex)
+				if err != nil {
+					return err
+				}
 				b = shuffledBats[regIndex]
 			}
 			for vecIndex := range b.Vecs {
@@ -329,9 +342,7 @@ func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, proc *process.Proces
 					return err
 				}
 			}
-			for i := 0; i < lenSels; i++ {
-				b.Zs = append(b.Zs, bat.Zs[sels[regIndex][i]])
-			}
+			b.AddRowCount(lenSels)
 		}
 	}
 
@@ -353,6 +364,5 @@ func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (proces
 	if err != nil {
 		return process.ExecNext, err
 	}
-	sendOneBatch(ap, proc)
-	return process.ExecNext, nil
+	return sendOneBatch(ap, proc, false), nil
 }

@@ -16,9 +16,10 @@ package disttae
 
 import (
 	"context"
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"strconv"
 	"strings"
+
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -125,6 +126,8 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	rel := db.txn.getCachedTable(ctx, genTableKey(ctx, name, db.databaseId),
 		db.txn.meta.SnapshotTS)
 	if rel != nil {
+		rel.Lock()
+		defer rel.Unlock()
 		rel.proc = p
 		return rel, nil
 	}
@@ -180,6 +183,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		rowid:         item.Rowid,
 		rowids:        item.Rowids,
 		proc:          p,
+		lastTS:        txn.meta.SnapshotTS,
 	}
 	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
