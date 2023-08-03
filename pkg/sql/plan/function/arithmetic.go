@@ -48,6 +48,7 @@ func minusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
 	case types.T_date, types.T_datetime:
+	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -63,6 +64,7 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
+	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -76,6 +78,7 @@ func divOperatorSupports(typ1, typ2 types.Type) bool {
 	switch typ1.Oid {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -306,6 +309,86 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, int64](parameters, result, proc, length, func(v1, v2 types.Datetime) int64 {
 			return v1.DatetimeMinusWithSecond(v2)
 		})
+
+	case types.T_array_int8:
+		return arrayArith[int8](parameters, result, proc, length, func(v1, v2 []int8, scale1, scale2 int32) ([]int8, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int8, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] - v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_int16:
+		return arrayArith[int16](parameters, result, proc, length, func(v1, v2 []int16, scale1, scale2 int32) ([]int16, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int16, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] - v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_int32:
+		return arrayArith[int32](parameters, result, proc, length, func(v1, v2 []int32, scale1, scale2 int32) ([]int32, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int32, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] - v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_int64:
+		return arrayArith[int64](parameters, result, proc, length, func(v1, v2 []int64, scale1, scale2 int32) ([]int64, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int64, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] - v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_float32:
+		return arrayArith[float32](parameters, result, proc, length, func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]float32, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] - v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_float64:
+		return arrayArith[float64](parameters, result, proc, length, func(v1, v2 []float64, scale1, scale2 int32) ([]float64, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]float64, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] - v2[i]
+			}
+
+			return r, nil
+		})
+
 	}
 	panic("unreached code")
 }
@@ -363,6 +446,85 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			r, _, err := v1.Mul(v2, scale1, scale2)
 			return r, err
 		})
+
+	case types.T_array_int8:
+		return arrayArith[int8](parameters, result, proc, length, func(v1, v2 []int8, scale1, scale2 int32) ([]int8, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int8, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] * v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_int16:
+		return arrayArith[int16](parameters, result, proc, length, func(v1, v2 []int16, scale1, scale2 int32) ([]int16, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int16, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] * v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_int32:
+		return arrayArith[int32](parameters, result, proc, length, func(v1, v2 []int32, scale1, scale2 int32) ([]int32, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int32, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] * v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_int64:
+		return arrayArith[int64](parameters, result, proc, length, func(v1, v2 []int64, scale1, scale2 int32) ([]int64, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int64, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] * v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_float32:
+		return arrayArith[float32](parameters, result, proc, length, func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]float32, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] * v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_float64:
+		return arrayArith[float64](parameters, result, proc, length, func(v1, v2 []float64, scale1, scale2 int32) ([]float64, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]float64, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] * v2[i]
+			}
+
+			return r, nil
+		})
 	}
 	panic("unreached code")
 }
@@ -387,6 +549,34 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			r, _, err := v1.Div(v2, scale1, scale2)
 			return r, err
+		})
+	//TODO: Check if Arrays should also support float32 and float64
+	// My understanding: https://stackoverflow.com/a/34504552/1609570
+	case types.T_array_float32:
+		return arrayArith[float32](parameters, result, proc, length, func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]float32, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] / v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_float64:
+		return arrayArith[float64](parameters, result, proc, length, func(v1, v2 []float64, scale1, scale2 int32) ([]float64, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]float64, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] / v2[i]
+			}
+
+			return r, nil
 		})
 	}
 	panic("unreached code")
