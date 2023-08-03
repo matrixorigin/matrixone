@@ -823,7 +823,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
 			ss = c.compileShuffleGroup(n, ss, ns)
-			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+			return c.compileSort(n, ss), nil
 		} else {
 			ss = c.compileMergeGroup(n, ss, ns)
 			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
@@ -2225,6 +2225,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
+		ss = c.compileProjection(n, c.compileRestrict(n, ss))
 		return ss
 
 	case plan.ShuffleMethod_Reshuffle:
@@ -2248,6 +2249,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
+		children = c.compileProjection(n, c.compileRestrict(n, children))
 		// recovery the children's last operator
 		for i := range children {
 			children[i].appendInstruction(lastOperator[i])
@@ -2302,7 +2304,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
 			})
 		}
-
+		children = c.compileProjection(n, c.compileRestrict(n, children))
 		// recovery the children's last operator
 		for i := range children {
 			children[i].appendInstruction(lastOperator[i])
