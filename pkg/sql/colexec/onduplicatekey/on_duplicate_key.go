@@ -173,13 +173,13 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					return err
 				}
 			}
-			newBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
+			tmpBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 			if err != nil {
 				return err
 			}
 			// update the oldConflictIdx of insertBatch by newBatch
 			for j := 0; j < insertColCount; j++ {
-				fromVec := newBatch.Vecs[j]
+				fromVec := tmpBatch.Vecs[j]
 				toVec := insertBatch.Vecs[j]
 				err := toVec.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
 				if err != nil {
@@ -192,19 +192,19 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					return err
 				}
 			}
-			newBatch.Clean(proc.GetMPool())
+			tmpBatch.Clean(proc.GetMPool())
 		} else {
 			// row id is null: means no uniqueness conflict found in origin rows
 			if len(oldRowIdVec) == 0 || originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
 				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 				checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
-				newBatch.Clean(proc.GetMPool())
+
 			} else {
-				newBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
+				tmpBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 				if err != nil {
 					return err
 				}
-				conflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, insertColCount)
+				conflictIdx, conflictMsg, err := checkConflict(proc, tmpBatch, checkConflictBatch, checkExpr, uniqueCols, insertColCount)
 				if err != nil {
 					return err
 				}
@@ -212,12 +212,13 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					return moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
 				} else {
 					// append batch to insertBatch
-					insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
-					checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
+					insertBatch.Append(proc.Ctx, proc.Mp(), tmpBatch)
+					checkConflictBatch.Append(proc.Ctx, proc.Mp(), tmpBatch)
 				}
-				newBatch.Clean(proc.GetMPool())
+				tmpBatch.Clean(proc.GetMPool())
 			}
 		}
+		newBatch.Clean(proc.GetMPool())
 	}
 
 	return nil
