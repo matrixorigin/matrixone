@@ -43,7 +43,7 @@ jobs:
         uses: guguducken/milestone-add-action@check_mill_exist
         with:
           action-token: ${{ secrets.TOKEN_ACTION }}
-          milestone: "v0.8.0"
+          milestone: "1.0.0"
 
   check-bvt-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'
@@ -116,16 +116,6 @@ jobs:
           github-token: ${{ secrets.TOKEN_ACTION }}
           labeled: kind/bug,kind/docs,kind/enhancement,kind/feature,kind/questions,kind/performance,kind/refactoring,kind/subtask
           label-operator: OR
-
-  Rerun-Actions:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'issue_comment' && github.event.action == 'created'
-    steps:
-      - uses: guguducken/workflow-rerun-action@v0.0.3
-        with:
-          action-token: ${{ secrets.TOKEN_ACTION }}
-          user: matrix-meow
-          workflow-this: Command to Rerun Workflows
 
   nightly-check:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
