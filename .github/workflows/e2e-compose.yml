@@ -103,13 +103,13 @@ jobs:
 
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |
-          echo "\n"  >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo ""  >> ./etc/launch-tae-compose/config/cn-0.toml
           echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-0.toml
           echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/cn-0.toml
-          echo "\n"  >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo ""  >> ./etc/launch-tae-compose/config/cn-1.toml
           echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-1.toml
           echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/cn-1.toml
-          echo "\n"  >> ./etc/launch-tae-compose/config/dn.toml
+          echo ""  >> ./etc/launch-tae-compose/config/dn.toml
           echo '[dn.txn]' >> ./etc/launch-tae-compose/config/dn.toml
           echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/dn.toml    
           cat ./etc/launch-tae-compose/config/cn-0.toml

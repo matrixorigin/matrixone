@@ -204,10 +204,10 @@ jobs:
       - name: echo config
         run: |
           cd $GITHUB_WORKSPACE/head
-          echo "\n"  >> ./etc/launch/cn.toml
+          echo ""  >> ./etc/launch/cn.toml
           echo '[cn.txn]' >> ./etc/launch/cn.toml
           echo 'mode = "Pessimistic"' >> ./etc/launch/cn.toml
-          echo "\n"  >> ./etc/launch/dn.toml
+          echo ""  >> ./etc/launch/dn.toml
           echo '[dn.txn]' >> ./etc/launch/dn.toml
           echo 'mode = "Pessimistic"' >> ./etc/launch/dn.toml
           cat ./etc/launch/cn.toml
