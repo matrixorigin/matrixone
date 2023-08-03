@@ -549,7 +549,6 @@ func (data *CNCheckpointData) ReadFromData(
 		for _, block := range table.BlockLocation {
 			var bat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
-			logutil.Infof("block.location is %v", block.location.String())
 			reader, err = blockio.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), block.location)
 			bat, err = LoadCNSubBlkColumnsByMetaWithId(ctx, schema.types, schema.attrs, uint16(idx), block.location.ID(), reader, m)
 			if err != nil {
@@ -1237,7 +1236,6 @@ func (data *CheckpointData) readAll(
 	data.replayMetaBatch()
 	for _, val := range data.locations {
 		var reader *blockio.BlockReader
-		logutil.Infof("va is %v", val.String())
 		reader, err = blockio.NewObjectReader(service, val)
 		if err != nil {
 			return
