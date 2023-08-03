@@ -107,8 +107,7 @@ func EncodeType(v *Type) ([]byte, int32) {
 }
 
 func DecodeType(v []byte) Type {
-	basedata := v[:TSize]
-	basetyp := *(*Type)(unsafe.Pointer(&basedata[0]))
+	basetyp := *(*Type)(unsafe.Pointer(&v[0]))
 	v = v[TSize:]
 	if len(v) != 0 {
 		basetyp.EnumValues = DecodeStringSlice(v)
