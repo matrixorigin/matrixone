@@ -380,7 +380,8 @@ jobs:
 
       - name: Check Log Messages Count per minute
         run: |
-          ./optools/check_log_count.sh 10 # count threshold
+          cd $GITHUB_WORKSPACE/head
+          ./optools/check_log_count.sh 10 60 # {count threshold} {metric collected interval}
 
       - name: Check mo-service Status
         if: ${{ always() && !cancelled() }}
