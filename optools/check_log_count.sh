@@ -22,6 +22,7 @@ pid=$$
 ts=`date +%s`
 out_log_count="/tmp/log_count.pid${pid}.ts${ts}"
 
+max_try_conn=3
 mod='mysql -h 127.0.0.1 -P 6001 -udump -p111 system -A'
 metric_interval=60
 count_threshold=1000
@@ -37,6 +38,28 @@ show_env() {
     echo_proxy "arg count_threshold : $count_threshold"
     echo_proxy "arg metric_interval : $metric_interval"
     echo_proxy "out_log_count file  : $out_log_count"
+}
+
+check_mo_service_alive() {
+    ## Action: try access mo {max_try_conn} times.
+    ##         if failed, exit 0 with note: "failed to access mo-servcie ..."
+    local ret=0
+    for idx in `seq 1 $max_try_conn`;
+    do
+        echo_proxy "try access mo $idx times."
+        $mod -Nse "select 1;" 1>/dev/null 2>&1
+        ret=$?
+        if [ $ret -eq 0 ]; then
+            break
+        fi
+        # sleep 1 for retry
+        sleep 1
+    done
+    if [ $ret -ne 0 ]; then
+        echo_proxy "failed to access mo-servcie through port 6001."
+        exit 0
+    fi
+    echo_proxy "seccess to access mo-servcie through port 6001."
 }
 
 get_log_count() {
@@ -108,6 +131,7 @@ elif [ $# -eq 2 ]; then
 fi
 
 show_env
+check_mo_service_alive
 get_log_count
 check_log_count
 ret=$?

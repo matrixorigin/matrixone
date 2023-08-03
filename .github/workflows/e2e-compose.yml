@@ -68,7 +68,7 @@ jobs:
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
 
-      - name: Check Log Messages Count per minute
+      - name: Check Log Messages Count per second
         run: |
           cd $GITHUB_WORKSPACE/head
           ./optools/check_log_count.sh 1000 60 # {count threshold} {metric collected interval}
@@ -151,10 +151,10 @@ jobs:
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
 
-      - name: Check Log Messages Count per minute
+      - name: Check Log Messages Count per second
         run: |
           cd $GITHUB_WORKSPACE/head
-          ./optools/check_log_count.sh 10 60 # {count threshold} {metric collected interval}
+          ./optools/check_log_count.sh 1000 60 # {count threshold} {metric collected interval}
 
       - name: shutdown containers
         if: ${{ always() }}
