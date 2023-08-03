@@ -93,7 +93,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		NodeType: plan.Node_PROJECT,
 		Stats:    &plan.Stats{},
 	}
-	if err := getProjectNode(stmt, ctx, projectNode, tableDef); err != nil {
+	isInsertWithoutAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef)
+	if err != nil {
 		return nil, err
 	}
 	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
@@ -119,7 +120,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef)
 	checkInsertPkDup := false
-	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId, checkInsertPkDup, nil)
+	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId, checkInsertPkDup, nil, isInsertWithoutAutoPkCol)
 	if err != nil {
 		return nil, err
 	}
@@ -161,9 +162,10 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	return fileList[0], nil
 }
 
-func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) error {
+func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
 	colToIndex := make(map[int32]string, 0)
+	isInsertWithoutAutoPkCol := false
 	if len(stmt.Param.Tail.ColumnList) == 0 {
 		for i := 0; i < len(tableDef.Cols); i++ {
 			colToIndex[int32(i)] = tableDef.Cols[i].Name
@@ -173,13 +175,13 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
 				if _, ok := tableDef.Name2ColIndex[realCol.Parts[0]]; !ok {
-					return moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.Parts[0])
+					return isInsertWithoutAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.Parts[0])
 				}
 				colToIndex[int32(i)] = realCol.Parts[0]
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 			default:
-				return moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+				return isInsertWithoutAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
 			}
 		}
 	}
@@ -218,8 +220,12 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			}
 		}
 		node.ProjectList[i] = tmp
+
+		if tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
+			isInsertWithoutAutoPkCol = true
+		}
 	}
-	return nil
+	return isInsertWithoutAutoPkCol, nil
 }
 
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
