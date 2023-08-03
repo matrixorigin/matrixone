@@ -43,6 +43,7 @@ type container struct {
 	state int
 
 	hasNull bool
+	isMerge bool
 
 	sels [][]int32
 
@@ -77,7 +78,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
-		ctr.FreeAllReg()
+		if ctr.isMerge {
+			ctr.FreeMergeTypeOperator(pipelineFailed)
+		} else {
+			ctr.FreeAllReg()
+		}
 	}
 }
 
