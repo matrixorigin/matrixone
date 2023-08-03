@@ -147,6 +147,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 	}
 
+	ctr.sels = make([][]int32, count)
+
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
