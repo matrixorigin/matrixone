@@ -17,6 +17,7 @@ package onduplicatekey
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -59,6 +60,7 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus,
 			}
 			anal.Output(newBat, isLast)
 			proc.SetInputBatch(newBat)
+			logutil.Infof("Table[`%s`] on duplicate key operator output batch: %s", arg.TableDef.Name, newBat.PrintBatch())
 		}
 		return process.ExecStop, nil
 	}
