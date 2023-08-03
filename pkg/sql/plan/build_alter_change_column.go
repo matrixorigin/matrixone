@@ -85,6 +85,9 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 
 	delete(alterCtx.alterColMap, col.Name)
 	alterCtx.alterColMap[newCol.Name] = col.Name
+	if tmpCol, ok := alterCtx.changColDefMap[col.ColId]; ok {
+		tmpCol.Name = newCol.Name
+	}
 	return nil
 }
 

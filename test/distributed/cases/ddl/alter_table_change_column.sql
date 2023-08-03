@@ -308,7 +308,6 @@ show index from t1;
 desc t1;
 select * from t1;
 
-
 alter table t1 alter column a drop default;
 show index from t1;
 desc t1;
@@ -361,3 +360,21 @@ desc t1;
 select * from t1;
 
 drop table t1;
+----------------------------------------------------------------------------------------
+drop table if exists t1;
+CREATE TABLE t1(col1 int not null, col2 varchar(10));
+insert into t1 values (1, '137iu2');
+insert into t1 values (1, '73ujf34f');
+select * from t1;
+
+alter table t1 change col1 col1 int primary key;
+--ERROR 1062 (23000): Duplicate entry '1' for key 't1.PRIMARY'
+desc t1;
+
+alter table t1 change col2 col2 varchar(10) primary key;
+desc t1;
+
+insert into t1 values (1, 'cdsdsa');
+select * from t1;
+drop table t1;
+drop database if exists db2;

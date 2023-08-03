@@ -120,7 +120,7 @@ type deleteNodeInfo struct {
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
-	checkInsertPkDup bool, pkFilterExpr []*Expr) error {
+	checkInsertPkDup bool, pkFilterExpr []*Expr, isInsertWithoutAutoPkCol bool) error {
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
@@ -130,7 +130,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, isInsertWithoutAutoPkCol)
 	return err
 }
 
@@ -209,7 +209,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
 	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs)
+		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, false)
 
 	return err
 }
@@ -352,7 +352,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols[:j], insertUniqueTableDef.Cols[j+1:]...)
 							}
 						}
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, true, true, nil)
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, true, true, nil, false)
 						if err != nil {
 							return err
 						}
@@ -754,6 +754,7 @@ func makeInsertPlan(
 	checkInsertPkDup bool,
 	updatePkCol bool,
 	pkFilterExprs []*Expr,
+	isInsertWithoutAutoPkCol bool,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -829,7 +830,7 @@ func makeInsertPlan(
 					return err
 				}
 
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, true, nil)
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, true, nil, false)
 				if err != nil {
 					return err
 				}
@@ -1229,7 +1230,8 @@ func makeInsertPlan(
 				builder.appendStep(lastNodeId)
 			}
 
-			if !isUpdate && !builder.qry.LoadTag { // insert stmt but not load
+			// insert stmt but not load stmt, not insert without auto incr pk col
+			if !isUpdate && !builder.qry.LoadTag && !isInsertWithoutAutoPkCol {
 				if len(pkFilterExprs) > 0 {
 					scanTableDef := DeepCopyTableDef(tableDef)
 					// scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
@@ -1972,6 +1974,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		false,
 		partitionIdx,
 		partTableIds,
+		isUpdate,
 	); ok {
 		lastNodeId = lockNodeId
 	}
@@ -2070,6 +2073,7 @@ func appendPreInsertUkPlan(
 		false,
 		-1,
 		nil,
+		isUpddate,
 	); ok {
 		lastNodeId = lockNodeId
 	}
@@ -2403,10 +2407,11 @@ func appendLockNode(
 	block bool,
 	partitionIdx int,
 	partTableIDs []uint64,
+	isUpdate bool,
 ) (int32, bool) {
-	// if do not lock table without pk. you can change to:
-	// pkPos, pkTyp := getPkPos(tableDef, true)
-	pkPos, pkTyp := getPkPos(tableDef, false)
+	// for insert stmt: do not lock rows if table have no PK
+	ignoreFakePK := !isUpdate
+	pkPos, pkTyp := getPkPos(tableDef, ignoreFakePK)
 	if pkPos == -1 {
 		return -1, false
 	}
