@@ -72,7 +72,7 @@ type LogServiceDriver struct {
 	readDuration time.Duration
 }
 
-func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
+func NewLogServiceDriver(ctx context.Context, cfg *Config) *LogServiceDriver {
 	clientpoolConfig := &clientConfig{
 		cancelDuration:        cfg.NewClientDuration,
 		recordSize:            cfg.NewRecordSize,
@@ -92,7 +92,6 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientPoolMaxSize, cfg.ClientPoolMaxSize, clientpoolConfig),
 		config:          cfg,
-		appendable:      newDriverAppender(),
 		driverInfo:      newDriverInfo(),
 		readCache:       newReadCache(),
 		appendQueue:     make(chan any, 10000),
@@ -100,7 +99,8 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		postAppendQueue: make(chan any, 10000),
 		appendPool:      pool,
 	}
-	d.closeCtx, d.closeCancel = context.WithCancel(context.Background())
+	d.closeCtx, d.closeCancel = context.WithCancel(ctx)
+	d.appendable = newDriverAppender(d.closeCtx)
 	d.preAppendLoop = sm.NewSafeQueue(10000, 10000, d.onPreAppend)
 	d.preAppendLoop.Start()
 	d.appendedLoop = sm.NewLoop(d.appendedQueue, d.postAppendQueue, d.onAppendedQueue, 10000)

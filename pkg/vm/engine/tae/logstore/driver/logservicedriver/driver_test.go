@@ -15,6 +15,7 @@
 package logservicedriver
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -49,7 +50,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	t.Logf("Driver Lsn %d, Syncing %d, Synced %d", d.driverLsn, d.syncing, d.synced)
 	t.Logf("Truncated %d", d.truncating.Load())
 	t.Logf("LSTruncated %d", d.truncatedLogserviceLsn)
-	d = NewLogServiceDriver(d.config)
+	d = NewLogServiceDriver(context.TODO(), d.config)
 	tempLsn := uint64(0)
 	err := d.Replay(func(e *entry.Entry) {
 		if e.Lsn <= tempLsn {
@@ -86,7 +87,7 @@ func TestReplay1(t *testing.T) {
 	defer service.Close()
 
 	cfg := NewTestConfig(ccfg)
-	driver := NewLogServiceDriver(cfg)
+	driver := NewLogServiceDriver(context.TODO(), cfg)
 
 	entryCount := 10000
 	entries := make([]*entry.Entry, entryCount)
@@ -126,7 +127,7 @@ func TestReplay2(t *testing.T) {
 
 	cfg := NewTestConfig(ccfg)
 	cfg.NewRecordSize = 100
-	driver := NewLogServiceDriver(cfg)
+	driver := NewLogServiceDriver(context.TODO(), cfg)
 
 	entryCount := 10000
 	entries := make([]*entry.Entry, entryCount)

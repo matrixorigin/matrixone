@@ -15,6 +15,7 @@
 package store
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -45,9 +46,9 @@ type StoreImpl struct {
 	truncateQueue   sm.Queue
 }
 
-func NewStoreWithLogserviceDriver(factory logservicedriver.LogServiceClientFactory) Store {
+func NewStoreWithLogserviceDriver(ctx context.Context, factory logservicedriver.LogServiceClientFactory) Store {
 	cfg := logservicedriver.NewDefaultConfig(factory)
-	driver := logservicedriver.NewLogServiceDriver(cfg)
+	driver := logservicedriver.NewLogServiceDriver(ctx, cfg)
 	return NewStore(driver)
 }
 

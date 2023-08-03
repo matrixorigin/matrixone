@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -31,12 +32,14 @@ type driverAppender struct {
 	entry           *recordEntry
 	contextDuration time.Duration
 	wg              sync.WaitGroup //wait client
+	closeCtx        context.Context
 }
 
-func newDriverAppender() *driverAppender {
+func newDriverAppender(closeCtx context.Context) *driverAppender {
 	return &driverAppender{
-		entry: newRecordEntry(),
-		wg:    sync.WaitGroup{},
+		entry:    newRecordEntry(),
+		wg:       sync.WaitGroup{},
+		closeCtx: closeCtx,
 	}
 }
 
@@ -73,7 +76,20 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	}
 	cancel()
 	if err != nil {
-		err = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
+		_ = RetryWithTimeout(retryTimout, func() (shouldReturn bool) {
+			// in certain cases, dn is expected to exit immediately. for instance, ha
+			// issues shutdown cmd or users pressed ctrl + c.
+			//
+			// in some situations, log service exit before dn service, dn will high likely fall into
+			// this retry process and needs to take retryTimeout, 180s by default, to detected fail.
+			//
+			// so, give a chance here to let dn can detect this intentional shut down operation and panic with err timely.
+			select {
+			case <-a.closeCtx.Done():
+				err = errors.New("dn is supposed to be shut down when appender retry")
+				return true
+			default:
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), appendTimeout)
 			ctx, timeoutSpan = trace.Debug(ctx, "appender retry",
 				trace.WithProfileGoroutine(),

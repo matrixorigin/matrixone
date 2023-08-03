@@ -46,7 +46,7 @@ func (d *LogServiceDriver) appendAppender() {
 	d.appendtimes++
 	d.onAppendQueue(d.appendable)
 	d.appendedQueue <- d.appendable
-	d.appendable = newDriverAppender()
+	d.appendable = newDriverAppender(d.closeCtx)
 }
 
 func (d *LogServiceDriver) onPreAppend(items ...any) {

@@ -42,7 +42,7 @@ type walDriver struct {
 
 func NewDriverWithLogservice(ctx context.Context, factory logservicedriver.LogServiceClientFactory) Driver {
 	ckpDuration := time.Second * 5
-	impl := store.NewStoreWithLogserviceDriver(factory)
+	impl := store.NewStoreWithLogserviceDriver(ctx, factory)
 	driver := NewDriverWithStore(ctx, impl, true, ckpDuration)
 	return driver
 }
