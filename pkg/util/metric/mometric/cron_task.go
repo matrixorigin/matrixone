@@ -192,6 +192,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	var err error
 	ctx, span := trace.Start(ctx, "checkNewAccountSize")
 	defer span.End()
+	logger = logger.WithContext(ctx)
 	logger.Info("started")
 	defer func() {
 		logger.Info("checkNewAccountSize exit", zap.Error(err))
