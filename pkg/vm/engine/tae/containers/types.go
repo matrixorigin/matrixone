@@ -97,6 +97,14 @@ type Batch struct {
 	// refidx  map[int]int
 }
 
+// BatchSplitter is used to split a batch into several batches
+// with the same size.
+type BatchSplitter struct {
+	internal  *Batch
+	sliceSize int
+	offset    int
+}
+
 type BatchWithVersion struct {
 	*Batch
 	Seqnums    []uint16
