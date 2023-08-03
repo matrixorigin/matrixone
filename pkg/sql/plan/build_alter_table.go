@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"math"
 	"strings"
 )
 
@@ -154,6 +155,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		return nil, err
 	}
 	alterTablePlan.InsertDataSql = insertDml
+
+	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -444,28 +447,41 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	return insertSQL, nil
 }
 
+const UnKnownColId uint64 = math.MaxUint64
+
 type AlterTableContext struct {
-	// key   --> Replica Table Column Names
-	// value --> Original Table Column Name
+	// key   --> Copy table column name
+	// value --> Original table column name
 	alterColMap     map[string]string
 	schemaName      string
 	originTableName string
 	copyTableName   string
+	// key oldColId -> new ColDef
+	changColDefMap map[uint64]*ColDef
 }
 
 func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, schemaName string) *AlterTableContext {
-	alterTableMap := make(map[string]string)
+	alterTblColMap := make(map[string]string)
+	changTblColIdMap := make(map[uint64]*ColDef)
 	for _, coldef := range originTableDef.Cols {
 		if coldef.Hidden {
 			continue
 		}
-		alterTableMap[coldef.Name] = coldef.Name
+		alterTblColMap[coldef.Name] = coldef.Name
+
+		if !coldef.Hidden {
+			changTblColIdMap[coldef.ColId] = &plan.ColDef{
+				ColId: UnKnownColId,
+				Name:  coldef.Name,
+			}
+		}
 	}
 	return &AlterTableContext{
-		alterColMap:     alterTableMap,
+		alterColMap:     alterTblColMap,
 		schemaName:      schemaName,
 		originTableName: originTableDef.Name,
 		copyTableName:   copyTableDef.Name,
+		changColDefMap:  changTblColIdMap,
 	}
 }
 
