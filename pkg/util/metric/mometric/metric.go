@@ -197,10 +197,6 @@ func registerAllMetrics() {
 	}
 }
 
-func initConfigByParameter(SV *config.ObservabilityParameters) {
-	metric.SetExportToProm(SV.EnableMetricToProm)
-}
-
 func initConfigByParameterUnit(SV *config.ObservabilityParameters) {
 	metric.SetExportToProm(SV.EnableMetricToProm)
 	metric.SetGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
