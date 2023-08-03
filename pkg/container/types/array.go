@@ -67,6 +67,35 @@ func StringToArray[T BuiltinNumber](input string) ([]T, error) {
 	var t T
 	for i, numStr := range numStrs {
 		switch any(t).(type) {
+
+		case int8:
+			num, err := strconv.ParseInt(numStr, 10, 8)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtx("Error while parsing array : %v", err)
+			}
+			numi8 := int8(num)
+			result[i] = *(*T)(unsafe.Pointer(&numi8))
+		case int16:
+			num, err := strconv.ParseInt(numStr, 10, 16)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtx("Error while parsing array : %v", err)
+			}
+			numi16 := int16(num)
+			result[i] = *(*T)(unsafe.Pointer(&numi16))
+		case int32:
+			num, err := strconv.ParseInt(numStr, 10, 32)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtx("Error while parsing array : %v", err)
+			}
+			numi32 := int32(num)
+			result[i] = *(*T)(unsafe.Pointer(&numi32))
+		case int64:
+			num, err := strconv.ParseInt(numStr, 10, 64)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtx("Error while parsing array : %v", err)
+			}
+			result[i] = *(*T)(unsafe.Pointer(&num))
+
 		case float32:
 			num, err := strconv.ParseFloat(numStr, 32)
 			if err != nil {
