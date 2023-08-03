@@ -16,9 +16,17 @@ package objectio
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// Alg | Offset | Length | OriginSize
+// ----|--------|--------|------------
+// 1   | 4      | 4      | 4
+// Alg: Specifies the compression algorithm
+// Offset: The offset of the compressed data in the file
+// Length: The length of the compressed data
+// OriginSize: The length of the original data
 type Extent []byte
 
 const (
