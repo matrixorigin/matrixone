@@ -306,7 +306,9 @@ message ForeignKeyDef {
 
 	string name						= 1;
 	repeated uint64 cols			= 2;
+	// Foreign key parent table Id
 	uint64 foreign_tbl				= 3;
+	// Foreign key parent table dependent column colids
 	repeated uint64 foreign_cols	= 4;
 	RefAction on_delete				= 5;
 	RefAction on_update				= 6;
@@ -1100,6 +1102,7 @@ message AlterTable {
 	AlgorithmType algorithm_type = 6;
 	string create_table_sql = 7;
 	string insert_data_sql = 8;
+	map<uint64, ColDef> change_tbl_colId_map = 9;
 }
 
 message DropTable {
