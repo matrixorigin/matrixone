@@ -685,7 +685,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Rowid](v, sels, negate)
 	case types.T_Blockid:
 		shrinkFixed[types.Blockid](v, sels, negate)
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
 		shrinkFixed[types.Varlena](v, sels, negate)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
@@ -743,7 +743,7 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) error {
 		shuffleFixed[types.Rowid](v, sels, mp)
 	case types.T_Blockid:
 		shuffleFixed[types.Blockid](v, sels, mp)
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
 		shuffleFixed[types.Varlena](v, sels, mp)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
@@ -1394,7 +1394,8 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			return nil
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64:
+		types.T_json, types.T_blob, types.T_text,
+		types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -1711,6 +1712,68 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return appendOneBytes(v, ws[sel].GetByteSlice(w.area), false, mp)
 			}
 		}
+
+	case types.T_array_int8:
+		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Varlena{}, true, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			if w.IsConst() {
+				return appendOneFixed(v, types.GetArray[int8](&ws[0], w.area), false, mp)
+			}
+			if nulls.Contains(&w.nsp, uint64(sel)) {
+				return appendOneArray[int8](v, []int8{}, true, mp)
+			} else {
+				return appendOneArray[int8](v, types.GetArray[int8](&ws[sel], w.area), false, mp)
+			}
+		}
+	case types.T_array_int16:
+		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Varlena{}, true, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			if w.IsConst() {
+				return appendOneFixed(v, types.GetArray[int16](&ws[0], w.area), false, mp)
+			}
+			if nulls.Contains(&w.nsp, uint64(sel)) {
+				return appendOneArray[int16](v, []int16{}, true, mp)
+			} else {
+				return appendOneArray[int16](v, types.GetArray[int16](&ws[sel], w.area), false, mp)
+			}
+		}
+	case types.T_array_int32:
+		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Varlena{}, true, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			if w.IsConst() {
+				return appendOneFixed(v, types.GetArray[int32](&ws[0], w.area), false, mp)
+			}
+			if nulls.Contains(&w.nsp, uint64(sel)) {
+				return appendOneArray[int32](v, []int32{}, true, mp)
+			} else {
+				return appendOneArray[int32](v, types.GetArray[int32](&ws[sel], w.area), false, mp)
+			}
+		}
+	case types.T_array_int64:
+		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Varlena{}, true, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			if w.IsConst() {
+				return appendOneFixed(v, types.GetArray[int64](&ws[0], w.area), false, mp)
+			}
+			if nulls.Contains(&w.nsp, uint64(sel)) {
+				return appendOneArray[int64](v, []int64{}, true, mp)
+			} else {
+				return appendOneArray[int64](v, types.GetArray[int64](&ws[sel], w.area), false, mp)
+			}
+		}
+
 	case types.T_array_float32:
 		return func(v, w *Vector, sel int64) error {
 			if w.IsConstNull() {
@@ -1994,6 +2057,56 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return SetConstBytes(v, ws[sel].GetByteSlice(w.area), length, mp)
 		}
+
+	case types.T_array_int8:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			v.area = v.area[:0]
+			if w.IsConst() {
+				return SetConstArray[int8](v, types.GetArray[int8](&ws[0], w.area), length, mp)
+			}
+			return SetConstArray[int8](v, types.GetArray[int8](&ws[sel], w.area), length, mp)
+		}
+	case types.T_array_int16:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			v.area = v.area[:0]
+			if w.IsConst() {
+				return SetConstArray[int16](v, types.GetArray[int16](&ws[0], w.area), length, mp)
+			}
+			return SetConstArray[int16](v, types.GetArray[int16](&ws[sel], w.area), length, mp)
+		}
+	case types.T_array_int32:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			v.area = v.area[:0]
+			if w.IsConst() {
+				return SetConstArray[int32](v, types.GetArray[int32](&ws[0], w.area), length, mp)
+			}
+			return SetConstArray[int32](v, types.GetArray[int32](&ws[sel], w.area), length, mp)
+		}
+	case types.T_array_int64:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			v.area = v.area[:0]
+			if w.IsConst() {
+				return SetConstArray[int64](v, types.GetArray[int64](&ws[0], w.area), length, mp)
+			}
+			return SetConstArray[int64](v, types.GetArray[int64](&ws[sel], w.area), length, mp)
+		}
+
 	case types.T_array_float32:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
@@ -2393,6 +2506,51 @@ func (v *Vector) String() string {
 			}
 		}
 		return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+
+	case types.T_array_int8:
+		col := MustArrayCol[int8](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			} else {
+				return types.ArrayToString[int8](col[0])
+			}
+		}
+		str := types.ArraysToString[int8](col)
+		return fmt.Sprintf("%s-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_int16:
+		col := MustArrayCol[int16](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			} else {
+				return types.ArrayToString[int16](col[0])
+			}
+		}
+		str := types.ArraysToString[int16](col)
+		return fmt.Sprintf("%s-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_int32:
+		col := MustArrayCol[int32](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			} else {
+				return types.ArrayToString[int32](col[0])
+			}
+		}
+		str := types.ArraysToString[int32](col)
+		return fmt.Sprintf("%s-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_int64:
+		col := MustArrayCol[int64](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			} else {
+				return types.ArrayToString[int64](col[0])
+			}
+		}
+		str := types.ArraysToString[int64](col)
+		return fmt.Sprintf("%s-%s", str, v.nsp.GetBitmap().String())
 	case types.T_array_float32:
 		col := MustArrayCol[float32](v)
 		if len(col) == 1 {
@@ -2540,6 +2698,15 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return appendOneBytes(vec, val.([]byte), false, mp)
+
+	case types.T_array_int8:
+		return appendOneArray[int8](vec, val.([]int8), false, mp)
+	case types.T_array_int16:
+		return appendOneArray[int16](vec, val.([]int16), false, mp)
+	case types.T_array_int32:
+		return appendOneArray[int32](vec, val.([]int32), false, mp)
+	case types.T_array_int64:
+		return appendOneArray[int64](vec, val.([]int64), false, mp)
 	case types.T_array_float32:
 		return appendOneArray[float32](vec, val.([]float32), false, mp)
 	case types.T_array_float64:
@@ -3296,7 +3463,7 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeFixed(maxVal)
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
 		minv, maxv = VarlenGetMinMax(v) //TODO: Validate this.
 
 	default:

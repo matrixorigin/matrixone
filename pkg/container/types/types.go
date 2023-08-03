@@ -82,8 +82,12 @@ const (
 	T_tuple T = 201
 
 	// Array family
-	T_array_float32 T = 220
-	T_array_float64 T = 221 //note: max value of uint8 is 255
+	T_array_int8    T = 220
+	T_array_int16   T = 221
+	T_array_int32   T = 222
+	T_array_int64   T = 223
+	T_array_float32 T = 224
+	T_array_float64 T = 225 //note: max value of uint8 is 255
 )
 
 const (
@@ -371,6 +375,11 @@ var Types map[string]T = map[string]T{
 	"rowid":                 T_Rowid,
 	"blockid":               T_Blockid,
 
+	"array int8":  T_array_int8,
+	"array int16": T_array_int16,
+	"array int32": T_array_int32,
+	"array int64": T_array_int64,
+
 	"array float32": T_array_float32, // TODO: should i include the space?
 	"array float64": T_array_float64,
 }
@@ -569,7 +578,7 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
-	case T_array_float32, T_array_float64:
+	case T_array_int8, T_array_int16, T_array_int32, T_array_int64, T_array_float32, T_array_float64:
 		typ.Size = VarlenaSize
 		typ.Width = MaxArrayDimension
 	case T_binary:
@@ -653,6 +662,15 @@ func (t T) String() string {
 		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
+
+	case T_array_int8:
+		return "ARRAY TINYINT"
+	case T_array_int16:
+		return "ARRAY SMALLINT"
+	case T_array_int32:
+		return "ARRAY INT"
+	case T_array_int64:
+		return "ARRAY BIGINT"
 	case T_array_float32:
 		return "ARRAY FLOAT"
 	case T_array_float64:
@@ -724,6 +742,15 @@ func (t T) OidString() string {
 		return "T_Blockid"
 	case T_interval:
 		return "T_interval"
+
+	case T_array_int8:
+		return "T_array_int8"
+	case T_array_int16:
+		return "T_array_int16"
+	case T_array_int32:
+		return "T_array_int32"
+	case T_array_int64:
+		return "T_array_int64"
 	case T_array_float32:
 		return "T_array_float32"
 	case T_array_float64:
@@ -806,7 +833,8 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary,
+		T_array_int8, T_array_int16, T_array_int32, T_array_int64, T_array_float32, T_array_float64:
 		return -24
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))

@@ -30,7 +30,8 @@ func plusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
-	case types.T_decimal64, types.T_decimal128, types.T_array_float32, types.T_array_float64:
+	case types.T_decimal64, types.T_decimal128:
+	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -160,6 +161,59 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			r, _, err := v1.Add(v2, scale1, scale2)
 			return r, err
+		})
+
+	case types.T_array_int8:
+		return arrayArith[int8](parameters, result, proc, length, func(v1, v2 []int8, scale1, scale2 int32) ([]int8, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int8, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] + v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_int16:
+		return arrayArith[int16](parameters, result, proc, length, func(v1, v2 []int16, scale1, scale2 int32) ([]int16, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int16, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] + v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_int32:
+		return arrayArith[int32](parameters, result, proc, length, func(v1, v2 []int32, scale1, scale2 int32) ([]int32, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int32, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] + v2[i]
+			}
+
+			return r, nil
+		})
+	case types.T_array_int64:
+		return arrayArith[int64](parameters, result, proc, length, func(v1, v2 []int64, scale1, scale2 int32) ([]int64, error) {
+			if len(v1) != len(v2) {
+				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+			}
+
+			r := make([]int64, len(v1))
+			for i := 0; i < len(v1); i++ {
+				r[i] = v1[i] + v2[i]
+			}
+
+			return r, nil
 		})
 	case types.T_array_float32:
 		return arrayArith[float32](parameters, result, proc, length, func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error) {

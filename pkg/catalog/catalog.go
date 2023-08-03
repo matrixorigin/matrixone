@@ -424,6 +424,22 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = vec.GetBytesAt(j)
 			}
+		case types.T_array_int8:
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = vector.GetArrayAt[int8](vec, j)
+			}
+		case types.T_array_int16:
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = vector.GetArrayAt[int16](vec, j)
+			}
+		case types.T_array_int32:
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = vector.GetArrayAt[int32](vec, j)
+			}
+		case types.T_array_int64:
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = vector.GetArrayAt[int64](vec, j)
+			}
 		case types.T_array_float32:
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = vector.GetArrayAt[float32](vec, j)

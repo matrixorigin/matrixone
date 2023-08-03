@@ -112,7 +112,7 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 		return movec.GetFixedAt[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
 		return col.GetBytesAt(int(row))
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
 		return col.GetBytesAt(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
@@ -198,7 +198,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool) {
 		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull)
 	case types.T_varchar, types.T_char, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
 		GenericUpdateBytes(col, row, val, isNull)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.GetType()))

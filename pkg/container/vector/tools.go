@@ -343,6 +343,31 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		}, func(t1, t2 string) bool {
 			return strings.Compare(t1, t2) <= 0
 		})
+
+	case types.T_array_int8:
+		return checkArrayIntersect[int8](v, vec, func(t1, t2 []int8) bool {
+			return types.CompareArray[int8](t1, t2) >= 0
+		}, func(t1, t2 []int8) bool {
+			return types.CompareArray[int8](t1, t2) <= 0
+		})
+	case types.T_array_int16:
+		return checkArrayIntersect[int16](v, vec, func(t1, t2 []int16) bool {
+			return types.CompareArray[int16](t1, t2) >= 0
+		}, func(t1, t2 []int16) bool {
+			return types.CompareArray[int16](t1, t2) <= 0
+		})
+	case types.T_array_int32:
+		return checkArrayIntersect[int32](v, vec, func(t1, t2 []int32) bool {
+			return types.CompareArray[int32](t1, t2) >= 0
+		}, func(t1, t2 []int32) bool {
+			return types.CompareArray[int32](t1, t2) <= 0
+		})
+	case types.T_array_int64:
+		return checkArrayIntersect[int64](v, vec, func(t1, t2 []int64) bool {
+			return types.CompareArray[int64](t1, t2) >= 0
+		}, func(t1, t2 []int64) bool {
+			return types.CompareArray[int64](t1, t2) <= 0
+		})
 	case types.T_array_float32:
 		return checkArrayIntersect[float32](v, vec, func(t1, t2 []float32) bool {
 			return types.CompareArray[float32](t1, t2) >= 0
@@ -537,6 +562,16 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 				return strings.Compare(t1, t2) <= 0
 			}), nil
 		}
+
+	case types.T_array_int8:
+		return compareArray[int8](ctx, v, vec, funName)
+	case types.T_array_int16:
+		return compareArray[int16](ctx, v, vec, funName)
+	case types.T_array_int32:
+		return compareArray[int32](ctx, v, vec, funName)
+	case types.T_array_int64:
+		return compareArray[int64](ctx, v, vec, funName)
+
 	case types.T_array_float32:
 		return compareArray[float32](ctx, v, vec, funName)
 	case types.T_array_float64:

@@ -130,6 +130,14 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return &plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
 				return &plan.Type{Id: int32(types.T_varchar), Width: width}, nil
+			case "array_int8":
+				return &plan.Type{Id: int32(types.T_array_int8), Width: width}, nil
+			case "array_int16":
+				return &plan.Type{Id: int32(types.T_array_int16), Width: width}, nil
+			case "array_int32":
+				return &plan.Type{Id: int32(types.T_array_int32), Width: width}, nil
+			case "array_int64":
+				return &plan.Type{Id: int32(types.T_array_int64), Width: width}, nil
 			case "array_float32":
 				return &plan.Type{Id: int32(types.T_array_float32), Width: width}, nil
 			case "array_float64":

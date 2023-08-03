@@ -245,7 +245,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_array_float32, types.T_array_float64,
+		types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64,
 	},
 
 	types.T_binary: {
@@ -1418,6 +1418,19 @@ func strTypeToOthers(proc *process.Process,
 		types.T_binary, types.T_varbinary, types.T_blob:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(proc.Ctx, source, rs, length, toType)
+
+	case types.T_array_int8:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[int8](proc.Ctx, source, rs, length, toType)
+	case types.T_array_int16:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[int16](proc.Ctx, source, rs, length, toType)
+	case types.T_array_int32:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[int32](proc.Ctx, source, rs, length, toType)
+	case types.T_array_int64:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[int64](proc.Ctx, source, rs, length, toType)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](proc.Ctx, source, rs, length, toType)

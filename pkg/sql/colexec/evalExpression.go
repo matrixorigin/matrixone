@@ -591,6 +591,30 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 			// Distinguish binary with non-binary string.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
 				vec = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+			} else if typ.Oid == types.T_array_int8 {
+				array, err := types.StringToArray[int8](sval)
+				if err != nil {
+					return nil, err
+				}
+				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+			} else if typ.Oid == types.T_array_int16 {
+				array, err := types.StringToArray[int16](sval)
+				if err != nil {
+					return nil, err
+				}
+				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+			} else if typ.Oid == types.T_array_int32 {
+				array, err := types.StringToArray[int32](sval)
+				if err != nil {
+					return nil, err
+				}
+				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+			} else if typ.Oid == types.T_array_int64 {
+				array, err := types.StringToArray[int64](sval)
+				if err != nil {
+					return nil, err
+				}
+				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float32 {
 				array, err := types.StringToArray[float32](sval)
 				if err != nil {
