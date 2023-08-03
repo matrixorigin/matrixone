@@ -261,15 +261,15 @@ func (t *Type) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("TempType: wiretype end group for non-group")
+			return moerr.NewInvalidArgNoCtx("wiretype end group for non-group", "")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("TempType: illegal tag %d (wire type %d)", fieldNum, wire)
+			return moerr.NewInvalidArgNoCtx("illegal tag %d ", fieldNum)
 		}
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("wrong wireType = %d for field Oid", wireType)
+				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Oid", wireType)
 			}
 			t.Oid = 0
 			for shift := uint(0); ; shift += 7 {
@@ -290,7 +290,7 @@ func (t *Type) Unmarshal(dAtA []byte) error {
 			}
 		case 2:
 			if wireType != 0 {
-				return fmt.Errorf("wrong wireType = %d for field Charset", wireType)
+				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Charset", wireType)
 			}
 			t.Charset = 0
 			for shift := uint(0); ; shift += 7 {
@@ -309,7 +309,7 @@ func (t *Type) Unmarshal(dAtA []byte) error {
 			}
 		case 3:
 			if wireType != 0 {
-				return fmt.Errorf("wrong wireType = %d for field NotNull", wireType)
+				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field NotNull", wireType)
 			}
 			t.notNull = 0
 			for shift := uint(0); ; shift += 7 {
@@ -328,7 +328,7 @@ func (t *Type) Unmarshal(dAtA []byte) error {
 			}
 		case 4:
 			if wireType != 0 {
-				return fmt.Errorf("wrong wireType = %d for field Dummy2", wireType)
+				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Dummy2", wireType)
 			}
 			t.dummy2 = 0
 			for shift := uint(0); ; shift += 7 {
@@ -347,7 +347,7 @@ func (t *Type) Unmarshal(dAtA []byte) error {
 			}
 		case 5:
 			if wireType != 0 {
-				return fmt.Errorf("wrong wireType = %d for field Size", wireType)
+				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Size", wireType)
 			}
 			t.Size = 0
 			for shift := uint(0); ; shift += 7 {
@@ -366,7 +366,7 @@ func (t *Type) Unmarshal(dAtA []byte) error {
 			}
 		case 6:
 			if wireType != 0 {
-				return fmt.Errorf("wrong wireType = %d for field Width", wireType)
+				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Width", wireType)
 			}
 			t.Width = 0
 			for shift := uint(0); ; shift += 7 {
@@ -385,7 +385,7 @@ func (t *Type) Unmarshal(dAtA []byte) error {
 			}
 		case 7:
 			if wireType != 0 {
-				return fmt.Errorf("wrong wireType = %d for field Scale", wireType)
+				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Scale", wireType)
 			}
 			t.Scale = 0
 			for shift := uint(0); ; shift += 7 {
@@ -404,7 +404,7 @@ func (t *Type) Unmarshal(dAtA []byte) error {
 			}
 		case 8:
 			if wireType != 2 {
-				return fmt.Errorf("wrong wireType = %d for field EnumValues", wireType)
+				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field EnumValues", wireType)
 			}
 			var stringLen uint64
 			for shift := uint(0); ; shift += 7 {
@@ -519,7 +519,7 @@ func skipPlan(dAtA []byte) (n int, err error) {
 		case 5:
 			iNdEx += 4
 		default:
-			return 0, fmt.Errorf("proto: illegal wireType %d", wireType)
+			return 0, moerr.NewInvalidArgNoCtx("illegal wireType %d", wireType)
 		}
 		if iNdEx < 0 {
 			return 0, moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
