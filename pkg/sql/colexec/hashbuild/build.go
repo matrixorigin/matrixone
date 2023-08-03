@@ -139,13 +139,15 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.RowCount()
+
+	ctr.sels = make([][]int32, count)
+
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
 
-		oldRowNumberOfHashTable := ctr.mp.GroupCount()
 		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
@@ -158,12 +160,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			if v == 0 {
 				continue
 			}
-
-			for v > oldRowNumberOfHashTable {
-				ctr.sels = append(ctr.sels, make([]int32, 0))
-				oldRowNumberOfHashTable++
-			}
 			ai := int64(v) - 1
+			if ctr.sels[ai] == nil {
+				ctr.sels[ai] = make([]int32, 0)
+			}
 			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
 	}
