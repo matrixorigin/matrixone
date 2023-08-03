@@ -554,6 +554,9 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
+			if block.End == 0 {
+				continue
+			}
 			windowCNBatch(bat, block.Start, block.End)
 			if dataBats[uint32(i)] == nil {
 				cnBatch := batch.NewWithSize(len(bat.Vecs))
@@ -925,7 +928,7 @@ func (data *CheckpointData) WriteTo(
 					blockLoc := &BlockLocation{
 						ClosedInterval: common.ClosedInterval{
 							Start: table.Start - block.Start,
-							End:   block.End - table.End,
+							End:   table.End - block.Start,
 						},
 						location: objectio.BuildLocation(name, blks[block.id].GetExtent(), 0, block.id),
 					}
