@@ -204,8 +204,12 @@ jobs:
       - name: echo config
         run: |
           cd $GITHUB_WORKSPACE/head
-          echo '\n\n[cn.txn]\nmode = "Pessimistic"' >> ./etc/launch/cn.toml
-          echo '\n\n[dn.txn]\nmode = "Pessimistic"' >> ./etc/launch/dn.toml
+          echo "\n"  >> ./etc/launch/cn.toml
+          echo '[cn.txn]' >> ./etc/launch/cn.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch/cn.toml
+          echo "\n"  >> ./etc/launch/dn.toml
+          echo '[dn.txn]' >> ./etc/launch/dn.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch/dn.toml
           cat ./etc/launch/cn.toml
           cat ./etc/launch/dn.toml
 

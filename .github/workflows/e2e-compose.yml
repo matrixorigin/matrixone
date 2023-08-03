@@ -103,9 +103,15 @@ jobs:
 
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |
-          sed -i 's/\[cn.txn\]/\[cn.txn\]\nmode = "Pessimistic"/g' ./etc/launch-tae-compose/config/cn-0.toml
-          sed -i 's/\[cn.txn\]/\[cn.txn\]\nmode = "Pessimistic"/g' ./etc/launch-tae-compose/config/cn-1.toml
-          sed -i 's/\[dn.txn\]/\[dn.txn\]\nmode = "Pessimistic"/g' ./etc/launch-tae-compose/config/dn.toml
+          echo "\n"  >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo "\n"  >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo "\n"  >> ./etc/launch-tae-compose/config/dn.toml
+          echo '[dn.txn]' >> ./etc/launch-tae-compose/config/dn.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/dn.toml    
           cat ./etc/launch-tae-compose/config/cn-0.toml
           cat ./etc/launch-tae-compose/config/cn-1.toml
           cat ./etc/launch-tae-compose/config/dn.toml

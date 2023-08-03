@@ -168,7 +168,6 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 			Port: int64(p),
 		},
 	}
-	cfg.Frontend.StorePath = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.cn
 	cfg.Engine.Type = opt.storage.cnEngine
