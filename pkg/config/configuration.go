@@ -166,19 +166,6 @@ var (
 type FrontendParameters struct {
 	MoVersion string
 
-	//root name
-	RootName string `toml:"rootname"`
-
-	//root password
-	RootPassword string `toml:"rootpassword"`
-
-	DumpUser string `toml:"dumpuser"`
-
-	DumpPassword string `toml:"dumppassword"`
-
-	//dump database
-	DumpDatabase string `toml:"dumpdatabase"`
-
 	//port defines which port the mo-server listens on and clients connect to
 	Port int64 `toml:"port"`
 
@@ -210,9 +197,6 @@ type FrontendParameters struct {
 	ProcessLimitationPartitionRows int64 `toml:"processLimitationPartitionRows"`
 
 	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
-	StorePath string `toml:"storePath"`
-
-	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
 	ServerVersionPrefix string `toml:"serverVersionPrefix"`
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
@@ -238,27 +222,6 @@ type FrontendParameters struct {
 
 	//port defines which port the rpc server listens on
 	PortOfRpcServerInComputationEngine int64 `toml:"portOfRpcServerInComputationEngine"`
-
-	//default is false. false : one txn for an independent batch true : only one txn during loading data
-	DisableOneTxnPerBatchDuringLoad bool `toml:"DisableOneTxnPerBatchDuringLoad"`
-
-	//default is 'debug'. the level of log.
-	LogLevel string `toml:"logLevel"`
-
-	//default is 'json'. the format of log.
-	LogFormat string `toml:"logFormat"`
-
-	//default is ''. the file
-	LogFilename string `toml:"logFilename"`
-
-	//default is 512MB. the maximum of log file size
-	LogMaxSize int64 `toml:"logMaxSize"`
-
-	//default is 0. the maximum days of log file to be kept
-	LogMaxDays int64 `toml:"logMaxDays"`
-
-	//default is 0. the maximum numbers of log file to be retained
-	LogMaxBackups int64 `toml:"logMaxBackups"`
 
 	//default is false. With true. Server will support tls
 	EnableTls bool `toml:"enableTls"`
@@ -319,21 +282,6 @@ type FrontendParameters struct {
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
-	if fp.RootName == "" {
-		fp.RootName = defaultRootName
-	}
-
-	if fp.RootPassword == "" {
-		fp.RootPassword = defaultRootPassword
-	}
-
-	if fp.DumpUser == "" {
-		fp.DumpUser = defaultDumpUser
-	}
-
-	if fp.DumpPassword == "" {
-		fp.DumpPassword = defaultDumpPassword
-	}
 
 	if fp.Port == 0 {
 		fp.Port = int64(defaultPort)
@@ -369,10 +317,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.ProcessLimitationPartitionRows == 0 {
 		fp.ProcessLimitationPartitionRows = int64(toml.ByteSize(defaultProcessLimitationPartitionRows))
-	}
-
-	if fp.StorePath == "" {
-		fp.StorePath = defaultStorePath
 	}
 
 	if fp.ServerVersionPrefix == "" {
@@ -457,12 +401,6 @@ func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
 }
 
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
-	fp.LogLevel = log.Level
-	fp.LogFormat = log.Format
-	fp.LogFilename = log.Filename
-	fp.LogMaxSize = int64(log.MaxSize)
-	fp.LogMaxDays = int64(log.MaxDays)
-	fp.LogMaxBackups = int64(log.MaxBackups)
 	fp.MoVersion = version
 }
 

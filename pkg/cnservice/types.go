@@ -113,11 +113,6 @@ type Config struct {
 	Engine struct {
 		Type                EngineType           `toml:"type"`
 		Logstore            options.LogstoreType `toml:"logstore"`
-		FlushInterval       toml.Duration        `toml:"flush-interval"`
-		MinCount            int64                `toml:"min-count"`
-		ScanInterval        toml.Duration        `toml:"scan-interval"`
-		IncrementalInterval toml.Duration        `toml:"incremental-interval"`
-		GlobalMinCount      int64                `toml:"global-min-count"`
 	}
 
 	// parameters for cn-server related buffer.
@@ -130,8 +125,6 @@ type Config struct {
 		HostSize int64 `toml:"host-size"`
 		// GuestSize is the memory limit for one query
 		GuestSize int64 `toml:"guest-size"`
-		// OperatorSize is the memory limit for one operator
-		OperatorSize int64 `toml:"operator-size"`
 		// BatchRows is the batch rows limit for one batch
 		BatchRows int64 `toml:"batch-rows"`
 		// BatchSize is the memory limit for one batch
