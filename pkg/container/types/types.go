@@ -784,7 +784,8 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary,
+		T_array_int8, T_array_int16, T_array_int32, T_array_int64, T_array_float32, T_array_float64:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
