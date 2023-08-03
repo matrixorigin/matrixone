@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -63,7 +64,7 @@ func Prepare(proc *process.Process, v any) error {
 	arg.rt.retryError = nil
 	arg.rt.step = stepLock
 	if arg.block {
-		arg.rt.InitReceiver(proc, true)
+		arg.rt.InitReceiver(proc, colexec.MergeReceiver)
 	}
 	return nil
 }

@@ -23,37 +23,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// isMergeType means the receiver operator receive batch from all regs or single by some order
-// Merge/MergeGroup/MergeLimit ... are Merge-Type
-// while Join/Intersect/Minus ... are not
-func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool) {
-	r.proc = proc
-	if isMergeType {
-		r.aliveMR = len(proc.Reg.MergeReceivers)
-		r.mergeListener = make([]reflect.SelectCase, r.aliveMR+1)
-		r.mergeListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
-		for i, mr := range proc.Reg.MergeReceivers {
-			r.mergeListener[i+1] = reflect.SelectCase{
-				Dir:  reflect.SelectRecv,
-				Chan: reflect.ValueOf(mr.Ch),
-			}
-		}
-	}
-}
-
-// There are 3 type of receiver
-// MergeReceiver Type: Merge/MergeGroup/MergeLimit/... they need receive
-func (r *ReceiverOperator) InitReceiver2(proc *process.Process, typ receiverType) {
+// TODO: add annotation
+func (r *ReceiverOperator) InitReceiver(proc *process.Process, typ receiverType) {
 	r.proc = proc
 	r.typ = typ
 
 	switch typ {
 	case MergeReceiver:
 		r.aliveMR = len(proc.Reg.MergeReceivers)
-		r.mergeListener = make([]reflect.SelectCase, r.aliveMR+1)
-		r.mergeListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
+		r.listeners = make([]reflect.SelectCase, r.aliveMR+1)
+		r.listeners[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
 		for i := 0; i < r.aliveMR; i++ {
-			r.mergeListener[i+1] = reflect.SelectCase{
+			r.listeners[i+1] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(proc.Reg.MergeReceivers[i].Ch),
 			}
@@ -75,10 +56,10 @@ func (r *ReceiverOperator) InitReceiver2(proc *process.Process, typ receiverType
 		r.ReceiveBuild = func(ap process.Analyze) (*batch.Batch, bool, error) {
 			return r.ReceiveFromSingleReg(r.aliveMR, ap)
 		}
-		r.mergeListener = make([]reflect.SelectCase, r.aliveMR+1)
-		r.mergeListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
+		r.listeners = make([]reflect.SelectCase, r.aliveMR+1)
+		r.listeners[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
 		for i := 0; i < r.aliveMR; i++ {
-			r.mergeListener[i+1] = reflect.SelectCase{
+			r.listeners[i+1] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(proc.Reg.MergeReceivers[i].Ch),
 			}
@@ -149,7 +130,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 		}
 
 		start := time.Now()
-		chosen, value, ok := reflect.Select(r.mergeListener)
+		chosen, value, ok := reflect.Select(r.listeners)
 		analyze.WaitStop(start)
 
 		// chosen == 0 means the info comes from proc context.Done
@@ -180,14 +161,14 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 }
 
 func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
-	if len(r.mergeListener) > 0 {
+	if len(r.listeners) > 0 {
 		// Remove the proc context.Done waiter because it MUST BE done
 		// when called this function
-		r.mergeListener = r.mergeListener[1:]
+		r.listeners = r.listeners[1:]
 	}
 
 	for r.aliveMR > 0 {
-		chosen, value, ok := reflect.Select(r.mergeListener)
+		chosen, value, ok := reflect.Select(r.listeners)
 		if !ok {
 			r.removeChosen(chosen)
 			continue
@@ -203,6 +184,6 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 }
 
 func (r *ReceiverOperator) removeChosen(idx int) {
-	r.mergeListener = append(r.mergeListener[:idx], r.mergeListener[idx+1:]...)
+	r.listeners = append(r.listeners[:idx], r.listeners[idx+1:]...)
 	r.aliveMR--
 }

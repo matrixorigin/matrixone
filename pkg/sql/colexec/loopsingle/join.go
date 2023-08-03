@@ -33,7 +33,7 @@ func Prepare(proc *process.Process, arg any) error {
 
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+	ap.ctr.InitReceiver(proc, colexec.SingleReceiver)
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)

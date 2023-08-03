@@ -232,8 +232,6 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	}
 
-	//fmt.Println(DebugShowScopes([]*Scope{s}))
-
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -1718,13 +1716,6 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		return c.compileShuffleJoin(ctx, node, left, right, ss, children)
-		if len(c.cnList) == 1 {
-			return c.compileShuffleJoin(ctx, node, left, right, ss, children)
-		} else {
-			// only support shuffle join on standalone for now. will fix this in the future
-			node.Stats.HashmapStats.Shuffle = false
-		}
-
 	}
 	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
 }
@@ -1826,7 +1817,6 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 		children[i].appendInstruction(lastOperator[i])
 	}
 
-	fmt.Printf("[compileshufflejoin] %s]\n", DebugShowScopes(parent))
 	return parent
 }
 
@@ -2224,15 +2214,12 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
 
-	/*
-		if len(c.cnList) > 1 {
-			n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
-		}
-	*/
+	if len(c.cnList) > 1 {
+		n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+	}
 
 	switch n.Stats.HashmapStats.ShuffleMethod {
 	case plan.ShuffleMethod_Reuse:
-		fmt.Print("[compileShuffleGroup] - Reuse\n")
 		for i := range ss {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.Group,
@@ -2245,7 +2232,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		return ss
 
 	case plan.ShuffleMethod_Reshuffle:
-		fmt.Print("[compileShuffleGroup] - Reshuffle\n")
 		dop := plan2.GetShuffleDop()
 		parent, children := c.newScopeListForShuffleGroup(1, dop)
 		// saving the last operator of all children to make sure the connector setting in
@@ -2299,7 +2285,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 
 		return parent
 	default:
-		fmt.Print("[compileShuffleGroup] - Normal\n")
 		dop := plan2.GetShuffleDop()
 		parent, children := c.newScopeListForShuffleGroup(validScopeCount(ss), dop)
 		c.constructShuffleAndDispatch(ss, children, n)
@@ -2646,7 +2631,8 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			}
 		}
 		if !appended {
-			panic("Could not append left !!!!!")
+			logutil.Errorf("no same addr scope to append left scopes")
+			children[0].PreScopes = append(children[0].PreScopes, scp)
 		}
 	}
 
@@ -2672,7 +2658,8 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			}
 		}
 		if !appended {
-			panic("Could not append right !!!!!")
+			logutil.Errorf("no same addr scope to append right scopes")
+			children[0].PreScopes = append(children[0].PreScopes, scp)
 		}
 	}
 	return parent, children
@@ -2705,11 +2692,9 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Magic: Merge,
 	}
 	buildLen := len(s.Proc.Reg.MergeReceivers) - s.buildIdx
-	fmt.Printf("[newJoinBuildScope] origin len = %d, buildlen = %d\n", len(s.Proc.Reg.MergeReceivers), buildLen)
 	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, buildLen, c.anal.Nodes())
 	for i := 0; i < buildLen; i++ {
 		regTransplant(s, rs, i+s.buildIdx, i)
-		//regTransplant(s, rs, 1, 0)
 	}
 
 	rs.appendInstruction(vm.Instruction{
@@ -2731,7 +2716,6 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 			},
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.buildIdx+1]
-		fmt.Printf("[newJoinBuildScope] s.Proc.Reg.MergeReceivers len = %d\n", len(s.Proc.Reg.MergeReceivers))
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
@@ -3166,7 +3150,6 @@ func isLaunchMode(cnlist engine.Nodes) bool {
 }
 
 func isSameCN(addr string, currentCNAddr string) bool {
-	return addr == currentCNAddr
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {

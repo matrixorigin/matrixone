@@ -38,7 +38,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
+	ap.ctr.InitReceiver(proc, colexec.MergeReceiver)
 
 	ctr := ap.ctr
 	ctr.aggVecs = make([]evalVector, len(ap.Aggs))

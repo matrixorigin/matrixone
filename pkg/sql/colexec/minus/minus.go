@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,7 +33,7 @@ func Prepare(proc *process.Process, argument any) error {
 	arg := argument.(*Argument)
 	{
 		arg.ctr = new(container)
-		arg.ctr.InitReceiver(proc, false)
+		arg.ctr.InitReceiver(proc, colexec.SingleReceiver)
 		arg.ctr.bat = nil
 		arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
 		if err != nil {

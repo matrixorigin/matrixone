@@ -42,7 +42,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, true)
+	ap.ctr.InitReceiver(proc, colexec.MergeReceiver)
 	if ap.Limit > 1024 {
 		ap.ctr.sels = make([]int64, 0, 1024)
 	} else {
