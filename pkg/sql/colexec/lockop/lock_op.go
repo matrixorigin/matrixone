@@ -437,8 +437,8 @@ func doLock(
 			fn = hasNewVersionInRange
 		}
 
-		// if [snapshotTS, lockedTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
+		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
+		changed, err := fn(proc, tableID, eng, vec, snapshotTS.Prev(), newSnapshotTS)
 		if err != nil {
 			return false, timestamp.Timestamp{}, err
 		}
