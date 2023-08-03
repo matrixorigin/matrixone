@@ -127,7 +127,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
 			return err
 		}
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 	}
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil

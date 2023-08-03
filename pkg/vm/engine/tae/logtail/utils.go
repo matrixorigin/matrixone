@@ -605,7 +605,7 @@ func (data *CNCheckpointData) ReadFromData(
 				length := len(rowIDVec)
 				pkVec := vector.NewVec(types.T_uint64.ToType())
 				for i := 0; i < length; i++ {
-					err = vector.AppendFixed[uint64](pkVec, rowIDToU64(rowIDVec[i]), false, m)
+					err = vector.AppendFixed[uint64](pkVec, objectio.HackRowidToU64(rowIDVec[i]), false, m)
 					if err != nil {
 						return
 					}
@@ -621,7 +621,7 @@ func (data *CNCheckpointData) ReadFromData(
 				length := len(rowIDVec)
 				pkVec2 := vector.NewVec(types.T_uint64.ToType())
 				for i := 0; i < length; i++ {
-					err = vector.AppendFixed[uint64](pkVec2, rowIDToU64(rowIDVec[i]), false, m)
+					err = vector.AppendFixed[uint64](pkVec2, objectio.HackRowidToU64(rowIDVec[i]), false, m)
 					if err != nil {
 						return
 					}
@@ -1377,7 +1377,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				node,
 				DBDelSchema,
 				txnimpl.FillDBRow,
-				u64ToRowID(entry.GetID()),
+				objectio.HackU64ToRowid(entry.GetID()),
 				dbNode.GetEnd())
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBDeleteTxnIDX])
 			collector.data.bats[DBDeleteTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetID(), false)
@@ -1388,7 +1388,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				node,
 				catalog.SystemDBSchema,
 				txnimpl.FillDBRow,
-				u64ToRowID(entry.GetID()),
+				objectio.HackU64ToRowid(entry.GetID()),
 				dbNode.GetEnd())
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBInsertTxnIDX])
 		}
@@ -1445,13 +1445,13 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			}
 			// send dropped column del
 			for _, name := range tblNode.BaseNode.Schema.Extra.DroppedAttrs {
-				tableColDelBat.GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
+				tableColDelBat.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
 				tableColDelBat.GetVectorByName(catalog.AttrCommitTs).Append(tblNode.GetEnd(), false)
 			}
 			rowidVec := tableColInsBat.GetVectorByName(catalog.AttrRowID)
 			commitVec := tableColInsBat.GetVectorByName(catalog.AttrCommitTs)
 			for _, usercol := range tblNode.BaseNode.Schema.ColDefs {
-				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))), false)
+				rowidVec.Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))), false)
 				commitVec.Append(tblNode.GetEnd(), false)
 			}
 
@@ -1468,7 +1468,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 				tblNode,
 				catalog.SystemTableSchema,
 				txnimpl.FillTableRow,
-				u64ToRowID(entry.GetID()),
+				objectio.HackU64ToRowid(entry.GetID()),
 				tblNode.GetEnd(),
 			)
 
@@ -1484,7 +1484,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			commitVec := tableColDelBat.GetVectorByName(catalog.AttrCommitTs)
 			pkVec := tableColDelBat.GetVectorByName(pkgcatalog.SystemColAttr_UniqName)
 			for _, usercol := range tblNode.BaseNode.Schema.ColDefs {
-				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))), false)
+				rowidVec.Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))), false)
 				commitVec.Append(tblNode.GetEnd(), false)
 				pkVec.Append([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name)), false)
 			}
@@ -1495,7 +1495,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 				tblNode,
 				TblDelSchema,
 				txnimpl.FillTableRow,
-				u64ToRowID(entry.GetID()),
+				objectio.HackU64ToRowid(entry.GetID()),
 				tblNode.GetEnd(),
 			)
 			tblNode.TxnMVCCNode.AppendTuple(tableDelTxnBat)
@@ -1535,7 +1535,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		if segNode.HasDropCommitted() {
 			vector.AppendFixed(
 				segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
-				segid2rowid(&entry.ID),
+				objectio.HackSegid2Rowid(&entry.ID),
 				false,
 				common.DefaultAllocator,
 			)
@@ -1697,7 +1697,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 			if metaNode.HasDropCommitted() {
 				vector.AppendFixed(
 					blkDNMetaDelRowIDVec,
-					blockid2rowid(&entry.ID),
+					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
 					common.DefaultAllocator,
 				)
@@ -1787,7 +1787,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				)
 				vector.AppendFixed(
 					blkDNMetaInsRowIDVec,
-					blockid2rowid(&entry.ID),
+					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
 					common.DefaultAllocator,
 				)
@@ -1821,7 +1821,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 			if metaNode.HasDropCommitted() {
 				vector.AppendFixed(
 					blkMetaDelRowIDVec,
-					blockid2rowid(&entry.ID),
+					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
 					common.DefaultAllocator,
 				)
@@ -1857,7 +1857,6 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					common.DefaultAllocator,
 				)
 				metaNode.TxnMVCCNode.AppendTuple(blkMetaDelTxnBat)
-
 				is_sorted := false
 				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
@@ -1906,7 +1905,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				)
 				vector.AppendFixed(
 					blkCNMetaInsRowIDVec,
-					blockid2rowid(&entry.ID),
+					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
 					common.DefaultAllocator,
 				)
@@ -1971,7 +1970,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				)
 				vector.AppendFixed(
 					blkMetaInsRowIDVec,
-					blockid2rowid(&entry.ID),
+					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
 					common.DefaultAllocator,
 				)

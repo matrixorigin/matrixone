@@ -214,8 +214,8 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 
 	if tblName == "" {
 		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
-		for _, dbName := range dbNames {
-			db, err = e.Database(noRepCtx, dbName, op)
+		for _, databaseName := range dbNames {
+			db, err = e.Database(noRepCtx, databaseName, op)
 			if err != nil {
 				return "", "", err
 			}
@@ -223,6 +223,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 			tableName, rel := distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				tblName = tableName
+				dbName = databaseName
 				break
 			}
 		}

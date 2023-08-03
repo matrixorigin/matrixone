@@ -118,11 +118,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 			resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.RowCount(), proc.GetMPool()))
 
 			proc.SetInputBatch(resBat)
-		} else {
-			// ToDo: need ouyuaning to make sure there are only one table
-			// in a deletion operator
-			// do compaction here
-			p.DeleteCtx.Source.Delete(proc.Ctx, nil, catalog.Row_ID)
 		}
 		return process.ExecStop, nil
 	}
