@@ -100,6 +100,9 @@ func (c *Config) Adjust() {
 	if c.ServerWorkers == 0 {
 		c.ServerWorkers = 50
 	}
+	if c.ServerBufferQueueSize == 0 {
+		c.ServerBufferQueueSize = 100000
+	}
 }
 
 // NewClient create client from config
