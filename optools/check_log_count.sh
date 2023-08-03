@@ -35,6 +35,7 @@ echo_proxy() {
 }
 
 show_env() {
+    echo_proxy "This script is encouraged by #9835"
     echo_proxy "arg count_threshold : $count_threshold"
     echo_proxy "arg metric_interval : $metric_interval"
     echo_proxy "out_log_count file  : $out_log_count"
@@ -88,11 +89,11 @@ EOF`
 check_log_count() {
     local rows=`wc -l $out_log_count | awk '{print $1}'`
     if [ "$rows" == "0" ]; then
-        echo_proxy "All log messages spitting out in threshold(val: $count_threshold) per second"
+        echo_proxy "log messages spitting out per second < threshold(val: $count_threshold): OK!"
         return 0
     fi
 
-    echo_proxy "log messages per second threshold(val: $count_threshold)"
+    echo_proxy "log messages spitting out per second threshold(val: $count_threshold)"
     echo_proxy "each rows show last $metric_interval secs status"
     echo_proxy
     cat $out_log_count
@@ -136,6 +137,6 @@ get_log_count
 check_log_count
 ret=$?
 if [ "$ret" != "0" ]; then
-    echo_proxy "log messages spitting out more then threshold(val: $count_threshold)"
+    echo_proxy "log messages spitting out per second > threshold(val: $count_threshold): NOT ok!!!"
     exit 1
 fi
