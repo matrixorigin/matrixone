@@ -449,7 +449,7 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 
 	i := vector.OrderedFindFirstIndexInSortedSlice[uint64](tableID, tidVec)
 	if i < 0 {
-		panic("tableID not found in checkpoint meta")
+		return
 	}
 
 	tid := tidVec[i]
