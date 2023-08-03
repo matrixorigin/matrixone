@@ -281,11 +281,11 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 // 2. Message with end flag and analysis result
 // 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
-	fmt.Printf("is remote run\n")
 	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
 	lastIdx := len(s.Instructions) - 1
 	lastInstruction := s.Instructions[lastIdx]
 	s.Instructions = s.Instructions[:lastIdx]
+	fmt.Printf("[remoterun] %s\n", DebugShowScopes([]*Scope{s}))
 
 	// The current logic is a bit hacky, the last operator doesn't go in the pipeline frame
 	// i.e. we need to call the corresponding Perpare, Call and Free manually.

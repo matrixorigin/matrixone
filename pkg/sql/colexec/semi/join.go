@@ -31,7 +31,8 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+	//ap.ctr.InitReceiver(proc, false)
+	ap.ctr.InitReceiver2(proc, colexec.JoinReceiver)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 
@@ -69,7 +70,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			}
 
 		case Probe:
-			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			//bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			bat, _, err := ctr.ReceiveProbe(anal)
 			if err != nil {
 				return process.ExecNext, err
 			}
@@ -99,7 +101,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 }
 
 func (ctr *container) build(anal process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	//bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	bat, _, err := ctr.ReceiveBuild(anal)
 	if err != nil {
 		return err
 	}
