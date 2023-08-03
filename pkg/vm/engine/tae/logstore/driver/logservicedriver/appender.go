@@ -16,10 +16,10 @@ package logservicedriver
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
