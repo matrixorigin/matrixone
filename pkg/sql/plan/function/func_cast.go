@@ -108,7 +108,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
+		types.T_binary, types.T_varbinary, types.T_enum,
 	},
 
 	types.T_uint16: {
@@ -130,7 +130,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
+		types.T_binary, types.T_varbinary, types.T_enum,
 	},
 
 	types.T_uint64: {
@@ -141,7 +141,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
+		types.T_binary, types.T_varbinary, types.T_enum,
 	},
 
 	types.T_float32: {
@@ -319,7 +319,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_enum: {
-		types.T_enum, types.T_uint16,
+		types.T_enum, types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
 		types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text,
 	},
@@ -800,6 +800,9 @@ func uint8ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint8 to %s", toType))
 }
@@ -857,6 +860,9 @@ func uint16ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint16 to %s", toType))
 }
@@ -914,6 +920,9 @@ func uint32ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint32 to %s", toType))
 }
@@ -971,6 +980,9 @@ func uint64ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint64 to %s", toType))
 }

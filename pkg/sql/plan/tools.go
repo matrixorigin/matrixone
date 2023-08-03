@@ -25,6 +25,7 @@ const (
 	moDefaultRecursionMax     = 100
 	moCheckRecursionLevelFun  = "mo_check_level"
 	moEnumCastIndexToValueFun = "cast_index_to_value"
+	moEnumCastValueToIndexFun = "cast_value_to_index"
 )
 
 func makeZeroRecursiveLevel() tree.SelectExpr {
