@@ -37,17 +37,6 @@ const (
 )
 
 var (
-	//root name
-	defaultRootName = "root"
-
-	//root password
-	defaultRootPassword = ""
-
-	//dump user name
-	defaultDumpUser = "dump"
-
-	//dump user password
-	defaultDumpPassword = "111"
 
 	//port defines which port the mo-server listens on and clients connect to
 	defaultPort = 6001
@@ -75,9 +64,6 @@ var (
 
 	//process.Limitation.PartitionRows.  10 << 32 = 42949672960
 	defaultProcessLimitationPartitionRows = 42949672960
-
-	//the root directory of the storage
-	defaultStorePath = "./store"
 
 	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
 

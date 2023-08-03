@@ -111,8 +111,8 @@ type Config struct {
 	// FileService file service configuration
 
 	Engine struct {
-		Type                EngineType           `toml:"type"`
-		Logstore            options.LogstoreType `toml:"logstore"`
+		Type     EngineType           `toml:"type"`
+		Logstore options.LogstoreType `toml:"logstore"`
 	}
 
 	// parameters for cn-server related buffer.
