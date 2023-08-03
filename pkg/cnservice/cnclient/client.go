@@ -80,7 +80,6 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 				zap.String("local-address", c.localServiceAddress),
 				zap.String("remote-address", backend))
 	}
-
 	return c.client.NewStream(backend, true)
 }
 

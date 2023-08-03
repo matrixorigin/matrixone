@@ -2589,7 +2589,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 	parent := make([]*Scope, 0, len(c.cnList))
 	children := make([]*Scope, 0, len(c.cnList))
 	lnum := len(left)
-	chlen := lnum + len(right)
+	sum := lnum + len(right)
 	for _, n := range c.cnList {
 		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
 		ss := make([]*Scope, dop)
@@ -2599,7 +2599,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].IsJoin = true
 			ss[i].NodeInfo.Addr = n.Addr
 			ss[i].NodeInfo.Mcpu = 1
-			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, chlen, c.anal.Nodes())
+			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, sum, c.anal.Nodes())
 			ss[i].buildIdx = lnum
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *batch.Batch, 16)

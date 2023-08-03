@@ -285,7 +285,6 @@ func (s *Scope) remoteRun(c *Compile) error {
 	lastIdx := len(s.Instructions) - 1
 	lastInstruction := s.Instructions[lastIdx]
 	s.Instructions = s.Instructions[:lastIdx]
-	fmt.Printf("[remoterun] %s\n", DebugShowScopes([]*Scope{s}))
 
 	// The current logic is a bit hacky, the last operator doesn't go in the pipeline frame
 	// i.e. we need to call the corresponding Perpare, Call and Free manually.

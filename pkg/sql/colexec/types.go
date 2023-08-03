@@ -93,7 +93,7 @@ type ReceiverOperator struct {
 	//
 	// Merge/MergeGroup/MergeLimit ... are Merge-Type
 	// while Join/Intersect/Minus ... are not
-	aliveMR   int
+	aliveCnt  int
 	listeners []reflect.SelectCase
 
 	typ receiverType

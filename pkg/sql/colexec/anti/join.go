@@ -61,7 +61,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			ctr.state = Probe
 
 		case Probe:
-			//bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			bat, _, err := ctr.ReceiveProbe(anal)
 			if err != nil {
 				return process.ExecNext, err
@@ -96,7 +95,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveBuild(anal)
-	//bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}

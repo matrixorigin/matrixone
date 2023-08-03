@@ -30,10 +30,10 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, typ receiverType)
 
 	switch typ {
 	case MergeReceiver:
-		r.aliveMR = len(proc.Reg.MergeReceivers)
-		r.listeners = make([]reflect.SelectCase, r.aliveMR+1)
+		r.aliveCnt = len(proc.Reg.MergeReceivers)
+		r.listeners = make([]reflect.SelectCase, r.aliveCnt+1)
 		r.listeners[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
-		for i := 0; i < r.aliveMR; i++ {
+		for i := 0; i < r.aliveCnt; i++ {
 			r.listeners[i+1] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(proc.Reg.MergeReceivers[i].Ch),
@@ -41,8 +41,8 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, typ receiverType)
 		}
 	case JoinReceiver:
 		r.JoinReceiverOperator = new(JoinReceiverOperator)
-		r.aliveMR = len(proc.Reg.MergeReceivers) - 1
-		if r.aliveMR == 1 {
+		r.aliveCnt = len(proc.Reg.MergeReceivers) - 1
+		if r.aliveCnt == 1 {
 			r.ReceiveBuild = func(ap process.Analyze) (*batch.Batch, bool, error) {
 				return r.ReceiveFromSingleReg(1, ap)
 			}
@@ -54,11 +54,11 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, typ receiverType)
 
 		r.ReceiveProbe = r.ReceiveFromAllRegs
 		r.ReceiveBuild = func(ap process.Analyze) (*batch.Batch, bool, error) {
-			return r.ReceiveFromSingleReg(r.aliveMR, ap)
+			return r.ReceiveFromSingleReg(r.aliveCnt, ap)
 		}
-		r.listeners = make([]reflect.SelectCase, r.aliveMR+1)
+		r.listeners = make([]reflect.SelectCase, r.aliveCnt+1)
 		r.listeners[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
-		for i := 0; i < r.aliveMR; i++ {
+		for i := 0; i < r.aliveCnt; i++ {
 			r.listeners[i+1] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(proc.Reg.MergeReceivers[i].Ch),
@@ -125,7 +125,7 @@ func (r *ReceiverOperator) CloseAllReg() {
 // if you want to use this function
 func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.Batch, bool, error) {
 	for {
-		if r.aliveMR == 0 {
+		if r.aliveCnt == 0 {
 			return nil, true, nil
 		}
 
@@ -167,7 +167,7 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 		r.listeners = r.listeners[1:]
 	}
 
-	for r.aliveMR > 0 {
+	for r.aliveCnt > 0 {
 		chosen, value, ok := reflect.Select(r.listeners)
 		if !ok {
 			r.removeChosen(chosen)
@@ -185,5 +185,5 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 
 func (r *ReceiverOperator) removeChosen(idx int) {
 	r.listeners = append(r.listeners[:idx], r.listeners[idx+1:]...)
-	r.aliveMR--
+	r.aliveCnt--
 }
