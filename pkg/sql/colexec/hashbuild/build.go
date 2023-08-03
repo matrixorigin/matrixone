@@ -140,7 +140,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.RowCount()
 
-	ctr.sels = make([][]int32, 0, count)
+	ctr.sels = make([][]int32, count, count)
 
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
