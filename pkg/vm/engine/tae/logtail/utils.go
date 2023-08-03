@@ -451,7 +451,6 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 	if i < 0 {
 		return
 	}
-
 	tid := tidVec[i]
 	blkInsStr := blkIns.GetBytesAt(i)
 	blkCNInsStr := blkCNIns.GetBytesAt(i)
@@ -554,6 +553,7 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
+			//logutil.Infof("load block %v from %v to %d", block.location.String(), block.ClosedInterval.String(), bat.Vecs[0].Length())
 			if block.End == 0 {
 				continue
 			}
@@ -641,6 +641,9 @@ func (data *CNCheckpointData) ReadFromData(
 
 func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Batch) (ins, del, cnIns, segDel *api.Batch, err error) {
 	var insTaeBat, delTaeBat, cnInsTaeBat, segDelTaeBat *batch.Batch
+	if len(bats) == 0 {
+		return
+	}
 	if tid == pkgcatalog.MO_DATABASE_ID || tid == pkgcatalog.MO_TABLES_ID || tid == pkgcatalog.MO_COLUMNS_ID {
 		insTaeBat = bats[BlockInsert]
 		delTaeBat = bats[BlockDelete]
@@ -766,7 +769,7 @@ func (data *CheckpointData) prepareMeta() {
 }
 
 func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart, delEnd int32) {
-	if delEnd < delStart && insEnd < insStart {
+	if delEnd <= delStart && insEnd <= insStart {
 		return
 	}
 	meta, ok := data.meta[tid]
@@ -774,7 +777,7 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 		meta = NewCheckpointMeta()
 		data.meta[tid] = meta
 	}
-	if delEnd >= delStart {
+	if delEnd > delStart {
 		if meta.tables[BlockDelete] == nil {
 			meta.tables[BlockDelete] = NewTableMeta()
 			meta.tables[BlockDelete].Start = uint64(delStart)
@@ -791,7 +794,7 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 			}
 		}
 	}
-	if insEnd >= insStart {
+	if insEnd > insStart {
 		if meta.tables[BlockInsert] == nil {
 			meta.tables[BlockInsert] = NewTableMeta()
 			meta.tables[BlockInsert].Start = uint64(insStart)
@@ -805,7 +808,7 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 }
 
 func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
-	if delEnd < delStart {
+	if delEnd <= delStart {
 		return
 	}
 	meta, ok := data.meta[tid]
@@ -813,7 +816,7 @@ func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 		meta = NewCheckpointMeta()
 		data.meta[tid] = meta
 	}
-	if delEnd >= delStart {
+	if delEnd > delStart {
 		if meta.tables[SegmentDelete] == nil {
 			meta.tables[SegmentDelete] = NewTableMeta()
 			meta.tables[SegmentDelete].Start = uint64(delStart)
@@ -870,7 +873,7 @@ func (data *CheckpointData) WriteTo(
 
 	for tid, mata := range data.meta {
 		for i, table := range mata.tables {
-			if table == nil {
+			if table == nil || table.ClosedInterval.Start == table.ClosedInterval.End {
 				continue
 			}
 			idx := uint16(i)
@@ -956,6 +959,16 @@ func (data *CheckpointData) WriteTo(
 		}
 	}
 
+	data.meta[0] = NewCheckpointMeta()
+	data.meta[0].tables[0] = NewTableMeta()
+	blockLoc := &BlockLocation{
+		ClosedInterval: common.ClosedInterval{
+			Start: 0,
+			End:   0,
+		},
+		location: objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID()),
+	}
+	data.meta[0].tables[0].BlockLocation = append(data.meta[0].tables[0].BlockLocation, blockLoc)
 	data.prepareMeta()
 	if err != nil {
 		return
@@ -1178,6 +1191,7 @@ func (data *CheckpointData) readMetaBatch(
 	if err != nil {
 		return
 	}
+	logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
 	data.setMetaBatch(bats[0])
 	return
 }
@@ -1199,6 +1213,12 @@ func (data *CheckpointData) replayMetaBatch() {
 
 	for i := 0; i < data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX].Length(); i++ {
 		tid := tidVec[i]
+		if tid == 0 {
+			strs := strings.Split(string(insVec[i]), ":")
+			loc, _ := blockio.EncodeLocationFromString(strs[0])
+			data.locations[string(insVec[i])] = loc
+			continue
+		}
 		insLocation := string(insVec[i])
 		delLocation := string(delVec[i])
 		delCNLocation := string(delCNVec[i])
@@ -1600,6 +1620,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		}
 	}
 	delEnd := segDelBat.GetVectorByName(catalog.AttrRowID).Length()
+	logutil.Infof("UpdateSegMeta delStart %d delEnd %d ", delStart, delEnd)
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
 	return nil
 }
@@ -1698,6 +1719,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 		metaNode := node
 		if metaNode.BaseNode.MetaLoc.IsEmpty() || metaNode.Aborted {
 			if metaNode.HasDropCommitted() {
+				logutil.Infof("metaNode.HasDropCommitted() is true, metaNode: %v", metaNode)
 				vector.AppendFixed(
 					blkDNMetaDelRowIDVec,
 					objectio.HackBlockid2Rowid(&entry.ID),
@@ -1736,6 +1758,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				)
 				metaNode.TxnMVCCNode.AppendTuple(blkDNMetaDelTxnBat)
 			} else {
+				logutil.Infof("!metaNode.HasDropCommitted() is true, metaNode: %v", metaNode)
 				vector.AppendFixed(
 					blkDNMetaInsIDVec,
 					entry.ID,
@@ -1821,6 +1844,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				metaNode.TxnMVCCNode.AppendTuple(blkDNMetaInsTxnBat)
 			}
 		} else {
+			logutil.Infof("metaNode.HasDropCommitted()111 is true, metaNode: %v", metaNode)
 			if metaNode.HasDropCommitted() {
 				vector.AppendFixed(
 					blkMetaDelRowIDVec,
@@ -1919,6 +1943,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					common.DefaultAllocator,
 				)
 			} else {
+				logutil.Infof("is_sorted.HasDropCommitted()111 is true, metaNode: %v", metaNode)
 				is_sorted := false
 				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
@@ -2009,6 +2034,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	}
 	insEnd := collector.data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
 	delEnd := collector.data.bats[BLKMetaDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	logutil.Infof("UpdateBlkMeta entry.GetSegment().GetTable().ID is %dinsStart %d insEnd %d delStart %d delEnd %d ", entry.GetSegment().GetTable().ID, insStart, insEnd, delStart, delEnd)
 	collector.data.UpdateBlkMeta(entry.GetSegment().GetTable().ID, int32(insStart), int32(insEnd), int32(delStart), int32(delEnd))
 	return nil
 }
