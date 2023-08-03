@@ -117,8 +117,9 @@ type Transaction struct {
 	// blockId uint64
 
 	// local timestamp for workspace operations
-	meta *txn.TxnMeta
-	op   client.TxnOperator
+	meta     *txn.TxnMeta
+	op       client.TxnOperator
+	sqlCount atomic.Uint64
 
 	// writes cache stores any writes done by txn
 	writes []Entry
@@ -276,7 +277,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	// For RC isolation, update the snapshot TS of transaction for each statement including
 	// the first one. Means that, the timestamp of the first statement is not the transaction's
 	// begin timestamp, but its own timestamp.
-	if !commit && txn.meta.IsRCIsolation() {
+	if !commit && txn.meta.IsRCIsolation() && txn.GetSQLCount() > 0 {
 		if err := txn.op.UpdateSnapshot(
 			ctx,
 			timestamp.Timestamp{}); err != nil {
@@ -359,6 +360,14 @@ func (txn *Transaction) resetSnapshot() error {
 		return true
 	})
 	return nil
+}
+
+func (txn *Transaction) IncrSQLCount() {
+	txn.sqlCount.Add(1)
+}
+
+func (txn *Transaction) GetSQLCount() uint64 {
+	return txn.sqlCount.Load()
 }
 
 // Entry represents a delete/insert

@@ -31,6 +31,7 @@ backend = "DISK-ETL"
 
 [dn]
 uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+port-base = 19000
 
 [dn.Txn.Storage]
 backend = "TAE"
@@ -46,8 +47,6 @@ incremental-interval = "180s"
 global-min-count = 60
 
 [dn.LogtailServer]
-listen-address = "0.0.0.0:32003"
-service-address = "127.0.0.1:32003"
 rpc-max-message-size = "16KiB"
 rpc-payload-copy-buffer-size = "16KiB"
 rpc-enable-checksum = true

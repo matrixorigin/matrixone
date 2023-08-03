@@ -82,11 +82,15 @@ func NewMarshalNodeImpl(node *plan.Node) *MarshalNodeImpl {
 
 func (m MarshalNodeImpl) GetStats() Stats {
 	if m.node.Stats != nil {
+		var hashmapSize float64
+		if m.node.Stats.HashmapStats != nil {
+			hashmapSize = m.node.Stats.HashmapStats.HashmapSize
+		}
 		return Stats{
 			BlockNum:    m.node.Stats.BlockNum,
 			Cost:        m.node.Stats.Cost,
 			Outcnt:      m.node.Stats.Outcnt,
-			HashmapSize: m.node.Stats.HashmapSize,
+			HashmapSize: hashmapSize,
 			Rowsize:     m.node.Stats.Rowsize,
 		}
 	} else {
