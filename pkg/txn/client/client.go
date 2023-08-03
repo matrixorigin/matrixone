@@ -15,7 +15,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"sync"
 	"sync/atomic"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	cutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -140,7 +140,7 @@ type txnClient struct {
 		// indicate whether the CN can provide service normally.
 		state status
 		// order by snapshot ts
-		activeTxns []*txnOperator
+		activeTxns map[string]*txnOperator
 	}
 }
 
@@ -153,6 +153,7 @@ func NewTxnClient(
 		sender: sender,
 	}
 	c.mu.state = paused
+	c.mu.activeTxns = make(map[string]*txnOperator, 100000)
 	for _, opt := range options {
 		opt(c)
 	}
@@ -333,16 +334,8 @@ func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
 func (client *txnClient) popTransaction(txn txn.TxnMeta) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	i := -1
-	for i = range client.mu.activeTxns {
-		op := client.mu.activeTxns[i]
-		if bytes.Equal(op.txnID, txn.ID) {
-			break
-		}
-	}
-	if i > 0 {
-		client.mu.activeTxns = append(client.mu.activeTxns[:i], client.mu.activeTxns[i+1:]...)
-	}
+
+	delete(client.mu.activeTxns, cutil.UnsafeBytesToString(txn.ID))
 	client.removeFromLeakCheck(txn.ID)
 }
 
@@ -351,7 +344,7 @@ func (client *txnClient) addActiveTxn(op *txnOperator) error {
 	defer client.mu.Unlock()
 
 	if client.mu.state == normal {
-		client.mu.activeTxns = append(client.mu.activeTxns, op)
+		client.mu.activeTxns[cutil.UnsafeBytesToString(op.txnID)] = op
 		client.addToLeakCheck(op)
 		return nil
 	}
@@ -377,8 +370,10 @@ func (client *txnClient) Resume() {
 func (client *txnClient) AbortAllRunningTxn() {
 	var ops []*txnOperator
 	client.mu.Lock()
-	ops = append(ops, client.mu.activeTxns...)
-	client.mu.activeTxns = client.mu.activeTxns[:0]
+	for key, op := range client.mu.activeTxns {
+		ops = append(ops, op)
+		delete(client.mu.activeTxns, key)
+	}
 	client.mu.Unlock()
 
 	for _, op := range ops {
