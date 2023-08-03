@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -446,35 +447,38 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 	blkDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_LOC_IDX]
 	segDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_LOC_IDX]
 
-	for i := 0; i < data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX].Length(); i++ {
-		tid := tidVec[i]
-		blkInsStr := blkIns.GetBytesAt(i)
-		blkCNInsStr := blkCNIns.GetBytesAt(i)
-		blkDelStr := blkDel.GetBytesAt(i)
-		segDelStr := segDel.GetBytesAt(i)
-		tableMeta := NewCheckpointMeta()
-		if len(blkInsStr) > 0 {
-			blkInsertTableMeta := NewTableMeta()
-			blkInsertTableMeta.DecodeFromString(string(blkInsStr))
-			// blkInsertOffset
-			tableMeta.tables[BlockInsert] = blkInsertTableMeta
-		}
-		if len(blkCNInsStr) > 0 {
-			blkDeleteTableMeta := NewTableMeta()
-			blkDeleteTableMeta.DecodeFromString(string(blkDelStr))
-			tableMeta.tables[BlockDelete] = blkDeleteTableMeta
-			cnBlkInsTableMeta := NewTableMeta()
-			cnBlkInsTableMeta.DecodeFromString(string(blkCNInsStr))
-			tableMeta.tables[CNBlockInsert] = cnBlkInsTableMeta
-		}
-		if len(segDelStr) > 0 {
-			segDeleteTableMeta := NewTableMeta()
-			segDeleteTableMeta.DecodeFromString(string(segDelStr))
-			tableMeta.tables[SegmentDelete] = segDeleteTableMeta
-		}
-
-		data.meta[tid] = tableMeta
+	i := vector.OrderedFindFirstIndexInSortedSlice[uint64](tableID, tidVec)
+	if i < 0 {
+		panic("tableID not found in checkpoint meta")
 	}
+
+	tid := tidVec[i]
+	blkInsStr := blkIns.GetBytesAt(i)
+	blkCNInsStr := blkCNIns.GetBytesAt(i)
+	blkDelStr := blkDel.GetBytesAt(i)
+	segDelStr := segDel.GetBytesAt(i)
+	tableMeta := NewCheckpointMeta()
+	if len(blkInsStr) > 0 {
+		blkInsertTableMeta := NewTableMeta()
+		blkInsertTableMeta.DecodeFromString(string(blkInsStr))
+		// blkInsertOffset
+		tableMeta.tables[BlockInsert] = blkInsertTableMeta
+	}
+	if len(blkCNInsStr) > 0 {
+		blkDeleteTableMeta := NewTableMeta()
+		blkDeleteTableMeta.DecodeFromString(string(blkDelStr))
+		tableMeta.tables[BlockDelete] = blkDeleteTableMeta
+		cnBlkInsTableMeta := NewTableMeta()
+		cnBlkInsTableMeta.DecodeFromString(string(blkCNInsStr))
+		tableMeta.tables[CNBlockInsert] = cnBlkInsTableMeta
+	}
+	if len(segDelStr) > 0 {
+		segDeleteTableMeta := NewTableMeta()
+		segDeleteTableMeta.DecodeFromString(string(segDelStr))
+		tableMeta.tables[SegmentDelete] = segDeleteTableMeta
+	}
+
+	data.meta[tid] = tableMeta
 	meta = data.meta[tableID]
 	return
 }
@@ -729,28 +733,32 @@ func (data *CheckpointData) prepareMeta() {
 	segDelLoc := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
 
 	tidVec := bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-
-	for tid, meta := range data.meta {
-		vector.AppendFixed[uint64](tidVec, tid, false, common.DefaultAllocator)
-		if meta.tables[BlockInsert] == nil {
+	var sortMeta []int
+	for tid := range data.meta {
+		sortMeta = append(sortMeta, int(tid))
+	}
+	sort.Ints(sortMeta)
+	for _, tid := range sortMeta {
+		vector.AppendFixed[uint64](tidVec, uint64(tid), false, common.DefaultAllocator)
+		if data.meta[uint64(tid)].tables[BlockInsert] == nil {
 			vector.AppendBytes(blkInsLoc, nil, true, common.DefaultAllocator)
 		} else {
-			vector.AppendBytes(blkInsLoc, []byte(meta.tables[BlockInsert].EncodeToString()), false, common.DefaultAllocator)
+			vector.AppendBytes(blkInsLoc, []byte(data.meta[uint64(tid)].tables[BlockInsert].EncodeToString()), false, common.DefaultAllocator)
 		}
-		if meta.tables[BlockDelete] == nil {
+		if data.meta[uint64(tid)].tables[BlockDelete] == nil {
 			vector.AppendBytes(blkDelLoc, nil, true, common.DefaultAllocator)
 		} else {
-			vector.AppendBytes(blkDelLoc, []byte(meta.tables[BlockDelete].EncodeToString()), false, common.DefaultAllocator)
+			vector.AppendBytes(blkDelLoc, []byte(data.meta[uint64(tid)].tables[BlockDelete].EncodeToString()), false, common.DefaultAllocator)
 		}
-		if meta.tables[CNBlockInsert] == nil {
+		if data.meta[uint64(tid)].tables[CNBlockInsert] == nil {
 			vector.AppendBytes(blkCNInsLoc, nil, true, common.DefaultAllocator)
 		} else {
-			vector.AppendBytes(blkCNInsLoc, []byte(meta.tables[CNBlockInsert].EncodeToString()), false, common.DefaultAllocator)
+			vector.AppendBytes(blkCNInsLoc, []byte(data.meta[uint64(tid)].tables[CNBlockInsert].EncodeToString()), false, common.DefaultAllocator)
 		}
-		if meta.tables[SegmentDelete] == nil {
+		if data.meta[uint64(tid)].tables[SegmentDelete] == nil {
 			vector.AppendBytes(segDelLoc, nil, true, common.DefaultAllocator)
 		} else {
-			vector.AppendBytes(segDelLoc, []byte(meta.tables[SegmentDelete].EncodeToString()), false, common.DefaultAllocator)
+			vector.AppendBytes(segDelLoc, []byte(data.meta[uint64(tid)].tables[SegmentDelete].EncodeToString()), false, common.DefaultAllocator)
 		}
 	}
 }
