@@ -120,7 +120,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
-			} else if (fstr == "array_float32" || fstr == "array_float64") && width > types.MaxArrayDimension {
+			} else if (fstr == "array_int8" || fstr == "array_int16" || fstr == "array_int32" || fstr == "array_int64" || fstr == "array_float32" || fstr == "array_float64") && width > types.MaxArrayDimension {
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxArrayDimension: %v", types.MaxVarcharLen)
 			}
 			switch fstr {

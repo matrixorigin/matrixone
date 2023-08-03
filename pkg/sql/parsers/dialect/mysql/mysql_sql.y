@@ -294,7 +294,7 @@ import (
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
-%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID ARRAY_FLOAT32 ARRAY_FLOAT64
+%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID ARRAY_INT8 ARRAY_INT16 ARRAY_INT32 ARRAY_INT64 ARRAY_FLOAT32 ARRAY_FLOAT64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION
 
@@ -9420,6 +9420,58 @@ char_type:
             },
         }
     }
+|   ARRAY_INT8 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   ARRAY_INT16 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   ARRAY_INT32 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   ARRAY_INT64 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
 |   ARRAY_FLOAT32 length_option_opt
     {
         locale := ""
@@ -9918,6 +9970,10 @@ non_reserved_keyword:
 |   INDEXES
 |   ISOLATION
 |   JSON
+|   ARRAY_INT8
+|   ARRAY_INT16
+|   ARRAY_INT32
+|   ARRAY_INT64
 |   ARRAY_FLOAT32
 |   ARRAY_FLOAT64
 |   KEY_BLOCK_SIZE

@@ -583,6 +583,10 @@ func init() {
 		"stage":                      STAGE,
 		"stages":                     STAGES,
 		"credentials":                CREDENTIALS,
+		"array_int8":                 ARRAY_INT8,
+		"array_int16":                ARRAY_INT16,
+		"array_int32":                ARRAY_INT32,
+		"array_int64":                ARRAY_INT64,
 		"array_float32":              ARRAY_FLOAT32,
 		"array_float64":              ARRAY_FLOAT64,
 	}
