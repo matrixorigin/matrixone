@@ -162,7 +162,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			}
 			ai := int64(v) - 1
 			if ctr.sels[ai] == nil {
-				ctr.sels[ai] = make([]int32, 0, 16)
+				ctr.sels[ai] = make([]int32, 0)
 			}
 			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
