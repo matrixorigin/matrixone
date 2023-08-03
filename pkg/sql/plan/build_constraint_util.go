@@ -999,6 +999,10 @@ func buildValueScan(
 						args[len(args)-1] = defExpr
 
 						defExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), moEnumCastValueToIndexFun, args)
+						if err != nil {
+							bat.Clean(proc.Mp())
+							return err
+						}
 					}
 				}
 				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
