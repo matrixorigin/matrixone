@@ -100,14 +100,14 @@ func TestGenerateUpgradeSQL(t *testing.T) {
 			expectedSchema: &table.Table{
 				Database: "testdb",
 				Table:    "testtable",
-				Columns:  []table.Column{txnIDCol, statementIDCol, sessionIDCol},
+				Columns:  []table.Column{txnIDCol, statementIDCol},
 			},
 			expectedDiff: table.SchemaDiff{
-				AddedColumns: []table.Column{statementIDCol, sessionIDCol},
+				AddedColumns: []table.Column{statementIDCol},
 				TableName:    "testtable",
 				DatabaseName: "testdb",
 			},
-			expectedSQL: "BEGIN;\nALTER TABLE `testdb`.`testtable` ADD COLUMN `statement_id` VARCHAR(16) DEFAULT 0;\nALTER TABLE `testdb`.`testtable` ADD COLUMN `session_id` VARCHAR(16) DEFAULT 0;\nCOMMIT;",
+			expectedSQL: "BEGIN;\nALTER TABLE `testdb`.`testtable` ADD COLUMN `statement_id` VARCHAR(16) DEFAULT 0;\nCOMMIT;",
 		},
 	}
 
