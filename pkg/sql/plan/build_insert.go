@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -215,7 +217,14 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 	for insertRowIdx, pkColIdx = range pkPosInValues {
 		valExprs := make([]*Expr, rowsCount)
-		colTyp = makePlan2Type(bat.Vecs[insertRowIdx].GetType())
+		rowTyp := bat.Vecs[insertRowIdx].GetType()
+		colTyp = makePlan2Type(rowTyp)
+
+		var varcharTyp *Type
+		if rowTyp.Oid == types.T_uuid {
+			typ := types.T_varchar.ToType()
+			varcharTyp = MakePlan2Type(&typ)
+		}
 
 		for _, data := range node.RowsetData.Cols[insertRowIdx].Data {
 			rowExpr := DeepCopyExpr(data.Expr)
@@ -228,15 +237,34 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 		for i := 0; i < rowsCount; i++ {
 			if valExprs[i] == nil {
-				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, uint64(i))
-				if constExpr == nil {
-					return nil
-				}
-				valExprs[i] = &plan.Expr{
-					Typ: colTyp,
-					Expr: &plan.Expr_C{
-						C: constExpr,
-					},
+				if bat.Vecs[insertRowIdx].GetType().Oid == types.T_uuid {
+					// we have not uuid type in plan.Const. so use string & cast string to uuid
+					val := vector.MustFixedCol[types.Uuid](bat.Vecs[insertRowIdx])[i]
+					constExpr := &plan.Expr{
+						Typ: varcharTyp,
+						Expr: &plan.Expr_C{
+							C: &plan.Const{
+								Value: &plan.Const_Sval{
+									Sval: val.ToString(),
+								},
+							},
+						},
+					}
+					valExprs[i], err = appendCastBeforeExpr(proc.Ctx, constExpr, colTyp, false)
+					if err != nil {
+						return nil
+					}
+				} else {
+					constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, uint64(i))
+					if constExpr == nil {
+						return nil
+					}
+					valExprs[i] = &plan.Expr{
+						Typ: colTyp,
+						Expr: &plan.Expr_C{
+							C: constExpr,
+						},
+					}
 				}
 			}
 		}
