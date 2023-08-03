@@ -108,8 +108,8 @@ func EncodeType(v *Type) ([]byte, int32) {
 
 func DecodeType(v []byte) Type {
 	basedata := v[:TSize]
-	start := TSize - SSize
-	*(*[]string)(unsafe.Pointer(&basedata[start])) = nil
+	//start := TSize - SSize
+	//*(*[]string)(unsafe.Pointer(&basedata[start])) = nil
 	basetyp := *(*Type)(unsafe.Pointer(&basedata[0]))
 	v = v[TSize:]
 	if len(v) != 0 {
