@@ -16,7 +16,7 @@ package logservicedriver
 
 import (
 	"context"
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
 
@@ -86,7 +86,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 			// so, give a chance here to let dn can detect this intentional shut down operation and panic with err timely.
 			select {
 			case <-a.closeCtx.Done():
-				err = errors.New("dn is supposed to be shut down when appender retry")
+				err = moerr.NewInternalErrorNoCtx("dn is supposed to be shut down when appender retry")
 				return true
 			default:
 			}
