@@ -16,7 +16,6 @@ package batch
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
@@ -36,7 +35,6 @@ func BatchToProtoBatch(bat *Batch) (*api.Batch, error) {
 
 func ProtoBatchToBatch(bat *api.Batch) (*Batch, error) {
 	rbat := NewWithSize(len(bat.Attrs))
-	logutil.Infof("dfsfsdflen %d", len(bat.Attrs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, v := range bat.Vecs {
 		vec, err := vector.ProtoVectorToVector(v)

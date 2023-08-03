@@ -108,40 +108,8 @@ var checkpointDataRefer_V1 [MaxIDX]*checkpointDataItem
 var checkpointDataRefer_V2 [MaxIDX]*checkpointDataItem
 var checkpointDataRefer_V3 [MaxIDX]*checkpointDataItem
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
-var BatchType map[uint16]int
-
-const (
-	SystemBatch = iota
-	NormalBatch
-	DNBatch
-)
 
 func init() {
-	BatchType = make(map[uint16]int)
-	BatchType[DBInsertIDX] = SystemBatch
-	BatchType[DBInsertTxnIDX] = DNBatch
-	BatchType[DBDeleteIDX] = SystemBatch
-	BatchType[DBDeleteTxnIDX] = DNBatch
-
-	BatchType[TBLInsertIDX] = SystemBatch
-	BatchType[TBLInsertTxnIDX] = DNBatch
-	BatchType[TBLDeleteIDX] = SystemBatch
-	BatchType[TBLDeleteTxnIDX] = DNBatch
-	BatchType[TBLColInsertIDX] = SystemBatch
-	BatchType[TBLColDeleteIDX] = SystemBatch
-
-	BatchType[SEGInsertIDX] = DNBatch
-	BatchType[SEGInsertTxnIDX] = DNBatch
-	BatchType[SEGDeleteIDX] = NormalBatch
-	BatchType[SEGDeleteTxnIDX] = DNBatch
-
-	BatchType[BLKMetaInsertIDX] = NormalBatch
-	BatchType[BLKDNMetaInsertTxnIDX] = DNBatch
-	BatchType[BLKMetaDeleteIDX] = NormalBatch
-	BatchType[BLKDNMetaDeleteTxnIDX] = DNBatch
-
-	BatchType[BLKCNMetaInsertIDX] = NormalBatch
-
 	checkpointDataSchemas_V1 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
 		catalog.SystemDBSchema,
@@ -300,7 +268,7 @@ func (t *TableMeta) EncodeToString() string {
 
 func (t *TableMeta) DecodeFromString(key string) error {
 	strs := strings.Split(key, ":")
-	logutil.Infof("k is %v", key)
+
 	location, err := blockio.EncodeLocationFromString(strs[0])
 	if err != nil {
 		return err
@@ -323,7 +291,6 @@ func (t *TableMeta) DecodeFromString(key string) error {
 		location: location,
 	})
 
-	logutil.Infof("t.BlockLocation is %v", t.BlockLocation[0].ClosedInterval.String())
 	return nil
 }
 
@@ -475,7 +442,6 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 	}
 	tidVec := vector.MustFixedCol[uint64](data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX])
 	blkIns := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_LOC_IDX]
-	logutil.Infof("blkIns.GetBytesAt(0)ssss is %v", string(blkIns.GetBytesAt(0)))
 	blkCNIns := data.bats[MetaIDX].Vecs[Checkpoint_Meta_CN_Delete_Block_LOC_IDX]
 	blkDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_LOC_IDX]
 	segDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_LOC_IDX]
@@ -488,15 +454,12 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 		segDelStr := segDel.GetBytesAt(i)
 		tableMeta := NewCheckpointMeta()
 		if len(blkInsStr) > 0 {
-			logutil.Infof("string(blkInsStr) is %v", string(blkInsStr))
 			blkInsertTableMeta := NewTableMeta()
 			blkInsertTableMeta.DecodeFromString(string(blkInsStr))
 			// blkInsertOffset
 			tableMeta.tables[BlockInsert] = blkInsertTableMeta
 		}
 		if len(blkCNInsStr) > 0 {
-			logutil.Infof("string(blkDelStr) is %v", string(blkDelStr))
-			logutil.Infof("string(blkCNInsStr) is %v", string(blkCNInsStr))
 			blkDeleteTableMeta := NewTableMeta()
 			blkDeleteTableMeta.DecodeFromString(string(blkDelStr))
 			tableMeta.tables[BlockDelete] = blkDeleteTableMeta
@@ -505,7 +468,6 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 			tableMeta.tables[CNBlockInsert] = cnBlkInsTableMeta
 		}
 		if len(segDelStr) > 0 {
-			logutil.Infof("string(segDelStr) is %v", string(segDelStr))
 			segDeleteTableMeta := NewTableMeta()
 			segDeleteTableMeta.DecodeFromString(string(segDelStr))
 			tableMeta.tables[SegmentDelete] = segDeleteTableMeta
@@ -531,7 +493,6 @@ func (data *CNCheckpointData) ReadFromData(
 	if err != nil {
 		return
 	}
-	logutil.Infof("metaBats is %v", metaBats[0].Vecs[2].Length())
 	metaBat := metaBats[0]
 	data.bats[MetaIDX] = metaBat
 	meta := data.GetTableMeta(tableID)
@@ -590,13 +551,7 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
-			if i == 0 {
-				logutil.Infof("block.Start is %d, block.End is %d is %v", block.Start, block.End, bat.Vecs[0].Length())
-			}
 			windowCNBatch(bat, block.Start, block.End)
-			if i == 0 {
-				logutil.Infof("block.Start 1111is %d, block.End is %d is %v", block.Start, block.End, bat.Vecs[0].Length())
-			}
 			if dataBats[uint32(i)] == nil {
 				cnBatch := batch.NewWithSize(len(bat.Vecs))
 				cnBatch.Attrs = make([]string, len(bat.Attrs))
@@ -684,7 +639,6 @@ func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Bat
 		insTaeBat = bats[BlockInsert]
 		delTaeBat = bats[BlockDelete]
 		if insTaeBat != nil {
-			logutil.Infof("MO_DATABASE_ID is %v", insTaeBat.String())
 			ins, err = batch.BatchToProtoBatch(insTaeBat)
 			if err != nil {
 				return
@@ -701,7 +655,6 @@ func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Bat
 
 	insTaeBat = bats[BlockInsert]
 	if insTaeBat != nil {
-		logutil.Infof("insTaeBat is %v, len is %d", insTaeBat.String(), insTaeBat.Vecs[0].Length())
 		ins, err = batch.BatchToProtoBatch(insTaeBat)
 		if err != nil {
 			return
@@ -716,7 +669,6 @@ func (data *CNCheckpointData) GetTableDataFromBats(tid uint64, bats []*batch.Bat
 		}
 	}
 	if cnInsTaeBat != nil {
-		logutil.Infof("cnInsTaeBat is %v, len is %d", cnInsTaeBat.String(), cnInsTaeBat.Vecs[0].Length())
 		cnIns, err = batch.BatchToProtoBatch(cnInsTaeBat)
 		if err != nil {
 			return
@@ -890,9 +842,6 @@ func (data *CheckpointData) WriteTo(
 		}
 		offset := 0
 		bats := containers.SplitDNBatch(data.bats[i], CheckpointBlockRows)
-		if i == int(BLKCNMetaInsertIDX) {
-			logutil.Infof("data.bats is %d", data.bats[BLKCNMetaInsertIDX].Length())
-		}
 		for _, bat := range bats {
 			var block objectio.BlockObject
 			if block, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
@@ -905,9 +854,6 @@ func (data *CheckpointData) WriteTo(
 			offset += bat.Length()
 			blockLoc.End = uint64(offset)
 			blockIndexs[i] = append(blockIndexs[i], blockLoc)
-			if i == int(BLKCNMetaInsertIDX) {
-				logutil.Infof("blockLoc.bats is %v", blockLoc.ClosedInterval.String())
-			}
 		}
 	}
 	blks, _, err := writer.Sync(context.Background())
@@ -958,9 +904,6 @@ func (data *CheckpointData) WriteTo(
 			for _, block := range blockIndexs[idx] {
 				if table.End < block.Start {
 					break
-				}
-				if idx == BLKCNMetaInsertIDX {
-					logutil.Infof("blockblockblock.bats is %v, table is %v", block.ClosedInterval.String(), table.ClosedInterval.String())
 				}
 				if table.Contains(block.ClosedInterval) {
 					blockLoc := &BlockLocation{

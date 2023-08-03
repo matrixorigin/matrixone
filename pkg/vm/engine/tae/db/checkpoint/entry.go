@@ -206,7 +206,6 @@ func (e *CheckpointEntry) Read(
 	return
 }
 func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
-	logutil.Infof("e.location is %v", e.location.String())
 	reader, err := blockio.NewObjectReader(fs.Service, e.location)
 	if err != nil {
 		return
