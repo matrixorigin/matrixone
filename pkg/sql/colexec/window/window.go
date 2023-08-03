@@ -486,9 +486,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	}
 
 	// shuffle agg vector
-	if ctr.aggVecs[idx].vec != nil && !ctr.aggVecs[idx].executor.IsColumnExpr() {
-		if err := ctr.aggVecs[idx].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
-			panic(err)
+	for k := idx; k < len(ctr.aggVecs); k++ {
+		if ctr.aggVecs[k].vec != nil && !ctr.aggVecs[k].executor.IsColumnExpr() {
+			if err := ctr.aggVecs[k].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
+				panic(err)
+			}
 		}
 	}
 
