@@ -1513,6 +1513,28 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `sqrt`
+	{
+		functionId: SQRT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqrt
+				},
+			},
+			// TODO: check if we should support SQRT for Decimal_128
+		},
+	},
+
 	// function `acos`
 	{
 		functionId: ACOS,

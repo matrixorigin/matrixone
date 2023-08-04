@@ -1453,6 +1453,28 @@ func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
+func builtInSqrt(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sqrtValue, err := momath.Sqrt(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sqrtValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
