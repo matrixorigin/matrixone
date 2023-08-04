@@ -304,10 +304,9 @@ var MakePlan2Type = makePlan2Type
 
 func makePlan2Type(typ *types.Type) *plan.Type {
 	return &plan.Type{
-		Id:         int32(typ.Oid),
-		Width:      typ.Width,
-		Scale:      typ.Scale,
-		Enumvalues: typ.EnumValues,
+		Id:    int32(typ.Oid),
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }
 

@@ -364,12 +364,18 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 		return
 	}
 	n += int64(sn2)
+	colBuf := make([]byte, types.TSize)
 	for i := uint16(0); i < colCnt; i++ {
 		def := new(ColDef)
 		if sn2, err = r.Read(types.EncodeUint16(&def.SeqNum)); err != nil {
 			return
 		}
 		n += int64(sn2)
+		if _, err = r.Read(colBuf); err != nil {
+			return
+		}
+		n += int64(types.TSize)
+		def.Type = types.DecodeType(colBuf)
 		if def.Name, sn, err = objectio.ReadString(r); err != nil {
 			return
 		}
@@ -418,21 +424,6 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			return
 		}
 		n += sn
-		// Read typ
-		var length int32
-		ldata := make([]byte, 4)
-		if sn2, err = r.Read(ldata); err != nil {
-			return
-		}
-		n += int64(sn2)
-		length = types.DecodeInt32(ldata)
-		tdata := make([]byte, length)
-		if sn2, err = r.Read(tdata); err != nil {
-			return
-		}
-		n += int64(sn2)
-		def.Type = types.DecodeType(tdata)
-
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -493,6 +484,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if _, err = w.Write(types.EncodeUint16(&def.SeqNum)); err != nil {
 			return
 		}
+		if _, err = w.Write(types.EncodeType(&def.Type)); err != nil {
+			return
+		}
 		if _, err = objectio.WriteString(def.Name, &w); err != nil {
 			return
 		}
@@ -527,16 +521,6 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 			return
 		}
 		if _, err = objectio.WriteBytes(def.OnUpdate, &w); err != nil {
-			return
-		}
-
-		// Marshal type
-		dat, tlen := types.EncodeType(&def.Type)
-		lendat := types.EncodeInt32(&tlen)
-		if _, err = w.Write(lendat); err != nil {
-			return
-		}
-		if _, err = w.Write(dat); err != nil {
 			return
 		}
 	}

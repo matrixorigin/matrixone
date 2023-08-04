@@ -146,6 +146,7 @@ type column struct {
 	isClusterBy     int8
 	seqnum          uint16
 	rowid           types.Rowid //rowid for a column in mo_columns
+	enumValues      []string
 }
 
 type columns []column

@@ -977,6 +977,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			num:          num,
 			comment:      attrDef.Attr.Comment,
 			seqnum:       uint16(num - 1),
+			enumValues:   attrDef.Attr.EnumVlaues,
 		}
 		attrDef.Attr.ID = uint64(num)
 		attrDef.Attr.Seqnum = uint16(num - 1)

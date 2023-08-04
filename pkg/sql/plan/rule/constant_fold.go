@@ -125,7 +125,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 				Scale:       e.Typ.Scale,
 				AutoIncr:    e.Typ.AutoIncr,
 				Table:       e.Typ.Table,
-				Enumvalues:  e.Typ.Enumvalues,
 			},
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
@@ -162,7 +161,6 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 					Scale:       e.Typ.Scale,
 					AutoIncr:    e.Typ.AutoIncr,
 					Table:       e.Typ.Table,
-					Enumvalues:  e.Typ.Enumvalues,
 				},
 				Expr: ef,
 			}
@@ -172,7 +170,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	ec := &plan.Expr_C{
 		C: c,
 	}
-	e.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width, Enumvalues: vec.GetType().EnumValues}
+	e.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 	e.Expr = ec
 	return e
 }

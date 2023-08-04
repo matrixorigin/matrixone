@@ -249,17 +249,14 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 
 func TypeToProtoType(typ types.Type) *plan.Type {
 	return &plan.Type{
-		Id:         int32(typ.Oid),
-		Width:      typ.Width,
-		Scale:      typ.Scale,
-		Enumvalues: typ.EnumValues,
+		Id:    int32(typ.Oid),
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }
 
 func ProtoTypeToType(typ *plan.Type) types.Type {
-	rtyp := types.New(types.T(typ.Id), typ.Width, typ.Scale)
-	rtyp.EnumValues = typ.GetEnumvalues()
-	return rtyp
+	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 
 // CompareAndCheckIntersect  we use this method for eval expr by zonemap

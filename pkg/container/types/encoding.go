@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	TSize          int = int(unsafe.Sizeof(Type{}) - 8)
+	TSize          int = int(unsafe.Sizeof(Type{}))
 	DateSize       int = 4
 	TimeSize       int = 8
 	DatetimeSize   int = 8
@@ -93,15 +93,12 @@ func DecodeJson(buf []byte) bytejson.ByteJson {
 	return bj
 }
 
-func EncodeType(v *Type) ([]byte, int32) {
-	dat, _ := v.Marshal()
-	return dat, int32(len(dat))
+func EncodeType(v *Type) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize)
 }
 
 func DecodeType(v []byte) Type {
-	var t Type
-	t.Unmarshal(v)
-	return t
+	return *(*Type)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeFixed[T FixedSizeT](v T) []byte {
@@ -288,9 +285,6 @@ func EncodeStringSlice(vs []string) []byte {
 func DecodeStringSlice(data []byte) []string {
 	var tm []byte
 
-	if len(data) == 0 {
-		return nil
-	}
 	cnt := DecodeInt32(data)
 	if cnt == 0 {
 		return nil

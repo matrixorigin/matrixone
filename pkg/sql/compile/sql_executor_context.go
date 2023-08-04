@@ -143,10 +143,9 @@ func (c *compilerContext) GetPrimaryKeyDef(
 		priDefs = append(priDefs, &plan.ColDef{
 			Name: key.Name,
 			Typ: &plan.Type{
-				Id:         int32(key.Type.Oid),
-				Width:      key.Type.Width,
-				Scale:      key.Type.Scale,
-				Enumvalues: key.Type.EnumValues,
+				Id:    int32(key.Type.Oid),
+				Width: key.Type.Width,
+				Scale: key.Type.Scale,
 			},
 			Primary: key.Primary,
 		})
@@ -270,7 +269,7 @@ func (c *compilerContext) getTableDef(
 					AutoIncr:    attr.Attr.AutoIncrement,
 					Table:       tableName,
 					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					Enumvalues:  attr.Attr.Type.EnumValues,
+					Enumvalues:  attr.Attr.EnumVlaues,
 				},
 				Primary:   attr.Attr.Primary,
 				Default:   attr.Attr.Default,

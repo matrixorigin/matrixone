@@ -259,7 +259,7 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
 			Width:       attr.Type.Width,
 			Scale:       attr.Type.Scale,
-			Enumvalues:  attr.Type.EnumValues,
+			Enumvalues:  attr.EnumVlaues,
 		},
 		Default:   attr.Default,
 		Primary:   attr.Primary,

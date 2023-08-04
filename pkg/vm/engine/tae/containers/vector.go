@@ -488,7 +488,7 @@ func (vec *vectorWrapper) Equals(o Vector) bool {
 	if vec.Length() != o.Length() {
 		return false
 	}
-	if !vec.GetType().TypeEqual(o.GetType()) {
+	if *vec.GetType() != *o.GetType() {
 		return false
 	}
 	if vec.HasNull() != o.HasNull() {

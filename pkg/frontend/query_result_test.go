@@ -129,10 +129,9 @@ func Test_saveQueryResultMeta(t *testing.T) {
 		colDefs[i] = &plan.ColDef{
 			Name: fmt.Sprintf("a_%d", i),
 			Typ: &plan.Type{
-				Id:         int32(ty.Oid),
-				Scale:      ty.Scale,
-				Width:      ty.Width,
-				Enumvalues: ty.EnumValues,
+				Id:    int32(ty.Oid),
+				Scale: ty.Scale,
+				Width: ty.Width,
 			},
 		}
 	}

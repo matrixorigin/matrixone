@@ -1446,7 +1446,6 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				Seqnum:        uint16(col.Seqnum),
 			},
 		}
-		exeCols[i].(*engine.AttributeDef).Attr.Type.EnumValues = colTyp.Enumvalues
 	}
 	return exeCols
 }

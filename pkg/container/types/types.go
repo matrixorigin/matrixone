@@ -106,17 +106,11 @@ type Type struct {
 	Width int32
 	// Scale means number of fractional digits for decimal, timestamp, float, etc.
 	Scale int32
-
-	EnumValues []string
 }
 
 // ProtoSize is used by gogoproto.
-func (t *Type) ProtoSize() (n int) {
-	var size int
-	if t.EnumValues != nil {
-		size = len(EncodeStringSlice(t.EnumValues))
-	}
-	return 20 + size
+func (t *Type) ProtoSize() int {
+	return 2*4 + 4*3
 }
 
 // MarshalToSizedBuffer is used by gogoproto.
@@ -133,13 +127,10 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
 	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
 
-	if t.EnumValues != nil {
-		copy(data[20:], EncodeStringSlice(t.EnumValues))
-	}
-	return t.ProtoSize(), nil
+	return 20, nil
 }
 
-// MarshalTo is used by gogop§roto.
+// MarshalTo is used by gogoproto.
 func (t *Type) MarshalTo(data []byte) (int, error) {
 	size := t.ProtoSize()
 	return t.MarshalToSizedBuffer(data[:size])
@@ -160,7 +151,6 @@ func (t *Type) Unmarshal(data []byte) error {
 	if len(data) < t.ProtoSize() {
 		panic("invalid byte slice")
 	}
-
 	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
 	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
 	t.notNull = uint8(binary.BigEndian.Uint16(data[4:]))
@@ -169,7 +159,6 @@ func (t *Type) Unmarshal(data []byte) error {
 	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
 	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
 
-	t.EnumValues = DecodeStringSlice(data[20:])
 	return nil
 }
 
@@ -899,24 +888,4 @@ func (t T) IsDecimal() bool {
 		return true
 	}
 	return false
-}
-
-func (t *Type) TypeEqual(o *Type) (equal bool) {
-	equal = t.Size == o.Size && t.Width == o.Width && t.Scale == o.Scale &&
-		t.Oid == o.Oid && t.Charset == o.Charset
-	if !equal {
-		return false
-	}
-	if t.EnumValues == nil && o.EnumValues == nil {
-		return true
-	}
-	if len(t.EnumValues) != len(o.EnumValues) {
-		return false
-	}
-	for i := range t.EnumValues {
-		if t.EnumValues[i] != o.EnumValues[i] {
-			return false
-		}
-	}
-	return true
 }

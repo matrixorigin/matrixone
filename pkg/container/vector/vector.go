@@ -377,18 +377,13 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 }
 
 func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
-	// write type
-	data, typelen := types.EncodeType(&v.typ)
-	lendata := types.EncodeInt32(&typelen)
-	if _, err := buf.Write(lendata); err != nil {
-		return err
-	}
-	if _, err := buf.Write(data); err != nil {
-		return err
-	}
 
 	// write class
 	buf.WriteByte(uint8(v.class))
+
+	// write type
+	data := types.EncodeType(&v.typ)
+	buf.Write(data)
 
 	// write length
 	length := uint32(v.length)
@@ -430,15 +425,13 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
-	// read typ
-	length := types.DecodeInt32(data[:4])
-	data = data[4:]
-	v.typ = types.DecodeType(data[:length])
-	data = data[length:]
-
 	// read class
 	v.class = int(data[0])
 	data = data[1:]
+
+	// read typ
+	v.typ = types.DecodeType(data[:types.TSize])
+	data = data[types.TSize:]
 
 	// read length
 	v.length = int(types.DecodeUint32(data[:4]))
@@ -474,7 +467,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	}
 
 	v.sorted = types.DecodeBool(data[:1])
-	// data = data[1:]
+	//data = data[1:]
 
 	v.cantFreeData = true
 	v.cantFreeArea = true
@@ -485,15 +478,13 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	var err error
 
-	// read typ
-	length := types.DecodeInt32(data[:4])
-	data = data[4:]
-	v.typ = types.DecodeType(data[:length])
-	data = data[length:]
-
 	// read class
 	v.class = int(data[0])
 	data = data[1:]
+
+	// read typ
+	v.typ = types.DecodeType(data[:types.TSize])
+	data = data[types.TSize:]
 
 	// read length
 	v.length = int(types.DecodeUint32(data[:4]))
@@ -537,7 +528,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	}
 
 	v.sorted = types.DecodeBool(data[:1])
-	// data = data[1:]
+	//data = data[1:]
 
 	return nil
 }

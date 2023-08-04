@@ -1435,10 +1435,9 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	result := make([]*plan.Type, len(ts))
 	for i, t := range ts {
 		result[i] = &plan.Type{
-			Id:         int32(t.Oid),
-			Width:      t.Width,
-			Scale:      t.Scale,
-			Enumvalues: t.EnumValues,
+			Id:    int32(t.Oid),
+			Width: t.Width,
+			Scale: t.Scale,
 		}
 	}
 	return result

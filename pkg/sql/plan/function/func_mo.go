@@ -477,7 +477,7 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 			for _, col := range cols {
 				if col.Name == colStr && col.Type.Oid == types.T_enum {
-					enumVlaue, err = enum.ParseEnumIndex(col.Type.EnumValues, indexVal)
+					enumVlaue, err = enum.ParseEnumIndex(col.EnumVlaues, indexVal)
 					if err != nil {
 						return err
 					}
@@ -545,7 +545,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 			for _, col := range cols {
 				if col.Name == colStr && col.Type.Oid == types.T_enum {
-					index, err = enum.ParseEnum(col.Type.EnumValues, enumStr)
+					index, err = enum.ParseEnum(col.EnumVlaues, enumStr)
 					if err != nil {
 						return err
 					}

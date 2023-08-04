@@ -19,9 +19,8 @@ import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 func NewProtoType(oid T) *plan.Type {
 	typ := New(oid, 0, 0)
 	return &plan.Type{
-		Id:         int32(oid),
-		Width:      typ.Width,
-		Scale:      typ.Scale,
-		Enumvalues: typ.EnumValues,
+		Id:    int32(oid),
+		Width: typ.Width,
+		Scale: typ.Scale,
 	}
 }

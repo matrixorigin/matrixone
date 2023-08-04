@@ -292,8 +292,7 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 			return
 		}
 		vt := vec.GetType()
-		typeBytes, _ := types.EncodeType(vt)
-		if err = vector.AppendBytes(bufVec, typeBytes, false, mp); err != nil {
+		if err = vector.AppendBytes(bufVec, types.EncodeType(vt), false, mp); err != nil {
 			return
 		}
 	}

@@ -807,7 +807,7 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 						Width:      attr.Attr.Type.Width,
 						Scale:      attr.Attr.Type.Scale,
 						AutoIncr:   attr.Attr.AutoIncrement,
-						Enumvalues: attr.Attr.Type.EnumValues,
+						Enumvalues: attr.Attr.EnumVlaues,
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,

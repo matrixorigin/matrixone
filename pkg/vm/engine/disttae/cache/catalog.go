@@ -525,6 +525,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	attr.ClusterBy = col.isClusterBy == 1
 	attr.AutoIncrement = col.isAutoIncrement == 1
 	attr.Seqnum = col.seqnum
+	attr.EnumVlaues = col.enumValues
 	if err := types.Decode(col.typ, &attr.Type); err != nil {
 		panic(err)
 	}
@@ -563,7 +564,7 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 					Width:      attr.Attr.Type.Width,
 					Scale:      attr.Attr.Type.Scale,
 					AutoIncr:   attr.Attr.AutoIncrement,
-					Enumvalues: attr.Attr.Type.EnumValues,
+					Enumvalues: attr.Attr.EnumVlaues,
 				},
 				Primary:  attr.Attr.Primary,
 				Default:  attr.Attr.Default,
