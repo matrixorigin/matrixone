@@ -738,6 +738,9 @@ func LoadCheckpointEntries(
 		if err != nil {
 			return nil, closeCBs, err
 		}
+		if len(bats) > 0 {
+			break
+		}
 	}
 
 	entries := make([]*api.Entry, 0)
