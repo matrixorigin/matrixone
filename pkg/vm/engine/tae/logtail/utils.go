@@ -312,7 +312,7 @@ func (l BlockLocation) String() string {
 	if len(l) != BlockLocationLength {
 		return string(l)
 	}
-	return fmt.Sprintf("%v_%v_start:%d_end:%d", l.GetLocation().String(), l.GetStartOffset(), l.GetEndOffset())
+	return fmt.Sprintf("%v_start:%d_end:%d", l.GetLocation().String(), l.GetStartOffset(), l.GetEndOffset())
 }
 
 type TableMeta struct {
