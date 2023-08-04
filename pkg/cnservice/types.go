@@ -320,10 +320,10 @@ func (c *Config) Validate() error {
 		}
 	} else {
 		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = -1
+			c.Txn.EnableSacrificingFreshness = 1
 		}
 		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
+			c.Txn.EnableCNBasedConsistency = 1
 		}
 		// We don't support the following now, so always disable
 		c.Txn.EnableRefreshExpression = -1

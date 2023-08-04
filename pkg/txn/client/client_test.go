@@ -16,9 +16,10 @@ package client
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -94,16 +95,18 @@ func TestTxnClientAbortAllRunningTxn(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
+	var ops []TxnOperator
 	for i := 0; i < 10; i++ {
-		_, err := c.New(ctx, newTestTimestamp(0))
+		op, err := c.New(ctx, newTestTimestamp(0))
 		assert.Nil(t, err)
+		ops = append(ops, op)
 	}
-	require.Equal(t, 10, len(c.(*txnClient).mu.txns))
+	require.Equal(t, 10, len(c.(*txnClient).mu.activeTxns))
 
 	c.AbortAllRunningTxn()
-	txnList := c.(*txnClient).mu.txns
-	for i := range txnList {
-		require.Equal(t, txn.TxnStatus_Aborted, txnList[i].Status)
+	require.Equal(t, 0, len(c.(*txnClient).mu.activeTxns))
+	for _, op := range ops {
+		assert.Equal(t, txn.TxnStatus_Aborted, op.(*txnOperator).mu.txn.Status)
 	}
 }
 
