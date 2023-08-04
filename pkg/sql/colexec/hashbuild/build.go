@@ -35,7 +35,13 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+	if len(proc.Reg.MergeReceivers) > 1 {
+		ap.ctr.InitReceiver(proc, true)
+		ap.ctr.isMerge = true
+	} else {
+		ap.ctr.InitReceiver(proc, false)
+	}
+
 	if ap.NeedHashMap {
 		if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 			return err
@@ -110,7 +116,13 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	var err error
 
 	for {
-		bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+		var bat *batch.Batch
+		if ap.ctr.isMerge {
+			bat, _, err = ctr.ReceiveFromAllRegs(anal)
+		} else {
+			bat, _, err = ctr.ReceiveFromSingleReg(0, anal)
+		}
+
 		if err != nil {
 			return err
 		}
@@ -139,13 +151,15 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.RowCount()
+
+	ctr.sels = make([][]int32, count)
+
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
 
-		oldRowNumberOfHashTable := ctr.mp.GroupCount()
 		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
@@ -158,12 +172,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			if v == 0 {
 				continue
 			}
-
-			for v > oldRowNumberOfHashTable {
-				ctr.sels = append(ctr.sels, make([]int32, 0))
-				oldRowNumberOfHashTable++
-			}
 			ai := int64(v) - 1
+			if ctr.sels[ai] == nil {
+				ctr.sels[ai] = make([]int32, 0)
+			}
 			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
 	}

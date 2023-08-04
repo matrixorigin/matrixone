@@ -572,17 +572,17 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 }
 
 func RecordReadFilterSelectivity(hit, total int) {
-	pipeline.stats.RecordReadFilterSelectivity(hit, total)
+	pipeline.stats.selectivityStats.RecordReadFilterSelectivity(hit, total)
 }
 
 func RecordBlockSelectivity(hit, total int) {
-	pipeline.stats.RecordBlockSelectivity(hit, total)
+	pipeline.stats.selectivityStats.RecordBlockSelectivity(hit, total)
 }
 
 func RecordColumnSelectivity(hit, total int) {
-	pipeline.stats.RecordColumnSelectivity(hit, total)
+	pipeline.stats.selectivityStats.RecordColumnSelectivity(hit, total)
 }
 
 func ExportSelectivityString() string {
-	return pipeline.stats.ExportString()
+	return pipeline.stats.selectivityStats.ExportString()
 }

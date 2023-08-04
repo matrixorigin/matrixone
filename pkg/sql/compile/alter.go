@@ -23,7 +23,10 @@ import (
 
 func (s *Scope) AlterTableCopy(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
-	dbName := c.db
+	dbName := qry.Database
+	if dbName == "" {
+		dbName = c.db
+	}
 	tblName := qry.GetTableDef().GetName()
 
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
@@ -82,6 +85,33 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
+	// get and update the change mapping information of table colIds
+	if err = updateNewTableColId(c, copyRel, qry.ChangeTblColIdMap); err != nil {
+		return err
+	}
+
+	if len(qry.CopyTableDef.RefChildTbls) > 0 {
+		// Restore the original table's foreign key child table ids to the copy table definition
+		if err = restoreNewTableRefChildTbls(c, copyRel, qry.CopyTableDef.RefChildTbls); err != nil {
+			return err
+		}
+
+		// update foreign key child table references
+		for _, tblId := range qry.CopyTableDef.RefChildTbls {
+			if err = updateTableForeignKeyColId(c, qry.ChangeTblColIdMap, tblId, originRel.GetTableID(c.ctx), copyRel.GetTableID(c.ctx)); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(qry.TableDef.Fkeys) > 0 {
+		for _, fkey := range qry.CopyTableDef.Fkeys {
+			if err = notifyParentTableFkTableIdChange(c, fkey, originRel.GetTableID(c.ctx), copyRel.GetTableID(c.ctx)); err != nil {
+				return err
+			}
+		}
+	}
+
 	var alterKind []api.AlterKind
 	alterKind = addAlterKind(alterKind, api.AlterKind_RenameTable)
 	oldName := copyRel.GetTableName()
@@ -120,4 +150,115 @@ func (s *Scope) AlterTable(c *Compile) error {
 	} else {
 		return s.AlterTableInplace(c)
 	}
+}
+
+// updateTableForeignKeyColId update foreign key colid of child table references
+func updateTableForeignKeyColId(c *Compile, changColDefMap map[uint64]*plan.ColDef, childTblId uint64, oldParentTblId uint64, newParentTblId uint64) error {
+	_, _, childRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, childTblId)
+	if err != nil {
+		return err
+	}
+	childTableDef, err := childRelation.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
+	var oldCt *engine.ConstraintDef
+	for _, def := range childTableDef {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			break
+		}
+	}
+	for _, ct := range oldCt.Cts {
+		if def, ok1 := ct.(*engine.ForeignKeyDef); ok1 {
+			for i := 0; i < len(def.Fkeys); i++ {
+				fkey := def.Fkeys[i]
+				if fkey.ForeignTbl == oldParentTblId {
+					for j := 0; j < len(fkey.ForeignCols); j++ {
+						if newColDef, ok2 := changColDefMap[fkey.ForeignCols[j]]; ok2 {
+							fkey.ForeignCols[j] = newColDef.ColId
+						}
+					}
+					fkey.ForeignTbl = newParentTblId
+				}
+			}
+		}
+	}
+	return childRelation.UpdateConstraint(c.ctx, oldCt)
+}
+
+func updateNewTableColId(c *Compile, copyRel engine.Relation, changColDefMap map[uint64]*plan.ColDef) error {
+	engineDefs, err := copyRel.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
+	for _, def := range engineDefs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			for _, vColDef := range changColDefMap {
+				if vColDef.Name == attr.Attr.Name {
+					vColDef.ColId = attr.Attr.ID
+					break
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// restoreNewTableRefChildTbls Restore the original table's foreign key child table ids to the copy table definition
+func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTbls []uint64) error {
+	copyTableDef, err := copyRel.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
+	var oldCt *engine.ConstraintDef
+	for _, def := range copyTableDef {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			break
+		}
+	}
+
+	if oldCt == nil {
+		oldCt = &engine.ConstraintDef{
+			Cts: []engine.Constraint{},
+		}
+	}
+	oldCt.Cts = append(oldCt.Cts, &engine.RefChildTableDef{
+		Tables: refChildTbls,
+	})
+	return copyRel.UpdateConstraint(c.ctx, oldCt)
+}
+
+// notifyParentTableFkTableIdChange Notify the parent table of changes in the tableid of the foreign key table
+func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldTableId uint64, newTableId uint64) error {
+	foreignTblId := fkey.ForeignTbl
+	_, _, fatherRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, foreignTblId)
+	if err != nil {
+		return err
+	}
+	fatherTableDef, err := fatherRelation.TableDefs(c.ctx)
+	if err != nil {
+		return err
+	}
+	var oldCt *engine.ConstraintDef
+	for _, def := range fatherTableDef {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			break
+		}
+	}
+	for _, ct := range oldCt.Cts {
+		if def, ok1 := ct.(*engine.RefChildTableDef); ok1 {
+			for i := 0; i < len(def.Tables); i++ {
+				if def.Tables[i] == oldTableId {
+					// delete target element
+					def.Tables = append(def.Tables[:i], def.Tables[i+1:]...)
+					// Because the length of the slice has become shorter, it is necessary to move i forward
+					i--
+				}
+			}
+		}
+	}
+	return fatherRelation.UpdateConstraint(c.ctx, oldCt)
 }
