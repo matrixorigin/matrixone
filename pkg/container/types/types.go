@@ -15,10 +15,8 @@
 package types
 
 import (
+	"encoding/binary"
 	"fmt"
-	"io"
-
-	math_bits "math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
@@ -112,115 +110,36 @@ type Type struct {
 	EnumValues []string
 }
 
-func sovPlan(x uint64) (n int) {
-	return (math_bits.Len64(x|1) + 6) / 7
-}
-
-func encodeVarintPlan(dAtA []byte, offset int, v uint64) int {
-	offset -= sovPlan(v)
-	base := offset
-	for v >= 1<<7 {
-		dAtA[offset] = uint8(v&0x7f | 0x80)
-		v >>= 7
-		offset++
-	}
-	dAtA[offset] = uint8(v)
-	return base
-}
-
 // ProtoSize is used by gogoproto.
 func (t *Type) ProtoSize() (n int) {
-	if t == nil {
-		return 0
+	var size int
+	if t.EnumValues != nil {
+		size = len(EncodeStringSlice(t.EnumValues))
 	}
-	var l int
-	_ = l
-	if t.Oid != 0 {
-		n += 1 + sovPlan(uint64(t.Oid))
-	}
-	if t.Charset != 0 {
-		n += 1 + sovPlan(uint64(t.Charset))
-	}
-	if t.notNull != 0 {
-		n += 1 + sovPlan(uint64(t.notNull))
-	}
-	if t.dummy2 != 0 {
-		n += 1 + sovPlan(uint64(t.dummy2))
-	}
-	if t.Size != 0 {
-		n += 1 + sovPlan(uint64(t.Size))
-	}
-	if t.Width != 0 {
-		n += 1 + sovPlan(uint64(t.Width))
-	}
-	if t.Scale != 0 {
-		n += 1 + sovPlan(uint64(t.Scale))
-	}
-	if len(t.EnumValues) > 0 {
-		for _, s := range t.EnumValues {
-			l = len(s)
-			n += 1 + l + sovPlan(uint64(l))
-		}
-	}
-
-	return n
+	return 20 + size
 }
 
 // MarshalToSizedBuffer is used by gogoproto.
-func (t *Type) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
+func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < t.ProtoSize() {
+		panic("invalid byte slice")
+	}
 
-	if len(t.EnumValues) > 0 {
-		for iNdEx := len(t.EnumValues) - 1; iNdEx >= 0; iNdEx-- {
-			i -= len(t.EnumValues[iNdEx])
-			copy(dAtA[i:], t.EnumValues[iNdEx])
-			i = encodeVarintPlan(dAtA, i, uint64(len(t.EnumValues[iNdEx])))
-			i--
-			dAtA[i] = 0x42
-		}
+	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
+	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
+	binary.BigEndian.PutUint16(data[4:], uint16(t.notNull))
+	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
+	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
+	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
+	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
+
+	if t.EnumValues != nil {
+		copy(data[20:], EncodeStringSlice(t.EnumValues))
 	}
-	if t.Scale != 0 {
-		i = encodeVarintPlan(dAtA, i, uint64(t.Scale))
-		i--
-		dAtA[i] = 0x38
-	}
-	if t.Width != 0 {
-		i = encodeVarintPlan(dAtA, i, uint64(t.Width))
-		i--
-		dAtA[i] = 0x30
-	}
-	if t.Size != 0 {
-		i = encodeVarintPlan(dAtA, i, uint64(t.Size))
-		i--
-		dAtA[i] = 0x28
-	}
-	if t.dummy2 != 0 {
-		i = encodeVarintPlan(dAtA, i, uint64(t.dummy2))
-		i--
-		dAtA[i] = 0x20
-	}
-	if t.notNull != 0 {
-		i = encodeVarintPlan(dAtA, i, uint64(t.notNull))
-		i--
-		dAtA[i] = 0x18
-	}
-	if t.Charset != 0 {
-		i = encodeVarintPlan(dAtA, i, uint64(t.Charset))
-		i--
-		dAtA[i] = 0x10
-	}
-	if t.Oid != 0 {
-		i = encodeVarintPlan(dAtA, i, uint64(t.Oid))
-		i--
-		dAtA[i] = 0x8
-	}
-	return len(dAtA) - i, nil
+	return t.ProtoSize(), nil
 }
 
-// MarshalTo is used by gogoproto.
+// MarshalTo is used by gogop§roto.
 func (t *Type) MarshalTo(data []byte) (int, error) {
 	size := t.ProtoSize()
 	return t.MarshalToSizedBuffer(data[:size])
@@ -228,307 +147,30 @@ func (t *Type) MarshalTo(data []byte) (int, error) {
 
 // Marshal is used by gogoproto.
 func (t *Type) Marshal() ([]byte, error) {
-	size := t.ProtoSize()
-	dAtA := make([]byte, size)
-	n, err := t.MarshalToSizedBuffer(dAtA[:size])
+	data := make([]byte, t.ProtoSize())
+	n, err := t.MarshalToSizedBuffer(data)
 	if err != nil {
 		return nil, err
 	}
-	return dAtA[:n], nil
+	return data[:n], nil
 }
 
 // Unmarshal is used by gogoproto.
-func (t *Type) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return moerr.NewInvalidArgNoCtx("wiretype end group for non-group", "")
-		}
-		if fieldNum <= 0 {
-			return moerr.NewInvalidArgNoCtx("illegal tag %d ", fieldNum)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 0 {
-				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Oid", wireType)
-			}
-			t.Oid = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				var oid uint8
-				oid |= uint8(b&0x7F) << shift
-				t.Oid = T(oid)
-				if b < 0x80 {
-					break
-				}
-			}
-		case 2:
-			if wireType != 0 {
-				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Charset", wireType)
-			}
-			t.Charset = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				t.Charset |= uint8(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 3:
-			if wireType != 0 {
-				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field NotNull", wireType)
-			}
-			t.notNull = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				t.notNull |= uint8(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 4:
-			if wireType != 0 {
-				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Dummy2", wireType)
-			}
-			t.dummy2 = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				t.dummy2 |= uint8(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 5:
-			if wireType != 0 {
-				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Size", wireType)
-			}
-			t.Size = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				t.Size |= int32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 6:
-			if wireType != 0 {
-				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Width", wireType)
-			}
-			t.Width = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				t.Width |= int32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 7:
-			if wireType != 0 {
-				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field Scale", wireType)
-			}
-			t.Scale = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				t.Scale |= int32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 8:
-			if wireType != 2 {
-				return moerr.NewInvalidArgNoCtx("wrong wireType = %d for field EnumValues", wireType)
-			}
-			var stringLen uint64
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			t.EnumValues = append(t.EnumValues, string(dAtA[iNdEx:postIndex]))
-			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipPlan(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			iNdEx += skippy
-		}
+func (t *Type) Unmarshal(data []byte) error {
+	if len(data) < t.ProtoSize() {
+		panic("invalid byte slice")
 	}
-	return nil
-}
 
-func skipPlan(dAtA []byte) (n int, err error) {
-	l := len(dAtA)
-	iNdEx := 0
-	depth := 0
-	for iNdEx < l {
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return 0, moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-			}
-			if iNdEx >= l {
-				return 0, io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= (uint64(b) & 0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		wireType := int(wire & 0x7)
-		switch wireType {
-		case 0:
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return 0, moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return 0, io.ErrUnexpectedEOF
-				}
-				iNdEx++
-				if dAtA[iNdEx-1] < 0x80 {
-					break
-				}
-			}
-		case 1:
-			iNdEx += 8
-		case 2:
-			var length int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return 0, moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-				}
-				if iNdEx >= l {
-					return 0, io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				length |= (int(b) & 0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if length < 0 {
-				return 0, moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-			}
-			iNdEx += length
-		case 3:
-			depth++
-		case 4:
-			if depth == 0 {
-				return 0, moerr.NewInvalidArgNoCtx("unexpected end of group", "")
-			}
-			depth--
-		case 5:
-			iNdEx += 4
-		default:
-			return 0, moerr.NewInvalidArgNoCtx("illegal wireType %d", wireType)
-		}
-		if iNdEx < 0 {
-			return 0, moerr.NewInvalidArgNoCtx("negative length found during unmarshaling", "")
-		}
-		if depth == 0 {
-			return iNdEx, nil
-		}
-	}
-	return 0, io.ErrUnexpectedEOF
+	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
+	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
+	t.notNull = uint8(binary.BigEndian.Uint16(data[4:]))
+	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
+	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
+	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
+	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
+
+	t.EnumValues = DecodeStringSlice(data[20:])
+	return nil
 }
 
 func (t *Type) MarshalBinary() ([]byte, error) {

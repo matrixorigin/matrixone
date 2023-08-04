@@ -94,22 +94,13 @@ func DecodeJson(buf []byte) bytejson.ByteJson {
 }
 
 func EncodeType(v *Type) ([]byte, int32) {
-	dat := unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize)
-	// For enum type encode the string list.
-	if v.EnumValues != nil {
-		dat = append(dat, EncodeStringSlice(v.EnumValues)...)
-	}
+	dat, _ := v.Marshal()
 	return dat, int32(len(dat))
 }
 
 func DecodeType(v []byte) Type {
 	var t Type
-
-	dat := v[:TSize]
-	t = *(*Type)(unsafe.Pointer(&dat[0]))
-	if left := v[TSize:]; len(left) > 0 {
-		t.EnumValues = DecodeStringSlice(left)
-	}
+	t.Unmarshal(v)
 	return t
 }
 
@@ -297,6 +288,9 @@ func EncodeStringSlice(vs []string) []byte {
 func DecodeStringSlice(data []byte) []string {
 	var tm []byte
 
+	if len(data) == 0 {
+		return nil
+	}
 	cnt := DecodeInt32(data)
 	if cnt == 0 {
 		return nil
