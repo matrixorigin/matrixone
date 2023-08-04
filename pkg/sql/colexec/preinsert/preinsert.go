@@ -56,7 +56,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 	}
 	defer proc.PutBatch(bat)
 
-	logutil.Infof("Table[`%s`] on preinsert operator3 input batch: %s", arg.TableDef.Name, bat.PrintBatch())
+	if arg.TableDef.Name == "indup_02" {
+		logutil.Infof("Table[%s] on preinsert operator1 input batch: %s", arg.TableDef.Name, bat.PrintBatch())
+	}
 
 	newBat := batch.NewWithSize(len(arg.Attrs))
 	newBat.Attrs = make([]string, 0, len(arg.Attrs))
@@ -76,7 +78,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
 			newBat.Clean(proc.GetMPool())
-			logutil.Infof("Table[`%s`] on preinsert operator gen auto incr err: %s", arg.TableDef.Name, err.Error())
+			if arg.TableDef.Name == "indup_02" {
+				logutil.Infof("Table[%s] on preinsert operator2 gen auto incr err: %s", arg.TableDef.Name, err.Error())
+			}
 			return process.ExecNext, err
 		}
 	}
@@ -84,7 +88,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
-		logutil.Infof("Table[`%s`] on preinsert operator notNullCheck err: %s", arg.TableDef.Name, err.Error())
+		if arg.TableDef.Name == "indup_02" {
+			logutil.Infof("Table[%s] on preinsert operator3 notNullCheck err: %s", arg.TableDef.Name, err.Error())
+		}
 		return process.ExecNext, err
 	}
 
@@ -92,7 +98,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 	err = genCompositePrimaryKey(newBat, proc, arg.TableDef)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
-		logutil.Infof("Table[`%s`] on preinsert operator gen composite primary key: %s", arg.TableDef.Name, err.Error())
+		if arg.TableDef.Name == "indup_02" {
+			logutil.Infof("Table[%s] on preinsert operator4 gen composite primary key: %s", arg.TableDef.Name, err.Error())
+		}
 		return process.ExecNext, err
 	}
 	err = genClusterBy(newBat, proc, arg.TableDef)
@@ -111,7 +119,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 		newBat.Vecs = append(newBat.Vecs, rowIdVec)
 	}
 	proc.SetInputBatch(newBat)
-	logutil.Infof("Table[`%s`] on preinsert operator output batch: %s", arg.TableDef.Name, newBat.PrintBatch())
+	if arg.TableDef.Name == "indup_02" {
+		logutil.Infof("Table[%s] on preinsert operator5 output batch: %s", arg.TableDef.Name, newBat.PrintBatch())
+	}
 	return process.ExecNext, nil
 }
 

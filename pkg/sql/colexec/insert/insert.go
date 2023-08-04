@@ -67,7 +67,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 
 	bat := proc.InputBatch()
 	if bat == nil {
-		logutil.Infof("Table[`%s`] on insert operator1 input batch is null")
 		// scenario 1 for cn write s3, more in the comment of S3Writer
 		if ap.ToWriteS3 {
 			// If the target is partition table
@@ -101,7 +100,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 		return process.ExecStop, nil
 	}
 	if bat.RowCount() == 0 {
-		logutil.Infof("Table[`%s`] on insert operator2 input batch row count = 0")
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
@@ -109,7 +107,9 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 	defer proc.PutBatch(bat)
 	insertCtx := ap.InsertCtx
 
-	logutil.Infof("Table[`%s`] on insert operator3 input batch: %s", insertCtx.TableDef.Name, bat.PrintBatch())
+	if insertCtx.TableDef.Name == "indup_02" {
+		logutil.Infof("Table[%s] on insert operator1 input batch: %s", insertCtx.TableDef.Name, bat.PrintBatch())
+	}
 
 	// scenario 1 for cn write s3, more in the comment of S3Writer
 	if ap.ToWriteS3 {
@@ -154,7 +154,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 		insertBat.SetRowCount(insertBat.RowCount() + bat.RowCount())
 
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
-			logutil.Infof("Table[`%s`] on insert operator4 output write partition batch: %s", insertCtx.TableDef.Name, insertBat.PrintBatch())
 			insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
 			if err != nil {
 				return process.ExecNext, err
@@ -171,12 +170,16 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 			// insert into table, insertBat will be deeply copied into txn's workspace.
 			err := insertCtx.Rel.Write(proc.Ctx, insertBat)
 			if err != nil {
-				logutil.Infof("Table[`%s`] on insert operator5 output write batch error [%s] and the branch is: %s", insertCtx.TableDef.Name, err.Error(), insertBat.PrintBatch())
+				if insertCtx.TableDef.Name == "indup_02" {
+					logutil.Infof("Table[%s] on insert operator2 output write batch error [%s] and the branch is: %s", insertCtx.TableDef.Name, err.Error(), insertBat.PrintBatch())
+				}
 				proc.SetInputBatch(nil)
 				insertBat.Clean(proc.GetMPool())
 				return process.ExecNext, err
 			}
-			logutil.Infof("Table[`%s`] on insert operator6 output write batch: %s", insertCtx.TableDef.Name, insertBat.PrintBatch())
+			if insertCtx.TableDef.Name == "indup_02" {
+				logutil.Infof("Table[%s] on insert operator3 output write batch: %s", insertCtx.TableDef.Name, insertBat.PrintBatch())
+			}
 		}
 
 		// `insertBat` does not include partition expression columns
