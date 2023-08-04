@@ -260,11 +260,10 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 
 		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
 		dataBuffer = nil
-		lastAnalyze.Network(bat)
-
 		if err != nil {
 			return err
 		}
+		lastAnalyze.Network(bat)
 		s.Proc.SetInputBatch(bat)
 
 		if isConnector {
