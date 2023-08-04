@@ -327,7 +327,7 @@ func (txn *Transaction) adjustUpdateOrderLocked() error {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	// If has s3 operation, can not rollback.
 	if txn.hasS3Op.Load() {
-		return moerr.NewTxnWWConflict(ctx)
+		return moerr.NewTxnCannotRetry(ctx)
 	}
 
 	txn.Lock()

@@ -200,6 +200,7 @@ const (
 	ErrDuplicateKey              uint16 = 20627
 	ErrTxnNeedRetry              uint16 = 20628
 	ErrTAENeedRetry              uint16 = 20629
+	ErrTxnCannotRetry            uint16 = 20630
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -388,6 +389,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 	ErrTxnNeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
 	ErrTAENeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae need retry"},
+	ErrTxnCannotRetry:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -1018,6 +1020,10 @@ func NewAppendableBlockNotFound(ctx context.Context) *Error {
 
 func NewTxnNeedRetry(ctx context.Context) *Error {
 	return newError(ctx, ErrTxnNeedRetry)
+}
+
+func NewTxnCannotRetry(ctx context.Context) *Error {
+	return newError(ctx, ErrTxnCannotRetry)
 }
 
 func NewDeadLockDetected(ctx context.Context) *Error {
