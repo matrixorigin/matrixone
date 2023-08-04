@@ -64,6 +64,8 @@ check_mo_service_alive() {
 }
 
 get_log_count() {
+    # count log message per second (exclude level=debug record)
+    #
     ### table system_metrics.metric example:
     # metric_name collecttime value   node    role    account type
     # mo_log_message_count    2023-08-03 15:08:08.591955  77  7c4dccb4-4d3c-41f8-b482-5251dc7a41bf    ALL sys error
@@ -78,7 +80,7 @@ get_log_count() {
     local sql=`cat << EOF
 select * from
 (select collecttime, cast( value / $metric_interval as DECIMAL(38,2)) as cnt_per_second, node, role, type as level from system_metrics.metric
- where metric_name = 'mo_log_message_count') a
+ where metric_name = 'mo_log_message_count' and type not in ('debug')) a
  where a.cnt_per_second > $count_threshold
  order by collecttime
 EOF`
