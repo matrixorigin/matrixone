@@ -61,6 +61,8 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus,
 			anal.Output(newBat, isLast)
 			proc.SetInputBatch(newBat)
 			logutil.Infof("Table[`%s`] on duplicate key operator output batch: %s", arg.TableDef.Name, newBat.PrintBatch())
+		} else {
+			logutil.Infof("Table[`%s`] on duplicate key operator output batch is NULL", arg.TableDef.Name)
 		}
 		return process.ExecStop, nil
 	}
