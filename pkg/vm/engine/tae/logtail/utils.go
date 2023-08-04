@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -244,6 +243,39 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) fu
 	}
 }
 
+type BlockLocationsIterator struct {
+	offset int
+	*BlockLocations
+}
+
+func (i *BlockLocationsIterator) HasNext() bool {
+	return i.offset < len(*i.BlockLocations)
+}
+
+func (i *BlockLocationsIterator) Next() BlockLocation {
+	loc := (BlockLocation)(*i.BlockLocations)[i.offset : i.offset+BlockLocationLength]
+	i.offset += BlockLocationLength
+	return loc
+}
+
+type BlockLocations []byte
+
+func NewEmptyBlockLocations() BlockLocations {
+	return make([]byte, 0)
+}
+
+func (l BlockLocations) Append(loc BlockLocation) {
+	l = append(l, loc...)
+}
+
+func (l BlockLocations) MakeIterator() *BlockLocationsIterator {
+	return &BlockLocationsIterator{
+		offset:         0,
+		BlockLocations: &l,
+	}
+}
+
+// func (l BlockLocations) append iterator
 /*
 Location is a fixed-length unmodifiable byte array.
 Layout:  Location(objectio.Location) | StartOffset(uint64) | EndOffset(uint64)
@@ -312,29 +344,12 @@ func (l BlockLocation) String() string {
 	if len(l) != BlockLocationLength {
 		return string(l)
 	}
-	return fmt.Sprintf("%v_start:%d_end:%d", l.GetLocation().String(), l.GetStartOffset(), l.GetEndOffset())
+	return fmt.Sprintf("%v_%v_start:%d_end:%d", l.GetLocation().String(), l.GetStartOffset(), l.GetEndOffset())
 }
 
 type TableMeta struct {
 	common.ClosedInterval
-	BlockLocation []*BlockLocation
-}
-
-func (t *TableMeta) EncodeToString() string {
-	var strs string
-	if t.BlockLocation == nil {
-		return ""
-	}
-	for _, location := range t.BlockLocation {
-		strs += string(*location) + ";"
-	}
-	return strs
-}
-
-func (t *TableMeta) DecodeFromString(key string) error {
-	blockLocation := (BlockLocation)([]byte(key))
-	t.BlockLocation = append(t.BlockLocation, &blockLocation)
-	return nil
+	locations BlockLocations
 }
 
 const (
@@ -358,21 +373,11 @@ func NewTableMeta() *TableMeta {
 	return &TableMeta{}
 }
 
-func (m *CheckpointMeta) DecodeFromString(keys []string) (err error) {
+func (m *CheckpointMeta) DecodeFromString(keys [][]byte) (err error) {
 	for i, key := range keys {
-		strs := strings.Split(key, ";")
 		tableMate := NewTableMeta()
-		for _, str := range strs {
-			if str == "" {
-				m.tables[i] = tableMate
-				continue
-			}
-			err = tableMate.DecodeFromString(str)
-			if err != nil {
-				return
-			}
-			m.tables[i] = tableMate
-		}
+		tableMate.locations = key
+		m.tables[i] = tableMate
 	}
 	return
 }
@@ -501,21 +506,21 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 	tableMeta := NewCheckpointMeta()
 	if len(blkInsStr) > 0 {
 		blkInsertTableMeta := NewTableMeta()
-		blkInsertTableMeta.DecodeFromString(string(blkInsStr))
+		blkInsertTableMeta.locations = blkInsStr
 		// blkInsertOffset
 		tableMeta.tables[BlockInsert] = blkInsertTableMeta
 	}
 	if len(blkCNInsStr) > 0 {
 		blkDeleteTableMeta := NewTableMeta()
-		blkDeleteTableMeta.DecodeFromString(string(blkDelStr))
+		blkDeleteTableMeta.locations = blkDelStr
 		tableMeta.tables[BlockDelete] = blkDeleteTableMeta
 		cnBlkInsTableMeta := NewTableMeta()
-		cnBlkInsTableMeta.DecodeFromString(string(blkCNInsStr))
+		cnBlkInsTableMeta.locations = blkCNInsStr
 		tableMeta.tables[CNBlockInsert] = cnBlkInsTableMeta
 	}
 	if len(segDelStr) > 0 {
 		segDeleteTableMeta := NewTableMeta()
-		segDeleteTableMeta.DecodeFromString(string(segDelStr))
+		segDeleteTableMeta.locations = segDelStr
 		tableMeta.tables[SegmentDelete] = segDeleteTableMeta
 	}
 
@@ -587,7 +592,9 @@ func (data *CNCheckpointData) ReadFromData(
 				idx = TBLColDeleteIDX
 			}
 		}
-		for _, block := range table.BlockLocation {
+		it := table.locations.MakeIterator()
+		for it.HasNext() {
+			block := it.Next()
 			var bat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
 			reader, err = blockio.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
@@ -790,22 +797,22 @@ func (data *CheckpointData) prepareMeta() {
 		if data.meta[uint64(tid)].tables[BlockInsert] == nil {
 			vector.AppendBytes(blkInsLoc, nil, true, common.DefaultAllocator)
 		} else {
-			vector.AppendBytes(blkInsLoc, []byte(data.meta[uint64(tid)].tables[BlockInsert].EncodeToString()), false, common.DefaultAllocator)
+			vector.AppendBytes(blkInsLoc, []byte(data.meta[uint64(tid)].tables[BlockInsert].locations), false, common.DefaultAllocator)
 		}
 		if data.meta[uint64(tid)].tables[BlockDelete] == nil {
 			vector.AppendBytes(blkDelLoc, nil, true, common.DefaultAllocator)
 		} else {
-			vector.AppendBytes(blkDelLoc, []byte(data.meta[uint64(tid)].tables[BlockDelete].EncodeToString()), false, common.DefaultAllocator)
+			vector.AppendBytes(blkDelLoc, []byte(data.meta[uint64(tid)].tables[BlockDelete].locations), false, common.DefaultAllocator)
 		}
 		if data.meta[uint64(tid)].tables[CNBlockInsert] == nil {
 			vector.AppendBytes(blkCNInsLoc, nil, true, common.DefaultAllocator)
 		} else {
-			vector.AppendBytes(blkCNInsLoc, []byte(data.meta[uint64(tid)].tables[CNBlockInsert].EncodeToString()), false, common.DefaultAllocator)
+			vector.AppendBytes(blkCNInsLoc, []byte(data.meta[uint64(tid)].tables[CNBlockInsert].locations), false, common.DefaultAllocator)
 		}
 		if data.meta[uint64(tid)].tables[SegmentDelete] == nil {
 			vector.AppendBytes(segDelLoc, nil, true, common.DefaultAllocator)
 		} else {
-			vector.AppendBytes(segDelLoc, []byte(data.meta[uint64(tid)].tables[SegmentDelete].EncodeToString()), false, common.DefaultAllocator)
+			vector.AppendBytes(segDelLoc, []byte(data.meta[uint64(tid)].tables[SegmentDelete].locations), false, common.DefaultAllocator)
 		}
 	}
 }
@@ -964,22 +971,22 @@ func (data *CheckpointData) WriteTo(
 					blockLoc := BuildBlockLoactionWithLocation(
 						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
 						0, block.GetEndOffset()-block.GetStartOffset())
-					table.BlockLocation = append(table.BlockLocation, &blockLoc)
+					table.locations.Append(blockLoc)
 				} else if block.Contains(table.ClosedInterval) {
 					blockLoc := BuildBlockLoactionWithLocation(
 						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
 						table.Start-block.GetStartOffset(), table.End-block.GetEndOffset())
-					table.BlockLocation = append(table.BlockLocation, &blockLoc)
+					table.locations.Append(blockLoc)
 				} else if table.Start <= block.GetEndOffset() && table.Start >= block.GetStartOffset() {
 					blockLoc := BuildBlockLoactionWithLocation(
 						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
 						table.Start-block.GetStartOffset(), block.GetEndOffset()-block.GetStartOffset())
-					table.BlockLocation = append(table.BlockLocation, &blockLoc)
+					table.locations.Append(blockLoc)
 				} else if table.End <= block.GetEndOffset() && table.End >= block.GetStartOffset() {
 					blockLoc := BuildBlockLoactionWithLocation(
 						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
 						0, block.GetEndOffset()-table.End)
-					table.BlockLocation = append(table.BlockLocation, &blockLoc)
+					table.locations.Append(blockLoc)
 				}
 			}
 		}
@@ -990,7 +997,7 @@ func (data *CheckpointData) WriteTo(
 	blockLoc := BuildBlockLoactionWithLocation(
 		name, blks[0].GetExtent(), 0, blks[0].GetID(),
 		0, 0)
-	data.meta[0].tables[0].BlockLocation = append(data.meta[0].tables[0].BlockLocation, &blockLoc)
+	data.meta[0].tables[0].locations.Append(blockLoc)
 	data.prepareMeta()
 	if err != nil {
 		return
@@ -1241,19 +1248,21 @@ func (data *CheckpointData) replayMetaBatch() {
 			data.locations[loc.Name().String()] = loc
 			continue
 		}
-		insLocation := string(insVec[i])
-		delLocation := string(delVec[i])
-		delCNLocation := string(delCNVec[i])
-		segLocation := string(segVec[i])
+		insLocation := insVec[i]
+		delLocation := delVec[i]
+		delCNLocation := delCNVec[i]
+		segLocation := segVec[i]
 
 		tableMeta := NewCheckpointMeta()
-		tableMeta.DecodeFromString([]string{insLocation, delLocation, delCNLocation, segLocation})
+		tableMeta.DecodeFromString([][]byte{insLocation, delLocation, delCNLocation, segLocation})
 		data.meta[tid] = tableMeta
 	}
 
 	for _, meta := range data.meta {
 		for _, table := range meta.tables {
-			for _, block := range table.BlockLocation {
+			it := table.locations.MakeIterator()
+			for it.HasNext() {
+				block := it.Next()
 				if !block.GetLocation().IsEmpty() {
 					data.locations[block.GetLocation().Name().String()] = block.GetLocation()
 					return
