@@ -202,11 +202,16 @@ message Expr {
 		TargetType  t		= 11;
 		ExprList	list	= 12;
 		MaxValue	max		= 13;
+		BinaryData	bin		= 14;
 	}
 
-	int32 aux_id = 14;
-	double ndv = 15;
-	double selectivity = 16;
+	int32 aux_id = 15;
+	double ndv = 16;
+	double selectivity = 17;
+}
+
+message BinaryData {
+	bytes data = 1;
 }
 
 enum CompressType {

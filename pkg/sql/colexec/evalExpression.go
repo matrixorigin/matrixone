@@ -99,8 +99,7 @@ func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs 
 }
 
 func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (ExpressionExecutor, error) {
-	expr := planExpr.Expr
-	switch t := expr.(type) {
+	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_C:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		vec, err := generateConstExpressionExecutor(proc, typ, t.C)
@@ -117,18 +116,6 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		vec := vector.NewConstNull(typ, 1, proc.Mp())
 		return &FixedVectorExpressionExecutor{
 			m:            proc.Mp(),
-			resultVector: vec,
-		}, nil
-
-	case *plan.Expr_List:
-		// a vector like [1, NUll, 2, 3, 4, 5, 6, 7, 9]
-		vec, err := generateConstListExpressionExecutor(proc, t.List.List)
-		if err != nil {
-			return nil, err
-		}
-		return &FixedVectorExpressionExecutor{
-			m:            proc.Mp(),
-			fixed:        true,
 			resultVector: vec,
 		}, nil
 
@@ -158,7 +145,6 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}, nil
 
 	case *plan.Expr_F:
-
 		overload, err := function.GetFunctionById(proc.Ctx, t.F.GetFunc().GetObj())
 		if err != nil {
 			return nil, err
@@ -170,15 +156,40 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			return nil, err
 		}
 
-		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutor(proc, t.F.Args[i])
+		fid, _ := function.DecodeOverloadID(t.F.GetFunc().GetObj())
+		switch fid {
+		case function.IN, function.NOT_IN:
+			leftArg, rightArg := t.F.Args[0], t.F.Args[1]
+			subExecutor, paramErr := NewExpressionExecutor(proc, leftArg)
 			if paramErr != nil {
-				for j := 0; j < i; j++ {
-					executor.parameterExecutor[j].Free()
-				}
 				return nil, paramErr
 			}
-			executor.SetParameter(i, subExecutor)
+			executor.SetParameter(0, subExecutor)
+
+			if vecData, ok := rightArg.Expr.(*plan.Expr_Bin); ok {
+				vec := vector.NewVec(types.T_any.ToType())
+				vec.UnmarshalBinary(vecData.Bin.Data)
+				executor.SetParameter(1, &FixedVectorExpressionExecutor{
+					m:            proc.Mp(),
+					fixed:        true,
+					resultVector: vec,
+				})
+			} else {
+				executor.parameterExecutor[0].Free()
+				return nil, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("expect BinaryData but get %v", rightArg))
+			}
+
+		default:
+			for i := range executor.parameterExecutor {
+				subExecutor, paramErr := NewExpressionExecutor(proc, t.F.Args[i])
+				if paramErr != nil {
+					for j := 0; j < i; j++ {
+						executor.parameterExecutor[j].Free()
+					}
+					return nil, paramErr
+				}
+				executor.SetParameter(i, subExecutor)
+			}
 		}
 
 		// IF all parameters here were constant. and this function can be folded.
@@ -221,7 +232,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		return executor, nil
 	}
 
-	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", expr))
+	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
 }
 
 func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*batch.Batch) (*vector.Vector, error) {
@@ -605,7 +616,7 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 	return vec, nil
 }
 
-func generateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
+func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	lenList := len(exprs)
 	vec, err := proc.AllocVectorOfRows(types.New(types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale), lenList, nil)
 	if err != nil {
@@ -947,7 +958,7 @@ func EvaluateFilterByZoneMap(
 
 	zm := GetExprZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
 	if !zm.IsInited() || zm.GetType() != types.T_bool {
-		selected = true
+		selected = false
 	} else {
 		selected = types.DecodeBool(zm.GetMaxBuf())
 	}
@@ -986,13 +997,15 @@ func GetExprZoneMap(
 			if t.F.Func.ObjName == "in" {
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
-					if vecs[args[1].AuxId], err = EvalExpressionOnce(proc, args[1], nil); err != nil {
+					if data, ok := args[1].Expr.(*plan.Expr_Bin); ok {
+						vec := vector.NewVec(types.T_any.ToType())
+						vec.UnmarshalBinary(data.Bin.Data)
+						vecs[args[1].AuxId] = vec
+					} else {
 						zms[expr.AuxId].Reset()
 						vecs[args[1].AuxId] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
 						return zms[expr.AuxId]
 					}
-
-					SortInFilter(vecs[args[1].AuxId])
 				}
 
 				if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {

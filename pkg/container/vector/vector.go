@@ -1973,7 +1973,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	}
 
 	if v.GetType().IsVarlen() {
-		err := BuildVarlenaFromValena(v, &v.col.([]types.Varlena)[oldLen], &(w.col.([]types.Varlena)[sel]), &w.area, mp)
+		err := BuildVarlenaFromValena(v, &v.col.([]types.Varlena)[oldLen], &w.col.([]types.Varlena)[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2011,7 +2011,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	if v.GetType().IsVarlen() {
 		var err error
 		var va types.Varlena
-		err = BuildVarlenaFromValena(v, &va, &(w.col.([]types.Varlena)[sel]), &w.area, mp)
+		err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2046,7 +2046,7 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			err = BuildVarlenaFromValena(v, &va, &(w.col.([]types.Varlena)[0]), &w.area, mp)
+			err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
@@ -2134,7 +2134,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			err = BuildVarlenaFromValena(v, &va, &(w.col.([]types.Varlena)[0]), &w.area, mp)
+			err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
@@ -2162,7 +2162,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
-						err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
+						err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 						if err != nil {
 							return err
 						}
@@ -2177,7 +2177,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
-						err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
+						err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 						if err != nil {
 							return err
 						}
@@ -2188,7 +2188,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
-					err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
+					err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -2199,7 +2199,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if flags[i] == 0 {
 						continue
 					}
-					err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
+					err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -3079,7 +3079,7 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 	vlen := len(*bs)
 	area1 := vec.GetArea()
 	voff := len(area1)
-	if voff+vlen < cap(area1) || m == nil {
+	if voff+vlen <= cap(area1) || m == nil {
 		area1 = append(area1, *bs...)
 		v1.SetOffsetLen(uint32(voff), uint32(vlen))
 		vec.SetArea(area1)

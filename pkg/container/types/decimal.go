@@ -176,15 +176,15 @@ func (x Decimal256) Compare(y Decimal256) int {
 	}
 }
 
-func CompareDecimal64(x Decimal64, y Decimal64) int64 {
-	return int64(x.Compare(y))
+func CompareDecimal64(x Decimal64, y Decimal64) int {
+	return x.Compare(y)
 }
 
-func CompareDecimal128(x Decimal128, y Decimal128) int64 {
-	return int64(x.Compare(y))
+func CompareDecimal128(x Decimal128, y Decimal128) int {
+	return x.Compare(y)
 }
 
-func CompareDecimal64WithScale(x, y Decimal64, scale1, scale2 int32) int64 {
+func CompareDecimal64WithScale(x, y Decimal64, scale1, scale2 int32) int {
 	if x.Sign() != y.Sign() {
 		if x.Sign() {
 			return -1
@@ -202,7 +202,7 @@ func CompareDecimal64WithScale(x, y Decimal64, scale1, scale2 int32) int64 {
 				return 1
 			}
 		}
-		return int64(x.Compare(y))
+		return x.Compare(y)
 	} else {
 		y, err = y.Scale(scale1 - scale2)
 		if err != nil {
@@ -212,11 +212,11 @@ func CompareDecimal64WithScale(x, y Decimal64, scale1, scale2 int32) int64 {
 				return -1
 			}
 		}
-		return int64(x.Compare(y))
+		return x.Compare(y)
 	}
 }
 
-func CompareDecimal128WithScale(x, y Decimal128, scale1, scale2 int32) int64 {
+func CompareDecimal128WithScale(x, y Decimal128, scale1, scale2 int32) int {
 	if x.Sign() != y.Sign() {
 		if x.Sign() {
 			return -1
@@ -234,7 +234,7 @@ func CompareDecimal128WithScale(x, y Decimal128, scale1, scale2 int32) int64 {
 				return 1
 			}
 		}
-		return int64(x.Compare(y))
+		return x.Compare(y)
 	} else {
 		y, err = y.Scale(scale1 - scale2)
 		if err != nil {
@@ -244,12 +244,12 @@ func CompareDecimal128WithScale(x, y Decimal128, scale1, scale2 int32) int64 {
 				return -1
 			}
 		}
-		return int64(x.Compare(y))
+		return x.Compare(y)
 	}
 }
 
-func CompareDecimal256(x Decimal256, y Decimal256) int64 {
-	return int64(x.Compare(y))
+func CompareDecimal256(x Decimal256, y Decimal256) int {
+	return x.Compare(y)
 }
 
 func (x Decimal64) Lt(y Decimal64) bool {

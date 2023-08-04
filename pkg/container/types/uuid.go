@@ -42,7 +42,7 @@ func EqualUuid(src Uuid, dest Uuid) bool {
 	return src == dest
 }
 
-func CompareUuid(left Uuid, right Uuid) int64 {
+func CompareUuid(left Uuid, right Uuid) int {
 	for i := 0; i < 16; i++ {
 		if left[i] == right[i] {
 			continue

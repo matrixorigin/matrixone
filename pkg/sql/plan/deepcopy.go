@@ -967,6 +967,13 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		newExpr.Expr = &plan.Expr_List{
 			List: e,
 		}
+
+	case *plan.Expr_Bin:
+		newExpr.Expr = &plan.Expr_Bin{
+			Bin: &plan.BinaryData{
+				Data: item.Bin.Data,
+			},
+		}
 	}
 
 	return newExpr

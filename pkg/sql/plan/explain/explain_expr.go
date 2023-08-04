@@ -155,8 +155,10 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 				return err
 			}
 		}
+	case *plan.Expr_Bin:
+		buf.WriteString("binary data")
 	default:
-		panic("error Expr")
+		panic("unsupported expr")
 	}
 	return nil
 }

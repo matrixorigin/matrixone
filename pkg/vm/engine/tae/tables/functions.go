@@ -124,7 +124,7 @@ func parseADedeupArgs(args ...any) (
 	return
 }
 
-func dedupNABlkFuncFactory[T any](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
+func dedupNABlkFuncFactory[T any](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, mask, def := parseNADedeupArgs(args...)
 		vs := vector.MustFixedCol[T](vec)
@@ -214,7 +214,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 	}
 }
 
-func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
+func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, mask, def, scan, txn := parseADedeupArgs(args...)
 		return func(v1 T, _ bool, _ int) error {

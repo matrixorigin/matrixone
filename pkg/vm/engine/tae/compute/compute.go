@@ -102,7 +102,7 @@ func GetOffsetOfBytes(
 func GetOffsetWithFunc[T any](
 	vals []T,
 	val T,
-	compare func(a, b T) int64,
+	compare func(a, b T) int,
 	skipmask *nulls.Bitmap,
 ) (offset int, exist bool) {
 	start, end := 0, len(vals)-1

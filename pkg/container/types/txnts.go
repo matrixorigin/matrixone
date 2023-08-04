@@ -303,6 +303,6 @@ func MockColTypes(colCnt int) (ct []Type) {
 	return
 }
 
-func CompareTSTSAligned(a, b TS) int64 {
-	return int64(bytes.Compare(a[:], b[:]))
+func CompareTSTSAligned(a, b TS) int {
+	return bytes.Compare(a[:], b[:])
 }

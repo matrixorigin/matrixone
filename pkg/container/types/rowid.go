@@ -50,12 +50,12 @@ func BuildTestBlockid(a, b int64) (ret Blockid) {
 	return
 }
 
-func CompareRowidRowidAligned(a, b Rowid) int64 {
-	return int64(bytes.Compare(a[:], b[:]))
+func CompareRowidRowidAligned(a, b Rowid) int {
+	return bytes.Compare(a[:], b[:])
 }
 
-func CompareBlockidBlockidAligned(a, b Blockid) int64 {
-	return int64(bytes.Compare(a[:], b[:]))
+func CompareBlockidBlockidAligned(a, b Blockid) int {
+	return bytes.Compare(a[:], b[:])
 }
 
 func (r Rowid) Less(than Rowid) bool {

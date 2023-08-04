@@ -1810,7 +1810,7 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 			})
 		}
 	default:
-		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
+		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join type '%v'", node.JoinType)))
 	}
 	// recovery the children's last operator
 	for i := range children {

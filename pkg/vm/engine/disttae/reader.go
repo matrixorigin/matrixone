@@ -234,16 +234,8 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 	// use the search function to find the offset of the primary key.
 	// it returns the offset of the primary key in the pk vector.
 	// if the primary key is not found, it returns empty slice
-	filter = func(vecs []*vector.Vector) []int32 {
-		vec := vecs[0]
-		row := searchFunc(vec)
-		if row < 0 {
-			return nil
-		}
-		return []int32{int32(row)}
-	}
 	mixin.filterState.evaluated = true
-	mixin.filterState.filter = filter
+	mixin.filterState.filter = searchFunc
 	mixin.filterState.seqnums = []uint16{uint16(mixin.columns.seqnums[mixin.columns.pkPos])}
 	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 	return
