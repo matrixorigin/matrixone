@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -443,6 +444,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.IsJoin = s.IsJoin
 	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
+	p.BuildIdx = int32(s.BuildIdx)
 
 	// Plan
 	if ctxId == 1 {
@@ -574,6 +576,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		IsLoad:   p.IsLoad,
 		Plan:     ctx.plan,
 		IsRemote: isRemote,
+		BuildIdx: int(p.BuildIdx),
 	}
 	if err := convertPipelineUuid(p, s); err != nil {
 		return s, err
