@@ -47,7 +47,7 @@ check_mo_service_alive() {
     local ret=0
     for idx in `seq 1 $max_try_conn`;
     do
-        echo_proxy "try access mo $idx times."
+        echo_proxy "Try to access mo $idx times."
         $mod -Nse "select 1;" 1>/dev/null 2>&1
         ret=$?
         if [ $ret -eq 0 ]; then
@@ -57,7 +57,7 @@ check_mo_service_alive() {
         sleep 1
     done
     if [ $ret -ne 0 ]; then
-        echo_proxy "failed to access mo-servcie through port 6001."
+        echo_proxy "warning: failed to access mo-servcie through port 6001."
         exit 0
     fi
     echo_proxy "seccess to access mo-servcie through port 6001."
