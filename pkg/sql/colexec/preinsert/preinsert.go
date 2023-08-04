@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,6 +55,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 		return process.ExecNext, nil
 	}
 	defer proc.PutBatch(bat)
+
+	logutil.Infof("Table[`%s`] on preinsert operator3 input batch: %s", arg.TableDef.Name, bat.PrintBatch())
+
 	newBat := batch.NewWithSize(len(arg.Attrs))
 	newBat.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
@@ -72,6 +76,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
 			newBat.Clean(proc.GetMPool())
+			logutil.Infof("Table[`%s`] on preinsert operator gen auto incr err: %s", arg.TableDef.Name, err.Error())
 			return process.ExecNext, err
 		}
 	}
@@ -79,6 +84,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
+		logutil.Infof("Table[`%s`] on preinsert operator notNullCheck err: %s", arg.TableDef.Name, err.Error())
 		return process.ExecNext, err
 	}
 
@@ -86,6 +92,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 	err = genCompositePrimaryKey(newBat, proc, arg.TableDef)
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
+		logutil.Infof("Table[`%s`] on preinsert operator gen composite primary key: %s", arg.TableDef.Name, err.Error())
 		return process.ExecNext, err
 	}
 	err = genClusterBy(newBat, proc, arg.TableDef)
@@ -104,6 +111,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
 		newBat.Vecs = append(newBat.Vecs, rowIdVec)
 	}
 	proc.SetInputBatch(newBat)
+	logutil.Infof("Table[`%s`] on preinsert operator output batch: %s", arg.TableDef.Name, newBat.PrintBatch())
 	return process.ExecNext, nil
 }
 
