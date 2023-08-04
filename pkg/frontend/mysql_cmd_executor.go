@@ -3505,6 +3505,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
+		ses.trafficBytes.Store(int64(0))
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
@@ -3962,10 +3963,11 @@ type jsonPlanHandler struct {
 	buffer     *bytes.Buffer
 }
 
-func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *jsonPlanHandler {
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, ses *Session) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan)
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx)
+	statsBytes.WithOutTrafficBytes(float64(ses.trafficBytes.Load()))
 	return &jsonPlanHandler{
 		jsonBytes:  jsonBytes,
 		statsBytes: statsBytes,

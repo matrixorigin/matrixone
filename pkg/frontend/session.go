@@ -162,7 +162,9 @@ type Session struct {
 
 	curResultSize float64 // MB
 
-	sentRows atomic.Int64
+	// sentRows and trafficBytes are used to calculate the query throughput for motrace.StatementInfo
+	sentRows     atomic.Int64
+	trafficBytes atomic.Int64
 
 	createdTime time.Time
 
