@@ -353,7 +353,7 @@ func (l BlockLocation) String() string {
 	if len(l) != BlockLocationLength {
 		return string(l)
 	}
-	return fmt.Sprintf("%v_%v_start:%d_end:%d", l.GetLocation().String(), l.GetStartOffset(), l.GetEndOffset())
+	return fmt.Sprintf("%v_start:%d_end:%d", l.GetLocation().String(), l.GetStartOffset(), l.GetEndOffset())
 }
 
 type TableMeta struct {
@@ -367,6 +367,13 @@ const (
 	CNBlockInsert
 	SegmentDelete
 )
+
+func (m *TableMeta) String() string {
+	if m==nil{
+		return ""
+	}
+	return fmt.Sprintf("interval:%v, locations:%v", m.ClosedInterval, m.locations)
+}
 
 const MetaMaxIdx = SegmentDelete + 1
 
@@ -389,6 +396,16 @@ func (m *CheckpointMeta) DecodeFromString(keys [][]byte) (err error) {
 		m.tables[i] = tableMate
 	}
 	return
+}
+func (m *CheckpointMeta) String() string {
+	s := ""
+	if m==nil{
+		return "nil"
+	}
+	for idx, table := range m.tables {
+		s += fmt.Sprintf("idx:%d, table:%s\n", idx, table)
+	}
+	return s
 }
 
 type CheckpointData struct {
@@ -518,6 +535,11 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 		blkInsertTableMeta.locations = blkInsStr
 		// blkInsertOffset
 		tableMeta.tables[BlockInsert] = blkInsertTableMeta
+	}
+	if len(blkDelStr) > 0 {
+		blkDeleteTableMeta := NewTableMeta()
+		blkDeleteTableMeta.locations = blkDelStr
+		tableMeta.tables[BlockDelete] = blkDeleteTableMeta
 	}
 	if len(blkCNInsStr) > 0 {
 		blkDeleteTableMeta := NewTableMeta()
@@ -826,65 +848,45 @@ func (data *CheckpointData) prepareMeta() {
 	}
 }
 
-func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart, delEnd int32) {
-	if delEnd <= delStart && insEnd <= insStart {
-		return
-	}
+func (data *CheckpointData) updateTableMeta(tid uint64, metaIdx int, start, end int32) {
 	meta, ok := data.meta[tid]
 	if !ok {
 		meta = NewCheckpointMeta()
 		data.meta[tid] = meta
 	}
-	if delEnd > delStart {
-		if meta.tables[BlockDelete] == nil {
-			meta.tables[BlockDelete] = NewTableMeta()
-			meta.tables[BlockDelete].Start = uint64(delStart)
-			meta.tables[BlockDelete].End = uint64(delEnd)
-			meta.tables[CNBlockInsert] = NewTableMeta()
-			meta.tables[CNBlockInsert].Start = uint64(delStart)
-			meta.tables[CNBlockInsert].End = uint64(delEnd)
+	if end > start {
+		if meta.tables[metaIdx] == nil {
+			meta.tables[metaIdx] = NewTableMeta()
+			meta.tables[metaIdx].Start = uint64(start)
+			meta.tables[metaIdx].End = uint64(end)
 		} else {
-			if !meta.tables[BlockDelete].TryMerge(common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}) {
-				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[BlockDelete].ClosedInterval, delStart, delEnd))
-			}
-			if !meta.tables[CNBlockInsert].TryMerge(common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}) {
-				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[CNBlockInsert].ClosedInterval, delStart, delEnd))
+			if !meta.tables[metaIdx].TryMerge(common.ClosedInterval{Start: uint64(start), End: uint64(end)}) {
+				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[BlockDelete].ClosedInterval, start, end))
 			}
 		}
 	}
-	if insEnd > insStart {
-		if meta.tables[BlockInsert] == nil {
-			meta.tables[BlockInsert] = NewTableMeta()
-			meta.tables[BlockInsert].Start = uint64(insStart)
-			meta.tables[BlockInsert].End = uint64(insEnd)
-		} else {
-			if !meta.tables[BlockInsert].TryMerge(common.ClosedInterval{Start: uint64(insStart), End: uint64(insEnd)}) {
-				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[BlockInsert].ClosedInterval, insStart, insEnd))
-			}
-		}
+}
+func (data *CheckpointData) updateMOCatalog(tid uint64, insStart, insEnd, delStart, delEnd int32) {
+	if delEnd <= delStart && insEnd <= insStart {
+		return
 	}
+	data.updateTableMeta(tid, BlockInsert, insStart, insEnd)
+	data.updateTableMeta(tid, BlockDelete, delStart, delEnd)
+}
+func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart, delEnd int32) {
+	if delEnd <= delStart && insEnd <= insStart {
+		return
+	}
+	data.updateTableMeta(tid, BlockInsert, insStart, insEnd)
+	data.updateTableMeta(tid, BlockDelete, delStart, delEnd)
+	data.updateTableMeta(tid, CNBlockInsert, delStart, delEnd)
 }
 
 func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
 	if delEnd <= delStart {
 		return
 	}
-	meta, ok := data.meta[tid]
-	if !ok {
-		meta = NewCheckpointMeta()
-		data.meta[tid] = meta
-	}
-	if delEnd > delStart {
-		if meta.tables[SegmentDelete] == nil {
-			meta.tables[SegmentDelete] = NewTableMeta()
-			meta.tables[SegmentDelete].Start = uint64(delStart)
-			meta.tables[SegmentDelete].End = uint64(delEnd)
-		} else {
-			if !meta.tables[SegmentDelete].TryMerge(common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}) {
-				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.tables[SegmentDelete].ClosedInterval, delStart, delEnd))
-			}
-		}
-	}
+	data.updateTableMeta(tid, SegmentDelete, delStart, delEnd)
 }
 
 func (data *CheckpointData) PrintData() {
@@ -975,7 +977,7 @@ func (data *CheckpointData) WriteTo(
 					break
 				}
 				blockLoc1 := objectio.BuildLocation(name, blks[block.GetID()].GetExtent(), 0, block.GetID())
-				logutil.Infof("write block %v to %d-%d, table is %d-%d", blockLoc1.String(), block.GetStartOffset(), block.GetEndOffset(), table.Start, table.End)
+				logutil.Infof("write tid %d-%d block %v to %d-%d, table is %d-%d", tid,i,blockLoc1.String(), block.GetStartOffset(), block.GetEndOffset(), table.Start, table.End)
 				if table.Uint64Contains(block.GetStartOffset(), block.GetEndOffset()) {
 					blockLoc := BuildBlockLoactionWithLocation(
 						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
@@ -1357,7 +1359,9 @@ func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
 		vec.Close()
 	}
 }
-
+func (data *CheckpointData) GetBatches() []*containers.Batch {
+	return data.bats[:]
+}
 func (data *CheckpointData) GetDBBatchs() (
 	*containers.Batch,
 	*containers.Batch,
@@ -1418,6 +1422,8 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
+	delStart := collector.data.bats[DBDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	insStart := collector.data.bats[DBInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
 			continue
@@ -1456,6 +1462,9 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBInsertTxnIDX])
 		}
 	}
+	delEnd := collector.data.bats[DBDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	insEnd := collector.data.bats[DBInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
+	collector.data.updateMOCatalog(pkgcatalog.MO_DATABASE_ID, int32(insStart), int32(insEnd), int32(delStart), int32(delEnd))
 	return nil
 }
 func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.BaseEntry) bool {
@@ -1483,6 +1492,10 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 	tableColInsBat := collector.data.bats[TBLColInsertIDX]
 	tableInsBat := collector.data.bats[TBLInsertIDX]
 	tableColInsTxnBat := collector.data.bats[TBLInsertTxnIDX]
+	tblDelStart := collector.data.bats[TBLDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	tblInsStart := collector.data.bats[TBLInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
+	colDelStart := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	colInsStart := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
 			continue
@@ -1564,6 +1577,12 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			tblNode.TxnMVCCNode.AppendTuple(tableDelTxnBat)
 		}
 	}
+	tblDelEnd := collector.data.bats[TBLDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	tblInsEnd := collector.data.bats[TBLInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
+	colDelEnd := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	colInsEnd := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
+	collector.data.updateMOCatalog(pkgcatalog.MO_TABLES_ID, int32(tblInsStart), int32(tblInsEnd), int32(tblDelStart), int32(tblDelEnd))
+	collector.data.updateMOCatalog(pkgcatalog.MO_COLUMNS_ID, int32(colInsStart), int32(colInsEnd), int32(colDelStart), int32(colDelEnd))
 	return nil
 }
 

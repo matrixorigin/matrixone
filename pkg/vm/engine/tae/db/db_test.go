@@ -7957,3 +7957,41 @@ func TestReplayPersistedDelete(t *testing.T) {
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
+
+func TestCheckpointReadWrite(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "create database db", "1")
+	assert.NoError(t, err)
+	schema1 := catalog.MockSchemaAll(2, 1)
+	_, err = db.CreateRelation(schema1)
+	assert.NoError(t, err)
+	schema2 := catalog.MockSchemaAll(3, -1)
+	_, err = db.CreateRelation(schema2)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	t1 := tae.TxnMgr.StatMaxCommitTS()
+	checkCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, tae.Opts.Fs)
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema1.Name)
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema2.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	t2 := tae.TxnMgr.StatMaxCommitTS()
+	checkCheckpointReadWrite(t, types.TS{}, t2, tae.Catalog, tae.Opts.Fs)
+	checkCheckpointReadWrite(t, t1, t2, tae.Catalog, tae.Opts.Fs)
+}
