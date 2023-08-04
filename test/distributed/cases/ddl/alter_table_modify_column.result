@@ -539,3 +539,32 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
 7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
 7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+drop table emp;
+drop table dept;
+drop table if exists t1;
+CREATE TABLE t1(col1 int not null, col2 varchar(10));
+insert into t1 values (1, '137iu2');
+insert into t1 values (1, '73ujf34f');
+select * from t1;
+col1    col2
+1    137iu2
+1    73ujf34f
+alter table t1 modify col1 int primary key;
+Duplicate entry '1' for key 'col1'
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    INT(32)    NO        null        
+col2    VARCHAR(10)    YES        null        
+alter table t1 modify col2 varchar(10) primary key;
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    INT(32)    NO        null        
+col2    VARCHAR(10)    NO    PRI    null        
+insert into t1 values (1, 'cdsdsa');
+select * from t1;
+col1    col2
+1    137iu2
+1    73ujf34f
+1    cdsdsa
+drop table t1;
+drop database if exists db2;
