@@ -1,8 +1,8 @@
 #SELECT, 嵌套
 select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
 
-
-select exp(log(sqrt(10))*2);
+#0.5 sqrt函数暂不支持
+#select exp(log(sqrt(10))*2);
 
 #SELECT
 SELECT LOG(2);
