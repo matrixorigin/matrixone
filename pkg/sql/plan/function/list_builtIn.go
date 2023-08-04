@@ -1531,7 +1531,6 @@ var supportedMathBuiltIns = []FuncNew{
 					return builtInSqrt
 				},
 			},
-			// TODO: check if we should support SQRT for Decimal_128
 		},
 	},
 
