@@ -259,19 +259,23 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 
 		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
+		dataBuffer = nil
+		lastAnalyze.Network(bat)
+
 		if err != nil {
 			return err
 		}
-		lastAnalyze.Network(bat)
 		s.Proc.SetInputBatch(bat)
 
 		if isConnector {
-			connector.Call(-1, s.Proc, lastArg, false, false)
+			if ok, err := connector.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
+				return err
+			}
 		} else {
-			dispatch.Call(-1, s.Proc, lastArg, false, false)
+			if ok, err := dispatch.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
+				return err
+			}
 		}
-
-		dataBuffer = nil
 	}
 }
 
@@ -298,9 +302,14 @@ func (s *Scope) remoteRun(c *Compile) error {
 	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
+	failed := false
+	defer func() {
+		lastArg.Free(s.Proc, failed)
+	}()
 
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
+		failed = true
 		return errEncode
 	}
 	s.Instructions = append(s.Instructions, lastInstruction)
@@ -308,26 +317,27 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc)
 	if errEncodeProc != nil {
+		failed = true
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
+		failed = true
 		return err
 	}
+	defer sender.close()
 	err = sender.send(sData, pData, pipeline.PipelineMessage)
 	if err != nil {
-		sender.close()
+		failed = true
 		return err
 	}
 
-	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
+	if err = receiveMessageFromCnServer(c, s, sender, lastInstruction); err != nil {
+		failed = true
+	}
 
-	// tell the connector or dispatch is over
-	lastArg.Free(s.Proc, err != nil)
-
-	sender.close()
 	return err
 }
 
