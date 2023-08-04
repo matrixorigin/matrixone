@@ -29,15 +29,15 @@ const (
 	MaxArrayDimension = 65536
 )
 
-func BytesToArray[T BuiltinNumber](input []byte) (res []T) {
+func BytesToArray[T RealNumbers](input []byte) (res []T) {
 	return DecodeSlice[T](input)
 }
 
-func ArrayToBytes[T BuiltinNumber](input []T) []byte {
+func ArrayToBytes[T RealNumbers](input []T) []byte {
 	return EncodeSlice[T](input)
 }
 
-func ArrayToString[T BuiltinNumber](input []T) string {
+func ArrayToString[T RealNumbers](input []T) string {
 	var buffer bytes.Buffer
 	for i, value := range input {
 		if i > 0 {
@@ -48,7 +48,7 @@ func ArrayToString[T BuiltinNumber](input []T) string {
 	return "[" + buffer.String() + "]"
 }
 
-func ArraysToString[T BuiltinNumber](input [][]T) string {
+func ArraysToString[T RealNumbers](input [][]T) string {
 	var strValues []string
 	for _, row := range input {
 		strValues = append(strValues, ArrayToString[T](row))
@@ -56,7 +56,7 @@ func ArraysToString[T BuiltinNumber](input [][]T) string {
 	return strings.Join(strValues, " ")
 }
 
-func StringToArray[T BuiltinNumber](input string) ([]T, error) {
+func StringToArray[T RealNumbers](input string) ([]T, error) {
 	input = strings.ReplaceAll(input, "[", "")
 	input = strings.ReplaceAll(input, "]", "")
 	input = strings.ReplaceAll(input, " ", "")
@@ -119,7 +119,7 @@ func StringToArray[T BuiltinNumber](input string) ([]T, error) {
 	return result, nil
 }
 
-func CompareArray[T BuiltinNumber](left, right []T) int64 {
+func CompareArray[T RealNumbers](left, right []T) int64 {
 
 	if len(left) != len(right) {
 		//TODO: check this with Min.

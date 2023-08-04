@@ -220,7 +220,7 @@ func (v *Vector) GetStringAt(i int) string {
 	return bs[i].GetString(v.area)
 }
 
-func GetArrayAt[T types.BuiltinNumber](v *Vector, i int) []T {
+func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	if v.IsConst() {
 		i = 0
 	}
@@ -273,7 +273,7 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) *Vec
 	return vec
 }
 
-func NewConstArray[T types.BuiltinNumber](typ types.Type, val []T, length int, mp *mpool.MPool) *Vector {
+func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp *mpool.MPool) *Vector {
 	vec := &Vector{
 		typ:   typ,
 		class: CONSTANT,
@@ -344,7 +344,7 @@ func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 	return SetBytesAt(v, idx, []byte(bs), mp)
 }
 
-func SetArrayAt[T types.BuiltinNumber](v *Vector, idx int, bs []T, mp *mpool.MPool) error {
+func SetArrayAt[T types.RealNumbers](v *Vector, idx int, bs []T, mp *mpool.MPool) error {
 	return SetBytesAt(v, idx, types.ArrayToBytes[T](bs), mp)
 }
 
@@ -2621,7 +2621,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	return nil
 }
 
-func SetConstArray[T types.BuiltinNumber](vec *Vector, val []T, length int, mp *mpool.MPool) error {
+func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 
@@ -2736,7 +2736,7 @@ func AppendBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error {
 	return appendOneBytes(vec, val, isNull, mp)
 }
 
-func AppendArray[T types.BuiltinNumber](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
+func AppendArray[T types.RealNumbers](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
 	}
@@ -2756,7 +2756,7 @@ func AppendMultiFixed[T any](vec *Vector, vals T, isNull bool, cnt int, mp *mpoo
 	return appendMultiFixed[T](vec, vals, isNull, cnt, mp)
 }
 
-func AppendMultiArrays[T types.BuiltinNumber](vec *Vector, vals []T, isNull bool, cnt int, mp *mpool.MPool) error {
+func AppendMultiArrays[T types.RealNumbers](vec *Vector, vals []T, isNull bool, cnt int, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
 	}
@@ -2815,7 +2815,7 @@ func AppendStringList(vec *Vector, ws []string, isNulls []bool, mp *mpool.MPool)
 	return appendStringList(vec, ws, isNulls, mp)
 }
 
-func AppendArrayList[T types.BuiltinNumber](vec *Vector, ws [][]T, isNulls []bool, mp *mpool.MPool) error {
+func AppendArrayList[T types.RealNumbers](vec *Vector, ws [][]T, isNulls []bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
 	}
@@ -2858,7 +2858,7 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 	}
 }
 
-func appendOneArray[T types.BuiltinNumber](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
+func appendOneArray[T types.RealNumbers](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 
@@ -2913,7 +2913,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	return nil
 }
 
-func appendMultiArrays[T types.BuiltinNumber](vec *Vector, val []T, isNull bool, cnt int, mp *mpool.MPool) error {
+func appendMultiArrays[T types.RealNumbers](vec *Vector, val []T, isNull bool, cnt int, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 	if err = extend(vec, cnt, mp); err != nil {
@@ -3002,7 +3002,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	return nil
 }
 
-func appendArrayList[T types.BuiltinNumber](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
+func appendArrayList[T types.RealNumbers](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 
@@ -3525,7 +3525,7 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 	return BuildVarlenaNoInline(vec, v, bs, m)
 }
 
-func BuildVarlenaFromArray[T types.BuiltinNumber](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
+func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
 	_bs := types.ArrayToBytes[T](*array)
 	bs := &_bs
 	vlen := len(*bs)

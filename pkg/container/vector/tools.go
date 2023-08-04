@@ -75,7 +75,7 @@ func MustStrCol(v *Vector) []string {
 	}
 }
 
-func MustArrayCol[T types.BuiltinNumber](v *Vector) [][]T {
+func MustArrayCol[T types.RealNumbers](v *Vector) [][]T {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -122,7 +122,7 @@ func ExpandStrCol(v *Vector) []string {
 	return MustStrCol(v)
 }
 
-func ExpandArrayCol[T types.BuiltinNumber](v *Vector) [][]T {
+func ExpandArrayCol[T types.RealNumbers](v *Vector) [][]T {
 	if v.IsConst() {
 		vs := make([][]T, v.Length())
 		if len(v.data) > 0 {
@@ -401,7 +401,7 @@ func checkStrIntersect(v1, v2 *Vector, gtFun compFn[string], ltFun compFn[string
 	return checkIntersect(cols1, cols2, gtFun, ltFun)
 }
 
-func checkArrayIntersect[T types.BuiltinNumber](v1, v2 *Vector, gtFun compFn[[]T], ltFun compFn[[]T]) (bool, error) {
+func checkArrayIntersect[T types.RealNumbers](v1, v2 *Vector, gtFun compFn[[]T], ltFun compFn[[]T]) (bool, error) {
 	cols1 := MustArrayCol[T](v1)
 	cols2 := MustArrayCol[T](v2)
 	return checkIntersect(cols1, cols2, gtFun, ltFun)
@@ -607,7 +607,7 @@ func compareNumber[T types.OrderedT](ctx context.Context, v1, v2 *Vector, fnName
 	}
 }
 
-func compareArray[T types.BuiltinNumber](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
+func compareArray[T types.RealNumbers](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
 	switch fnName {
 	case ">":
 		return runArrayCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 []T) bool {
@@ -659,7 +659,7 @@ func runStrCompareCheckAnyResultIsTrue(vec1, vec2 *Vector, fn compFn[string]) bo
 	return compareCheckAnyResultIsTrue(cols1, cols2, fn)
 }
 
-func runArrayCompareCheckAnyResultIsTrue[T types.BuiltinNumber](vec1, vec2 *Vector, fn compFn[[]T]) bool {
+func runArrayCompareCheckAnyResultIsTrue[T types.RealNumbers](vec1, vec2 *Vector, fn compFn[[]T]) bool {
 	// column_a operator column_b  -> return true
 	// that means we don't known the return, just readBlock
 	if vec1.IsConstNull() || vec2.IsConstNull() {

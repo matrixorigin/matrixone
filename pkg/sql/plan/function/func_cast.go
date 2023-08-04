@@ -3794,7 +3794,7 @@ func strToStr(
 	return nil
 }
 
-func strToArray[T types.BuiltinNumber](
+func strToArray[T types.RealNumbers](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {

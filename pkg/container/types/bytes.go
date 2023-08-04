@@ -103,7 +103,7 @@ func (v *Varlena) GetByteSlice(area []byte) []byte {
 	return area[voff : voff+vlen]
 }
 
-func GetArray[T BuiltinNumber](v *Varlena, area []byte) []T {
+func GetArray[T RealNumbers](v *Varlena, area []byte) []T {
 	svlen := (*v)[0]
 	if svlen <= VarlenaInlineSize {
 		return BytesToArray[T](v.ByteSlice())

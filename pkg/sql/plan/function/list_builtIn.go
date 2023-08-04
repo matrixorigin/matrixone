@@ -1510,6 +1510,67 @@ var supportedMathBuiltIns = []FuncNew{
 					return AbsDecimal128
 				},
 			},
+
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0] //TODO: is this OK? or should I use return types.T_array_int8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsArray[int8]
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_int16},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsArray[int16]
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_array_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsArray[int32]
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_array_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsArray[int64]
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsArray[float32]
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsArray[float64]
+				},
+			},
 		},
 	},
 
