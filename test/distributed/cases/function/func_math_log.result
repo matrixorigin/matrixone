@@ -1,5 +1,8 @@
 select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
 invalid argument ln, bad value -1
+select exp(log(sqrt(10))*2);
+exp(log(sqrt(10))*2)
+10.000000000000002
 SELECT LOG(2);
 LOG(2)
 0.6931471805599453

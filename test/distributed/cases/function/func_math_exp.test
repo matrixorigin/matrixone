@@ -1,8 +1,7 @@
 #SELECT, 嵌套
 select log(exp(10));
 
-#0.5中sqrt暂不支持
-#select exp(log(sqrt(10))*2);
+select exp(log(sqrt(10))*2);
 
 #SELECT
 SELECT EXP(2);

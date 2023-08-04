@@ -1,6 +1,9 @@
 select log(exp(10));
 log(exp(10))
 10.0
+select exp(log(sqrt(10))*2);
+exp(log(sqrt(10))*2)
+10.000000000000002
 SELECT EXP(2);
 EXP(2)
 7.38905609893065
