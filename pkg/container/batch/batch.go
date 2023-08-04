@@ -347,6 +347,7 @@ func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
 }
 
 // PrintBatch Convert batch to a two-dimensional table string
+// Warning: This method is only used for debugging code and is not suitable for printing big batch data
 func (bat *Batch) PrintBatch() string {
 	stringBuffer := bytes.NewBufferString("")
 	if bat.RowCount() > 0 {
