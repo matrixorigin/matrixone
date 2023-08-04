@@ -1717,12 +1717,6 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		return c.compileShuffleJoin(ctx, node, left, right, ss, children)
-		if len(c.cnList) == 1 {
-			return c.compileShuffleJoin(ctx, node, left, right, ss, children)
-		} else {
-			// only support shuffle join on standalone for now. will fix this in the future
-			node.Stats.HashmapStats.Shuffle = false
-		}
 	}
 	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
 }
@@ -2337,24 +2331,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 		//return []*Scope{c.newMergeScope(parent)}
 	}
 }
-
-//func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
-//	ss2 := make([]*Scope, 0, len(ss))
-//	for _, s := range ss {
-//		if s.IsEnd {
-//			continue
-//		}
-//		ss2 = append(ss2, s)
-//	}
-//	insert := &vm.Instruction{
-//		Op:  vm.Insert,
-//		Arg: arg,
-//	}
-//	for i := range ss2 {
-//		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
-//	}
-//	return c.newMergeScope(ss2)
-//}
 
 // DeleteMergeScope need to assure this:
 // one block can be only deleted by one and the same
