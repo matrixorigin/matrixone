@@ -35,7 +35,7 @@ echo_proxy() {
 }
 
 show_env() {
-    echo_proxy "This script is encouraged by #9835"
+    echo_proxy "This script is inspired by #9835"
     echo_proxy "arg count_threshold : $count_threshold"
     echo_proxy "arg metric_interval : $metric_interval"
     echo_proxy "out_log_count file  : $out_log_count"
