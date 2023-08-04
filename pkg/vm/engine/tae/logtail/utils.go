@@ -264,8 +264,8 @@ func NewEmptyBlockLocations() BlockLocations {
 	return make([]byte, 0)
 }
 
-func (l BlockLocations) Append(loc BlockLocation) {
-	l = append(l, loc...)
+func (l *BlockLocations) Append(loc BlockLocation) {
+	*l = append(*l, loc...)
 }
 
 func (l BlockLocations) MakeIterator() *BlockLocationsIterator {
@@ -273,6 +273,15 @@ func (l BlockLocations) MakeIterator() *BlockLocationsIterator {
 		offset:         0,
 		BlockLocations: &l,
 	}
+}
+func (l BlockLocations) String() string {
+	s := ""
+	it := l.MakeIterator()
+	for it.HasNext() {
+		loc := it.Next()
+		s += loc.String()
+	}
+	return s
 }
 
 // func (l BlockLocations) append iterator
