@@ -167,84 +167,17 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		})
 
 	case types.T_array_int8:
-		//TODO: Try out opBinaryBytesBytesToBytesWithErrorCheck()
-		return arrayArith[int8](parameters, result, proc, length, func(v1, v2 []int8, scale1, scale2 int32) ([]int8, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int8, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] + v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[int8])
 	case types.T_array_int16:
-		return arrayArith[int16](parameters, result, proc, length, func(v1, v2 []int16, scale1, scale2 int32) ([]int16, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int16, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] + v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[int16])
 	case types.T_array_int32:
-		return arrayArith[int32](parameters, result, proc, length, func(v1, v2 []int32, scale1, scale2 int32) ([]int32, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int32, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] + v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[int32])
 	case types.T_array_int64:
-		return arrayArith[int64](parameters, result, proc, length, func(v1, v2 []int64, scale1, scale2 int32) ([]int64, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int64, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] + v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[int64])
 	case types.T_array_float32:
-		return arrayArith[float32](parameters, result, proc, length, func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]float32, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] + v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32])
 	case types.T_array_float64:
-		return arrayArith[float64](parameters, result, proc, length, func(v1, v2 []float64, scale1, scale2 int32) ([]float64, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]float64, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] + v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float64])
 	}
 	panic("unreached code")
 }
@@ -312,84 +245,17 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		})
 
 	case types.T_array_int8:
-		return arrayArith[int8](parameters, result, proc, length, func(v1, v2 []int8, scale1, scale2 int32) ([]int8, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int8, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] - v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[int8])
 	case types.T_array_int16:
-		return arrayArith[int16](parameters, result, proc, length, func(v1, v2 []int16, scale1, scale2 int32) ([]int16, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int16, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] - v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[int16])
 	case types.T_array_int32:
-		return arrayArith[int32](parameters, result, proc, length, func(v1, v2 []int32, scale1, scale2 int32) ([]int32, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int32, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] - v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[int32])
 	case types.T_array_int64:
-		return arrayArith[int64](parameters, result, proc, length, func(v1, v2 []int64, scale1, scale2 int32) ([]int64, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int64, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] - v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[int64])
 	case types.T_array_float32:
-		return arrayArith[float32](parameters, result, proc, length, func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]float32, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] - v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float32])
 	case types.T_array_float64:
-		return arrayArith[float64](parameters, result, proc, length, func(v1, v2 []float64, scale1, scale2 int32) ([]float64, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]float64, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] - v2[i]
-			}
-
-			return r, nil
-		})
-
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float64])
 	}
 	panic("unreached code")
 }
@@ -449,83 +315,17 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		})
 
 	case types.T_array_int8:
-		return arrayArith[int8](parameters, result, proc, length, func(v1, v2 []int8, scale1, scale2 int32) ([]int8, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int8, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] * v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[int8])
 	case types.T_array_int16:
-		return arrayArith[int16](parameters, result, proc, length, func(v1, v2 []int16, scale1, scale2 int32) ([]int16, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int16, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] * v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[int16])
 	case types.T_array_int32:
-		return arrayArith[int32](parameters, result, proc, length, func(v1, v2 []int32, scale1, scale2 int32) ([]int32, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int32, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] * v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[int32])
 	case types.T_array_int64:
-		return arrayArith[int64](parameters, result, proc, length, func(v1, v2 []int64, scale1, scale2 int32) ([]int64, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]int64, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] * v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[int64])
 	case types.T_array_float32:
-		return arrayArith[float32](parameters, result, proc, length, func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]float32, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] * v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32])
 	case types.T_array_float64:
-		return arrayArith[float64](parameters, result, proc, length, func(v1, v2 []float64, scale1, scale2 int32) ([]float64, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]float64, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] * v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float64])
 	}
 	panic("unreached code")
 }
@@ -551,34 +351,12 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 			r, _, err := v1.Div(v2, scale1, scale2)
 			return r, err
 		})
-	//TODO: Check if Arrays should also support float32 and float64
+	//TODO: Check if int8 would be casted to float32 or float64.
 	// My understanding: https://stackoverflow.com/a/34504552/1609570
 	case types.T_array_float32:
-		return arrayArith[float32](parameters, result, proc, length, func(v1, v2 []float32, scale1, scale2 int32) ([]float32, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]float32, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] / v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32])
 	case types.T_array_float64:
-		return arrayArith[float64](parameters, result, proc, length, func(v1, v2 []float64, scale1, scale2 int32) ([]float64, error) {
-			if len(v1) != len(v2) {
-				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-			}
-
-			r := make([]float64, len(v1))
-			for i := 0; i < len(v1); i++ {
-				r[i] = v1[i] / v2[i]
-			}
-
-			return r, nil
-		})
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float64])
 	}
 	panic("unreached code")
 }
@@ -653,4 +431,68 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		})
 	}
 	panic("unreached code")
+}
+
+func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
+	if len(v1) != len(v2) {
+		return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+	}
+
+	_v1 := types.BytesToArray[T](v1)
+	_v2 := types.BytesToArray[T](v2)
+
+	r := make([]T, len(v1))
+	for i := 0; i < len(v1); i++ {
+		r[i] = _v1[i] + _v2[i]
+	}
+
+	return types.ArrayToBytes[T](r), nil
+}
+
+func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
+	if len(v1) != len(v2) {
+		return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+	}
+
+	_v1 := types.BytesToArray[T](v1)
+	_v2 := types.BytesToArray[T](v2)
+
+	r := make([]T, len(v1))
+	for i := 0; i < len(v1); i++ {
+		r[i] = _v1[i] - _v2[i]
+	}
+
+	return types.ArrayToBytes[T](r), nil
+}
+
+func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
+	if len(v1) != len(v2) {
+		return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+	}
+
+	_v1 := types.BytesToArray[T](v1)
+	_v2 := types.BytesToArray[T](v2)
+
+	r := make([]T, len(v1))
+	for i := 0; i < len(v1); i++ {
+		r[i] = _v1[i] * _v2[i]
+	}
+
+	return types.ArrayToBytes[T](r), nil
+}
+
+func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
+	if len(v1) != len(v2) {
+		return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
+	}
+
+	_v1 := types.BytesToArray[T](v1)
+	_v2 := types.BytesToArray[T](v2)
+
+	r := make([]T, len(v1))
+	for i := 0; i < len(v1); i++ {
+		r[i] = _v1[i] / _v2[i]
+	}
+
+	return types.ArrayToBytes[T](r), nil
 }
