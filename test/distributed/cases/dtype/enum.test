@@ -1,3 +1,4 @@
+-- @bvt:issue#6613
 CREATE TABLE shirts (
     name VARCHAR(40),
     size ENUM('x-small', 'small', 'medium', 'large', 'x-large')
@@ -13,4 +14,4 @@ create table t_enum(a int,b enum('1','2','3','4','5'));
 insert into t_enum values(1,1);
 select * from t_enum;
 drop table t_enum;
-
+-- @bvt:issue
