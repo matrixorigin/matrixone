@@ -263,17 +263,18 @@ type BlockLocation []byte
 func BuildBlockLoaction(id uint16, start, end uint64) BlockLocation {
 	buf := make([]byte, BlockLocationLength)
 	copy(buf[StartOffsetOffset:StartOffsetOffset+StartOffsetLength], types.EncodeUint64(&start))
-	copy(buf[EndOffsetLength:EndOffsetOffset+EndOffsetLength], types.EncodeUint64(&start))
+	logutil.Infof("end is %d", end)
+	copy(buf[EndOffsetOffset:EndOffsetOffset+EndOffsetLength], types.EncodeUint64(&end))
 	blkLoc := BlockLocation(buf)
 	blkLoc.SetID(id)
-	return blkLoc
+	return buf
 }
 func BuildBlockLoactionWithLocation(name objectio.ObjectName, extent objectio.Extent, rows uint32, id uint16, start, end uint64) BlockLocation {
 	buf := make([]byte, BlockLocationLength)
 	location := objectio.BuildLocation(name, extent, rows, id)
 	copy(buf[LocationOffset:LocationOffset+LocationLength], location)
 	copy(buf[StartOffsetOffset:StartOffsetOffset+StartOffsetLength], types.EncodeUint64(&start))
-	copy(buf[EndOffsetLength:EndOffsetOffset+EndOffsetLength], types.EncodeUint64(&start))
+	copy(buf[EndOffsetOffset:EndOffsetOffset+EndOffsetLength], types.EncodeUint64(&end))
 	return buf
 }
 func (l BlockLocation) GetID() uint16 {
@@ -302,7 +303,16 @@ func (l BlockLocation) SetEndOffset(end uint64) {
 }
 func (l BlockLocation) Contains(i common.ClosedInterval) bool {
 	return l.GetStartOffset() <= i.Start && l.GetEndOffset() >= i.End
+}
 
+func (l BlockLocation) String() string {
+	if len(l) == 0 {
+		return ""
+	}
+	if len(l) != BlockLocationLength {
+		return string(l)
+	}
+	return fmt.Sprintf("%v_%v_start:%d_end:%d", l.GetLocation().String(), l.GetStartOffset(), l.GetEndOffset())
 }
 
 type TableMeta struct {
@@ -585,7 +595,7 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
-			//logutil.Infof("load block %v from %v to %d", block.location.String(), block.ClosedInterval.String(), bat.Vecs[0].Length())
+			logutil.Infof("load block %v: %d-%d to %d", block.GetLocation().String(), block.GetStartOffset(), block.GetEndOffset(), bat.Vecs[0].Length())
 			if block.GetEndOffset() == 0 {
 				continue
 			}
@@ -894,6 +904,7 @@ func (data *CheckpointData) WriteTo(
 			}
 			Endoffset := offset + bat.Length()
 			blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(Endoffset))
+			logutil.Infof("blockLoc is %d-%d", blockLoc.GetStartOffset(), blockLoc.GetEndOffset())
 			blockIndexs[i] = append(blockIndexs[i], &blockLoc)
 		}
 	}
@@ -904,6 +915,7 @@ func (data *CheckpointData) WriteTo(
 			if table == nil || table.ClosedInterval.Start == table.ClosedInterval.End {
 				continue
 			}
+
 			idx := uint16(i)
 			if i > BlockDelete {
 				if tid == pkgcatalog.MO_DATABASE_ID ||
@@ -946,6 +958,8 @@ func (data *CheckpointData) WriteTo(
 				if table.End < block.GetStartOffset() {
 					break
 				}
+				blockLoc1 := objectio.BuildLocation(name, blks[block.GetID()].GetExtent(), 0, block.GetID())
+				logutil.Infof("write block %v to %d-%d, table is %d-%d", blockLoc1.String(), block.GetStartOffset(), block.GetEndOffset(), table.Start, table.End)
 				if table.Uint64Contains(block.GetStartOffset(), block.GetEndOffset()) {
 					blockLoc := BuildBlockLoactionWithLocation(
 						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
@@ -1222,9 +1236,9 @@ func (data *CheckpointData) replayMetaBatch() {
 	for i := 0; i < data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX].Length(); i++ {
 		tid := tidVec[i]
 		if tid == 0 {
-			strs := strings.Split(string(insVec[i]), ":")
-			loc, _ := blockio.EncodeLocationFromString(strs[0])
-			data.locations[string(insVec[i])] = loc
+			bl := BlockLocation(insVec[i])
+			loc := bl.GetLocation()
+			data.locations[loc.Name().String()] = loc
 			continue
 		}
 		insLocation := string(insVec[i])
@@ -1241,7 +1255,7 @@ func (data *CheckpointData) replayMetaBatch() {
 		for _, table := range meta.tables {
 			for _, block := range table.BlockLocation {
 				if !block.GetLocation().IsEmpty() {
-					data.locations[block.GetLocation().String()] = block.GetLocation()
+					data.locations[block.GetLocation().Name().String()] = block.GetLocation()
 					return
 				}
 			}
