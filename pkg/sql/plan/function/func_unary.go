@@ -79,6 +79,20 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	})
 }
 
+func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(in []byte) (out []byte, err error) {
+		_in := types.BytesToArray[T](in)
+		_out := make([]T, len(_in))
+		for i := 0; i < len(_in); i++ {
+			_out[i], err = absSigned[T](_in[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+		return types.ArrayToBytes[T](_out), nil
+	})
+}
+
 func StringSingle(val []byte) uint8 {
 	if len(val) == 0 {
 		return 0

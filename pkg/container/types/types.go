@@ -328,12 +328,8 @@ type RealNumbers interface {
 	constraints.Signed | constraints.Float
 }
 
-type ArrayType interface {
-	[]int8 | []int16 | []int32 | []int64 | []float32 | []float64
-}
-
 type FixedSizeTExceptStrType interface {
-	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid | ArrayType
+	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid
 }
 
 type Number interface {

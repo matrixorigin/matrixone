@@ -2548,6 +2548,71 @@ func opUnaryStrToBytesWithErrorCheck(
 	return nil
 }
 
+func opUnaryBytesToBytesWithErrorCheck(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) ([]byte, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := resultFn(v1)
+			if err != nil {
+				return err
+			}
+
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				if err = rs.AppendMustBytesValue(r); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			v1, null1 := p1.GetStrValue(i)
+			if null1 {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+			} else {
+				r, err := resultFn(v1)
+				if err != nil {
+					return err
+				}
+				if err = rs.AppendMustBytesValue(r); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		r, err := resultFn(v1)
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendMustBytesValue(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func opUnaryBytesToStrWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) (string, error)) error {

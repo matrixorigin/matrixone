@@ -167,6 +167,7 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		})
 
 	case types.T_array_int8:
+		//TODO: Try out opBinaryBytesBytesToBytesWithErrorCheck()
 		return arrayArith[int8](parameters, result, proc, length, func(v1, v2 []int8, scale1, scale2 int32) ([]int8, error) {
 			if len(v1) != len(v2) {
 				return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
