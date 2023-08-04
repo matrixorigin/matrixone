@@ -984,7 +984,7 @@ func (data *CheckpointData) WriteTo(
 				} else if block.Contains(table.ClosedInterval) {
 					blockLoc := BuildBlockLoactionWithLocation(
 						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
-						table.Start-block.GetStartOffset(), table.End-block.GetEndOffset())
+						table.Start-block.GetStartOffset(), table.End-block.GetStartOffset())
 					table.locations.Append(blockLoc)
 				} else if table.Start <= block.GetEndOffset() && table.Start >= block.GetStartOffset() {
 					blockLoc := BuildBlockLoactionWithLocation(
