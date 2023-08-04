@@ -418,6 +418,10 @@ func (s *Scope) JoinRun(c *Compile) error {
 	if mcpu <= 1 { // no need to parallel
 		buildScope := c.newJoinBuildScope(s, nil)
 		s.PreScopes = append(s.PreScopes, buildScope)
+		if s.BuildIdx > 1 {
+			probeScope := c.newJoinProbeScope(s, nil)
+			s.PreScopes = append(s.PreScopes, probeScope)
+		}
 		return s.MergeRun(c)
 	}
 
