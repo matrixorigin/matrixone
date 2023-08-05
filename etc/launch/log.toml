@@ -4,3 +4,6 @@ data-dir = "./mo-data"
 
 [log]
 level = "info"
+
+[observability]
+disableStmtAggregation = true
