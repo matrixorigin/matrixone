@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -38,6 +39,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -4037,16 +4039,21 @@ func (h *marshalPlanHandler) handoverBuffer() *bytes.Buffer {
 	return b
 }
 
+var allocCount atomic.Int64
+var releaseCount atomic.Int64
+
 var marshalPlanBufferPool = sync.Pool{New: func() any {
-	return bytes.NewBuffer(make([]byte, 0, 8192))
+	return bytes.NewBuffer(make([]byte, 0, 16*mpool.KB))
 }}
 
 // get buffer from marshalPlanBufferPool
 func getMarshalPlanBufferPool() *bytes.Buffer {
+	allocCount.Add(1)
 	return marshalPlanBufferPool.Get().(*bytes.Buffer)
 }
 
 func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
+	releaseCount.Add(1)
 	marshalPlanBufferPool.Put(b)
 }
 
@@ -4099,4 +4106,14 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 		statsByte = statistic.DefaultStatsArray
 	}
 	return
+}
+
+func init() {
+	go func() {
+		for {
+			time.Sleep(3 * time.Second)
+			alloc, release := allocCount.Load(), releaseCount.Load()
+			logutil.Infof("json_buffer alloc, release, delta: %d, %d, %d", alloc, release, alloc-release)
+		}
+	}()
 }
