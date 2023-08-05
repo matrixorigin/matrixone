@@ -152,6 +152,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		// check if uniqueness conflict found in checkConflictBatch
 		oldConflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, insertColCount)
 		if err != nil {
+			newBatch.Clean(proc.GetMPool())
 			return err
 		}
 		if oldConflictIdx > -1 {
@@ -170,11 +171,13 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				toVec := newBatch.Vecs[j+insertColCount]
 				err := toVec.Copy(fromVec, 0, int64(oldConflictIdx), proc.Mp())
 				if err != nil {
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
 			}
 			tmpBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 			if err != nil {
+				newBatch.Clean(proc.GetMPool())
 				return err
 			}
 			// update the oldConflictIdx of insertBatch by newBatch
@@ -183,12 +186,16 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				toVec := insertBatch.Vecs[j]
 				err := toVec.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
 				if err != nil {
+					tmpBatch.Clean(proc.GetMPool())
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
 
 				toVec2 := checkConflictBatch.Vecs[j]
 				err = toVec2.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
 				if err != nil {
+					tmpBatch.Clean(proc.GetMPool())
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
 			}
@@ -202,13 +209,18 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			} else {
 				tmpBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 				if err != nil {
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
 				conflictIdx, conflictMsg, err := checkConflict(proc, tmpBatch, checkConflictBatch, checkExpr, uniqueCols, insertColCount)
 				if err != nil {
+					tmpBatch.Clean(proc.GetMPool())
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
 				if conflictIdx > -1 {
+					tmpBatch.Clean(proc.GetMPool())
+					newBatch.Clean(proc.GetMPool())
 					return moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
 				} else {
 					// append batch to insertBatch
