@@ -441,8 +441,9 @@ func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	r := make([]T, len(v1))
-	for i := 0; i < len(v1); i++ {
+	n := len(_v1)
+	r := make([]T, n)
+	for i := 0; i < n; i++ {
 		r[i] = _v1[i] + _v2[i]
 	}
 
@@ -457,8 +458,9 @@ func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	r := make([]T, len(v1))
-	for i := 0; i < len(v1); i++ {
+	n := len(_v1)
+	r := make([]T, n)
+	for i := 0; i < n; i++ {
 		r[i] = _v1[i] - _v2[i]
 	}
 
@@ -473,8 +475,9 @@ func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	r := make([]T, len(v1))
-	for i := 0; i < len(v1); i++ {
+	n := len(_v1)
+	r := make([]T, n)
+	for i := 0; i < n; i++ {
 		r[i] = _v1[i] * _v2[i]
 	}
 
@@ -489,8 +492,9 @@ func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	r := make([]T, len(v1))
-	for i := 0; i < len(v1); i++ {
+	n := len(_v1)
+	r := make([]T, n)
+	for i := 0; i < n; i++ {
 		r[i] = _v1[i] / _v2[i]
 	}
 
