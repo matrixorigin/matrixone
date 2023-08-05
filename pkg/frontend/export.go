@@ -516,7 +516,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 		writeByte: writeByte,
 		err:       nil,
 	}
-	ses.trafficBytes.Add(int64(len(writeByte)))
+	ses.trafficBytes.Add(int64(len(writeByte))) // statistic out traffic, CASE 2: output file
 	bat.Clean(ses.GetMemPool())
 }
 

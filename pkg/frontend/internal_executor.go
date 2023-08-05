@@ -397,6 +397,8 @@ func (ip *internalProtocol) ResetStatistics() {
 	ip.result.resultSet = nil
 }
 
+func (ip *internalProtocol) GetStatisticsWriteBytes() uint64 { return 0 }
+
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
 
 func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {

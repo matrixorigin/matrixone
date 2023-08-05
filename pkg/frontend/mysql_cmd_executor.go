@@ -437,6 +437,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
 	ses.sentRows.Add(int64(n))
+	ses.trafficBytes.Add(int64(proto.GetStatisticsWriteBytes())) // statistic out traffic, CASE 1: send back to client
 	logDebugf(ses.GetDebugString(), "rowCount %v \n"+
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
