@@ -39,13 +39,15 @@ func ArrayToBytes[T RealNumbers](input []T) []byte {
 
 func ArrayToString[T RealNumbers](input []T) string {
 	var buffer bytes.Buffer
+	_, _ = io.WriteString(&buffer, "[")
 	for i, value := range input {
 		if i > 0 {
 			_, _ = io.WriteString(&buffer, ", ")
 		}
 		_, _ = io.WriteString(&buffer, fmt.Sprintf("%v", value))
 	}
-	return "[" + buffer.String() + "]"
+	_, _ = io.WriteString(&buffer, "]")
+	return buffer.String()
 }
 
 func ArraysToString[T RealNumbers](input [][]T) string {
