@@ -1459,6 +1459,23 @@ func builtInSqrt(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	})
 }
 
+func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length, func(in []byte) (out []byte, err error) {
+		_in := types.BytesToArray[T](in)
+
+		n := len(_in)
+		_out := make([]float64, n)
+		for i := 0; i < n; i++ {
+			_out[i], err = momath.Sqrt(float64(_in[i])) //TODO: Check about this casting.
+			if err != nil {
+				return nil, err
+			}
+		}
+		return types.ArrayToBytes[float64](_out), nil
+
+	})
+}
+
 func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)

@@ -1638,7 +1638,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SQRT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fixedTypeMatch, // TODO: need to check about the cast logic.
 
 		Overloads: []overload{
 			{
@@ -1649,6 +1649,66 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInSqrt
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_int8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqrtArray[int8]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_int16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqrtArray[int16]
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqrtArray[int32]
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqrtArray[int64]
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqrtArray[float32]
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqrtArray[float64]
 				},
 			},
 		},
