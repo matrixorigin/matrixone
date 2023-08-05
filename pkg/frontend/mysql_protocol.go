@@ -2265,6 +2265,12 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 	}
 
 	//make rows into the batch
+	var beginIdx, endIdx int
+	beginIdx = mp.tcpConn.OutBuf().GetWriteIndex()
+	defer func() {
+		endIdx = mp.tcpConn.OutBuf().GetWriteIndex()
+		mp.ses.trafficBytes.Add(int64(endIdx - beginIdx)) // statistic out traffic, CASE 1: send back to client
+	}()
 	for i := uint64(0); i < cnt; i++ {
 		err = mp.openRow(nil)
 		if err != nil {
