@@ -105,6 +105,9 @@ var (
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
 
+	// defaultMetricInternalGatherInterval default: 1 min.
+	defaultMetricInternalGatherInterval = time.Minute
+
 	// defaultMetricUpdateStorageUsageInterval default: 15 min.
 	defaultMetricUpdateStorageUsageInterval = 15 * time.Minute
 
@@ -472,12 +475,15 @@ type ObservabilityParameters struct {
 	LongQueryTime float64 `toml:"longQueryTime"`
 
 	// MetricExportInterval default is 15 sec.
-	MetricExportInterval int `toml:"metricExportInterval"`
+	MetricExportInterval int `toml:"metric-export-interval"`
 
 	// MetricGatherInterval default is 15 sec.
-	MetricGatherInterval int `toml:"metricGatherInterval"`
+	MetricGatherInterval int `toml:"metric-gather-interval"`
 
-	// MetricStorageUsageUpdateInterval, default: 30 min
+	// MetricInternalGatherInterval default is 1 min, handle metric.SubSystemMO metric
+	MetricInternalGatherInterval toml.Duration `toml:"metric-internal-gather-interval"`
+
+	// MetricStorageUsageUpdateInterval, default: 15 min
 	MetricStorageUsageUpdateInterval toml.Duration `toml:"metricStorageUsageUpdateInterval"`
 
 	// MetricStorageUsageCheckNewInterval, default: 1 min
@@ -528,6 +534,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		LongQueryTime:                      defaultLongQueryTime,
 		MetricExportInterval:               defaultMetricExportInterval,
 		MetricGatherInterval:               defaultMetricGatherInterval,
+		MetricInternalGatherInterval:       toml.Duration{},
 		MetricStorageUsageUpdateInterval:   toml.Duration{},
 		MetricStorageUsageCheckNewInterval: toml.Duration{},
 		MergeCycle:                         toml.Duration{},
@@ -541,6 +548,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		EnableStmtMerge:                    false,
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
 	}
+	op.MetricInternalGatherInterval.Duration = defaultMetricInternalGatherInterval
 	op.MetricStorageUsageUpdateInterval.Duration = defaultMetricUpdateStorageUsageInterval
 	op.MetricStorageUsageCheckNewInterval.Duration = defaultMetricStorageUsageCheckNewInterval
 	op.MergeCycle.Duration = defaultMergeCycle

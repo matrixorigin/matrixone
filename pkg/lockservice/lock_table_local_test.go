@@ -117,7 +117,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				lock, ok := lt.mu.store.Get([]byte{1})
 				require.True(t, ok)
 				lt.mu.RUnlock()
-				if lock.waiter.waiters.len() == 2 {
+				if getWaiterLen(lock.waiter) == 2 {
 					break
 				}
 				time.Sleep(time.Millisecond * 10)
@@ -172,8 +172,9 @@ func TestCloseLocalLockTableWithBlockedSameTxnWaiters(t *testing.T) {
 				lt.mu.RLock()
 				lock, ok := lt.mu.store.Get([]byte{1})
 				require.True(t, ok)
-				if lock.waiter.waiters.len() == 1 &&
-					len(lock.waiter.waiters.all()[0].sameTxnWaiters) == n-1 {
+
+				if getWaiterLen(lock.waiter) == 1 &&
+					len(mustGetWaiter(lock.waiter, 0).sameTxnWaiters) == n-1 {
 					lt.mu.RUnlock()
 					break
 				}
@@ -455,7 +456,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					flags = append(flags, l.value)
 					if !l.isLockRangeStart() {
 						if len(c.mergedWaiters) == 0 {
-							assert.Equal(t, 0, l.waiter.waiters.len())
+							assert.Equal(t, 0, getWaiterLen(l.waiter))
 						} else {
 							var waitTxns []string
 							l.waiter.waiters.iter(func(v *waiter) bool {
@@ -556,9 +557,9 @@ func TestMergeRangeWithConflict(t *testing.T) {
 					return true
 				})
 				assert.Equal(t, [][]byte{{1}, {3}}, locks)
-				assert.Equal(t, 2, w.waiters.len())
-				assert.Equal(t, []byte("txn3"), w.waiters.all()[0].txnID)
-				assert.Equal(t, []byte("txn4"), w.waiters.all()[1].txnID)
+				assert.Equal(t, 2, getWaiterLen(w))
+				assert.Equal(t, []byte("txn3"), mustGetWaiter(w, 0).txnID)
+				assert.Equal(t, []byte("txn4"), mustGetWaiter(w, 1).txnID)
 			}()
 			waitWaiters(t, l, 1, []byte{3}, 1)
 
@@ -572,12 +573,12 @@ func TestMergeRangeWithConflict(t *testing.T) {
 			})
 			lt.mu.Unlock()
 			assert.Equal(t, [][]byte{{1}, {2}, {3}}, rows)
-			assert.Equal(t, 1, waiters[0].waiters.len())
-			assert.Equal(t, []byte("txn3"), waiters[0].waiters.all()[0].txnID)
-			assert.Equal(t, 1, waiters[1].waiters.len())
-			assert.Equal(t, []byte("txn4"), waiters[1].waiters.all()[0].txnID)
-			assert.Equal(t, 1, waiters[2].waiters.len())
-			assert.Equal(t, []byte("txn1"), waiters[2].waiters.all()[0].txnID)
+			assert.Equal(t, 1, getWaiterLen(waiters[0]))
+			assert.Equal(t, []byte("txn3"), mustGetWaiter(waiters[0], 0).txnID)
+			assert.Equal(t, 1, getWaiterLen(waiters[1]))
+			assert.Equal(t, []byte("txn4"), mustGetWaiter(waiters[1], 0).txnID)
+			assert.Equal(t, 1, getWaiterLen(waiters[2]))
+			assert.Equal(t, []byte("txn1"), mustGetWaiter(waiters[2], 0).txnID)
 
 			require.NoError(t, l.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 			wg.Wait()
@@ -1016,4 +1017,27 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 type target struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
+}
+
+func mustGetWaiter(w *waiter, n int) *waiter {
+	var ww *waiter
+	i := 0
+	w.waiters.iter(func(v *waiter) bool {
+		ww = v
+		i++
+		return i <= n
+	})
+	if ww == nil {
+		panic("no waiter")
+	}
+	return ww
+}
+
+func getWaiterLen(w *waiter) int {
+	var i int
+	w.waiters.iter(func(v *waiter) bool {
+		i++
+		return true
+	})
+	return i
 }
