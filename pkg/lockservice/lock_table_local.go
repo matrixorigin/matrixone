@@ -354,39 +354,50 @@ func (l *localLockTable) handleLockConflictLocked(
 	txn *activeTxn,
 	w *waiter,
 	key []byte,
-	conflictWith Lock) {
-	childWaiters := make([]*waiter, 0)
-	w.waiters.iter(func(w *waiter) bool {
-		childWaiters = append(childWaiters, w)
-		return true
-	})
-	w.waiters.reset()
-
+	conflictWith Lock) error {
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
 	txn.setBlocked(w.txnID, w)
+
+	var err error
+	conflictWith.waiter.waiters.beginChange()
+	defer func() {
+		if err == nil {
+			return
+		}
+		conflictWith.waiter.waiters.rollbackChange()
+		w.notify(l.bind.ServiceID, notifyValue{err: err})
+	}()
+
 	conflictWith.waiter.add(l.bind.ServiceID, true, w)
-	if err := l.detector.check(
+	if err = l.detector.check(
 		conflictWith.txnID,
 		txn.toWaitTxn(
 			l.bind.ServiceID,
 			true)); err != nil {
-		panic("BUG: active dead lock check can not fail")
+		return err
 	}
 
 	// add child waiters into current locks waiting list
-	for _, v := range childWaiters {
+	w.waiters.iter(func(v *waiter) bool {
 		if bytes.Equal(v.txnID, conflictWith.txnID) {
 			v.notify(l.bind.ServiceID, notifyValue{})
-			continue
+			return true
 		}
-
 		conflictWith.waiter.add(l.bind.ServiceID, false, v)
-		if err := l.detector.check(conflictWith.txnID, v.belongTo); err != nil {
-			panic("BUG: active dead lock check can not fail")
+		if err = l.detector.check(conflictWith.txnID, v.belongTo); err != nil {
+			return false
 		}
+		return true
+	})
+	if err != nil {
+		return err
 	}
+
+	w.waiters.reset()
+	conflictWith.waiter.waiters.commitChange()
 	logLocalLockWaitOn(l.bind.ServiceID, txn, l.bind.Table, w, key, conflictWith)
+	return nil
 }
 
 func getWaiter(
