@@ -131,7 +131,9 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 		}
 		return newCompare(uuidAscCompare, uuidCopy, nullsLast)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_json, types.T_text,
+		types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64,
+		types.T_array_float32, types.T_array_float64:
 		return &strCompare{
 			desc:        desc,
 			nullsLast:   nullsLast,
