@@ -360,7 +360,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		offset = w.prepareBlockMeta(offset, w.blocks[i], w.tombstonesColmeta)
 	}
 
-	metaHeader := buildObjectMetaV1()
+	metaHeader := buildObjectMetaV2()
 	objectMetas := make([]objectDataMetaV1, len(w.blocks))
 	bloomFilterDatas := make([][]byte, len(w.blocks))
 	bloomFilterExtents := make([]Extent, len(w.blocks))

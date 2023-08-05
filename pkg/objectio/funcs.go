@@ -109,7 +109,7 @@ func ReadObjectMeta(
 		return
 	}
 
-	meta = ObjectMeta(obj.([]byte))
+	meta = obj.(ObjectMeta)
 	return
 }
 

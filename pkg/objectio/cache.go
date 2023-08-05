@@ -47,13 +47,24 @@ func LoadObjectMetaByExtent(
 	fs fileservice.FileService) (meta ObjectMeta, err error) {
 	v, _, ok := metaCache.Get(*name.Short(), false)
 	if ok {
-		meta = ObjectMeta(v)
+		var obj any
+		obj, err = Decode(v)
+		meta = obj.(ObjectMeta)
+		if err != nil {
+			return
+		}
 		return
 	}
-	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
+	if v, err = ReadExtent(ctx, name.String(), extent, noLRUCache, fs, constructorFactory); err != nil {
 		return
 	}
-	metaCache.Set(*name.Short(), meta, int64(len(meta[:])), false)
+	var obj any
+	obj, err = Decode(v)
+	if err != nil {
+		return
+	}
+	meta = obj.(ObjectMeta)
+	metaCache.Set(*name.Short(), v, int64(len(v[:])), false)
 	return
 }
 

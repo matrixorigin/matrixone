@@ -45,14 +45,14 @@ func ConvertToSchemaType(ckpIdx uint16) DataMetaType {
 	return CkpMetaStart + DataMetaType(ckpIdx)
 }
 
-type objectMetaV1 []byte
+type objectMetaV2 []byte
 
-func buildObjectMetaV1() objectMetaV1 {
+func buildObjectMetaV2() objectMetaV2 {
 	var buf [metaHeaderLen]byte
 	return buf[:]
 }
 
-func (mh objectMetaV1) MustGetMeta(metaType DataMetaType) objectDataMetaV1 {
+func (mh objectMetaV2) MustGetMeta(metaType DataMetaType) objectDataMetaV1 {
 	if metaType == SchemaData {
 		return mh.MustDataMeta()
 	} else if metaType == SchemaTombstone {
@@ -61,19 +61,19 @@ func (mh objectMetaV1) MustGetMeta(metaType DataMetaType) objectDataMetaV1 {
 	return nil
 }
 
-func (mh objectMetaV1) HeaderLength() uint32 {
+func (mh objectMetaV2) HeaderLength() uint32 {
 	return metaHeaderLen
 }
 
-func (mh objectMetaV1) DataMetaCount() uint16 {
+func (mh objectMetaV2) DataMetaCount() uint16 {
 	return types.DecodeUint16(mh[:dataMetaCount])
 }
 
-func (mh objectMetaV1) TombstoneMetaCount() uint16 {
+func (mh objectMetaV2) TombstoneMetaCount() uint16 {
 	return types.DecodeUint16(mh[tombstoneMetaCountOff : tombstoneMetaCountOff+tombstoneMetaCount])
 }
 
-func (mh objectMetaV1) DataMeta() (objectDataMetaV1, bool) {
+func (mh objectMetaV2) DataMeta() (objectDataMetaV1, bool) {
 	if mh.DataMetaCount() == 0 {
 		return nil, false
 	}
@@ -81,7 +81,7 @@ func (mh objectMetaV1) DataMeta() (objectDataMetaV1, bool) {
 	return objectDataMetaV1(mh[offset:]), true
 }
 
-func (mh objectMetaV1) MustDataMeta() objectDataMetaV1 {
+func (mh objectMetaV2) MustDataMeta() objectDataMetaV1 {
 	meta, ok := mh.DataMeta()
 	if !ok {
 		panic("no data meta")
@@ -89,7 +89,7 @@ func (mh objectMetaV1) MustDataMeta() objectDataMetaV1 {
 	return meta
 }
 
-func (mh objectMetaV1) TombstoneMeta() (objectDataMetaV1, bool) {
+func (mh objectMetaV2) TombstoneMeta() (objectDataMetaV1, bool) {
 	if mh.TombstoneMetaCount() == 0 {
 		return nil, false
 	}
@@ -97,7 +97,7 @@ func (mh objectMetaV1) TombstoneMeta() (objectDataMetaV1, bool) {
 	return objectDataMetaV1(mh[offset:]), true
 }
 
-func (mh objectMetaV1) MustTombstoneMeta() objectDataMetaV1 {
+func (mh objectMetaV2) MustTombstoneMeta() objectDataMetaV1 {
 	meta, ok := mh.TombstoneMeta()
 	if !ok {
 		panic("no tombstone meta")
@@ -105,38 +105,38 @@ func (mh objectMetaV1) MustTombstoneMeta() objectDataMetaV1 {
 	return meta
 }
 
-func (mh objectMetaV1) SetDataMetaCount(count uint16) {
+func (mh objectMetaV2) SetDataMetaCount(count uint16) {
 	copy(mh[:dataMetaCount], types.EncodeUint16(&count))
 }
 
-func (mh objectMetaV1) SetDataMetaOffset(offset uint32) {
+func (mh objectMetaV2) SetDataMetaOffset(offset uint32) {
 	copy(mh[dataMetaCount:dataMetaCount+dataMetaOffset], types.EncodeUint32(&offset))
 }
 
-func (mh objectMetaV1) SetTombstoneMetaCount(count uint16) {
+func (mh objectMetaV2) SetTombstoneMetaCount(count uint16) {
 	copy(mh[tombstoneMetaCountOff:tombstoneMetaCountOff+tombstoneMetaCount], types.EncodeUint16(&count))
 }
 
-func (mh objectMetaV1) SetTombstoneMetaOffset(offset uint32) {
+func (mh objectMetaV2) SetTombstoneMetaOffset(offset uint32) {
 	copy(mh[tombstoneMetaCountOff+tombstoneMetaCount:tombstoneMetaCountOff+tombstoneMetaCount+tombstoneMetaOffset], types.EncodeUint32(&offset))
 }
 
-func (mh objectMetaV1) SubMeta(pos uint16) (objectDataMetaV1, bool) {
+func (mh objectMetaV2) SubMeta(pos uint16) (objectDataMetaV1, bool) {
 	offStart := schemaCountLen + uint32(pos)*typePosLen + schemaType + schemaBlockCount + metaHeaderLen
 	offEnd := schemaCountLen + uint32(pos)*typePosLen + typePosLen + metaHeaderLen
 	offset := types.DecodeUint32(mh[offStart:offEnd])
 	return objectDataMetaV1(mh[offset:]), true
 }
 
-func (mh objectMetaV1) SubMetaCount() uint16 {
+func (mh objectMetaV2) SubMetaCount() uint16 {
 	return types.DecodeUint16(mh[metaHeaderLen : metaHeaderLen+schemaCountLen])
 }
 
-func (mh objectMetaV1) SubMetaIndex() SubMetaIndex {
+func (mh objectMetaV2) SubMetaIndex() SubMetaIndex {
 	return SubMetaIndex(mh[metaHeaderLen:])
 }
 
-func (mh objectMetaV1) SubMetaTypes() []uint16 {
+func (mh objectMetaV2) SubMetaTypes() []uint16 {
 	cnt := mh.SubMetaCount()
 	subMetaTypes := make([]uint16, cnt)
 	for i := uint16(0); i < cnt; i++ {
