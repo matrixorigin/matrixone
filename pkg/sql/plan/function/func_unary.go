@@ -95,6 +95,29 @@ func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Functio
 	})
 }
 
+func SummationReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_array_float32, types.T_array_float64:
+		return types.T_float64.ToType()
+	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64:
+		return types.T_int64.ToType()
+	}
+	panic(moerr.NewInternalErrorNoCtx("unsupport type '%v' for summation", typs[0]))
+}
+
+func SummationArray[T types.RealNumbers, O types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToFixed[O](ivecs, result, proc, length, func(in []byte) (out O) {
+		_in := types.BytesToArray[T](in)
+
+		n := len(_in)
+		var sum O = 0
+		for i := 0; i < n; i++ {
+			sum = sum + O(_in[i]) //TODO: check if this casting is right or not.
+		}
+		return sum
+	})
+}
+
 func StringSingle(val []byte) uint8 {
 	if len(val) == 0 {
 		return 0

@@ -1574,6 +1574,65 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `summation`
+	{
+		functionId: SUMMATION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_int8},
+				retType:    SummationReturnType,
+				newOp: func() executeLogicOfOverload {
+					return SummationArray[int8, int64]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_int16},
+				retType:    SummationReturnType,
+				newOp: func() executeLogicOfOverload {
+					return SummationArray[int16, int64]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_int32},
+				retType:    SummationReturnType,
+				newOp: func() executeLogicOfOverload {
+					return SummationArray[int32, int64]
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_int64},
+				retType:    SummationReturnType,
+				newOp: func() executeLogicOfOverload {
+					return SummationArray[int64, int64]
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_float32},
+				retType:    SummationReturnType,
+				newOp: func() executeLogicOfOverload {
+					return SummationArray[float32, float64]
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_float64},
+				retType:    SummationReturnType,
+				newOp: func() executeLogicOfOverload {
+					return SummationArray[float64, float64]
+				},
+			},
+		},
+	},
+
 	// function `acos`
 	{
 		functionId: ACOS,
