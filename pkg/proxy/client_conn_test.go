@@ -94,12 +94,13 @@ func (c *mockNetConn) SetWriteDeadline(t time.Time) error {
 }
 
 type mockClientConn struct {
-	conn        net.Conn
-	tenant      Tenant
-	clientInfo  clientInfo // need to set it explicitly
-	router      Router
-	tun         *tunnel
-	setVarStmts []string
+	conn         net.Conn
+	tenant       Tenant
+	clientInfo   clientInfo // need to set it explicitly
+	router       Router
+	tun          *tunnel
+	setVarStmts  []string
+	prepareStmts []string
 }
 
 var _ ClientConn = (*mockClientConn)(nil)
@@ -139,8 +140,14 @@ func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 			return nil, err
 		}
 	}
+	for _, stmt := range c.prepareStmts {
+		if _, err := sc.ExecStmt(stmt, nil); err != nil {
+			return nil, err
+		}
+	}
 	return sc, nil
 }
+
 func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
 	switch ev := e.(type) {
 	case *killQueryEvent:
@@ -153,6 +160,10 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		return nil
 	case *setVarEvent:
 		c.setVarStmts = append(c.setVarStmts, ev.stmt)
+		sendResp([]byte("ok"), resp)
+		return nil
+	case *prepareEvent:
+		c.prepareStmts = append(c.prepareStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
 		return nil
 	case *suspendAccountEvent:
