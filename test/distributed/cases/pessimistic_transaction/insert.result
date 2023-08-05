@@ -364,10 +364,10 @@ select count(*) from t;
 count(*)
 200000
 insert into t select * from t;
-Duplicate entry '\d{5}' for key 'a'
+Duplicate entry ('[0-9]{6}'|'[0-9]{5}'|'[0-9]{4}'|'[0-9]{3}'|'[0-9]{2}'|'[0-9]{1}') for key 'a'
 begin;
 insert into t select * from t;
-Duplicate entry '\d{5}' for key 'a'
+Duplicate entry ('[0-9]{6}'|'[0-9]{5}'|'[0-9]{4}'|'[0-9]{3}'|'[0-9]{2}'|'[0-9]{1}') for key 'a'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select count(*) from t;
 count(*)
