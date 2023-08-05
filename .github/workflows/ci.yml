@@ -158,7 +158,7 @@ jobs:
           GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
           export GOCOVERDIR=$GITHUB_WORKSPACE/matrixone
           go build -cover "$GOLDFLAGS" -o mo-service ./cmd/mo-service/
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch
       - name: Start PR BVT Test
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         id: test_bvt
@@ -231,7 +231,7 @@ jobs:
               "XXL":2000
             }
 
-  ducu_issue_check:
+  docu_issue_check:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
     steps:

@@ -39,11 +39,13 @@ const (
 	IOET_WALTxnCommand_Composed_CurrVer = IOET_WALTxnCommand_Composed_V1
 	IOET_WALTxnCommand_TxnState_CurrVer = IOET_WALTxnCommand_TxnState_V1
 
-	// CmdBufReserved is reserved size of cmd buffer. ComposedCmd.CmdBufLimit is
-	// the max buffer size that could be sent out to log-service. This value is normally
-	// the max RPC message size which is configured in config of DN. The message contains
-	// mainly commands, but also other information whose size is CmdBufReserved.
-	CmdBufReserved = 1024
+	// CmdBufReserved is reserved size of cmd buffer, mainly the size of TxnCtx.Memo.
+	// ComposedCmd.CmdBufLimit is the max buffer size that could be sent out to log-service.
+	// This value is normally the max RPC message size which is configured in config of DN.
+	// The message contains mainly commands, but also other information whose size is CmdBufReserved.
+	// TODO(volgariver6): this buf size is about the max size of TxnCt.Memo, we need to calculate
+	// the exact size of it.
+	CmdBufReserved = 1024 * 1024 * 10
 )
 
 func init() {
@@ -478,21 +480,19 @@ func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 		if buf, err = cmd.MarshalBinary(); err != nil {
 			return
 		}
+		// If the size cmd buffer is bigger than the limit, stop push items into
+		// the buffer and update cc.LastPos.
+		// We do the check before write the cmd to writer, there must be cmds
+		// that have not been pushed into the buffer. So do NOT need to set
+		// cc.LastPos to zero.
+		if n+int64(len(buf))+4 >= cc.CmdBufLimit {
+			cc.LastPos += idx
+			return
+		}
 		if sn, err = objectio.WriteBytes(buf, w); err != nil {
 			return
 		}
 		n += sn
-		// If the size cmd buffer is bigger than the limit, stop push items into
-		// the buffer and update cc.last.
-		if n >= cc.CmdBufLimit {
-			cc.LastPos += idx + 1
-
-			// We have pushed all cmds, set cc.last to 0 to stop pushing any items.
-			if cc.LastPos == len(cc.Cmds) {
-				cc.LastPos = 0
-			}
-			return
-		}
 	}
 	cc.LastPos = 0
 	return
