@@ -111,13 +111,8 @@ type Config struct {
 	// FileService file service configuration
 
 	Engine struct {
-		Type                EngineType           `toml:"type"`
-		Logstore            options.LogstoreType `toml:"logstore"`
-		FlushInterval       toml.Duration        `toml:"flush-interval"`
-		MinCount            int64                `toml:"min-count"`
-		ScanInterval        toml.Duration        `toml:"scan-interval"`
-		IncrementalInterval toml.Duration        `toml:"incremental-interval"`
-		GlobalMinCount      int64                `toml:"global-min-count"`
+		Type     EngineType           `toml:"type"`
+		Logstore options.LogstoreType `toml:"logstore"`
 	}
 
 	// parameters for cn-server related buffer.
@@ -130,8 +125,6 @@ type Config struct {
 		HostSize int64 `toml:"host-size"`
 		// GuestSize is the memory limit for one query
 		GuestSize int64 `toml:"guest-size"`
-		// OperatorSize is the memory limit for one operator
-		OperatorSize int64 `toml:"operator-size"`
 		// BatchRows is the batch rows limit for one batch
 		BatchRows int64 `toml:"batch-rows"`
 		// BatchSize is the memory limit for one batch
@@ -327,10 +320,10 @@ func (c *Config) Validate() error {
 		}
 	} else {
 		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = -1
+			c.Txn.EnableSacrificingFreshness = 1
 		}
 		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
+			c.Txn.EnableCNBasedConsistency = 1
 		}
 		// We don't support the following now, so always disable
 		c.Txn.EnableRefreshExpression = -1

@@ -177,7 +177,11 @@ func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int
 
 func (s *Scope) AlterTableInplace(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
-	dbName := c.db
+	dbName := qry.Database
+	if dbName == "" {
+		dbName = c.db
+	}
+
 	tblName := qry.GetTableDef().GetName()
 
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)

@@ -166,12 +166,12 @@ jobs:
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
-          sed -i.bak 's/level = "info"/level = "error"/g'  ./etc/launch-tae-CN-tae-DN/log.toml
+          sed -i.bak 's/level = "info"/level = "error"/g'  ./etc/launch/log.toml
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
           GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
           export GOCOVERDIR=$GITHUB_WORKSPACE/matrixone
           go build -cover "$GOLDFLAGS" -o mo-service ./cmd/mo-service/
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN        
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch
       - name: Start BVT Test
         if: ${{ always() && !cancelled() }}
         id: bvt_on_pr_version

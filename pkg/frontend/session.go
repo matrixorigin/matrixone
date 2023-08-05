@@ -2015,6 +2015,7 @@ func (ses *Session) StatusSession() *status.Session {
 		statementID   string
 		statementType string
 		queryType     string
+		sqlSourceType string
 		queryStart    time.Time
 	)
 	if ses.txnHandler != nil && ses.txnHandler.txnOperator != nil {
@@ -2027,6 +2028,9 @@ func (ses *Session) StatusSession() *status.Session {
 		statementType = stmtInfo.StatementType
 		queryType = stmtInfo.QueryType
 		queryStart = stmtInfo.RequestAt
+	}
+	if v := ses.sqlType.Load(); v != nil {
+		sqlSourceType = v.(string)
 	}
 	return &status.Session{
 		NodeID:        ses.getRoutineManager().baseService.ID(),
@@ -2043,7 +2047,7 @@ func (ses *Session) StatusSession() *status.Session {
 		StatementID:   statementID,
 		StatementType: statementType,
 		QueryType:     queryType,
-		SQLSourceType: ses.sqlType.Load().(string),
+		SQLSourceType: sqlSourceType,
 		QueryStart:    queryStart,
 	}
 }

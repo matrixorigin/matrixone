@@ -154,7 +154,10 @@ func (w *waiter) add(
 
 func (w *waiter) moveTo(serviceID string, to *waiter) {
 	to.waiters.beginChange()
-	to.add(serviceID, false, w.waiters.all()...)
+	w.waiters.iter(func(w *waiter) bool {
+		to.add(serviceID, false, w)
+		return true
+	})
 }
 
 func (w *waiter) getStatus() waiterStatus {
@@ -328,33 +331,36 @@ func (w *waiter) close(
 func (w *waiter) fetchNextWaiter(
 	serviceID string,
 	value notifyValue) *waiter {
-	if w.waiters.len() == 0 {
+	next := w.awakeNextWaiter(serviceID)
+	if next == nil {
 		logWaiterFetchNextWaiter(serviceID, w, nil, value)
 		return nil
 	}
-	next := w.awakeNextWaiter(serviceID)
-	logWaiterFetchNextWaiter(serviceID, w, next, value)
+
 	for {
 		if next.notify(serviceID, value) {
 			next.unref(serviceID)
 			return next
 		}
-		if next.waiters.len() == 0 {
+		next = next.awakeNextWaiter(serviceID)
+		if next == nil {
 			return nil
 		}
-		next = next.awakeNextWaiter(serviceID)
 	}
 }
 
 func (w *waiter) awakeNextWaiter(serviceID string) *waiter {
-	next, remains := w.waiters.pop()
-	next.add(serviceID, false, remains...)
+	next := w.waiters.moveToFirst(serviceID)
 	w.waiters.reset()
 	return next
 }
 
 func (w *waiter) reset(serviceID string) {
-	waiters := w.waiters.len()
+	waiters := 0
+	w.waiters.iter(func(w *waiter) bool {
+		waiters++
+		return true
+	})
 	notifies := len(w.c)
 	if waiters > 0 || notifies > 0 {
 		panic(fmt.Sprintf("BUG: waiter should be empty. %s, waiters %d, notifies %d",

@@ -30,7 +30,7 @@ func TestAcquireWaiter(t *testing.T) {
 
 	assert.Equal(t, 0, len(w.c))
 	assert.Equal(t, int32(1), w.refCount.Load())
-	assert.Equal(t, 0, w.waiters.len())
+	assert.Equal(t, 0, len(w.waiters.(*sliceBasedWaiterQueue).waiters))
 }
 
 func TestAddNewWaiter(t *testing.T) {
@@ -45,7 +45,7 @@ func TestAddNewWaiter(t *testing.T) {
 
 	w1.casStatus("", ready, blocking)
 	w.add("s1", true, w1)
-	assert.Equal(t, 1, w.waiters.len())
+	assert.Equal(t, 1, len(w.waiters.(*sliceBasedWaiterQueue).waiters))
 	assert.Equal(t, int32(2), w1.refCount.Load())
 	w.close("s1", notifyValue{})
 }
@@ -64,7 +64,7 @@ func TestCloseWaiter(t *testing.T) {
 
 	v := w.close("s1", notifyValue{})
 	assert.NotNil(t, v)
-	assert.Equal(t, 1, v.waiters.len())
+	assert.Equal(t, 1, len(v.waiters.(*sliceBasedWaiterQueue).waiters))
 	assert.Equal(t, w1, v)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -73,7 +73,7 @@ func TestCloseWaiter(t *testing.T) {
 
 	v = w1.close("s1", notifyValue{})
 	assert.NotNil(t, v)
-	assert.Equal(t, 0, v.waiters.len())
+	assert.Equal(t, 0, len(v.waiters.(*sliceBasedWaiterQueue).waiters))
 	assert.Equal(t, w2, v)
 
 	assert.NoError(t, w2.wait(ctx, "s1").err)
