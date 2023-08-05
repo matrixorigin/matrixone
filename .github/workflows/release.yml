@@ -21,7 +21,7 @@ jobs:
       - name: Build normal
         run: |
           make build
-          zip -r mo-linux-x86_64.zip mo-service ./etc/launch-tae-CN-tae-DN
+          zip -r mo-linux-x86_64.zip mo-service ./etc/launch
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
@@ -55,7 +55,7 @@ jobs:
       - name: Build normal
         run: |
           make build
-          zip -r mo-linux-arm64.zip mo-service ./etc/launch-tae-CN-tae-DN
+          zip -r mo-linux-arm64.zip mo-service ./etc/launch
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
@@ -106,11 +106,11 @@ jobs:
           gon -log-json ./gon.json
           unzip -d ./mo-macos11 mo-macos11.zip
           mkdir -p ./mo-macos11/etc
-          cp -r ./etc/launch-tae-CN-tae-DN ./mo-macos11/etc/
+          cp -r ./etc/launch ./mo-macos11/etc/
           cd ./mo-macos11
           spctl -a -vvv -t install mo-service
           codesign --test-requirement="=notarized" -vv mo-service
-          zip -r mo-darwin-x86_64.zip mo-service ./etc/launch-tae-CN-tae-DN
+          zip -r mo-darwin-x86_64.zip mo-service ./etc/launch
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
@@ -152,11 +152,11 @@ jobs:
           gon -log-json ./gon.json
           unzip -d ./mo-macos11 mo-macos11.zip
           mkdir -p ./mo-macos11/etc
-          cp -r ./etc/launch-tae-CN-tae-DN ./mo-macos11/etc/
+          cp -r ./etc/launch ./mo-macos11/etc/
           cd ./mo-macos11
           spctl -a -vvv -t install mo-service
           codesign --test-requirement="=notarized" -vv mo-service
-          zip -r mo-darwin-arm64.zip mo-service ./etc/launch-tae-CN-tae-DN
+          zip -r mo-darwin-arm64.zip mo-service ./etc/launch
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
