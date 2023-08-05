@@ -191,8 +191,6 @@ type MysqlProtocol interface {
 
 	ResetStatistics()
 
-	GetStatisticsWriteBytes() uint64
-
 	GetStats() string
 
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
@@ -378,11 +376,6 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 func (mp *MysqlProtocolImpl) ResetStatistics() {
 	mp.ResetStats()
 	mp.resetFlushCount()
-}
-
-// GetStatisticsWriteBytes dependency on ResetStatistics work.
-func (mp *MysqlProtocolImpl) GetStatisticsWriteBytes() uint64 {
-	return mp.writeBytes
 }
 
 func (mp *MysqlProtocolImpl) GetConnectAttrs() map[string]string {

@@ -493,10 +493,6 @@ func (fp *FakeProtocol) sendEOFOrOkPacket(warnings uint16, status uint16) error 
 	return nil
 }
 
-func (fp *FakeProtocol) GetStatisticsWriteBytes() uint64 {
-	return 0
-}
-
 func (fp *FakeProtocol) ResetStatistics() {}
 
 func (fp *FakeProtocol) GetStats() string {
