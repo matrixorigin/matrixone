@@ -187,6 +187,7 @@ const (
 	SPACE
 	SPLIT         // SPLIT
 	SPLIT_PART    // SPLIT_PART
+	SQRT          // SQRT
 	STARCOUNT     // STARTCOUNT
 	STARTSWITH    // STARTSWITH
 	STDDEV_POP    // STDDEV_POP
@@ -296,7 +297,8 @@ const (
 	MO_TABLE_COL_MIN // table column min value
 
 	MO_LOG_DATE // parse date from string, like __mo_filepath
-	PURGE_LOG   // purge mo internal log, like rawlog, statement_info, metric
+	MO_CHECH_LEVEL
+	PURGE_LOG // purge mo internal log, like rawlog, statement_info, metric
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -437,6 +439,7 @@ var functionIdRegister = map[string]int32{
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
+	"sqrt":                           SQRT,
 	"to_seconds":                     TO_SECONDS,
 	"day":                            DAY,
 	"to_days":                        TO_DAYS,
@@ -544,6 +547,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
 	"mo_log_date":                    MO_LOG_DATE,
+	"mo_check_level":                 MO_CHECH_LEVEL,
 	"purge_log":                      PURGE_LOG,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,

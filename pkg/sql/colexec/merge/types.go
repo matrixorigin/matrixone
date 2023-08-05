@@ -25,7 +25,8 @@ type container struct {
 }
 
 type Argument struct {
-	ctr *container
+	ctr      *container
+	SinkScan bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

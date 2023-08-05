@@ -52,7 +52,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
-
+	if bat.Last() {
+		proc.SetInputBatch(bat)
+		return process.ExecNext, nil
+	}
 	if bat.IsEmpty() {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)

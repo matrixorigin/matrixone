@@ -35,8 +35,7 @@ disableMetric = true
 
 [cn]
 uuid = "dd1dccb5-4d3c-41f8-b482-5251dc7a41bf"
-listen-address = "0.0.0.0:7002"
-service-address = "127.0.0.1:7002"
+port-base = 18200
 
 [cn.Engine]
 type = "distributed-tae"
@@ -45,15 +44,3 @@ type = "distributed-tae"
 port = 16002
 unix-socket = "/tmp/mysql2.sock"
 proxy-enabled = true
-
-[cn.lockservice]
-listen-address = "0.0.0.0:7003"
-service-address = "127.0.0.1:7003"
-
-[cn.ctl.address]
-listen-address = "0.0.0.0:9958"
-service-address = "127.0.0.1:9958"
-
-[cn.query-service.address]
-listen-address = "0.0.0.0:29998"
-service-address = "127.0.0.1:29998"

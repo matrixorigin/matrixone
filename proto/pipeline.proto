@@ -61,6 +61,10 @@ message Dispatch {
   bool  is_sink = 6;
 }
 
+message Merge {
+  bool sinkScan = 1;
+}
+
 message MultiArguemnt{
   bool Dist = 1;
   repeated plan.Expr GroupExpr = 2;
@@ -345,8 +349,8 @@ message Instruction{
 
   Deletion delete = 31;
   LockOp lock_op = 32;
-
   Shuffle shuffle = 33;
+  Merge merge = 34;
 }
 
 message AnalysisList {
@@ -426,6 +430,7 @@ message Pipeline {
   int32 children_count = 12;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 13;
+  int32 build_idx = 14;
 }
 
 message WrapNode {

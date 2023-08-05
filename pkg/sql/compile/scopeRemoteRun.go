@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -166,6 +168,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			return err
 		}
 		s = refactorScope(c, s)
+		s.SetContextRecursively(c.ctx)
 
 		err = s.ParallelRun(c, s.IsRemote)
 		if err != nil {
@@ -188,17 +191,30 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 }
 
 // receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
+func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnClient, lastInstruction vm.Instruction) error {
 	var val morpc.Message
 	var err error
 	var dataBuffer []byte
 	var sequence uint64
 
+	lastAnalyze := c.proc.GetAnalyze(lastInstruction.Idx)
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 		if err != nil {
 			return err
 		}
+	}
+
+	var isConnector bool
+	var lastArg vm.InstructionArgument
+	switch arg := lastInstruction.Arg.(type) {
+	case *connector.Argument:
+		isConnector = true
+		lastArg = arg
+	case *dispatch.Argument:
+		lastArg = arg
+	default:
+		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
 	for {
@@ -246,8 +262,14 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 		if err != nil {
 			return err
 		}
-		nextAnalyze.Network(bat)
-		sendToConnectOperator(nextOperator, bat)
+		lastAnalyze.Network(bat)
+		s.Proc.SetInputBatch(bat)
+
+		if isConnector {
+			connector.Call(-1, s.Proc, lastArg, false, false)
+		} else {
+			dispatch.Call(-1, s.Proc, lastArg, false, false)
+		}
 
 		dataBuffer = nil
 	}
@@ -260,14 +282,28 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 // 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
 	// encode the scope. shouldn't encode the `connector` operator which used to receive the back batch.
-	n := len(s.Instructions) - 1
-	con := s.Instructions[n]
-	s.Instructions = s.Instructions[:n]
+	lastIdx := len(s.Instructions) - 1
+	lastInstruction := s.Instructions[lastIdx]
+	s.Instructions = s.Instructions[:lastIdx]
+
+	// The current logic is a bit hacky, the last operator doesn't go in the pipeline frame
+	// i.e. we need to call the corresponding Perpare, Call and Free manually.
+	// Prepare and Free are called in this func, and Call in receiveMessageFromCnServer
+	lastArg := lastInstruction.Arg
+	switch arg := lastArg.(type) {
+	case *connector.Argument:
+		connector.Prepare(s.Proc, arg)
+	case *dispatch.Argument:
+		dispatch.Prepare(s.Proc, arg)
+	default:
+		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
+	}
+
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
 		return errEncode
 	}
-	s.Instructions = append(s.Instructions, con)
+	s.Instructions = append(s.Instructions, lastInstruction)
 
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc)
@@ -286,10 +322,11 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return err
 	}
 
-	nextInstruction := s.Instructions[len(s.Instructions)-1]
-	nextAnalyze := c.proc.GetAnalyze(nextInstruction.Idx)
-	nextArg := nextInstruction.Arg.(*connector.Argument)
-	err = receiveMessageFromCnServer(c, sender, nextAnalyze, nextArg)
+	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
+
+	// tell the connector or dispatch is over
+	lastArg.Free(s.Proc, err != nil)
+
 	sender.close()
 	return err
 }
@@ -407,6 +444,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.IsJoin = s.IsJoin
 	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
+	p.BuildIdx = int32(s.BuildIdx)
 
 	// Plan
 	if ctxId == 1 {
@@ -538,6 +576,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		IsLoad:   p.IsLoad,
 		Plan:     ctx.plan,
 		IsRemote: isRemote,
+		BuildIdx: int(p.BuildIdx),
 	}
 	if err := convertPipelineUuid(p, s); err != nil {
 		return s, err
@@ -898,6 +937,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket: t.NBucket,
 		}
 	case *merge.Argument:
+		in.Merge = &pipeline.Merge{
+			SinkScan: t.SinkScan,
+		}
+	case *mergerecursive.Argument:
 	case *mergegroup.Argument:
 		in.Agg = &pipeline.Group{
 			NeedEval: t.NeedEval,
@@ -1293,6 +1336,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		}
 	case vm.Merge:
 		v.Arg = &merge.Argument{}
+	case vm.MergeRecursive:
+		v.Arg = &mergerecursive.Argument{}
 	case vm.MergeGroup:
 		v.Arg = &mergegroup.Argument{
 			NeedEval: opr.Agg.NeedEval,
@@ -1580,13 +1625,6 @@ func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Bat
 		}
 	}
 	return bat, err
-}
-
-func sendToConnectOperator(arg *connector.Argument, bat *batch.Batch) {
-	select {
-	case <-arg.Reg.Ctx.Done():
-	case arg.Reg.Ch <- bat:
-	}
 }
 
 func (ctx *scopeContext) getRegister(id, idx int32) *process.WaitRegister {

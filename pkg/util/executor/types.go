@@ -16,6 +16,7 @@ package executor
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,12 +42,14 @@ type TxnExecutor interface {
 
 // Options execute options.
 type Options struct {
+	disableIncrStatement    bool
 	txnOp                   client.TxnOperator
 	database                string
 	accountID               uint32
 	minCommittedTS          timestamp.Timestamp
 	innerTxn                bool
 	waitCommittedLogApplied bool
+	timeZone                *time.Location
 }
 
 // Result exec sql result

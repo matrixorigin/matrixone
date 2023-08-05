@@ -55,7 +55,6 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		case reg.Ch <- bat:
 		}
 	}
-
 	return false, nil
 }
 

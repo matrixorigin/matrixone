@@ -20,8 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -35,9 +33,11 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
@@ -96,6 +96,7 @@ type store struct {
 	ctlservice          ctlservice.CtlService
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
+	shutdownC           chan struct{}
 
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
@@ -115,6 +116,8 @@ type store struct {
 		serviceHolder  taskservice.TaskServiceHolder
 		storageFactory taskservice.TaskStorageFactory
 	}
+
+	addressMgr address.AddressManager
 }
 
 // NewService create DN Service
@@ -123,6 +126,7 @@ func NewService(
 	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
+	shutdownC chan struct{},
 	opts ...Option) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -146,10 +150,13 @@ func NewService(
 		rt:                  rt,
 		fileService:         fileService,
 		metadataFileService: metadataFS,
+		shutdownC:           shutdownC,
+		addressMgr:          address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.registerServices()
 	s.replicas = &sync.Map{}
 	s.stopper = stopper.NewStopper("dn-store",
 		stopper.WithLogger(s.rt.Logger().RawLogger()))
@@ -337,7 +344,7 @@ func (s *store) initTxnSender() error {
 
 func (s *store) initTxnServer() error {
 	server, err := rpc.NewTxnServer(
-		s.cfg.ListenAddress,
+		s.txnServiceListenAddr(),
 		s.rt,
 		rpc.WithServerQueueBufferSize(s.cfg.RPC.ServerBufferQueueSize),
 		rpc.WithServerQueueWorkers(s.cfg.RPC.ServerWorkers),
@@ -360,7 +367,7 @@ func (s *store) initClocker() error {
 
 func (s *store) initLockTableAllocator() error {
 	s.lockTableAllocator = lockservice.NewLockTableAllocator(
-		s.cfg.LockService.ListenAddress,
+		s.lockServiceListenAddr(),
 		s.cfg.LockService.KeepBindTimeout.Duration,
 		s.cfg.RPC)
 	return nil

@@ -20,7 +20,7 @@ import (
 )
 
 func (s *store) initCtlService() error {
-	cs, err := ctlservice.NewCtlService(s.cfg.UUID, s.cfg.Ctl.Address.ListenAddress, s.cfg.RPC)
+	cs, err := ctlservice.NewCtlService(s.cfg.UUID, s.ctlServiceListenAddr(), s.cfg.RPC)
 	if err != nil {
 		return err
 	}

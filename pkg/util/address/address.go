@@ -15,7 +15,15 @@
 package address
 
 import (
+	"fmt"
+	"net"
 	"strings"
+	"sync"
+)
+
+const (
+	defaultListenAddressHost = "0.0.0.0"
+	defaultReservedSlots     = 20
 )
 
 // Address is used to describe the address of a MO running service, divided into 2 addresses,
@@ -61,4 +69,105 @@ func replaceHost(
 		panic("address's host not found: " + address)
 	}
 	return strings.Replace(address, oldHost, newHost, 1)
+}
+
+// AddressManager manages all service names and ports. It uses unified
+// listen address and service address. The port of each service is generated
+// by port base and the port slot.
+type AddressManager interface {
+	// Register registers a service by its name and port slot.
+	Register(portSlot int)
+	// ListenAddress returns the service address of the service.
+	ListenAddress(slot int) string
+	// ServiceAddress returns the service address of the service.
+	ServiceAddress(slot int) string
+}
+
+type addressManager struct {
+	portBase      int
+	reservedSlots int
+	address       Address
+	mu            struct {
+		sync.Mutex
+		portAdvanced int
+		services     map[int]int // slot => port number
+	}
+}
+
+func NewAddressManager(serviceAddress string, portBase int) AddressManager {
+	am := &addressManager{
+		address: Address{
+			ListenAddress:  defaultListenAddressHost,
+			ServiceAddress: serviceAddress,
+		},
+		portBase:      portBase,
+		reservedSlots: defaultReservedSlots,
+	}
+	am.mu.portAdvanced = 0
+	am.mu.services = make(map[int]int)
+	return am
+}
+
+// Register implements the AddressManager interface.
+func (m *addressManager) Register(portSlot int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.portBase == 0 {
+		return
+	}
+	if _, ok := m.mu.services[portSlot]; ok {
+		return
+	}
+	m.mu.services[portSlot] = m.portAdvanceLocked()
+}
+
+// ListenAddress implements the AddressManager interface.
+func (m *addressManager) ListenAddress(slot int) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.mu.services[slot]
+	if !ok {
+		panic(fmt.Sprintf("slot %d has not been registered yet", slot))
+	}
+	return fmt.Sprintf("%s:%d", m.address.ListenAddress, p)
+}
+
+// ServiceAddress implements the AddressManager interface.
+func (m *addressManager) ServiceAddress(slot int) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.mu.services[slot]
+	if !ok {
+		panic(fmt.Sprintf("slot %d has not been registered yet", slot))
+	}
+	return fmt.Sprintf("%s:%d", m.address.ServiceAddress, p)
+}
+
+// portAdvanceLocked advances the port and return the first available one.
+func (m *addressManager) portAdvanceLocked() int {
+	var port int
+	for {
+		port = m.portBase + m.mu.portAdvanced
+		if portCheck(port) {
+			break
+		}
+		m.mu.portAdvanced++
+		if m.mu.portAdvanced > m.reservedSlots {
+			panic(fmt.Sprintf("no ports are available between %d and %d",
+				m.portBase, m.portBase+m.reservedSlots))
+		}
+	}
+	m.mu.portAdvanced++
+	return port
+}
+
+// portCheck checks if the port is available to use. If the port is not used, return
+// true; otherwise, return false.
+func portCheck(port int) bool {
+	l, err := net.Listen("tcp4", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return false
+	}
+	defer l.Close()
+	return true
 }

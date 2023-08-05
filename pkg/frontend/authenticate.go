@@ -5468,7 +5468,18 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 	case *tree.Replace:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		entry1 := privilegeEntry{
+			privilegeEntryTyp: privilegeEntryTypeCompound,
+			compound: &compoundEntry{
+				items: []privilegeItem{
+					{privilegeTyp: PrivilegeTypeInsert},
+					{privilegeTyp: PrivilegeTypeDelete},
+				},
+			},
+		}
+
+		extraEntries = append(extraEntries, entry1)
 		writeDatabaseAndTableDirectly = true
 	case *tree.Load:
 		objType = objectTypeTable
@@ -5504,12 +5515,17 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
+		canExecInRestricted = true
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SetVar:
+	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.SetVar:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+		canExecInRestricted = true
 	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
 		objType = objectTypeNone
 		kind = privilegeKindNone

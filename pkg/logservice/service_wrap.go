@@ -28,9 +28,10 @@ type WrappedService struct {
 func NewWrappedService(
 	c Config,
 	fileService fileservice.FileService,
+	shutdownC chan struct{},
 	opts ...Option,
 ) (*WrappedService, error) {
-	svc, err := NewService(c, fileService, opts...)
+	svc, err := NewService(c, fileService, shutdownC, opts...)
 	if err != nil {
 		return nil, err
 	}

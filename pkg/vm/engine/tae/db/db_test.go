@@ -5870,6 +5870,9 @@ func TestAlterRenameTbl2(t *testing.T) {
 	schema2 := schema.Clone()
 	schema2.Name = "t1-copy-fefsfwafe"
 
+	schema3 := schema.Clone()
+	schema3.Name = "t1-copy-igmgibjtm"
+
 	var oldId, newId uint64
 	{
 		var err error
@@ -5879,8 +5882,8 @@ func TestAlterRenameTbl2(t *testing.T) {
 		db, _ := txn.GetDatabase("xx")
 
 		hdl, err := db.CreateRelation(schema)
-		oldId = hdl.ID()
 		require.NoError(t, err)
+		oldId = hdl.ID()
 		require.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -5888,8 +5891,8 @@ func TestAlterRenameTbl2(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("xx")
 		hdl, err := db.CreateRelation(schema2)
-		newId = hdl.ID()
 		require.NoError(t, err)
+		newId = hdl.ID()
 
 		_, err = db.DropRelationByID(oldId)
 		require.NoError(t, err)
@@ -5902,12 +5905,57 @@ func TestAlterRenameTbl2(t *testing.T) {
 		t.Log(dbentry.PrettyNameIndex())
 	}
 
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("xx")
+		hdl, err := db.CreateRelation(schema3)
+		require.NoError(t, err)
+		newId2 := hdl.ID()
+
+		_, err = db.DropRelationByID(newId)
+		require.NoError(t, err)
+
+		newhdl, _ := db.GetRelationByID(newId2)
+		require.NoError(t, newhdl.AlterTable(ctx, api.NewRenameTableReq(0, 0, "t1-copy-igmgibjtm", "t1")))
+		require.NoError(t, txn.Commit(context.Background()))
+
+		dbentry := db.GetMeta().(*catalog.DBEntry)
+		t.Log(dbentry.PrettyNameIndex())
+		newId = newId2
+	}
+
 	tae.restart(ctx)
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.GetDatabase("xx")
-	dbentry := db.GetMeta().(*catalog.DBEntry)
-	t.Log(dbentry.PrettyNameIndex())
-	require.NoError(t, txn.Commit(context.Background()))
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("xx")
+		dbentry := db.GetMeta().(*catalog.DBEntry)
+		t.Log(dbentry.PrettyNameIndex())
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("xx")
+
+		newhdl, _ := db.GetRelationByID(newId)
+		require.NoError(t, newhdl.AlterTable(ctx, api.NewRenameTableReq(0, 0, "t1", "t2")))
+		require.NoError(t, txn.Commit(context.Background()))
+
+		dbentry := db.GetMeta().(*catalog.DBEntry)
+		t.Log(dbentry.PrettyNameIndex())
+	}
+
+	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS()))
+
+	tae.restart(ctx)
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("xx")
+		dbentry := db.GetMeta().(*catalog.DBEntry)
+		t.Log(dbentry.PrettyNameIndex())
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+
 }
 
 func TestAlterTableBasic(t *testing.T) {
