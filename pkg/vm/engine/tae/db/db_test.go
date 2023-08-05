@@ -7957,3 +7957,66 @@ func TestReplayPersistedDelete(t *testing.T) {
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
+
+func TestCheckpointReadWrite(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "create database db", "1")
+	assert.NoError(t, err)
+	schema1 := catalog.MockSchemaAll(2, 1)
+	_, err = db.CreateRelation(schema1)
+	assert.NoError(t, err)
+	schema2 := catalog.MockSchemaAll(3, -1)
+	_, err = db.CreateRelation(schema2)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	t1 := tae.TxnMgr.StatMaxCommitTS()
+	checkCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, tae.Opts.Fs)
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema1.Name)
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema2.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	t2 := tae.TxnMgr.StatMaxCommitTS()
+	checkCheckpointReadWrite(t, types.TS{}, t2, tae.Catalog, tae.Opts.Fs)
+	checkCheckpointReadWrite(t, t1, t2, tae.Catalog, tae.Opts.Fs)
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	t3 := tae.TxnMgr.StatMaxCommitTS()
+	checkCheckpointReadWrite(t, types.TS{}, t3, tae.Catalog, tae.Opts.Fs)
+	checkCheckpointReadWrite(t, t2, t3, tae.Catalog, tae.Opts.Fs)
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 1
+	schema.SegmentMaxBlocks = 1
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+
+	tae.createRelAndAppend(bat, true)
+	t4 := tae.TxnMgr.StatMaxCommitTS()
+	checkCheckpointReadWrite(t, types.TS{}, t4, tae.Catalog, tae.Opts.Fs)
+	checkCheckpointReadWrite(t, t3, t4, tae.Catalog, tae.Opts.Fs)
+
+	tae.compactBlocks(false)
+	t5 := tae.TxnMgr.StatMaxCommitTS()
+	checkCheckpointReadWrite(t, types.TS{}, t5, tae.Catalog, tae.Opts.Fs)
+	checkCheckpointReadWrite(t, t4, t5, tae.Catalog, tae.Opts.Fs)
+}
