@@ -96,7 +96,10 @@ func TestGetCNOrderedMap(t *testing.T) {
 			expected: newOrderedMap(nil),
 		},
 		{
-			tasks:     []task.Task{{TaskRunner: "a"}, {TaskRunner: "b"}, {TaskRunner: "b"}},
+			tasks: []task.Task{
+				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
+				{TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
+				{TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()}},
 			workingCN: []string{"a", "b"},
 
 			expected: &cnMap{
@@ -105,7 +108,11 @@ func TestGetCNOrderedMap(t *testing.T) {
 			},
 		},
 		{
-			tasks:     []task.Task{{TaskRunner: "a"}, {TaskRunner: "b"}, {TaskRunner: "a"}, {TaskRunner: "a"}},
+			tasks: []task.Task{
+				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
+				{TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
+				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
+				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()}},
 			workingCN: []string{"a", "b"},
 
 			expected: &cnMap{

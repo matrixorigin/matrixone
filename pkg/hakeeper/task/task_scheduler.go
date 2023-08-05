@@ -134,24 +134,24 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 
 func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (orderedMap *cnMap, expired []task.Task) {
 	orderedMap = newOrderedMap(workingCN)
+
+	heartbeatInActiveTasks := tasks[:0]
 	for _, t := range tasks {
+		if heartbeatTimeout(t.LastHeartbeat) {
+			expired = append(expired, t)
+		} else {
+			heartbeatInActiveTasks = append(heartbeatInActiveTasks, t)
+		}
+	}
+
+	for _, t := range heartbeatInActiveTasks {
 		if contains(workingCN, t.TaskRunner) {
 			orderedMap.inc(t.TaskRunner)
 		} else {
 			expired = append(expired, t)
 		}
 	}
-	for _, t := range tasks {
-		if heartbeatTimeout(t.LastHeartbeat) {
-			for _, e := range expired {
-				if t.ID == e.ID {
-					break
-				}
-			}
-			expired = append(expired, t)
-		}
-	}
-	return orderedMap, expired
+	return
 }
 
 func heartbeatTimeout(lastHeartbeat int64) bool {
