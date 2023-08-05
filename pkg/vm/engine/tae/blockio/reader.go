@@ -176,15 +176,15 @@ func (r *BlockReader) LoadOneSubColumns(
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	var ioVectors []*fileservice.IOVector
-	ioVectors, err = r.reader.ReadSubBlock(ctx, cols, typs, dataType, m)
+	var ioVector *fileservice.IOVector
+	ioVector, err = r.reader.ReadOneSubBlock(ctx, cols, typs, dataType, blk, m)
 	if err != nil {
 		return
 	}
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVectors[0].Entries[i].ObjectBytes)
+		obj, err = objectio.Decode(ioVector.Entries[i].ObjectBytes)
 		if err != nil {
 			return
 		}

@@ -633,7 +633,7 @@ func (data *CNCheckpointData) ReadFromData(
 			if err != nil {
 				return
 			}
-			logutil.Infof("load block %v: %d-%d to %d", block.GetLocation().String(), block.GetStartOffset(), block.GetEndOffset(), bat.Vecs[0].Length())
+			//logutil.Infof("load block %v: %d-%d to %d", block.GetLocation().String(), block.GetStartOffset(), block.GetEndOffset(), bat.Vecs[0].Length())
 			if block.GetEndOffset() == 0 {
 				continue
 			}
@@ -922,8 +922,8 @@ func (data *CheckpointData) WriteTo(
 			}
 			Endoffset := offset + bat.Length()
 			blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(Endoffset))
-			logutil.Infof("blockLoc is %d-%d", blockLoc.GetStartOffset(), blockLoc.GetEndOffset())
 			blockIndexs[i] = append(blockIndexs[i], &blockLoc)
+			offset += bat.Length()
 		}
 	}
 	blks, _, err := writer.Sync(context.Background())
@@ -976,8 +976,11 @@ func (data *CheckpointData) WriteTo(
 				if table.End < block.GetStartOffset() {
 					break
 				}
-				blockLoc1 := objectio.BuildLocation(name, blks[block.GetID()].GetExtent(), 0, block.GetID())
-				logutil.Infof("write tid %d-%d block %v to %d-%d, table is %d-%d", tid,i,blockLoc1.String(), block.GetStartOffset(), block.GetEndOffset(), table.Start, table.End)
+				if table.Start >= block.GetEndOffset() {
+					continue
+				}
+				//blockLoc1 := objectio.BuildLocation(name, blks[block.GetID()].GetExtent(), 0, block.GetID())
+				//logutil.Infof("write block %v to %d-%d, table is %d-%d", blockLoc1.String(), block.GetStartOffset(), block.GetEndOffset(), table.Start, table.End)
 				if table.Uint64Contains(block.GetStartOffset(), block.GetEndOffset()) {
 					blockLoc := BuildBlockLoactionWithLocation(
 						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
