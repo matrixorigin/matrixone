@@ -4007,7 +4007,7 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 			marshalPlan: nil,
 			stmt:        stmt,
 			uuid:        uuid,
-			buffer:      getMarshalPlanBufferPool(),
+			buffer:      nil,
 		}
 	}
 	query := plan.GetQuery()
@@ -4015,7 +4015,7 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		query:  query,
 		stmt:   stmt,
 		uuid:   uuid,
-		buffer: getMarshalPlanBufferPool(),
+		buffer: nil,
 	}
 	// check longQueryTime
 	if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
@@ -4051,10 +4051,19 @@ func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
 	marshalPlanBufferPool.Put(b)
 }
 
+// allocBufferIfNeeded should call just right before needed.
+// It will reuse buffer from pool if possible.
+func (h *marshalPlanHandler) allocBufferIfNeeded() {
+	if h.buffer == nil {
+		h.buffer = getMarshalPlanBufferPool()
+	}
+}
+
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	var err error
 	if h.marshalPlan != nil {
 		var jsonBytesLen = 0
+		h.allocBufferIfNeeded()
 		h.buffer.Reset()
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
