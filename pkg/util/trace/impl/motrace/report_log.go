@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"go.uber.org/zap"
@@ -107,6 +108,9 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
 	var discardable = false
+	// count log message each minute
+	metric.MOLogMessageCounter(entry.Level.String()).Add(1)
+	// check trace is enable
 	if !GetTracerProvider().IsEnable() {
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
