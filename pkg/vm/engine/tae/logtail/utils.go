@@ -978,7 +978,7 @@ func (data *CheckpointData) WriteTo(
 				}
 			}
 			for _, block := range blockIndexs[idx] {
-				if table.End < block.GetStartOffset() {
+				if table.End <= block.GetStartOffset() {
 					break
 				}
 				if table.Start >= block.GetEndOffset() {
