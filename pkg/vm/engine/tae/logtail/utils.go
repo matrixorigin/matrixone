@@ -369,7 +369,7 @@ const (
 )
 
 func (m *TableMeta) String() string {
-	if m==nil{
+	if m == nil {
 		return ""
 	}
 	return fmt.Sprintf("interval:%v, locations:%v", m.ClosedInterval, m.locations)
@@ -399,7 +399,7 @@ func (m *CheckpointMeta) DecodeFromString(keys [][]byte) (err error) {
 }
 func (m *CheckpointMeta) String() string {
 	s := ""
-	if m==nil{
+	if m == nil {
 		return "nil"
 	}
 	for idx, table := range m.tables {
@@ -536,11 +536,6 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 		// blkInsertOffset
 		tableMeta.tables[BlockInsert] = blkInsertTableMeta
 	}
-	if len(blkDelStr) > 0 {
-		blkDeleteTableMeta := NewTableMeta()
-		blkDeleteTableMeta.locations = blkDelStr
-		tableMeta.tables[BlockDelete] = blkDeleteTableMeta
-	}
 	if len(blkCNInsStr) > 0 {
 		blkDeleteTableMeta := NewTableMeta()
 		blkDeleteTableMeta.locations = blkDelStr
@@ -548,6 +543,16 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 		cnBlkInsTableMeta := NewTableMeta()
 		cnBlkInsTableMeta.locations = blkCNInsStr
 		tableMeta.tables[CNBlockInsert] = cnBlkInsTableMeta
+	} else {
+		if tableID == pkgcatalog.MO_DATABASE_ID ||
+			tableID == pkgcatalog.MO_TABLES_ID ||
+			tableID == pkgcatalog.MO_COLUMNS_ID {
+			if len(blkDelStr) > 0 {
+				blkDeleteTableMeta := NewTableMeta()
+				blkDeleteTableMeta.locations = blkDelStr
+				tableMeta.tables[BlockDelete] = blkDeleteTableMeta
+			}
+		}
 	}
 	if len(segDelStr) > 0 {
 		segDeleteTableMeta := NewTableMeta()
