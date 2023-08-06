@@ -354,7 +354,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	txn *activeTxn,
 	w *waiter,
 	key []byte,
-	conflictWith Lock) error {
+	conflictWith Lock) {
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
 	txn.setBlocked(w.txnID, w)
@@ -375,7 +375,7 @@ func (l *localLockTable) handleLockConflictLocked(
 		txn.toWaitTxn(
 			l.bind.ServiceID,
 			true)); err != nil {
-		return err
+		return
 	}
 
 	// add child waiters into current locks waiting list
@@ -391,13 +391,12 @@ func (l *localLockTable) handleLockConflictLocked(
 		return true
 	})
 	if err != nil {
-		return err
+		return
 	}
 
 	w.waiters.reset()
 	conflictWith.waiter.waiters.commitChange()
 	logLocalLockWaitOn(l.bind.ServiceID, txn, l.bind.Table, w, key, conflictWith)
-	return nil
 }
 
 func getWaiter(
