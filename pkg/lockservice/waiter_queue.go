@@ -20,11 +20,9 @@ import (
 )
 
 type waiterQueue interface {
-	len() int
 	reset()
-	pop() (*waiter, []*waiter)
+	moveToFirst(serviceID string) *waiter
 	put(...*waiter)
-	all() []*waiter
 	iter(func(*waiter) bool)
 
 	beginChange()
@@ -38,32 +36,20 @@ func newWaiterQueue() *sliceBasedWaiterQueue {
 
 type sliceBasedWaiterQueue struct {
 	sync.RWMutex
-	offset         int
 	beginChangeIdx int
 	waiters        []*waiter
 }
 
-func (q *sliceBasedWaiterQueue) len() int {
-	q.RLock()
-	defer q.RUnlock()
-	return len(q.waiters) - q.offset
-}
-
-func (q *sliceBasedWaiterQueue) all() []*waiter {
-	return q.waiters[q.offset:]
-}
-
-func (q *sliceBasedWaiterQueue) pop() (*waiter, []*waiter) {
-	if q.len() == 0 {
-		panic("BUG: no waiter in queue")
-	}
-
+func (q *sliceBasedWaiterQueue) moveToFirst(serviceID string) *waiter {
 	q.Lock()
 	defer q.Unlock()
-	v := q.waiters[q.offset]
-	q.waiters[q.offset] = nil
-	q.offset++
-	return v, q.waiters[q.offset:]
+	if len(q.waiters) == 0 {
+		return nil
+	}
+	v := q.waiters[0]
+	v.add(serviceID, false, q.waiters[1:]...)
+	q.waiters = q.waiters[:0]
+	return v
 }
 
 func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
@@ -82,7 +68,7 @@ func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 	}
 
 	// if a new waiter added, need to check if the current txn has a waiter in the queue.
-	for _, w := range q.waiters[q.offset:] {
+	for _, w := range q.waiters {
 		if bytes.Equal(w.txnID, ws[0].txnID) {
 			w.sameTxnWaiters = append(w.sameTxnWaiters, ws[0])
 			return
@@ -94,9 +80,8 @@ func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 func (q *sliceBasedWaiterQueue) iter(fn func(*waiter) bool) {
 	q.RLock()
 	defer q.RUnlock()
-	n := len(q.waiters)
-	for i := q.offset; i < n; i++ {
-		if !fn(q.waiters[i]) {
+	for _, w := range q.waiters {
+		if !fn(w) {
 			return
 		}
 	}
@@ -106,7 +91,6 @@ func (q *sliceBasedWaiterQueue) reset() {
 	q.Lock()
 	defer q.Unlock()
 	q.waiters = q.waiters[:0]
-	q.offset = 0
 	q.beginChangeIdx = -1
 }
 

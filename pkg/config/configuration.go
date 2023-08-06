@@ -37,17 +37,6 @@ const (
 )
 
 var (
-	//root name
-	defaultRootName = "root"
-
-	//root password
-	defaultRootPassword = ""
-
-	//dump user name
-	defaultDumpUser = "dump"
-
-	//dump user password
-	defaultDumpPassword = "111"
 
 	//port defines which port the mo-server listens on and clients connect to
 	defaultPort = 6001
@@ -75,9 +64,6 @@ var (
 
 	//process.Limitation.PartitionRows.  10 << 32 = 42949672960
 	defaultProcessLimitationPartitionRows = 42949672960
-
-	//the root directory of the storage
-	defaultStorePath = "./store"
 
 	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
 
@@ -118,6 +104,9 @@ var (
 	defaultDNReplicaID = 1
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
+
+	// defaultMetricInternalGatherInterval default: 1 min.
+	defaultMetricInternalGatherInterval = time.Minute
 
 	// defaultMetricUpdateStorageUsageInterval default: 15 min.
 	defaultMetricUpdateStorageUsageInterval = 15 * time.Minute
@@ -166,19 +155,6 @@ var (
 type FrontendParameters struct {
 	MoVersion string
 
-	//root name
-	RootName string `toml:"rootname"`
-
-	//root password
-	RootPassword string `toml:"rootpassword"`
-
-	DumpUser string `toml:"dumpuser"`
-
-	DumpPassword string `toml:"dumppassword"`
-
-	//dump database
-	DumpDatabase string `toml:"dumpdatabase"`
-
 	//port defines which port the mo-server listens on and clients connect to
 	Port int64 `toml:"port"`
 
@@ -210,9 +186,6 @@ type FrontendParameters struct {
 	ProcessLimitationPartitionRows int64 `toml:"processLimitationPartitionRows"`
 
 	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
-	StorePath string `toml:"storePath"`
-
-	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
 	ServerVersionPrefix string `toml:"serverVersionPrefix"`
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
@@ -238,27 +211,6 @@ type FrontendParameters struct {
 
 	//port defines which port the rpc server listens on
 	PortOfRpcServerInComputationEngine int64 `toml:"portOfRpcServerInComputationEngine"`
-
-	//default is false. false : one txn for an independent batch true : only one txn during loading data
-	DisableOneTxnPerBatchDuringLoad bool `toml:"DisableOneTxnPerBatchDuringLoad"`
-
-	//default is 'debug'. the level of log.
-	LogLevel string `toml:"logLevel"`
-
-	//default is 'json'. the format of log.
-	LogFormat string `toml:"logFormat"`
-
-	//default is ''. the file
-	LogFilename string `toml:"logFilename"`
-
-	//default is 512MB. the maximum of log file size
-	LogMaxSize int64 `toml:"logMaxSize"`
-
-	//default is 0. the maximum days of log file to be kept
-	LogMaxDays int64 `toml:"logMaxDays"`
-
-	//default is 0. the maximum numbers of log file to be retained
-	LogMaxBackups int64 `toml:"logMaxBackups"`
 
 	//default is false. With true. Server will support tls
 	EnableTls bool `toml:"enableTls"`
@@ -319,21 +271,6 @@ type FrontendParameters struct {
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
-	if fp.RootName == "" {
-		fp.RootName = defaultRootName
-	}
-
-	if fp.RootPassword == "" {
-		fp.RootPassword = defaultRootPassword
-	}
-
-	if fp.DumpUser == "" {
-		fp.DumpUser = defaultDumpUser
-	}
-
-	if fp.DumpPassword == "" {
-		fp.DumpPassword = defaultDumpPassword
-	}
 
 	if fp.Port == 0 {
 		fp.Port = int64(defaultPort)
@@ -369,10 +306,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.ProcessLimitationPartitionRows == 0 {
 		fp.ProcessLimitationPartitionRows = int64(toml.ByteSize(defaultProcessLimitationPartitionRows))
-	}
-
-	if fp.StorePath == "" {
-		fp.StorePath = defaultStorePath
 	}
 
 	if fp.ServerVersionPrefix == "" {
@@ -457,12 +390,6 @@ func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
 }
 
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
-	fp.LogLevel = log.Level
-	fp.LogFormat = log.Format
-	fp.LogFilename = log.Filename
-	fp.LogMaxSize = int64(log.MaxSize)
-	fp.LogMaxDays = int64(log.MaxDays)
-	fp.LogMaxBackups = int64(log.MaxBackups)
 	fp.MoVersion = version
 }
 
@@ -548,12 +475,15 @@ type ObservabilityParameters struct {
 	LongQueryTime float64 `toml:"longQueryTime"`
 
 	// MetricExportInterval default is 15 sec.
-	MetricExportInterval int `toml:"metricExportInterval"`
+	MetricExportInterval int `toml:"metric-export-interval"`
 
 	// MetricGatherInterval default is 15 sec.
-	MetricGatherInterval int `toml:"metricGatherInterval"`
+	MetricGatherInterval int `toml:"metric-gather-interval"`
 
-	// MetricStorageUsageUpdateInterval, default: 30 min
+	// MetricInternalGatherInterval default is 1 min, handle metric.SubSystemMO metric
+	MetricInternalGatherInterval toml.Duration `toml:"metric-internal-gather-interval"`
+
+	// MetricStorageUsageUpdateInterval, default: 15 min
 	MetricStorageUsageUpdateInterval toml.Duration `toml:"metricStorageUsageUpdateInterval"`
 
 	// MetricStorageUsageCheckNewInterval, default: 1 min
@@ -604,6 +534,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		LongQueryTime:                      defaultLongQueryTime,
 		MetricExportInterval:               defaultMetricExportInterval,
 		MetricGatherInterval:               defaultMetricGatherInterval,
+		MetricInternalGatherInterval:       toml.Duration{},
 		MetricStorageUsageUpdateInterval:   toml.Duration{},
 		MetricStorageUsageCheckNewInterval: toml.Duration{},
 		MergeCycle:                         toml.Duration{},
@@ -617,6 +548,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		EnableStmtMerge:                    false,
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
 	}
+	op.MetricInternalGatherInterval.Duration = defaultMetricInternalGatherInterval
 	op.MetricStorageUsageUpdateInterval.Duration = defaultMetricUpdateStorageUsageInterval
 	op.MetricStorageUsageCheckNewInterval.Duration = defaultMetricStorageUsageCheckNewInterval
 	op.MergeCycle.Duration = defaultMergeCycle
