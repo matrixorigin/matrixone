@@ -1,0 +1,85 @@
+syntax = "proto3";
+package function;
+option go_package = "../function";
+
+// protoc --go_out=. --go-grpc_out=. ./python_udf.proto
+
+service PythonUdfService {
+  rpc run(PythonUdfRequest) returns (PythonUdfResponse) {}
+}
+
+message PythonUdfRequest {
+  PythonUdf udf = 1;
+  repeated DataVector vectors = 2;
+  int64 length = 3;
+}
+
+message PythonUdfResponse {
+  DataVector vector = 1;
+}
+
+message PythonUdf {
+  string handler = 1;
+  string asFun = 2;
+  DataType retType = 3;
+}
+
+message DataVector {
+  repeated Data data = 1;
+  bool const = 2;
+  int64 length = 3;
+  DataType type = 4;
+  int32 scale = 5;
+}
+
+enum DataType {
+  UNKNOWN = 0;
+
+  BOOL = 10;
+
+  INT8 = 20;
+  INT16 = 21;
+  INT32 = 22;
+  INT64 = 23;
+
+  UINT8 = 30;
+  UINT16 = 31;
+  UINT32 = 32;
+  UINT64 = 33;
+
+  FLOAT32 = 40;
+  FLOAT64 = 41;
+
+  CHAR = 50;
+  VARCHAR = 51;
+  TEXT = 52;
+  JSON = 53;
+  UUID = 54;
+
+  TIME = 60;
+  DATE = 61;
+  DATETIME = 62;
+  TIMESTAMP = 63;
+
+  DECIMAL64 = 70;
+  DECIMAL128 = 71;
+
+
+  BINARY = 80;
+  VARBINARY = 81;
+  BLOB = 82;
+}
+
+message Data {
+  oneof val {
+    bool boolVal = 1; // bool
+    sint32 intVal = 2; // int8, int16, int32
+    sint64 int64Val = 3; // int64
+    uint32 uintVal = 4; // uint8, uint16, uint32
+    uint64 uint64Val = 5; // uint64
+    float floatVal = 6; // float32
+    double doubleVal = 7; // float64
+    string stringVal = 8; // char, varchar, text, json, uuid | time, date, datetime, timestamp | Decimal64, Decimal128
+    bytes bytesVal = 9; // binary, varbinary, blob
+  }
+}

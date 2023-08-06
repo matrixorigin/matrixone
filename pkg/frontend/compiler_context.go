@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -280,7 +281,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	return tcc.getTableDef(ctx, table, dbName, tableName, sub)
 }
 
-func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body string, err error) {
+func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
 	var expectInvalidArgErr bool
 	var expectedInvalidArgLengthErr bool
 	var badValue string
@@ -293,7 +294,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 
 	err = inputNameIsInvalid(ctx, name)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -309,19 +310,19 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 		}
 	}()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	sql = fmt.Sprintf(`select args, body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	sql = fmt.Sprintf(`select args, body, language, rettype from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -331,11 +332,20 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 			expectInvalidArgErr = false
 			argstr, err = erArray[0].GetString(ctx, i, 0)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
-			body, err = erArray[0].GetString(ctx, i, 1)
+			udf = &function.Udf{}
+			udf.Body, err = erArray[0].GetString(ctx, i, 1)
 			if err != nil {
-				return "", err
+				return nil, err
+			}
+			udf.Language, err = erArray[0].GetString(ctx, i, 2)
+			if err != nil {
+				return nil, err
+			}
+			udf.RetType, err = erArray[0].GetString(ctx, i, 3)
+			if err != nil {
+				return nil, err
 			}
 			// arg type check
 			argMap := make(map[string]string)
@@ -344,8 +354,9 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 				expectedInvalidArgLengthErr = true
 				continue
 			}
-			i := 0
-			for _, v := range argMap {
+
+			for k, v := range argMap {
+				i, _ := strconv.Atoi(k)
 				switch t := int32(types.Types[v]); {
 				case (t >= 20 && t <= 29): // int family
 					if args[i].Typ.Id < 20 || args[i].Typ.Id > 29 {
@@ -363,15 +374,16 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 						badValue = v
 					}
 				}
-				i++
+
 			}
 			if (!expectInvalidArgErr) && (!expectedInvalidArgLengthErr) {
-				return body, err
+				udf.ArgMap = argMap
+				return udf, err
 			}
 		}
-		return "", err
+		return nil, err
 	} else {
-		return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+		return nil, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
 	}
 }
 
