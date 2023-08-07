@@ -121,7 +121,7 @@ func InitTestCaseExecuteDir(name string) (string, error) {
 }
 
 func CopyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, _ error) error {
 		if info.IsDir() {
 			return nil
 		}

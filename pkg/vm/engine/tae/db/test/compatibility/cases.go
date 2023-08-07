@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -119,7 +118,6 @@ func makeTest1() TestCase {
 		pc := GetPrepareCase(tc.dependsOn)
 		tae := initTestEngine(tc, t)
 		defer tae.Close()
-		t.Log(tae.Catalog.SimplePPString(common.PPL1))
 
 		bat := pc.getBatch(pc, t)
 		defer bat.Close()
@@ -129,7 +127,6 @@ func makeTest1() TestCase {
 
 		txn, rel := tae.GetRelation()
 		testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()-1, true)
-		return
 		err := rel.Append(context.Background(), bats[0])
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 		assert.NoError(t, txn.Commit(context.Background()))

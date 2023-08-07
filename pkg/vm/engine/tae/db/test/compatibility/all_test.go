@@ -37,7 +37,6 @@ func runAllPrepare(t *testing.T) {
 	for _, prepareCase := range PrepareCases {
 		runPrepareCase(prepareCase, t)
 	}
-	return
 }
 
 func runTestCase(testCase TestCase, t *testing.T) {
@@ -58,7 +57,6 @@ func runAllTestCase(t *testing.T) {
 	for _, testCase := range TestCases {
 		runTestCase(testCase, t)
 	}
-	return
 }
 
 func TestPrepare(t *testing.T) {
