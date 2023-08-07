@@ -597,3 +597,25 @@ func TestHandler_HandleTxn(t *testing.T) {
 
 	})
 }
+
+func TestHandler_HandleEventPrepare(t *testing.T) {
+	testWithServer(t, func(t *testing.T, addr string, s *Server) {
+		db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
+		// connect to server.
+		require.NoError(t, err)
+		require.NotNil(t, db1)
+		defer func() {
+			_ = db1.Close()
+		}()
+		_, err = db1.Exec("prepare p1 from 'select ?'")
+		require.NoError(t, err)
+
+		res, err := db1.Query("execute p1 using @pp") // we're just searching the PREPARE stmt.
+		require.NoError(t, err)
+		defer res.Close()
+		err = res.Err()
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
+	})
+}
