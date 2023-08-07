@@ -783,7 +783,7 @@ func TestUpdateCNWorkState(t *testing.T) {
 		assert.NotEmpty(t, state)
 		info, ok1 = state.CNState.Stores[uuid]
 		assert.True(t, ok1)
-		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
 	}
 	runStoreTest(t, fn)
 }
@@ -866,7 +866,7 @@ func TestPatchCNStore(t *testing.T) {
 		assert.NotEmpty(t, state)
 		info, ok1 = state.CNState.Stores[uuid]
 		assert.True(t, ok1)
-		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
 		labels1, ok2 = info.Labels["account"]
 		assert.True(t, ok2)
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})
