@@ -304,6 +304,7 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 	attr.AutoIncrement = row[MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8) == 1
 	attr.Primary = string(row[MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte)) == "p"
 	attr.ClusterBy = row[MO_COLUMNS_ATT_IS_CLUSTERBY].(int8) == 1
+	attr.EnumVlaues = string(row[MO_COLUMNS_ATT_ENUM_IDX].([]byte))
 	return &engine.AttributeDef{Attr: attr}, nil
 }
 

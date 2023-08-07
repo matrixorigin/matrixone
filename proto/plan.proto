@@ -30,7 +30,7 @@ message Type {
 	int32 width      = 4;
 	int32 scale      = 5;
 	string table     = 6;
-	repeated string enumvalues = 7;
+	string enumvalues = 7;
 };
 
 // Const: if a const value can be reprensented by int64 or

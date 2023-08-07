@@ -169,7 +169,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return nil, moerr.NewNYI(ctx, "enum type length err")
 			}
 
-			return &plan.Type{Id: int32(types.T_enum), Enumvalues: n.InternalType.EnumValues}, nil
+			return &plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
 		default:
 			return nil, moerr.NewNYI(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}

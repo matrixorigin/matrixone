@@ -22,8 +22,11 @@ import (
 )
 
 // ParseEnum return item index with item name or value.
-func ParseEnum(elems []string, name string) (uint16, error) {
-	var err error
+func ParseEnum(enumStr string, name string) (uint16, error) {
+	if len(enumStr) == 0 {
+		return 0, moerr.NewInternalErrorNoCtx("convert to MySQL enum failed: enum define is empty %v", enumStr)
+	}
+	elems := strings.Split(enumStr, ",")
 	enumName, err := ParseEnumName(elems, name)
 	if err == nil {
 		return enumName, nil
@@ -57,7 +60,11 @@ func ParseEnumValue(elems []string, number uint16) (uint16, error) {
 }
 
 // ParseEnumIndex return item value with index.
-func ParseEnumIndex(elems []string, index uint16) (string, error) {
+func ParseEnumIndex(enumStr string, index uint16) (string, error) {
+	if len(enumStr) == 0 {
+		return "", moerr.NewInternalErrorNoCtx("parse MySQL enum failed: enum type length err %d", len(enumStr))
+	}
+	elems := strings.Split(enumStr, ",")
 	if index == 0 || index > uint16(len(elems)) {
 		return "", moerr.NewInternalErrorNoCtx("parse MySQL enum failed: index %d overflow enum boundary [1, %d]", index, len(elems))
 	}

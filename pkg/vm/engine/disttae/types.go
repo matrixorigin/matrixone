@@ -500,7 +500,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	seqnum          uint16
-	enumValues      []string
+	enumValues      string
 }
 
 type withFilterMixin struct {

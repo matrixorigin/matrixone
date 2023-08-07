@@ -407,6 +407,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	nums := vector.MustFixedCol[int32](bat.GetVector(catalog.MO_COLUMNS_ATTNUM_IDX + MO_OFF))
 	clusters := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
 	seqnums := vector.MustFixedCol[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
+	enumValues := bat.GetVector(catalog.MO_COLUMNS_ATT_ENUM_IDX + MO_OFF)
 	for i, account := range accounts {
 		key.AccountId = account
 		key.Name = tableNames.GetStringAt(i)
@@ -432,6 +433,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				constraintType:  constraintTypes.GetStringAt(i),
 				isClusterBy:     clusters[i],
 				seqnum:          seqnums[i],
+				enumValues:      enumValues.GetStringAt(i),
 			}
 			copy(col.rowid[:], rowids[i][:])
 			col.typ = append(col.typ, typs.GetBytesAt(i)...)

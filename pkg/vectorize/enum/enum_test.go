@@ -15,6 +15,7 @@
 package enum
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -91,7 +92,7 @@ func TestParseEnum(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := ParseEnum(c.enums, c.value)
+			got, _ := ParseEnum(strings.Join(c.enums, ","), c.value)
 			require.Equal(t, c.want, got)
 		})
 	}
@@ -138,7 +139,7 @@ func TestParseEnumIndex(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := ParseEnumIndex(c.enums, c.index)
+			got, _ := ParseEnumIndex(strings.Join(c.enums, ","), c.index)
 			require.Equal(t, c.want, got)
 		})
 	}

@@ -69,7 +69,7 @@ type Attribute struct {
 	// Seqnum, do not change during the whole lifetime of the table
 	Seqnum uint16
 	// EnumValues is for enum type
-	EnumVlaues []string
+	EnumVlaues string
 }
 
 type PropertiesDef struct {

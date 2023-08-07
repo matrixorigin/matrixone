@@ -399,7 +399,11 @@ func genCreateColumnTuple(col column, rowid types.Rowid, needRowid bool, m *mpoo
 		if err := vector.AppendFixed(bat.Vecs[idx], col.seqnum, false, m); err != nil {
 			return nil, err
 		}
-
+		idx = catalog.MO_COLUMNS_ATT_ENUM_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_enum
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(col.enumValues), false, m); err != nil {
+			return nil, err
+		}
 	}
 	if needRowid {
 		//add the rowid vector as the first one in the batch
