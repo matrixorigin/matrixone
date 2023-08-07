@@ -90,7 +90,7 @@ func TestAppend(t *testing.T) {
 	err := rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 	// FIXME
-	// checkAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
+	// testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
 	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -140,7 +140,7 @@ func TestAppend2(t *testing.T) {
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 	{
 		txn, rel := getDefaultRelation(t, db, schema.Name)
-		checkAllColRowsByScan(t, rel, int(totalRows), false)
+		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
@@ -221,7 +221,7 @@ func TestAppend4(t *testing.T) {
 			assert.NoError(t, err)
 		}
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
-		checkAllColRowsByScan(t, rel, bat.Length(), false)
+		testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
 
 		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 		filter := handle.NewEQFilter(v)
@@ -231,12 +231,12 @@ func TestAppend4(t *testing.T) {
 		assert.NoError(t, err)
 
 		txn, rel = getDefaultRelation(t, tae, schema.Name)
-		checkAllColRowsByScan(t, rel, bat.Length()-1, true)
+		testutil.CheckAllColRowsByScan(t, rel, bat.Length()-1, true)
 		err = txn.Commit(context.Background())
 		assert.NoError(t, err)
 		compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 		txn, rel = getDefaultRelation(t, tae, schema.Name)
-		checkAllColRowsByScan(t, rel, bat.Length()-1, false)
+		testutil.CheckAllColRowsByScan(t, rel, bat.Length()-1, false)
 		err = txn.Commit(context.Background())
 		assert.NoError(t, err)
 	}
@@ -259,7 +259,7 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	err := rel.Append(context.Background(), bats[0])
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
+	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
 	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
 	err = rel.DeleteByFilter(context.Background(), filter)
@@ -280,35 +280,35 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 	err = rel.UpdateByFilter(context.Background(), ufilter, uint16(updateColIdx), oldv, oldvIsNull)
 	assert.NoError(t, err)
 
-	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
+	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()-1, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
+	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()-1, true)
 	for _, b := range bats[1:] {
 		err = rel.Append(context.Background(), b)
 		assert.NoError(t, err)
 	}
-	checkAllColRowsByScan(t, rel, bat.Length()-1, true)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-1, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	checkAllColRowsByScan(t, rel, bat.Length()-1, false)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-1, false)
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, bat.Length()-2, true)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-2, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	// After merging blocks, the logic of read data is modified
 	//compactSegs(t, tae, schema)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	//checkAllColRowsByScan(t, rel, bat.Length()-2, false)
-	checkAllColRowsByScan(t, rel, bat.Length()-1, false)
+	//testutil.CheckAllColRowsByScan(t, rel, bat.Length()-2, false)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-1, false)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	// t.Log(rel.GetMeta().(*catalog.TableEntry).PPString(common.PPL1, 0, ""))
@@ -1126,7 +1126,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
-		blk := getOneBlock(rel)
+		blk := testutil.GetOneBlock(rel)
 		blkData := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
 		assert.Nil(t, err)
@@ -1229,7 +1229,7 @@ func TestCompactABlk(t *testing.T) {
 	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
-		blk := getOneBlock(rel)
+		blk := testutil.GetOneBlock(rel)
 		blkData := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
 		assert.NoError(t, err)
@@ -1617,7 +1617,7 @@ func TestDelete1(t *testing.T) {
 	}
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
-		blk := getOneBlock(rel)
+		blk := testutil.GetOneBlock(rel)
 		view, err := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx())
 		assert.NoError(t, err)
 		defer view.Close()
@@ -1639,7 +1639,7 @@ func TestDelete1(t *testing.T) {
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		assert.Equal(t, bat.Length()-2, int(rel.Rows()))
-		blk := getOneBlock(rel)
+		blk := testutil.GetOneBlock(rel)
 		view, err := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx())
 		assert.NoError(t, err)
 		defer view.Close()
@@ -1695,7 +1695,7 @@ func TestLogIndex1(t *testing.T) {
 	}
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
-		blk := getOneBlock(rel)
+		blk := testutil.GetOneBlock(rel)
 		meta := blk.GetMeta().(*catalog.BlockEntry)
 
 		view, err := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx())
@@ -1767,8 +1767,8 @@ func TestCrossDBTxn(t *testing.T) {
 	rel2, err = db2.GetRelationByName(schema2.Name)
 	assert.NoError(t, err)
 
-	checkAllColRowsByScan(t, rel1, int(rows1), false)
-	checkAllColRowsByScan(t, rel2, int(rows2), false)
+	testutil.CheckAllColRowsByScan(t, rel1, int(rows1), false)
+	testutil.CheckAllColRowsByScan(t, rel2, int(rows2), false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
@@ -1954,7 +1954,7 @@ func TestSystemDB2(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err = sysDB.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, 1000, false)
+	testutil.CheckAllColRowsByScan(t, rel, 1000, false)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -1995,7 +1995,7 @@ func TestScan1(t *testing.T) {
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, bat.Length(), false)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -2019,7 +2019,7 @@ func TestDedup(t *testing.T) {
 	err = rel.Append(context.Background(), bat)
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	checkAllColRowsByScan(t, rel, 10, false)
+	testutil.CheckAllColRowsByScan(t, rel, 10, false)
 	err = txn.Rollback(context.Background())
 	assert.NoError(t, err)
 }
@@ -2042,19 +2042,19 @@ func TestScan2(t *testing.T) {
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(context.Background(), bats[0])
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
+	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
 
 	err = rel.Append(context.Background(), bats[0])
 	assert.Error(t, err)
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, int(rows), false)
+	testutil.CheckAllColRowsByScan(t, rel, int(rows), false)
 
 	pkv := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(5)
 	filter := handle.NewEQFilter(pkv)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, int(rows)-1, true)
+	testutil.CheckAllColRowsByScan(t, rel, int(rows)-1, true)
 
 	pkv = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(8)
 	filter = handle.NewEQFilter(pkv)
@@ -2065,7 +2065,7 @@ func TestScan2(t *testing.T) {
 	v, _, err := rel.GetValueByFilter(context.Background(), filter, 3)
 	assert.NoError(t, err)
 	assert.Equal(t, updateV, v.(int64))
-	checkAllColRowsByScan(t, rel, int(rows)-1, true)
+	testutil.CheckAllColRowsByScan(t, rel, int(rows)-1, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -2104,7 +2104,7 @@ func TestADA(t *testing.T) {
 	assert.NoError(t, err)
 	id, row, err = rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, 1, true)
+	testutil.CheckAllColRowsByScan(t, rel, 1, true)
 
 	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
@@ -2115,7 +2115,7 @@ func TestADA(t *testing.T) {
 	assert.NoError(t, err)
 	_, _, err = rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, 1, true)
+	testutil.CheckAllColRowsByScan(t, rel, 1, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -2331,7 +2331,7 @@ func TestChaos1(t *testing.T) {
 	assert.True(t, appendCnt-deleteCnt <= 1)
 	_, rel := getDefaultRelation(t, tae, schema.Name)
 	assert.Equal(t, int64(appendCnt-deleteCnt), rel.Rows())
-	blk := getOneBlock(rel)
+	blk := testutil.GetOneBlock(rel)
 	view, err := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx())
 	assert.NoError(t, err)
 	defer view.Close()
@@ -2481,7 +2481,7 @@ func TestMergeBlocks(t *testing.T) {
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
 	for it.Valid() {
-		checkAllColRowsByScan(t, rel, bat.Length(), false)
+		testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
 		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(context.Background(), txn, schema, 0)
 		assert.NoError(t, err)
 		defer col.Close()
@@ -2501,7 +2501,7 @@ func TestMergeBlocks(t *testing.T) {
 	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	it = rel.MakeBlockIt()
 	for it.Valid() {
-		checkAllColRowsByScan(t, rel, bat.Length()-5, false)
+		testutil.CheckAllColRowsByScan(t, rel, bat.Length()-5, false)
 		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(context.Background(), txn, schema, 0)
 		assert.Nil(t, err)
 		t.Log(col)
@@ -2575,7 +2575,7 @@ func TestSegDelLogtail(t *testing.T) {
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
-	checkAllColRowsByScan(t, rel, bat.Length()-5, false)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-5, false)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
@@ -2605,7 +2605,7 @@ func TestSegDelLogtail(t *testing.T) {
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
-	checkAllColRowsByScan(t, rel, bat.Length()-5, false)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-5, false)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	check()
@@ -2622,40 +2622,40 @@ func TestMergeblocks2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 3
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 6)
 	bats := bat.Split(2)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[1])
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	{
 		v := getSingleSortKeyValue(bat, schema, 1)
 		filter := handle.NewEQFilter(v)
-		txn2, rel := tae.getRelation()
+		txn2, rel := tae.GetRelation()
 		t.Log("********before delete******************")
-		checkAllColRowsByScan(t, rel, 6, true)
+		testutil.CheckAllColRowsByScan(t, rel, 6, true)
 		_ = rel.DeleteByFilter(context.Background(), filter)
 		assert.Nil(t, txn2.Commit(context.Background()))
 	}
 
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	t.Log("**********************")
-	checkAllColRowsByScan(t, rel, 5, true)
+	testutil.CheckAllColRowsByScan(t, rel, 5, true)
 
 	{
 		t.Log("************merge************")
 
-		txn, rel = tae.getRelation()
+		txn, rel = tae.GetRelation()
 
 		segIt := rel.MakeSegmentIt()
 		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
@@ -2678,9 +2678,9 @@ func TestMergeblocks2(t *testing.T) {
 		{
 			v := getSingleSortKeyValue(bat, schema, 2)
 			filter := handle.NewEQFilter(v)
-			txn2, rel := tae.getRelation()
+			txn2, rel := tae.GetRelation()
 			t.Log("********before delete******************")
-			checkAllColRowsByScan(t, rel, 5, true)
+			testutil.CheckAllColRowsByScan(t, rel, 5, true)
 			_ = rel.DeleteByFilter(context.Background(), filter)
 			assert.Nil(t, txn2.Commit(context.Background()))
 		}
@@ -2689,8 +2689,8 @@ func TestMergeblocks2(t *testing.T) {
 	}
 
 	t.Log("********************")
-	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 4, true)
+	_, rel = tae.GetRelation()
+	testutil.CheckAllColRowsByScan(t, rel, 4, true)
 	assert.Equal(t, int64(4), rel.Rows())
 
 	v := getSingleSortKeyValue(bat, schema, 1)
@@ -2775,24 +2775,24 @@ func TestDelete2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 11)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 5)
 	defer bat.Close()
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	v := getSingleSortKeyValue(bat, schema, 2)
 	filter := handle.NewEQFilter(v)
 	err := rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 }
 
 func TestNull1(t *testing.T) {
@@ -2801,38 +2801,38 @@ func TestNull1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 9)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
 	defer bat.Close()
 	bats := bat.Split(4)
 	bats[0].Vecs[3].Update(2, nil, true)
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
-	txn, rel := tae.getRelation()
-	blk := getOneBlock(rel)
+	txn, rel := tae.GetRelation()
+	blk := testutil.GetOneBlock(rel)
 	view, err := blk.GetColumnDataById(context.Background(), 3)
 	assert.NoError(t, err)
 	defer view.Close()
 	//v := view.GetData().Get(2)
 	assert.True(t, view.GetData().IsNull(2))
-	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
+	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart(ctx)
-	txn, rel = tae.getRelation()
-	blk = getOneBlock(rel)
+	tae.Restart(ctx)
+	txn, rel = tae.GetRelation()
+	blk = testutil.GetOneBlock(rel)
 	view, err = blk.GetColumnDataById(context.Background(), 3)
 	assert.NoError(t, err)
 	defer view.Close()
 	//v = view.GetData().Get(2)
 	assert.True(t, view.GetData().IsNull(2))
-	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
+	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
 
 	v := getSingleSortKeyValue(bats[0], schema, 2)
 	filter_2 := handle.NewEQFilter(v)
@@ -2849,8 +2849,8 @@ func TestNull1(t *testing.T) {
 	assert.True(t, uv_isNull)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
+	txn, rel = tae.GetRelation()
+	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), true)
 	_, uv_isNull, err = rel.GetValueByFilter(context.Background(), filter_4, 3)
 	assert.NoError(t, err)
 	assert.True(t, uv_isNull)
@@ -2859,17 +2859,17 @@ func TestNull1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.compactBlocks(false)
-	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, lenOfBats(bats[:2]), false)
+	tae.CompactBlocks(false)
+	txn, rel = tae.GetRelation()
+	testutil.CheckAllColRowsByScan(t, rel, lenOfBats(bats[:2]), false)
 	_, uv_isNull, err = rel.GetValueByFilter(context.Background(), filter_4, 3)
 	assert.NoError(t, err)
 	assert.True(t, uv_isNull)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart(ctx)
-	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, lenOfBats(bats[:2]), false)
+	tae.Restart(ctx)
+	txn, rel = tae.GetRelation()
+	testutil.CheckAllColRowsByScan(t, rel, lenOfBats(bats[:2]), false)
 	_, uv_isNull, err = rel.GetValueByFilter(context.Background(), filter_4, 3)
 	assert.NoError(t, err)
 	assert.True(t, uv_isNull)
@@ -2883,7 +2883,7 @@ func TestNull1(t *testing.T) {
 	assert.True(t, uv0_1_isNull)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_, uv0_1_isNull, err = rel.GetValueByFilter(context.Background(), filter0_1, 12)
 	assert.NoError(t, err)
 	assert.True(t, uv0_1_isNull)
@@ -2891,10 +2891,10 @@ func TestNull1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.compactBlocks(false)
-	tae.mergeBlocks(false)
+	tae.CompactBlocks(false)
+	tae.MergeBlocks(false)
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_, uv0_1_isNull, err = rel.GetValueByFilter(context.Background(), filter0_1, 12)
 	assert.NoError(t, err)
 	assert.True(t, uv0_1_isNull)
@@ -2903,9 +2903,9 @@ func TestNull1(t *testing.T) {
 	assert.True(t, uv0_2_isNull)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_, uv0_1_isNull, err = rel.GetValueByFilter(context.Background(), filter0_1, 12)
 	assert.NoError(t, err)
 	assert.True(t, uv0_1_isNull)
@@ -2982,7 +2982,7 @@ func TestGetColumnData(t *testing.T) {
 	defer bat.Close()
 	tae.createRelAndAppend(bats[0], true)
 	txn, rel := tae.getRelation()
-	blk := getOneBlock(rel)
+	blk := testutil.GetOneBlock(rel)
 	view, _ := blk.GetColumnDataById(context.Background(), 2)
 	defer view.Close()
 	assert.Equal(t, bats[0].Length(), view.Length())
@@ -2996,7 +2996,7 @@ func TestGetColumnData(t *testing.T) {
 
 	tae.compactBlocks(false)
 	txn, rel = tae.getRelation()
-	blk = getOneBlock(rel)
+	blk = testutil.GetOneBlock(rel)
 	view, _ = blk.GetColumnDataById(context.Background(), 2)
 	defer view.Close()
 	assert.Equal(t, bats[0].Length(), view.Length())
@@ -3011,7 +3011,7 @@ func TestGetColumnData(t *testing.T) {
 	txn, rel = tae.getRelation()
 	err := rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	blk = getOneBlock(rel)
+	blk = testutil.GetOneBlock(rel)
 	view, err = blk.GetColumnDataById(context.Background(), 2)
 	assert.NoError(t, err)
 	defer view.Close()
@@ -3066,13 +3066,13 @@ func TestCompactBlk1(t *testing.T) {
 		filter := handle.NewEQFilter(v)
 		txn2, rel := tae.getRelation()
 		t.Log("********before delete******************")
-		checkAllColRowsByScan(t, rel, 5, true)
+		testutil.CheckAllColRowsByScan(t, rel, 5, true)
 		_ = rel.DeleteByFilter(context.Background(), filter)
 		assert.Nil(t, txn2.Commit(context.Background()))
 	}
 
 	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 4, true)
+	testutil.CheckAllColRowsByScan(t, rel, 4, true)
 
 	{
 		t.Log("************compact************")
@@ -3091,7 +3091,7 @@ func TestCompactBlk1(t *testing.T) {
 			filter := handle.NewEQFilter(v)
 			txn2, rel := tae.getRelation()
 			t.Log("********before delete******************")
-			checkAllColRowsByScan(t, rel, 4, true)
+			testutil.CheckAllColRowsByScan(t, rel, 4, true)
 			_ = rel.DeleteByFilter(context.Background(), filter)
 			assert.Nil(t, txn2.Commit(context.Background()))
 		}
@@ -3101,12 +3101,12 @@ func TestCompactBlk1(t *testing.T) {
 	}
 
 	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 3, true)
+	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 
 	tae.restart(ctx)
 	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 3, true)
+	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 }
 
@@ -3149,12 +3149,12 @@ func TestCompactBlk2(t *testing.T) {
 	filter := handle.NewEQFilter(v)
 	txn2, rel1 := tae.getRelation()
 	t.Log("********before delete******************")
-	checkAllColRowsByScan(t, rel1, 5, true)
+	testutil.CheckAllColRowsByScan(t, rel1, 5, true)
 	_ = rel1.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
 	_, rel2 := tae.getRelation()
-	checkAllColRowsByScan(t, rel2, 4, true)
+	testutil.CheckAllColRowsByScan(t, rel2, 4, true)
 
 	t.Log("************compact************")
 	txn, rel = tae.getRelation()
@@ -3173,7 +3173,7 @@ func TestCompactBlk2(t *testing.T) {
 	filter = handle.NewEQFilter(v)
 	txn2, rel3 := tae.getRelation()
 	t.Log("********before delete******************")
-	checkAllColRowsByScan(t, rel3, 4, true)
+	testutil.CheckAllColRowsByScan(t, rel3, 4, true)
 	_ = rel3.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
@@ -3182,15 +3182,15 @@ func TestCompactBlk2(t *testing.T) {
 	filter = handle.NewEQFilter(v)
 	txn2, rel4 := tae.getRelation()
 	t.Log("********before delete******************")
-	checkAllColRowsByScan(t, rel4, 3, true)
+	testutil.CheckAllColRowsByScan(t, rel4, 3, true)
 	_ = rel4.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
-	checkAllColRowsByScan(t, rel1, 5, true)
-	checkAllColRowsByScan(t, rel2, 4, true)
+	testutil.CheckAllColRowsByScan(t, rel1, 5, true)
+	testutil.CheckAllColRowsByScan(t, rel2, 4, true)
 
 	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 2, true)
+	testutil.CheckAllColRowsByScan(t, rel, 2, true)
 	assert.Equal(t, int64(2), rel.Rows())
 
 	v = getSingleSortKeyValue(bat, schema, 2)
@@ -3227,12 +3227,12 @@ func TestCompactblk3(t *testing.T) {
 	v := getSingleSortKeyValue(bat, schema, 1)
 	filter := handle.NewEQFilter(v)
 	txn2, rel1 := tae.getRelation()
-	checkAllColRowsByScan(t, rel1, 3, true)
+	testutil.CheckAllColRowsByScan(t, rel1, 3, true)
 	_ = rel1.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
 	_, rel2 := tae.getRelation()
-	checkAllColRowsByScan(t, rel2, 2, true)
+	testutil.CheckAllColRowsByScan(t, rel2, 2, true)
 
 	txn, rel := tae.getRelation()
 	it := rel.MakeBlockIt()
@@ -3702,20 +3702,20 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// account 2
 		// check data for good
 		_, tbl := tae.getRelation()
-		checkAllColRowsByScan(t, tbl, 35, false)
+		testutil.CheckAllColRowsByScan(t, tbl, 35, false)
 		// [mo_catalog, db]
 		assert.Equal(t, 2, len(mustStartTxn(t, tae, 2).DatabaseNames()))
 		_, sysDB = tae.getDB(pkgcatalog.MO_CATALOG)
 		sysDB.Relations()
 		sysDBTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_DATABASE)
 		// [mo_catalog, db]
-		checkAllColRowsByScan(t, sysDBTbl, 2, true)
+		testutil.CheckAllColRowsByScan(t, sysDBTbl, 2, true)
 		sysTblTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_TABLES)
 		// [mo_database, mo_tables, mo_columns, 'mo_users_t2' 'test-table-a-timestamp']
-		checkAllColRowsByScan(t, sysTblTbl, 5, true)
+		testutil.CheckAllColRowsByScan(t, sysTblTbl, 5, true)
 		sysColTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_COLUMNS)
 		// [mo_database(8), mo_tables(13), mo_columns(19), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
-		checkAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+5, true)
+		testutil.CheckAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+5, true)
 	}
 	{
 		// account 1
@@ -3723,20 +3723,20 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		tae.bindTenantID(1)
 		// check data for good
 		_, tbl := tae.getRelation()
-		checkAllColRowsByScan(t, tbl, 29, false)
+		testutil.CheckAllColRowsByScan(t, tbl, 29, false)
 		// [mo_catalog, db]
 		assert.Equal(t, 2, len(mustStartTxn(t, tae, 1).DatabaseNames()))
 		_, sysDB = tae.getDB(pkgcatalog.MO_CATALOG)
 		sysDB.Relations()
 		sysDBTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_DATABASE)
 		// [mo_catalog, db]
-		checkAllColRowsByScan(t, sysDBTbl, 2, true)
+		testutil.CheckAllColRowsByScan(t, sysDBTbl, 2, true)
 		sysTblTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_TABLES)
 		// [mo_database, mo_tables, mo_columns, 'mo_users_t1' 'test-table-a-timestamp']
-		checkAllColRowsByScan(t, sysTblTbl, 5, true)
+		testutil.CheckAllColRowsByScan(t, sysTblTbl, 5, true)
 		sysColTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_COLUMNS)
 		// [mo_database(8), mo_tables(13), mo_columns(19), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
-		checkAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+6, true)
+		testutil.CheckAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+6, true)
 	}
 	{
 		// sys account
@@ -3748,13 +3748,13 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		sysDB.Relations()
 		sysDBTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_DATABASE)
 		// [mo_catalog]
-		checkAllColRowsByScan(t, sysDBTbl, 1, true)
+		testutil.CheckAllColRowsByScan(t, sysDBTbl, 1, true)
 		sysTblTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_TABLES)
 		// [mo_database, mo_tables, mo_columns, 'mo_accounts']
-		checkAllColRowsByScan(t, sysTblTbl, 4, true)
+		testutil.CheckAllColRowsByScan(t, sysTblTbl, 4, true)
 		sysColTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_COLUMNS)
 		// [mo_database(8), mo_tables(13), mo_columns(19), 'mo_accounts'(1+1)]
-		checkAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+2, true)
+		testutil.CheckAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+2, true)
 	}
 
 }
@@ -4618,13 +4618,13 @@ func TestCompactDeltaBlk(t *testing.T) {
 		filter := handle.NewEQFilter(v)
 		txn2, rel := tae.getRelation()
 		t.Log("********before delete******************")
-		checkAllColRowsByScan(t, rel, 5, true)
+		testutil.CheckAllColRowsByScan(t, rel, 5, true)
 		_ = rel.DeleteByFilter(context.Background(), filter)
 		assert.Nil(t, txn2.Commit(context.Background()))
 	}
 
 	_, rel := tae.getRelation()
-	checkAllColRowsByScan(t, rel, 4, true)
+	testutil.CheckAllColRowsByScan(t, rel, 4, true)
 
 	{
 		t.Log("************compact************")
@@ -4651,7 +4651,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		filter := handle.NewEQFilter(v)
 		txn2, rel := tae.getRelation()
 		t.Log("********before delete******************")
-		checkAllColRowsByScan(t, rel, 4, true)
+		testutil.CheckAllColRowsByScan(t, rel, 4, true)
 		_ = rel.DeleteByFilter(context.Background(), filter)
 		assert.Nil(t, txn2.Commit(context.Background()))
 	}
@@ -4675,12 +4675,12 @@ func TestCompactDeltaBlk(t *testing.T) {
 	}
 
 	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 3, true)
+	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 
 	tae.restart(ctx)
 	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 3, true)
+	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 }
 
@@ -5147,7 +5147,7 @@ func TestMergeBlocks3(t *testing.T) {
 		_, _, err = rel.GetValueByFilter(context.Background(), filter9, 3)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 
-		checkAllColRowsByScan(t, rel, 86, true)
+		testutil.CheckAllColRowsByScan(t, rel, 86, true)
 		require.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -5304,7 +5304,7 @@ func TestUpdate(t *testing.T) {
 		v, _, err := rel.GetValueByFilter(context.Background(), filter, 2)
 		assert.NoError(t, err)
 		assert.Equal(t, v.(int32), expectV.Load())
-		checkAllColRowsByScan(t, rel, 1, true)
+		testutil.CheckAllColRowsByScan(t, rel, 1, true)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 }
@@ -6088,7 +6088,7 @@ func TestAlterFakePk(t *testing.T) {
 		tid = rel.ID()
 		d, _ := rel.GetDB()
 		did = d.GetID()
-		blkFp = getOneBlock(rel).Fingerprint()
+		blkFp = testutil.GetOneBlock(rel).Fingerprint()
 		tblEntry := rel.GetMeta().(*catalog.TableEntry)
 		err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "add1", types.NewProtoType(types.T_int32), 1))
 		require.NoError(t, err)
@@ -6209,7 +6209,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 
 	require.Error(t, rel0.Append(context.Background(), nil)) // schema changed, error
 	// Test variaous read on old schema
-	checkAllColRowsByScan(t, rel0, 8, false)
+	testutil.CheckAllColRowsByScan(t, rel0, 8, false)
 
 	filter := handle.NewEQFilter(uint16(3))
 	id, row, err := rel0.GetByFilter(context.Background(), filter)
@@ -6242,7 +6242,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 8, false)
+	testutil.CheckAllColRowsByScan(t, rel, 8, false)
 	it := rel.MakeBlockIt()
 	cnt := 0
 	var id2 *common.ID
@@ -6289,7 +6289,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	bats = catalog.MockBatch(schema2, 20).Split(5)
 	require.NoError(t, rel.Append(context.Background(), bats[4])) // new 4th block and append 4 blocks
 
-	checkAllColRowsByScan(t, rel, 20, true)
+	testutil.CheckAllColRowsByScan(t, rel, 20, true)
 	require.NoError(t, txn.Commit(context.Background()))
 
 	resp, close, _ := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
