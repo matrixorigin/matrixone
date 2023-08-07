@@ -1,0 +1,502 @@
+drop table if exists names;
+create table names(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into names(id, name, age) values(1,"Abby", 24);
+insert into names(id, name, age) values(2,"Bob", 25);
+insert into names(id, name, age) values(3,"Carol", 23);
+insert into names(id, name, age) values(4,"Dora", 29);
+select id,name,age from names;
+id    name    age
+1    Abby    24
+2    Bob    25
+3    Carol    23
+4    Dora    29
+drop table if exists weights;
+create table weights(a int unique);
+insert into weights values(1);
+select * from weights;
+a
+1
+drop table if exists test;
+create table test(id int primary key, name varchar(10), age int);
+insert into test values(1, 'Abby', 20);
+insert into test values(2, 'Bob', 21);
+select id,name,age from test;
+id    name    age
+1    Abby    20
+2    Bob    21
+drop table if exists pet;
+create table pet(name char(10),owner char(10), species char(10), gender char(1), weight float,age int);
+insert into pet values ('Sunsweet01','Dsant01','otter','f',30.11,2),
+('Sunsweet02','Dsant02','otter','m',30.11,3);
+insert into pet(name, owner, species, gender, weight, age) values ('Sunsweet03','Dsant01','otter','f',30.11,2),
+('Sunsweet04','Dsant02','otter','m',30.11,3);
+select * from pet;
+name    owner    species    gender    weight    age
+Sunsweet01    Dsant01    otter    f    30.11    2
+Sunsweet02    Dsant02    otter    m    30.11    3
+Sunsweet03    Dsant01    otter    f    30.11    2
+Sunsweet04    Dsant02    otter    m    30.11    3
+drop table if exists t1;
+create table t1 (a bigint unsigned not null, primary key(a));
+insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612);
+select * from t1;
+a
+18446744073709551615
+18446744073709551614
+18446744073709551613
+18446744073709551612
+drop table if exists t1;
+create table t1(a int, b int);
+insert into t1 values(), ();
+select * from t1;
+a    b
+null    null
+null    null
+drop table if exists t1;
+create table t1(a int default (1+12), b int);
+insert into t1(b) values(1), (1);
+select * from t1;
+a    b
+13    1
+13    1
+drop table if exists t1;
+create table t1(a int primary key default (1+12));
+insert into t1 values();
+select * from t1;
+a
+13
+drop table if exists t1;
+create table t1(a int, b int);
+insert into t1(a) values(1), (2);
+select * from t1;
+a    b
+1    null
+2    null
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values (1+2), (2*2);
+select * from t1;
+a
+3
+4
+drop table if exists t1;
+create table t1 (a datetime default now());
+insert into t1 values();
+insert into t1 values(now());
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values(1+2*3), (666/2);
+select * from t1;
+a
+7
+333
+drop table if exists t;
+CREATE TABLE t (i1 INT, d1 DOUBLE, e2 DECIMAL(5,2));
+INSERT INTO t VALUES ( 6, 6.0, 10.0/3), ( null, 9.0, 10.0/3), ( 1, null, 10.0/3), ( 2, 2.0, null );
+select * from t;
+i1    d1    e2
+6    6.0    3.33
+null    9.0    3.33
+1    null    3.33
+2    2.0    null
+drop table if exists t1;
+create table t1 (a date);
+insert into t1 values(DATE("2017-06-15 09:34:21")),(DATE("2019-06-25 10:12:21")),(DATE("2019-06-25 18:20:49"));
+select * from t1;
+a
+2017-06-15
+2019-06-25
+2019-06-25
+drop table if exists t1;
+create table t1 (a date default DATE("2017-06-15 09:34:21"));
+insert into t1 (a) values (default), (default), (default);
+select * from t1;
+a
+2017-06-15
+2017-06-15
+2017-06-15
+drop table if exists t1;
+create table t1(a int auto_increment, b int);
+insert into t1 values(null, 2), (3, null), (null, null);
+select * from t1;
+a    b
+1    2
+3    null
+4    null
+drop table if exists t1;
+create table t1(a int auto_increment, b bigint auto_increment);
+insert into t1 values(null, 2), (3, null), (null, null);
+select * from t1;
+a    b
+1    2
+3    3
+4    4
+insert into t1 values(100, 2), (null, null), (null, null);
+select * from t1;
+a    b
+1    2
+3    3
+4    4
+100    2
+101    5
+102    6
+drop table if exists t1;
+create table t1(a int, b int, primary key(a));
+insert into t1 values(null, 1);
+constraint violation: Column 'a' cannot be null
+drop table if exists t1;
+create table t1(a int, b int, primary key(a, b));
+insert into t1 values(null, 1);
+constraint violation: Column 'a' cannot be null
+drop table if exists t1;
+create table t1(a int, b varchar(20), primary key(a, b));
+insert into t1 values(1, '2');
+insert into t1 values(1, '3');
+insert into t1 values(2, '2');
+insert into t1 values(2, '3');
+select * from t1;
+a    b
+1    2
+1    3
+2    2
+2    3
+insert into t1 values(2, '3');
+Duplicate entry '(2,3)' for key '__mo_cpkey_col'
+drop table if exists t1;
+create table t1(a int, b int, c int);
+insert into t1 values(1, 2, 3) on duplicate key update a=5;
+insert into t1 values(1, 2, 3) on duplicate key update a=5, b=6, c=7;
+insert into t1 values(1, 2, 3) on duplicate key update a=values(b)+values(c);
+drop table if exists t1;
+create table t1(a int, primary key(b));
+invalid input: column 'b' doesn't exist in table
+create table t1(a int, b int, primary key(b, c));
+invalid input: column 'c' doesn't exist in table
+drop table if exists t1;
+[unknown result because it is related to issue#5790]
+create table t1(a int, b varchar(20), unique key(a));
+[unknown result because it is related to issue#5790]
+insert into t1 values(1, '1');
+[unknown result because it is related to issue#5790]
+insert into t1 values(2, '2');
+[unknown result because it is related to issue#5790]
+insert into t1 values(3, '3');
+[unknown result because it is related to issue#5790]
+insert into t1 values(4, '4');
+[unknown result because it is related to issue#5790]
+select * from t1;
+[unknown result because it is related to issue#5790]
+insert into t1 values(1, '1');
+[unknown result because it is related to issue#5790]
+insert into t1 values(null, '1');
+[unknown result because it is related to issue#5790]
+insert into t1 values(null, '1');
+[unknown result because it is related to issue#5790]
+drop table if exists t1;
+[unknown result because it is related to issue#5790]
+create table t1(a int, b varchar(20), unique key(a, b));
+[unknown result because it is related to issue#5790]
+insert into t1 values(1, '2');
+[unknown result because it is related to issue#5790]
+insert into t1 values(1, '3');
+[unknown result because it is related to issue#5790]
+insert into t1 values(2, '2');
+[unknown result because it is related to issue#5790]
+insert into t1 values(2, '3');
+[unknown result because it is related to issue#5790]
+select * from t1;
+[unknown result because it is related to issue#5790]
+insert into t1 values(2, '3');
+[unknown result because it is related to issue#5790]
+insert into t1 values(null, '1');
+[unknown result because it is related to issue#5790]
+insert into t1 values(null, '2');
+[unknown result because it is related to issue#5790]
+insert into t1 values(null, '2');
+[unknown result because it is related to issue#5790]
+drop table if exists flush_logtail;
+create table flush_logtail(a int, b int);
+insert into flush_logtail values(1, 1);
+insert into flush_logtail values(2, 2);
+insert into flush_logtail values(3, 3);
+insert into flush_logtail values(4, 4);
+insert into flush_logtail values(5, 5);
+select mo_ctl('dn', 'AddFaultPoint', 'enable_fault_injection');
+mo_ctl(dn, AddFaultPoint, enable_fault_injection)
+{\n  "method": "AddFaultPoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'AddFaultPoint', 'flush_table_error.:::.echo.0.flush_table_fault');
+mo_ctl(dn, AddFaultPoint, flush_table_error.:::.echo.0.flush_table_fault)
+{\n  "method": "AddFaultPoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'insert.flush_logtail');
+internal error: flush_table_fault
+select * from flush_logtail;
+a    b
+1    1
+2    2
+3    3
+4    4
+5    5
+select mo_ctl('dn', 'AddFaultPoint', 'disable_fault_injection');
+mo_ctl(dn, AddFaultPoint, disable_fault_injection)
+{\n  "method": "AddFaultPoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'insert.flush_logtail');
+mo_ctl(dn, flush, insert.flush_logtail)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+drop table if exists t1;
+create table t1 (a varchar(50));
+insert into t1 values("这是一个字节数超过五十的字符串，但是utf8没有超过");
+drop table if exists t1;
+create table t1 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key num_phone(col2),key num_id(col4));
+insert into t1 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
+Duplicate entry '13456789872' for key '__mo_index_idx_col'
+drop table if exists t;
+create table t(a int);
+insert into t values(1);
+insert into t select * from t;
+select count(*) from t;
+count(*)
+2
+insert into t select * from t;
+select count(*) from t;
+count(*)
+4
+insert into t select * from t;
+select count(*) from t;
+count(*)
+8
+insert into t select * from t;
+select count(*) from t;
+count(*)
+16
+insert into t select * from t;
+select count(*) from t;
+count(*)
+32
+insert into t select * from t;
+select count(*) from t;
+count(*)
+64
+insert into t select * from t;
+select count(*) from t;
+count(*)
+128
+insert into t select * from t;
+select count(*) from t;
+count(*)
+256
+insert into t select * from t;
+select count(*) from t;
+count(*)
+512
+insert into t select * from t;
+select count(*) from t;
+count(*)
+1024
+insert into t select * from t;
+select count(*) from t;
+count(*)
+2048
+insert into t select * from t;
+select count(*) from t;
+count(*)
+4096
+insert into t select * from t;
+select count(*) from t;
+count(*)
+8192
+insert into t select * from t;
+select count(*) from t;
+count(*)
+16384
+insert into t select * from t;
+select count(*) from t;
+count(*)
+32768
+insert into t select * from t;
+select count(*) from t;
+count(*)
+65536
+insert into t select * from t;
+select count(*) from t;
+count(*)
+131072
+insert into t select * from t;
+select count(*) from t;
+count(*)
+262144
+insert into t select * from t;
+select count(*) from t;
+count(*)
+524288
+insert into t select * from t;
+select count(*) from t;
+count(*)
+1048576
+insert into t select * from t;
+select count(*) from t;
+count(*)
+2097152
+insert into t select * from t;
+select count(*) from t;
+count(*)
+4194304
+insert into t select * from t;
+select count(*) from t;
+count(*)
+8388608
+insert into t select * from t;
+select count(*) from t;
+count(*)
+16777216
+begin;
+insert into t select * from t;
+select count(*) from t;
+count(*)
+33554432
+commit;
+select count(*) from t;
+count(*)
+33554432
+drop table t;
+create table t(a int primary key);
+insert into t select * from generate_series(1,200000) g;
+select count(*) from t;
+count(*)
+200000
+insert into t select * from t;
+Duplicate entry ('[0-9]{6}'|'[0-9]{5}'|'[0-9]{4}'|'[0-9]{3}'|'[0-9]{2}'|'[0-9]{1}') for key 'a'
+begin;
+insert into t select * from t;
+Duplicate entry ('[0-9]{6}'|'[0-9]{5}'|'[0-9]{4}'|'[0-9]{3}'|'[0-9]{2}'|'[0-9]{1}') for key 'a'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select count(*) from t;
+count(*)
+200000
+commit;
+select count(*) from t;
+count(*)
+200000
+insert into t select null;
+constraint violation: Column 'a' cannot be null
+drop table t;
+create table t(a int,b int);
+[unknown result because it is related to issue#5790]
+create table temp(c int);
+[unknown result because it is related to issue#5790]
+insert into temp select * from generate_series(1,200000) g;
+[unknown result because it is related to issue#5790]
+insert into t select c,c from temp;
+[unknown result because it is related to issue#5790]
+select count(*) from t;
+[unknown result because it is related to issue#5790]
+insert into t select * from t order by a, b;
+[unknown result because it is related to issue#5790]
+begin;
+[unknown result because it is related to issue#5790]
+insert into t select * from t order by a, b;
+[unknown result because it is related to issue#5790]
+select count(*) from t;
+[unknown result because it is related to issue#5790]
+commit;
+[unknown result because it is related to issue#5790]
+select count(*) from t;
+[unknown result because it is related to issue#5790]
+insert into t select null,null;
+[unknown result because it is related to issue#5790]
+drop table t;
+[unknown result because it is related to issue#5790]
+drop table temp;
+[unknown result because it is related to issue#5790]
+create table t(a int);
+[unknown result because it is related to issue#5790]
+insert into t select * from generate_series(1,200000) g;
+[unknown result because it is related to issue#5790]
+select count(*) from t;
+[unknown result because it is related to issue#5790]
+insert into t select * from t order by a;
+[unknown result because it is related to issue#5790]
+begin;
+[unknown result because it is related to issue#5790]
+insert into t select * from t order by a;
+[unknown result because it is related to issue#5790]
+select count(*) from t;
+[unknown result because it is related to issue#5790]
+commit;
+[unknown result because it is related to issue#5790]
+select count(*) from t;
+[unknown result because it is related to issue#5790]
+insert into t select null;
+[unknown result because it is related to issue#5790]
+select count(*) from t;
+[unknown result because it is related to issue#5790]
+drop table t;
+[unknown result because it is related to issue#5790]
+create table t(a int auto_increment,b int);
+[unknown result because it is related to issue#5790]
+insert into t(b) select * from generate_series(1,200000) g;
+[unknown result because it is related to issue#5790]
+select count(*) from t;
+[unknown result because it is related to issue#5790]
+select a from t where a > 199990;
+[unknown result because it is related to issue#5790]
+drop table t;
+[unknown result because it is related to issue#5790]
+drop table if exists t1;
+[unknown result because it is related to issue#5790]
+create table t1(
+col1 tinyint,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned
+);
+[unknown result because it is related to issue#5790]
+load data infile '$resources/load_data/integer_numbers_3.csv' into table t1;
+[unknown result because it is related to issue#5790]
+select * from t1;
+[unknown result because it is related to issue#5790]
+drop table t1;
+[unknown result because it is related to issue#5790]
+create database ssb;use ssb;
+[unknown result because it is related to issue#5790]
+create table t2(c1 int) cluster by c1;
+[unknown result because it is related to issue#5790]
+insert into t2 values(3),(5),(1),(4),(2);
+[unknown result because it is related to issue#5790]
+select * from t2;
+[unknown result because it is related to issue#5790]
+select mo_ctl('dn', 'flush', 'ssb.t2');
+[unknown result because it is related to issue#5790]
+select * from t2;
+[unknown result because it is related to issue#5790]
+drop table t2;
+[unknown result because it is related to issue#5790]
+create table t2(c1 int) cluster by c1;
+[unknown result because it is related to issue#5790]
+load data infile '$resources/load_data/integer.csv' into table t2;
+[unknown result because it is related to issue#5790]
+select * from t2;
+[unknown result because it is related to issue#5790]
+select mo_ctl('dn', 'flush', 'ssb.t2');
+[unknown result because it is related to issue#5790]
+select * from t2;
+[unknown result because it is related to issue#5790]
+drop table t2;
+[unknown result because it is related to issue#5790]
+create table t2(c1 int,c2 int) cluster by (c1,c2);
+[unknown result because it is related to issue#5790]
+load data infile '$resources/load_data/integer2.csv' into table t2;
+[unknown result because it is related to issue#5790]
+select * from t2;
+[unknown result because it is related to issue#5790]
+select mo_ctl('dn', 'flush', 'ssb.t2');
+[unknown result because it is related to issue#5790]
+select * from t2;
+[unknown result because it is related to issue#5790]
+drop table t2;
+[unknown result because it is related to issue#5790]
+drop database ssb;
+[unknown result because it is related to issue#5790]

@@ -554,6 +554,10 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 						zap.String("create-by", createBy))
 				}))
 		}
+		if s.cfg.Txn.Limit > 0 {
+			opts = append(opts,
+				client.WithTxnLimit(s.cfg.Txn.Limit))
+		}
 		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(
 			sender,
