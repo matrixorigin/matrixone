@@ -33,7 +33,7 @@ type MemoryFS struct {
 	name string
 	sync.RWMutex
 	tree            *btree.BTreeG[*_MemFSEntry]
-	diskCache       *DiskCache
+	caches          []IOVectorCache
 	perfCounterSets []*perfcounter.CounterSet
 	asyncUpdate     bool
 }
@@ -53,23 +53,6 @@ func NewMemoryFS(
 		}),
 		perfCounterSets: perfCounterSets,
 	}
-
-	//if diskCacheCapacity > DisableCacheCapacity && diskCachePath != "" {
-	//	var err error
-	//	fs.diskCache, err = NewDiskCache(
-	//		diskCachePath,
-	//		diskCacheCapacity,
-	//		fs.perfCounterSets,
-	//	)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	logutil.Info("fileservice: disk cache initialized",
-	//		zap.Any("fs-name", fs.name),
-	//		zap.Any("capacity", diskCacheCapacity),
-	//		zap.Any("path", diskCachePath),
-	//	)
-	//}
 
 	return fs, nil
 }
@@ -206,15 +189,16 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	default:
 	}
 
-	if m.diskCache != nil {
-		if err := m.diskCache.Read(ctx, vector); err != nil {
+	for _, cache := range m.caches {
+		cache := cache
+		if err := cache.Read(ctx, vector); err != nil {
 			return err
 		}
 		defer func() {
 			if err != nil {
 				return
 			}
-			err = m.diskCache.Update(ctx, vector, m.asyncUpdate)
+			err = cache.Update(ctx, vector, m.asyncUpdate)
 		}()
 	}
 

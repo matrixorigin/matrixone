@@ -215,7 +215,7 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 	return true, nil
 }
 
-func (s *service) abortDeadlockTxn(wait pb.WaitTxn) {
+func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 	// this wait activeTxn must be hold by current service, because
 	// all transactions found to be deadlocked by the deadlock
 	// detector must be held by the current service
@@ -224,7 +224,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn) {
 	if activeTxn == nil {
 		return
 	}
-	activeTxn.abort(s.cfg.ServiceID, wait)
+	activeTxn.abort(s.cfg.ServiceID, wait, err)
 }
 
 func (s *service) getLockTable(tableID uint64) (lockTable, error) {
