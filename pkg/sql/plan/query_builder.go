@@ -1555,48 +1555,25 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 const NameGroupConcat = "group_concat"
 
-func (builder *QueryBuilder) hackForGroupConcat(selectExprs tree.SelectExprs, ctx *BindContext) (err error) {
-	for _, selectExpr := range selectExprs {
-		astExpr := selectExpr.Expr
-		switch exprImpl := astExpr.(type) {
-		case *tree.FuncExpr:
-			funcRef, ok := exprImpl.Func.FunctionReference.(*tree.UnresolvedName)
-			if !ok {
-				return moerr.NewNYI(builder.GetContext(), "function expr '%v'", exprImpl)
-			}
-			funcName := funcRef.Parts[0]
-			if funcName == NameGroupConcat {
-				ctx.forceWindows = true
-				//ctx.isDistinct=true
-				logutil.Infof("debug find group_concat")
-				break
-			}
-		default:
-			continue
-		}
-	}
-	return nil
-}
-
-func (ctx *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
-	windowsSpecList := make([]*plan.Expr, 0, len(ctx.aggregates))
+func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
+	windowsSpecList := make([]*plan.Expr, 0, len(bc.aggregates))
 	j := 0
 
-	if len(ctx.windows) < 1 {
+	if len(bc.windows) < 1 {
 		panic("no winspeclist to be used to force")
 	}
 
-	for i := range ctx.aggregates {
-		windowExpr := DeepCopyExpr(ctx.windows[j])
+	for i := range bc.aggregates {
+		windowExpr := DeepCopyExpr(bc.windows[j])
 		windowSpec := windowExpr.GetW()
 		if windowSpec == nil {
 			panic("no winspeclist to be used to force")
 		}
-		windowSpec.WindowFunc = DeepCopyExpr(ctx.aggregates[i])
-		windowExpr.Typ = ctx.aggregates[i].Typ
+		windowSpec.WindowFunc = DeepCopyExpr(bc.aggregates[i])
+		windowExpr.Typ = bc.aggregates[i].Typ
 
 		if windowSpec.Name == NameGroupConcat {
-			if j < len(ctx.windows)-1 {
+			if j < len(bc.windows)-1 {
 				j++
 			}
 		} else {
@@ -1606,7 +1583,7 @@ func (ctx *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 	}
 
 	//clean ctx.windows to avoid adding another windows node
-	ctx.windows = nil
+	bc.windows = nil
 
 	return windowsSpecList, nil
 }

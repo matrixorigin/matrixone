@@ -476,17 +476,3 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 	}
 	return nil
 }
-
-func (ctr *container) evalMultiAggs(bat *batch.Batch, proc *process.Process) error {
-	ctr.hasAggResult = true
-	for i := range ctr.multiVecs {
-		for j := range ctr.multiVecs[i] {
-			vec, err := ctr.multiVecs[i][j].executor.Eval(proc, []*batch.Batch{bat})
-			if err != nil {
-				return err
-			}
-			ctr.multiVecs[i][j].vec = vec
-		}
-	}
-	return nil
-}
