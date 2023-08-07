@@ -81,6 +81,8 @@ type Argument struct {
 
 	// IsSink means this is a Sink Node
 	IsSink bool
+	// RecSink means this is a Recursive Sink Node
+	RecSink bool
 	// FuncId means the sendFunc you want to call
 	FuncId int
 	// LocalRegs means the local register you need to send to.
