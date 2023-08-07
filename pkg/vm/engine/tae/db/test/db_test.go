@@ -72,21 +72,21 @@ func TestAppend(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := newTestEngine(ctx, t, nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.BlockMaxRows = options.DefaultBlockMaxRows
 	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	data := catalog.MockBatch(schema, int(schema.BlockMaxRows*2))
 	defer data.Close()
 	bats := data.Split(4)
 	now := time.Now()
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 	t.Log(time.Since(now))
-	tae.checkRowsByScan(bats[0].Length(), false)
+	tae.CheckRowsByScan(bats[0].Length(), false)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	err := rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 	// FIXME
@@ -94,7 +94,7 @@ func TestAppend(t *testing.T) {
 	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
-	tae.checkRowsByScan(bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
+	tae.CheckRowsByScan(bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
@@ -2517,7 +2517,6 @@ func TestSegDelLogtail(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	// tae := newTestEngine(ctx, t, opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, -1)
@@ -2708,7 +2707,7 @@ func TestMergeblocks2(t *testing.T) {
 	// _, _, err = rel.GetByFilter(context.Background(),filter)
 	// assert.NotNil(t, err)
 
-	// tae.restart()
+	// tae.Restart()
 	// assert.Equal(t, int64(2), rel.Rows())
 }
 func TestMergeEmptyBlocks(t *testing.T) {
@@ -2717,28 +2716,28 @@ func TestMergeEmptyBlocks(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 3
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 6)
 	bats := bat.Split(2)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
-	assert.NoError(t, tae.deleteAll(true))
+	assert.NoError(t, tae.DeleteAll(true))
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	assert.NoError(t, rel.Append(context.Background(), bats[1]))
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	{
 		t.Log("************merge************")
 
-		txn, rel = tae.getRelation()
+		txn, rel = tae.GetRelation()
 
 		segIt := rel.MakeSegmentIt()
 		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
@@ -2761,7 +2760,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 		{
 			v := getSingleSortKeyValue(bat, schema, 4)
 			filter := handle.NewEQFilter(v)
-			txn2, rel := tae.getRelation()
+			txn2, rel := tae.GetRelation()
 			_ = rel.DeleteByFilter(context.Background(), filter)
 			assert.Nil(t, txn2.Commit(context.Background()))
 		}
@@ -2921,16 +2920,16 @@ func TestTruncate(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*5+1))
 	defer bat.Close()
 	bats := bat.Split(20)
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
 	var wg sync.WaitGroup
 	p, _ := ants.NewPool(10)
@@ -2938,7 +2937,7 @@ func TestTruncate(t *testing.T) {
 	tryAppend := func(i int) func() {
 		return func() {
 			defer wg.Done()
-			tae.tryAppend(bats[1+i])
+			tae.TryAppend(bats[1+i])
 		}
 	}
 
@@ -2947,7 +2946,7 @@ func TestTruncate(t *testing.T) {
 			wg.Add(1)
 			_ = p.Submit(func() {
 				defer wg.Done()
-				tae.truncate()
+				tae.Truncate()
 				t.Log(tae.Catalog.SimplePPString(common.PPL1))
 			})
 		}
@@ -2956,11 +2955,11 @@ func TestTruncate(t *testing.T) {
 		time.Sleep(time.Millisecond * 2)
 	}
 	wg.Wait()
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	t.Logf("Rows: %d", rel.Rows())
 	assert.NoError(t, txn.Commit(context.Background()))
-	tae.truncate()
-	txn, rel = tae.getRelation()
+	tae.Truncate()
+	txn, rel = tae.GetRelation()
 	assert.Zero(t, 0, rel.Rows())
 	assert.NoError(t, txn.Commit(context.Background()))
 }
@@ -2971,17 +2970,17 @@ func TestGetColumnData(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 13)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 39)
 	bats := bat.Split(4)
 	defer bat.Close()
-	tae.createRelAndAppend(bats[0], true)
-	txn, rel := tae.getRelation()
+	tae.CreateRelAndAppend(bats[0], true)
+	txn, rel := tae.GetRelation()
 	blk := testutil.GetOneBlock(rel)
 	view, _ := blk.GetColumnDataById(context.Background(), 2)
 	defer view.Close()
@@ -2994,8 +2993,8 @@ func TestGetColumnData(t *testing.T) {
 	assert.NotZero(t, view.GetData().Allocated())
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.compactBlocks(false)
-	txn, rel = tae.getRelation()
+	tae.CompactBlocks(false)
+	txn, rel = tae.GetRelation()
 	blk = testutil.GetOneBlock(rel)
 	view, _ = blk.GetColumnDataById(context.Background(), 2)
 	defer view.Close()
@@ -3008,7 +3007,7 @@ func TestGetColumnData(t *testing.T) {
 	assert.NotZero(t, view.GetData().Allocated())
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	err := rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 	blk = testutil.GetOneBlock(rel)
@@ -3032,31 +3031,31 @@ func TestCompactBlk1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 5)
 	bats := bat.Split(5)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bats[2], true)
+	tae.CreateRelAndAppend(bats[2], true)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[1])
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[3])
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[4])
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[0])
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -3064,19 +3063,19 @@ func TestCompactBlk1(t *testing.T) {
 		v := getSingleSortKeyValue(bat, schema, 1)
 		t.Logf("v is %v**********", v)
 		filter := handle.NewEQFilter(v)
-		txn2, rel := tae.getRelation()
+		txn2, rel := tae.GetRelation()
 		t.Log("********before delete******************")
 		testutil.CheckAllColRowsByScan(t, rel, 5, true)
 		_ = rel.DeleteByFilter(context.Background(), filter)
 		assert.Nil(t, txn2.Commit(context.Background()))
 	}
 
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 4, true)
 
 	{
 		t.Log("************compact************")
-		txn, rel = tae.getRelation()
+		txn, rel = tae.GetRelation()
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
@@ -3089,7 +3088,7 @@ func TestCompactBlk1(t *testing.T) {
 			v := getSingleSortKeyValue(bat, schema, 2)
 			t.Logf("v is %v**********", v)
 			filter := handle.NewEQFilter(v)
-			txn2, rel := tae.getRelation()
+			txn2, rel := tae.GetRelation()
 			t.Log("********before delete******************")
 			testutil.CheckAllColRowsByScan(t, rel, 4, true)
 			_ = rel.DeleteByFilter(context.Background(), filter)
@@ -3100,12 +3099,12 @@ func TestCompactBlk1(t *testing.T) {
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	}
 
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 
-	tae.restart(ctx)
-	_, rel = tae.getRelation()
+	tae.Restart(ctx)
+	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 }
@@ -3116,48 +3115,48 @@ func TestCompactBlk2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 5)
 	bats := bat.Split(5)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bats[2], true)
+	tae.CreateRelAndAppend(bats[2], true)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[1])
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[3])
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[4])
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[0])
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	v := getSingleSortKeyValue(bat, schema, 1)
 	t.Logf("v is %v**********", v)
 	filter := handle.NewEQFilter(v)
-	txn2, rel1 := tae.getRelation()
+	txn2, rel1 := tae.GetRelation()
 	t.Log("********before delete******************")
 	testutil.CheckAllColRowsByScan(t, rel1, 5, true)
 	_ = rel1.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
-	_, rel2 := tae.getRelation()
+	_, rel2 := tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel2, 4, true)
 
 	t.Log("************compact************")
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	meta := blk.GetMeta().(*catalog.BlockEntry)
@@ -3171,7 +3170,7 @@ func TestCompactBlk2(t *testing.T) {
 	v = getSingleSortKeyValue(bat, schema, 2)
 	t.Logf("v is %v**********", v)
 	filter = handle.NewEQFilter(v)
-	txn2, rel3 := tae.getRelation()
+	txn2, rel3 := tae.GetRelation()
 	t.Log("********before delete******************")
 	testutil.CheckAllColRowsByScan(t, rel3, 4, true)
 	_ = rel3.DeleteByFilter(context.Background(), filter)
@@ -3180,7 +3179,7 @@ func TestCompactBlk2(t *testing.T) {
 	v = getSingleSortKeyValue(bat, schema, 4)
 	t.Logf("v is %v**********", v)
 	filter = handle.NewEQFilter(v)
-	txn2, rel4 := tae.getRelation()
+	txn2, rel4 := tae.GetRelation()
 	t.Log("********before delete******************")
 	testutil.CheckAllColRowsByScan(t, rel4, 3, true)
 	_ = rel4.DeleteByFilter(context.Background(), filter)
@@ -3189,7 +3188,7 @@ func TestCompactBlk2(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel1, 5, true)
 	testutil.CheckAllColRowsByScan(t, rel2, 4, true)
 
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 2, true)
 	assert.Equal(t, int64(2), rel.Rows())
 
@@ -3203,7 +3202,7 @@ func TestCompactBlk2(t *testing.T) {
 	_, _, err = rel.GetByFilter(context.Background(), filter)
 	assert.NotNil(t, err)
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	assert.Equal(t, int64(2), rel.Rows())
 }
 
@@ -3213,28 +3212,28 @@ func TestCompactblk3(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 3)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	v := getSingleSortKeyValue(bat, schema, 1)
 	filter := handle.NewEQFilter(v)
-	txn2, rel1 := tae.getRelation()
+	txn2, rel1 := tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel1, 3, true)
 	_ = rel1.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
-	_, rel2 := tae.getRelation()
+	_, rel2 := tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel2, 2, true)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	meta := blk.GetMeta().(*catalog.BlockEntry)
@@ -3268,37 +3267,37 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 5)
 	bats := bat.Split(5)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bats[2], true)
-	txn, rel := tae.getRelation()
+	tae.CreateRelAndAppend(bats[2], true)
+	txn, rel := tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[1])
 	assert.Nil(t, txn.Commit(context.Background()))
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[3])
 	assert.Nil(t, txn.Commit(context.Background()))
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[4])
 	assert.Nil(t, txn.Commit(context.Background()))
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_ = rel.Append(context.Background(), bats[0])
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	v := getSingleSortKeyValue(bat, schema, 1)
 	filter := handle.NewEQFilter(v)
-	txn2, rel := tae.getRelation()
+	txn2, rel := tae.GetRelation()
 	_ = rel.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	meta := blk.GetMeta().(*catalog.BlockEntry)
@@ -3309,7 +3308,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	err = txn.Commit(context.Background())
 	assert.NoError(t, err)
 
-	txn, _ = tae.getRelation()
+	txn, _ = tae.GetRelation()
 	_, err = meta.GetBlockData().GetByFilter(context.Background(), txn, filter)
 	assert.Error(t, err)
 	v = getSingleSortKeyValue(bat, schema, 2)
@@ -3327,7 +3326,7 @@ func TestDelete3(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
@@ -3341,29 +3340,29 @@ func TestDelete3(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	// rows := int(schema.BlockMaxRows * 1)
 	rows := int(schema.BlockMaxRows*3) + 1
 	bat := catalog.MockBatch(schema, rows)
 
-	tae.createRelAndAppend(bat, true)
-	tae.checkRowsByScan(rows, false)
+	tae.CreateRelAndAppend(bat, true)
+	tae.CheckRowsByScan(rows, false)
 	deleted := false
 	for i := 0; i < 10; i++ {
 		if deleted {
-			tae.checkRowsByScan(0, true)
+			tae.CheckRowsByScan(0, true)
 			tae.DoAppend(bat)
 			deleted = false
-			tae.checkRowsByScan(rows, true)
+			tae.CheckRowsByScan(rows, true)
 		} else {
-			tae.checkRowsByScan(rows, true)
-			err := tae.deleteAll(true)
+			tae.CheckRowsByScan(rows, true)
+			err := tae.DeleteAll(true)
 			if err == nil {
 				deleted = true
-				tae.checkRowsByScan(0, true)
+				tae.CheckRowsByScan(0, true)
 				// assert.Zero(t, tae.getRows())
 			} else {
-				tae.checkRowsByScan(rows, true)
+				tae.CheckRowsByScan(rows, true)
 				// assert.Equal(t, tae.getRows(), rows)
 			}
 		}
@@ -3376,7 +3375,7 @@ func TestDropCreated1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
@@ -3390,7 +3389,7 @@ func TestDropCreated1(t *testing.T) {
 	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
 	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 }
 
 func TestDropCreated2(t *testing.T) {
@@ -3398,7 +3397,7 @@ func TestDropCreated2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
 	defer tae.Close()
 
@@ -3415,7 +3414,7 @@ func TestDropCreated2(t *testing.T) {
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 }
 
 func TestDropCreated3(t *testing.T) {
@@ -3423,7 +3422,7 @@ func TestDropCreated3(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
@@ -3437,7 +3436,7 @@ func TestDropCreated3(t *testing.T) {
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
 	assert.Nil(t, err)
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 }
 
 func TestDropCreated4(t *testing.T) {
@@ -3445,7 +3444,7 @@ func TestDropCreated4(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
 	defer tae.Close()
 
@@ -3462,7 +3461,7 @@ func TestDropCreated4(t *testing.T) {
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
 	assert.Nil(t, err)
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 }
 
 // records create at 1 and commit
@@ -3472,7 +3471,7 @@ func TestReadEqualTS(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
@@ -3504,13 +3503,13 @@ func TestTruncateZonemap(t *testing.T) {
 	}
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 12) // set varchar PK
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*2+9))        // 2.9 blocks
 	minv := mockBytes(0, 35)                                              // 0x00000000
@@ -3535,43 +3534,43 @@ func TestTruncateZonemap(t *testing.T) {
 		assert.Equal(t, maxvOffset, row)
 	}
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	// runtime check
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	checkMinMax(rel, 1, 8)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	// restart without compact
-	tae.restart(ctx)
-	txn, rel = tae.getRelation()
+	tae.Restart(ctx)
+	txn, rel = tae.GetRelation()
 	checkMinMax(rel, 1, 8)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	// restart with compact
-	tae.compactBlocks(false)
-	tae.mergeBlocks(false)
-	tae.restart(ctx)
-	txn, rel = tae.getRelation()
+	tae.CompactBlocks(false)
+	tae.MergeBlocks(false)
+	tae.Restart(ctx)
+	txn, rel = tae.GetRelation()
 	checkMinMax(rel, 0, 9)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	// 3 NonAppendable Blocks
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	rel.UpdateByFilter(context.Background(), handle.NewEQFilter(maxv), 12, mockBytes(0xff, 35), false)
 	assert.NoError(t, txn.Commit(context.Background()))
-	tae.compactBlocks(false)
-	tae.mergeBlocks(false)
-	tae.restart(ctx)
+	tae.CompactBlocks(false)
+	tae.MergeBlocks(false)
+	tae.Restart(ctx)
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	_, row, err := rel.GetByFilter(context.Background(), handle.NewEQFilter(mockBytes(0xff, 35)))
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(9), row)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
-func mustStartTxn(t *testing.T, tae *testEngine, tenantID uint32) txnif.AsyncTxn {
+func mustStartTxn(t *testing.T, tae *testutil.TestEngine, tenantID uint32) txnif.AsyncTxn {
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	txn.BindAccessInfo(tenantID, 0, 0)
@@ -3584,7 +3583,7 @@ func TestMultiTenantDBOps(t *testing.T) {
 
 	var err error
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	txn11 := mustStartTxn(t, tae, 1)
@@ -3611,7 +3610,7 @@ func TestMultiTenantDBOps(t *testing.T) {
 	assert.NoError(t, txn23.Commit(context.Background()))
 
 	txn22.Commit(context.Background())
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
 	txn24 := mustStartTxn(t, tae, 2)
 	// [mo_catalog, db, db2]
@@ -3646,12 +3645,12 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 
 	var err error
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	s := catalog.MockSchemaAll(1, 0)
 	s.Name = "mo_accounts"
-	txn0, sysDB := tae.getDB(pkgcatalog.MO_CATALOG)
+	txn0, sysDB := tae.GetDB(pkgcatalog.MO_CATALOG)
 	_, err = sysDB.CreateRelation(s)
 	assert.NoError(t, err)
 	assert.NoError(t, txn0.Commit(context.Background()))
@@ -3659,41 +3658,41 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	schema11 := catalog.MockSchemaAll(3, 0)
 	schema11.BlockMaxRows = 10
 	schema11.SegmentMaxBlocks = 2
-	tae.bindSchema(schema11)
-	tae.bindTenantID(1)
+	tae.BindSchema(schema11)
+	tae.BindTenantID(1)
 
 	bat1 := catalog.MockBatch(schema11, int(schema11.BlockMaxRows*2+9))
-	tae.createRelAndAppend(bat1, true)
+	tae.CreateRelAndAppend(bat1, true)
 	// pretend 'mo_users'
 	s = catalog.MockSchemaAll(1, 0)
 	s.Name = "mo_users"
-	txn11, sysDB := tae.getDB(pkgcatalog.MO_CATALOG)
+	txn11, sysDB := tae.GetDB(pkgcatalog.MO_CATALOG)
 	_, err = sysDB.CreateRelation(s)
 	assert.NoError(t, err)
 	assert.NoError(t, txn11.Commit(context.Background()))
 
-	tae.compactBlocks(false)
-	tae.mergeBlocks(false)
+	tae.CompactBlocks(false)
+	tae.MergeBlocks(false)
 
 	schema21 := catalog.MockSchemaAll(2, 1)
 	schema21.BlockMaxRows = 10
 	schema21.SegmentMaxBlocks = 2
-	tae.bindSchema(schema21)
-	tae.bindTenantID(2)
+	tae.BindSchema(schema21)
+	tae.BindTenantID(2)
 
 	bat2 := catalog.MockBatch(schema21, int(schema21.BlockMaxRows*3+5))
-	tae.createRelAndAppend(bat2, true)
-	txn21, sysDB := tae.getDB(pkgcatalog.MO_CATALOG)
+	tae.CreateRelAndAppend(bat2, true)
+	txn21, sysDB := tae.GetDB(pkgcatalog.MO_CATALOG)
 	s = catalog.MockSchemaAll(1, 0)
 	s.Name = "mo_users"
 	_, err = sysDB.CreateRelation(s)
 	assert.NoError(t, err)
 	assert.NoError(t, txn21.Commit(context.Background()))
 
-	tae.compactBlocks(false)
-	tae.mergeBlocks(false)
+	tae.CompactBlocks(false)
+	tae.MergeBlocks(false)
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
 	reservedColumnsCnt := len(catalog.SystemDBSchema.ColDefs) +
 		len(catalog.SystemColumnSchema.ColDefs) +
@@ -3701,11 +3700,11 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	{
 		// account 2
 		// check data for good
-		_, tbl := tae.getRelation()
+		_, tbl := tae.GetRelation()
 		testutil.CheckAllColRowsByScan(t, tbl, 35, false)
 		// [mo_catalog, db]
 		assert.Equal(t, 2, len(mustStartTxn(t, tae, 2).DatabaseNames()))
-		_, sysDB = tae.getDB(pkgcatalog.MO_CATALOG)
+		_, sysDB = tae.GetDB(pkgcatalog.MO_CATALOG)
 		sysDB.Relations()
 		sysDBTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_DATABASE)
 		// [mo_catalog, db]
@@ -3719,14 +3718,14 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	}
 	{
 		// account 1
-		tae.bindSchema(schema11)
-		tae.bindTenantID(1)
+		tae.BindSchema(schema11)
+		tae.BindTenantID(1)
 		// check data for good
-		_, tbl := tae.getRelation()
+		_, tbl := tae.GetRelation()
 		testutil.CheckAllColRowsByScan(t, tbl, 29, false)
 		// [mo_catalog, db]
 		assert.Equal(t, 2, len(mustStartTxn(t, tae, 1).DatabaseNames()))
-		_, sysDB = tae.getDB(pkgcatalog.MO_CATALOG)
+		_, sysDB = tae.GetDB(pkgcatalog.MO_CATALOG)
 		sysDB.Relations()
 		sysDBTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_DATABASE)
 		// [mo_catalog, db]
@@ -3740,11 +3739,11 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	}
 	{
 		// sys account
-		tae.bindSchema(nil)
-		tae.bindTenantID(0)
+		tae.BindSchema(nil)
+		tae.BindTenantID(0)
 		// [mo_catalog]
 		assert.Equal(t, 1, len(mustStartTxn(t, tae, 0).DatabaseNames()))
-		_, sysDB = tae.getDB(pkgcatalog.MO_CATALOG)
+		_, sysDB = tae.GetDB(pkgcatalog.MO_CATALOG)
 		sysDB.Relations()
 		sysDBTbl, _ := sysDB.GetRelationByName(pkgcatalog.MO_DATABASE)
 		// [mo_catalog]
@@ -3766,7 +3765,7 @@ func TestUpdateAttr(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
 	defer tae.Close()
 
@@ -3799,7 +3798,7 @@ func TestUpdateAttr(t *testing.T) {
 
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
 	t.Log(tae.Catalog.SimplePPString(3))
 }
@@ -3825,7 +3824,7 @@ func TestLogtailBasic(t *testing.T) {
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	logMgr := tae.LogtailMgr
 	defer tae.Close()
 
@@ -4055,24 +4054,24 @@ func TestGetLastAppender(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 14)
 	bats := bat.Split(2)
 
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	rel.Append(context.Background(), bats[1])
 	require.NoError(t, txn.Commit(context.Background()))
 }
@@ -4088,38 +4087,38 @@ func TestCollectInsert(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 20
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 12)
 	bats := bat.Split(4)
 
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
-	txn1, rel := tae.getRelation()
+	txn1, rel := tae.GetRelation()
 	assert.NoError(t, rel.Append(context.Background(), bats[1]))
 	assert.NoError(t, txn1.Commit(context.Background()))
 
 	p1 := txn1.GetPrepareTS()
 	t.Logf("p1= %v", p1.ToString())
 
-	txn2, rel := tae.getRelation()
+	txn2, rel := tae.GetRelation()
 	assert.NoError(t, rel.Append(context.Background(), bats[2]))
 	assert.NoError(t, txn2.Commit(context.Background()))
 
 	p2 := txn2.GetPrepareTS()
 	t.Logf("p2= %v", p2.ToString())
 
-	txn3, rel := tae.getRelation()
+	txn3, rel := tae.GetRelation()
 	assert.NoError(t, rel.Append(context.Background(), bats[3]))
 	assert.NoError(t, txn3.Commit(context.Background()))
 
 	p3 := txn3.GetPrepareTS()
 	t.Logf("p3= %v", p3.ToString())
 
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	blkit := rel.MakeBlockIt()
 	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
 
@@ -4163,38 +4162,38 @@ func TestCollectDelete(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 20
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 12)
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
-	_, rel := tae.getRelation()
+	_, rel := tae.GetRelation()
 	blkit := rel.MakeBlockIt()
 	blkID := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).AsCommonID()
 
-	txn1, rel := tae.getRelation()
+	txn1, rel := tae.GetRelation()
 	assert.NoError(t, rel.RangeDelete(blkID, 0, 0, handle.DT_Normal))
 	assert.NoError(t, txn1.Commit(context.Background()))
 	p1 := txn1.GetPrepareTS()
 	t.Logf("p1= %v", p1.ToString())
 
-	txn2, rel := tae.getRelation()
+	txn2, rel := tae.GetRelation()
 	assert.NoError(t, rel.RangeDelete(blkID, 1, 3, handle.DT_Normal))
 	assert.NoError(t, txn2.Commit(context.Background()))
 	p2 := txn2.GetPrepareTS()
 	t.Logf("p2= %v", p2.ToString())
 
-	txn3, rel := tae.getRelation()
+	txn3, rel := tae.GetRelation()
 	assert.NoError(t, rel.RangeDelete(blkID, 4, 5, handle.DT_Normal))
 	assert.NoError(t, txn3.Commit(context.Background()))
 	p3 := txn3.GetPrepareTS()
 	t.Logf("p3= %v", p3.ToString())
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	blkit = rel.MakeBlockIt()
 	blkhandle := blkit.GetBlock()
 	blkdata := blkhandle.GetMeta().(*catalog.BlockEntry).GetBlockData()
@@ -4288,27 +4287,27 @@ func TestAppendnode(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	appendCnt := 20
 	bat := catalog.MockBatch(schema, appendCnt)
 	bats := bat.Split(appendCnt)
 
-	tae.createRelAndAppend(bats[0], true)
-	tae.checkRowsByScan(1, false)
+	tae.CreateRelAndAppend(bats[0], true)
+	tae.CheckRowsByScan(1, false)
 
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(5)
 	defer pool.Release()
 	worker := func(i int) func() {
 		return func() {
-			txn, rel := tae.getRelation()
+			txn, rel := tae.GetRelation()
 			row := getColumnRowsByScan(t, rel, 0, true)
-			err := tae.doAppendWithTxn(bats[i], txn, true)
+			err := tae.DoAppendWithTxn(bats[i], txn, true)
 			assert.NoError(t, err)
 			row2 := getColumnRowsByScan(t, rel, 0, true)
 			assert.Equal(t, row+1, row2)
@@ -4321,10 +4320,10 @@ func TestAppendnode(t *testing.T) {
 		pool.Submit(worker(i))
 	}
 	wg.Wait()
-	tae.checkRowsByScan(appendCnt, true)
+	tae.CheckRowsByScan(appendCnt, true)
 
-	tae.restart(ctx)
-	tae.checkRowsByScan(appendCnt, true)
+	tae.Restart(ctx)
+	tae.CheckRowsByScan(appendCnt, true)
 }
 
 func TestTxnIdempotent(t *testing.T) {
@@ -4332,22 +4331,22 @@ func TestTxnIdempotent(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	appendCnt := 20
 	bat := catalog.MockBatch(schema, appendCnt)
 	bats := bat.Split(appendCnt)
 
 	var wg sync.WaitGroup
 
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 	for i := 0; i < 10; i++ {
-		txn, _ := tae.getRelation()
+		txn, _ := tae.GetRelation()
 		wg.Add(1)
 		assert.NoError(t, txn.Rollback(context.Background()))
 		go func() {
@@ -4366,7 +4365,7 @@ func TestWatchDirty(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	logMgr := tae.LogtailMgr
 
@@ -4381,21 +4380,21 @@ func TestWatchDirty(t *testing.T) {
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 50
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	appendCnt := 200
 	bat := catalog.MockBatch(schema, appendCnt)
 	bats := bat.Split(appendCnt)
 
-	tae.createRelAndAppend(bats[0], true)
-	tae.checkRowsByScan(1, false)
+	tae.CreateRelAndAppend(bats[0], true)
+	tae.CheckRowsByScan(1, false)
 
 	wg := &sync.WaitGroup{}
 	pool, _ := ants.NewPool(3)
 	defer pool.Release()
 	worker := func(i int) func() {
 		return func() {
-			txn, _ := tae.getRelation()
-			err := tae.doAppendWithTxn(bats[i], txn, true)
+			txn, _ := tae.GetRelation()
+			err := tae.DoAppendWithTxn(bats[i], txn, true)
 			assert.NoError(t, err)
 			assert.NoError(t, txn.Commit(context.Background()))
 			wg.Done()
@@ -4430,16 +4429,16 @@ func TestDirtyWatchRace(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "test"
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 5
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
-	tae.createRelAndAppend(catalog.MockBatch(schema, 1), true)
+	tae.CreateRelAndAppend(catalog.MockBatch(schema, 1), true)
 
 	visitor := &catalog.LoopProcessor{}
 	watcher := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, visitor)
@@ -4486,35 +4485,35 @@ func TestBlockRead(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	tsAlloc := types.NewTsAlloctor(opts.Clock)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 40)
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
-	_, rel := tae.getRelation()
+	_, rel := tae.GetRelation()
 	blkit := rel.MakeBlockIt()
 	blkEntry := blkit.GetBlock().GetMeta().(*catalog.BlockEntry)
 	blkID := blkEntry.AsCommonID()
 
 	beforeDel := tsAlloc.Alloc()
-	txn1, rel := tae.getRelation()
+	txn1, rel := tae.GetRelation()
 	assert.NoError(t, rel.RangeDelete(blkID, 0, 0, handle.DT_Normal))
 	assert.NoError(t, txn1.Commit(context.Background()))
 
 	afterFirstDel := tsAlloc.Alloc()
-	txn2, rel := tae.getRelation()
+	txn2, rel := tae.GetRelation()
 	assert.NoError(t, rel.RangeDelete(blkID, 1, 3, handle.DT_Normal))
 	assert.NoError(t, txn2.Commit(context.Background()))
 
 	afterSecondDel := tsAlloc.Alloc()
 
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 
 	metaloc := blkEntry.GetMetaLoc()
 	deltaloc := blkEntry.GetDeltaLoc()
@@ -4602,33 +4601,33 @@ func TestCompactDeltaBlk(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 6
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 5)
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	{
 		v := getSingleSortKeyValue(bat, schema, 1)
 		t.Logf("v is %v**********", v)
 		filter := handle.NewEQFilter(v)
-		txn2, rel := tae.getRelation()
+		txn2, rel := tae.GetRelation()
 		t.Log("********before delete******************")
 		testutil.CheckAllColRowsByScan(t, rel, 5, true)
 		_ = rel.DeleteByFilter(context.Background(), filter)
 		assert.Nil(t, txn2.Commit(context.Background()))
 	}
 
-	_, rel := tae.getRelation()
+	_, rel := tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 4, true)
 
 	{
 		t.Log("************compact************")
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
@@ -4649,7 +4648,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		v := getSingleSortKeyValue(bat, schema, 2)
 		t.Logf("v is %v**********", v)
 		filter := handle.NewEQFilter(v)
-		txn2, rel := tae.getRelation()
+		txn2, rel := tae.GetRelation()
 		t.Log("********before delete******************")
 		testutil.CheckAllColRowsByScan(t, rel, 4, true)
 		_ = rel.DeleteByFilter(context.Background(), filter)
@@ -4657,7 +4656,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 	}
 	{
 		t.Log("************compact************")
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
@@ -4674,12 +4673,12 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 
-	tae.restart(ctx)
-	_, rel = tae.getRelation()
+	tae.Restart(ctx)
+	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 }
@@ -4689,7 +4688,7 @@ func TestFlushTable(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	tae.BGCheckpointRunner.DebugUpdateOptions(
@@ -4698,13 +4697,13 @@ func TestFlushTable(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 21)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
-	_, rel := tae.getRelation()
+	_, rel := tae.GetRelation()
 	db, err := rel.GetDB()
 	assert.Nil(t, err)
 	table, err := db.GetRelationByName(schema.Name)
@@ -4718,7 +4717,7 @@ func TestFlushTable(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
@@ -4733,17 +4732,17 @@ func TestReadCheckpoint(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 21)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 	now := time.Now()
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
@@ -4801,7 +4800,7 @@ func TestReadCheckpoint(t *testing.T) {
 			}
 		}
 	}
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
@@ -4824,7 +4823,7 @@ func TestDelete4(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.NewEmptySchema("xx")
 	schema.AppendPKCol("name", types.T_varchar.ToType(), 0)
@@ -4832,11 +4831,11 @@ func TestDelete4(t *testing.T) {
 	schema.Finalize(false)
 	schema.BlockMaxRows = 50
 	schema.SegmentMaxBlocks = 5
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	bat.Vecs[1].Update(0, uint32(0), false)
 	defer bat.Close()
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
 	var wg sync.WaitGroup
@@ -4847,7 +4846,7 @@ func TestDelete4(t *testing.T) {
 		time.Sleep(time.Duration(rand.Intn(20)+1) * time.Millisecond)
 		cloneBat := bat.CloneWindow(0, 1)
 		defer cloneBat.Close()
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
 		if err != nil {
 			txn.Rollback(context.Background())
@@ -4889,7 +4888,7 @@ func TestDelete4(t *testing.T) {
 	t.Logf("count=%v", count.Load())
 
 	getValueFn := func() {
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		v, _, err := rel.GetValueByFilter(context.Background(), filter, 1)
 		assert.NoError(t, err)
 		assert.Equal(t, int(count.Load()), int(v.(uint32)))
@@ -4897,7 +4896,7 @@ func TestDelete4(t *testing.T) {
 		t.Logf("GetV=%v, %s", v, txn.GetStartTS().ToString())
 	}
 	scanFn := func() {
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
@@ -4917,7 +4916,7 @@ func TestDelete4(t *testing.T) {
 		getValueFn()
 		scanFn()
 
-		tae.restart(ctx)
+		tae.Restart(ctx)
 
 		getValueFn()
 		scanFn()
@@ -4935,19 +4934,19 @@ func TestGetActiveRow(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	v := getSingleSortKeyValue(bat, schema, 0)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(context.Background(), filter)
@@ -4956,13 +4955,13 @@ func TestGetActiveRow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	assert.NoError(t, rel.Append(context.Background(), bat))
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	{
-		txn2, rel2 := tae.getRelation()
+		txn2, rel2 := tae.GetRelation()
 		it := rel2.MakeBlockIt()
 		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
 		task, err := jobs.NewCompactBlockTask(nil, txn2, blk, tae.Runtime)
@@ -4979,21 +4978,21 @@ func TestTransfer(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 100
 	schema.SegmentMaxBlocks = 10
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	bat := catalog.MockBatch(schema, 10)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
 
-	txn1, rel1 := tae.getRelation()
+	txn1, rel1 := tae.GetRelation()
 	err := rel1.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 
@@ -5006,7 +5005,7 @@ func TestTransfer(t *testing.T) {
 	// assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
 	assert.NoError(t, err)
 
-	txn2, rel2 := tae.getRelation()
+	txn2, rel2 := tae.GetRelation()
 	_, _, err = rel2.GetValueByFilter(context.Background(), filter, 3)
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
@@ -5021,31 +5020,31 @@ func TestTransfer2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 10
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	bat := catalog.MockBatch(schema, 200)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
 
-	txn1, rel1 := tae.getRelation()
+	txn1, rel1 := tae.GetRelation()
 	err := rel1.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 
-	tae.mergeBlocks(false)
+	tae.MergeBlocks(false)
 
 	err = txn1.Commit(context.Background())
 	// assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
 	assert.NoError(t, err)
 
-	txn2, rel2 := tae.getRelation()
+	txn2, rel2 := tae.GetRelation()
 	_, _, err = rel2.GetValueByFilter(context.Background(), filter, 3)
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
@@ -5060,22 +5059,22 @@ func TestMergeBlocks3(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 	filter5 := handle.NewEQFilter(bat.Vecs[3].Get(15))
 	filter9 := handle.NewEQFilter(bat.Vecs[3].Get(19))
 	filter8 := handle.NewEQFilter(bat.Vecs[3].Get(18))
 	filter7 := handle.NewEQFilter(bat.Vecs[3].Get(17))
 	// delete all rows in first blk in seg1 and the 5th,9th rows in blk2
 	{
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		segit := rel.MakeSegmentIt()
 		seg1 := segit.GetSegment().GetMeta().(*catalog.SegmentEntry)
 		segHandle, err := rel.GetSegment(&seg1.ID)
@@ -5098,13 +5097,13 @@ func TestMergeBlocks3(t *testing.T) {
 	// 2. delete 7th row in blk2 during executing merge task
 	// 3. delete 8th row in blk2 and commit that after merging, test transfer
 	{
-		del8txn, rel8 := tae.getRelation()
+		del8txn, rel8 := tae.GetRelation()
 		valrow8, null, err := rel8.GetValueByFilter(context.Background(), filter8, schema.GetColIdx(catalog.PhyAddrColumnName))
 		require.NoError(t, err)
 		require.False(t, null)
 
-		del7txn, rel7 := tae.getRelation()
-		mergetxn, relm := tae.getRelation()
+		del7txn, rel7 := tae.GetRelation()
+		mergetxn, relm := tae.GetRelation()
 
 		// merge first segment
 		segit := relm.MakeSegmentIt()
@@ -5137,7 +5136,7 @@ func TestMergeBlocks3(t *testing.T) {
 	// consistency check
 	{
 		var err error
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		_, _, err = rel.GetValueByFilter(context.Background(), filter5, 3)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 		_, _, err = rel.GetValueByFilter(context.Background(), filter7, 3)
@@ -5158,22 +5157,22 @@ func TestCompactEmptyBlock(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 3
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 6)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
-	assert.NoError(t, tae.deleteAll(true))
-	tae.checkRowsByScan(0, true)
+	tae.CreateRelAndAppend(bat, true)
+	assert.NoError(t, tae.DeleteAll(true))
+	tae.CheckRowsByScan(0, true)
 
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 
-	tae.checkRowsByScan(0, true)
+	tae.CheckRowsByScan(0, true)
 
 	blkCnt := 0
 	p := &catalog.LoopProcessor{}
@@ -5182,20 +5181,20 @@ func TestCompactEmptyBlock(t *testing.T) {
 		return nil
 	}
 
-	_, rel := tae.getRelation()
+	_, rel := tae.GetRelation()
 	err := rel.GetMeta().(*catalog.TableEntry).RecurLoop(p)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, blkCnt)
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
 	blkCnt = 0
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	err = rel.GetMeta().(*catalog.TableEntry).RecurLoop(p)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, blkCnt)
-	tae.checkRowsByScan(0, true)
+	tae.CheckRowsByScan(0, true)
 	t.Log(tae.Catalog.SimplePPString(3))
 }
 
@@ -5204,21 +5203,21 @@ func TestTransfer3(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 100
 	schema.SegmentMaxBlocks = 10
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	bat := catalog.MockBatch(schema, 10)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
 
-	txn1, rel1 := tae.getRelation()
+	txn1, rel1 := tae.GetRelation()
 
 	var err error
 	err = rel1.DeleteByFilter(context.Background(), filter)
@@ -5242,19 +5241,19 @@ func TestUpdate(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts2(nil, 5)
 	// opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 100
 	schema.SegmentMaxBlocks = 4
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
 	bat.Vecs[2].Update(0, int32(0), false)
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	var wg sync.WaitGroup
 
@@ -5263,7 +5262,7 @@ func TestUpdate(t *testing.T) {
 	filter := handle.NewEQFilter(bat.Vecs[3].Get(0))
 	updateFn := func() {
 		defer wg.Done()
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 		v, _, err := rel.GetValue(id, offset, 2)
@@ -5300,7 +5299,7 @@ func TestUpdate(t *testing.T) {
 	wg.Wait()
 	t.Logf("Final: %v", expectV.Load())
 	{
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		v, _, err := rel.GetValueByFilter(context.Background(), filter, 2)
 		assert.NoError(t, err)
 		assert.Equal(t, v.(int32), expectV.Load())
@@ -5319,14 +5318,14 @@ func TestAlwaysUpdate(t *testing.T) {
 	opts.GCCfg.ScanGCInterval = 3600 * time.Second
 	opts.CatalogCfg.GCInterval = 3600 * time.Second
 	// opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.Name = "testupdate"
 	schema.BlockMaxRows = 8192
 	schema.SegmentMaxBlocks = 200
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	bats := catalog.MockBatch(schema, 400*100).Split(100)
 	metalocs := make([]objectio.Location, 0, 100)
@@ -5367,7 +5366,7 @@ func TestAlwaysUpdate(t *testing.T) {
 		tuples := bats[0].CloneWindow(0, 1)
 		defer tuples.Close()
 		for x := i; x < j; x++ {
-			txn, rel := tae.getRelation()
+			txn, rel := tae.GetRelation()
 			filter := handle.NewEQFilter(int64(x))
 			id, offset, err := rel.GetByFilter(context.Background(), filter)
 			assert.NoError(t, err)
@@ -5420,12 +5419,12 @@ func TestInsertPerf(t *testing.T) {
 	opts := new(options.Options)
 	options.WithCheckpointScanInterval(time.Second * 10)(opts)
 	options.WithFlushInterval(time.Second * 10)(opts)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 5
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	cnt := 1000
 	iBat := 1
@@ -5434,13 +5433,13 @@ func TestInsertPerf(t *testing.T) {
 	bat := catalog.MockBatch(schema, cnt*iBat*poolSize*2)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat.Window(0, 1), true)
+	tae.CreateRelAndAppend(bat.Window(0, 1), true)
 	var wg sync.WaitGroup
 	run := func(start int) func() {
 		return func() {
 			defer wg.Done()
 			for i := start; i < start+cnt*iBat; i += iBat {
-				txn, rel := tae.getRelation()
+				txn, rel := tae.GetRelation()
 				_ = rel.Append(context.Background(), bat.Window(i, iBat))
 				_ = txn.Commit(context.Background())
 			}
@@ -5490,7 +5489,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
@@ -5499,11 +5498,11 @@ func TestGCWithCheckpoint(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 21)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 	now := time.Now()
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
@@ -5544,7 +5543,7 @@ func TestGCDropDB(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
@@ -5552,11 +5551,11 @@ func TestGCDropDB(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 210)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
 	db, err := txn.DropDatabase(defaultTestDB)
@@ -5594,7 +5593,7 @@ func TestGCDropDB(t *testing.T) {
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
 	assert.True(t, tables1.Compare(tables2))
-	tae.restart(ctx)
+	tae.Restart(ctx)
 }
 
 func TestGCDropTable(t *testing.T) {
@@ -5602,7 +5601,7 @@ func TestGCDropTable(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
@@ -5610,7 +5609,7 @@ func TestGCDropTable(t *testing.T) {
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 210)
 	defer bat.Close()
 	schema2 := catalog.MockSchemaAll(3, 1)
@@ -5619,7 +5618,7 @@ func TestGCDropTable(t *testing.T) {
 	bat2 := catalog.MockBatch(schema2, 210)
 	defer bat.Close()
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 	txn, _ := tae.StartTxn(nil)
 	db, err := txn.GetDatabase(defaultTestDB)
 	assert.Nil(t, err)
@@ -5667,7 +5666,7 @@ func TestGCDropTable(t *testing.T) {
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
 	assert.True(t, tables1.Compare(tables2))
-	tae.restart(ctx)
+	tae.Restart(ctx)
 }
 
 func TestAlterRenameTbl(t *testing.T) {
@@ -5675,7 +5674,7 @@ func TestAlterRenameTbl(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(2, -1)
@@ -5837,7 +5836,7 @@ func TestAlterRenameTbl(t *testing.T) {
 		require.NoError(t, txn.Commit(context.Background()))
 	}
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
@@ -5846,7 +5845,7 @@ func TestAlterRenameTbl(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 
 	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS()))
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
@@ -5860,7 +5859,7 @@ func TestAlterRenameTbl2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(2, -1)
@@ -5927,7 +5926,7 @@ func TestAlterRenameTbl2(t *testing.T) {
 		newId = newId2
 	}
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("xx")
@@ -5950,7 +5949,7 @@ func TestAlterRenameTbl2(t *testing.T) {
 
 	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS()))
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("xx")
@@ -5966,7 +5965,7 @@ func TestAlterTableBasic(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(2, -1)
@@ -6023,7 +6022,7 @@ func TestAlterTableBasic(t *testing.T) {
 
 	close()
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
 	resp, close, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
@@ -6071,20 +6070,20 @@ func TestAlterFakePk(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bats := catalog.MockBatch(schema, 12).Split(3)
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
 	var did, tid uint64
 	var blkFp *common.ID
 	{
 		// add two cloumns
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		tid = rel.ID()
 		d, _ := rel.GetDB()
 		did = d.GetID()
@@ -6100,7 +6099,7 @@ func TestAlterFakePk(t *testing.T) {
 	}
 
 	{
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		seg, err := rel.GetSegment(blkFp.SegmentID())
 		require.NoError(t, err)
 		blk, err := seg.GetBlock(blkFp.BlockID)
@@ -6113,7 +6112,7 @@ func TestAlterFakePk(t *testing.T) {
 	}
 
 	{
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		seg, err := rel.GetSegment(blkFp.SegmentID())
 		require.NoError(t, err)
 		blk, err := seg.GetBlock(blkFp.BlockID)
@@ -6174,18 +6173,18 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 5)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bats := catalog.MockBatch(schema, 8).Split(2)
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
 	{
 		// test error in alter
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		tblEntry := rel.GetMeta().(*catalog.TableEntry)
 		err := rel.AlterTable(context.TODO(), api.NewRemoveColumnReq(0, 0, 1, 10))
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
@@ -6196,14 +6195,14 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 		require.Equal(t, 1, tblEntry.MVCC.Depth())
 	}
 
-	txn0, rel0 := tae.getRelation()
+	txn0, rel0 := tae.GetRelation()
 	db, err := rel0.GetDB()
 	require.NoError(t, err)
 	did, tid := db.GetID(), rel0.ID()
 
 	require.NoError(t, rel0.Append(context.Background(), bats[1])) // in localsegment
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	require.NoError(t, rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xyz", types.NewProtoType(types.T_int32), 0)))
 	require.NoError(t, txn.Commit(context.Background()))
 
@@ -6232,16 +6231,16 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	// GetValueByFilter() is combination of GetByFilter and GetValue
 	// GetValueByPhyAddrKey is GetValue
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	schema1 := rel.Schema().(*catalog.Schema)
 	bats = catalog.MockBatch(schema1, 16).Split(4)
 	require.Error(t, rel.Append(context.Background(), bats[0])) // dup error
 	require.NoError(t, rel.Append(context.Background(), bats[1]))
 	require.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 8, false)
 	it := rel.MakeBlockIt()
 	cnt := 0
@@ -6274,17 +6273,17 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	txn.Commit(context.Background())
 
 	// append to the second block
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	require.NoError(t, rel.Append(context.Background(), bats[2]))
 	require.NoError(t, rel.Append(context.Background(), bats[3])) // new block and append 2 rows
 	require.NoError(t, txn.Commit(context.Background()))
 
 	// remove and freeze
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	require.NoError(t, rel.AlterTable(context.TODO(), api.NewRemoveColumnReq(0, 0, 9, 8))) // remove float mock_8
 	require.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	schema2 := rel.Schema().(*catalog.Schema)
 	bats = catalog.MockBatch(schema2, 20).Split(5)
 	require.NoError(t, rel.Append(context.Background(), bats[4])) // new 4th block and append 4 blocks
@@ -6324,27 +6323,27 @@ func TestGlobalCheckpoint1(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
 	options.WithGlobalVersionInterval(time.Millisecond * 10)(opts)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 400)
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	tae.checkRowsByScan(400, true)
+	tae.CheckRowsByScan(400, true)
 
 	testutils.WaitExpect(4000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 
-	tae.restart(ctx)
-	tae.checkRowsByScan(400, true)
+	tae.Restart(ctx)
+	tae.CheckRowsByScan(400, true)
 }
 
 func TestAppendAndGC(t *testing.T) {
@@ -6356,7 +6355,7 @@ func TestAppendAndGC(t *testing.T) {
 	opts.CacheCfg = new(options.CacheCfg)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
 	db.DiskCleaner.SetMinMergeCountForTest(2)
@@ -6409,7 +6408,7 @@ func TestAppendAndGC(t *testing.T) {
 		return db.DiskCleaner.GetMinMerged() != nil
 	})
 	assert.NotNil(t, minMerged)
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	db = tae.DB
 	db.DiskCleaner.SetMinMergeCountForTest(2)
 	testutils.WaitExpect(5000, func() bool {
@@ -6432,32 +6431,32 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
 	options.WithDisableGCCatalog()(opts)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 40)
 
-	_, firstRel := tae.createRelAndAppend(bat, true)
+	_, firstRel := tae.CreateRelAndAppend(bat, true)
 
-	tae.dropRelation(t)
+	tae.DropRelation(t)
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
-	tae.globalCheckpoint(txn.GetStartTS(), 0, false)
+	tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
+	tae.GlobalCheckpoint(txn.GetStartTS(), 0, false)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.createRelAndAppend(bat, false)
+	tae.CreateRelAndAppend(bat, false)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	require.NoError(t, rel.AlterTable(context.Background(), api.NewRemoveColumnReq(0, 0, 3, 3)))
 	require.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	newschema := rel.Schema().(*catalog.Schema)
 	require.Equal(t, uint32(1), newschema.Version)
 	require.Equal(t, uint32(10), newschema.Extra.NextColSeqnum)
@@ -6466,8 +6465,8 @@ func TestGlobalCheckpoint2(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
-	tae.globalCheckpoint(txn.GetStartTS(), 0, false)
+	tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
+	tae.GlobalCheckpoint(txn.GetStartTS(), 0, false)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	p := &catalog.LoopProcessor{}
@@ -6483,13 +6482,13 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.True(t, tableExisted)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	tableExisted = false
 	assert.NoError(t, tae.Catalog.RecurLoop(p))
 	assert.False(t, tableExisted)
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	newschema = rel.Schema().(*catalog.Schema)
 	require.Equal(t, uint32(1), newschema.Version)
 	require.Equal(t, uint32(10), newschema.Extra.NextColSeqnum)
@@ -6508,25 +6507,25 @@ func TestGlobalCheckpoint3(t *testing.T) {
 	options.WithCheckpointGlobalMinCount(1)(opts)
 	options.WithGlobalVersionInterval(time.Nanosecond * 1)(opts)
 	options.WithDisableGCCatalog()(opts)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 40)
 
-	_, rel := tae.createRelAndAppend(bat, true)
+	_, rel := tae.CreateRelAndAppend(bat, true)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 
-	tae.dropRelation(t)
+	tae.DropRelation(t)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 
-	tae.createRelAndAppend(bat, false)
+	tae.CreateRelAndAppend(bat, false)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
@@ -6543,7 +6542,7 @@ func TestGlobalCheckpoint3(t *testing.T) {
 	assert.NoError(t, tae.Catalog.RecurLoop(p))
 	assert.True(t, tableExisted)
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
 	tableExisted = false
 	assert.NoError(t, tae.Catalog.RecurLoop(p))
@@ -6557,7 +6556,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
@@ -6566,7 +6565,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 40)
 
 	txn, err := tae.StartTxn(nil)
@@ -6575,7 +6574,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.incrementalCheckpoint(txn.GetCommitTS(), false, true, true)
+	err = tae.IncrementalCheckpoint(txn.GetCommitTS(), false, true, true)
 	assert.NoError(t, err)
 
 	txn, err = tae.StartTxn(nil)
@@ -6584,18 +6583,18 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.globalCheckpoint(txn.GetCommitTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetCommitTS(), globalCkpInterval, false)
 	assert.NoError(t, err)
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	// tae.createRelAndAppend(bat, false)
+	// tae.CreateRelAndAppend(bat, false)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -6605,13 +6604,13 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	err = tae.globalCheckpoint(txn.GetCommitTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetCommitTS(), globalCkpInterval, false)
 	assert.NoError(t, err)
 
-	tae.createRelAndAppend(bat, false)
+	tae.CreateRelAndAppend(bat, false)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t.Log(tae.Catalog.SimplePPString(3))
@@ -6623,7 +6622,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
@@ -6632,21 +6631,21 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 60)
 	bats := bat.Split(3)
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
+	err = tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.globalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -6654,26 +6653,26 @@ func TestGlobalCheckpoint5(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.globalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.checkRowsByScan(40, true)
+	tae.CheckRowsByScan(40, true)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.restart(ctx)
+	tae.Restart(ctx)
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.checkRowsByScan(40, true)
+	tae.CheckRowsByScan(40, true)
 
 	tae.DoAppend(bats[2])
 
-	tae.checkRowsByScan(60, true)
+	tae.CheckRowsByScan(60, true)
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.globalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+	err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
 	assert.NoError(t, err)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -6686,7 +6685,7 @@ func TestGlobalCheckpoint6(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
@@ -6697,14 +6696,14 @@ func TestGlobalCheckpoint6(t *testing.T) {
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, batchsize*(restartCnt+1))
 	bats := bat.Split(restartCnt + 1)
 
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	err = tae.incrementalCheckpoint(txn.GetStartTS(), false, true, true)
+	err = tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -6712,18 +6711,18 @@ func TestGlobalCheckpoint6(t *testing.T) {
 		tae.DoAppend(bats[i+1])
 		txn, err = tae.StartTxn(nil)
 		assert.NoError(t, err)
-		err = tae.globalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
+		err = tae.GlobalCheckpoint(txn.GetStartTS(), globalCkpInterval, false)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 
 		rows := (i + 2) * batchsize
-		tae.checkRowsByScan(rows, true)
+		tae.CheckRowsByScan(rows, true)
 		t.Log(tae.Catalog.SimplePPString(3))
-		tae.restart(ctx)
+		tae.Restart(ctx)
 		tae.BGCheckpointRunner.DisableCheckpoint()
 		tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 		t.Log(tae.Catalog.SimplePPString(3))
-		tae.checkRowsByScan(rows, true)
+		tae.CheckRowsByScan(rows, true)
 	}
 }
 
@@ -6733,16 +6732,16 @@ func TestGCCheckpoint1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 50)
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	testutils.WaitExpect(4000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
@@ -6793,7 +6792,7 @@ func TestGCCatalog1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	txn1, _ := tae.StartTxn(nil)
@@ -6993,12 +6992,12 @@ func TestGCCatalog2(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchema(3, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 33)
 
 	checkCompactAndGCFn := func() bool {
@@ -7018,7 +7017,7 @@ func TestGCCatalog2(t *testing.T) {
 		return appendableCount == 0
 	}
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 	t.Log(tae.Catalog.SimplePPString(3))
 	testutils.WaitExpect(4000, checkCompactAndGCFn)
 	assert.True(t, checkCompactAndGCFn())
@@ -7030,12 +7029,12 @@ func TestGCCatalog3(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchema(3, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 33)
 
 	checkCompactAndGCFn := func() bool {
@@ -7053,7 +7052,7 @@ func TestGCCatalog3(t *testing.T) {
 		return dbCount == 0
 	}
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	_, err = txn.DropDatabase("db")
@@ -7078,16 +7077,16 @@ func TestForceCheckpoint(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(18, 2)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 50)
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
 	assert.Error(t, err)
@@ -7097,24 +7096,24 @@ func TestForceCheckpoint(t *testing.T) {
 
 func TestLogailAppend(t *testing.T) {
 	ctx := context.Background()
-	tae := newTestEngine(ctx, t, nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	tae.DB.LogtailMgr.RegisterCallback(logtail.MockCallback)
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	batch := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks)-1))
 	//create database, create table, append
-	tae.createRelAndAppend(batch, true)
+	tae.CreateRelAndAppend(batch, true)
 	//delete
-	err := tae.deleteAll(true)
+	err := tae.DeleteAll(true)
 	assert.NoError(t, err)
 	//compact(metadata)
 	tae.DoAppend(batch)
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 	//drop table
-	tae.dropRelation(t)
+	tae.DropRelation(t)
 	//drop database
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -7125,27 +7124,27 @@ func TestLogailAppend(t *testing.T) {
 func TestSnapshotLag1(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	data := catalog.MockBatch(schema, 20)
 	defer data.Close()
 
 	bats := data.Split(4)
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
-	txn1, rel1 := tae.getRelation()
+	txn1, rel1 := tae.GetRelation()
 	assert.NoError(t, rel1.Append(context.Background(), bats[1]))
-	txn2, rel2 := tae.getRelation()
+	txn2, rel2 := tae.GetRelation()
 	assert.NoError(t, rel2.Append(context.Background(), bats[1]))
 
 	{
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		assert.NoError(t, rel.Append(context.Background(), bats[1]))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -7160,28 +7159,28 @@ func TestSnapshotLag1(t *testing.T) {
 func TestMarshalPartioned(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
 	schema.Partitioned = 1
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	data := catalog.MockBatch(schema, 20)
 	defer data.Close()
 
 	bats := data.Split(4)
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 
-	_, rel := tae.getRelation()
+	_, rel := tae.GetRelation()
 	partioned := rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
@@ -7192,9 +7191,9 @@ func TestMarshalPartioned(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
-	_, rel = tae.getRelation()
+	_, rel = tae.GetRelation()
 	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 }
@@ -7202,24 +7201,24 @@ func TestMarshalPartioned(t *testing.T) {
 func TestDedup2(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.BlockMaxRows = 2
 	schema.SegmentMaxBlocks = 10
 	schema.Partitioned = 1
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	count := 50
 	data := catalog.MockBatch(schema, count)
 	datas := data.Split(count)
 
-	tae.createRelAndAppend(datas[0], true)
+	tae.CreateRelAndAppend(datas[0], true)
 
 	for i := 1; i < count; i++ {
 		tae.DoAppend(datas[i])
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		for j := 0; j <= i; j++ {
 			err := rel.Append(context.Background(), datas[j])
 			assert.Error(t, err)
@@ -7231,47 +7230,47 @@ func TestDedup2(t *testing.T) {
 func TestCompactLargeTable(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(600, 3)
 	schema.BlockMaxRows = 2
 	schema.SegmentMaxBlocks = 10
 	schema.Partitioned = 1
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	data := catalog.MockBatch(schema, 10)
 
-	tae.createRelAndAppend(data, true)
+	tae.CreateRelAndAppend(data, true)
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
-	tae.checkRowsByScan(10, true)
+	tae.CheckRowsByScan(10, true)
 
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
-	tae.checkRowsByScan(10, true)
+	tae.CheckRowsByScan(10, true)
 }
 
 func TestCommitS3Blocks(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(60, 3)
 	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 10
 	schema.Partitioned = 1
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 
 	data := catalog.MockBatch(schema, 200)
 	datas := data.Split(10)
-	tae.createRelAndAppend(datas[0], true)
+	tae.CreateRelAndAppend(datas[0], true)
 	datas = datas[1:]
 
 	blkMetas := make([]objectio.Location, 0)
@@ -7300,12 +7299,12 @@ func TestCommitS3Blocks(t *testing.T) {
 	}
 
 	for _, meta := range blkMetas {
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{meta})
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	for _, meta := range blkMetas {
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		err := rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{meta})
 		assert.Error(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
@@ -7318,22 +7317,22 @@ func TestDedupSnapshot1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 3
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 10)
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	txn.SetSnapshotTS(txn.GetStartTS().Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
 	err := rel.Append(context.Background(), bat)
@@ -7347,13 +7346,13 @@ func TestDedupSnapshot2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 3
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	data := catalog.MockBatch(schema, 200)
 	createRelation(t, tae.DB, "db", schema, true)
 
@@ -7373,12 +7372,12 @@ func TestDedupSnapshot2(t *testing.T) {
 		blocks[0].GetID())
 	assert.Nil(t, err)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	err = rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc})
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	txn.SetSnapshotTS(txn.GetStartTS().Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
 	err = rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc})
@@ -7392,13 +7391,13 @@ func TestDedupSnapshot3(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 3
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	createRelation(t, tae.DB, "db", schema, true)
 
 	totalRows := 100
@@ -7441,19 +7440,19 @@ func TestDedupSnapshot3(t *testing.T) {
 	}
 	wg.Wait()
 
-	tae.checkRowsByScan(totalRows, false)
+	tae.CheckRowsByScan(totalRows, false)
 }
 
 func TestDeduplication(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(60, 3)
 	schema.BlockMaxRows = 2
 	schema.SegmentMaxBlocks = 10
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	createRelation(t, tae.DB, "db", schema, true)
 
 	rows := 10
@@ -7483,7 +7482,7 @@ func TestDeduplication(t *testing.T) {
 		blocks[0].GetID(),
 	)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	err = rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc})
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -7526,7 +7525,7 @@ func TestDeduplication(t *testing.T) {
 	for _, txn := range txns {
 		txn.Commit(context.Background())
 	}
-	tae.checkRowsByScan(rows, false)
+	tae.CheckRowsByScan(rows, false)
 	t.Logf(tae.Catalog.SimplePPString(3))
 }
 
@@ -7535,16 +7534,16 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	rows := 100
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = uint32(rows)
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, rows)
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	blkit := rel.MakeBlockIt()
 	blkHandle := blkit.GetBlock()
 	blkMeta := blkHandle.GetMeta().(*catalog.BlockEntry)
@@ -7585,7 +7584,7 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 					blocks[0].GetID(),
 				)
 
-				txn, rel := tae.getRelation()
+				txn, rel := tae.GetRelation()
 				blkit := rel.MakeBlockIt()
 				blkHandle := blkit.GetBlock()
 				err = blkHandle.UpdateDeltaLoc(deltaLoc)
@@ -7599,7 +7598,7 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 	}()
 
 	for offset := 0; offset < rows; offset++ {
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		assert.NoError(t, rel.RangeDelete(blkID, uint32(offset), uint32(offset), handle.DT_Normal))
 		assert.NoError(t, txn.Commit(context.Background()))
 		ts := txn.GetCommitTS()
@@ -7623,17 +7622,17 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 func TestRW(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	rows := 10
 	schema := catalog.MockSchemaAll(5, 2)
 	schema.BlockMaxRows = uint32(rows)
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, rows)
 	defer bat.Close()
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
-	txn1, rel1 := tae.getRelation()
+	txn1, rel1 := tae.GetRelation()
 	v := bat.Vecs[2].Get(2)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel1.GetByFilter(ctx, filter)
@@ -7645,7 +7644,7 @@ func TestRW(t *testing.T) {
 
 	cnt := 3
 	for i := 0; i < cnt; i++ {
-		txn2, rel2 := tae.getRelation()
+		txn2, rel2 := tae.GetRelation()
 		v = bat.Vecs[2].Get(i + 3)
 		filter = handle.NewEQFilter(v)
 		id, row, err = rel2.GetByFilter(ctx, filter)
@@ -7666,7 +7665,7 @@ func TestRW(t *testing.T) {
 	assert.NoError(t, err)
 
 	{
-		txn, rel := tae.getRelation()
+		txn, rel := tae.GetRelation()
 		rcnt := getColumnRowsByScan(t, rel, 2, true)
 		assert.Equal(t, rows-cnt-1, rcnt)
 		assert.NoError(t, txn.Commit(ctx))
@@ -7678,20 +7677,20 @@ func TestReplayDeletes(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	rows := 250
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 50
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, rows)
 	defer bat.Close()
 	bats := bat.Split(5)
-	tae.createRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend(bats[0], true)
 	//nablk
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 	//deletes
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	blkIt := rel.MakeBlockIt()
 	blk := blkIt.GetBlock()
 	blk.RangeDelete(1, 50, handle.DT_Normal)
@@ -7701,7 +7700,7 @@ func TestReplayDeletes(t *testing.T) {
 	//keep the segment appendable
 	tae.DoAppend(bats[2])
 	//compact nablk and its next blk
-	txn2, rel := tae.getRelation()
+	txn2, rel := tae.GetRelation()
 	blkIt = rel.MakeBlockIt()
 	blkEntry := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry)
 	txn, err := tae.StartTxn(nil)
@@ -7721,7 +7720,7 @@ func TestReplayDeletes(t *testing.T) {
 	seg, err := tbl.GetSegmentByID(blkEntry.AsCommonID().SegmentID())
 	segString1 := seg.Repr()
 	assert.NoError(t, err)
-	tae.restart(context.Background())
+	tae.Restart(context.Background())
 	t.Log(tae.Catalog.SimplePPString(3))
 	db, err = tae.Catalog.GetDatabaseByID(blkEntry.AsCommonID().DbID)
 	assert.NoError(t, err)
@@ -7737,28 +7736,28 @@ func TestApplyDeltalocation1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 10
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, rows)
 	defer bat.Close()
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 
 	// apply deleteloc fails on ablk
 	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
-	ok, err := tae.tryDeleteByDeltaloc([]any{v1})
+	ok, err := tae.TryDeleteByDeltaloc([]any{v1})
 	assert.NoError(t, err)
 	assert.False(t, ok)
 
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 	filter := handle.NewEQFilter(v1)
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	id, offset, err := rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	ok, err = tae.tryDeleteByDeltaloc([]any{v1})
+	ok, err = tae.TryDeleteByDeltaloc([]any{v1})
 	assert.NoError(t, err)
 	assert.True(t, ok)
 
@@ -7769,15 +7768,15 @@ func TestApplyDeltalocation1(t *testing.T) {
 
 	// apply deltaloc fails if there're persisted deletes
 	v2 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
-	ok, err = tae.tryDeleteByDeltaloc([]any{v2})
+	ok, err = tae.TryDeleteByDeltaloc([]any{v2})
 	assert.NoError(t, err)
 	assert.False(t, ok)
 
 	// apply deltaloc fails if there're deletes in memory
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v3)
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	id, offset, err = rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
@@ -7785,7 +7784,7 @@ func TestApplyDeltalocation1(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	v4 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(4)
-	ok, err = tae.tryDeleteByDeltaloc([]any{v4})
+	ok, err = tae.TryDeleteByDeltaloc([]any{v4})
 	assert.NoError(t, err)
 	assert.False(t, ok)
 
@@ -7797,17 +7796,17 @@ func TestApplyDeltalocation2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 10
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, rows)
 	bats := bat.Split(10)
 	defer bat.Close()
-	tae.createRelAndAppend(bat, true)
-	tae.compactBlocks(false)
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(false)
 
 	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	v5 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(5)
@@ -7816,44 +7815,44 @@ func TestApplyDeltalocation2(t *testing.T) {
 
 	// test logtail
 	tae.LogtailMgr.RegisterCallback(logtail.MockCallback)
-	tae.tryDeleteByDeltaloc([]any{v3, v5})
+	tae.TryDeleteByDeltaloc([]any{v3, v5})
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	_, _, err := rel.GetByFilter(context.Background(), filter5)
 	assert.Error(t, err)
 	_, _, err = rel.GetByFilter(context.Background(), filter3)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
-	tae.checkRowsByScan(8, true)
+	tae.CheckRowsByScan(8, true)
 
-	tae.restart(context.Background())
-	txn, rel = tae.getRelation()
+	tae.Restart(context.Background())
+	txn, rel = tae.GetRelation()
 	_, _, err = rel.GetByFilter(context.Background(), filter5)
 	assert.Error(t, err)
 	_, _, err = rel.GetByFilter(context.Background(), filter3)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
-	tae.checkRowsByScan(8, true)
+	tae.CheckRowsByScan(8, true)
 
 	// test dedup
 	tae.DoAppend(bats[3])
-	tae.checkRowsByScan(9, true)
+	tae.CheckRowsByScan(9, true)
 
 	// test compact
-	tae.compactBlocks(false)
-	txn, rel = tae.getRelation()
+	tae.CompactBlocks(false)
+	txn, rel = tae.GetRelation()
 	_, _, err = rel.GetByFilter(context.Background(), filter5)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
-	tae.checkRowsByScan(9, true)
+	tae.CheckRowsByScan(9, true)
 
-	tae.restart(context.Background())
-	txn, rel = tae.getRelation()
+	tae.Restart(context.Background())
+	txn, rel = tae.GetRelation()
 	_, _, err = rel.GetByFilter(context.Background(), filter5)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
-	tae.checkRowsByScan(9, true)
+	tae.CheckRowsByScan(9, true)
 }
 
 func TestApplyDeltalocation3(t *testing.T) {
@@ -7861,16 +7860,16 @@ func TestApplyDeltalocation3(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 10
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, rows)
 	defer bat.Close()
-	tae.createRelAndAppend(bat, true)
-	tae.compactBlocks(false)
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(false)
 
 	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter3 := handle.NewEQFilter(v3)
@@ -7881,45 +7880,45 @@ func TestApplyDeltalocation3(t *testing.T) {
 	filter5 := handle.NewEQFilter(v5)
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	ok, err := tae.tryDeleteByDeltalocWithTxn([]any{v3}, txn)
+	ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v3}, txn)
 	assert.NoError(t, err)
 	assert.True(t, ok)
 
 	{
 		// delete v5
-		txn2, rel2 := tae.getRelation()
+		txn2, rel2 := tae.GetRelation()
 		err = rel2.DeleteByFilter(context.Background(), filter5)
 		assert.NoError(t, err)
 		assert.NoError(t, txn2.Commit(context.Background()))
 	}
-	tae.checkRowsByScan(9, true)
+	tae.CheckRowsByScan(9, true)
 
 	assert.Error(t, txn.Commit(context.Background()))
-	tae.checkRowsByScan(9, true)
+	tae.CheckRowsByScan(9, true)
 
 	// apply deltaloc successfully if txn of new deletes are active
 
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	ok, err = tae.tryDeleteByDeltalocWithTxn([]any{v3}, txn)
+	ok, err = tae.TryDeleteByDeltalocWithTxn([]any{v3}, txn)
 	assert.NoError(t, err)
 	assert.True(t, ok)
 
 	// delete v5
 	v4 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(4)
 	filter4 := handle.NewEQFilter(v4)
-	txn2, rel2 := tae.getRelation()
+	txn2, rel2 := tae.GetRelation()
 	err = rel2.DeleteByFilter(context.Background(), filter4)
 	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit(context.Background()))
-	tae.checkRowsByScan(8, true)
+	tae.CheckRowsByScan(8, true)
 
 	assert.NoError(t, txn2.Commit(context.Background()))
-	tae.checkRowsByScan(7, true)
+	tae.CheckRowsByScan(7, true)
 
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	_, _, err = rel.GetByFilter(context.Background(), filter3)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -7931,31 +7930,31 @@ func TestReplayPersistedDelete(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 10
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, rows)
 	defer bat.Close()
-	tae.createRelAndAppend(bat, true)
-	tae.compactBlocks(false)
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(false)
 
 	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter3 := handle.NewEQFilter(v3)
-	txn, rel := tae.getRelation()
+	txn, rel := tae.GetRelation()
 	id, offset, err := rel.GetByFilter(context.Background(), filter3)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	ok, err := tae.tryDeleteByDeltaloc([]any{v3})
+	ok, err := tae.TryDeleteByDeltaloc([]any{v3})
 	assert.NoError(t, err)
 	assert.True(t, ok)
 
-	tae.restart(context.Background())
+	tae.Restart(context.Background())
 
-	txn, rel = tae.getRelation()
+	txn, rel = tae.GetRelation()
 	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
