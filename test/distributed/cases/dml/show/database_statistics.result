@@ -106,7 +106,7 @@ Number of columns in mo_database
 9
 show column_number from mo_columns;
 Number of columns in mo_columns
-23
+24
 show column_number from mo_indexes;
 Number of columns in mo_indexes
 14
@@ -430,7 +430,7 @@ Number of columns in mo_database
 9
 show column_number from mo_columns;
 Number of columns in mo_columns
-23
+24
 use system;
 show column_number from statement_info;
 Number of columns in statement_info

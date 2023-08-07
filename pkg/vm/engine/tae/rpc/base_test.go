@@ -240,6 +240,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	clusterBy       int8
+	enumValues      string
 }
 
 func genColumns(accountId uint32, tableName, databaseName string,
@@ -285,6 +286,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			databaseName: databaseName,
 			num:          int32(num),
 			comment:      attrDef.Attr.Comment,
+			enumValues:   attrDef.Attr.EnumVlaues,
 		}
 		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
@@ -540,6 +542,11 @@ func genCreateColumnTuple(
 		idx = catalog.MO_COLUMNS_ATT_SEQNUM_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_is_clusterby
 		if err := vector.AppendFixed(bat.Vecs[idx], uint16(0) /*just create*/, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_COLUMNS_ATT_ENUM_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_enum
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(col.enumValues), false, m); err != nil {
 			return nil, err
 		}
 
