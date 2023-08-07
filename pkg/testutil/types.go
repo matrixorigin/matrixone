@@ -46,7 +46,6 @@ var (
 	textType       = types.T_text.ToType()
 	uuidType       = types.T_uuid.ToType()
 	rowIdType      = types.T_Rowid.ToType()
-	enumType       = types.T_enum.ToType()
 )
 
 func MakeDecimal64Type(width, scalar int32) types.Type {
