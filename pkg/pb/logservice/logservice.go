@@ -75,8 +75,11 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 		storeInfo = CNStoreInfo{}
 		storeInfo.Labels = make(map[string]metadata.LabelList)
 	}
-	if storeInfo.WorkState == metadata.WorkState_Unknown {
+	v, ok := metadata.WorkState_value[metadata.ToTitle(hb.InitWorkState)]
+	if !ok {
 		storeInfo.WorkState = metadata.WorkState_Working
+	} else {
+		storeInfo.WorkState = metadata.WorkState(v)
 	}
 	storeInfo.Tick = tick
 	storeInfo.ServiceAddress = hb.ServiceAddress
@@ -104,16 +107,12 @@ func (s *CNState) UpdateLabel(label CNStoreLabel) {
 // UpdateWorkState updates work state of CN store.
 func (s *CNState) UpdateWorkState(state CNWorkState) {
 	if state.GetState() == metadata.WorkState_Unknown {
-		return
+		state.State = metadata.WorkState_Working
 	}
 	storeInfo, ok := s.Stores[state.UUID]
 	// If the CN store does not exist, we should do nothing and wait for
 	// CN heartbeat.
 	if !ok {
-		return
-	}
-	// If current state is more advanced, do nothing.
-	if storeInfo.WorkState >= state.GetState() {
 		return
 	}
 	storeInfo.WorkState = state.State
@@ -122,15 +121,16 @@ func (s *CNState) UpdateWorkState(state CNWorkState) {
 
 // PatchCNStore updates work state and labels of CN store.
 func (s *CNState) PatchCNStore(stateLabel CNStateLabel) {
+	if stateLabel.GetState() == metadata.WorkState_Unknown {
+		stateLabel.State = metadata.WorkState_Working
+	}
 	storeInfo, ok := s.Stores[stateLabel.UUID]
 	// If the CN store does not exist, we should do nothing and wait for
 	// CN heartbeat.
 	if !ok {
 		return
 	}
-	if stateLabel.GetState() > storeInfo.WorkState {
-		storeInfo.WorkState = stateLabel.State
-	}
+	storeInfo.WorkState = stateLabel.State
 	if stateLabel.Labels != nil {
 		storeInfo.Labels = stateLabel.Labels
 	}
