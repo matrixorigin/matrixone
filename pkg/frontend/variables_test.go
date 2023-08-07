@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"testing"
 
 	"github.com/smartystreets/goconvey/convey"
@@ -71,4 +72,205 @@ func TestSystemVariable(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 	})
+}
+
+func Test_valueIsBoolTrue(t *testing.T) {
+	type args struct {
+		value interface{}
+	}
+	dumpWantErr := func(t assert.TestingT, err error, msgAndArgs ...interface{}) bool {
+		return false
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    bool
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "bool/true",
+			args: args{
+				value: true,
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "bool/false",
+			args: args{
+				value: false,
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int/1",
+			args: args{
+				value: 1,
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int/0",
+			args: args{
+				value: 0,
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int8/1",
+			args: args{
+				value: int8(1),
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int8/0",
+			args: args{
+				value: int8(0),
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int16/1",
+			args: args{
+				value: int16(1),
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int16/0",
+			args: args{
+				value: int16(0),
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int32/1",
+			args: args{
+				value: int32(1),
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int32/0",
+			args: args{
+				value: int32(0),
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int64/1",
+			args: args{
+				value: int64(1),
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "int64/0",
+			args: args{
+				value: int64(0),
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "uint8/1",
+			args: args{
+				value: uint8(1),
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "uint8/0",
+			args: args{
+				value: uint8(0),
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "uint16/1",
+			args: args{
+				value: uint16(1),
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "uint16/0",
+			args: args{
+				value: uint16(0),
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "uint32/1",
+			args: args{
+				value: uint32(1),
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "uint32/0",
+			args: args{
+				value: uint32(0),
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "uint64/1",
+			args: args{
+				value: uint64(1),
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "uint64/0",
+			args: args{
+				value: uint64(0),
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "string/on",
+			args: args{
+				value: "ON",
+			},
+			want:    true,
+			wantErr: dumpWantErr,
+		},
+		{
+			name: "string/off",
+			args: args{
+				value: "OFF",
+			},
+			want:    false,
+			wantErr: dumpWantErr,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := valueIsBoolTrue(tt.args.value)
+			if !tt.wantErr(t, err, fmt.Sprintf("valueIsBoolTrue(%v)", tt.args.value)) {
+				return
+			}
+			assert.Equalf(t, tt.want, got, "valueIsBoolTrue(%v)", tt.args.value)
+		})
+	}
 }

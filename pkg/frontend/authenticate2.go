@@ -207,18 +207,16 @@ func checkPrivilegeInCache(ctx context.Context, ses *Session, priv *privilege, e
 func privilegeCacheIsEnabled(ses *Session) (bool, error) {
 	var err error
 	var value interface{}
+	var newValue bool
 	value, err = ses.GetSessionVar("enable_privilege_cache")
 	if err != nil {
 		return false, err
 	}
 
-	svbt := SystemVariableBoolType{}
-	newValue, err2 := svbt.Convert(value)
-	if err2 != nil {
-		return false, err2
+	newValue, err = valueIsBoolTrue(value)
+	if err != nil {
+		return false, err
 	}
-	if svbt.IsTrue(newValue) {
-		return true, nil
-	}
-	return false, err
+
+	return newValue, err
 }
