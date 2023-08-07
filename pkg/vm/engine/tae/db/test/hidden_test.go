@@ -42,7 +42,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
@@ -201,7 +201,7 @@ func TestHidden2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, -1)
 	schema.BlockMaxRows = 10

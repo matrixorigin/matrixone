@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -40,7 +41,7 @@ func TestTables1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 	txn, _ := db.StartTxn(nil)
 	database, _ := txn.CreateDatabase("db", "", "")
@@ -105,7 +106,7 @@ func TestTxn1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchema(3, 2)
@@ -193,7 +194,7 @@ func TestTxn2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 
 	var wg sync.WaitGroup
@@ -219,7 +220,7 @@ func TestTxn4(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -248,7 +249,7 @@ func TestTxn5(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -321,7 +322,7 @@ func TestTxn6(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -440,7 +441,7 @@ func TestMergeBlocks1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := new(options.Options)
-	db := initDB(ctx, t, opts)
+	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 5
@@ -546,7 +547,7 @@ func TestMergeBlocks2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(ctx, t, opts)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
@@ -594,7 +595,7 @@ func TestCompaction1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -657,7 +658,7 @@ func TestCompaction2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := initDB(ctx, t, opts)
+	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)

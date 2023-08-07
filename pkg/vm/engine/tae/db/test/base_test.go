@@ -16,41 +16,21 @@ package test
 
 import (
 	"context"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-
-	checkpoint2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 )
 
 const (
 	ModuleName    = "TAEDB"
 	defaultTestDB = "db"
 )
-
-func initDB(ctx context.Context, t *testing.T, opts *options.Options) *db.DB {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	db, _ := db.Open(ctx, dir, opts)
-	// only ut executes this checker
-	db.DiskCleaner.AddChecker(
-		func(item any) bool {
-			min := db.TxnMgr.MinTSForTest()
-			checkpoint := item.(*checkpoint2.CheckpointEntry)
-			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
-			return !checkpoint.GetEnd().GreaterEq(min)
-		})
-	return db
-}
 
 func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {
 	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(row)

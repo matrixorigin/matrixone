@@ -37,7 +37,7 @@ func TestCatalog1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchema(1, 0)
@@ -82,7 +82,7 @@ func TestShowDatabaseNames(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 
 	{
@@ -154,7 +154,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(ctx, t, opts)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	txn, _ := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(13, 12)

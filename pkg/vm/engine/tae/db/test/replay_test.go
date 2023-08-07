@@ -41,7 +41,7 @@ func TestReplayCatalog1(t *testing.T) {
 	ctx := context.Background()
 
 	testutils.EnsureNoLeak(t)
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schemas := make([]*catalog.Schema, 4)
 	for i := range schemas {
 		schemas[i] = catalog.MockSchema(2, 0)
@@ -120,7 +120,7 @@ func TestReplayCatalog2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
@@ -200,7 +200,7 @@ func TestReplayCatalog3(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
@@ -288,7 +288,7 @@ func TestReplay1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
@@ -394,7 +394,7 @@ func TestReplay2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
@@ -608,7 +608,7 @@ func TestReplayTableRows(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
@@ -732,7 +732,7 @@ func TestReplay4(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(ctx, t, opts)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
@@ -797,7 +797,7 @@ func TestReplay5(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(ctx, t, opts)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
@@ -919,7 +919,7 @@ func TestReplay6(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(ctx, t, opts)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -981,7 +981,7 @@ func TestReplay7(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(ctx, t, opts)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(18, 14)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5
@@ -1262,7 +1262,7 @@ func TestReplay10(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(ctx, t, opts)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5

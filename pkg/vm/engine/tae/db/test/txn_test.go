@@ -484,10 +484,10 @@ func TestApp1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	option := new(options.Options)
-	option.CacheCfg = new(options.CacheCfg)
-	option.CacheCfg.IndexCapacity = mpool.GB
-	db := initDB(ctx, t, option)
+	opts := new(options.Options)
+	opts.CacheCfg = new(options.CacheCfg)
+	opts.CacheCfg.IndexCapacity = mpool.GB
+	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 	mgr := db.TxnMgr
 	c := db.Catalog
@@ -539,7 +539,7 @@ func TestWarehouse(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 
 	txn, _ := db.StartTxn(nil)
@@ -567,7 +567,7 @@ func TestTxn7(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 10
@@ -607,7 +607,7 @@ func TestTxn8(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -655,7 +655,7 @@ func TestTxn9(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 12)

@@ -36,7 +36,7 @@ func TestCheckpoint1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := initDB(ctx, t, opts)
+	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 1000
@@ -92,7 +92,7 @@ func TestCheckpoint2(t *testing.T) {
 	// opts.CheckpointCfg.ScannerInterval = 10
 	// opts.CheckpointCfg.ExecutionLevels = 2
 	// opts.CheckpointCfg.ExecutionInterval = 1
-	tae := initDB(ctx, t, opts)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema1 := catalog.MockSchema(4, 2)
 	schema1.BlockMaxRows = 10
@@ -177,7 +177,7 @@ func TestSchedule1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
