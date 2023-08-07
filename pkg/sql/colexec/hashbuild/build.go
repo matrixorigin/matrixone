@@ -173,6 +173,17 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			n = hashmap.UnitLimit
 		}
 
+		//preAlloc to improve performance and reduce memory reAlloc
+		if count > 200000 && i == hashmap.UnitLimit*256 {
+			groupCount := ctr.mp.GroupCount()
+			rate := float64(groupCount) / float64(i)
+			hashmapCount := int(float64(count) * rate)
+			err = ctr.mp.PreAlloc(uint64(hashmapCount), proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+
 		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
