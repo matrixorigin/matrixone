@@ -61,7 +61,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -936,61 +935,52 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 }
 
 func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, proc *process.Process) *group.Argument {
-	var lenAggs, lenMultiAggs int
 	aggs := make([]agg.Aggregate, len(n.AggList))
-	multiaggs := make([]group_concat.Argument, len(n.AggList))
+	cfg := ""
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
-			if len(f.F.Args) > 1 {
-				executor, err := colexec.NewExpressionExecutor(proc, f.F.Args[len(f.F.Args)-1])
-				if err != nil {
-					panic(err)
-				}
-				// vec is separator
-				vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-				if err != nil {
-					panic(err)
-				}
-				sepa := vec.GetStringAt(0)
-				multiaggs[lenMultiAggs] = group_concat.Argument{
-					Dist:      distinct,
-					GroupExpr: f.F.Args[:len(f.F.Args)-1],
-					Separator: sepa,
-					OrderId:   int32(i),
-				}
-				executor.Free()
-				lenMultiAggs++
-				continue
-			}
 			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 			fun, err := function.GetFunctionById(ctx, obj)
 			if err != nil {
 				panic(err)
 			}
-			aggs[lenAggs] = agg.Aggregate{
-				E:    f.F.Args[0],
-				Dist: distinct,
-				Op:   fun.GetSpecialId(),
+			if len(f.F.Args) > 0 {
+				//for group concat, the last arg is separator string
+				if f.F.Func.ObjName == plan2.NameGroupConcat && len(f.F.Args) > 1 {
+					separatorExpr := f.F.Args[len(f.F.Args)-1]
+					executor, err := colexec.NewExpressionExecutor(proc, separatorExpr)
+					if err != nil {
+						panic(err)
+					}
+					vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+					if err != nil {
+						panic(err)
+					}
+					cfg = vec.GetStringAt(0)
+				}
 			}
-			lenAggs++
+
+			aggs[i] = agg.Aggregate{
+				E:      f.F.Args[0],
+				Dist:   distinct,
+				Op:     fun.GetSpecialId(),
+				Config: cfg,
+			}
 		}
 	}
-	aggs = aggs[:lenAggs]
-	multiaggs = multiaggs[:lenMultiAggs]
 	typs := make([]types.Type, len(cn.ProjectList))
 	for i, e := range cn.ProjectList {
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
 
 	return &group.Argument{
-		Aggs:      aggs,
-		MultiAggs: multiaggs,
-		Types:     typs,
-		NeedEval:  needEval,
-		Exprs:     n.GroupBy,
-		Ibucket:   uint64(ibucket),
-		Nbucket:   uint64(nbucket),
+		Aggs:     aggs,
+		Types:    typs,
+		NeedEval: needEval,
+		Exprs:    n.GroupBy,
+		Ibucket:  uint64(ibucket),
+		Nbucket:  uint64(nbucket),
 	}
 }
 

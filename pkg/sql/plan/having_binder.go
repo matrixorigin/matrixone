@@ -151,6 +151,9 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 
 func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) error {
 
+	if len(astExpr.OrderBy) < 1 {
+		return nil
+	}
 	b.ctx.forceWindows = true
 	b.ctx.isDistinct = true
 
@@ -167,7 +170,7 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 	w.OrderBy = make([]*plan.OrderBySpec, 0, len(astExpr.OrderBy))
 
 	for _, order := range astExpr.OrderBy {
-		
+
 		b.insideAgg = true
 		expr, err := b.BindExpr(order.Expr, depth, isRoot)
 		b.insideAgg = false
