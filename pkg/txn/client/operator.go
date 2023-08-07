@@ -146,6 +146,7 @@ func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
 
 type txnOperator struct {
 	sender rpc.TxnSender
+	waiter *waiter
 	txnID  []byte
 
 	option struct {
@@ -208,6 +209,22 @@ func newTxnOperatorWithSnapshot(
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
 	return tc, nil
+}
+
+func (tc *txnOperator) waitActive(ctx context.Context) error {
+	if tc.waiter == nil {
+		return nil
+	}
+	defer tc.waiter.close()
+	return tc.waiter.wait(ctx)
+}
+
+func (tc *txnOperator) notifyActive() {
+	if tc.waiter == nil {
+		panic("BUG: notify active on non-waiter txn operator")
+	}
+	defer tc.waiter.close()
+	tc.waiter.notify()
 }
 
 func (tc *txnOperator) AddWorkspace(workspace Workspace) {

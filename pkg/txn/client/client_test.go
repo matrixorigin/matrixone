@@ -19,15 +19,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAdjustClient(t *testing.T) {
@@ -126,4 +126,72 @@ func TestTxnClientPauseAndResume(t *testing.T) {
 	require.Equal(t, paused, tcClient.mu.state)
 	tcFeature.Resume()
 	require.Equal(t, normal, tcClient.mu.state)
+}
+
+func TestLimit(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, ts rpc.TxnSender) {
+			ctx := context.Background()
+
+			c := make(chan struct{})
+			c2 := make(chan struct{})
+			n := 0
+			go func() {
+				defer close(c2)
+				for {
+					select {
+					case <-c:
+						return
+					default:
+						op, err := tc.New(ctx, newTestTimestamp(0))
+						require.NoError(t, err)
+						require.NoError(t, op.Rollback(ctx))
+						n++
+					}
+				}
+			}()
+			time.Sleep(time.Millisecond * 200)
+			close(c)
+			<-c2
+			require.True(t, n < 5)
+		},
+		WithTxnLimit(1))
+}
+
+func TestMaxActiveTxnWithWaitPrevClosed(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, ts rpc.TxnSender) {
+			ctx := context.Background()
+			op1, err := tc.New(ctx, newTestTimestamp(0))
+			require.NoError(t, err)
+
+			c := make(chan struct{})
+			go func() {
+				defer close(c)
+				_, err = tc.New(ctx, newTestTimestamp(0))
+				require.NoError(t, err)
+			}()
+
+			require.NoError(t, op1.Rollback(ctx))
+			<-c
+		},
+		WithMaxActiveTxn(1))
+}
+
+func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, ts rpc.TxnSender) {
+			ctx := context.Background()
+			op1, err := tc.New(ctx, newTestTimestamp(0))
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, op1.Rollback(ctx))
+			}()
+
+			ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err = tc.New(ctx2, newTestTimestamp(0))
+			require.Error(t, err)
+		},
+		WithMaxActiveTxn(1))
 }
