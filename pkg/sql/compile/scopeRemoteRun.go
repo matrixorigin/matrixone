@@ -1469,9 +1469,10 @@ func convertToPipelineAggregates(ags []agg.Aggregate) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:   int32(a.Op),
-			Dist: a.Dist,
-			Expr: a.E,
+			Op:     int32(a.Op),
+			Dist:   a.Dist,
+			Expr:   a.E,
+			Config: a.Config,
 		}
 	}
 	return result
@@ -1482,9 +1483,10 @@ func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
 	result := make([]agg.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = agg.Aggregate{
-			Op:   int(a.Op),
-			Dist: a.Dist,
-			E:    a.Expr,
+			Op:     int(a.Op),
+			Dist:   a.Dist,
+			E:      a.Expr,
+			Config: a.Config,
 		}
 	}
 	return result

@@ -78,6 +78,7 @@ message Aggregate {
   int32 op = 1;
   bool dist = 2;
   plan.Expr expr = 3;
+  bytes config =4;
 }
 
 message Group {

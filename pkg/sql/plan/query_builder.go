@@ -553,6 +553,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
+		if node.WinSpecList != nil {
+			increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
+		}
+
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
@@ -564,6 +568,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		if node.WinSpecList != nil {
 			groupSize = int32(len(builder.qry.Nodes[node.Children[0]].ProjectList))
+			increaseRefCntForExprList(node.WinSpecList, -1, colRefCnt)
 		}
 
 		for _, expr := range node.FilterList {

@@ -29,7 +29,7 @@ type GroupConcat1 struct {
 
 const group_concat_max_len = 1024
 
-func newGroupConcat1(separator string) *GroupConcat1 {
+func newGroupConcat(separator string) *GroupConcat1 {
 	return &GroupConcat1{
 		separator: separator,
 	}

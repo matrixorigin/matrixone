@@ -77,7 +77,7 @@ type Aggregate struct {
 	Op     int
 	Dist   bool
 	E      *plan.Expr
-	Config any
+	Config []byte
 }
 
 // Agg agg interface

@@ -869,7 +869,7 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 			panic(err)
 		}
 		var e *plan.Expr = nil
-		var cfg any
+		var cfg []byte
 
 		if len(f.F.Args) > 0 {
 
@@ -884,7 +884,7 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 				if err != nil {
 					panic(err)
 				}
-				cfg = vec.GetStringAt(0)
+				cfg = []byte(vec.GetStringAt(0))
 			}
 
 			e = f.F.Args[0]
@@ -936,7 +936,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 
 func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, proc *process.Process) *group.Argument {
 	aggs := make([]agg.Aggregate, len(n.AggList))
-	cfg := ""
+	var cfg []byte
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
@@ -957,7 +957,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 					if err != nil {
 						panic(err)
 					}
-					cfg = vec.GetStringAt(0)
+					cfg = []byte(vec.GetStringAt(0))
 				}
 			}
 

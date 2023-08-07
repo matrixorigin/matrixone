@@ -291,7 +291,6 @@ var supportedAggregateFunctions = []FuncNew{
 		},
 	},
 
-
 	{
 		functionId: GROUP_CONCAT,
 		class:      plan.Function_AGG,
