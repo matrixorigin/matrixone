@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"go/constant"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -170,9 +172,30 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 	w.OrderBy = make([]*plan.OrderBySpec, 0, len(astExpr.OrderBy))
 
 	for _, order := range astExpr.OrderBy {
+		orderExpr := order.Expr
+		if numVal, ok := order.Expr.(*tree.NumVal); ok {
+			switch numVal.Value.Kind() {
+			case constant.Int:
+				colPos, _ := constant.Int64Val(numVal.Value)
+				if numVal.Negative() {
+					moerr.NewSyntaxError(b.GetContext(), "ORDER BY position %v is negative", colPos)
+				}
+				if colPos < 1 || int(colPos) > len(astExpr.Exprs)-1 {
+					return moerr.NewSyntaxError(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
+				}
+				orderExpr = astExpr.Exprs[colPos-1]
+			default:
+				return moerr.NewSyntaxError(b.GetContext(), "non-integer constant in ORDER BY")
+			}
+
+		}
+
+		if _, ok := order.Expr.(*tree.Subquery); ok {
+			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
+		}
 
 		b.insideAgg = true
-		expr, err := b.BindExpr(order.Expr, depth, isRoot)
+		expr, err := b.BindExpr(orderExpr, depth, isRoot)
 		b.insideAgg = false
 
 		if err != nil {

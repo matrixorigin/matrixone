@@ -303,8 +303,8 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.GroupConcat1ReturnType,
-				specialId:  agg.AggregateGroupConcat1,
+				retType:    agg.GroupConcatReturnType,
+				specialId:  agg.AggregateGroupConcat,
 			},
 		},
 	},

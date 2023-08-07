@@ -173,6 +173,12 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, vecs
 				if a.err == nil {
 					a.err = err
 				}
+			} else if vec.IsConstNull() {
+				var v T1
+				a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], 1, a.es[j], hasNull)
+				if a.err == nil {
+					a.err = err
+				}
 			} else {
 				a.vs[j], a.es[j], err = a.fill(int64(j), (any)(vec.GetBytesAt(0)).(T1), a.vs[j], 1, a.es[j], hasNull)
 				if a.err == nil {

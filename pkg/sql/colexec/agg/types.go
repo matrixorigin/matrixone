@@ -44,7 +44,6 @@ const (
 	AggregateAnyValue
 	AggregateMedian
 	AggregateGroupConcat
-	AggregateGroupConcat1
 
 	WinRank
 	WinRowNumber

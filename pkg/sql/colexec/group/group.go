@@ -158,7 +158,7 @@ func (ctr *container) generateAggStructures(ap *Argument) error {
 	var err error
 	i := 0
 	for i < len(ap.Aggs) {
-		if ctr.bat.Aggs[i], err = agg.New(ap.Aggs[i].Op, ap.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType()); err != nil {
+		if ctr.bat.Aggs[i], err = agg.NewWithConfig(ap.Aggs[i].Op, ap.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType(), ap.Aggs[i].Config); err != nil {
 			ctr.bat = nil
 			return err
 		}

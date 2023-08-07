@@ -34,23 +34,23 @@ grp    group_concat((, a, :, c, ), ,)
 3    (4:E),(5:C),(6:D),(7:d),(8:d),(9:D)
 SELECT grp,group_concat(NULL) FROM group_concat_01 GROUP BY grp;
 grp    group_concat(null, ,)
-1    
-2    
-3    
+1    null
+2    null
+3    null
 SELECT grp,group_concat(a,NULL) FROM group_concat_01 GROUP BY grp;
 grp    group_concat(a, null, ,)
-1    
-2    
-3    
+1    null
+2    null
+3    null
 SELECT group_concat(NULL) FROM group_concat_01;
 group_concat(null, ,)
-
+null
 SELECT group_concat(a,c,NULL) FROM group_concat_01;
 group_concat(a, c, null, ,)
-
+null
 SELECT group_concat(a,NULL) FROM group_concat_01;
 group_concat(a, null, ,)
-
+null
 SELECT grp,group_concat(c separator ",") FROM group_concat_01 GROUP BY grp;
 grp    group_concat(c, ,)
 1    a
@@ -62,42 +62,42 @@ grp    group_concat(c, ---->)
 2    b---->c
 3    E---->C---->D---->d---->d---->D
 SELECT grp,group_concat(c ORDER BY c) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,)
+grp    group_concat(c, ,order by c)
 1    a
 2    b,c
-3    E,C,D,d,d,D
+3    C,D,D,E,d,d
 SELECT grp,group_concat(c ORDER BY c DESC) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,)
+grp    group_concat(c, ,order by c desc)
 1    a
-2    b,c
-3    E,C,D,d,d,D
+2    c,b
+3    d,d,E,D,D,C
 SELECT grp,group_concat(d ORDER BY a) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(d, ,)
+grp    group_concat(d, ,order by a)
 1    a
 2    a,b
 3    a,b,b,d,d,c
 SELECT grp,group_concat(d ORDER BY a DESC) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(d, ,)
+grp    group_concat(d, ,order by a desc)
 1    a
-2    a,b
-3    a,b,b,d,d,c
+2    b,a
+3    c,d,d,b,b,a
 SELECT grp,group_concat(c ORDER BY 1) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,)
+grp    group_concat(c, ,order by 1)
 1    a
 2    b,c
-3    E,C,D,d,d,D
+3    C,D,D,E,d,d
 SELECT grp,group_concat(c ORDER BY c separator ",") FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,)
+grp    group_concat(c, ,order by c)
 1    a
 2    b,c
-3    E,C,D,d,d,D
+3    C,D,D,E,d,d
 SELECT grp,group_concat(c ORDER BY c DESC separator ",") FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,)
+grp    group_concat(c, ,order by c desc)
 1    a
-2    b,c
-3    E,C,D,d,d,D
+2    c,b
+3    d,d,E,D,D,C
 SELECT grp,group_concat(c ORDER BY grp DESC) FROM group_concat_01 GROUP BY grp ORDER BY grp;
-grp    group_concat(c, ,)
+grp    group_concat(c, ,order by grp desc)
 1    a
 2    b,c
 3    E,C,D,d,d,D
@@ -131,7 +131,7 @@ INSERT INTO group_concat_04 values (1,4);
 INSERT INTO group_concat_04 values (5,4);
 INSERT INTO group_concat_04 values (5,5);
 SELECT REQ_ID, group_concat(URL) AS URL FROM group_concat_03, group_concat_04 WHERE group_concat_04.URL_ID = group_concat_03.URL_ID group by REQ_ID;
-req_id    url
+req_id    URL
 1    www.host.com
 5    www.host.com,www.google.com,www.help.com
 DROP TABLE IF EXISTS group_concat_05;
@@ -141,16 +141,16 @@ CREATE TABLE group_concat_06(id int);
 INSERT INTO group_concat_05 values(0),(1);
 SELECT group_concat(group_concat_05.id) FROM group_concat_05,group_concat_06;
 group_concat(group_concat_05.id, ,)
-
+null
 DROP TABLE IF EXISTS group_concat_07;
 CREATE TABLE group_concat_07(bar varchar(32));
 INSERT INTO group_concat_07 values('tesgroup_concat_08');
 INSERT INTO group_concat_07 values('tesgroup_concat_09');
 SELECT group_concat(bar order by concat(bar,bar)) FROM group_concat_07;
-group_concat(bar, ,)
+group_concat(bar, ,order by concat(bar, bar))
 tesgroup_concat_08,tesgroup_concat_09
 SELECT group_concat(bar order by concat(bar,bar) ASC) FROM group_concat_07;
-group_concat(bar, ,)
+group_concat(bar, ,order by concat(bar, bar) asc)
 tesgroup_concat_08,tesgroup_concat_09
 SELECT bar FROM group_concat_07 HAVING group_concat(bar)='';
 SQL syntax error: column "group_concat_07.bar" must appear in the GROUP BY clause or be used in an aggregate function
@@ -216,8 +216,7 @@ a    c
 3    3
 3    3
 SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
-grp
-2,3,4,5
+not supported: subquery in group_concat ORDER BY
 DROP TABLE IF EXISTS group_concat_13;
 DROP TABLE IF EXISTS group_concat_14;
 CREATE TABLE group_concat_13 ( a int );
@@ -225,7 +224,7 @@ CREATE TABLE group_concat_14 ( a int );
 INSERT INTO group_concat_13 VALUES (1), (2);
 INSERT INTO group_concat_14 VALUES (1), (2);
 SELECT GROUP_CONCAT(group_concat_13.a*group_concat_14.a ORDER BY group_concat_14.a) FROM group_concat_13, group_concat_14 GROUP BY group_concat_13.a;
-group_concat(group_concat_13.a * group_concat_14.a, ,)
+group_concat(group_concat_13.a * group_concat_14.a, ,order by group_concat_14.a)
 1,2
 2,4
 DROP TABLE IF EXISTS group_concat_15;

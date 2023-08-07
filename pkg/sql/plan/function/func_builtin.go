@@ -914,13 +914,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	// do not support the constant vector.
-	for _, v := range parameters {
-		if v.IsConst() {
-			return moerr.NewConstraintViolation(proc.Ctx, "serial function don't support constant")
-		}
-	}
-
+	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := types.NewPackerArray(length, proc.Mp())
 	defer func() {
 		for _, p := range ps {
@@ -931,164 +925,169 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 	bitMap := new(nulls.Nulls)
 
 	for _, v := range parameters {
+		if v.IsConstNull() {
+			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+			return nil
+		}
+
 		switch v.GetType().Oid {
 		case types.T_bool:
-			s := vector.MustFixedCol[bool](v)
+			s := vector.ExpandFixedCol[bool](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeBool(b)
 				}
 			}
 		case types.T_int8:
-			s := vector.MustFixedCol[int8](v)
+			s := vector.ExpandFixedCol[int8](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeInt8(b)
 				}
 			}
 		case types.T_int16:
-			s := vector.MustFixedCol[int16](v)
+			s := vector.ExpandFixedCol[int16](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeInt16(b)
 				}
 			}
 		case types.T_int32:
-			s := vector.MustFixedCol[int32](v)
+			s := vector.ExpandFixedCol[int32](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeInt32(b)
 				}
 			}
 		case types.T_int64:
-			s := vector.MustFixedCol[int64](v)
+			s := vector.ExpandFixedCol[int64](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeInt64(b)
 				}
 			}
 		case types.T_uint8:
-			s := vector.MustFixedCol[uint8](v)
+			s := vector.ExpandFixedCol[uint8](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeUint8(b)
 				}
 			}
 		case types.T_uint16:
-			s := vector.MustFixedCol[uint16](v)
+			s := vector.ExpandFixedCol[uint16](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeUint16(b)
 				}
 			}
 		case types.T_uint32:
-			s := vector.MustFixedCol[uint32](v)
+			s := vector.ExpandFixedCol[uint32](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeUint32(b)
 				}
 			}
 		case types.T_uint64:
-			s := vector.MustFixedCol[uint64](v)
+			s := vector.ExpandFixedCol[uint64](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeUint64(b)
 				}
 			}
 		case types.T_float32:
-			s := vector.MustFixedCol[float32](v)
+			s := vector.ExpandFixedCol[float32](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeFloat32(b)
 				}
 			}
 		case types.T_float64:
-			s := vector.MustFixedCol[float64](v)
+			s := vector.ExpandFixedCol[float64](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeFloat64(b)
 				}
 			}
 		case types.T_date:
-			s := vector.MustFixedCol[types.Date](v)
+			s := vector.ExpandFixedCol[types.Date](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeDate(b)
 				}
 			}
 		case types.T_time:
-			s := vector.MustFixedCol[types.Time](v)
+			s := vector.ExpandFixedCol[types.Time](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeTime(b)
 				}
 			}
 		case types.T_datetime:
-			s := vector.MustFixedCol[types.Datetime](v)
+			s := vector.ExpandFixedCol[types.Datetime](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeDatetime(b)
 				}
 			}
 		case types.T_timestamp:
-			s := vector.MustFixedCol[types.Timestamp](v)
+			s := vector.ExpandFixedCol[types.Timestamp](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeTimestamp(b)
 				}
 			}
 		case types.T_decimal64:
-			s := vector.MustFixedCol[types.Decimal64](v)
+			s := vector.ExpandFixedCol[types.Decimal64](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeDecimal64(b)
 				}
 			}
 		case types.T_decimal128:
-			s := vector.MustFixedCol[types.Decimal128](v)
+			s := vector.ExpandFixedCol[types.Decimal128](v)
 			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeDecimal128(b)
 				}
 			}
 		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			vs := vector.MustStrCol(v)
+			vs := vector.ExpandStrCol(v)
 			for i := range vs {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
 					ps[i].EncodeStringType([]byte(vs[i]))
@@ -1097,7 +1096,6 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 		}
 	}
 
-	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		if bitMap.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
