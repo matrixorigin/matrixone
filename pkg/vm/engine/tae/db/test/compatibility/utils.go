@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -77,7 +78,7 @@ func EnsurePrepareEnvOK() error {
 	}
 	ver := int(types.DecodeInt64(buf))
 	if ver > version {
-		return fmt.Errorf("prepare env version is %d, but current version is %d", ver, version)
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("prepare env version is %d, but current version is %d", ver, version))
 	}
 
 	return nil
