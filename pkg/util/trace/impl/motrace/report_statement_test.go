@@ -125,6 +125,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 
 	gotCnt := 0
 	dummyReportStmFunc := func(ctx context.Context, s *StatementInfo) error {
+		s.reported = true
 		gotCnt++
 		return nil
 	}
