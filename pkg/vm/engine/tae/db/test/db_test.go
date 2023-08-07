@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -2516,7 +2517,8 @@ func TestSegDelLogtail(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	// tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, -1)
 	schema.BlockMaxRows = 10
@@ -2594,7 +2596,7 @@ func TestSegDelLogtail(t *testing.T) {
 	}
 	check()
 
-	tae.restart(ctx)
+	tae.Restart(ctx)
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
