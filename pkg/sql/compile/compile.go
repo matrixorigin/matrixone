@@ -1061,7 +1061,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 				dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
 					Op:  vm.Dispatch,
-					Arg: constructDispatchLocal(false, false, regs),
+					Arg: constructDispatchLocal(false, false, false, regs),
 				})
 				for i := range scopes {
 					insertArg, err := constructInsert(n, c.e, c.proc)
@@ -1231,7 +1231,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := c.newMergeScope(ss)
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, true, receivers),
+			Arg: constructDispatchLocal(true, true, len(receivers) > 1, receivers),
 		})
 
 		return []*Scope{rs}, nil
@@ -2697,7 +2697,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(false, false, extraRegisters(ss, 0)),
+			Arg: constructDispatchLocal(false, false, false, extraRegisters(ss, 0)),
 		})
 	}
 	rs.IsEnd = true
@@ -2737,7 +2737,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, false, extraRegisters(ss, s.BuildIdx)),
+			Arg: constructDispatchLocal(true, false, false, extraRegisters(ss, s.BuildIdx)),
 		})
 	}
 	rs.IsEnd = true
@@ -3035,7 +3035,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
-	if n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
 			return nil, err
