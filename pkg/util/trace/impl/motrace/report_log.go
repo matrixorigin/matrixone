@@ -68,7 +68,13 @@ func (m *MOZapLog) GetName() string {
 // itemName: 8
 // nodeInfo: 40 /*36+4*/
 // spanInfo: 36+16
-const deltaContentLength = int64(26 + 5 + 8 + 40 + 36 + 16)
+const (
+	deltaContentLength = int64(26 + 5 + 8 + 40 + 36 + 16)
+
+	session_id = "session_id"
+
+	statement_id = "statement_id"
+)
 
 // Size 计算近似值
 func (m *MOZapLog) Size() int64 {
@@ -106,8 +112,12 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(messageCol, table.StringField(m.Message))
 	row.SetColumnVal(extraCol, table.StringField(m.Extra))
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
-	row.SetColumnVal(statementIDCol, table.UuidField(m.StatementID[:]))
-	row.SetColumnVal(sessionIDCol, table.UuidField(m.SessionID[:]))
+	if m.SessionID != [16]byte{} {
+		row.SetColumnVal(sessionIDCol, table.UuidField(m.SessionID[:]))
+	}
+	if m.StatementID != [16]byte{} {
+		row.SetColumnVal(sessionIDCol, table.UuidField(m.SessionID[:]))
+	}
 }
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
@@ -145,9 +155,9 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 		}
 
 		if v.Type == zapcore.ByteStringType {
-			if v.Key == "session_id" {
+			if v.Key == session_id {
 				copy(log.SessionID[:], v.Interface.([]byte))
-			} else if v.Key == "statement_id" {
+			} else if v.Key == statement_id {
 				copy(log.StatementID[:], v.Interface.([]byte))
 			}
 		}
