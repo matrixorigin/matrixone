@@ -40,7 +40,9 @@ func GroupConcat1ReturnType(_ []types.Type) types.Type {
 
 func (g *GroupConcat1) Grows(cnt int) {
 	for i := 0; i < cnt; i++ {
-		g.result = append(g.result, bytes.Buffer{})
+		buffer := bytes.Buffer{}
+		buffer.Grow(group_concat_max_len)
+		g.result = append(g.result, buffer)
 	}
 }
 
@@ -56,7 +58,7 @@ func (g *GroupConcat1) Eval(vs [][]byte, err error) ([][]byte, error) {
 
 func (g *GroupConcat1) Fill(groupIndex int64, input []byte, oldValue []byte, z int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
 
-	if isNull || g.result[groupIndex].Cap()+len(input) > group_concat_max_len {
+	if isNull || g.result[groupIndex].Len() > group_concat_max_len {
 		return nil, isEmpty, nil
 	}
 
@@ -78,7 +80,7 @@ func (g *GroupConcat1) Fill(groupIndex int64, input []byte, oldValue []byte, z i
 
 func (g *GroupConcat1) Merge(xIndex int64, yIndex int64, x []byte, y []byte, xIsEmpty bool, yIsEmpty bool, yGroupConcat1 any) ([]byte, bool, error) {
 
-	if yIsEmpty || g.result[xIndex].Cap() > group_concat_max_len {
+	if yIsEmpty || g.result[xIndex].Len() > group_concat_max_len {
 		return []byte{}, xIsEmpty && yIsEmpty, nil
 	}
 
