@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	defaultTestDB = "db"
+	DefaultTestDB = "db"
 )
 
 type TestEngine struct {
@@ -78,7 +78,7 @@ func (e *TestEngine) Close() error {
 }
 
 func (e *TestEngine) CreateRelAndAppend(bat *containers.Batch, createDB bool) (handle.Database, handle.Relation) {
-	return CreateRelationAndAppend(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, bat, createDB)
+	return CreateRelationAndAppend(e.t, e.tenantID, e.DB, DefaultTestDB, e.schema, bat, createDB)
 }
 
 func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
@@ -89,25 +89,25 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 func (e *TestEngine) DropRelation(t *testing.T) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err := txn.GetDatabase(defaultTestDB)
+	db, err := txn.GetDatabase(DefaultTestDB)
 	assert.NoError(t, err)
 	_, err = db.DropRelationByName(e.schema.Name)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 func (e *TestEngine) GetRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
-	return GetRelation(e.t, e.tenantID, e.DB, defaultTestDB, e.schema.Name)
+	return GetRelation(e.t, e.tenantID, e.DB, DefaultTestDB, e.schema.Name)
 }
 func (e *TestEngine) GetRelationWithTxn(txn txnif.AsyncTxn) (rel handle.Relation) {
-	return GetRelationWithTxn(e.t, txn, defaultTestDB, e.schema.Name)
+	return GetRelationWithTxn(e.t, txn, DefaultTestDB, e.schema.Name)
 }
 
 func (e *TestEngine) CompactBlocks(skipConflict bool) {
-	CompactBlocks(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, skipConflict)
+	CompactBlocks(e.t, e.tenantID, e.DB, DefaultTestDB, e.schema, skipConflict)
 }
 
 func (e *TestEngine) MergeBlocks(skipConflict bool) {
-	MergeBlocks(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, skipConflict)
+	MergeBlocks(e.t, e.tenantID, e.DB, DefaultTestDB, e.schema, skipConflict)
 }
 
 func (e *TestEngine) GetDB(name string) (txn txnif.AsyncTxn, db handle.Database) {
@@ -120,7 +120,7 @@ func (e *TestEngine) GetDB(name string) (txn txnif.AsyncTxn, db handle.Database)
 }
 
 func (e *TestEngine) GetTestDB() (txn txnif.AsyncTxn, db handle.Database) {
-	return e.GetDB(defaultTestDB)
+	return e.GetDB(DefaultTestDB)
 }
 
 func (e *TestEngine) DoAppend(bat *containers.Batch) {
@@ -143,7 +143,7 @@ func (e *TestEngine) TryAppend(bat *containers.Batch) {
 	txn, err := e.DB.StartTxn(nil)
 	txn.BindAccessInfo(e.tenantID, 0, 0)
 	assert.NoError(e.t, err)
-	db, err := txn.GetDatabase(defaultTestDB)
+	db, err := txn.GetDatabase(DefaultTestDB)
 	assert.NoError(e.t, err)
 	rel, err := db.GetRelationByName(e.schema.Name)
 	if err != nil {
@@ -421,7 +421,7 @@ func GetRelationWithTxn(t *testing.T, txn txnif.AsyncTxn, dbName, tblName string
 }
 
 func GetDefaultRelation(t *testing.T, e *db.DB, name string) (txn txnif.AsyncTxn, rel handle.Relation) {
-	return GetRelation(t, 0, e, defaultTestDB, name)
+	return GetRelation(t, 0, e, DefaultTestDB, name)
 }
 
 func GetOneBlock(rel handle.Relation) handle.Block {

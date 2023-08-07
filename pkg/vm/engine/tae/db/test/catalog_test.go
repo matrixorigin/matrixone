@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 
@@ -40,7 +41,7 @@ func TestCatalog1(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchema(1, 0)
-	txn, _, rel := createRelationNoCommit(t, db, defaultTestDB, schema, true)
+	txn, _, rel := testutil.CreateRelationNoCommit(t, db, defaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
 	seg, _ := rel.CreateSegment(false)
 	blk, err := seg.CreateBlock(false)
@@ -48,7 +49,7 @@ func TestCatalog1(t *testing.T) {
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
-	txn, rel = getDefaultRelation(t, db, schema.Name)
+	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
 	sseg, err := rel.GetSegment(seg.GetID())
 	assert.Nil(t, err)
 	t.Log(sseg.String())
@@ -63,7 +64,7 @@ func TestCatalog1(t *testing.T) {
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	{
-		_, rel = getDefaultRelation(t, db, schema.Name)
+		_, rel = testutil.GetDefaultRelation(t, db, schema.Name)
 		it := rel.MakeBlockIt()
 		cnt := 0
 		for it.Valid() {

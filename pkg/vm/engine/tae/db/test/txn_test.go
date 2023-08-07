@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -556,7 +557,7 @@ func TestWarehouse(t *testing.T) {
 		view, _ := blk.GetColumnDataById(context.Background(), 1)
 		t.Log(view.GetData().String())
 		defer view.Close()
-		checkAllColRowsByScan(t, rel, 20, false)
+		testutil.CheckAllColRowsByScan(t, rel, 20, false)
 		_ = txn.Commit(context.Background())
 	}
 }
@@ -878,7 +879,7 @@ func TestTxn9(t *testing.T) {
 // 	}
 // 	filter := handle.NewEQFilter(int32(1))
 // 	err = rel.DeleteByFilter(filter)
-// 	checkAllColRowsByScan(t, rel, 3, true)
+// 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 // 	assert.NoError(t, err)
 // 	{
 // 		txn, rel := tae.getRelation()
