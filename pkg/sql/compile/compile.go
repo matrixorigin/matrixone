@@ -3035,7 +3035,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
-	if n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
 			return nil, err
