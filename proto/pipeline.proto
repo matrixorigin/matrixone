@@ -59,6 +59,7 @@ message Dispatch {
   repeated int32 ShuffleRegIdxLocal=4;
   repeated int32 ShuffleRegIdxRemote=5;
   bool  is_sink = 6;
+  bool  rec_sink = 7;
 }
 
 message Merge {
