@@ -3,7 +3,6 @@ package function
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -17,10 +16,16 @@ import (
 )
 
 type Udf struct {
-	Body     string            `json:"body"`
-	Language string            `json:"language"`
-	RetType  string            `json:"rettype"`
-	ArgMap   map[string]string `json:"args"` // TODO maybe change it to array
+	Body     string `json:"body"`
+	Language string `json:"language"`
+	RetType  string `json:"rettype"`
+	Args     []*Arg `json:"args"`
+}
+
+// Arg of Udf
+type Arg struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 func (u *Udf) GetPlanExpr() *plan.Expr {
@@ -53,10 +58,9 @@ func (u *Udf) GetRetPlanType() *plan.Type {
 }
 
 func (u *Udf) GetArgsType() []types.Type {
-	typ := make([]types.Type, len(u.ArgMap))
-	for k, v := range u.ArgMap {
-		i, _ := strconv.Atoi(k)
-		typ[i] = types.Types[v].ToType()
+	typ := make([]types.Type, len(u.Args))
+	for i, arg := range u.Args {
+		typ[i] = types.Types[arg.Type].ToType()
 	}
 	return typ
 }

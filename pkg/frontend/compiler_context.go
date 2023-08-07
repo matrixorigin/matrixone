@@ -325,7 +325,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	if execResultArrayHasData(erArray) {
+	if execResultArrayHasData(erArray) { // TODO function reload
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			// reset flag
 			expectedInvalidArgLengthErr = false
@@ -348,36 +348,38 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 				return nil, err
 			}
 			// arg type check
-			argMap := make(map[string]string)
-			json.Unmarshal([]byte(argstr), &argMap)
-			if len(argMap) != len(args) {
+			argList := make([]*function.Arg, 0)
+			err = json.Unmarshal([]byte(argstr), &argList)
+			if err != nil {
+				return nil, err
+			}
+			if len(argList) != len(args) {
 				expectedInvalidArgLengthErr = true
 				continue
 			}
 
-			for k, v := range argMap {
-				i, _ := strconv.Atoi(k)
-				switch t := int32(types.Types[v]); {
-				case (t >= 20 && t <= 29): // int family
-					if args[i].Typ.Id < 20 || args[i].Typ.Id > 29 {
+			for j, arg := range argList {
+				switch t := int32(types.Types[arg.Type]); {
+				case t >= 20 && t <= 29: // int family
+					if args[j].Typ.Id < 20 || args[j].Typ.Id > 29 {
 						expectInvalidArgErr = true
-						badValue = v
+						badValue = arg.Type
 					}
 				case t == 10: // bool family
-					if args[i].Typ.Id != 10 {
+					if args[j].Typ.Id != 10 {
 						expectInvalidArgErr = true
-						badValue = v
+						badValue = arg.Type
 					}
-				case (t >= 30 && t <= 33): // float family
-					if args[i].Typ.Id < 30 || args[i].Typ.Id > 33 {
+				case t >= 30 && t <= 33: // float family
+					if args[j].Typ.Id < 30 || args[j].Typ.Id > 33 {
 						expectInvalidArgErr = true
-						badValue = v
+						badValue = arg.Type
 					}
 				}
 
 			}
 			if (!expectInvalidArgErr) && (!expectedInvalidArgLengthErr) {
-				udf.ArgMap = argMap
+				udf.Args = argList
 				return udf, err
 			}
 		}

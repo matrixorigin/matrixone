@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -965,7 +966,7 @@ var (
 				function_id int auto_increment,
 				name     varchar(100),
 				owner  int unsigned,
-				args     text,
+				args     json,
 				retType  varchar(20),
 				body     text,
 				language varchar(20),
@@ -1424,7 +1425,7 @@ const (
 
 	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
 
-	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and args = '%s';`
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$**.type') = '%s';`
 
 	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s";`
 
@@ -4527,16 +4528,20 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 			if err != nil {
 				return err
 			}
-			argMap := make(map[string]string)
-			json.Unmarshal([]byte(argstr), &argMap)
-			argCount := 0
-			if len(argMap) == len(df.Args) {
-				for _, v := range argMap {
-					if v != (df.Args[argCount].GetType(fmtctx)) {
-						return moerr.NewInvalidInput(ctx, "invalid parameter")
-					}
-					argCount++
+			argList := make([]*function.Arg, 0)
+			json.Unmarshal([]byte(argstr), &argList)
+			if len(argList) == len(df.Args) {
+				match := true
+				for j, arg := range argList {
+					typ := df.Args[j].GetType(fmtctx)
 					fmtctx.Reset()
+					if arg.Type != typ {
+						match = false
+						break
+					}
+				}
+				if !match {
+					continue
 				}
 				handleArgMatch := func() error {
 					//put it into the single transaction
@@ -4559,11 +4564,9 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 				return handleArgMatch()
 			}
 		}
-		return err
-	} else {
-		// no such function
-		return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 	}
+	// no such function
+	return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 }
 
 func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) (err error) {
@@ -8339,8 +8342,10 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	var dbName string
 	var checkExistence string
 	var argsJson []byte
+	var typesJson []byte
 	var fmtctx *tree.FmtCtx
-	var argMap map[string]string
+	var argList []*function.Arg
+	var typeList []string
 	var erArray []ExecResult
 
 	// a database must be selected or specified as qualifier when create a function
@@ -8363,24 +8368,30 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	fmtctx.Reset()
 
 	// build argmap and marshal as json
-	argMap = make(map[string]string)
+	argList = make([]*function.Arg, len(cf.Args))
+	typeList = make([]string, len(cf.Args))
 	for i := 0; i < len(cf.Args); i++ {
-		// FIXME Json maybe should be changed to array later.
-		// here we do not use the param name provided by user,
-		// because two same udfs with different param names will be seen as two different udfs.
-		curName := strconv.Itoa(i)
+		argList[i] = &function.Arg{}
+		argList[i].Name = cf.Args[i].GetName(fmtctx)
 		fmtctx.Reset()
-		argMap[curName] = cf.Args[i].GetType(fmtctx)
+		typ := cf.Args[i].GetType(fmtctx)
+		argList[i].Type = typ
+		typeList[i] = typ
 		fmtctx.Reset()
 	}
-	argsJson, err = json.Marshal(argMap)
+	argsJson, err = json.Marshal(argList)
+	if err != nil {
+		return err
+	}
+
+	typesJson, err = json.Marshal(typeList)
 	if err != nil {
 		return err
 	}
 
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
-	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(argsJson))
+	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(typesJson))
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
 		return err
