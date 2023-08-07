@@ -56,11 +56,6 @@ func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 	q.Lock()
 	defer q.Unlock()
 
-	if len(q.waiters) == 0 || len(ws) == 0 {
-		q.waiters = ws
-		return
-	}
-
 	// no new waiter added, moved from other waiter's waiter queue.
 	if len(ws) > 1 {
 		q.waiters = append(q.waiters, ws...)
