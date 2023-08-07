@@ -114,6 +114,13 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
 	}
 
+	if funcName == NameGroupConcat {
+		err := b.processForceWindows(funcName, astExpr, depth, isRoot)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	b.insideAgg = true
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
@@ -140,6 +147,93 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 			},
 		},
 	}, nil
+}
+
+func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) error {
+
+	b.ctx.forceWindows = true
+	b.ctx.isDistinct = true
+
+	w := &plan.WindowSpec{}
+	ws := &tree.WindowSpec{}
+
+	// window function
+	w.Name = funcName
+
+	// partition by
+	w.PartitionBy = DeepCopyExprList(b.ctx.groups)
+
+	//order by
+	w.OrderBy = make([]*plan.OrderBySpec, 0, len(astExpr.OrderBy))
+
+	for _, order := range astExpr.OrderBy {
+		
+		b.insideAgg = true
+		expr, err := b.BindExpr(order.Expr, depth, isRoot)
+		b.insideAgg = false
+
+		if err != nil {
+			return err
+		}
+
+		orderBy := &plan.OrderBySpec{
+			Expr: expr,
+			Flag: plan.OrderBySpec_INTERNAL,
+		}
+
+		switch order.Direction {
+		case tree.Ascending:
+			orderBy.Flag |= plan.OrderBySpec_ASC
+		case tree.Descending:
+			orderBy.Flag |= plan.OrderBySpec_DESC
+		}
+
+		switch order.NullsPosition {
+		case tree.NullsFirst:
+			orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+		case tree.NullsLast:
+			orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
+		}
+
+		w.OrderBy = append(w.OrderBy, orderBy)
+	}
+
+	w.Frame = getFrame(ws)
+
+	// append
+	b.ctx.windows = append(b.ctx.windows, &plan.Expr{
+		Expr: &plan.Expr_W{W: w},
+	})
+
+	return nil
+}
+
+func getFrame(ws *tree.WindowSpec) *plan.FrameClause {
+
+	f := &tree.FrameClause{Type: tree.Range}
+
+	if ws.OrderBy == nil {
+		f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+		f.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
+	} else {
+		f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+		f.End = &tree.FrameBound{Type: tree.CurrentRow}
+	}
+
+	ws.HasFrame = false
+	ws.Frame = f
+
+	return &plan.FrameClause{
+		Type: plan.FrameClause_FrameType(ws.Frame.Type),
+		Start: &plan.FrameBound{
+			Type:      plan.FrameBound_BoundType(ws.Frame.Start.Type),
+			UnBounded: ws.Frame.Start.UnBounded,
+		},
+		End: &plan.FrameBound{
+			Type:      plan.FrameBound_BoundType(ws.Frame.End.Type),
+			UnBounded: ws.Frame.End.UnBounded,
+		},
+	}
 }
 
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

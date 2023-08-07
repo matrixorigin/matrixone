@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -561,6 +562,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))
 
+		if node.WinSpecList != nil {
+			groupSize = int32(len(builder.qry.Nodes[node.Children[0]].ProjectList))
+		}
+
 		for _, expr := range node.FilterList {
 			builder.remapHavingClause(expr, groupTag, aggregateTag, groupSize)
 		}
@@ -615,6 +620,18 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+
+		if node.WinSpecList != nil {
+
+			node.NodeType = plan.Node_WINDOW
+
+			for _, expr := range node.WinSpecList {
+				err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		if len(node.ProjectList) == 0 {
@@ -1531,6 +1548,64 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	return lastNodeID, nil
 }
 
+const NameGroupConcat = "group_concat1"
+
+func (builder *QueryBuilder) hackForGroupConcat(selectExprs tree.SelectExprs, ctx *BindContext) (err error) {
+	for _, selectExpr := range selectExprs {
+		astExpr := selectExpr.Expr
+		switch exprImpl := astExpr.(type) {
+		case *tree.FuncExpr:
+			funcRef, ok := exprImpl.Func.FunctionReference.(*tree.UnresolvedName)
+			if !ok {
+				return moerr.NewNYI(builder.GetContext(), "function expr '%v'", exprImpl)
+			}
+			funcName := funcRef.Parts[0]
+			if funcName == NameGroupConcat {
+				ctx.forceWindows = true
+				//ctx.isDistinct=true
+				logutil.Infof("debug find group_concat")
+				break
+			}
+		default:
+			continue
+		}
+	}
+	return nil
+}
+
+func (ctx *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
+	windowsSpecList := make([]*plan.Expr, 0, len(ctx.aggregates))
+	j := 0
+
+	if len(ctx.windows) < 1 {
+		panic("group_concat1")
+	}
+
+	for i := range ctx.aggregates {
+		windowExpr := DeepCopyExpr(ctx.windows[j])
+		windowSpec := windowExpr.GetW()
+		if windowSpec == nil {
+			panic("group_concat1")
+		}
+		windowSpec.WindowFunc = DeepCopyExpr(ctx.aggregates[i])
+		windowExpr.Typ = ctx.aggregates[i].Typ
+
+		if windowSpec.Name == NameGroupConcat {
+			if j < len(ctx.windows)-1 {
+				j++
+			}
+		} else {
+			windowSpec.OrderBy = nil
+		}
+		windowsSpecList = append(windowsSpecList, windowExpr)
+	}
+
+	//clean ctx.windows to avoid adding another windows node
+	ctx.windows = nil
+
+	return windowsSpecList, nil
+}
+
 func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
 	// preprocess CTEs
 	if stmt.With != nil {
@@ -2136,14 +2211,31 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
 		}
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_AGG,
-			Children:    []int32{nodeID},
-			GroupBy:     ctx.groups,
-			AggList:     ctx.aggregates,
-			BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
-		}, ctx)
+		if ctx.forceWindows {
 
+			winSpecList, err := ctx.generateForceWinSpecList()
+			if err != nil {
+				return 0, err
+			}
+
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_AGG,
+				Children:    []int32{nodeID},
+				GroupBy:     ctx.groups,
+				AggList:     ctx.aggregates,
+				BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
+				WinSpecList: winSpecList,
+			}, ctx)
+
+		} else {
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_AGG,
+				Children:    []int32{nodeID},
+				GroupBy:     ctx.groups,
+				AggList:     ctx.aggregates,
+				BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
+			}, ctx)
+		}
 		if len(havingList) > 0 {
 			var newFilterList []*plan.Expr
 			var expr *plan.Expr

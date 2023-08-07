@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,7 +74,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -868,13 +870,31 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 			panic(err)
 		}
 		var e *plan.Expr = nil
+		var cfg any
+
 		if len(f.F.Args) > 0 {
+
+			//for group concat, the last arg is separator string
+			if f.F.Func.ObjName == plan2.NameGroupConcat && len(f.F.Args) > 1 {
+				separatorExpr := f.F.Args[len(f.F.Args)-1]
+				executor, err := colexec.NewExpressionExecutor(proc, separatorExpr)
+				if err != nil {
+					panic(err)
+				}
+				vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+				if err != nil {
+					panic(err)
+				}
+				cfg = vec.GetStringAt(0)
+			}
+
 			e = f.F.Args[0]
 		}
 		aggs[i] = agg.Aggregate{
-			E:    e,
-			Dist: distinct,
-			Op:   fun.GetSpecialId(),
+			E:      e,
+			Dist:   distinct,
+			Op:     fun.GetSpecialId(),
+			Config: cfg,
 		}
 		if e != nil {
 			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
@@ -918,8 +938,6 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, proc *process.Process) *group.Argument {
 	var lenAggs, lenMultiAggs int
 	aggs := make([]agg.Aggregate, len(n.AggList))
-	// multiaggs: is not like the normal agg funcs which have only one arg exclude 'distinct'
-	// for now, we have group_concat
 	multiaggs := make([]group_concat.Argument, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {

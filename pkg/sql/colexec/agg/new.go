@@ -62,6 +62,10 @@ func ReturnType(op int, typ types.Type) (types.Type, error) {
 }
 
 func New(op int, dist bool, typ types.Type) (Agg[any], error) {
+	return NewWithConfig(op, dist, typ, nil)
+}
+
+func NewWithConfig(op int, dist bool, typ types.Type, config any) (Agg[any], error) {
 	switch op {
 	case AggregateSum:
 		return newSum(typ, dist), nil
@@ -91,6 +95,8 @@ func New(op int, dist bool, typ types.Type) (Agg[any], error) {
 		return newAnyValue(typ, dist), nil
 	case AggregateMedian:
 		return newMedian(typ, dist), nil
+	case AggregateGroupConcat1:
+		return NewGroupConcat1(typ, dist, config), nil
 	case WinRank:
 		r := NewRank()
 		return NewUnaryAgg(WinRank, r, false, typ, RankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
@@ -854,4 +860,22 @@ func newGenericMedian[T Numeric](typ types.Type, dist bool) Agg[any] {
 		panic(moerr.NewNotSupportedNoCtx("median in distinct mode"))
 	}
 	return NewUnaryAgg(AggregateMedian, aggPriv, false, typ, MedianReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+}
+
+func NewGroupConcat1(typ types.Type, dist bool, config any) Agg[any] {
+
+	if config == nil {
+		config = ","
+	}
+
+	switch typ.Oid {
+	case types.T_varchar:
+		aggPriv := newGroupConcat1(config.(string))
+		if dist {
+			return NewUnaryDistAgg(AggregateGroupConcat1, aggPriv, false, typ, GroupConcat1ReturnType(nil), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateGroupConcat1, aggPriv, false, typ, GroupConcat1ReturnType(nil), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	}
+
+	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for group_concat", typ))
 }

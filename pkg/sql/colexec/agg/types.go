@@ -44,6 +44,7 @@ const (
 	AggregateAnyValue
 	AggregateMedian
 	AggregateGroupConcat
+	AggregateGroupConcat1
 
 	WinRank
 	WinRowNumber
@@ -66,6 +67,7 @@ var Names = [...]string{
 	AggregateAnyValue:            "any",
 	AggregateMedian:              "median",
 	AggregateGroupConcat:         "group_concat",
+	AggregateGroupConcat1:        "group_concat1",
 
 	WinRank:      "rank",
 	WinRowNumber: "row_number",
@@ -73,9 +75,10 @@ var Names = [...]string{
 }
 
 type Aggregate struct {
-	Op   int
-	Dist bool
-	E    *plan.Expr
+	Op     int
+	Dist   bool
+	E      *plan.Expr
+	Config any
 }
 
 // Agg agg interface

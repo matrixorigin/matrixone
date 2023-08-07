@@ -237,6 +237,8 @@ type BindContext struct {
 	rightChild *BindContext
 
 	defaultDatabase string
+
+	forceWindows bool
 }
 
 type NameTuple struct {

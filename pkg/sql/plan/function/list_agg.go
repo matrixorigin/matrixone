@@ -315,4 +315,22 @@ var supportedAggregateFunctions = []FuncNew{
 			},
 		},
 	},
+
+	{
+		functionId: GROUP_CONCAT1,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    agg.GroupConcat1ReturnType,
+				specialId:  agg.AggregateGroupConcat1,
+			},
+		},
+	},
 }
