@@ -131,7 +131,7 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		bs, size, ok := m.objCache.Get(key, vector.Preloading)
+		bs, size, ok := m.objCache.Get(ctx, key, vector.Preloading)
 		numRead++
 		if ok {
 			vector.Entries[i].ObjectBytes = bs
@@ -178,7 +178,7 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
+		m.objCache.Set(ctx, key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
 
 	}
 	return nil

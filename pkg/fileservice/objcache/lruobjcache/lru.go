@@ -16,7 +16,10 @@ package lruobjcache
 
 import (
 	"container/list"
+	"context"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type LRU struct {
@@ -30,9 +33,10 @@ type LRU struct {
 }
 
 type lruItem struct {
-	Key   any
-	Value []byte
-	Size  int64
+	Key     any
+	Value   []byte
+	Size    int64
+	NumRead int
 }
 
 func New(capacity int64,
@@ -47,7 +51,7 @@ func New(capacity int64,
 	}
 }
 
-func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
+func (l *LRU) Set(ctx context.Context, key any, value []byte, size int64, preloading bool) {
 	l.Lock()
 	defer l.Unlock()
 
@@ -87,10 +91,20 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
 		l.postSet(key, value, size, isNewEntry)
 	}
 
-	l.evict()
+	l.evict(ctx)
 }
 
-func (l *LRU) evict() {
+func (l *LRU) evict(ctx context.Context) {
+	var numEvict, numEvictWithZeroRead int64
+	defer func() {
+		if numEvict > 0 || numEvictWithZeroRead > 0 {
+			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+				set.FileService.Cache.LRU.Evict.Add(numEvict)
+				set.FileService.Cache.LRU.EvictWithZeroRead.Add(numEvictWithZeroRead)
+			})
+		}
+	}()
+
 	for {
 		if l.size <= l.capacity {
 			return
@@ -111,13 +125,17 @@ func (l *LRU) evict() {
 			if l.postEvict != nil {
 				l.postEvict(item.Key, item.Value, item.Size)
 			}
+			numEvict++
+			if item.NumRead == 0 {
+				numEvictWithZeroRead++
+			}
 			break
 		}
 
 	}
 }
 
-func (l *LRU) Get(key any, preloading bool) (value []byte, size int64, ok bool) {
+func (l *LRU) Get(ctx context.Context, key any, preloading bool) (value []byte, size int64, ok bool) {
 	l.Lock()
 	defer l.Unlock()
 	if elem, ok := l.kv[key]; ok {
@@ -125,6 +143,7 @@ func (l *LRU) Get(key any, preloading bool) (value []byte, size int64, ok bool) 
 			l.evicts.MoveToFront(elem)
 		}
 		item := elem.Value.(*lruItem)
+		item.NumRead++
 		return item.Value, item.Size, true
 	}
 	return nil, 0, false

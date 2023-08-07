@@ -61,7 +61,7 @@ func LoadBF(
 	fs fileservice.FileService,
 	noLoad bool,
 ) (bf objectio.BloomFilter, err error) {
-	v, ok := cache.Get(*loc.ShortName())
+	v, ok := cache.Get(ctx, *loc.ShortName())
 	if ok {
 		bf = objectio.BloomFilter(v)
 		return
@@ -74,7 +74,7 @@ func LoadBF(
 	if err != nil {
 		return
 	}
-	cache.Set(*loc.ShortName(), v, int64(size))
+	cache.Set(ctx, *loc.ShortName(), v, int64(size))
 	bf = objectio.BloomFilter(v)
 	return
 }
