@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package test
 
 import (
 	"bytes"
@@ -32,6 +32,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 
@@ -240,7 +241,7 @@ func TestAppend4(t *testing.T) {
 	}
 }
 
-func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
+func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1))
 	defer bat.Close()
 	bats := bat.Split(4)

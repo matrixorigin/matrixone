@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package test
 
 import (
 	"context"
@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 
 	checkpoint2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
@@ -53,7 +54,7 @@ func init() {
 }
 
 type testEngine struct {
-	*DB
+	*db.DB
 	t        *testing.T
 	schema   *catalog.Schema
 	tenantID uint32 // for almost tests, userID and roleID is not important
@@ -75,7 +76,7 @@ func (e *testEngine) bindTenantID(tenantID uint32) { e.tenantID = tenantID }
 func (e *testEngine) restart(ctx context.Context) {
 	_ = e.DB.Close()
 	var err error
-	e.DB, err = Open(ctx, e.Dir, e.Opts)
+	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
 	// only ut executes this checker
 	e.DB.DiskCleaner.AddChecker(
 		func(item any) bool {
@@ -312,9 +313,9 @@ func (e *testEngine) tryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	return
 }
 
-func initDB(ctx context.Context, t *testing.T, opts *options.Options) *DB {
+func initDB(ctx context.Context, t *testing.T, opts *options.Options) *db.DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	db, _ := Open(ctx, dir, opts)
+	db, _ := db.Open(ctx, dir, opts)
 	// only ut executes this checker
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {
@@ -326,7 +327,7 @@ func initDB(ctx context.Context, t *testing.T, opts *options.Options) *DB {
 	return db
 }
 
-func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalog.Schema)) {
+func withTestAllPKType(t *testing.T, tae *db.DB, test func(*testing.T, *db.DB, *catalog.Schema)) {
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(100)
 	defer pool.Release()
@@ -351,13 +352,13 @@ func lenOfBats(bats []*containers.Batch) int {
 	return rows
 }
 
-func printCheckpointStats(t *testing.T, tae *DB) {
+func printCheckpointStats(t *testing.T, tae *db.DB) {
 	t.Logf("GetCheckpointedLSN: %d", tae.Wal.GetCheckpointed())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Wal.GetPenddingCnt())
 	t.Logf("GetCurrSeqNum: %d", tae.Wal.GetCurrSeqNum())
 }
 
-func createDB(t *testing.T, e *DB, dbName string) {
+func createDB(t *testing.T, e *db.DB, dbName string) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
 	_, err = txn.CreateDatabase(dbName, "", "")
@@ -365,7 +366,7 @@ func createDB(t *testing.T, e *DB, dbName string) {
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
-func dropDB(t *testing.T, e *DB, dbName string) {
+func dropDB(t *testing.T, e *db.DB, dbName string) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
 	_, err = txn.DropDatabase(dbName)
@@ -373,13 +374,13 @@ func dropDB(t *testing.T, e *DB, dbName string) {
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
-func createRelation(t *testing.T, e *DB, dbName string, schema *catalog.Schema, createDB bool) (db handle.Database, rel handle.Relation) {
+func createRelation(t *testing.T, e *db.DB, dbName string, schema *catalog.Schema, createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, db, rel := createRelationNoCommit(t, e, dbName, schema, createDB)
 	assert.NoError(t, txn.Commit(context.Background()))
 	return
 }
 
-func createRelationNoCommit(t *testing.T, e *DB, dbName string, schema *catalog.Schema, createDB bool) (txn txnif.AsyncTxn, db handle.Database, rel handle.Relation) {
+func createRelationNoCommit(t *testing.T, e *db.DB, dbName string, schema *catalog.Schema, createDB bool) (txn txnif.AsyncTxn, db handle.Database, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
 	if createDB {
@@ -397,7 +398,7 @@ func createRelationNoCommit(t *testing.T, e *DB, dbName string, schema *catalog.
 func createRelationAndAppend(
 	t *testing.T,
 	tenantID uint32,
-	e *DB,
+	e *db.DB,
 	dbName string,
 	schema *catalog.Schema,
 	bat *containers.Batch,
@@ -420,7 +421,7 @@ func createRelationAndAppend(
 	return
 }
 
-func getRelation(t *testing.T, tenantID uint32, e *DB, dbName, tblName string) (txn txnif.AsyncTxn, rel handle.Relation) {
+func getRelation(t *testing.T, tenantID uint32, e *db.DB, dbName, tblName string) (txn txnif.AsyncTxn, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
 	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
@@ -439,7 +440,7 @@ func getRelationWithTxn(t *testing.T, txn txnif.AsyncTxn, dbName, tblName string
 	return
 }
 
-func getDefaultRelation(t *testing.T, e *DB, name string) (txn txnif.AsyncTxn, rel handle.Relation) {
+func getDefaultRelation(t *testing.T, e *db.DB, name string) (txn txnif.AsyncTxn, rel handle.Relation) {
 	return getRelation(t, 0, e, defaultTestDB, name)
 }
 
@@ -524,7 +525,7 @@ func forEachSegment(rel handle.Relation, fn func(seg handle.Segment) error) {
 	}
 }
 
-func appendFailClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func appendFailClosure(t *testing.T, data *containers.Batch, name string, e *db.DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -538,7 +539,7 @@ func appendFailClosure(t *testing.T, data *containers.Batch, name string, e *DB,
 	}
 }
 
-func appendClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func appendClosure(t *testing.T, data *containers.Batch, name string, e *db.DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -552,7 +553,7 @@ func appendClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg 
 	}
 }
 
-func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *db.DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -572,7 +573,7 @@ func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *DB, 
 	}
 }
 
-func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+func compactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict bool) {
 	txn, rel := getRelation(t, tenantID, e, dbName, schema.Name)
 
 	var metas []*catalog.BlockEntry
@@ -610,7 +611,7 @@ func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *
 	}
 }
 
-func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+func mergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict bool) {
 	txn, _ := e.StartTxn(nil)
 	txn.BindAccessInfo(tenantID, 0, 0)
 	db, _ := txn.GetDatabase(dbName)
