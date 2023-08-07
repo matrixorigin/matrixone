@@ -122,6 +122,9 @@ type clientConn struct {
 	// setVarStmts keeps all set user variable statements. When connection
 	// is transferred, set all these variables first.
 	setVarStmts []string
+	// prepareStmts keeps all prepare statements. When connection
+	// is transferred, execute all these prepare statements first.
+	prepareStmts []string
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
 	// testHelper is used for testing.
@@ -257,6 +260,8 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		return c.handleSuspendAccount(ev)
 	case *dropAccountEvent:
 		return c.handleDropAccount(ev)
+	case *prepareEvent:
+		return c.handlePrepare(ev)
 	default:
 	}
 	return nil
@@ -386,6 +391,12 @@ func (c *clientConn) handleDropAccount(e *dropAccountEvent) error {
 	return c.handleSuspendAccount(se)
 }
 
+// handleSetVar handles the prepare event.
+func (c *clientConn) handlePrepare(e *prepareEvent) error {
+	c.prepareStmts = append(c.prepareStmts, e.stmt)
+	return nil
+}
+
 // Close implements the ClientConn interface.
 func (c *clientConn) Close() error {
 	return nil
@@ -460,6 +471,13 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
+		if _, err := sc.ExecStmt(stmt, nil); err != nil {
+			return nil, err
+		}
+	}
+
+	// Execute the prepare statements.
+	for _, stmt := range c.prepareStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {
 			return nil, err
 		}

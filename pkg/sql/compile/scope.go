@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"runtime/debug"
-	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -817,8 +816,7 @@ func (s *Scope) replace(c *Compile) error {
 		}
 		delAffectedRows = result.AffectedRows
 	}
-
-	result, err := c.runSqlWithResult(strings.Replace(c.sql, "replace", "insert", 1))
+	result, err := c.runSqlWithResult("insert " + c.sql[7:])
 	if err != nil {
 		return err
 	}
