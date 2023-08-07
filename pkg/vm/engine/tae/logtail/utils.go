@@ -45,9 +45,9 @@ const (
 	CheckpointVersion1 uint32 = 1
 	CheckpointVersion2 uint32 = 2
 	CheckpointVersion3 uint32 = 3
-	CheckpointVersion4 uint32 = 3
+	CheckpointVersion4 uint32 = 4
 
-	CheckpointCurrentVersion = CheckpointVersion3
+	CheckpointCurrentVersion = CheckpointVersion4
 )
 
 const (
@@ -227,7 +227,7 @@ func init() {
 		BlkMetaSchema, // 23
 	}
 
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V3
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V4
 	checkpointDataReferVersions = make(map[uint32][24]*checkpointDataItem)
 
 	for idx, schema := range checkpointDataSchemas_V1 {
@@ -259,7 +259,7 @@ func init() {
 
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
 	var checkpointDataRefer [MaxIDX]*checkpointDataItem
-	for idx, schema := range checkpointDataSchemas_V3 {
+	for idx, schema := range schemas {
 		checkpointDataRefer[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
