@@ -2052,6 +2052,20 @@ func (ses *Session) StatusSession() *status.Session {
 	}
 }
 
+func (ses *Session) SetSessionRoutineStatus(status string) error {
+	var err error
+	if status == tree.AccountStatusRestricted.String() {
+		ses.getRoutine().setResricted(true)
+	} else if status == tree.AccountStatusSuspend.String() {
+		ses.getRoutine().setResricted(false)
+	} else if status == tree.AccountStatusOpen.String() {
+		ses.getRoutine().setResricted(false)
+	} else {
+		err = moerr.NewInternalErrorNoCtx("SetSessionRoutineStatus have invalid status : %s", status)
+	}
+	return err
+}
+
 func checkPlanIsInsertValues(proc *process.Process,
 	p *plan.Plan) (bool, [][]colexec.ExpressionExecutor) {
 	qry := p.GetQuery()

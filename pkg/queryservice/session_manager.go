@@ -28,6 +28,8 @@ type Session interface {
 	GetTenantName() string
 	// StatusSession converts the session to status.Session.
 	StatusSession() *status.Session
+	// SetSessionRoutineStatus set the session Status
+	SetSessionRoutineStatus(status string) error
 }
 
 // SessionManager manages all sessions locally.

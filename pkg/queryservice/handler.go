@@ -39,6 +39,20 @@ func (s *queryService) handleRequest(ctx context.Context, req *pb.Request, resp 
 			Sessions: sessions,
 		}
 		return nil
+	case pb.CmdMethod_AlterAccount:
+		if req.AlterAccountRequest == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		err := s.alterSessionsStatus(req.AlterAccountRequest.Tenant, req.AlterAccountRequest.SysTenant, req.AlterAccountRequest.Status)
+		if err != nil {
+			resp.WrapError(err)
+			return nil
+		}
+		resp.AlterAccountResponse = &pb.AlterAccountResponse{
+			AlterSuccess: true,
+		}
+
+		return nil
 	default:
 		return moerr.NewInternalError(ctx, "Unsupported cmd: %s", req.CmdMethod)
 	}
@@ -59,4 +73,22 @@ func (s *queryService) processList(tenant string, sysTenant bool) ([]*status.Ses
 		sessions = append(sessions, ses.StatusSession())
 	}
 	return sessions, nil
+}
+
+// alterSessionStatus alter session routine accoring to the input status
+func (s *queryService) alterSessionsStatus(tenant string, sysTenant bool, status string) error {
+	var ss []Session
+	if sysTenant {
+		ss = s.sessionMgr.GetAllSessions()
+	} else {
+		ss = s.sessionMgr.GetSessionsByTenant(tenant)
+	}
+	for _, ses := range ss {
+		if ses.GetTenantName() == tenant {
+			if err := ses.SetSessionRoutineStatus(status); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
