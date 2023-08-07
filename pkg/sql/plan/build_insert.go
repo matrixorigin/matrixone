@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -53,7 +55,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
-	checkInsertPkDup, pkPosInValues, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +66,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, err
 	}
 	var pkFilterExprs []*Expr
-	if !checkInsertPkDup {
+	if CNPrimaryCheck && len(pkPosInValues) > 0 {
 		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
@@ -167,7 +169,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs)
+		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, isInsertWithoutAutoPkCol)
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +188,6 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
 		return nil
 	}
-
 	pkPos, pkTyp := getPkPos(tableDef, true)
 	if pkPos == -1 {
 		if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
@@ -198,78 +199,186 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 	node := builder.qry.Nodes[0]
 
-	pkValueExprs := make([]*Expr, len(pkPosInValues))
-	for idx, cols := range node.RowsetData.Cols {
-		pkColIdx, ok := pkPosInValues[idx]
-		if !ok {
-			continue
-		}
-		if len(cols.Data) == 1 {
-			rowExpr := DeepCopyExpr(cols.Data[0].Expr)
-			e, err := forceCastExpr(builder.GetContext(), rowExpr, tableDef.Cols[idx].Typ)
-			if err != nil {
-				return nil
-			}
-			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-				Typ: tableDef.Cols[idx].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						ColPos: int32(pkColIdx),
-					},
-				},
-			}, e})
-			if err != nil {
-				return nil
-			}
-			pkValueExprs[pkColIdx] = expr
-		}
-	}
 	proc := ctx.GetProcess()
 	var bat *batch.Batch
+	var err error
 	if builder.isPrepareStatement {
 		bat = proc.GetPrepareBatch()
 	} else {
 		bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
 	}
-	if bat != nil {
-		for insertRowIdx, pkColIdx := range pkPosInValues {
-			if pkValueExprs[pkColIdx] == nil {
-				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, 0)
-				if constExpr == nil {
-					return nil
-				}
-				typ := makePlan2Type(bat.Vecs[insertRowIdx].GetType())
+	rowsCount := bat.RowCount()
 
-				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-					Typ: typ,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: int32(pkColIdx),
+	colExprs := make([][]*Expr, len(pkPosInValues))
+	pkColLength := len(pkPosInValues)
+	var colTyp *Type
+	var insertRowIdx int
+	var pkColIdx int
+
+	for insertRowIdx, pkColIdx = range pkPosInValues {
+		valExprs := make([]*Expr, rowsCount)
+		rowTyp := bat.Vecs[insertRowIdx].GetType()
+		colTyp = makePlan2Type(rowTyp)
+
+		var varcharTyp *Type
+		if rowTyp.Oid == types.T_uuid {
+			typ := types.T_varchar.ToType()
+			varcharTyp = MakePlan2Type(&typ)
+		}
+
+		for _, data := range node.RowsetData.Cols[insertRowIdx].Data {
+			rowExpr := DeepCopyExpr(data.Expr)
+			e, err := forceCastExpr(builder.GetContext(), rowExpr, colTyp)
+			if err != nil {
+				return nil
+			}
+			valExprs[data.RowPos] = e
+		}
+
+		for i := 0; i < rowsCount; i++ {
+			if valExprs[i] == nil {
+				if bat.Vecs[insertRowIdx].GetType().Oid == types.T_uuid {
+					// we have not uuid type in plan.Const. so use string & cast string to uuid
+					val := vector.MustFixedCol[types.Uuid](bat.Vecs[insertRowIdx])[i]
+					constExpr := &plan.Expr{
+						Typ: varcharTyp,
+						Expr: &plan.Expr_C{
+							C: &plan.Const{
+								Value: &plan.Const_Sval{
+									Sval: val.ToString(),
+								},
+							},
 						},
+					}
+					valExprs[i], err = appendCastBeforeExpr(proc.Ctx, constExpr, colTyp, false)
+					if err != nil {
+						return nil
+					}
+				} else {
+					constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, uint64(i))
+					if constExpr == nil {
+						return nil
+					}
+					valExprs[i] = &plan.Expr{
+						Typ: colTyp,
+						Expr: &plan.Expr_C{
+							C: constExpr,
+						},
+					}
+				}
+			}
+		}
+		colExprs[pkColIdx] = valExprs
+	}
+
+	if pkColLength == 1 {
+		var orExpr *Expr
+		for i := 0; i < rowsCount; i++ {
+			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+				Typ: colTyp,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						ColPos: int32(pkColIdx),
+						Name:   tableDef.Pkey.PkeyColName,
 					},
-				}, &plan.Expr{
-					Typ: typ,
-					Expr: &plan.Expr_C{
-						C: constExpr,
-					},
-				}})
+				},
+			}, colExprs[0][i]})
+			if err != nil {
+				return nil
+			}
+
+			if i == 0 {
+				orExpr = expr
+			} else {
+				orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
 				if err != nil {
 					return nil
 				}
-
-				pkValueExprs[pkColIdx] = expr
 			}
 		}
-	}
-	return pkValueExprs
+		return []*Expr{orExpr}
+		// args in list must be constant
+		// expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
+		// 	Typ: colTyp,
+		// 	Expr: &plan.Expr_Col{
+		// 		Col: &ColRef{
+		// 			ColPos: 0,
+		// 			Name:   tableDef.Pkey.PkeyColName,
+		// 		},
+		// 	},
+		// }, {
+		// 	Expr: &plan.Expr_List{
+		// 		List: &plan.ExprList{
+		// 			List: colExprs[0],
+		// 		},
+		// 	},
+		// 	Typ: &plan.Type{
+		// 		Id: int32(types.T_tuple),
+		// 	},
+		// }})
+		// if err != nil {
+		// 	return nil
+		// }
+		// return []*Expr{expr}
+	} else {
+		// multi cols pk & one row for insert
+		if rowsCount == 1 {
+			filterExprs := make([]*Expr, pkColLength)
+			for insertRowIdx, pkColIdx = range pkPosInValues {
+				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					Typ: tableDef.Cols[insertRowIdx].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkColIdx),
+							Name:   tableDef.Cols[insertRowIdx].Name,
+						},
+					},
+				}, colExprs[pkColIdx][0]})
+				if err != nil {
+					return nil
+				}
+				filterExprs[pkColIdx] = expr
+			}
+			return filterExprs
+		} else {
+			// seems serial function have poor performance. we have to use or function
+			var orExpr *Expr
+			for i := 0; i < rowsCount; i++ {
+				var andExpr *Expr
+				for insertRowIdx, pkColIdx = range pkPosInValues {
+					eqExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+						Typ: tableDef.Cols[insertRowIdx].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								ColPos: int32(pkColIdx),
+								Name:   tableDef.Cols[insertRowIdx].Name,
+							},
+						},
+					}, colExprs[pkColIdx][i]})
+					if err != nil {
+						return nil
+					}
 
-	// if len(pkValueExprs) == 1 {
-	// 	return pkValueExprs[0]
-	// } else {
-	// 	pkValueExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", pkValueExprs)
-	// 	if err != nil {
-	// 		return nil
-	// 	}
-	// 	return pkValueExpr
-	// }
+					if andExpr == nil {
+						andExpr = eqExpr
+					} else {
+						andExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{andExpr, eqExpr})
+						if err != nil {
+							return nil
+						}
+					}
+				}
+
+				if i == 0 {
+					orExpr = andExpr
+				} else {
+					orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, andExpr})
+					if err != nil {
+						return nil
+					}
+				}
+			}
+			return []*Expr{orExpr}
+		}
+	}
 }

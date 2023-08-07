@@ -42,11 +42,12 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
-	// need change to get update values. not get values from where clause
-	// if !updatePlanCtxs[0].checkInsertPkDup {
-	// 	pkFilterExpr := getPkFilterExpr(builder, tblInfo.tableDefs[0])
-	// 	updatePlanCtxs[0].pkFilterExprs = []*Expr{pkFilterExpr}
+
+	// if len(updatePlanCtxs) == 1 && updatePlanCtxs[0].updatePkCol {
+	// 	pkFilterExpr := getPkFilterExpr(builder, lastNodeId, updatePlanCtxs[0], tblInfo.tableDefs[0])
+	// 	updatePlanCtxs[0].pkFilterExprs = pkFilterExpr
 	// }
+
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
 	// append sink node
@@ -147,24 +148,6 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	}
 
 	updatePlanCtxs := make([]*dmlPlanCtx, len(aliasList))
-	checkInsertPkDup := true
-	if len(aliasList) == 1 && stmt.Where != nil {
-		tableDef := tableInfo.tableDefs[0]
-		if comp, ok := stmt.Where.Expr.(*tree.ComparisonExpr); ok {
-			if comp.Op == tree.EQUAL {
-				if name, ok := comp.Left.(*tree.UnresolvedName); ok {
-					if name.NumParts == 1 && name.Parts[0] == tableDef.Pkey.PkeyColName {
-						checkInsertPkDup = false
-					}
-				} else if name, ok := comp.Right.(*tree.UnresolvedName); ok {
-					if name.NumParts == 1 && name.Parts[0] == tableDef.Pkey.PkeyColName {
-						checkInsertPkDup = false
-					}
-				}
-			}
-		}
-	}
-
 	for i, alias := range aliasList {
 		tableDef := tableInfo.tableDefs[i]
 		updateKeys := tableInfo.updateKeys[i]
@@ -185,25 +168,27 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		updateColPosMap := make(map[string]int)
 		offset := len(tableDef.Cols)
 		updatePkCol := false
+		updatePkColCount := 0
 		var pkNameMap = make(map[string]struct{})
 		if tableDef.Pkey != nil {
 			for _, pkName := range tableDef.Pkey.Names {
 				pkNameMap[pkName] = struct{}{}
 			}
-		} else {
-			// we don't known if update pk. just set true and let check pk dup work
-			updatePkCol = true
 		}
+
 		for colName, updateKey := range updateKeys {
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateKey,
 			})
 			updateColPosMap[colName] = offset
 			if _, ok := pkNameMap[colName]; ok {
-				updatePkCol = true
+				updatePkColCount++
 			}
 			offset++
 		}
+
+		// we don't known if update pk if tableDef.Pkey is nil. just set true and let check pk dup work
+		updatePkCol = tableDef.Pkey == nil || updatePkColCount > 0
 
 		// append  table.* to project list
 		upPlanCtx := getDmlPlanCtx()
@@ -215,7 +200,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
-		upPlanCtx.checkInsertPkDup = checkInsertPkDup
+		upPlanCtx.checkInsertPkDup = true
 		upPlanCtx.updatePkCol = updatePkCol
 
 		for idx, col := range tableDef.Cols {
@@ -256,30 +241,45 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	return lastNodeId, updatePlanCtxs, nil
 }
 
-// func getPkFilterExpr(builder *QueryBuilder, tableDef *TableDef) *Expr {
+// todo:  seems this filter do not make any sense for check pk dup in update statement
+//        need more research
+// func getPkFilterExpr(builder *QueryBuilder, lastNodeId int32, upCtx *dmlPlanCtx, tableDef *TableDef) []*Expr {
+// 	node := builder.qry.Nodes[lastNodeId]
+// 	var pkNameMap = make(map[string]int)
+// 	for idx, pkName := range tableDef.Pkey.Names {
+// 		pkNameMap[pkName] = idx
+// 	}
 
-// 	for _, node := range builder.qry.Nodes {
-// 		if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 {
-// 			continue
-// 		}
-
-// 		preNode := builder.qry.Nodes[node.Children[0]]
-// 		if preNode.NodeType != plan.Node_TABLE_SCAN || preNode.TableDef.TblId != tableDef.TblId {
-// 			continue
-// 		}
-
-// 		basePkName := tableDef.Pkey.PkeyColName
-// 		tblAndPkName := fmt.Sprintf("%s.%s", tableDef.Name, tableDef.Pkey.PkeyColName)
-// 		if e, ok := node.FilterList[0].Expr.(*plan.Expr_F); ok && e.F.Func.ObjName == "=" {
-// 			if pkExpr, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
-// 				return DeepCopyExpr(e.F.Args[1])
+// 	filterExpr := make([]*Expr, len(tableDef.Pkey.Names))
+// 	for colName, colIdx := range upCtx.updateColPosMap {
+// 		if pkIdx, ok := pkNameMap[colName]; ok {
+// 			switch e := node.ProjectList[colIdx].Expr.(type) {
+// 			case *plan.Expr_C:
+// 			case *plan.Expr_F:
+// 				if e.F.Func.ObjName != "cast" {
+// 					return nil
+// 				}
+// 				if _, isConst := e.F.Args[0].Expr.(*plan.Expr_C); !isConst {
+// 					return nil
+// 				}
+// 			default:
+// 				return nil
 // 			}
 
-// 			if pkExpr, ok := e.F.Args[1].Expr.(*plan.Expr_Col); ok && (pkExpr.Col.Name == tblAndPkName || pkExpr.Col.Name == basePkName) {
-// 				return DeepCopyExpr(e.F.Args[0])
+// 			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+// 				Typ: node.ProjectList[colIdx].Typ,
+// 				Expr: &plan.Expr_Col{
+// 					Col: &ColRef{
+// 						ColPos: int32(pkIdx),
+// 						Name:   tableDef.Pkey.PkeyColName,
+// 					},
+// 				},
+// 			}, node.ProjectList[colIdx]})
+// 			if err != nil {
+// 				return nil
 // 			}
-
+// 			filterExpr[pkIdx] = expr
 // 		}
 // 	}
-// 	return nil
+// 	return filterExpr
 // }

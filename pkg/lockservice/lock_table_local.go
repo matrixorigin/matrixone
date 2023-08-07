@@ -265,17 +265,18 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 					// txn1 unlock, notify txn2/op1
 					// txn2/op3 get lock before txn2/op1 get notify
 					// TODO: add more test
-					for _, w := range c.w.waiters.all() {
+					c.w.waiters.iter(func(w *waiter) bool {
 						if bytes.Equal(lock.txnID, w.txnID) {
 							w.close(l.bind.ServiceID, notifyValue{})
-							continue
+							return true
 						}
 
 						lock.waiter.add(l.bind.ServiceID, false, w)
 						if err := l.detector.check(c.w.txnID, w.belongTo); err != nil {
 							panic("BUG: active dead lock check can not fail")
 						}
-					}
+						return true
+					})
 					c.w.waiters.reset()
 					c.w.close(l.bind.ServiceID, notifyValue{})
 					c.w = nil
@@ -354,7 +355,11 @@ func (l *localLockTable) handleLockConflictLocked(
 	w *waiter,
 	key []byte,
 	conflictWith Lock) {
-	childWaiters := w.waiters.all()
+	childWaiters := make([]*waiter, 0)
+	w.waiters.iter(func(w *waiter) bool {
+		childWaiters = append(childWaiters, w)
+		return true
+	})
 	w.waiters.reset()
 
 	// find conflict, and wait prev txn completed, and a new
