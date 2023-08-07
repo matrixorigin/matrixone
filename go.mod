@@ -45,8 +45,9 @@ require (
 	github.com/prometheus/client_model v0.4.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.38.1
+	github.com/segmentio/kafka-go v0.4.42
 	github.com/shirou/gopsutil/v3 v3.22.4
-	github.com/smartystreets/goconvey v1.8.0
+	github.com/smartystreets/goconvey v1.7.2
 	github.com/spf13/cobra v1.7.0
 	github.com/stretchr/testify v1.8.2
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.673
@@ -91,7 +92,7 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/gopherjs/gopherjs v1.17.2 // indirect
+	github.com/gopherjs/gopherjs v1.12.80 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-immutable-radix v1.0.0 // indirect
 	github.com/hashicorp/go-msgpack v0.5.3 // indirect
