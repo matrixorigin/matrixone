@@ -45,6 +45,7 @@ const (
 	CheckpointVersion1 uint32 = 1
 	CheckpointVersion2 uint32 = 2
 	CheckpointVersion3 uint32 = 3
+	CheckpointVersion4 uint32 = 3
 
 	CheckpointCurrentVersion = CheckpointVersion3
 )
@@ -92,6 +93,16 @@ const (
 	Checkpoint_Meta_Segment_LOC_IDX         = 6
 )
 
+// for ver1-3
+const (
+	Checkpoint_Meta_Insert_Block_Start_IDX = 3
+	Checkpoint_Meta_Insert_Block_End_IDX   = 4
+	Checkpoint_Meta_Delete_Block_Start_IDX = 5
+	Checkpoint_Meta_Delete_Block_End_IDX   = 6
+	Checkpoint_Meta_Segment_Start_IDX      = 7
+	Checkpoint_Meta_Segment_End_IDX        = 8
+)
+
 type checkpointDataItem struct {
 	schema *catalog.Schema
 	types  []types.Type
@@ -101,11 +112,13 @@ type checkpointDataItem struct {
 var checkpointDataSchemas_V1 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V2 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V3 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V4 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataRefer_V1 [MaxIDX]*checkpointDataItem
 var checkpointDataRefer_V2 [MaxIDX]*checkpointDataItem
 var checkpointDataRefer_V3 [MaxIDX]*checkpointDataItem
+var checkpointDataRefer_V4 [MaxIDX]*checkpointDataItem
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
 
 func init() {
@@ -162,6 +175,32 @@ func init() {
 		BlkMetaSchema, // 23
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
+		MetaSchema_V1,
+		catalog.SystemDBSchema,
+		TxnNodeSchema,
+		DBDelSchema, // 3
+		DBDNSchema,
+		catalog.SystemTableSchema,
+		TblDNSchema,
+		TblDelSchema, // 7
+		TblDNSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
+		SegSchema, // 11
+		SegDNSchema,
+		DelSchema,
+		SegDNSchema,
+		BlkMetaSchema, // 15
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 19
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 23
+	}
+	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
 		MetaSchema,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
@@ -215,6 +254,19 @@ func init() {
 		}
 	}
 	checkpointDataReferVersions[CheckpointVersion3] = checkpointDataRefer_V3
+	registerCheckpointDataReferVersion(CheckpointVersion4, checkpointDataSchemas_V4[:])
+}
+
+func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
+	var checkpointDataRefer [MaxIDX]*checkpointDataItem
+	for idx, schema := range checkpointDataSchemas_V3 {
+		checkpointDataRefer[idx] = &checkpointDataItem{
+			schema,
+			append(BaseTypes, schema.Types()...),
+			append(BaseAttr, schema.AllNames()...),
+		}
+	}
+	checkpointDataReferVersions[version] = checkpointDataRefer
 }
 
 func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (*CheckpointData, error) {
@@ -509,7 +561,7 @@ func (data *CNCheckpointData) PrefetchFrom(
 	return prefetchCheckpointData(ctx, version, service, key)
 }
 
-func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta) {
+func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32) (meta *CheckpointMeta) {
 	if len(data.meta) != 0 {
 		meta = data.meta[tableID]
 		return
@@ -520,9 +572,19 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 	blkDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_LOC_IDX]
 	segDel := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_LOC_IDX]
 
-	i := vector.OrderedFindFirstIndexInSortedSlice[uint64](tableID, tidVec)
-	if i < 0 {
-		return
+	var i int
+	if version <= CheckpointVersion3 {
+		i = -1
+		for idx, id := range tidVec {
+			if id == tableID {
+				i = idx
+			}
+		}
+	} else {
+		i = vector.OrderedFindFirstIndexInSortedSlice[uint64](tableID, tidVec)
+		if i < 0 {
+			return
+		}
 	}
 	tid := tidVec[i]
 	blkInsStr := blkIns.GetBytesAt(i)
@@ -564,10 +626,92 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta
 	meta = data.meta[tableID]
 	return
 }
+func (data *CNCheckpointData) fillInMetaBatchWithLocation(location objectio.Location, m *mpool.MPool) (err error) {
+	length := data.bats[MetaIDX].Vecs[2].Length()
+	insVec := vector.NewVec(types.T_varchar.ToType())
+	cnInsVec := vector.NewVec(types.T_varchar.ToType())
+	delVec := vector.NewVec(types.T_varchar.ToType())
+	segVec := vector.NewVec(types.T_varchar.ToType())
 
+	tidVec := data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX]
+	blkInsStart := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_Start_IDX]
+	blkInsEnd := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_End_IDX]
+	blkDelStart := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_Start_IDX]
+	blkDelEnd := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_End_IDX]
+	segDelStart := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_Start_IDX]
+	segDelEnd := data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_End_IDX]
+	for i := 0; i < length; i++ {
+		insStart := vector.GetFixedAt[int32](blkInsStart, i)
+		insEnd := vector.GetFixedAt[int32](blkInsEnd, i)
+		if insStart < insEnd {
+			insLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), BLKMetaInsertIDX, uint64(insStart), uint64(insEnd))
+			err = vector.AppendAny(insVec, []byte(insLoc), false, m)
+			if err != nil {
+				return
+			}
+		} else {
+			err = vector.AppendAny(insVec, nil, true, m)
+			if err != nil {
+				return
+			}
+		}
+
+		delStart := vector.GetFixedAt[int32](blkDelStart, i)
+		delEnd := vector.GetFixedAt[int32](blkDelEnd, i)
+		if delStart < delEnd {
+			delLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), BLKMetaDeleteIDX, uint64(delStart), uint64(delEnd))
+			err = vector.AppendAny(delVec, []byte(delLoc), false, m)
+			if err != nil {
+				return
+			}
+			cnInsLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), BLKCNMetaInsertIDX, uint64(delStart), uint64(delEnd))
+			err = vector.AppendAny(cnInsVec, []byte(cnInsLoc), false, m)
+			if err != nil {
+				return
+			}
+		} else {
+			err = vector.AppendAny(delVec, nil, true, m)
+			if err != nil {
+				return
+			}
+			err = vector.AppendAny(cnInsVec, nil, true, m)
+			if err != nil {
+				return
+			}
+		}
+
+		segStart := vector.GetFixedAt[int32](segDelStart, i)
+		segEnd := vector.GetFixedAt[int32](segDelEnd, i)
+		if segStart < segEnd {
+			segLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), SEGDeleteIDX, uint64(segStart), uint64(segEnd))
+			err = vector.AppendAny(segVec, []byte(segLoc), false, m)
+			if err != nil {
+				return
+			}
+		} else {
+			err = vector.AppendAny(segVec, nil, true, m)
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	vector.AppendAny(tidVec, uint64(0), false, m)
+	blkLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), BLKMetaInsertIDX, uint64(0), uint64(0))
+	vector.AppendAny(insVec, []byte(blkLoc), false, m)
+	vector.AppendAny(cnInsVec, nil, true, m)
+	vector.AppendAny(delVec, nil, true, m)
+	vector.AppendAny(segVec, nil, true, m)
+	data.bats[MetaIDX].Vecs[Checkpoint_Meta_Insert_Block_LOC_IDX] = insVec
+	data.bats[MetaIDX].Vecs[Checkpoint_Meta_CN_Delete_Block_LOC_IDX] = cnInsVec
+	data.bats[MetaIDX].Vecs[Checkpoint_Meta_Delete_Block_LOC_IDX] = delVec
+	data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_LOC_IDX] = segVec
+	return
+}
 func (data *CNCheckpointData) ReadFromData(
 	ctx context.Context,
 	tableID uint64,
+	location objectio.Location,
 	reader *blockio.BlockReader,
 	version uint32,
 	m *mpool.MPool,
@@ -575,13 +719,113 @@ func (data *CNCheckpointData) ReadFromData(
 
 	var metaBats []*batch.Batch
 	metaIdx := checkpointDataReferVersions[version][MetaIDX]
-	metaBats, err = LoadCNSubBlkColumnsByMeta(ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, m)
+	metaBats, err = LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, m)
 	if err != nil {
 		return
 	}
 	metaBat := metaBats[0]
 	data.bats[MetaIDX] = metaBat
-	meta := data.GetTableMeta(tableID)
+	if version <= CheckpointVersion3 {
+		if tableID == pkgcatalog.MO_DATABASE_ID || tableID == pkgcatalog.MO_TABLES_ID || tableID == pkgcatalog.MO_COLUMNS_ID {
+			dataBats = make([]*batch.Batch, MetaMaxIdx)
+			switch tableID {
+			case pkgcatalog.MO_DATABASE_ID:
+				item := checkpointDataReferVersions[version][DBInsertIDX]
+				dataBats[BlockInsert], err = LoadCNSubBlkColumnsByMetaWithId(ctx, item.types, item.attrs, 0, uint16(DBInsertIDX), version, reader, m)
+				if err != nil {
+					return
+				}
+				item = checkpointDataReferVersions[version][DBDeleteIDX]
+				dataBats[BlockDelete], err = LoadCNSubBlkColumnsByMetaWithId(ctx, item.types, item.attrs, 0, uint16(DBDeleteIDX), version, reader, m)
+				if err != nil {
+					return
+				}
+			case pkgcatalog.MO_TABLES_ID:
+				item := checkpointDataReferVersions[version][TBLInsertIDX]
+				dataBats[BlockInsert], err = LoadCNSubBlkColumnsByMetaWithId(ctx, item.types, item.attrs, 0, uint16(TBLInsertIDX), version, reader, m)
+				if err != nil {
+					return
+				}
+				item = checkpointDataReferVersions[version][TBLDeleteIDX]
+				dataBats[BlockDelete], err = LoadCNSubBlkColumnsByMetaWithId(ctx, item.types, item.attrs, 0, uint16(TBLDeleteIDX), version, reader, m)
+				if err != nil {
+					return
+				}
+			case pkgcatalog.MO_COLUMNS_ID:
+				item := checkpointDataReferVersions[version][TBLColInsertIDX]
+				dataBats[BlockInsert], err = LoadCNSubBlkColumnsByMetaWithId(ctx, item.types, item.attrs, 0, uint16(TBLColInsertIDX), version, reader, m)
+				if err != nil {
+					return
+				}
+				item = checkpointDataReferVersions[version][TBLColDeleteIDX]
+				dataBats[BlockDelete], err = LoadCNSubBlkColumnsByMetaWithId(ctx, item.types, item.attrs, 0, uint16(TBLColDeleteIDX), version, reader, m)
+				if err != nil {
+					return
+				}
+			}
+			if version == CheckpointVersion1 {
+				if tableID == pkgcatalog.MO_TABLES_ID {
+					bat := data.bats[BlockInsert]
+					if bat == nil {
+						return
+					}
+					versionVec := vector.MustFixedCol[uint32](bat.Vecs[pkgcatalog.MO_TABLES_VERSION_IDX+2]) // 2 for rowid and committs
+					length := len(versionVec)
+					vec := vector.NewVec(types.T_uint32.ToType())
+					for i := 0; i < length; i++ {
+						err = vector.AppendFixed[uint32](vec, pkgcatalog.CatalogVersion_V1, false, m)
+						if err != nil {
+							return
+						}
+					}
+					bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_CatalogVersion)
+					bat.Vecs = append(bat.Vecs, vec)
+				}
+			}
+			if version <= CheckpointVersion2 {
+				if tableID == pkgcatalog.MO_DATABASE_ID {
+					bat := data.bats[BlockDelete]
+					if bat == nil {
+						return
+					}
+					rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+					length := len(rowIDVec)
+					pkVec := vector.NewVec(types.T_uint64.ToType())
+					for i := 0; i < length; i++ {
+						err = vector.AppendFixed[uint64](pkVec, objectio.HackRowidToU64(rowIDVec[i]), false, m)
+						if err != nil {
+							return
+						}
+					}
+					bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
+					bat.Vecs = append(bat.Vecs, pkVec)
+				} else if tableID == pkgcatalog.MO_TABLES_ID {
+					bat := data.bats[BlockDelete]
+					if bat == nil {
+						return
+					}
+					rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+					length := len(rowIDVec)
+					pkVec2 := vector.NewVec(types.T_uint64.ToType())
+					for i := 0; i < length; i++ {
+						err = vector.AppendFixed[uint64](pkVec2, objectio.HackRowidToU64(rowIDVec[i]), false, m)
+						if err != nil {
+							return
+						}
+					}
+					bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
+					bat.Vecs = append(bat.Vecs, pkVec2)
+				}
+
+			}
+			return
+		}
+		err = data.fillInMetaBatchWithLocation(location, m)
+		if err != nil {
+			return
+		}
+	}
+	meta := data.GetTableMeta(tableID, version)
 	if meta == nil {
 		return
 	}
@@ -634,7 +878,7 @@ func (data *CNCheckpointData) ReadFromData(
 			var bat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
 			reader, err = blockio.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
-			bat, err = LoadCNSubBlkColumnsByMetaWithId(ctx, schema.types, schema.attrs, uint16(idx), block.GetID(), reader, m)
+			bat, err = LoadCNSubBlkColumnsByMetaWithId(ctx, schema.types, schema.attrs, uint16(idx), block.GetID(), version, reader, m)
 			if err != nil {
 				return
 			}
@@ -663,64 +907,6 @@ func (data *CNCheckpointData) ReadFromData(
 		}
 	}
 
-	if tableID == pkgcatalog.MO_DATABASE_ID ||
-		tableID == pkgcatalog.MO_TABLES_ID ||
-		tableID == pkgcatalog.MO_COLUMNS_ID {
-		if version == CheckpointVersion1 {
-			bat := data.bats[BlockInsert]
-			if bat == nil {
-				return
-			}
-			versionVec := vector.MustFixedCol[uint32](bat.Vecs[pkgcatalog.MO_TABLES_VERSION_IDX+2]) // 2 for rowid and committs
-			length := len(versionVec)
-			vec := vector.NewVec(types.T_uint32.ToType())
-			for i := 0; i < length; i++ {
-				err = vector.AppendFixed[uint32](vec, pkgcatalog.CatalogVersion_V1, false, m)
-				if err != nil {
-					return
-				}
-			}
-			bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_CatalogVersion)
-			bat.Vecs = append(bat.Vecs, vec)
-		}
-		if version <= CheckpointVersion2 {
-			if tableID == pkgcatalog.MO_DATABASE_ID {
-				bat := data.bats[BlockDelete]
-				if bat == nil {
-					return
-				}
-				rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-				length := len(rowIDVec)
-				pkVec := vector.NewVec(types.T_uint64.ToType())
-				for i := 0; i < length; i++ {
-					err = vector.AppendFixed[uint64](pkVec, objectio.HackRowidToU64(rowIDVec[i]), false, m)
-					if err != nil {
-						return
-					}
-				}
-				bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
-				bat.Vecs = append(bat.Vecs, pkVec)
-			} else if tableID == pkgcatalog.MO_TABLES_ID {
-				bat := data.bats[BlockDelete]
-				if bat == nil {
-					return
-				}
-				rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-				length := len(rowIDVec)
-				pkVec2 := vector.NewVec(types.T_uint64.ToType())
-				for i := 0; i < length; i++ {
-					err = vector.AppendFixed[uint64](pkVec2, objectio.HackRowidToU64(rowIDVec[i]), false, m)
-					if err != nil {
-						return
-					}
-				}
-				bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
-				bat.Vecs = append(bat.Vecs, pkVec2)
-			}
-
-		}
-
-	}
 	return
 }
 
@@ -811,6 +997,65 @@ func windowCNBatch(bat *batch.Batch, start, end uint64) {
 			panic(err)
 		}
 	}
+}
+
+func (data *CheckpointData) fillInMetaBatchWithLocation(location objectio.Location) {
+	length := data.bats[MetaIDX].Vecs[2].Length()
+	insVec := containers.MakeVector(types.T_varchar.ToType())
+	cnInsVec := containers.MakeVector(types.T_varchar.ToType())
+	delVec := containers.MakeVector(types.T_varchar.ToType())
+	segVec := containers.MakeVector(types.T_varchar.ToType())
+
+	tidVec := data.bats[MetaIDX].GetVectorByName(SnapshotAttr_TID)
+	blkInsStart := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector()
+	blkInsEnd := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).GetDownstreamVector()
+	blkDelStart := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).GetDownstreamVector()
+	blkDelEnd := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector()
+	segDelStart := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector()
+	segDelEnd := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector()
+	for i := 0; i < length; i++ {
+		insStart := vector.GetFixedAt[int32](blkInsStart, i)
+		insEnd := vector.GetFixedAt[int32](blkInsEnd, i)
+		if insStart < insEnd {
+			insLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), BLKMetaInsertIDX, uint64(insStart), uint64(insEnd))
+			insVec.Append([]byte(insLoc), false)
+		} else {
+			insVec.Append(nil, true)
+		}
+
+		delStart := vector.GetFixedAt[int32](blkDelStart, i)
+		delEnd := vector.GetFixedAt[int32](blkDelEnd, i)
+		if delStart < delEnd {
+			delLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), BLKMetaDeleteIDX, uint64(delStart), uint64(delEnd))
+			delVec.Append([]byte(delLoc), false)
+			cnInsLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), BLKCNMetaInsertIDX, uint64(delStart), uint64(delEnd))
+			cnInsVec.Append([]byte(cnInsLoc), false)
+		} else {
+			delVec.Append(nil, true)
+			cnInsVec.Append(nil, true)
+		}
+
+		segStart := vector.GetFixedAt[int32](segDelStart, i)
+		segEnd := vector.GetFixedAt[int32](segDelEnd, i)
+		if segStart < segEnd {
+			segLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), SEGDeleteIDX, uint64(segStart), uint64(segEnd))
+			segVec.Append([]byte(segLoc), false)
+		} else {
+			segVec.Append(nil, true)
+		}
+	}
+
+	tidVec.Append(uint64(0), false)
+	blkLoc := BuildBlockLoactionWithLocation(location.Name(), location.Extent(), location.Rows(), BLKMetaInsertIDX, uint64(0), uint64(0))
+	insVec.Append([]byte(blkLoc), false)
+	cnInsVec.Append(nil, true)
+	delVec.Append(nil, true)
+	segVec.Append(nil, true)
+
+	data.bats[MetaIDX].AddVector(SnapshotMetaAttr_BlockInsertBatchLocation, insVec)
+	data.bats[MetaIDX].AddVector(SnapshotMetaAttr_BlockCNInsertBatchLocation, cnInsVec)
+	data.bats[MetaIDX].AddVector(SnapshotMetaAttr_BlockDeleteBatchLocation, delVec)
+	data.bats[MetaIDX].AddVector(SnapshotMetaAttr_SegDeleteBatchLocation, segVec)
 }
 
 func (data *CheckpointData) prepareMeta() {
@@ -1042,6 +1287,7 @@ func (data *CheckpointData) WriteTo(
 }
 
 func LoadBlkColumnsByMeta(
+	version uint32,
 	cxt context.Context,
 	colTypes []types.Type,
 	colNames []string,
@@ -1052,7 +1298,14 @@ func LoadBlkColumnsByMeta(
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResults, err := reader.LoadSubColumns(cxt, idxs, nil, id, nil)
+	var err error
+	var ioResults []*batch.Batch
+	if version <= CheckpointVersion3 {
+		ioResults = make([]*batch.Batch, 1)
+		ioResults[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+	} else {
+		ioResults, err = reader.LoadSubColumns(cxt, idxs, nil, id, nil)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1077,6 +1330,7 @@ func LoadBlkColumnsByMeta(
 }
 
 func LoadCNSubBlkColumnsByMeta(
+	version uint32,
 	cxt context.Context,
 	colTypes []types.Type,
 	colNames []string,
@@ -1088,7 +1342,14 @@ func LoadCNSubBlkColumnsByMeta(
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResults, err := reader.LoadSubColumns(cxt, idxs, nil, id, m)
+	var err error
+	var ioResults []*batch.Batch
+	if version <= CheckpointVersion3 {
+		ioResults = make([]*batch.Batch, 1)
+		ioResults[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+	} else {
+		ioResults, err = reader.LoadSubColumns(cxt, idxs, nil, id, m)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1105,14 +1366,19 @@ func LoadCNSubBlkColumnsByMetaWithId(
 	colNames []string,
 	dataType uint16,
 	id uint16,
+	version uint32,
 	reader *blockio.BlockReader,
 	m *mpool.MPool,
-) (*batch.Batch, error) {
+) (ioResult *batch.Batch, err error) {
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResult, err := reader.LoadOneSubColumns(cxt, idxs, nil, dataType, id, m)
+	if version <= CheckpointVersion3 {
+		ioResult, err = reader.LoadColumns(cxt, idxs, nil, id, nil)
+	} else {
+		ioResult, err = reader.LoadOneSubColumns(cxt, idxs, nil, dataType, id, m)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1197,6 +1463,7 @@ func prefetchBatches(
 func (data *CheckpointData) ReadFrom(
 	ctx context.Context,
 	version uint32,
+	location objectio.Location,
 	reader *blockio.BlockReader,
 	fs fileservice.FileService,
 	m *mpool.MPool,
@@ -1204,6 +1471,9 @@ func (data *CheckpointData) ReadFrom(
 	err = data.readMetaBatch(ctx, version, reader, m)
 	if err != nil {
 		return
+	}
+	if version <= CheckpointVersion3 {
+		data.fillInMetaBatchWithLocation(location)
 	}
 	err = data.readAll(ctx, version, fs)
 	if err != nil {
@@ -1235,7 +1505,7 @@ func (data *CheckpointData) readMetaBatch(
 ) (err error) {
 	var bats []*containers.Batch
 	item := checkpointDataReferVersions[version][MetaIDX]
-	bats, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(0), reader)
+	bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, uint16(0), reader)
 	if err != nil {
 		return
 	}
@@ -1253,13 +1523,13 @@ func (data *CheckpointData) getMetaBatch() (bat *containers.Batch) {
 func (data *CheckpointData) replayMetaBatch() {
 	bat := data.getMetaBatch()
 	data.locations = make(map[string]objectio.Location)
-	tidVec := vector.MustFixedCol[uint64](bat.Vecs[Checkpoint_Meta_TID_IDX].GetDownstreamVector())
-	insVec := vector.MustBytesCol(bat.Vecs[Checkpoint_Meta_Insert_Block_LOC_IDX].GetDownstreamVector())
-	delVec := vector.MustBytesCol(bat.Vecs[Checkpoint_Meta_Delete_Block_LOC_IDX].GetDownstreamVector())
-	delCNVec := vector.MustBytesCol(bat.Vecs[Checkpoint_Meta_CN_Delete_Block_LOC_IDX].GetDownstreamVector())
-	segVec := vector.MustBytesCol(bat.Vecs[Checkpoint_Meta_Segment_LOC_IDX].GetDownstreamVector())
+	tidVec := vector.MustFixedCol[uint64](bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	insVec := vector.MustBytesCol(bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector())
+	delVec := vector.MustBytesCol(bat.GetVectorByName(SnapshotMetaAttr_BlockCNInsertBatchLocation).GetDownstreamVector())
+	delCNVec := vector.MustBytesCol(bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector())
+	segVec := vector.MustBytesCol(bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector())
 
-	for i := 0; i < data.bats[MetaIDX].Vecs[Checkpoint_Meta_TID_IDX].Length(); i++ {
+	for i := 0; i < data.bats[MetaIDX].GetVectorByName(SnapshotAttr_TID).Length(); i++ {
 		tid := tidVec[i]
 		if tid == 0 {
 			bl := BlockLocation(insVec[i])
@@ -1319,7 +1589,7 @@ func (data *CheckpointData) readAll(
 				continue
 			}
 			item := checkpointDataReferVersions[version][idx]
-			bats, err = LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader)
+			bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, uint16(idx), reader)
 			if err != nil {
 				return
 			}
@@ -1357,13 +1627,26 @@ func (data *CheckpointData) Close() {
 }
 
 func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
-	switch version {
-	case CheckpointVersion1:
+	if version == CheckpointVersion1 {
 		bat := data.bats[TBLInsertIDX]
 		if bat == nil {
 			return
 		}
 		vec := data.bats[TBLInsertIDX].GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion)
+		vec.Close()
+	}
+	if version <= CheckpointVersion3 {
+		bat := data.bats[MetaIDX]
+		if bat == nil {
+			return
+		}
+		vec := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation)
+		vec.Close()
+		vec = data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockCNInsertBatchLocation)
+		vec.Close()
+		vec = data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation)
+		vec.Close()
+		vec = data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation)
 		vec.Close()
 	}
 }

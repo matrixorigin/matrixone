@@ -158,7 +158,7 @@ func (e *CheckpointEntry) Replay(
 	if err = data.PrefetchFrom(ctx, e.version, fs.Service, e.location); err != nil {
 		return
 	}
-	if err = data.ReadFrom(ctx, e.version, reader, fs.Service, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(ctx, e.version, e.location, reader, fs.Service, common.DefaultAllocator); err != nil {
 		return
 	}
 	readDuration = time.Since(t0)
@@ -197,6 +197,7 @@ func (e *CheckpointEntry) Read(
 	if err = data.ReadFrom(
 		ctx,
 		e.version,
+		e.location,
 		reader,
 		fs.Service,
 		common.DefaultAllocator,
@@ -216,7 +217,7 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 		return
 	}*/
 	var bats []*batch.Batch
-	if bats, err = data.ReadFromData(ctx, tid, reader, e.version, common.DefaultAllocator); err != nil {
+	if bats, err = data.ReadFromData(ctx, tid, e.location, reader, e.version, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, segDel, err = data.GetTableDataFromBats(tid, bats)

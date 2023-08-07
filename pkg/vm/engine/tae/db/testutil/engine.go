@@ -337,6 +337,7 @@ func dnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.F
 	err = data.ReadFrom(
 		context.Background(),
 		logtail.CheckpointCurrentVersion,
+		location,
 		reader,
 		fs,
 		common.DefaultAllocator,
@@ -352,6 +353,7 @@ func cnReadCheckpoint(t *testing.T, tid uint64, location objectio.Location, fs f
 	bats, err := data.ReadFromData(
 		context.Background(),
 		tid,
+		location,
 		reader,
 		logtail.CheckpointCurrentVersion,
 		common.DefaultAllocator,
