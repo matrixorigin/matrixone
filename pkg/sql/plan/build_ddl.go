@@ -1879,15 +1879,16 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
-					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
-						KeyParts: []*tree.KeyPart{
-							{
-								ColName: opt.Column.Name,
-							},
-						},
-						Name: opt.Column.Name.Parts[0],
-					})
-					indexs = append(indexs, opt.Column.Name.Parts[0])
+					return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport add unique index constraints when adding new column")
+					//uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
+					//	KeyParts: []*tree.KeyPart{
+					//		{
+					//			ColName: opt.Column.Name,
+					//		},
+					//	},
+					//	Name: opt.Column.Name.Parts[0],
+					//})
+					//indexs = append(indexs, opt.Column.Name.Parts[0])
 				}
 			}
 			if len(pks) > 0 {
