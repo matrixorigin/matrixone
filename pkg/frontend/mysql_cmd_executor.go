@@ -38,7 +38,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -3940,14 +3939,13 @@ func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 }
 
 // build plan json when marhal plan error
-func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
+func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, msg string) []byte {
 	explainData := explain.ExplainData{
 		Code:    errcode,
 		Message: msg,
 		Success: false,
 		Uuid:    uuid.String(),
 	}
-	buffer := &bytes.Buffer{}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)
 	encoder.Encode(explainData)
@@ -4017,8 +4015,8 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		uuid:   uuid,
 		buffer: nil,
 	}
-	// check longQueryTime
-	if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
+	// check longQueryTime, need after StatementInfo.MarkResponseAt
+	if stmt.Duration > motrace.GetLongQueryTime() {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 	}
 	return h
@@ -4039,7 +4037,7 @@ func (h *marshalPlanHandler) handoverBuffer() *bytes.Buffer {
 }
 
 var marshalPlanBufferPool = sync.Pool{New: func() any {
-	return bytes.NewBuffer(make([]byte, 0, 16*mpool.KB))
+	return bytes.NewBuffer(make([]byte, 0, 8192))
 }}
 
 // get buffer from marshalPlanBufferPool
@@ -4061,10 +4059,10 @@ func (h *marshalPlanHandler) allocBufferIfNeeded() {
 
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	var err error
+	h.allocBufferIfNeeded()
+	h.buffer.Reset()
 	if h.marshalPlan != nil {
 		var jsonBytesLen = 0
-		h.allocBufferIfNeeded()
-		h.buffer.Reset()
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
 		encoder := json.NewEncoder(h.buffer)
@@ -4072,7 +4070,8 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		err = encoder.Encode(h.marshalPlan)
 		if err != nil {
 			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
-			jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
+			h.buffer.Reset()
+			jsonBytes = buildErrorJsonPlan(h.buffer, h.uuid, moError.ErrorCode(), moError.Error())
 		} else {
 			jsonBytesLen = h.buffer.Len()
 		}
@@ -4083,9 +4082,9 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
 	} else if h.query != nil {
-		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
+		jsonBytes = buildErrorJsonPlan(h.buffer, h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
 	} else {
-		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")
+		jsonBytes = buildErrorJsonPlan(h.buffer, h.uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
 	return
 }
