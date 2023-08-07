@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"sort"
 	"strconv"
@@ -3940,11 +3941,13 @@ func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 
 // build plan json when marhal plan error
 func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, msg string) []byte {
+	var bytes [36]byte
+	util.EncodeUUIDHex(bytes[:], uuid[:])
 	explainData := explain.ExplainData{
 		Code:    errcode,
 		Message: msg,
 		Success: false,
-		Uuid:    uuid.String(),
+		Uuid:    util.UnsafeBytesToString(bytes[:]),
 	}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)
