@@ -232,6 +232,10 @@ type Config struct {
 
 	// MaxPreparedStmtCount
 	MaxPreparedStmtCount int `toml:"max_prepared_stmt_count"`
+
+	// InitWorkState is the initial work state for CN. Valid values are:
+	// "working", "draining" and "drained".
+	InitWorkState string `toml:"init-work-state"`
 }
 
 func (c *Config) Validate() error {
@@ -367,6 +371,10 @@ func (c *Config) Validate() error {
 		if c.ServiceHost == "" {
 			c.ServiceHost = defaultServiceHost
 		}
+	}
+
+	if !metadata.ValidStateString(c.InitWorkState) {
+		c.InitWorkState = metadata.WorkState_Working.String()
 	}
 
 	// TODO: remove this if rc is stable
