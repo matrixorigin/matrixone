@@ -36,9 +36,7 @@ func GroupConcat1ReturnType(_ []types.Type) types.Type {
 }
 
 func (g *GroupConcat1) Grows(cnt int) {
-	for len(g.result) < cnt {
-		g.result = append(g.result, nil)
-	}
+	g.result = make([][]byte, cnt)
 }
 
 func (g *GroupConcat1) Eval(vs [][]byte, err error) ([][]byte, error) {
@@ -59,13 +57,23 @@ func (g *GroupConcat1) Fill(groupIndex int64, input []byte, oldValue []byte, z i
 
 	tupleStr := tupleToString(tuple)
 
+	if !isEmpty {
+		g.result[groupIndex] = append(g.result[groupIndex], []byte(g.separator)...)
+	}
 	g.result[groupIndex] = append(g.result[groupIndex], []byte(tupleStr)...)
-	//想明白null
+
 	return []byte{}, false, nil
 }
 
 func (g *GroupConcat1) Merge(xIndex int64, yIndex int64, x []byte, y []byte, xIsEmpty bool, yIsEmpty bool, yGroupConcat1 any) ([]byte, bool, error) {
 
+	if yIsEmpty {
+		return []byte{}, xIsEmpty && yIsEmpty, nil
+	}
+
+	if !xIsEmpty {
+		g.result[xIndex] = append(g.result[xIndex], []byte(g.separator)...)
+	}
 	g.result[xIndex] = append(g.result[xIndex], yGroupConcat1.(*GroupConcat1).result[yIndex]...)
 
 	return []byte{}, xIsEmpty && yIsEmpty, nil
