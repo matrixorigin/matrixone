@@ -2931,6 +2931,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(true)
 				}
 			}
+			err = alterSessionStatus(ctx, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusRestricted.String(), ses.GetParameterUnit().QueryService)
+			if err != nil {
+				return err
+			}
 		}
 
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusOpen && accountStatus == tree.AccountStatusRestricted.String() {
@@ -2939,6 +2943,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 				for rt := range rtMap {
 					rt.setResricted(false)
 				}
+			}
+			err = alterSessionStatus(ctx, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusOpen.String(), ses.GetParameterUnit().QueryService)
+			if err != nil {
+				return err
 			}
 		}
 	}
