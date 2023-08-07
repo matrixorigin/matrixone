@@ -168,7 +168,11 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 			if vecData, ok := rightArg.Expr.(*plan.Expr_Bin); ok {
 				vec := vector.NewVec(types.T_any.ToType())
-				vec.UnmarshalBinary(vecData.Bin.Data)
+				err := vec.UnmarshalBinary(vecData.Bin.Data)
+				if err != nil {
+					executor.parameterExecutor[0].Free()
+					return nil, err
+				}
 				executor.SetParameter(1, &FixedVectorExpressionExecutor{
 					m:            proc.Mp(),
 					fixed:        true,

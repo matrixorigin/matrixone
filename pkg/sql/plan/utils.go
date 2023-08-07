@@ -1097,15 +1097,12 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 	// If it is Expr_List, perform constant folding on its elements
 	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
 		exprList := exprImpl.List.List
-		for i, exprElem := range exprList {
-			_, ok2 := exprElem.Expr.(*plan.Expr_F)
-			if ok2 {
-				foldExpr, err := ConstantFold(bat, exprElem, proc, varAndParamIsConst)
-				if err != nil {
-					return e, nil
-				}
-				exprList[i] = foldExpr
+		for i := range exprList {
+			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
+			if err != nil {
+				return e, nil
 			}
+			exprList[i] = foldExpr
 		}
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -1128,16 +1125,6 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 				},
 			},
 		}, nil
-	}
-
-	var err error
-	if elist, ok := e.Expr.(*plan.Expr_List); ok {
-		for i, expr := range elist.List.List {
-			if elist.List.List[i], err = ConstantFold(bat, expr, proc, varAndParamIsConst); err != nil {
-				return nil, err
-			}
-		}
-		return e, nil
 	}
 
 	ef, ok := e.Expr.(*plan.Expr_F)

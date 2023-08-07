@@ -163,8 +163,7 @@ func getCompositPKVals(
 func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		funName := exprImpl.F.Func.ObjName
-		switch funName {
+		switch exprImpl.F.Func.ObjName {
 		case "and":
 			pkBytes := getPkExpr(exprImpl.F.Args[0], pkName, proc)
 			if pkBytes != nil {

@@ -198,15 +198,13 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
 	return
 }
 
-func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
-	filter blockio.ReadFilter,
-) {
+func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) blockio.ReadFilter {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
-		return
+		return nil
 	}
 
 	// evaluate the search function for the filter
@@ -227,7 +225,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
 		mixin.filterState.hasNull = hasNull
-		return
+		return nil
 	}
 
 	// here we will select the primary key column from the vectors, and
@@ -238,7 +236,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 	mixin.filterState.filter = searchFunc
 	mixin.filterState.seqnums = []uint16{uint16(mixin.columns.seqnums[mixin.columns.pkPos])}
 	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
-	return
+	return searchFunc
 }
 
 // -----------------------------------------------------------------
