@@ -279,6 +279,15 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	return rbat, nil
 }
 
+func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
+	for i := range bat.Vecs {
+		if err := bat.Vecs[i].PreExtend(rows, m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
