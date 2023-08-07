@@ -182,3 +182,14 @@ func (e *IOEntry) ReadFromOSFile(file *os.File) error {
 
 	return nil
 }
+
+func DataAsObject(r io.Reader, data []byte) (object []byte, objectSize int64, err error) {
+	if len(data) > 0 {
+		return data, int64(len(data)), nil
+	}
+	data, err = io.ReadAll(r)
+	if err != nil {
+		return nil, 0, err
+	}
+	return data, int64(len(data)), nil
+}

@@ -108,8 +108,12 @@ func WaitWaiters(
 			panic("missing lock")
 		}
 
-		if lock.waiter.waiters.len() == waitersCount {
-			waiters := lock.waiter.waiters.all()
+		waiters := make([]*waiter, 0)
+		lock.waiter.waiters.iter(func(w *waiter) bool {
+			waiters = append(waiters, w)
+			return true
+		})
+		if len(waiters) == waitersCount {
 			for i, n := range sameTxnCounts {
 				if len(waiters[i].sameTxnWaiters) != n {
 					return false
