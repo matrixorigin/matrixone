@@ -68,6 +68,9 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		return
 	}
 	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, workingCN)
+	runtime.ProcessLevelRuntime().Logger().Info("task schedule query tasks",
+		zap.Int("created", len(createdTasks)),
+		zap.Int("expired", len(expiredTasks)))
 	s.allocateTasks(createdTasks, orderedCN)
 	s.allocateTasks(expiredTasks, orderedCN)
 }
@@ -132,26 +135,37 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 	orderedCN.inc(t.TaskRunner)
 }
 
-func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (orderedMap *cnMap, expired []task.Task) {
-	orderedMap = newOrderedMap(workingCN)
-
-	heartbeatInActiveTasks := tasks[:0]
+func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (*cnMap, []task.Task) {
 	for _, t := range tasks {
-		if heartbeatTimeout(t.LastHeartbeat) {
-			expired = append(expired, t)
-		} else {
-			heartbeatInActiveTasks = append(heartbeatInActiveTasks, t)
-		}
+		runtime.ProcessLevelRuntime().Logger().Info("running task",
+			zap.String("task", t.Metadata.String()),
+			zap.String("runner", t.TaskRunner),
+			zap.Int64("last-heartbeat", t.LastHeartbeat))
 	}
-
-	for _, t := range heartbeatInActiveTasks {
-		if contains(workingCN, t.TaskRunner) {
+	orderedMap := newOrderedMap(workingCN)
+	n := 0
+	for _, t := range tasks {
+		if heartbeatTimeout(t.LastHeartbeat) || !contains(workingCN, t.TaskRunner) {
+			n++
+		} else {
 			orderedMap.inc(t.TaskRunner)
-		} else {
+		}
+	}
+	if n == 0 {
+		return orderedMap, nil
+	}
+	for _, cn := range orderedMap.orderedKeys {
+		runtime.ProcessLevelRuntime().Logger().Info("working cn",
+			zap.String("cn", cn),
+			zap.Uint32("running tasks", orderedMap.get(cn)))
+	}
+	expired := make([]task.Task, 0, n)
+	for _, t := range tasks {
+		if heartbeatTimeout(t.LastHeartbeat) || !contains(workingCN, t.TaskRunner) {
 			expired = append(expired, t)
 		}
 	}
-	return
+	return orderedMap, expired
 }
 
 func heartbeatTimeout(lastHeartbeat int64) bool {
