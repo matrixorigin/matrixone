@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package test
 
 import (
 	"context"
@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -41,7 +42,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
@@ -50,7 +51,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(10)
 
-	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
+	txn, _, rel := testutil.CreateRelationNoCommit(t, tae, testutil.DefaultTestDB, schema, true)
 	err := rel.Append(context.Background(), bats[0])
 	{
 		offsets := make([]uint32, 0)
@@ -77,9 +78,9 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		blk := getOneBlock(rel)
+		blk := testutil.GetOneBlock(rel)
 		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		assert.NoError(t, err)
 		defer view.Close()
@@ -101,7 +102,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bats[2])
@@ -114,9 +115,9 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	compactBlocks(t, 0, tae, "db", schema, false)
+	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 
-	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	var segMeta *catalog.SegmentEntry
 	{
 		it := rel.MakeBlockIt()
@@ -158,7 +159,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeBlockIt()
 		for it.Valid() {
@@ -200,7 +201,7 @@ func TestHidden2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, -1)
 	schema.BlockMaxRows = 10
@@ -209,10 +210,10 @@ func TestHidden2(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(10)
 
-	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
+	txn, _, rel := testutil.CreateRelationNoCommit(t, tae, testutil.DefaultTestDB, schema, true)
 	err := rel.Append(context.Background(), bats[0])
 	{
-		blk := getOneBlock(rel)
+		blk := testutil.GetOneBlock(rel)
 		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
@@ -247,9 +248,9 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		blk := getOneBlock(rel)
+		blk := testutil.GetOneBlock(rel)
 		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
@@ -288,7 +289,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeBlockIt()
 		blks := make([]data.Block, 0)
@@ -309,7 +310,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeSegmentIt()
 		segs := make([]data.Segment, 0)
@@ -333,7 +334,7 @@ func TestHidden2(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	t.Log(rel.Rows())
 	assert.Equal(t, int64(26), rel.Rows())
 	{
