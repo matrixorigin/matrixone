@@ -741,7 +741,7 @@ func TestReplay4(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(4)
 
-	testutil.CreateRelationAndAppend(t, 0, tae, defaultTestDB, schema, bats[0], true)
+	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bats[0], true)
 	txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -758,7 +758,7 @@ func TestReplay4(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	testutil.CompactBlocks(t, 0, tae2, defaultTestDB, schema, false)
+	testutil.CompactBlocks(t, 0, tae2, testutil.DefaultTestDB, schema, false)
 	txn, rel = testutil.GetDefaultRelation(t, tae2, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
 	err = rel.Append(context.Background(), bats[2])
@@ -767,13 +767,13 @@ func TestReplay4(t *testing.T) {
 		bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	testutil.CompactBlocks(t, 0, tae2, defaultTestDB, schema, false)
+	testutil.CompactBlocks(t, 0, tae2, testutil.DefaultTestDB, schema, false)
 
 	txn, rel = testutil.GetDefaultRelation(t, tae2, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, testutil.LenOfBats(bats[0:3]), false)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	testutil.MergeBlocks(t, 0, tae2, defaultTestDB, schema, false)
+	testutil.MergeBlocks(t, 0, tae2, testutil.DefaultTestDB, schema, false)
 
 	txn, rel = testutil.GetDefaultRelation(t, tae2, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, testutil.LenOfBats(bats[0:3]), false)
@@ -806,7 +806,7 @@ func TestReplay5(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(8)
 
-	testutil.CreateRelationAndAppend(t, 0, tae, defaultTestDB, schema, bats[0], true)
+	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bats[0], true)
 	txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -841,7 +841,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	testutil.CompactBlocks(t, 0, tae, defaultTestDB, schema, false)
+	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
 	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
@@ -863,7 +863,7 @@ func TestReplay5(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	assert.NoError(t, txn.Commit(context.Background()))
-	testutil.CompactBlocks(t, 0, tae, defaultTestDB, schema, false)
+	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
 	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
@@ -885,7 +885,7 @@ func TestReplay5(t *testing.T) {
 	// })
 	// testutil.PrintCheckpointStats(t, tae)
 	// assert.Equal(t, tae.Wal.GetCurrSeqNum()/2, tae.Wal.GetCheckpointed())
-	testutil.MergeBlocks(t, 0, tae, defaultTestDB, schema, false)
+	testutil.MergeBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
 
 	_ = tae.Close()
 	tae, err = db.Open(ctx, tae.Dir, nil)
@@ -927,7 +927,7 @@ func TestReplay6(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(4)
 
-	testutil.CreateRelationAndAppend(t, 0, tae, defaultTestDB, schema, bats[0], true)
+	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bats[0], true)
 
 	_ = tae.Close()
 	tae, err := db.Open(ctx, tae.Dir, opts)
@@ -941,7 +941,7 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	testutil.CompactBlocks(t, 0, tae, defaultTestDB, schema, false)
+	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
 
 	_ = tae.Close()
 	tae, err = db.Open(ctx, tae.Dir, opts)
@@ -956,8 +956,8 @@ func TestReplay6(t *testing.T) {
 	err = rel.Append(context.Background(), bats[3])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
-	testutil.CompactBlocks(t, 0, tae, defaultTestDB, schema, false)
-	testutil.MergeBlocks(t, 0, tae, defaultTestDB, schema, false)
+	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
+	testutil.MergeBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
 	err = tae.BGCheckpointRunner.ForceFlush(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
@@ -988,9 +988,9 @@ func TestReplay7(t *testing.T) {
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*15+1))
 	defer bat.Close()
-	testutil.CreateRelationAndAppend(t, 0, tae, defaultTestDB, schema, bat, true)
-	testutil.CompactBlocks(t, 0, tae, defaultTestDB, schema, true)
-	testutil.MergeBlocks(t, 0, tae, defaultTestDB, schema, true)
+	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bat, true)
+	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, true)
+	testutil.MergeBlocks(t, 0, tae, testutil.DefaultTestDB, schema, true)
 	time.Sleep(time.Millisecond * 100)
 
 	_ = tae.Close()
@@ -1022,7 +1022,7 @@ func TestReplay8(t *testing.T) {
 
 	tae.CreateRelAndAppend(bats[0], true)
 	txn, rel := tae.GetRelation()
-	v := getSingleSortKeyValue(bats[0], schema, 2)
+	v := testutil.GetSingleSortKeyValue(bats[0], schema, 2)
 	filter := handle.NewEQFilter(v)
 	err := rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -1099,19 +1099,19 @@ func TestReplay8(t *testing.T) {
 	err = rel.Append(context.Background(), window)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 
-	v0_5 := getSingleSortKeyValue(bats[0], schema, 5)
+	v0_5 := testutil.GetSingleSortKeyValue(bats[0], schema, 5)
 	filter = handle.NewEQFilter(v0_5)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	v1_5 := getSingleSortKeyValue(bats[1], schema, 5)
+	v1_5 := testutil.GetSingleSortKeyValue(bats[1], schema, 5)
 	filter = handle.NewEQFilter(v1_5)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	v2_5 := getSingleSortKeyValue(bats[2], schema, 5)
+	v2_5 := testutil.GetSingleSortKeyValue(bats[2], schema, 5)
 	filter = handle.NewEQFilter(v2_5)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	v3_2 := getSingleSortKeyValue(bats[3], schema, 2)
+	v3_2 := testutil.GetSingleSortKeyValue(bats[3], schema, 2)
 	filter = handle.NewEQFilter(v3_2)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -1177,7 +1177,7 @@ func TestReplay9(t *testing.T) {
 	tae.CreateRelAndAppend(bats[0], true)
 	txn, rel := tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
-	v := getSingleSortKeyValue(bats[0], schema, 2)
+	v := testutil.GetSingleSortKeyValue(bats[0], schema, 2)
 	filter := handle.NewEQFilter(v)
 	err := rel.UpdateByFilter(context.Background(), filter, 2, int32(999), false)
 	assert.NoError(t, err)
@@ -1207,7 +1207,7 @@ func TestReplay9(t *testing.T) {
 	tae.CompactBlocks(false)
 
 	txn, rel = tae.GetRelation()
-	v2 := getSingleSortKeyValue(bats[0], schema, 4)
+	v2 := testutil.GetSingleSortKeyValue(bats[0], schema, 4)
 	filter2 := handle.NewEQFilter(v2)
 	err = rel.UpdateByFilter(context.Background(), filter2, 1, int16(199), false)
 	assert.NoError(t, err)
@@ -1232,7 +1232,7 @@ func TestReplay9(t *testing.T) {
 	tae.MergeBlocks(false)
 
 	txn, rel = tae.GetRelation()
-	v3 := getSingleSortKeyValue(bats[1], schema, 3)
+	v3 := testutil.GetSingleSortKeyValue(bats[1], schema, 3)
 	filter3 := handle.NewEQFilter(v3)
 	err = rel.UpdateByFilter(context.Background(), filter3, 5, uint16(88), false)
 	assert.NoError(t, err)
@@ -1287,7 +1287,7 @@ func TestReplay10(t *testing.T) {
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	defer bat.Close()
-	testutil.CreateRelationAndAppend(t, 0, tae, defaultTestDB, schema, bat, true)
+	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bat, true)
 	time.Sleep(time.Millisecond * 100)
 
 	_ = tae.Close()

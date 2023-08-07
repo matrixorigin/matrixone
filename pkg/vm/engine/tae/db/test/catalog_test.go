@@ -41,7 +41,7 @@ func TestCatalog1(t *testing.T) {
 	defer db.Close()
 
 	schema := catalog.MockSchema(1, 0)
-	txn, _, rel := testutil.CreateRelationNoCommit(t, db, defaultTestDB, schema, true)
+	txn, _, rel := testutil.CreateRelationNoCommit(t, db, testutil.DefaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
 	seg, _ := rel.CreateSegment(false)
 	blk, err := seg.CreateBlock(false)

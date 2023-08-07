@@ -67,6 +67,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	ModuleName = "TAEDB"
+)
+
 func TestAppend(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -2638,7 +2642,7 @@ func TestMergeblocks2(t *testing.T) {
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	{
-		v := getSingleSortKeyValue(bat, schema, 1)
+		v := testutil.GetSingleSortKeyValue(bat, schema, 1)
 		filter := handle.NewEQFilter(v)
 		txn2, rel := tae.GetRelation()
 		t.Log("********before delete******************")
@@ -2675,7 +2679,7 @@ func TestMergeblocks2(t *testing.T) {
 		assert.NoError(t, err)
 
 		{
-			v := getSingleSortKeyValue(bat, schema, 2)
+			v := testutil.GetSingleSortKeyValue(bat, schema, 2)
 			filter := handle.NewEQFilter(v)
 			txn2, rel := tae.GetRelation()
 			t.Log("********before delete******************")
@@ -2692,17 +2696,17 @@ func TestMergeblocks2(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel, 4, true)
 	assert.Equal(t, int64(4), rel.Rows())
 
-	v := getSingleSortKeyValue(bat, schema, 1)
+	v := testutil.GetSingleSortKeyValue(bat, schema, 1)
 	filter := handle.NewEQFilter(v)
 	_, _, err := rel.GetByFilter(context.Background(), filter)
 	assert.NotNil(t, err)
 
-	v = getSingleSortKeyValue(bat, schema, 2)
+	v = testutil.GetSingleSortKeyValue(bat, schema, 2)
 	filter = handle.NewEQFilter(v)
 	_, _, err = rel.GetByFilter(context.Background(), filter)
 	assert.NotNil(t, err)
 
-	// v = getSingleSortKeyValue(bat, schema, 4)
+	// v = testutil.GetSingleSortKeyValue(bat, schema, 4)
 	// filter = handle.NewEQFilter(v)
 	// _, _, err = rel.GetByFilter(context.Background(),filter)
 	// assert.NotNil(t, err)
@@ -2758,7 +2762,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 		assert.NoError(t, err)
 
 		{
-			v := getSingleSortKeyValue(bat, schema, 4)
+			v := testutil.GetSingleSortKeyValue(bat, schema, 4)
 			filter := handle.NewEQFilter(v)
 			txn2, rel := tae.GetRelation()
 			_ = rel.DeleteByFilter(context.Background(), filter)
@@ -2785,7 +2789,7 @@ func TestDelete2(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 
 	txn, rel := tae.GetRelation()
-	v := getSingleSortKeyValue(bat, schema, 2)
+	v := testutil.GetSingleSortKeyValue(bat, schema, 2)
 	filter := handle.NewEQFilter(v)
 	err := rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -2833,13 +2837,13 @@ func TestNull1(t *testing.T) {
 	assert.True(t, view.GetData().IsNull(2))
 	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
 
-	v := getSingleSortKeyValue(bats[0], schema, 2)
+	v := testutil.GetSingleSortKeyValue(bats[0], schema, 2)
 	filter_2 := handle.NewEQFilter(v)
 	_, uv0_2_isNull, err := rel.GetValueByFilter(context.Background(), filter_2, 3)
 	assert.NoError(t, err)
 	assert.True(t, uv0_2_isNull)
 
-	v0_4 := getSingleSortKeyValue(bats[0], schema, 4)
+	v0_4 := testutil.GetSingleSortKeyValue(bats[0], schema, 4)
 	filter_4 := handle.NewEQFilter(v0_4)
 	err = rel.UpdateByFilter(context.Background(), filter_4, 3, nil, true)
 	assert.NoError(t, err)
@@ -2873,7 +2877,7 @@ func TestNull1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, uv_isNull)
 
-	v0_1 := getSingleSortKeyValue(bats[0], schema, 1)
+	v0_1 := testutil.GetSingleSortKeyValue(bats[0], schema, 1)
 	filter0_1 := handle.NewEQFilter(v0_1)
 	err = rel.UpdateByFilter(context.Background(), filter0_1, 12, nil, true)
 	assert.NoError(t, err)
@@ -3060,7 +3064,7 @@ func TestCompactBlk1(t *testing.T) {
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	{
-		v := getSingleSortKeyValue(bat, schema, 1)
+		v := testutil.GetSingleSortKeyValue(bat, schema, 1)
 		t.Logf("v is %v**********", v)
 		filter := handle.NewEQFilter(v)
 		txn2, rel := tae.GetRelation()
@@ -3085,7 +3089,7 @@ func TestCompactBlk1(t *testing.T) {
 		assert.NoError(t, err)
 
 		{
-			v := getSingleSortKeyValue(bat, schema, 2)
+			v := testutil.GetSingleSortKeyValue(bat, schema, 2)
 			t.Logf("v is %v**********", v)
 			filter := handle.NewEQFilter(v)
 			txn2, rel := tae.GetRelation()
@@ -3143,7 +3147,7 @@ func TestCompactBlk2(t *testing.T) {
 	_ = rel.Append(context.Background(), bats[0])
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	v := getSingleSortKeyValue(bat, schema, 1)
+	v := testutil.GetSingleSortKeyValue(bat, schema, 1)
 	t.Logf("v is %v**********", v)
 	filter := handle.NewEQFilter(v)
 	txn2, rel1 := tae.GetRelation()
@@ -3167,7 +3171,7 @@ func TestCompactBlk2(t *testing.T) {
 	err = txn.Commit(context.Background())
 	assert.NoError(t, err)
 
-	v = getSingleSortKeyValue(bat, schema, 2)
+	v = testutil.GetSingleSortKeyValue(bat, schema, 2)
 	t.Logf("v is %v**********", v)
 	filter = handle.NewEQFilter(v)
 	txn2, rel3 := tae.GetRelation()
@@ -3176,7 +3180,7 @@ func TestCompactBlk2(t *testing.T) {
 	_ = rel3.DeleteByFilter(context.Background(), filter)
 	assert.Nil(t, txn2.Commit(context.Background()))
 
-	v = getSingleSortKeyValue(bat, schema, 4)
+	v = testutil.GetSingleSortKeyValue(bat, schema, 4)
 	t.Logf("v is %v**********", v)
 	filter = handle.NewEQFilter(v)
 	txn2, rel4 := tae.GetRelation()
@@ -3192,12 +3196,12 @@ func TestCompactBlk2(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel, 2, true)
 	assert.Equal(t, int64(2), rel.Rows())
 
-	v = getSingleSortKeyValue(bat, schema, 2)
+	v = testutil.GetSingleSortKeyValue(bat, schema, 2)
 	filter = handle.NewEQFilter(v)
 	_, _, err = rel.GetByFilter(context.Background(), filter)
 	assert.NotNil(t, err)
 
-	v = getSingleSortKeyValue(bat, schema, 4)
+	v = testutil.GetSingleSortKeyValue(bat, schema, 4)
 	filter = handle.NewEQFilter(v)
 	_, _, err = rel.GetByFilter(context.Background(), filter)
 	assert.NotNil(t, err)
@@ -3223,7 +3227,7 @@ func TestCompactblk3(t *testing.T) {
 
 	tae.CreateRelAndAppend(bat, true)
 
-	v := getSingleSortKeyValue(bat, schema, 1)
+	v := testutil.GetSingleSortKeyValue(bat, schema, 1)
 	filter := handle.NewEQFilter(v)
 	txn2, rel1 := tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel1, 3, true)
@@ -3291,7 +3295,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	_ = rel.Append(context.Background(), bats[0])
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	v := getSingleSortKeyValue(bat, schema, 1)
+	v := testutil.GetSingleSortKeyValue(bat, schema, 1)
 	filter := handle.NewEQFilter(v)
 	txn2, rel := tae.GetRelation()
 	_ = rel.DeleteByFilter(context.Background(), filter)
@@ -3311,7 +3315,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	txn, _ = tae.GetRelation()
 	_, err = meta.GetBlockData().GetByFilter(context.Background(), txn, filter)
 	assert.Error(t, err)
-	v = getSingleSortKeyValue(bat, schema, 2)
+	v = testutil.GetSingleSortKeyValue(bat, schema, 2)
 	filter = handle.NewEQFilter(v)
 	_, err = meta.GetBlockData().GetByFilter(context.Background(), txn, filter)
 	assert.NoError(t, err)
@@ -4612,7 +4616,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 
 	{
-		v := getSingleSortKeyValue(bat, schema, 1)
+		v := testutil.GetSingleSortKeyValue(bat, schema, 1)
 		t.Logf("v is %v**********", v)
 		filter := handle.NewEQFilter(v)
 		txn2, rel := tae.GetRelation()
@@ -4645,7 +4649,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	{
-		v := getSingleSortKeyValue(bat, schema, 2)
+		v := testutil.GetSingleSortKeyValue(bat, schema, 2)
 		t.Logf("v is %v**********", v)
 		filter := handle.NewEQFilter(v)
 		txn2, rel := tae.GetRelation()
@@ -4947,7 +4951,7 @@ func TestGetActiveRow(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 
 	txn, rel := tae.GetRelation()
-	v := getSingleSortKeyValue(bat, schema, 0)
+	v := testutil.GetSingleSortKeyValue(bat, schema, 0)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)

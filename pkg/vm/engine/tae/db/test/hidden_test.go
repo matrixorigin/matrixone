@@ -51,7 +51,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(10)
 
-	txn, _, rel := testutil.CreateRelationNoCommit(t, tae, defaultTestDB, schema, true)
+	txn, _, rel := testutil.CreateRelationNoCommit(t, tae, testutil.DefaultTestDB, schema, true)
 	err := rel.Append(context.Background(), bats[0])
 	{
 		offsets := make([]uint32, 0)
@@ -210,7 +210,7 @@ func TestHidden2(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(10)
 
-	txn, _, rel := testutil.CreateRelationNoCommit(t, tae, defaultTestDB, schema, true)
+	txn, _, rel := testutil.CreateRelationNoCommit(t, tae, testutil.DefaultTestDB, schema, true)
 	err := rel.Append(context.Background(), bats[0])
 	{
 		blk := testutil.GetOneBlock(rel)

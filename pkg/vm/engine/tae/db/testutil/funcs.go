@@ -261,26 +261,6 @@ func AppendClosure(t *testing.T, data *containers.Batch, name string, e *db.DB, 
 	}
 }
 
-func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *db.DB, wg *sync.WaitGroup) func() {
-	return func() {
-		if wg != nil {
-			defer wg.Done()
-		}
-		txn, _ := e.StartTxn(nil)
-		database, _ := txn.GetDatabase("db")
-		rel, err := database.GetRelationByName(name)
-		if err != nil {
-			_ = txn.Rollback(context.Background())
-			return
-		}
-		if err = rel.Append(context.Background(), data); err != nil {
-			_ = txn.Rollback(context.Background())
-			return
-		}
-		_ = txn.Commit(context.Background())
-	}
-}
-
 func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict bool) {
 	txn, rel := GetRelation(t, tenantID, e, dbName, schema.Name)
 
@@ -376,36 +356,18 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 	}
 }
 
-/*func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
-	txn, rel := GetDefaultRelation(t, e, schema.Name)
-	segs := make([]*catalog.SegmentEntry, 0)
-	it := rel.MakeSegmentIt()
-	for it.Valid() {
-		seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry)
-		segs = append(segs, seg)
-		it.Next()
-	}
-	for _, segMeta := range segs {
-		seg := segMeta.GetSegmentData()
-		factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
-		assert.NoError(t, err)
-		if factory == nil {
-			continue
-		}
-		task, err := e.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-		assert.NoError(t, err)
-		err = task.WaitDone()
-		assert.NoError(t, err)
-	}
-	assert.NoError(t, txn.Commit(context.Background()))
-}*/
-
-func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {
+func GetSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {
 	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(row)
 	return
 }
 
-func mockCNDeleteInS3(fs *objectio.ObjectFS, blk data.Block, schema *catalog.Schema, txn txnif.AsyncTxn, deleteRows []uint32) (location objectio.Location, err error) {
+func MockCNDeleteInS3(
+	fs *objectio.ObjectFS,
+	blk data.Block,
+	schema *catalog.Schema,
+	txn txnif.AsyncTxn,
+	deleteRows []uint32,
+) (location objectio.Location, err error) {
 	pkDef := schema.GetPrimaryKey()
 	view, err := blk.GetColumnDataById(context.Background(), txn, schema, pkDef.Idx)
 	pkVec := containers.MakeVector(pkDef.Type)
