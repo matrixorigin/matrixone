@@ -21,8 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type PrepareStatementType int
-
 func runPrepareCase(prepareCase PrepareCase, t *testing.T) {
 	prepareCase.prepareFn(
 		prepareCase, t,
