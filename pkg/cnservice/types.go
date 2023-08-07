@@ -210,6 +210,12 @@ type Config struct {
 		// EnableCheckRCInvalidError this config is used to check and find RC bugs in pessimistic mode.
 		// Will remove it later version.
 		EnableCheckRCInvalidError bool `toml:"enable-check-rc-invalid-error"`
+		// Limit flow control of transaction creation, maximum number of transactions per second. Default
+		// is unlimited.
+		Limit int `toml:"limit-per-second"`
+		// MaxActive is the count of max active txn in current cn.  If reached max value, the txn
+		// is added to a FIFO queue. Default is unlimited.
+		MaxActive int `toml:"max-active"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
