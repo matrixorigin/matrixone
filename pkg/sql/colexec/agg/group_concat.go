@@ -15,18 +15,19 @@
 package agg
 
 import (
+	"bytes"
 	"fmt"
-	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type GroupConcat1 struct {
-	result    []strings.Builder
+	result    []bytes.Buffer
 	separator string
 }
+
+const group_concat_max_len = 1024
 
 func newGroupConcat1(separator string) *GroupConcat1 {
 	return &GroupConcat1{
@@ -38,25 +39,24 @@ func GroupConcat1ReturnType(_ []types.Type) types.Type {
 }
 
 func (g *GroupConcat1) Grows(cnt int) {
-	logutil.Infof("group_concat grows")
-	for len(g.result) < cnt {
-		g.result = append(g.result, strings.Builder{})
+	for i := 0; i < cnt; i++ {
+		g.result = append(g.result, bytes.Buffer{})
 	}
-
-	logutil.Infof("cnt %d  len result %d", cnt, len(g.result))
 }
 
 func (g *GroupConcat1) Eval(vs [][]byte, err error) ([][]byte, error) {
 	result := make([][]byte, 0, len(g.result))
-	for i := range g.result {
-		result = append(result, []byte(g.result[i].String()))
+
+	for i := 0; i < len(g.result); i++ {
+		result = append(result, g.result[i].Bytes())
 	}
+
 	return result, nil
 }
 
 func (g *GroupConcat1) Fill(groupIndex int64, input []byte, oldValue []byte, z int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
 
-	if isNull {
+	if isNull || g.result[groupIndex].Cap()+len(input) > group_concat_max_len {
 		return nil, isEmpty, nil
 	}
 
@@ -77,26 +77,26 @@ func (g *GroupConcat1) Fill(groupIndex int64, input []byte, oldValue []byte, z i
 }
 
 func (g *GroupConcat1) Merge(xIndex int64, yIndex int64, x []byte, y []byte, xIsEmpty bool, yIsEmpty bool, yGroupConcat1 any) ([]byte, bool, error) {
-	logutil.Infof("group_concat merge")
-	if yIsEmpty {
+
+	if yIsEmpty || g.result[xIndex].Cap() > group_concat_max_len {
 		return []byte{}, xIsEmpty && yIsEmpty, nil
 	}
 
 	if !xIsEmpty {
 		g.result[xIndex].WriteString(g.separator)
 	}
-	g.result[xIndex].WriteString(yGroupConcat1.(*GroupConcat1).result[yIndex].String())
+	g.result[xIndex].Write(yGroupConcat1.(*GroupConcat1).result[yIndex].Bytes())
 
 	return []byte{}, xIsEmpty && yIsEmpty, nil
 }
 
 func (g *GroupConcat1) MarshalBinary() ([]byte, error) {
 
-	sbuilders := g.result
-	strings := make([]string, 0, len(sbuilders))
+	bytes := g.result
+	strings := make([]string, 0, len(bytes))
 
-	for i := range sbuilders {
-		strings = append(strings, sbuilders[i].String())
+	for i := range bytes {
+		strings = append(strings, bytes[i].String())
 	}
 	res := types.EncodeStringSlice(strings)
 
@@ -108,11 +108,11 @@ func (g *GroupConcat1) UnmarshalBinary(odata []byte) error {
 	data := make([]byte, len(odata))
 	copy(data, data)
 
-	strs := types.DecodeStringSlice(data)
-	result := make([]strings.Builder, len(strs))
+	strings := types.DecodeStringSlice(data)
+	result := make([]bytes.Buffer, len(strings))
 
 	for i := range result {
-		result[i].WriteString(strs[i])
+		result[i].WriteString(strings[i])
 	}
 	g.result = result
 
