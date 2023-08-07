@@ -34,8 +34,13 @@ func newGroupConcat(separator string) *GroupConcat1 {
 		separator: separator,
 	}
 }
-func GroupConcat1ReturnType(_ []types.Type) types.Type {
-	return types.T_varchar.ToType()
+func GroupConcat1ReturnType(parameters []types.Type) types.Type {
+	for _, p := range parameters {
+		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+			return types.T_blob.ToType()
+		}
+	}
+	return types.T_text.ToType()
 }
 
 func (g *GroupConcat1) Grows(cnt int) {
