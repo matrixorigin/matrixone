@@ -7970,7 +7970,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(ctx, t, opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
@@ -7986,7 +7986,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t1 := tae.TxnMgr.StatMaxCommitTS()
-	checkCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, tae.Opts.Fs)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -7999,8 +7999,8 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t2 := tae.TxnMgr.StatMaxCommitTS()
-	checkCheckpointReadWrite(t, types.TS{}, t2, tae.Catalog, tae.Opts.Fs)
-	checkCheckpointReadWrite(t, t1, t2, tae.Catalog, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t2, tae.Catalog, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t1, t2, tae.Catalog, tae.Opts.Fs)
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -8008,22 +8008,22 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	t3 := tae.TxnMgr.StatMaxCommitTS()
-	checkCheckpointReadWrite(t, types.TS{}, t3, tae.Catalog, tae.Opts.Fs)
-	checkCheckpointReadWrite(t, t2, t3, tae.Catalog, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t3, tae.Catalog, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t2, t3, tae.Catalog, tae.Opts.Fs)
 
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 1
 	schema.SegmentMaxBlocks = 1
-	tae.bindSchema(schema)
+	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 10)
 
-	tae.createRelAndAppend(bat, true)
+	tae.CreateRelAndAppend(bat, true)
 	t4 := tae.TxnMgr.StatMaxCommitTS()
-	checkCheckpointReadWrite(t, types.TS{}, t4, tae.Catalog, tae.Opts.Fs)
-	checkCheckpointReadWrite(t, t3, t4, tae.Catalog, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t4, tae.Catalog, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t3, t4, tae.Catalog, tae.Opts.Fs)
 
-	tae.compactBlocks(false)
+	tae.CompactBlocks(false)
 	t5 := tae.TxnMgr.StatMaxCommitTS()
-	checkCheckpointReadWrite(t, types.TS{}, t5, tae.Catalog, tae.Opts.Fs)
-	checkCheckpointReadWrite(t, t4, t5, tae.Catalog, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t5, tae.Catalog, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t4, t5, tae.Catalog, tae.Opts.Fs)
 }
