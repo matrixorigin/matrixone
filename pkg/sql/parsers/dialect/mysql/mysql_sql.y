@@ -399,7 +399,7 @@ import (
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
-%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN GROUP_CONCAT1
+%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK
@@ -7934,14 +7934,14 @@ window_spec:
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
-            Type: $3,
-            WindowSpec: $8,
-            AggType: 2,
-        }
+	    name := tree.SetUnresolvedName(strings.ToLower($1))
+	        $$ = &tree.FuncExpr{
+	        Func: tree.FuncName2ResolvableFunctionReference(name),
+	        Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
+	        Type: $3,
+	        WindowSpec: $8,
+            OrderBy:$5,
+	    }
     }
 |   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
@@ -8099,19 +8099,7 @@ function_call_aggregate:
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
 	    WindowSpec: $6,
-	}
-    }
-
-|   GROUP_CONCAT1 '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
-    {
-	name := tree.SetUnresolvedName(strings.ToLower($1))
-	$$ = &tree.FuncExpr{
-	    Func: tree.FuncName2ResolvableFunctionReference(name),
-	    Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
-	    Type: $3,
-	    WindowSpec: $8,
-        OrderBy:$5,
-	}
+	    }
     }
 
 

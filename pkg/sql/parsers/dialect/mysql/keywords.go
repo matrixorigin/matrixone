@@ -200,7 +200,6 @@ func init() {
 		"grants":                     GRANTS,
 		"group":                      GROUP,
 		"group_concat":               GROUP_CONCAT,
-		"group_concat1":              GROUP_CONCAT1,
 		"having":                     HAVING,
 		"hash":                       HASH,
 		"high_priority":              HIGH_PRIORITY,

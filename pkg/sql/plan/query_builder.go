@@ -1548,7 +1548,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	return lastNodeID, nil
 }
 
-const NameGroupConcat = "group_concat1"
+const NameGroupConcat = "group_concat"
 
 func (builder *QueryBuilder) hackForGroupConcat(selectExprs tree.SelectExprs, ctx *BindContext) (err error) {
 	for _, selectExpr := range selectExprs {
@@ -1578,14 +1578,14 @@ func (ctx *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 	j := 0
 
 	if len(ctx.windows) < 1 {
-		panic("group_concat1")
+		panic("no winspeclist to be used to force")
 	}
 
 	for i := range ctx.aggregates {
 		windowExpr := DeepCopyExpr(ctx.windows[j])
 		windowSpec := windowExpr.GetW()
 		if windowSpec == nil {
-			panic("group_concat1")
+			panic("no winspeclist to be used to force")
 		}
 		windowSpec.WindowFunc = DeepCopyExpr(ctx.aggregates[i])
 		windowExpr.Typ = ctx.aggregates[i].Typ

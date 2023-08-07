@@ -67,7 +67,6 @@ var Names = [...]string{
 	AggregateAnyValue:            "any",
 	AggregateMedian:              "median",
 	AggregateGroupConcat:         "group_concat",
-	AggregateGroupConcat1:        "group_concat1",
 
 	WinRank:      "rank",
 	WinRowNumber: "row_number",

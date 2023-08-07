@@ -194,7 +194,6 @@ const (
 	SUBSTR        // SUBSTR
 	SUM           // SUM
 	GROUP_CONCAT
-	GROUP_CONCAT1
 	TAN // TAN
 	TO_DATE
 	STR_TO_DATE
@@ -381,7 +380,6 @@ var functionIdRegister = map[string]int32{
 	"min":                   MIN,
 	"sum":                   SUM,
 	"group_concat":          GROUP_CONCAT,
-	"group_concat1":         GROUP_CONCAT1,
 	"avg":                   AVG,
 	"count":                 COUNT,
 	"starcount":             STARCOUNT,

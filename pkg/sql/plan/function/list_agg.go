@@ -291,33 +291,9 @@ var supportedAggregateFunctions = []FuncNew{
 		},
 	},
 
+
 	{
 		functionId: GROUP_CONCAT,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return newCheckResultWithSuccess(0)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType: func(parameters []types.Type) types.Type {
-					for _, p := range parameters {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_text.ToType()
-				},
-				specialId: agg.AggregateGroupConcat,
-			},
-		},
-	},
-
-	{
-		functionId: GROUP_CONCAT1,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
