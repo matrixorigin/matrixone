@@ -259,6 +259,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 
 		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
+		dataBuffer = nil
 		if err != nil {
 			return err
 		}
@@ -266,12 +267,14 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		s.Proc.SetInputBatch(bat)
 
 		if isConnector {
-			connector.Call(-1, s.Proc, lastArg, false, false)
+			if ok, err := connector.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
+				return err
+			}
 		} else {
-			dispatch.Call(-1, s.Proc, lastArg, false, false)
+			if ok, err := dispatch.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
+				return err
+			}
 		}
-
-		dataBuffer = nil
 	}
 }
 
@@ -298,9 +301,14 @@ func (s *Scope) remoteRun(c *Compile) error {
 	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
+	failed := false
+	defer func() {
+		lastArg.Free(s.Proc, failed)
+	}()
 
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
+		failed = true
 		return errEncode
 	}
 	s.Instructions = append(s.Instructions, lastInstruction)
@@ -308,26 +316,27 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc)
 	if errEncodeProc != nil {
+		failed = true
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
+		failed = true
 		return err
 	}
+	defer sender.close()
 	err = sender.send(sData, pData, pipeline.PipelineMessage)
 	if err != nil {
-		sender.close()
+		failed = true
 		return err
 	}
 
-	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
+	if err = receiveMessageFromCnServer(c, s, sender, lastInstruction); err != nil {
+		failed = true
+	}
 
-	// tell the connector or dispatch is over
-	lastArg.Free(s.Proc, err != nil)
-
-	sender.close()
 	return err
 }
 
@@ -444,6 +453,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.IsJoin = s.IsJoin
 	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
+	p.BuildIdx = int32(s.BuildIdx)
 
 	// Plan
 	if ctxId == 1 {
@@ -575,6 +585,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		IsLoad:   p.IsLoad,
 		Plan:     ctx.plan,
 		IsRemote: isRemote,
+		BuildIdx: int(p.BuildIdx),
 	}
 	if err := convertPipelineUuid(p, s); err != nil {
 		return s, err
@@ -725,7 +736,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Shuffle.ShuffleColMin = t.ShuffleColMin
 		in.Shuffle.AliveRegCnt = t.AliveRegCnt
 	case *dispatch.Argument:
-		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, FuncId: int32(t.FuncId)}
+		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, RecSink: t.RecSink, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
 		for i := range t.ShuffleRegIdxLocal {
 			in.Dispatch.ShuffleRegIdxLocal[i] = int32(t.ShuffleRegIdxLocal[i])
@@ -1139,6 +1150,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 
 		v.Arg = &dispatch.Argument{
 			IsSink:              t.IsSink,
+			RecSink:             t.RecSink,
 			FuncId:              int(t.FuncId),
 			LocalRegs:           regs,
 			RemoteRegs:          rrs,

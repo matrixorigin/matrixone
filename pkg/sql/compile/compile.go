@@ -1061,7 +1061,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 				dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
 					Op:  vm.Dispatch,
-					Arg: constructDispatchLocal(false, false, regs),
+					Arg: constructDispatchLocal(false, false, false, regs),
 				})
 				for i := range scopes {
 					insertArg, err := constructInsert(n, c.e, c.proc)
@@ -1231,7 +1231,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := c.newMergeScope(ss)
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, true, receivers),
+			Arg: constructDispatchLocal(true, true, len(receivers) > 1, receivers),
 		})
 
 		return []*Scope{rs}, nil
@@ -1717,18 +1717,12 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
-		if len(c.cnList) == 1 {
-			return c.compileShuffleJoin(ctx, node, left, right, ss, children)
-		} else {
-			// only support shuffle join on standalone for now. will fix this in the future
-			node.Stats.HashmapStats.Shuffle = false
-		}
+		return c.compileShuffleJoin(ctx, node, left, right, ss, children)
 	}
 	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
 }
 
-func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	var rs []*Scope
+func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *plan.Node, lefts []*Scope, rights []*Scope) []*Scope {
 	isEq := plan2.IsEquiJoin2(node.OnList)
 	if !isEq {
 		panic("shuffle join only support equal join for now!")
@@ -1744,11 +1738,17 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 		leftTyps[i] = dupType(expr.Typ)
 	}
 
-	rs = c.newShuffleJoinScopeList(ss, children, node)
+	parent, children := c.newShuffleJoinScopeList(lefts, rights, node)
+	lastOperator := make([]vm.Instruction, 0, len(children))
+	for i := range children {
+		ilen := len(children[i].Instructions) - 1
+		lastOperator = append(lastOperator, children[i].Instructions[ilen])
+		children[i].Instructions = children[i].Instructions[:ilen]
+	}
 	switch node.JoinType {
 	case plan.Node_INNER:
-		for i := range rs {
-			rs[i].appendInstruction(vm.Instruction{
+		for i := range children {
+			children[i].appendInstruction(vm.Instruction{
 				Op:  vm.Join,
 				Idx: c.anal.curr,
 				Arg: constructJoin(node, rightTyps, c.proc),
@@ -1757,16 +1757,16 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 
 	case plan.Node_ANTI:
 		if node.BuildOnLeft {
-			for i := range rs {
-				rs[i].appendInstruction(vm.Instruction{
+			for i := range children {
+				children[i].appendInstruction(vm.Instruction{
 					Op:  vm.RightAnti,
 					Idx: c.anal.curr,
 					Arg: constructRightAnti(node, rightTyps, 0, 0, c.proc),
 				})
 			}
 		} else {
-			for i := range rs {
-				rs[i].appendInstruction(vm.Instruction{
+			for i := range children {
+				children[i].appendInstruction(vm.Instruction{
 					Op:  vm.Anti,
 					Idx: c.anal.curr,
 					Arg: constructAnti(node, rightTyps, c.proc),
@@ -1776,16 +1776,16 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 
 	case plan.Node_SEMI:
 		if node.BuildOnLeft {
-			for i := range rs {
-				rs[i].appendInstruction(vm.Instruction{
+			for i := range children {
+				children[i].appendInstruction(vm.Instruction{
 					Op:  vm.RightSemi,
 					Idx: c.anal.curr,
 					Arg: constructRightSemi(node, rightTyps, 0, 0, c.proc),
 				})
 			}
 		} else {
-			for i := range rs {
-				rs[i].appendInstruction(vm.Instruction{
+			for i := range children {
+				children[i].appendInstruction(vm.Instruction{
 					Op:  vm.Semi,
 					Idx: c.anal.curr,
 					Arg: constructSemi(node, rightTyps, c.proc),
@@ -1794,8 +1794,8 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 		}
 
 	case plan.Node_LEFT:
-		for i := range rs {
-			rs[i].appendInstruction(vm.Instruction{
+		for i := range children {
+			children[i].appendInstruction(vm.Instruction{
 				Op:  vm.Left,
 				Idx: c.anal.curr,
 				Arg: constructLeft(node, rightTyps, c.proc),
@@ -1803,18 +1803,22 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 		}
 
 	case plan.Node_RIGHT:
-		for i := range rs {
-			rs[i].appendInstruction(vm.Instruction{
+		for i := range children {
+			children[i].appendInstruction(vm.Instruction{
 				Op:  vm.Right,
 				Idx: c.anal.curr,
 				Arg: constructRight(node, leftTyps, rightTyps, 0, 0, c.proc),
 			})
 		}
-
 	default:
 		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
 	}
-	return rs
+	// recovery the children's last operator
+	for i := range children {
+		children[i].appendInstruction(lastOperator[i])
+	}
+
+	return parent
 }
 
 func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
@@ -1862,7 +1866,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, ss), ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightSemi,
@@ -1909,7 +1913,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
+			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, ss), ss, children, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
@@ -1940,7 +1944,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 	case plan.Node_ANTI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, 1, ss), ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightAnti,
@@ -2329,24 +2333,6 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 	}
 }
 
-//func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
-//	ss2 := make([]*Scope, 0, len(ss))
-//	for _, s := range ss {
-//		if s.IsEnd {
-//			continue
-//		}
-//		ss2 = append(ss2, s)
-//	}
-//	insert := &vm.Instruction{
-//		Op:  vm.Insert,
-//		Arg: arg,
-//	}
-//	for i := range ss2 {
-//		ss2[i].Instructions = append(ss2[i].Instructions, dupInstruction(insert, nil, i))
-//	}
-//	return c.newMergeScope(ss2)
-//}
-
 // DeleteMergeScope need to assure this:
 // one block can be only deleted by one and the same
 // CN, so we need to transfer the rows from the
@@ -2497,7 +2483,7 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 	return ss
 }
 
-func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scope) []*Scope {
+func (c *Compile) newScopeListForRightJoin(childrenCount int, bIdx int, leftScopes []*Scope) []*Scope {
 	/*
 		ss := make([]*Scope, 0, len(leftScopes))
 		for i := range leftScopes {
@@ -2524,6 +2510,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scop
 		IsJoin:   true,
 		Proc:     process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes()),
 		NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, maxCpuNum)},
+		BuildIdx: bIdx,
 	}
 	return ss
 }
@@ -2558,40 +2545,6 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 	return rs
 }
 
-//func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
-//rs := make([]*Scope, len(ss))
-//// join's input will record in the left/right scope when JoinRun
-//// so set it to false here.
-//c.anal.isFirst = false
-//for i := range ss {
-//if ss[i].IsEnd {
-//rs[i] = ss[i]
-//continue
-//}
-//chp := c.newMergeScope(dupScopeList(children))
-//rs[i] = new(Scope)
-//rs[i].Magic = Remote
-//rs[i].IsJoin = true
-//rs[i].NodeInfo = ss[i].NodeInfo
-//rs[i].PreScopes = []*Scope{ss[i], chp}
-//rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
-//ss[i].appendInstruction(vm.Instruction{
-//Op: vm.Connector,
-//Arg: &connector.Argument{
-//Reg: rs[i].Proc.Reg.MergeReceivers[0],
-//},
-//})
-//chp.appendInstruction(vm.Instruction{
-//Op: vm.Connector,
-//Arg: &connector.Argument{
-//Reg: rs[i].Proc.Reg.MergeReceivers[1],
-//},
-//})
-//chp.IsEnd = true
-//}
-//return rs
-//}
-
 func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *plan.Node) []*Scope {
 	length := len(ss)
 	rs := make([]*Scope, length)
@@ -2605,6 +2558,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = ss[i].NodeInfo
+		rs[i].BuildIdx = 1
 		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
 		}
@@ -2633,10 +2587,11 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 	return rs
 }
 
-func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []*Scope {
-	joinScopes := make([]*Scope, 0, len(c.cnList))
-	idx := 0
-	cnt := 0
+func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([]*Scope, []*Scope) {
+	parent := make([]*Scope, 0, len(c.cnList))
+	children := make([]*Scope, 0, len(c.cnList))
+	lnum := len(left)
+	sum := lnum + len(right)
 	for _, n := range c.cnList {
 		dop := c.generateCPUNumber(n.Mcpu, plan2.GetShuffleDop())
 		ss := make([]*Scope, dop)
@@ -2646,49 +2601,70 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) []
 			ss[i].IsJoin = true
 			ss[i].NodeInfo.Addr = n.Addr
 			ss[i].NodeInfo.Mcpu = 1
-			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
+			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, sum, c.anal.Nodes())
+			ss[i].BuildIdx = lnum
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *batch.Batch, 16)
 			}
 		}
-		if isSameCN(n.Addr, c.addr) {
-			idx = cnt
-		}
-		joinScopes = append(joinScopes, ss...)
-		cnt += dop
+		children = append(children, ss...)
+		parent = append(parent, c.newMergeRemoteScope(ss, n))
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	for i := range left {
-		left[i].appendInstruction(vm.Instruction{
+	for i, scp := range left {
+		scp.appendInstruction(vm.Instruction{
 			Op:  vm.Shuffle,
-			Arg: constructShuffleJoinArg(joinScopes, n, true),
+			Idx: c.anal.curr,
+			Arg: constructShuffleJoinArg(children, n, true),
 		})
+		scp.appendInstruction(vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: constructDispatch(i, children, scp.NodeInfo.Addr, n),
+		})
+		scp.IsEnd = true
+
+		appended := false
+		for _, js := range children {
+			if isSameCN(js.NodeInfo.Addr, scp.NodeInfo.Addr) {
+				js.PreScopes = append(js.PreScopes, scp)
+				appended = true
+				break
+			}
+		}
+		if !appended {
+			logutil.Errorf("no same addr scope to append left scopes")
+			children[0].PreScopes = append(children[0].PreScopes, scp)
+		}
 	}
-	leftMerge := c.newMergeScope(left)
-	leftMerge.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatch(0, joinScopes, c.addr, n),
-	})
-	leftMerge.IsEnd = true
 
 	c.anal.isFirst = currentFirstFlag
-	for i := range right {
-		right[i].appendInstruction(vm.Instruction{
+	for i, scp := range right {
+		scp.appendInstruction(vm.Instruction{
 			Op:  vm.Shuffle,
-			Arg: constructShuffleJoinArg(joinScopes, n, false),
+			Idx: c.anal.curr,
+			Arg: constructShuffleJoinArg(children, n, false),
 		})
+		scp.appendInstruction(vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: constructDispatch(i+lnum, children, scp.NodeInfo.Addr, n),
+		})
+		scp.IsEnd = true
+
+		appended := false
+		for _, js := range children {
+			if isSameCN(js.NodeInfo.Addr, scp.NodeInfo.Addr) {
+				js.PreScopes = append(js.PreScopes, scp)
+				appended = true
+				break
+			}
+		}
+		if !appended {
+			logutil.Errorf("no same addr scope to append right scopes")
+			children[0].PreScopes = append(children[0].PreScopes, scp)
+		}
 	}
-	rightMerge := c.newMergeScope(right)
-	rightMerge.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatch(1, joinScopes, c.addr, n),
-	})
-	rightMerge.IsEnd = true
-
-	joinScopes[idx].PreScopes = append(joinScopes[idx].PreScopes, leftMerge, rightMerge)
-
-	return joinScopes
+	return parent, children
 }
 
 func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
@@ -2701,13 +2677,32 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		IsFirst: true,
 		Arg:     &merge.Argument{},
 	})
-	rs.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatchLocal(false, false, extraRegisters(ss, 0)),
-	})
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, s.BuildIdx, c.anal.Nodes())
+	for i := 0; i < s.BuildIdx; i++ {
+		regTransplant(s, rs, i, i)
+	}
+
+	if ss == nil {
+		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+			Ctx: s.Proc.Ctx,
+			Ch:  make(chan *batch.Batch, 16),
+		}
+		rs.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: s.Proc.Reg.MergeReceivers[0],
+			},
+		})
+		s.Proc.Reg.MergeReceivers = append(s.Proc.Reg.MergeReceivers[:1], s.Proc.Reg.MergeReceivers[s.BuildIdx:]...)
+		s.BuildIdx = 1
+	} else {
+		rs.appendInstruction(vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: constructDispatchLocal(false, false, false, extraRegisters(ss, 0)),
+		})
+	}
 	rs.IsEnd = true
-	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
-	regTransplant(s, rs, 0, 0)
+
 	return rs
 }
 
@@ -2715,8 +2710,11 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	rs := &Scope{
 		Magic: Merge,
 	}
-	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
-	regTransplant(s, rs, 1, 0)
+	buildLen := len(s.Proc.Reg.MergeReceivers) - s.BuildIdx
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, buildLen, c.anal.Nodes())
+	for i := 0; i < buildLen; i++ {
+		regTransplant(s, rs, i+s.BuildIdx, i)
+	}
 
 	rs.appendInstruction(vm.Instruction{
 		Op:      vm.HashBuild,
@@ -2725,21 +2723,22 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, ss != nil),
 	})
 
-	if ss == nil { // unparallel, send the hashtable to s directly
-		s.Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
+	if ss == nil { // unparallel, send the hashtable to join scope directly
+		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
 			Ch:  make(chan *batch.Batch, 1),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
 			Arg: &connector.Argument{
-				Reg: s.Proc.Reg.MergeReceivers[1],
+				Reg: s.Proc.Reg.MergeReceivers[s.BuildIdx],
 			},
 		})
+		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, false, extraRegisters(ss, 1)),
+			Arg: constructDispatchLocal(true, false, false, extraRegisters(ss, s.BuildIdx)),
 		})
 	}
 	rs.IsEnd = true
@@ -3037,7 +3036,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
-	if n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
 			return nil, err
