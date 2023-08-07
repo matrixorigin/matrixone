@@ -156,7 +156,3 @@ func makeTest1() TestCase {
 		testFn:    testFn,
 	}
 }
-
-func test1(testCase TestCase, t *testing.T) {
-	t.Logf("Test %s", testCase.desc)
-}
