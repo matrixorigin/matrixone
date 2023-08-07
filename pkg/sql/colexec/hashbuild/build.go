@@ -174,7 +174,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 
 		//preAlloc to improve performance and reduce memory reAlloc
-		if count > 200000 && i == hashmap.UnitLimit*256 {
+		if count > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
 			groupCount := ctr.mp.GroupCount()
 			rate := float64(groupCount) / float64(i)
 			hashmapCount := int(float64(count) * rate)
