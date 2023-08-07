@@ -145,6 +145,8 @@ func CompareGeneric(a, b any, t types.T) int64 {
 		return CompareOrdered(a.(types.Time), b.(types.Time))
 	case types.T_datetime:
 		return CompareOrdered(a.(types.Datetime), b.(types.Datetime))
+	case types.T_enum:
+		return CompareOrdered(a.(types.Enum), b.(types.Enum))
 	case types.T_TS:
 		return int64(a.(types.TS).Compare(b.(types.TS)))
 	case types.T_Rowid:

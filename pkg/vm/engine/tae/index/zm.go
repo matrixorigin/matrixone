@@ -307,6 +307,8 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.DecodeFixed[types.Datetime](buf)
 	case types.T_timestamp:
 		return types.DecodeFixed[types.Timestamp](buf)
+	case types.T_enum:
+		return types.DecodeFixed[types.Enum](buf)
 	case types.T_decimal64:
 		return types.DecodeFixed[types.Decimal64](buf)
 	case types.T_decimal128:
@@ -602,6 +604,15 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	case types.T_timestamp:
 		col := vector.MustFixedCol[types.Timestamp](vec)
 		minVal, maxVal := types.DecodeTimestamp(zm.GetMinBuf()), types.DecodeTimestamp(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+
+		return lowerBound < len(col) && maxVal >= col[lowerBound]
+
+	case types.T_enum:
+		col := vector.MustFixedCol[types.Enum](vec)
+		minVal, maxVal := types.DecodeEnum(zm.GetMinBuf()), types.DecodeEnum(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
 			return minVal <= col[i]
 		})

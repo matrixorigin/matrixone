@@ -304,6 +304,10 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Datetime(i+offset), false)
 		}
+	case types.T_enum:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Enum(i+offset), false)
+		}
 	case types.T_char, types.T_varchar, types.T_binary,
 		types.T_varbinary, types.T_blob, types.T_text:
 		for i := 0; i < rows; i++ {

@@ -292,6 +292,15 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Const
 				Datetimeval: int64(vector.MustFixedCol[types.Datetime](vec)[row]),
 			},
 		}
+	case types.T_enum:
+		if !transAll {
+			return nil
+		}
+		return &plan.Const{
+			Value: &plan.Const_EnumVal{
+				EnumVal: uint32(vector.MustFixedCol[types.Enum](vec)[row]),
+			},
+		}
 	case types.T_decimal64:
 		return &plan.Const{
 			Value: &plan.Const_Decimal64Val{

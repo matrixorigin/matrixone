@@ -87,6 +87,8 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 		return fetchUUIDRows
 	case types.T_char, types.T_varchar, types.T_binary:
 		return fetchVarlenaRows
+	case types.T_enum:
+		return fetchEnumRows
 	default:
 		panic(fmt.Sprintf("not support for %s", t.String()))
 	}
@@ -422,6 +424,33 @@ func fetchTimeRows(
 	if lockTable {
 		min := fn(math.MinInt64)
 		max := fn(math.MaxInt64)
+		return true, [][]byte{min, max},
+			lock.Granularity_Range
+	}
+	return fetchFixedRows(
+		vec,
+		max,
+		fn,
+		filter,
+		filterCols)
+}
+
+func fetchEnumRows(
+	vec *vector.Vector,
+	parker *types.Packer,
+	tp types.Type,
+	max int,
+	lockTable bool,
+	filter RowsFilter,
+	filterCols []int32) (bool, [][]byte, lock.Granularity) {
+	fn := func(v types.Enum) []byte {
+		parker.Reset()
+		parker.EncodeEnum(v)
+		return parker.Bytes()
+	}
+	if lockTable {
+		min := fn(math.MaxUint16)
+		max := fn(0)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}

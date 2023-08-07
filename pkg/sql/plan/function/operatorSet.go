@@ -190,6 +190,8 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return strCaseFn(parameters, result, proc, length)
 	case types.T_json:
 		return strCaseFn(parameters, result, proc, length)
+	case types.T_enum:
+		return strCaseFn(parameters, result, proc, length)
 	}
 	panic("unreached code")
 }

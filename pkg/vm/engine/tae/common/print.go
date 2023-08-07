@@ -218,6 +218,8 @@ func MoVectorToString(v *vector.Vector, printN int) string {
 		return vec2Str(vector.MustFixedCol[types.Time](v)[:printN], v)
 	case types.T_timestamp:
 		return vec2Str(vector.MustFixedCol[types.Timestamp](v)[:printN], v)
+	case types.T_enum:
+		return vec2Str(vector.MustFixedCol[types.Enum](v)[:printN], v)
 	case types.T_decimal64:
 		return vec2Str(vector.MustFixedCol[types.Decimal64](v)[:printN], v)
 	case types.T_decimal128:

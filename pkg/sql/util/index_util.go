@@ -650,6 +650,16 @@ func compactPrimaryCol(v *vector.Vector, bitMap *nulls.Nulls, proc *process.Proc
 		}
 		vec = vector.NewVec(*v.GetType())
 		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_enum:
+		s := vector.MustFixedCol[types.Enum](v)
+		ns := make([]types.Enum, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewVec(*v.GetType())
+		vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustFixedCol[types.Decimal64](v)
 		ns := make([]types.Decimal64, 0)
