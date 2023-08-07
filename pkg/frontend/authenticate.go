@@ -2713,6 +2713,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 	var targetAccountId uint64
 	var version uint64
 	var accountExist bool
+	var accountStatus string
 	account := ses.GetTenantInfo()
 	if !(account.IsSysTenant() && account.IsMoAdminRole()) {
 		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to alter the account",
@@ -2797,6 +2798,11 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 		if execResultArrayHasData(erArray) {
 			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 				targetAccountId, err = erArray[0].GetUint64(ctx, i, 0)
+				if err != nil {
+					return err
+				}
+
+				accountStatus, err = erArray[0].GetString(ctx, 0, 2)
 				if err != nil {
 					return err
 				}
@@ -2931,7 +2937,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 			}
 		}
 
-		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusOpen {
+		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusOpen && accountStatus == tree.AccountStatusRestricted.String() {
 			accountId2RoutineMap := ses.getRoutineManager().accountRoutine.deepCopyRoutineMap()
 			if rtMap, ok := accountId2RoutineMap[int64(targetAccountId)]; ok {
 				for rt := range rtMap {
