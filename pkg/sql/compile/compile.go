@@ -1061,7 +1061,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 				dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
 					Op:  vm.Dispatch,
-					Arg: constructDispatchLocal(false, false, regs),
+					Arg: constructDispatchLocal(false, false, regs, false),
 				})
 				for i := range scopes {
 					insertArg, err := constructInsert(n, c.e, c.proc)
@@ -1229,9 +1229,14 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 		rs := c.newMergeScope(ss)
+		isLog := false
+		if strings.Contains(c.sql, "indup_02") && strings.Contains(c.sql, "duplicate") {
+			isLog = true
+		}
+
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, true, receivers),
+			Arg: constructDispatchLocal(true, true, receivers, isLog),
 		})
 
 		return []*Scope{rs}, nil
@@ -2697,7 +2702,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(false, false, extraRegisters(ss, 0)),
+			Arg: constructDispatchLocal(false, false, extraRegisters(ss, 0), false),
 		})
 	}
 	rs.IsEnd = true
@@ -2737,7 +2742,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, false, extraRegisters(ss, s.BuildIdx)),
+			Arg: constructDispatchLocal(true, false, extraRegisters(ss, s.BuildIdx), false),
 		})
 	}
 	rs.IsEnd = true

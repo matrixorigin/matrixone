@@ -107,6 +107,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	} else {
 		ap.ctr.hasData = true
 	}
+	if ap.IsLog {
+		logutil.Infof("dipatch operator input batch: %s", bat.PrintBatch())
+	}
+
 	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {
 		return process.ExecStop, err
