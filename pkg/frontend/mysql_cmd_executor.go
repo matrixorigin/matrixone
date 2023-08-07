@@ -26,7 +26,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -4039,21 +4038,16 @@ func (h *marshalPlanHandler) handoverBuffer() *bytes.Buffer {
 	return b
 }
 
-var allocCount atomic.Int64
-var releaseCount atomic.Int64
-
 var marshalPlanBufferPool = sync.Pool{New: func() any {
 	return bytes.NewBuffer(make([]byte, 0, 16*mpool.KB))
 }}
 
 // get buffer from marshalPlanBufferPool
 func getMarshalPlanBufferPool() *bytes.Buffer {
-	allocCount.Add(1)
 	return marshalPlanBufferPool.Get().(*bytes.Buffer)
 }
 
 func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
-	releaseCount.Add(1)
 	marshalPlanBufferPool.Put(b)
 }
 
@@ -4106,14 +4100,4 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 		statsByte = statistic.DefaultStatsArray
 	}
 	return
-}
-
-func init() {
-	go func() {
-		for {
-			time.Sleep(3 * time.Second)
-			alloc, release := allocCount.Load(), releaseCount.Load()
-			logutil.Infof("json_buffer alloc, release, delta: %d, %d, %d", alloc, release, alloc-release)
-		}
-	}()
 }
