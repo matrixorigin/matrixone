@@ -284,6 +284,10 @@ func NewDeadLockDetectedNoCtx() *Error {
 	return newError(Context(), ErrDeadLockDetected)
 }
 
+func NewDeadlockCheckBusyNoCtx() *Error {
+	return newError(Context(), ErrDeadlockCheckBusy)
+}
+
 func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }

@@ -31,6 +31,8 @@ var (
 	ErrTxnNotFound = moerr.NewInvalidStateNoCtx("txn not found")
 	// ErrDeadLockDetected dead lock detected
 	ErrDeadLockDetected = moerr.NewDeadLockDetectedNoCtx()
+	// ErrDeadlockCheckBusy dead lock check is busy
+	ErrDeadlockCheckBusy = moerr.NewDeadlockCheckBusyNoCtx()
 	// ErrLockTableBindChanged lock table and lock service bind changed
 	ErrLockTableBindChanged = moerr.NewLockTableBindChangedNoCtx()
 	// ErrLockTableNotFound lock table not found on remote lock service
