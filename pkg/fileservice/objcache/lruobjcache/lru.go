@@ -28,8 +28,8 @@ type LRU[K comparable] struct {
 	size      int64
 	evicts    *list.List
 	kv        map[K]*list.Element
-	postSet   func(key K, value []byte, sz int64, isNewEntry bool)
-	postEvict func(key K, value []byte, sz int64)
+	postSet   func(key K, value []byte, isNewEntry bool)
+	postEvict func(key K, value []byte)
 }
 
 type lruItem[K comparable] struct {
@@ -41,9 +41,9 @@ type lruItem[K comparable] struct {
 
 func New[K comparable](
 	capacity int64,
-	postSet func(keySet K, valSet []byte, szSet int64, isNewEntry bool),
-	postEvict func(keyEvicted K, valEvicted []byte, szEvicted int64,
-	)) *LRU[K] {
+	postSet func(keySet K, valSet []byte, isNewEntry bool),
+	postEvict func(keyEvicted K, valEvicted []byte),
+) *LRU[K] {
 	return &LRU[K]{
 		capacity:  capacity,
 		evicts:    list.New(),
@@ -53,7 +53,7 @@ func New[K comparable](
 	}
 }
 
-func (l *LRU[K]) Set(ctx context.Context, key K, value []byte, size int64, preloading bool) {
+func (l *LRU[K]) Set(ctx context.Context, key K, value []byte, preloading bool) {
 	l.Lock()
 	defer l.Unlock()
 
@@ -63,11 +63,11 @@ func (l *LRU[K]) Set(ctx context.Context, key K, value []byte, size int64, prelo
 		isNewEntry = false
 		item := elem.Value.(*lruItem[K])
 		l.size -= item.Size
-		l.size += size
+		l.size += int64(len(value))
 		if !preloading {
 			l.evicts.MoveToFront(elem)
 		}
-		item.Size = size
+		item.Size = int64(len(value))
 		item.Key = key
 		item.Value = value
 
@@ -77,7 +77,7 @@ func (l *LRU[K]) Set(ctx context.Context, key K, value []byte, size int64, prelo
 		item := &lruItem[K]{
 			Key:   key,
 			Value: value,
-			Size:  size,
+			Size:  int64(len(value)),
 		}
 		var elem *list.Element
 		if preloading {
@@ -86,11 +86,11 @@ func (l *LRU[K]) Set(ctx context.Context, key K, value []byte, size int64, prelo
 			elem = l.evicts.PushFront(item)
 		}
 		l.kv[key] = elem
-		l.size += size
+		l.size += int64(len(value))
 	}
 
 	if l.postSet != nil {
-		l.postSet(key, value, size, isNewEntry)
+		l.postSet(key, value, isNewEntry)
 	}
 
 	l.evict(ctx)
@@ -125,7 +125,7 @@ func (l *LRU[K]) evict(ctx context.Context) {
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)
 			if l.postEvict != nil {
-				l.postEvict(item.Key, item.Value, item.Size)
+				l.postEvict(item.Key, item.Value)
 			}
 			numEvict++
 			if item.NumRead == 0 {
@@ -137,7 +137,7 @@ func (l *LRU[K]) evict(ctx context.Context) {
 	}
 }
 
-func (l *LRU[K]) Get(ctx context.Context, key K, preloading bool) (value []byte, size int64, ok bool) {
+func (l *LRU[K]) Get(ctx context.Context, key K, preloading bool) (value []byte, ok bool) {
 	l.Lock()
 	defer l.Unlock()
 	if elem, ok := l.kv[key]; ok {
@@ -146,9 +146,9 @@ func (l *LRU[K]) Get(ctx context.Context, key K, preloading bool) (value []byte,
 		}
 		item := elem.Value.(*lruItem[K])
 		item.NumRead++
-		return item.Value, item.Size, true
+		return item.Value, true
 	}
-	return nil, 0, false
+	return nil, false
 }
 
 func (l *LRU[K]) Flush() {

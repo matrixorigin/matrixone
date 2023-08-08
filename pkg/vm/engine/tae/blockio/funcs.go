@@ -70,11 +70,11 @@ func LoadBF(
 		return
 	}
 	r, _ := NewObjectReader(fs, loc)
-	v, size, err := r.LoadAllBF(ctx)
+	v, _, err = r.LoadAllBF(ctx)
 	if err != nil {
 		return
 	}
-	cache.Set(ctx, *loc.ShortName(), v, int64(size))
+	cache.Set(ctx, *loc.ShortName(), v)
 	bf = objectio.BloomFilter(v)
 	return
 }

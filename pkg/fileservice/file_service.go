@@ -125,11 +125,6 @@ type IOEntry struct {
 	// if data is empty, the io.Reader must be fully read before returning nil error
 	ToObjectBytes func(reader io.Reader, data []byte) (object []byte, objectSize int64, err error)
 
-	// ObjectSize indicates the memory bytes to hold the object
-	// set from ToObjectBytes returning value
-	// used in capacity limited caches
-	ObjectSize int64
-
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache
 	done bool

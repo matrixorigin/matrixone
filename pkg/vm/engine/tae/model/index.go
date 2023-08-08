@@ -21,7 +21,7 @@ import (
 )
 
 type LRUCache interface {
-	Set(ctx context.Context, k any, v []byte, size int64)
+	Set(ctx context.Context, k any, v []byte)
 	Get(ctx context.Context, k any) ([]byte, bool)
 	Size() int64
 }
@@ -41,10 +41,10 @@ func (lru *simpleLRU) Size() int64 {
 }
 
 func (lru *simpleLRU) Get(ctx context.Context, k any) (v []byte, ok bool) {
-	v, _, ok = lru.impl.Get(ctx, k, false)
+	v, ok = lru.impl.Get(ctx, k, false)
 	return
 }
 
-func (lru *simpleLRU) Set(ctx context.Context, k any, v []byte, size int64) {
-	lru.impl.Set(ctx, k, v, size, false)
+func (lru *simpleLRU) Set(ctx context.Context, k any, v []byte) {
+	lru.impl.Set(ctx, k, v, false)
 }

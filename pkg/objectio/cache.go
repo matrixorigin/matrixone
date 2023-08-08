@@ -45,7 +45,7 @@ func LoadObjectMetaByExtent(
 	extent *Extent,
 	noLRUCache bool,
 	fs fileservice.FileService) (meta ObjectMeta, err error) {
-	v, _, ok := metaCache.Get(ctx, *name.Short(), false)
+	v, ok := metaCache.Get(ctx, *name.Short(), false)
 	if ok {
 		meta = ObjectMeta(v)
 		return
@@ -53,7 +53,7 @@ func LoadObjectMetaByExtent(
 	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
 		return
 	}
-	metaCache.Set(ctx, *name.Short(), meta, int64(len(meta[:])), false)
+	metaCache.Set(ctx, *name.Short(), meta, false)
 	return
 }
 

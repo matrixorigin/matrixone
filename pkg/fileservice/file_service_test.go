@@ -664,7 +664,6 @@ func testFileService(
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(m.M))
 		assert.Equal(t, int64(42), m.M[42])
-		assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 
 	})
 
