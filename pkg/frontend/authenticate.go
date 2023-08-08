@@ -8905,7 +8905,7 @@ func addInitSystemVariablesSql(accountId int, accountName, variable_name string,
 	return initMoMysqlCompatibilityMode
 }
 
-// alterSessions alter all nodes session status which the tenant has been alter restricted.
+// alterSessionStatus alter all nodes session status which the tenant has been alter restricted or open.
 func alterSessionStatus(ctx context.Context, tenant string, user string, status string, qs queryservice.QueryService) error {
 	var nodes []string
 	labels := clusterservice.NewSelector().SelectByLabel(
@@ -8961,7 +8961,7 @@ func alterSessionStatus(ctx context.Context, tenant string, user string, status 
 			} else {
 				queryResp, ok := res.response.(*query.Response)
 				if !(ok && queryResp.AlterAccountResponse != nil && queryResp.AlterAccountResponse.AlterSuccess) {
-					retErr = moerr.NewInternalError(ctx, "alter account restricted failed")
+					retErr = moerr.NewInternalError(ctx, "alter account failed")
 				}
 			}
 		case <-ctx.Done():
