@@ -1,74 +1,190 @@
 package kafka
 
-import "github.com/segmentio/kafka-go"
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
+type AdminClientInterface interface {
+	CreateTopics(ctx context.Context, topics []kafka.TopicSpecification) ([]kafka.TopicResult, error)
+}
 
 type KafkaAdapter struct {
-	// Address of Kafka broker(s)
-	Brokers []string
-
-	// Default Kafka topic for this adapter (optional)
-	DefaultTopic string
-
-	// Reader and Writer configurations can be used to fine-tune the behavior of the Kafka client
-	ReaderConfig kafka.ReaderConfig
-	WriterConfig kafka.WriterConfig
-
-	// Readers and writers can be stored if you want to keep long-lived connections
-	// Typically, you would instantiate them based on a particular topic when needed
-	Readers map[string]*kafka.Reader
-	Writers map[string]*kafka.Writer
-
-	// Optionally, maintain connection state
-	Connected bool
+	Producer    *kafka.Producer
+	Consumer    *kafka.Consumer
+	AdminClient *kafka.AdminClient
+	Brokers     []string
+	ConfigMap   *kafka.ConfigMap
+	Connected   bool
 }
 
-// NewKafkaAdapter initializes a new Kafka adapter
-func NewKafkaAdapter(brokers []string, defaultTopic string) *KafkaAdapter {
-	return &KafkaAdapter{
-		Brokers:      brokers,
-		DefaultTopic: defaultTopic,
-		Readers:      make(map[string]*kafka.Reader),
-		Writers:      make(map[string]*kafka.Writer),
+func NewKafkaAdapter(brokers []string, configMap *kafka.ConfigMap) (*KafkaAdapter, error) {
+	// Ensure provided brokers are not empty
+	if len(brokers) == 0 {
+		return nil, fmt.Errorf("brokers list is empty")
 	}
+
+	// Create a new admin client instance
+	adminClient, err := kafka.NewAdminClient(configMap)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create confluent admin client: %w", err)
+	}
+
+	// Create a new consumer client instance
+	consumer, err := kafka.NewConsumer(configMap)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create confluent consumer client: %w", err)
+	}
+
+	// Create a new producer client instance
+	producer, err := kafka.NewProducer(configMap)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create confluent producer client: %w", err)
+	}
+
+	// Return a new KafkaAdapter instance
+	return &KafkaAdapter{
+		Producer:    producer,
+		AdminClient: adminClient,
+		Consumer:    consumer,
+		Brokers:     brokers,
+		ConfigMap:   configMap,
+		Connected:   true,
+	}, nil
 }
 
-func (k *KafkaAdapter) CreateTopic(name string, configs ...interface{}) error {
-	// ... Kafka-specific logic to create topic
+func (ka *KafkaAdapter) CreateTopic(ctx context.Context, topicName string, partitions int, replicationFactor int) error {
+	topicSpecification := kafka.TopicSpecification{
+		Topic:             topicName,
+		NumPartitions:     partitions,
+		ReplicationFactor: replicationFactor,
+		// can add more configs here
+	}
+
+	results, err := ka.AdminClient.CreateTopics(ctx, []kafka.TopicSpecification{topicSpecification})
+	if err != nil {
+		return err
+	}
+
+	// Check results for errors
+	for _, result := range results {
+		if result.Error.Code() != kafka.ErrNoError {
+			return result.Error
+		}
+	}
 	return nil
 }
 
-func (k *KafkaAdapter) UpdateTopic(name string, configs ...interface{}) error {
-	// ... Kafka-specific logic to update topic settings
-	return nil
+func (ka *KafkaAdapter) DescribeTopicDetails(ctx context.Context, topicName string) (*kafka.TopicMetadata, error) {
+
+	// Fetch metadata
+	meta, err := ka.AdminClient.GetMetadata(&topicName, false, int(10*time.Second.Milliseconds()))
+	if err != nil {
+		return nil, err
+	}
+
+	// Find and return the topic's metadata
+	for _, topic := range meta.Topics {
+		if topic.Topic == topicName {
+			return &topic, nil
+		}
+	}
+
+	return nil, moerr.NewInternalError(ctx, "topic not found")
 }
 
-func (k *KafkaAdapter) DeleteTopic(name string) error {
-	// ... Kafka-specific logic to delete topic
-	return nil
+func (ka *KafkaAdapter) ReadMessages(topic string, offset int64, limit int) ([]*kafka.Message, error) {
+	if ka.Consumer == nil {
+		return nil, fmt.Errorf("consumer not initialized")
+	}
+
+	// Set the starting offset for the topic
+	err := ka.Consumer.Assign([]kafka.TopicPartition{
+		{Topic: &topic, Partition: 0, Offset: kafka.Offset(offset)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to assign partition: %w", err)
+	}
+
+	var messages []*kafka.Message
+	for i := 0; i < limit; i++ {
+		msg, err := ka.Consumer.ReadMessage(-1) // Wait indefinitely until a message is available
+		if err != nil {
+			// Check for timeout
+			if kafkaErr, ok := err.(kafka.Error); ok && kafkaErr.Code() == kafka.ErrTimedOut {
+				break // Exit the loop if a timeout occurs
+			} else {
+				return nil, fmt.Errorf("failed to read message: %w", err)
+			}
+		}
+		messages = append(messages, msg)
+	}
+
+	return messages, nil
 }
 
-func (k *KafkaAdapter) ListTopics() ([]string, error) {
-	// ... Kafka-specific logic to list all topics
-	return nil, nil
+func (ka *KafkaAdapter) BatchRead(topic string, startOffset int64, limit int, batchSize int) ([]*kafka.Message, error) {
+	// Calculate how many goroutines to spawn based on the limit and batch size
+	numGoroutines := (limit + batchSize - 1) / batchSize
+
+	messagesCh := make(chan []*kafka.Message, numGoroutines)
+	errCh := make(chan error, numGoroutines)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(offset int64) {
+			defer wg.Done()
+
+			// Read a batch of messages
+			messages, err := ka.readBatch(topic, offset, batchSize)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			messagesCh <- messages
+		}(startOffset + int64(i*batchSize))
+	}
+
+	// Wait for all goroutines to finish
+	wg.Wait()
+
+	close(messagesCh)
+	close(errCh)
+
+	// Collect all messages
+	var allMessages []*kafka.Message
+	for batch := range messagesCh {
+		allMessages = append(allMessages, batch...)
+	}
+
+	// Return the first error encountered, if any
+	for err := range errCh {
+		return nil, err
+	}
+
+	return allMessages, nil
 }
 
-func (k *KafkaAdapter) Connect() error {
-	// ... Kafka-specific connection logic
-	return nil
-}
+func (ka *KafkaAdapter) readBatch(topic string, offset int64, batchSize int) ([]*kafka.Message, error) {
+	var messages []*kafka.Message
 
-func (k *KafkaAdapter) Publish(topic string, message []byte) error {
-	// ... Kafka-specific publishing logic
-	return nil
-}
+	ka.Consumer.Assign([]kafka.TopicPartition{
+		{Topic: &topic, Partition: 0, Offset: kafka.Offset(offset)},
+	})
 
-func (k *KafkaAdapter) Subscribe(topic string) (<-chan []byte, error) {
-	// ... Kafka-specific subscription logic
-	ch := make(chan []byte)
-	return ch, nil
-}
+	for i := 0; i < batchSize; i++ {
+		msg, err := ka.Consumer.ReadMessage(-1) // blocking read
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
 
-func (k *KafkaAdapter) Close() error {
-	// ... Kafka-specific cleanup logic
-	return nil
+	return messages, nil
 }
