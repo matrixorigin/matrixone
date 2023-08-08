@@ -204,12 +204,13 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	mo_user_defined_functionConst := tree.NewNumValWithType(constant.MakeString("mo_user_defined_function"), "mo_user_defined_function", false, tree.P_char)
 	mo_mysql_compatibility_modeConst := tree.NewNumValWithType(constant.MakeString("mo_mysql_compatibility_mode"), "mo_mysql_compatibility_mode", false, tree.P_char)
 	mo_indexes := tree.NewNumValWithType(constant.MakeString("mo_indexes"), "mo_indexes", false, tree.P_char)
+	mo_table_partitions := tree.NewNumValWithType(constant.MakeString("mo_table_partitions"), "mo_table_partitions", false, tree.P_char)
 	mo_pubs := tree.NewNumValWithType(constant.MakeString("mo_pubs"), "mo_pubs", false, tree.P_char)
 	mo_stored_procedure := tree.NewNumValWithType(constant.MakeString("mo_stored_procedure"), "mo_stored_procedure", false, tree.P_char)
 	mo_stages := tree.NewNumValWithType(constant.MakeString("mo_stages"), "mo_stages", false, tree.P_char)
 
 	notInValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst, mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst,
-		mo_user_defined_functionConst, mo_mysql_compatibility_modeConst, mo_indexes, mo_pubs, mo_stored_procedure, mo_stages})
+		mo_user_defined_functionConst, mo_mysql_compatibility_modeConst, mo_indexes, mo_table_partitions, mo_pubs, mo_stored_procedure, mo_stages})
 
 	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
 

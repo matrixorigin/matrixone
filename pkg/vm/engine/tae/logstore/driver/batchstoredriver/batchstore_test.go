@@ -15,7 +15,6 @@
 package batchstoredriver
 
 import (
-	"os"
 	"sync"
 	"testing"
 
@@ -28,10 +27,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const (
+	Modulename = "batchstoredriver"
+)
+
 func initEnv(t *testing.T) *baseStore {
-	dir := "/tmp/logstore/teststore/batchstoredriver"
+	dir := testutils.InitTestEnv(Modulename, t)
 	name := "mock"
-	os.RemoveAll(dir)
 	cfg := &StoreCfg{
 		RotateChecker: NewMaxSizeRotateChecker(int(mpool.KB) * 3),
 	}

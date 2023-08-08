@@ -16,8 +16,6 @@ package rpc
 
 import (
 	"context"
-	"os"
-	"path"
 	"strconv"
 	"sync"
 	"testing"
@@ -30,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -40,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -54,23 +51,9 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	ctx := context.Background()
 
-	//create  file service;
-	//dir := testutils.GetDefaultTestPath(ModuleName, t)
-	dir := "/tmp/s3"
-	dir = path.Join(dir, "/local")
-	//if dir exists, remove it.
-	os.RemoveAll(dir)
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-	}
-	//create dir;
-	fs, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
-	opts.Fs = fs
 	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
+	fs := handle.db.Opts.Fs
 	IDAlloc := catalog.NewIDAllocator()
 
 	schema := catalog.MockSchema(2, 1)
@@ -228,23 +211,9 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	ctx := context.Background()
 
-	//create  file service;
-	//dir := testutils.GetDefaultTestPath(ModuleName, t)
-	dir := "/tmp/s3"
-	dir = path.Join(dir, "/local")
-	//if dir exists, remove it.
-	os.RemoveAll(dir)
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-	}
-	//create dir;
-	fs, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
-	opts.Fs = fs
 	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
+	fs := handle.db.Opts.Fs
 	IDAlloc := catalog.NewIDAllocator()
 
 	schema := catalog.MockSchema(2, 1)
@@ -260,7 +229,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	taeBats[3] = taeBats[3].CloneWindow(0, 10)
 
 	//sort by primary key
-	_, err = mergesort.SortBlockColumns(taeBats[0].Vecs, 1, mocks.GetTestVectorPool())
+	_, err := mergesort.SortBlockColumns(taeBats[0].Vecs, 1, mocks.GetTestVectorPool())
 	assert.Nil(t, err)
 	_, err = mergesort.SortBlockColumns(taeBats[1].Vecs, 1, mocks.GetTestVectorPool())
 	assert.Nil(t, err)
@@ -1741,20 +1710,6 @@ func TestApplyDeltaloc(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	ctx := context.Background()
 
-	//create  file service;
-	dir := "/tmp/s3"
-	dir = path.Join(dir, "/local")
-	//if dir exists, remove it.
-	os.RemoveAll(dir)
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-	}
-	//create dir;
-	fs, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
-	opts.Fs = fs
 	h := mockTAEHandle(ctx, t, opts)
 	defer h.HandleClose(context.TODO())
 
@@ -1883,7 +1838,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		assert.NoError(t, err)
 		blk, err := seg.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(t, err)
-		deltaLoc, err := mockCNDeleteInS3(h.db.Runtime.Fs, blk.GetBlockData(), schema, txn0, offsets)
+		deltaLoc, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, blk.GetBlockData(), schema, txn0, offsets)
 		assert.NoError(t, err)
 		delLocBat.Vecs[0].Append([]byte(deltaLoc.String()), false)
 	}
