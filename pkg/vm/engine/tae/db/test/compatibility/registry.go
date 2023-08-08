@@ -30,7 +30,7 @@ var (
 )
 
 func initPrepareTest(pc PrepareCase, opts *options.Options, t *testing.T) *testutil.TestEngine {
-	dir, err := InitPrepareDirByType(pc.typ)
+	dir, err := InitPrepareDirByType(pc.id)
 	assert.NoError(t, err)
 	ctx := context.Background()
 	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
@@ -42,7 +42,7 @@ func initTestEngine(tc TestCase, t *testing.T) *testutil.TestEngine {
 	opts := pc.getOptions(pc, t)
 	dir, err := InitTestCaseExecuteDir(tc.name)
 	assert.NoError(t, err)
-	err = CopyDir(GetPrepareDirByType(pc.typ), dir)
+	err = CopyDir(GetPrepareDirByType(pc.id), dir)
 	assert.NoError(t, err)
 	ctx := context.Background()
 	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
@@ -51,7 +51,7 @@ func initTestEngine(tc TestCase, t *testing.T) *testutil.TestEngine {
 }
 
 type PrepareCase struct {
-	typ        int
+	id         int
 	desc       string
 	prepareFn  func(tc PrepareCase, t *testing.T)
 	getBatch   func(tc PrepareCase, t *testing.T) *containers.Batch
@@ -94,14 +94,14 @@ func PrepareCaseRegister(prepareCase PrepareCase) {
 	if PrepareCases == nil {
 		PrepareCases = make(map[int]PrepareCase)
 	}
-	if _, ok := PrepareCases[prepareCase.typ]; ok {
+	if _, ok := PrepareCases[prepareCase.id]; ok {
 		panic("PrepareCaseRegister: duplicate prepare case type")
 	}
-	PrepareCases[prepareCase.typ] = prepareCase
+	PrepareCases[prepareCase.id] = prepareCase
 }
 
-func GetPrepareCase(typ int) PrepareCase {
-	if prepareCase, ok := PrepareCases[typ]; ok {
+func GetPrepareCase(id int) PrepareCase {
+	if prepareCase, ok := PrepareCases[id]; ok {
 		return prepareCase
 	}
 	panic("GetPrepareCase: prepare case not found")

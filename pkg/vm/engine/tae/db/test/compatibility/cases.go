@@ -16,6 +16,7 @@ package compatibility
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,14 +30,14 @@ import (
 )
 
 func init() {
-	PrepareCaseRegister(makePrepare1())
-	TestCaseRegister(makeTest1())
+	PrepareCaseRegister(makePrepare1(1, "prepare-1"))
+	TestCaseRegister(makeTest1(1, "test-1", "prepare-1=>test-1"))
 }
 
-func makePrepare1() PrepareCase {
+func makePrepare1(id int, desc string) PrepareCase {
 	getSchema := func(tc PrepareCase, t *testing.T) *catalog.Schema {
 		schema := catalog.MockSchemaAll(18, 13)
-		schema.Name = "test-1"
+		schema.Name = fmt.Sprintf("test-%d", tc.id)
 		schema.BlockMaxRows = 10
 		schema.SegmentMaxBlocks = 2
 		return schema
@@ -76,8 +77,8 @@ func makePrepare1() PrepareCase {
 		_ = txn.Rollback(context.Background())
 	}
 	return PrepareCase{
-		desc:       "prepare-1",
-		typ:        1,
+		desc:       desc,
+		id:         id,
 		prepareFn:  prepareFn,
 		getSchema:  getSchema,
 		getBatch:   getBatch,
@@ -85,7 +86,7 @@ func makePrepare1() PrepareCase {
 	}
 }
 
-func makeTest1() TestCase {
+func makeTest1(dependsOn int, name, desc string) TestCase {
 	testFn := func(tc TestCase, t *testing.T) {
 		pc := GetPrepareCase(tc.dependsOn)
 		tae := tc.GetEngine(t)
@@ -118,9 +119,9 @@ func makeTest1() TestCase {
 		_ = txn.Rollback(context.Background())
 	}
 	return TestCase{
-		name:      "test-1",
-		desc:      "test-1",
-		dependsOn: 1,
+		name:      name,
+		desc:      desc,
+		dependsOn: dependsOn,
 		testFn:    testFn,
 	}
 }
