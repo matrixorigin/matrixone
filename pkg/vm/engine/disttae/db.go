@@ -36,6 +36,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	defer e.Unlock()
 
 	e.catalog = cache.NewCatalog()
+	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 
 	var packer *types.Packer
 	put := e.packerPool.Get(&packer)
@@ -269,44 +270,36 @@ func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partiti
 func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
 	part := e.getPartition(tbl.db.databaseId, tbl.tableId)
 
-	select {
-	case <-part.Lock():
-		defer part.Unlock()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	state, doneMutate := part.MutateState()
-
-	if err := state.ConsumeCheckpoints(func(checkpoint string) error {
-		entries, closeCBs, err := logtail.LoadCheckpointEntries(
-			ctx,
-			checkpoint,
-			tbl.tableId,
-			tbl.tableName,
-			tbl.db.databaseId,
-			tbl.db.databaseName,
-			tbl.db.txn.engine.mp,
-			tbl.db.txn.engine.fs)
-		defer func() {
-			for _, cb := range closeCBs {
-				cb()
-			}
-		}()
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
+	if err := part.ConsumeCheckpoints(
+		ctx,
+		func(checkpoint string, state *logtailreplay.PartitionState) error {
+			entries, closeCBs, err := logtail.LoadCheckpointEntries(
+				ctx,
+				checkpoint,
+				tbl.tableId,
+				tbl.tableName,
+				tbl.db.databaseId,
+				tbl.db.databaseName,
+				tbl.db.txn.engine.mp,
+				tbl.db.txn.engine.fs)
+			defer func() {
+				for _, cb := range closeCBs {
+					cb()
+				}
+			}()
+			if err != nil {
 				return err
 			}
-		}
-		return nil
-	}); err != nil {
+			for _, entry := range entries {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	); err != nil {
 		return nil, err
 	}
-
-	doneMutate()
 
 	return part, nil
 }

@@ -44,6 +44,20 @@ type TestEngine struct {
 	tenantID uint32 // for almost tests, userID and roleID is not important
 }
 
+func NewTestEngineWithDir(
+	ctx context.Context,
+	dir string,
+	t *testing.T,
+	opts *options.Options,
+) *TestEngine {
+	blockio.Start()
+	db := InitTestDBWithDir(ctx, dir, t, opts)
+	return &TestEngine{
+		DB: db,
+		t:  t,
+	}
+}
+
 func NewTestEngine(
 	ctx context.Context,
 	moduleName string,
@@ -293,6 +307,24 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	}
 	ok = true
 	return
+}
+
+func InitTestDBWithDir(
+	ctx context.Context,
+	dir string,
+	t *testing.T,
+	opts *options.Options,
+) *db.DB {
+	db, _ := db.Open(ctx, dir, opts)
+	// only ut executes this checker
+	db.DiskCleaner.AddChecker(
+		func(item any) bool {
+			min := db.TxnMgr.MinTSForTest()
+			ckp := item.(*checkpoint.CheckpointEntry)
+			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
+			return !ckp.GetEnd().GreaterEq(min)
+		})
+	return db
 }
 
 func InitTestDB(

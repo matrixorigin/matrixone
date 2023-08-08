@@ -232,7 +232,6 @@ func TestTable_ToCreateSql(t *testing.T) {
 		})
 	}
 }
-
 func TestViewOption_Apply(t *testing.T) {
 	type args struct {
 		view *View
