@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/enum"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -477,7 +476,7 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 			for _, col := range cols {
 				if col.Name == colStr && col.Type.Oid == types.T_enum {
-					enumVlaue, err = enum.ParseEnumIndex(col.EnumVlaues, indexVal)
+					enumVlaue, err = types.ParseEnumIndex(col.EnumVlaues, indexVal)
 					if err != nil {
 						return err
 					}
@@ -545,7 +544,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 			for _, col := range cols {
 				if col.Name == colStr && col.Type.Oid == types.T_enum {
-					index, err = enum.ParseEnum(col.EnumVlaues, enumStr)
+					index, err = types.ParseEnum(col.EnumVlaues, enumStr)
 					if err != nil {
 						return err
 					}

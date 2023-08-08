@@ -1483,7 +1483,6 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
-				{toType: types.T_enum, preferLevel: 2},
 			},
 		},
 
@@ -1509,7 +1508,6 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
-				{toType: types.T_enum, preferLevel: 2},
 			},
 		},
 
@@ -1535,7 +1533,6 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
-				{toType: types.T_enum, preferLevel: 2},
 			},
 		},
 
@@ -1561,7 +1558,6 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
-				{toType: types.T_enum, preferLevel: 2},
 			},
 		},
 
