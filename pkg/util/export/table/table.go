@@ -15,21 +15,21 @@
 package table
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"math"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 const ExternalFilePath = "__mo_filepath"
@@ -253,6 +253,12 @@ var NormalTableEngine = "TABLE"
 // Deprecated
 var ExternalTableEngine = "EXTERNAL"
 
+type SchemaDiff struct {
+	AddedColumns []Column
+	TableName    string
+	DatabaseName string
+}
+
 type Table struct {
 	Account          string
 	Database         string
@@ -475,7 +481,7 @@ func (cf *ColumnField) EncodeBytes() string {
 }
 
 func (cf *ColumnField) EncodeUuid() (dst [36]byte) {
-	EncodeUUIDHex(dst[:], cf.Bytes)
+	util.EncodeUUIDHex(dst[:], cf.Bytes)
 	return
 }
 
@@ -520,22 +526,6 @@ func BytesField(val []byte) ColumnField {
 
 func UuidField(val []byte) ColumnField {
 	return ColumnField{Type: TUuid, Bytes: val}
-}
-
-var bufferPool = sync.Pool{
-	New: func() any {
-		return bytes.NewBuffer(make([]byte, 16*mpool.MB))
-	},
-}
-
-func GetBuffer() *bytes.Buffer {
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	return buf
-}
-
-func ReleaseBuffer(b *bytes.Buffer) {
-	bufferPool.Put(b)
 }
 
 type Row struct {
@@ -855,13 +845,6 @@ func GetAllTables() []*Table {
 		tables = append(tables, tbl)
 	}
 	return tables
-}
-
-func GetTable(b string) (*Table, bool) {
-	mux.Lock()
-	defer mux.Unlock()
-	tbl, exist := gTable[b]
-	return tbl, exist
 }
 
 // SetPathBuilder

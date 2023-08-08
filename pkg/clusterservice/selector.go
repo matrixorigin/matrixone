@@ -52,6 +52,22 @@ func (s Selector) SelectByLabel(labels map[string]string, op Op) Selector {
 	return s
 }
 
+// SelectWithoutLabel updates the selector by removing the labels.
+func (s Selector) SelectWithoutLabel(labels map[string]string) Selector {
+	for labelKey, labelValue := range s.labels {
+		v, ok := labels[labelKey]
+		if ok && v == labelValue {
+			delete(s.labels, labelKey)
+		}
+	}
+	return s
+}
+
+// LabelNum returns the number of labels in this selector.
+func (s Selector) LabelNum() int {
+	return len(s.labels)
+}
+
 func (s Selector) filterCN(cn metadata.CNService) bool {
 	return s.filter(cn.ServiceID, cn.Labels)
 }
