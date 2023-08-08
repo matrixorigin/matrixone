@@ -48,6 +48,7 @@ show column_number from mo_tables;
 show column_number from mo_database;
 show column_number from mo_columns;
 show column_number from mo_indexes;
+show column_number from mo_table_partitions;
 
 use system_metrics;
 show column_number from metric;
@@ -87,12 +88,12 @@ use test_db;
 drop table if exists t1;
 -- test non primary key table
 create table t1(
-col1 int,
-col2 float,
-col3 varchar,
-col4 blob,
-col6 date,
-col7 bool
+                   col1 int,
+                   col2 float,
+                   col3 varchar,
+                   col4 blob,
+                   col6 date,
+                   col7 bool
 );
 
 
@@ -114,12 +115,12 @@ select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
 -- test primary key table
 drop table if exists t11;
 create table t11(
-col1 int primary key,
-col2 float,
-col3 varchar,
-col4 blob,
-col6 date,
-col7 bool
+                    col1 int primary key,
+                    col2 float,
+                    col3 varchar,
+                    col4 blob,
+                    col6 date,
+                    col7 bool
 );
 
 
@@ -185,7 +186,7 @@ show table_values from partition_table;
 select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
 
 create table t2(
-col1 json
+    col1 json
 );
 
 
@@ -202,7 +203,7 @@ show table_values from t2;
 
 
 create table t3(
-col1 decimal(5,2)
+    col1 decimal(5,2)
 );
 
 show table_values from t3;
@@ -243,6 +244,7 @@ show column_number from engines;
 show column_number from routines;
 show column_number from parameters;
 show column_number from keywords;
+show column_number from partitions;
 
 use mysql;
 show column_number from user;
@@ -279,12 +281,12 @@ use test_db;
 drop table if exists t1;
 -- test non primary key table
 create table t1(
-col1 int,
-col2 float,
-col3 varchar,
-col4 blob,
-col6 date,
-col7 bool
+                   col1 int,
+                   col2 float,
+                   col3 varchar,
+                   col4 blob,
+                   col6 date,
+                   col7 bool
 );
 
 
@@ -306,12 +308,12 @@ select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
 -- test primary key table
 drop table if exists t11;
 create table t11(
-col1 int primary key,
-col2 float,
-col3 varchar,
-col4 blob,
-col6 date,
-col7 bool
+                    col1 int primary key,
+                    col2 float,
+                    col3 varchar,
+                    col4 blob,
+                    col6 date,
+                    col7 bool
 );
 
 
@@ -348,7 +350,7 @@ show table_values from external_table;
 
 
 create table t2(
-col1 json
+    col1 json
 );
 
 
@@ -365,7 +367,7 @@ show table_values from t2;
 
 
 create table t3(
-col1 decimal
+    col1 decimal
 );
 
 show table_values from t3;

@@ -558,6 +558,10 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithTxnLimit(s.cfg.Txn.Limit))
 		}
+		if s.cfg.Txn.MaxActive > 0 {
+			opts = append(opts,
+				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
+		}
 		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(
 			sender,
