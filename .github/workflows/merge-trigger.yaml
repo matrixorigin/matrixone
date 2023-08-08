@@ -337,11 +337,12 @@ jobs:
              ${{ github.workspace }}/reports
           retention-days: 7
 
- customer_test:
+  customer_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN CUSTOMER TEST
     runs-on: arm64-runner
     needs: [setup_mo_test_env,bvt_test]
+    timeout-minutes: 30
     steps:
       - name: Clone mo-night-regression Repo
         if: ${{ always() && !cancelled() }}
