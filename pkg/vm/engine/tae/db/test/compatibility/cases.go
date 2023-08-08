@@ -176,7 +176,7 @@ func prepareDDL(tc PrepareCase, t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err = txn.DropDatabase("db3")
+	_, err = txn.DropDatabase("db3")
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -196,7 +196,7 @@ func prepareDDL(tc PrepareCase, t *testing.T) {
 	// WAL: create and drop db5, create ane drop table5
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err = txn.CreateDatabase("db5", "sql", "type")
+	_, err = txn.CreateDatabase("db5", "sql", "type")
 	assert.NoError(t, err)
 	db, err = txn.CreateDatabase("db_of_table5", "sql", "type")
 	assert.NoError(t, err)
@@ -216,7 +216,7 @@ func prepareDDL(tc PrepareCase, t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err = txn.DropDatabase("db5")
+	_, err = txn.DropDatabase("db5")
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
