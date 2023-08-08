@@ -147,3 +147,35 @@ func GetPrepareCase(id int) PrepareCase {
 	}
 	panic("GetPrepareCase: prepare case not found")
 }
+
+func MakePrepareCase(
+	prepareFn func(tc PrepareCase, t *testing.T),
+	id int,
+	desc string,
+	schemaCfg schemaCfg,
+	batchSize int,
+	optType optType,
+) PrepareCase {
+	return PrepareCase{
+		id:        id,
+		desc:      desc,
+		schemaCfg: schemaCfg,
+		batchSize: batchSize,
+		optType:   optType,
+		prepareFn: prepareFn,
+	}
+}
+
+func MakeTestCase(
+	testFn func(tc TestCase, t *testing.T),
+	dependsOn int,
+	name string,
+	desc string,
+) TestCase {
+	return TestCase{
+		name:      name,
+		desc:      desc,
+		dependsOn: dependsOn,
+		testFn:    testFn,
+	}
+}

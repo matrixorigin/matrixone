@@ -25,89 +25,68 @@ import (
 )
 
 func init() {
-	PrepareCaseRegister(makePrepare1(
-		1, "prepare-1", schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
+	PrepareCaseRegister(MakePrepareCase(
+		prepare1, 1, "prepare-1",
+		schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
 	))
-	TestCaseRegister(makeTest1(1, "test-1", "prepare-1=>test-1"))
+	TestCaseRegister(
+		MakeTestCase(test1, 1, "test-1", "prepare-1=>test-1"),
+	)
 }
 
-func makePrepare1(
-	id int,
-	desc string,
-	schemaCfg schemaCfg,
-	batchSize int,
-	optType optType,
-) PrepareCase {
-	prepareFn := func(tc PrepareCase, t *testing.T) {
-		tae := tc.GetEngine(t)
-		defer tae.Close()
+func prepare1(tc PrepareCase, t *testing.T) {
+	tae := tc.GetEngine(t)
+	defer tae.Close()
 
-		schema := tc.GetSchema(t)
-		bat := tc.GetBatch(t)
-		defer bat.Close()
-		bats := bat.Split(4)
+	schema := tc.GetSchema(t)
+	bat := tc.GetBatch(t)
+	defer bat.Close()
+	bats := bat.Split(4)
 
-		tae.CreateRelAndAppend(bats[0], true)
-		txn, rel := tae.GetRelation()
-		v := testutil.GetSingleSortKeyValue(bats[0], schema, 2)
-		filter := handle.NewEQFilter(v)
-		err := rel.DeleteByFilter(context.Background(), filter)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(context.Background()))
+	tae.CreateRelAndAppend(bats[0], true)
+	txn, rel := tae.GetRelation()
+	v := testutil.GetSingleSortKeyValue(bats[0], schema, 2)
+	filter := handle.NewEQFilter(v)
+	err := rel.DeleteByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 
-		txn, rel = tae.GetRelation()
-		window := bat.CloneWindow(2, 1)
-		defer window.Close()
-		err = rel.Append(context.Background(), window)
-		assert.NoError(t, err)
-		_ = txn.Rollback(context.Background())
-	}
-	return PrepareCase{
-		desc:      desc,
-		id:        id,
-		batchSize: batchSize,
-		optType:   optType,
-		schemaCfg: schemaCfg,
-		prepareFn: prepareFn,
-	}
+	txn, rel = tae.GetRelation()
+	window := bat.CloneWindow(2, 1)
+	defer window.Close()
+	err = rel.Append(context.Background(), window)
+	assert.NoError(t, err)
+	_ = txn.Rollback(context.Background())
 }
 
-func makeTest1(dependsOn int, name, desc string) TestCase {
-	testFn := func(tc TestCase, t *testing.T) {
-		pc := GetPrepareCase(tc.dependsOn)
-		tae := tc.GetEngine(t)
+func test1(tc TestCase, t *testing.T) {
+	pc := GetPrepareCase(tc.dependsOn)
+	tae := tc.GetEngine(t)
 
-		bat := pc.GetBatch(t)
-		defer bat.Close()
-		bats := bat.Split(4)
-		window := bat.CloneWindow(2, 1)
-		defer window.Close()
+	bat := pc.GetBatch(t)
+	defer bat.Close()
+	bats := bat.Split(4)
+	window := bat.CloneWindow(2, 1)
+	defer window.Close()
 
-		txn, rel := tae.GetRelation()
-		testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()-1, true)
-		err := rel.Append(context.Background(), bats[0])
-		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-		assert.NoError(t, txn.Commit(context.Background()))
+	txn, rel := tae.GetRelation()
+	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()-1, true)
+	err := rel.Append(context.Background(), bats[0])
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	assert.NoError(t, txn.Commit(context.Background()))
 
-		txn, rel = tae.GetRelation()
-		err = rel.Append(context.Background(), window)
-		assert.NoError(t, err)
-		_ = txn.Rollback(context.Background())
+	txn, rel = tae.GetRelation()
+	err = rel.Append(context.Background(), window)
+	assert.NoError(t, err)
+	_ = txn.Rollback(context.Background())
 
-		schema := pc.GetSchema(t)
-		txn, rel = testutil.GetDefaultRelation(t, tae.DB, schema.Name)
-		testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()-1, true)
-		assert.NoError(t, txn.Commit(context.Background()))
+	schema := pc.GetSchema(t)
+	txn, rel = testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length()-1, true)
+	assert.NoError(t, txn.Commit(context.Background()))
 
-		txn, rel = testutil.GetDefaultRelation(t, tae.DB, schema.Name)
-		err = rel.Append(context.Background(), window)
-		assert.NoError(t, err)
-		_ = txn.Rollback(context.Background())
-	}
-	return TestCase{
-		name:      name,
-		desc:      desc,
-		dependsOn: dependsOn,
-		testFn:    testFn,
-	}
+	txn, rel = testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+	err = rel.Append(context.Background(), window)
+	assert.NoError(t, err)
+	_ = txn.Rollback(context.Background())
 }
