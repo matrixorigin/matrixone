@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package test
 
 import (
 	"context"
@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -483,10 +484,10 @@ func TestApp1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	option := new(options.Options)
-	option.CacheCfg = new(options.CacheCfg)
-	option.CacheCfg.IndexCapacity = mpool.GB
-	db := initDB(ctx, t, option)
+	opts := new(options.Options)
+	opts.CacheCfg = new(options.CacheCfg)
+	opts.CacheCfg.IndexCapacity = mpool.GB
+	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 	mgr := db.TxnMgr
 	c := db.Catalog
@@ -538,7 +539,7 @@ func TestWarehouse(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
 
 	txn, _ := db.StartTxn(nil)
@@ -556,7 +557,7 @@ func TestWarehouse(t *testing.T) {
 		view, _ := blk.GetColumnDataById(context.Background(), 1)
 		t.Log(view.GetData().String())
 		defer view.Close()
-		checkAllColRowsByScan(t, rel, 20, false)
+		testutil.CheckAllColRowsByScan(t, rel, 20, false)
 		_ = txn.Commit(context.Background())
 	}
 }
@@ -566,7 +567,7 @@ func TestTxn7(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 10
@@ -606,7 +607,7 @@ func TestTxn8(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -654,7 +655,7 @@ func TestTxn9(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	tae := initDB(ctx, t, nil)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 12)
@@ -878,7 +879,7 @@ func TestTxn9(t *testing.T) {
 // 	}
 // 	filter := handle.NewEQFilter(int32(1))
 // 	err = rel.DeleteByFilter(filter)
-// 	checkAllColRowsByScan(t, rel, 3, true)
+// 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
 // 	assert.NoError(t, err)
 // 	{
 // 		txn, rel := tae.getRelation()
