@@ -22,6 +22,19 @@ func (r RCBytes) Size() int64 {
 	return int64(len(r.Value))
 }
 
+func (c RCBytes) Len() int {
+	if c.RCPoolItem == nil {
+		return 0
+	}
+	return len(c.Value)
+}
+
+func (c RCBytes) Copy() []byte {
+	ret := make([]byte, len(c.Value))
+	copy(ret, c.Value)
+	return ret
+}
+
 type rcBytesPool struct {
 	sizes []int
 	pools []*RCPool[[]byte]
@@ -66,4 +79,10 @@ func (r *rcBytesPool) Get(size int) RCBytes {
 	}
 
 	panic("impossible")
+}
+
+func (r *rcBytesPool) GetAndCopy(from []byte) RCBytes {
+	bs := r.Get(len(from))
+	copy(bs.Value, from)
+	return bs
 }

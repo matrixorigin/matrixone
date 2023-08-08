@@ -44,13 +44,14 @@ func LoadColumns(ctx context.Context,
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData)
+		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Value)
 		if err != nil {
 			return
 		}
 		bat.Vecs[i] = obj.(*vector.Vector)
 		bat.SetRowCount(bat.Vecs[i].Length())
 	}
+	//TODO call CachedData.Release
 	return
 }
 

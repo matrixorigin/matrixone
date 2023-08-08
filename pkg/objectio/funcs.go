@@ -48,7 +48,9 @@ func ReadExtent(
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
-	v = ioVec.Entries[0].CachedData
+	//TODO do not copy, return RCBytes
+	// defer ioVec.Entries[0].CachedData.Release()
+	v = ioVec.Entries[0].CachedData.Copy()
 	return
 }
 
@@ -213,7 +215,7 @@ func ReadOneBlockWithMeta(
 				if err != nil {
 					return
 				}
-				filledEntries[i].CachedData = buf.Bytes()
+				filledEntries[i].CachedData = fileservice.RCBytesPool.GetAndCopy(buf.Bytes())
 			}
 		}
 		ioVec.Entries = filledEntries

@@ -364,7 +364,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				cr := &countingReader{
 					R: r,
 				}
-				bs, _, err := entry.ToCacheData(cr, nil)
+				bs, err := entry.ToCacheData(cr, nil)
 				if err != nil {
 					return err
 				}
@@ -419,7 +419,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer file.Close()
-						bs, _, err := entry.ToCacheData(buf, buf.Bytes())
+						bs, err := entry.ToCacheData(buf, buf.Bytes())
 						if err != nil {
 							return err
 						}

@@ -116,14 +116,14 @@ type IOEntry struct {
 	// When reading, if the ToCacheData field is not nil, the returning object's byte slice will be set to this field
 	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
 	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
-	CachedData []byte
+	CachedData RCBytes
 
 	// ToCacheData constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns
 	// reader always contains entry contents
 	// data may contains entry contents if available
 	// if data is empty, the io.Reader must be fully read before returning nil error
-	ToCacheData func(reader io.Reader, data []byte) (object []byte, objectSize int64, err error)
+	ToCacheData func(reader io.Reader, data []byte) (cacheData RCBytes, err error)
 
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache

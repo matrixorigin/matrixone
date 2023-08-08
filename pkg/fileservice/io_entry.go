@@ -142,7 +142,7 @@ func (e *IOEntry) setCachedData() error {
 	if len(e.Data) == 0 {
 		return nil
 	}
-	bs, _, err := e.ToCacheData(bytes.NewReader(e.Data), e.Data)
+	bs, err := e.ToCacheData(bytes.NewReader(e.Data), e.Data)
 	if err != nil {
 		return err
 	}
@@ -182,13 +182,13 @@ func (e *IOEntry) ReadFromOSFile(file *os.File) error {
 	return nil
 }
 
-func DataAsObject(r io.Reader, data []byte) (object []byte, objectSize int64, err error) {
+func DataAsObject(r io.Reader, data []byte) (_ RCBytes, err error) {
 	if len(data) > 0 {
-		return data, int64(len(data)), nil
+		return RCBytesPool.GetAndCopy(data), nil
 	}
 	data, err = io.ReadAll(r)
 	if err != nil {
-		return nil, 0, err
+		return
 	}
-	return data, int64(len(data)), nil
+	return RCBytesPool.GetAndCopy(data), nil
 }
