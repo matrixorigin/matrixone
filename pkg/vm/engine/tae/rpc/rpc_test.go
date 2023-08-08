@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -1837,7 +1838,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		assert.NoError(t, err)
 		blk, err := seg.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(t, err)
-		deltaLoc, err := mockCNDeleteInS3(h.db.Runtime.Fs, blk.GetBlockData(), schema, txn0, offsets)
+		deltaLoc, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, blk.GetBlockData(), schema, txn0, offsets)
 		assert.NoError(t, err)
 		delLocBat.Vecs[0].Append([]byte(deltaLoc.String()), false)
 	}
