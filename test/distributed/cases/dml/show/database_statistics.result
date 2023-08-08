@@ -171,7 +171,7 @@ Number of columns in statement_info
 31
 show column_number from rawlog;
 Number of columns in rawlog
-24
+26
 show column_number from log_info;
 Number of columns in log_info
 13

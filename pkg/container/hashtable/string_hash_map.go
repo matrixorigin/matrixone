@@ -191,6 +191,10 @@ func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	return nil
 }
 
+func (ht *StringHashMap) PreAlloc(n uint64, m *mpool.MPool) error {
+	return ht.resizeOnDemand(n, m)
+}
+
 func (ht *StringHashMap) resizeOnDemand(n uint64, m *mpool.MPool) error {
 	targetCnt := ht.elemCnt + n
 	if targetCnt <= uint64(len(ht.rawData))*ht.blockMaxElemCnt {
