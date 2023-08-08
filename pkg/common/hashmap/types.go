@@ -22,7 +22,9 @@ import (
 )
 
 const (
-	UnitLimit = 256
+	UnitLimit             = 256
+	HashMapSizeThreshHold = UnitLimit * 128
+	HashMapSizeEstimate   = UnitLimit * 32
 )
 
 var (
