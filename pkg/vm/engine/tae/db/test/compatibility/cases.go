@@ -35,21 +35,33 @@ func init() {
 	)
 
 	PrepareCaseRegister(MakePrepareCase(
-		prepareDDL, "prepare-4", "prepare case ddl", schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt))
+		prepareDDL, "prepare-2", "prepare case ddl",
+		schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
+	))
 	TestCaseRegister(
-		MakeTestCase(testDDL, "prepare-4", "test-4", "prepare-4=>test-4"),
+		MakeTestCase(testDDL, "prepare-2", "test-2", "prepare-2=>test-2"),
 	)
 
 	PrepareCaseRegister(MakePrepareCase(
-		prepareCompact, "prepare-3", "prepare case compact", schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt))
+		prepareCompact, "prepare-3", "prepare case compact", schemaCfg{10, 2, 18, 13}, (10*3+1)*2, longOpt))
 	TestCaseRegister(
 		MakeTestCase(testCompact, "prepare-3", "test-3", "prepare-3=>test-3"),
 	)
 
 	PrepareCaseRegister(MakePrepareCase(
-		prepareDelete, "prepare-2", "prepare case delete", schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt))
+		prepareDelete, "prepare-4", "prepare case delete",
+		schemaCfg{10, 2, 18, 13}, (10*3+1)*3, longOpt,
+	))
 	TestCaseRegister(
-		MakeTestCase(testDelete, "prepare-2", "test-2", "prepare-2=>test-2"),
+		MakeTestCase(testDelete, "prepare-4", "test-4", "prepare-4=>test-4"),
+	)
+
+	PrepareCaseRegister(MakePrepareCase(
+		prepareAppend, "prepare-5", "prepare case append",
+		schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
+	))
+	TestCaseRegister(
+		MakeTestCase(testAppend, "prepare-5", "test-5", "prepare-5=>test-5"),
 	)
 }
 
@@ -114,7 +126,7 @@ func prepareDDL(tc PrepareCase, t *testing.T) {
 	// ckp2-2: drop db2, drop table2
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err = txn.CreateDatabase("db2", "sql", "type")
+	_, err = txn.CreateDatabase("db2", "sql", "type")
 	assert.NoError(t, err)
 	db, err = txn.CreateDatabase("db_of_table2", "sql", "type")
 	assert.NoError(t, err)
@@ -135,7 +147,7 @@ func prepareDDL(tc PrepareCase, t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err = txn.DropDatabase("db2")
+	_, err = txn.DropDatabase("db2")
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -144,7 +156,7 @@ func prepareDDL(tc PrepareCase, t *testing.T) {
 	// ckp3: create and drop db3, table3
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	db, err = txn.CreateDatabase("db3", "sql", "type")
+	_, err = txn.CreateDatabase("db3", "sql", "type")
 	assert.NoError(t, err)
 	db, err = txn.CreateDatabase("db_of_table3", "sql", "type")
 	assert.NoError(t, err)
