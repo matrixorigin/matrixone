@@ -22,7 +22,7 @@ import (
 )
 
 func TestLRU(t *testing.T) {
-	l := New(1, nil, nil)
+	l := New[int](1, nil, nil)
 	ctx := context.Background()
 
 	l.Set(ctx, 1, []byte{42}, 1, false)
@@ -85,7 +85,7 @@ func TestLRUCallbacks(t *testing.T) {
 func BenchmarkLRUSet(b *testing.B) {
 	ctx := context.Background()
 	const capacity = 1024
-	l := New(capacity, nil, nil)
+	l := New[int](capacity, nil, nil)
 	for i := 0; i < b.N; i++ {
 		l.Set(ctx, i%capacity, []byte{byte(i)}, 1, false)
 	}
@@ -94,7 +94,7 @@ func BenchmarkLRUSet(b *testing.B) {
 func BenchmarkLRUParallelSet(b *testing.B) {
 	ctx := context.Background()
 	const capacity = 1024
-	l := New(capacity, nil, nil)
+	l := New[int](capacity, nil, nil)
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
 			l.Set(ctx, i%capacity, []byte{byte(i)}, 1, false)
@@ -105,7 +105,7 @@ func BenchmarkLRUParallelSet(b *testing.B) {
 func BenchmarkLRUParallelSetOrGet(b *testing.B) {
 	ctx := context.Background()
 	const capacity = 1024
-	l := New(capacity, nil, nil)
+	l := New[int](capacity, nil, nil)
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
 			l.Set(ctx, i%capacity, []byte{byte(i)}, 1, false)

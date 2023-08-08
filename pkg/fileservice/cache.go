@@ -73,7 +73,7 @@ type IOVectorCache interface {
 	Flush()
 }
 
-type IOVectorCacheKey struct {
+type CacheKey struct {
 	Path   string
 	Offset int64
 	Size   int64

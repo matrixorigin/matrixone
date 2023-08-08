@@ -22,36 +22,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
-type LRU struct {
+type LRU[K comparable] struct {
 	sync.Mutex
 	capacity  int64
 	size      int64
 	evicts    *list.List
-	kv        map[any]*list.Element
-	postSet   func(key any, value []byte, sz int64, isNewEntry bool)
-	postEvict func(key any, value []byte, sz int64)
+	kv        map[K]*list.Element
+	postSet   func(key K, value []byte, sz int64, isNewEntry bool)
+	postEvict func(key K, value []byte, sz int64)
 }
 
-type lruItem struct {
-	Key     any
+type lruItem[K comparable] struct {
+	Key     K
 	Value   []byte
 	Size    int64
 	NumRead int
 }
 
-func New(capacity int64,
-	postSet func(keySet any, valSet []byte, szSet int64, isNewEntry bool),
-	postEvict func(keyEvicted any, valEvicted []byte, szEvicted int64)) *LRU {
-	return &LRU{
+func New[K comparable](
+	capacity int64,
+	postSet func(keySet K, valSet []byte, szSet int64, isNewEntry bool),
+	postEvict func(keyEvicted K, valEvicted []byte, szEvicted int64,
+	)) *LRU[K] {
+	return &LRU[K]{
 		capacity:  capacity,
 		evicts:    list.New(),
-		kv:        make(map[any]*list.Element),
+		kv:        make(map[K]*list.Element),
 		postSet:   postSet,
 		postEvict: postEvict,
 	}
 }
 
-func (l *LRU) Set(ctx context.Context, key any, value []byte, size int64, preloading bool) {
+func (l *LRU[K]) Set(ctx context.Context, key K, value []byte, size int64, preloading bool) {
 	l.Lock()
 	defer l.Unlock()
 
@@ -59,7 +61,7 @@ func (l *LRU) Set(ctx context.Context, key any, value []byte, size int64, preloa
 	if elem, ok := l.kv[key]; ok {
 		// replace
 		isNewEntry = false
-		item := elem.Value.(*lruItem)
+		item := elem.Value.(*lruItem[K])
 		l.size -= item.Size
 		l.size += size
 		if !preloading {
@@ -72,7 +74,7 @@ func (l *LRU) Set(ctx context.Context, key any, value []byte, size int64, preloa
 	} else {
 		// insert
 		isNewEntry = true
-		item := &lruItem{
+		item := &lruItem[K]{
 			Key:   key,
 			Value: value,
 			Size:  size,
@@ -94,7 +96,7 @@ func (l *LRU) Set(ctx context.Context, key any, value []byte, size int64, preloa
 	l.evict(ctx)
 }
 
-func (l *LRU) evict(ctx context.Context) {
+func (l *LRU[K]) evict(ctx context.Context) {
 	var numEvict, numEvictWithZeroRead int64
 	defer func() {
 		if numEvict > 0 || numEvictWithZeroRead > 0 {
@@ -118,7 +120,7 @@ func (l *LRU) evict(ctx context.Context) {
 			if elem == nil {
 				return
 			}
-			item := elem.Value.(*lruItem)
+			item := elem.Value.(*lruItem[K])
 			l.size -= item.Size
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)
@@ -135,39 +137,39 @@ func (l *LRU) evict(ctx context.Context) {
 	}
 }
 
-func (l *LRU) Get(ctx context.Context, key any, preloading bool) (value []byte, size int64, ok bool) {
+func (l *LRU[K]) Get(ctx context.Context, key K, preloading bool) (value []byte, size int64, ok bool) {
 	l.Lock()
 	defer l.Unlock()
 	if elem, ok := l.kv[key]; ok {
 		if !preloading {
 			l.evicts.MoveToFront(elem)
 		}
-		item := elem.Value.(*lruItem)
+		item := elem.Value.(*lruItem[K])
 		item.NumRead++
 		return item.Value, item.Size, true
 	}
 	return nil, 0, false
 }
 
-func (l *LRU) Flush() {
+func (l *LRU[K]) Flush() {
 	l.Lock()
 	defer l.Unlock()
 	l.size = 0
 	l.evicts = list.New()
-	l.kv = make(map[any]*list.Element)
+	l.kv = make(map[K]*list.Element)
 }
 
-func (l *LRU) Capacity() int64 {
+func (l *LRU[K]) Capacity() int64 {
 	return l.capacity
 }
 
-func (l *LRU) Used() int64 {
+func (l *LRU[K]) Used() int64 {
 	l.Lock()
 	defer l.Unlock()
 	return l.size
 }
 
-func (l *LRU) Available() int64 {
+func (l *LRU[K]) Available() int64 {
 	l.Lock()
 	defer l.Unlock()
 	return l.capacity - l.size

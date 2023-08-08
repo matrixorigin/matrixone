@@ -26,16 +26,16 @@ type CacheConfig struct {
 	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
 }
 
-var metaCache *lruobjcache.LRU
+var metaCache *lruobjcache.LRU[ObjectNameShort]
 var onceInit sync.Once
 
 func init() {
-	metaCache = lruobjcache.New(512*1024*1024, nil, nil)
+	metaCache = lruobjcache.New[ObjectNameShort](512*1024*1024, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = lruobjcache.New(size, nil, nil)
+		metaCache = lruobjcache.New[ObjectNameShort](size, nil, nil)
 	})
 }
 

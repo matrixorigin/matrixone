@@ -51,7 +51,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 
 		postSetFn := func(keySet any, valSet []byte, szSet int64, isNewEntry bool) {
 			if o.enableOverlapChecker && isNewEntry {
-				_key := keySet.(IOVectorCacheKey)
+				_key := keySet.(CacheKey)
 				if err := o.overlapChecker.Insert(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
 					panic(err)
 				}
@@ -59,7 +59,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 		}
 		postEvictFn := func(keyEvicted any, valEvicted []byte, _ int64) {
 			if o.enableOverlapChecker {
-				_key := keyEvicted.(IOVectorCacheKey)
+				_key := keyEvicted.(CacheKey)
 				if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
 					panic(err)
 				}
@@ -126,7 +126,7 @@ func (m *MemCache) Read(
 		if entry.ToObjectBytes == nil {
 			continue
 		}
-		key := IOVectorCacheKey{
+		key := CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
 			Size:   entry.Size,
@@ -172,7 +172,7 @@ func (m *MemCache) Update(
 			continue
 		}
 
-		key := IOVectorCacheKey{
+		key := CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
 			Size:   entry.Size,

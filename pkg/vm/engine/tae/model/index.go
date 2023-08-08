@@ -27,12 +27,12 @@ type LRUCache interface {
 }
 
 type simpleLRU struct {
-	impl lruobjcache.LRU
+	impl lruobjcache.LRU[any]
 }
 
 func NewSimpleLRU(capacity int64) LRUCache {
 	return &simpleLRU{
-		impl: *lruobjcache.New(capacity, nil, nil),
+		impl: *lruobjcache.New[any](capacity, nil, nil),
 	}
 }
 
