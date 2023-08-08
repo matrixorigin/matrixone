@@ -33,14 +33,6 @@ func init() {
 	TestCaseRegister(makeTest1())
 }
 
-func initPrepareTest(pc PrepareCase, opts *options.Options, t *testing.T) *testutil.TestEngine {
-	dir, err := InitPrepareDirByType(pc.typ)
-	assert.NoError(t, err)
-	ctx := context.Background()
-	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
-	return tae
-}
-
 func makePrepare1() PrepareCase {
 	getSchema := func(tc PrepareCase, t *testing.T) *catalog.Schema {
 		schema := catalog.MockSchemaAll(18, 13)
@@ -58,15 +50,9 @@ func makePrepare1() PrepareCase {
 		opts := config.WithLongScanAndCKPOpts(nil)
 		return opts
 	}
-	getEngine := func(tc PrepareCase, t *testing.T) *testutil.TestEngine {
-		opts := tc.getOptions(tc, t)
-		e := initPrepareTest(tc, opts, t)
-		e.BindSchema(getSchema(tc, t))
-		return e
-	}
 
 	prepareFn := func(tc PrepareCase, t *testing.T) {
-		tae := tc.getEngine(tc, t)
+		tae := tc.GetEngine(t)
 		defer tae.Close()
 
 		schema := tc.getSchema(tc, t)
@@ -95,29 +81,14 @@ func makePrepare1() PrepareCase {
 		prepareFn:  prepareFn,
 		getSchema:  getSchema,
 		getBatch:   getBatch,
-		getEngine:  getEngine,
 		getOptions: getOptions,
 	}
-}
-
-func initTestEngine(tc TestCase, t *testing.T) *testutil.TestEngine {
-	pc := GetPrepareCase(tc.dependsOn)
-	opts := pc.getOptions(pc, t)
-	dir, err := InitTestCaseExecuteDir(tc.name)
-	assert.NoError(t, err)
-	err = CopyDir(GetPrepareDirByType(pc.typ), dir)
-	assert.NoError(t, err)
-	ctx := context.Background()
-	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
-	tae.BindSchema(pc.getSchema(pc, t))
-	return tae
 }
 
 func makeTest1() TestCase {
 	testFn := func(tc TestCase, t *testing.T) {
 		pc := GetPrepareCase(tc.dependsOn)
-		tae := initTestEngine(tc, t)
-		defer tae.Close()
+		tae := tc.GetEngine(t)
 
 		bat := pc.getBatch(pc, t)
 		defer bat.Close()
