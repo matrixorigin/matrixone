@@ -14,21 +14,26 @@
 
 package model
 
-import "github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
+)
 
 type LRUCache interface {
-	Set(k any, v []byte, size int64)
-	Get(k any) ([]byte, bool)
+	Set(ctx context.Context, k any, v []byte)
+	Get(ctx context.Context, k any) ([]byte, bool)
 	Size() int64
 }
 
 type simpleLRU struct {
-	impl lruobjcache.LRU
+	impl lrucache.LRU[any, fileservice.Bytes]
 }
 
 func NewSimpleLRU(capacity int64) LRUCache {
 	return &simpleLRU{
-		impl: *lruobjcache.New(capacity, nil, nil),
+		impl: *lrucache.New[any, fileservice.Bytes](capacity, nil, nil),
 	}
 }
 
@@ -36,11 +41,11 @@ func (lru *simpleLRU) Size() int64 {
 	return lru.impl.Used()
 }
 
-func (lru *simpleLRU) Get(k any) (v []byte, ok bool) {
-	v, _, ok = lru.impl.Get(k, false)
+func (lru *simpleLRU) Get(ctx context.Context, k any) (v []byte, ok bool) {
+	v, ok = lru.impl.Get(ctx, k, false)
 	return
 }
 
-func (lru *simpleLRU) Set(k any, v []byte, size int64) {
-	lru.impl.Set(k, v, size, false)
+func (lru *simpleLRU) Set(ctx context.Context, k any, v []byte) {
+	lru.impl.Set(ctx, k, v, false)
 }

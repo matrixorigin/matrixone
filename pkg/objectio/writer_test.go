@@ -121,17 +121,17 @@ func TestNewObjectWriter(t *testing.T) {
 	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
 
-	obj, err := Decode(vec.Entries[0].ObjectBytes)
+	obj, err := Decode(vec.Entries[0].CachedData.Value)
 	assert.Nil(t, err)
 	vector1 := obj.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
 
-	obj, err = Decode(vec.Entries[1].ObjectBytes)
+	obj, err = Decode(vec.Entries[1].CachedData.Value)
 	assert.Nil(t, err)
 	vector2 := obj.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
 
-	obj, err = Decode(vec.Entries[2].ObjectBytes)
+	obj, err = Decode(vec.Entries[2].CachedData.Value)
 	assert.Nil(t, err)
 	vector3 := obj.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
@@ -160,17 +160,17 @@ func TestNewObjectWriter(t *testing.T) {
 	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
 
-	obj, err = Decode(vec.Entries[0].ObjectBytes)
+	obj, err = Decode(vec.Entries[0].CachedData.Value)
 	assert.Nil(t, err)
 	vector1 = obj.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
 
-	obj, err = Decode(vec.Entries[1].ObjectBytes)
+	obj, err = Decode(vec.Entries[1].CachedData.Value)
 	assert.Nil(t, err)
 	vector2 = obj.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
 
-	obj, err = Decode(vec.Entries[2].ObjectBytes)
+	obj, err = Decode(vec.Entries[2].CachedData.Value)
 	assert.Nil(t, err)
 	vector3 = obj.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
