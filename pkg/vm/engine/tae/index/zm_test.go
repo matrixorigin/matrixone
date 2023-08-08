@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -259,6 +260,7 @@ func TestZM(t *testing.T) {
 	zm1 := BuildZM(types.T_int64, types.EncodeInt64(&int64v))
 	require.Equal(t, int64v, zm1.GetMin())
 	require.Equal(t, int64v, zm1.GetMax())
+	require.Equal(t, int64v, zm1.GetSum())
 
 	i64l := int64v - 200
 	i64h := int64v + 100
@@ -271,12 +273,14 @@ func TestZM(t *testing.T) {
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
 	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
+	require.Equal(t, int64v+i64l, zm1.GetSum())
 
 	UpdateZMAny(zm1, i64h)
 	t.Log(zm1.String())
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
+	require.Equal(t, int64v+i64l+i64h, zm1.GetSum())
 
 	minv := bytes.Repeat([]byte{0x00}, 31)
 	maxv := bytes.Repeat([]byte{0xff}, 31)
@@ -309,6 +313,39 @@ func TestZM(t *testing.T) {
 	require.Equal(t, zm2.GetMinBuf(), zm3.GetMinBuf())
 	require.Equal(t, zm2.GetMaxBuf(), zm3.GetMaxBuf())
 	require.True(t, zm3.MaxTruncated())
+}
+
+func TestZMSumOverflow(t *testing.T) {
+	maxi64 := int64(math.MaxInt64)
+	zm1 := BuildZM(types.T_int64, types.EncodeInt64(&maxi64))
+	t.Log(zm1.String())
+	require.Equal(t, maxi64, zm1.GetSum())
+
+	i64l := int64(1)
+	UpdateZMAny(zm1, i64l)
+	t.Log(zm1.String())
+	require.Equal(t, int64(0), zm1.GetSum())
+
+	UpdateZMAny(zm1, i64l)
+	require.Equal(t, int64(0), zm1.GetSum())
+
+	maxf64 := math.MaxFloat64
+	zm2 := BuildZM(types.T_float64, types.EncodeFloat64(&maxf64))
+	t.Log(zm2.String())
+	require.Equal(t, maxf64, zm2.GetSum())
+
+	f64l := float64(1)
+	UpdateZMAny(zm2, f64l)
+	t.Log(zm2.String())
+	require.Equal(t, maxf64, zm2.GetSum())
+
+	UpdateZMAny(zm2, maxf64)
+	t.Log(zm2.String())
+	require.Equal(t, float64(0), zm2.GetSum())
+
+	UpdateZMAny(zm2, math.SmallestNonzeroFloat64)
+	t.Log(zm2.String())
+	require.Equal(t, float64(0), zm2.GetSum())
 }
 
 func BenchmarkZM(b *testing.B) {

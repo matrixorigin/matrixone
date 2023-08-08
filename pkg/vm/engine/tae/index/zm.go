@@ -47,6 +47,14 @@ func init() {
 //	       len(min)    len(max) |   |
 //	                       reserved |
 //	                              type
+
+// reserved byte:
+//  x x x x x x x x
+// | | | | | | | |
+// | | +-+-+-+-+-+-- scale
+// | +------------- 1: sum overflowed (for types that support SUM)
+// +--------------- 1: inited
+
 type ZM []byte
 
 func NewZM(t types.T, scale int32) ZM {
@@ -78,6 +86,9 @@ func (zm ZM) doInit(v []byte) {
 	} else {
 		zm.updateMinFixed(v)
 		zm.updateMaxFixed(v)
+		if zm.supportSum() {
+			zm.updateSumFixed(v)
+		}
 	}
 	zm.setInited()
 }
@@ -90,6 +101,12 @@ func (zm ZM) String() string {
 	} else {
 		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
 			zm.GetType().String(), zm.GetScale(), zm.GetMin(), zm.GetMax()))
+		if zm.supportSum() {
+			_, _ = b.WriteString(fmt.Sprintf("SUM:%v", zm.GetSum()))
+			if zm.GetOverflow() {
+				_, _ = b.WriteString(fmt.Sprintf("(OVERFLOWED)"))
+			}
+		}
 	}
 	if zm.MaxTruncated() {
 		_ = b.WriteByte('+')
@@ -140,6 +157,14 @@ func (zm ZM) GetScale() int32 {
 	return int32(sz)
 }
 
+func (zm ZM) SetOverflow() {
+	zm[62] |= 0x40
+}
+
+func (zm ZM) GetOverflow() bool {
+	return zm[62]&0x40 != 0
+}
+
 func (zm ZM) GetMin() any {
 	if !zm.IsInited() {
 		return nil
@@ -153,6 +178,19 @@ func (zm ZM) GetMax() any {
 		return nil
 	}
 	buf := zm.GetMaxBuf()
+	return zm.getValue(buf)
+}
+
+func (zm ZM) supportSum() bool {
+	t := zm.GetType()
+	return t.IsInteger() || t.IsFloat() || t == types.T_decimal64
+}
+
+func (zm ZM) GetSum() any {
+	if !zm.IsInited() {
+		return nil
+	}
+	buf := zm.GetSumBuf()
 	return zm.getValue(buf)
 }
 
@@ -368,12 +406,17 @@ func (zm ZM) updateMaxFixed(v []byte) {
 }
 
 func (zm ZM) updateSumFixed(v []byte) {
+	if zm.GetOverflow() {
+		return
+	}
+
 	switch zm.GetType() {
 	case types.T_int8:
 		a := types.DecodeInt8(zm.GetSumBuf())
 		b := types.DecodeInt8(v)
 		sum, overflow := add(a, b, func(s int8) bool { return (s > a) != (b > 0) })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeInt8(&sum))
@@ -383,6 +426,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 		b := types.DecodeInt16(v)
 		sum, overflow := add(a, b, func(s int16) bool { return (s > a) != (b > 0) })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeInt16(&sum))
@@ -392,6 +436,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 		b := types.DecodeInt32(v)
 		sum, overflow := add(a, b, func(s int32) bool { return (s > a) != (b > 0) })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeInt32(&sum))
@@ -401,6 +446,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 		b := types.DecodeInt64(v)
 		sum, overflow := add(a, b, func(s int64) bool { return (s > a) != (b > 0) })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeInt64(&sum))
@@ -410,6 +456,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 		b := types.DecodeUint8(v)
 		sum, overflow := add(a, b, func(s uint8) bool { return s < a })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeUint8(&sum))
@@ -419,6 +466,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 		b := types.DecodeUint16(v)
 		sum, overflow := add(a, b, func(s uint16) bool { return s < a })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeUint16(&sum))
@@ -428,6 +476,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 		b := types.DecodeUint32(v)
 		sum, overflow := add(a, b, func(s uint32) bool { return s < a })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeUint32(&sum))
@@ -437,6 +486,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 		b := types.DecodeUint64(v)
 		sum, overflow := add(a, b, func(s uint64) bool { return s < a })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeUint64(&sum))
@@ -446,6 +496,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 		b := types.DecodeFloat32(v)
 		sum, overflow := add(a, b, func(s float32) bool { return math.IsInf(float64(s), 0) })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeFloat32(&sum))
@@ -455,6 +506,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 		b := types.DecodeFloat64(v)
 		sum, overflow := add(a, b, func(s float64) bool { return math.IsInf(s, 0) })
 		if overflow {
+			zm.SetOverflow()
 			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeFloat64(&sum))
@@ -462,7 +514,8 @@ func (zm ZM) updateSumFixed(v []byte) {
 	case types.T_decimal64:
 		sum, err := types.DecodeDecimal64(zm.GetSumBuf()).Add64(types.DecodeDecimal64(v))
 		if err != nil {
-			sum = types.Decimal64(0)
+			zm.SetOverflow()
+			sum = 0
 		}
 		copy(zm.GetSumBuf(), types.EncodeDecimal64(&sum))
 		return
@@ -1213,7 +1266,7 @@ func UpdateZM(zm ZM, v []byte) {
 	} else if compute.Compare(v, zm.GetMaxBuf(), t, scale, scale) > 0 {
 		zm.updateMaxFixed(v)
 	}
-	if t.IsInteger() || t.IsFloat() || t == types.T_decimal64 {
+	if zm.supportSum() {
 		zm.updateSumFixed(v)
 	}
 }
