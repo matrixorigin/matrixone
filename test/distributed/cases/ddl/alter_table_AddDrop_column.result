@@ -224,13 +224,9 @@ drop table index03;
 drop table if exists cluster01;
 create table cluster01(a int, b int, c varchar(10)) cluster by(a,b,c);
 alter table cluster01 add column col1 int;
-invalid input: can't add/drop column for cluster table now
 alter table cluster01 drop column c;
-invalid input: can't add/drop column for cluster table now
 alter table cluster01 drop column a;
-invalid input: can't add/drop column for cluster table now
 alter table cluster01 drop column b;
-invalid input: can't add/drop column for cluster table now
 drop table cluster01;
 drop table if exists foreign01;
 create table foreign01(col1 int primary key,
