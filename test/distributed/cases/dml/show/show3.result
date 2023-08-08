@@ -1,0 +1,7 @@
+set global enable_privilege_cache = off;
+create table t1 (a int, b int, c int) COMMENT='before cluster by' PARTITION BY hash(a+b) PARTITIONS 2  CLUSTER BY (a,b);
+create table t2 (a int, b int, c int) CLUSTER BY (a,b) PARTITION BY hash(a+b) PARTITIONS 2   COMMENT='after cluster by';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 64 near " PARTITION BY hash(a+b) PARTITIONS 2   COMMENT='after cluster by';";
+create table t3 (a int, b int, c int) PARTITION BY hash(a+b) PARTITIONS 2  COMMENT='before cluster by' CLUSTER BY (a,b);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 82 near "  COMMENT='before cluster by' CLUSTER BY (a,b);";
+set global enable_privilege_cache = on;
