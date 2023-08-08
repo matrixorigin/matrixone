@@ -276,7 +276,7 @@ func TestAccountParser(t *testing.T) {
 			hasErr:   false,
 		},
 		{
-			str:      "t1:u1?a:1",
+			str:      "t1:u1?a=1",
 			tenant:   "t1",
 			username: "u1",
 			hasErr:   false,
