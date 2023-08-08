@@ -277,7 +277,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	// For RC isolation, update the snapshot TS of transaction for each statement including
 	// the first one. Means that, the timestamp of the first statement is not the transaction's
 	// begin timestamp, but its own timestamp.
-	if !commit && txn.meta.IsRCIsolation() && txn.GetSQLCount() > 0 {
+	if !commit && txn.meta.IsRCIsolation() && txn.GetSQLCount() > 1 {
 		if err := txn.op.UpdateSnapshot(
 			ctx,
 			timestamp.Timestamp{}); err != nil {
