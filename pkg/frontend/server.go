@@ -98,7 +98,7 @@ func NewMOServer(
 			goetty.WithSessionCodec(codec),
 			goetty.WithSessionLogger(logutil.GetGlobalLogger()),
 			goetty.WithSessionDisableCompactAfterGrow(),
-			goetty.WithSessionRWBUfferSize(1024*1024, 1024*1024)),
+			goetty.WithSessionRWBUfferSize(DefaultRpcBufferSize, DefaultRpcBufferSize)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
