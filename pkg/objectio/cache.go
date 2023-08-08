@@ -17,7 +17,7 @@ package objectio
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"sync"
 )
@@ -26,16 +26,16 @@ type CacheConfig struct {
 	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
 }
 
-var metaCache *lruobjcache.LRU
+var metaCache *lrucache.LRU[ObjectNameShort, fileservice.Bytes]
 var onceInit sync.Once
 
 func init() {
-	metaCache = lruobjcache.New(512*1024*1024, nil, nil)
+	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = lruobjcache.New(size, nil, nil)
+		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil)
 	})
 }
 
@@ -45,7 +45,7 @@ func LoadObjectMetaByExtent(
 	extent *Extent,
 	noLRUCache bool,
 	fs fileservice.FileService) (meta ObjectMeta, err error) {
-	v, _, ok := metaCache.Get(*name.Short(), false)
+	v, ok := metaCache.Get(ctx, *name.Short(), false)
 	if ok {
 		meta = ObjectMeta(v)
 		return
@@ -53,7 +53,7 @@ func LoadObjectMetaByExtent(
 	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
 		return
 	}
-	metaCache.Set(*name.Short(), meta, int64(len(meta[:])), false)
+	metaCache.Set(ctx, *name.Short(), fileservice.Bytes(meta), false)
 	return
 }
 

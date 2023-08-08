@@ -61,6 +61,10 @@ type FileServiceCounterSet struct {
 			EvictPending     stats.Counter
 			EvictImmediately stats.Counter
 		}
+		LRU struct {
+			Evict             stats.Counter
+			EvictWithZeroRead stats.Counter
+		}
 	}
 
 	FileWithChecksum struct {
