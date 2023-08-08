@@ -26,16 +26,16 @@ func (r RCBytes) Size() int64 {
 	return int64(len(r.Value))
 }
 
-func (c RCBytes) Len() int {
-	if c.RCPoolItem == nil {
+func (r RCBytes) Len() int {
+	if r.RCPoolItem == nil {
 		return 0
 	}
-	return len(c.Value)
+	return len(r.Value)
 }
 
-func (c RCBytes) Copy() []byte {
-	ret := make([]byte, len(c.Value))
-	copy(ret, c.Value)
+func (r RCBytes) Copy() []byte {
+	ret := make([]byte, len(r.Value))
+	copy(ret, r.Value)
 	return ret
 }
 
