@@ -113,17 +113,17 @@ type IOEntry struct {
 	// if number of bytes is unknown, set Size field to -1
 	ReaderForWrite io.Reader
 
-	// When reading, if the ToObjectBytes field is not nil, the returning object's byte slice will be set to this field
+	// When reading, if the ToCacheData field is not nil, the returning object's byte slice will be set to this field
 	// Data, WriterForRead, ReadCloserForRead may be empty if ObjectBytes is not null
-	// if ToObjectBytes is provided, caller should always read ObjectBytes instead of Data, WriterForRead or ReadCloserForRead
+	// if ToCacheData is provided, caller should always read ObjectBytes instead of Data, WriterForRead or ReadCloserForRead
 	ObjectBytes []byte
 
-	// ToObjectBytes constructs an object byte slice from entry contents
+	// ToCacheData constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns
 	// reader always contains entry contents
 	// data may contains entry contents if available
 	// if data is empty, the io.Reader must be fully read before returning nil error
-	ToObjectBytes func(reader io.Reader, data []byte) (object []byte, objectSize int64, err error)
+	ToCacheData func(reader io.Reader, data []byte) (object []byte, objectSize int64, err error)
 
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache

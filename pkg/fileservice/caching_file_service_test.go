@@ -58,7 +58,7 @@ func testCachingFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToObjectBytes: func(r io.Reader, data []byte) ([]byte, int64, error) {
+					ToCacheData: func(r io.Reader, data []byte) ([]byte, int64, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {

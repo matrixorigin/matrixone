@@ -122,7 +122,7 @@ func (m *MemCache) Read(
 		if entry.done {
 			continue
 		}
-		if entry.ToObjectBytes == nil {
+		if entry.ToCacheData == nil {
 			continue
 		}
 		key := CacheKey{

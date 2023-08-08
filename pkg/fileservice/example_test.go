@@ -57,7 +57,7 @@ func TestCacheExample(t *testing.T) {
 			{
 				Offset: 0,
 				Size:   2,
-				ToObjectBytes: func(_ io.Reader, data []byte) ([]byte, int64, error) {
+				ToCacheData: func(_ io.Reader, data []byte) ([]byte, int64, error) {
 					return data, 8, nil
 				},
 			},
