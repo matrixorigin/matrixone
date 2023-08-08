@@ -39,7 +39,7 @@ const (
 )
 
 func initPrepareTest(pc PrepareCase, opts *options.Options, t *testing.T) *testutil.TestEngine {
-	dir, err := InitPrepareDirByType(pc.id)
+	dir, err := InitPrepareDirByName(pc.name)
 	assert.NoError(t, err)
 	ctx := context.Background()
 	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
@@ -51,7 +51,7 @@ func initTestEngine(tc TestCase, t *testing.T) *testutil.TestEngine {
 	opts := pc.GetOptions(t)
 	dir, err := InitTestCaseExecuteDir(tc.name)
 	assert.NoError(t, err)
-	err = CopyDir(GetPrepareDirByType(pc.id), dir)
+	err = CopyDir(GetPrepareDirByName(pc.name), dir)
 	assert.NoError(t, err)
 	ctx := context.Background()
 	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
@@ -67,7 +67,7 @@ type schemaCfg struct {
 }
 
 type PrepareCase struct {
-	id        int
+	name      string
 	desc      string
 	schemaCfg schemaCfg
 	batchSize int
@@ -109,7 +109,7 @@ func (pc PrepareCase) GetBatch(t *testing.T) *containers.Batch {
 type TestCase struct {
 	name      string
 	desc      string
-	dependsOn int
+	dependsOn string
 	testFn    func(tc TestCase, t *testing.T)
 }
 
@@ -118,7 +118,7 @@ func (tc TestCase) GetEngine(t *testing.T) *testutil.TestEngine {
 	return tae
 }
 
-var PrepareCases map[int]PrepareCase
+var PrepareCases map[string]PrepareCase
 var TestCases map[string]TestCase
 
 func TestCaseRegister(testCase TestCase) {
@@ -133,16 +133,16 @@ func TestCaseRegister(testCase TestCase) {
 
 func PrepareCaseRegister(prepareCase PrepareCase) {
 	if PrepareCases == nil {
-		PrepareCases = make(map[int]PrepareCase)
+		PrepareCases = make(map[string]PrepareCase)
 	}
-	if _, ok := PrepareCases[prepareCase.id]; ok {
+	if _, ok := PrepareCases[prepareCase.name]; ok {
 		panic("PrepareCaseRegister: duplicate prepare case type")
 	}
-	PrepareCases[prepareCase.id] = prepareCase
+	PrepareCases[prepareCase.name] = prepareCase
 }
 
-func GetPrepareCase(id int) PrepareCase {
-	if prepareCase, ok := PrepareCases[id]; ok {
+func GetPrepareCase(name string) PrepareCase {
+	if prepareCase, ok := PrepareCases[name]; ok {
 		return prepareCase
 	}
 	panic("GetPrepareCase: prepare case not found")
@@ -150,14 +150,14 @@ func GetPrepareCase(id int) PrepareCase {
 
 func MakePrepareCase(
 	prepareFn func(tc PrepareCase, t *testing.T),
-	id int,
+	name string,
 	desc string,
 	schemaCfg schemaCfg,
 	batchSize int,
 	optType optType,
 ) PrepareCase {
 	return PrepareCase{
-		id:        id,
+		name:      name,
 		desc:      desc,
 		schemaCfg: schemaCfg,
 		batchSize: batchSize,
@@ -168,7 +168,7 @@ func MakePrepareCase(
 
 func MakeTestCase(
 	testFn func(tc TestCase, t *testing.T),
-	dependsOn int,
+	dependsOn string,
 	name string,
 	desc string,
 ) TestCase {

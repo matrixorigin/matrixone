@@ -26,11 +26,11 @@ import (
 
 func init() {
 	PrepareCaseRegister(MakePrepareCase(
-		prepare1, 1, "prepare-1",
+		prepare1, "prepare-1", "prepare case 1",
 		schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
 	))
 	TestCaseRegister(
-		MakeTestCase(test1, 1, "test-1", "prepare-1=>test-1"),
+		MakeTestCase(test1, "prepare-1", "test-1", "prepare-1=>test-1"),
 	)
 }
 
