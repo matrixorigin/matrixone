@@ -104,7 +104,7 @@ func (zm ZM) String() string {
 		if zm.supportSum() {
 			_, _ = b.WriteString(fmt.Sprintf("SUM:%v", zm.GetSum()))
 			if zm.GetOverflow() {
-				_, _ = b.WriteString(fmt.Sprintf("(OVERFLOWED)"))
+				_, _ = b.WriteString("(OVERFLOWED)")
 			}
 		}
 	}
