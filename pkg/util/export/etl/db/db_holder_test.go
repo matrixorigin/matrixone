@@ -16,13 +16,14 @@ package db_holder
 
 import (
 	"context"
+	"database/sql/driver"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
-	"database/sql/driver"
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
@@ -45,11 +46,11 @@ func TestGetPrepareSQL(t *testing.T) {
 		t.Errorf("Expected columns to be %d, but got %d", columns, sqls.columns)
 	}
 
-	expectedOneRow := "INSERT INTO `testDB`.`testTable` VALUES  (?,?,?)"
+	expectedOneRow := "INSERT INTO `testDB`.`testTable` () VALUES  (?,?,?)"
 	if sqls.oneRow != expectedOneRow {
 		t.Errorf("Expected oneRow to be %s, but got %s", expectedOneRow, sqls.oneRow)
 	}
-	expectedMultiRows := "INSERT INTO `testDB`.`testTable` VALUES (?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?)"
+	expectedMultiRows := "INSERT INTO `testDB`.`testTable` () VALUES (?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?)"
 	if sqls.maxRows != expectedMultiRows {
 		t.Errorf("Expected multiRows to be %s, but got %s", expectedMultiRows, sqls.maxRows)
 	}
@@ -83,7 +84,7 @@ func TestBulkInsert(t *testing.T) {
 
 	mock.ExpectBegin()
 
-	stmt := mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO `testDB`.`testTable` VALUES (?,?,?,?,?,?)"))
+	stmt := mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO `testDB`.`testTable` (`str`,`int64`,`float64`,`uint64`,`datetime_6`,`json_col`) VALUES (?,?,?,?,?,?)"))
 
 	for _, record := range records {
 		driverValues := make([]driver.Value, len(record))
@@ -139,7 +140,9 @@ func TestBulkInsertWithBatch(t *testing.T) {
 	numBatches := len(records) / batchSize
 
 	// Expect numBatches batches
-	stmt := mock.ExpectPrepare("^INSERT INTO `testDB`.`testTable` VALUES (.+)$")
+	placeholders := strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?),", batchSize), ",")
+
+	stmt := mock.ExpectPrepare(regexp.QuoteMeta(fmt.Sprintf("INSERT INTO `testDB`.`testTable` (`str`,`int64`,`float64`,`uint64`,`datetime_6`,`json_col`) VALUES %s", placeholders)))
 	batchArgs := make([]driver.Value, batchSize*6) // Assuming 6 fields in a record
 	for i := range batchArgs {
 		batchArgs[i] = sqlmock.AnyArg()
@@ -150,7 +153,7 @@ func TestBulkInsertWithBatch(t *testing.T) {
 	}
 
 	// Expect last 9
-	stmt = mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO `testDB`.`testTable` VALUES (?,?,?,?,?,?)"))
+	stmt = mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO `testDB`.`testTable` (`str`,`int64`,`float64`,`uint64`,`datetime_6`,`json_col`) VALUES (?,?,?,?,?,?)"))
 	recordArgs := make([]driver.Value, 6) // Assuming 6 fields in a record
 	for i := range recordArgs {
 		recordArgs[i] = sqlmock.AnyArg()
