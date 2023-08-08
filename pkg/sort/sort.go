@@ -223,6 +223,7 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(strCol, os, genericGreater[string])
 		}
+		//TODO: Add T_array here.
 	}
 }
 

@@ -51,9 +51,9 @@ func ArrayToString[T RealNumbers](input []T) string {
 }
 
 func ArraysToString[T RealNumbers](input [][]T) string {
-	var strValues []string
-	for _, row := range input {
-		strValues = append(strValues, ArrayToString[T](row))
+	strValues := make([]string, len(input))
+	for i, row := range input {
+		strValues[i] = ArrayToString[T](row)
 	}
 	return strings.Join(strValues, " ")
 }
