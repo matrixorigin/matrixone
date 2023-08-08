@@ -1061,7 +1061,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 				dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
 					Op:  vm.Dispatch,
-					Arg: constructDispatchLocal(false, false, regs, false),
+					Arg: constructDispatchLocal(false, false, false, regs, false),
 				})
 				for i := range scopes {
 					insertArg, err := constructInsert(n, c.e, c.proc)
@@ -1236,7 +1236,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, true, receivers, isLog),
+			Arg: constructDispatchLocal(true, true, len(receivers) > 1, receivers, isLog),
 		})
 
 		return []*Scope{rs}, nil
@@ -1743,12 +1743,22 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 	}
 
 	parent, children := c.newShuffleJoinScopeList(lefts, rights, node)
-	lastOperator := make([]vm.Instruction, 0, len(children))
-	for i := range children {
-		ilen := len(children[i].Instructions) - 1
-		lastOperator = append(lastOperator, children[i].Instructions[ilen])
-		children[i].Instructions = children[i].Instructions[:ilen]
+	if parent != nil {
+		lastOperator := make([]vm.Instruction, 0, len(children))
+		for i := range children {
+			ilen := len(children[i].Instructions) - 1
+			lastOperator = append(lastOperator, children[i].Instructions[ilen])
+			children[i].Instructions = children[i].Instructions[:ilen]
+		}
+
+		defer func() {
+			// recovery the children's last operator
+			for i := range children {
+				children[i].appendInstruction(lastOperator[i])
+			}
+		}()
 	}
+
 	switch node.JoinType {
 	case plan.Node_INNER:
 		for i := range children {
@@ -1817,12 +1827,11 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 	default:
 		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
 	}
-	// recovery the children's last operator
-	for i := range children {
-		children[i].appendInstruction(lastOperator[i])
-	}
 
-	return parent
+	if parent != nil {
+		return parent
+	}
+	return children
 }
 
 func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
@@ -2592,7 +2601,8 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 }
 
 func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([]*Scope, []*Scope) {
-	parent := make([]*Scope, 0, len(c.cnList))
+	single := len(c.cnList) <= 1
+	var parent []*Scope
 	children := make([]*Scope, 0, len(c.cnList))
 	lnum := len(left)
 	sum := lnum + len(right)
@@ -2612,7 +2622,9 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			}
 		}
 		children = append(children, ss...)
-		parent = append(parent, c.newMergeRemoteScope(ss, n))
+		if !single {
+			parent = append(parent, c.newMergeRemoteScope(ss, n))
+		}
 	}
 
 	currentFirstFlag := c.anal.isFirst
@@ -2702,7 +2714,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(false, false, extraRegisters(ss, 0), false),
+			Arg: constructDispatchLocal(false, false, false, extraRegisters(ss, 0), false),
 		})
 	}
 	rs.IsEnd = true
@@ -2742,7 +2754,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, false, extraRegisters(ss, s.BuildIdx), false),
+			Arg: constructDispatchLocal(true, false, false, extraRegisters(ss, s.BuildIdx), false),
 		})
 	}
 	rs.IsEnd = true
@@ -3040,7 +3052,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
-	if n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+	if n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
 			return nil, err

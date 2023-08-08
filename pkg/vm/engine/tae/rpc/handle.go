@@ -17,8 +17,8 @@ package rpc
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -250,6 +251,17 @@ func (h *Handle) handleRequests(
 				req,
 				&db.WriteResp{},
 			)
+			if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) && (strings.HasPrefix(req.TableName, "bmsql") || strings.HasPrefix(req.TableName, "sbtest")) {
+				for _, rreq := range txnCtx.reqs {
+					if crreq, ok := rreq.(*db.WriteReq); ok {
+						logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %s txn: %s",
+							crreq.Type, crreq.TableID,
+							crreq.TableName, common.MoBatchToString(crreq.Batch, 3),
+							txn.String(),
+						)
+					}
+				}
+			}
 		default:
 			panic(moerr.NewNYI(ctx, "Pls implement me"))
 		}
@@ -840,26 +852,23 @@ func (h *Handle) HandleWrite(
 		)
 		logutil.Debugf("[precommit] write batch: %s", common.DebugMoBatch(req.Batch))
 	})
+	var dbase handle.Database
+	var tb handle.Relation
 	defer func() {
 		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
-		// TODO: delete this debug log after issue 10227
-		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("[precommit] dup handle write typ: %v, %d-%s, %s txn: %s",
-				req.Type, req.TableID,
-				req.TableName, common.MoBatchToString(req.Batch, 3),
-				txn.String(),
-			)
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) && (strings.HasPrefix(req.TableName, "bmsql") || strings.HasPrefix(req.TableName, "sbtest")) {
+			logutil.Infof("[precommit] dup handle catalog on dup %s ", tb.GetMeta().(*catalog2.TableEntry).PPString(common.PPL1, 0, ""))
 		}
 	}()
 
-	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	dbase, err = txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
 		return
 	}
 
-	tb, err := dbase.GetRelationByID(req.TableID)
+	tb, err = dbase.GetRelationByID(req.TableID)
 	if err != nil {
 		return
 	}
@@ -875,12 +884,6 @@ func (h *Handle) HandleWrite(
 				}
 				locations = append(locations, location)
 			}
-			// TODO: delete this debug log after issue 10227
-			n := len(req.MetaLocs)
-			if n > 2 {
-				n = 2
-			}
-			logutil.Infof("[precommit](%s) metalocs: %v", hex.EncodeToString([]byte(txn.GetID())), req.MetaLocs[:n])
 			err = tb.AddBlksWithMetaLoc(ctx, locations)
 			return
 		}

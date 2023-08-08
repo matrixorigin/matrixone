@@ -407,6 +407,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			sourceArg := sourceIns.Arg.(*dispatch.Argument)
 			arg := &dispatch.Argument{
 				IsSink:     sourceArg.IsSink,
+				RecSink:    sourceArg.RecSink,
 				FuncId:     sourceArg.FuncId,
 				LocalRegs:  make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
 				RemoteRegs: make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs)),
@@ -1000,10 +1001,11 @@ func constructIntersect(ibucket, nbucket int) *intersect.Argument {
 	}
 }
 
-func constructDispatchLocal(all bool, isSink bool, regs []*process.WaitRegister, isLog bool) *dispatch.Argument {
+func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.WaitRegister, isLog bool) *dispatch.Argument {
 	arg := new(dispatch.Argument)
 	arg.LocalRegs = regs
 	arg.IsSink = isSink
+	arg.RecSink = RecSink
 	arg.IsLog = isLog
 	if all {
 		arg.FuncId = dispatch.SendToAllLocalFunc

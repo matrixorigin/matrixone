@@ -258,6 +258,7 @@ func (bat *Batch) String() string {
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	rbat := NewWithSize(len(bat.Vecs))
 	rbat.SetAttributes(bat.Attrs)
+	rbat.Recursive = bat.Recursive
 	for j, vec := range bat.Vecs {
 		typ := *bat.GetVector(int32(j)).GetType()
 		rvec := vector.NewVec(typ)
@@ -269,6 +270,15 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	}
 	rbat.rowCount = bat.rowCount
 	return rbat, nil
+}
+
+func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
+	for i := range bat.Vecs {
+		if err := bat.Vecs[i].PreExtend(rows, m); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {

@@ -1391,18 +1391,16 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				v.area = area[:len(v.area)]
 			}
 			vs := v.col.([]types.Varlena)
-			var va types.Varlena
 			var err error
 			for i := range ws {
 				if nulls.Contains(&w.nsp, uint64(i)) {
 					nulls.Add(&v.nsp, uint64(v.length))
 				} else {
-					err = BuildVarlenaFromValena(v, &va, &ws[i], &w.area, mp)
+					err = BuildVarlenaFromValena(v, &vs[v.length], &ws[i], &w.area, mp)
 					if err != nil {
 						return err
 					}
 				}
-				vs[v.length] = va
 				v.length++
 			}
 			return nil
@@ -2339,8 +2337,6 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 
 func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	var err error
-	var va types.Varlena
-
 	if vec.capacity == 0 {
 		if err := extend(vec, 1, mp); err != nil {
 			return err
@@ -2348,11 +2344,10 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	}
 	vec.class = CONSTANT
 	col := vec.col.([]types.Varlena)
-	err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
+	err = BuildVarlenaFromByteSlice(vec, &col[0], &val, mp)
 	if err != nil {
 		return err
 	}
-	col[0] = va
 	vec.data = vec.data[:cap(vec.data)]
 	vec.SetLength(length)
 	return nil
@@ -2587,8 +2582,6 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 
 func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool) error {
 	var err error
-	var va types.Varlena
-
 	if err = extend(vec, len(vals), mp); err != nil {
 		return err
 	}
@@ -2599,11 +2592,10 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 		if len(isNulls) > 0 && isNulls[i] {
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
-			err = BuildVarlenaFromByteSlice(vec, &va, &w, mp)
+			err = BuildVarlenaFromByteSlice(vec, &col[length+i], &w, mp)
 			if err != nil {
 				return err
 			}
-			col[length+i] = va
 		}
 	}
 	return nil
@@ -2611,7 +2603,6 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 
 func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPool) error {
 	var err error
-	var va types.Varlena
 
 	if err = extend(vec, len(vals), mp); err != nil {
 		return err
@@ -2624,11 +2615,10 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
 			bs := []byte(w)
-			err = BuildVarlenaFromByteSlice(vec, &va, &bs, mp)
+			err = BuildVarlenaFromByteSlice(vec, &col[length+i], &bs, mp)
 			if err != nil {
 				return err
 			}
-			col[length+i] = va
 		}
 	}
 	return nil
@@ -2757,17 +2747,15 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		}
 		w.length = end - start
 		if v.GetType().IsVarlen() {
-			var va types.Varlena
 			vCol := v.col.([]types.Varlena)
 			wCol := w.col.([]types.Varlena)
 			for i := start; i < end; i++ {
 				if !nulls.Contains(&v.nsp, uint64(i)) {
 					bs := vCol[i].GetByteSlice(v.area)
-					err = BuildVarlenaFromByteSlice(w, &va, &bs, mp)
+					err = BuildVarlenaFromByteSlice(w, &wCol[i-start], &bs, mp)
 					if err != nil {
 						return err
 					}
-					wCol[i-start] = va
 				}
 			}
 		} else {
