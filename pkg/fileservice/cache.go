@@ -79,10 +79,16 @@ type CacheKey struct {
 	Size   int64
 }
 
+type Bytes []byte
+
+func (b Bytes) Size() int64 {
+	return int64(len(b))
+}
+
 // ObjectCache caches IOEntry.ObjectBytes
 type ObjectCache interface {
-	Set(ctx context.Context, key CacheKey, value []byte, preloading bool)
-	Get(ctx context.Context, key CacheKey, preloading bool) (value []byte, ok bool)
+	Set(ctx context.Context, key CacheKey, value Bytes, preloading bool)
+	Get(ctx context.Context, key CacheKey, preloading bool) (value Bytes, ok bool)
 	Flush()
 	Capacity() int64
 	Used() int64

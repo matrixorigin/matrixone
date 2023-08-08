@@ -17,6 +17,7 @@ package model
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
 )
 
@@ -27,12 +28,12 @@ type LRUCache interface {
 }
 
 type simpleLRU struct {
-	impl lruobjcache.LRU[any]
+	impl lruobjcache.LRU[any, fileservice.Bytes]
 }
 
 func NewSimpleLRU(capacity int64) LRUCache {
 	return &simpleLRU{
-		impl: *lruobjcache.New[any](capacity, nil, nil),
+		impl: *lruobjcache.New[any, fileservice.Bytes](capacity, nil, nil),
 	}
 }
 

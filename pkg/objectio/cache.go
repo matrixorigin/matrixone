@@ -26,16 +26,16 @@ type CacheConfig struct {
 	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
 }
 
-var metaCache *lruobjcache.LRU[ObjectNameShort]
+var metaCache *lruobjcache.LRU[ObjectNameShort, fileservice.Bytes]
 var onceInit sync.Once
 
 func init() {
-	metaCache = lruobjcache.New[ObjectNameShort](512*1024*1024, nil, nil)
+	metaCache = lruobjcache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = lruobjcache.New[ObjectNameShort](size, nil, nil)
+		metaCache = lruobjcache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil)
 	})
 }
 
@@ -53,7 +53,7 @@ func LoadObjectMetaByExtent(
 	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
 		return
 	}
-	metaCache.Set(ctx, *name.Short(), meta, false)
+	metaCache.Set(ctx, *name.Short(), fileservice.Bytes(meta), false)
 	return
 }
 
