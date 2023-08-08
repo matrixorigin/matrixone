@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -475,7 +476,7 @@ func (cf *ColumnField) EncodeBytes() string {
 }
 
 func (cf *ColumnField) EncodeUuid() (dst [36]byte) {
-	EncodeUUIDHex(dst[:], cf.Bytes)
+	util.EncodeUUIDHex(dst[:], cf.Bytes)
 	return
 }
 

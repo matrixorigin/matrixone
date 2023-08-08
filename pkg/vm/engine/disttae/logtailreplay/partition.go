@@ -28,6 +28,9 @@ type Partition struct {
 	lock  chan struct{}
 	state atomic.Pointer[PartitionState]
 	TS    timestamp.Timestamp // last updated timestamp
+
+	// assuming checkpoints will be consumed once
+	checkpointConsumed atomic.Bool
 }
 
 func NewPartition() *Partition {
@@ -70,4 +73,45 @@ func (p *Partition) Lock() <-chan struct{} {
 
 func (p *Partition) Unlock() {
 	p.lock <- struct{}{}
+}
+
+func (p *Partition) ConsumeCheckpoints(
+	ctx context.Context,
+	fn func(
+		checkpoint string,
+		state *PartitionState,
+	) error,
+) (
+	err error,
+) {
+
+	if p.checkpointConsumed.Load() {
+		return nil
+	}
+
+	select {
+	case <-p.Lock():
+		defer p.Unlock()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	curState := p.state.Load()
+	if len(curState.checkpoints) == 0 {
+		return nil
+	}
+
+	state := curState.Copy()
+
+	if err := state.consumeCheckpoints(fn); err != nil {
+		return err
+	}
+
+	if !p.state.CompareAndSwap(curState, state) {
+		panic("concurrent mutation")
+	}
+
+	p.checkpointConsumed.Store(true)
+
+	return
 }

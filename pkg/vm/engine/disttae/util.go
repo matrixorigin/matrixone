@@ -723,7 +723,8 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 
 // SelectForSuperTenant is used to select CN servers for sys tenant.
 // For sys tenant, there are some special strategies to select CN servers.
-// The following strategies are listed in order of priority:
+// First of all, the requested labels must be match with the ones on servers.
+// Then, the following strategies are listed in order of priority:
 //  1. The CN servers which are configured as sys account.
 //  2. The CN servers which are configured as some labels whose key is not account.
 //  3. The CN servers which are configured as no labels.
@@ -740,7 +741,7 @@ func SelectForSuperTenant(
 
 	// found is true indicates that we have find some available CN services.
 	var found bool
-	var emptyCNs, allCNs []*metadata.CNService
+	var emptyCNs []*metadata.CNService
 
 	// S1: Select servers that configured as sys account.
 	mc.GetCNService(selector, func(s metadata.CNService) bool {
@@ -762,9 +763,19 @@ func SelectForSuperTenant(
 
 	// S2: If there are no servers that are configured as sys account.
 	// There may be some performance issues, but we need to do this still.
-	// Select all CN servers and select ones which are not configured as
-	// label with key "account".
-	mc.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
+	// (1) If there is only one request label, which is account:sys, we fetch all
+	//   CN servers.
+	// (2) Otherwise, there are other labels, we fetch the CN servers whose labels
+	//   are matched with them.
+	// In the apply function, we only append the CN servers who has no account key,
+	// to filter out the CN servers who belongs to some common tenants.
+	var se clusterservice.Selector
+	if selector.LabelNum() == 1 {
+		se = clusterservice.NewSelector()
+	} else {
+		se = selector.SelectWithoutLabel(map[string]string{"account": "sys"})
+	}
+	mc.GetCNService(se, func(s metadata.CNService) bool {
 		if filter != nil && filter(s.ServiceID) {
 			return true
 		}
@@ -773,7 +784,6 @@ func SelectForSuperTenant(
 			found = true
 			appendFn(&s)
 		}
-		allCNs = append(allCNs, &s)
 		return true
 	})
 	if found {
@@ -791,9 +801,13 @@ func SelectForSuperTenant(
 	// S4.1: If the root is super, return all servers.
 	username = strings.ToLower(username)
 	if username == "dump" || username == "root" {
-		for _, cn := range allCNs {
-			appendFn(cn)
-		}
+		mc.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
+			if filter != nil && filter(s.ServiceID) {
+				return true
+			}
+			appendFn(&s)
+			return true
+		})
 		return
 	}
 
