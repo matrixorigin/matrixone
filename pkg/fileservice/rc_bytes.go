@@ -14,7 +14,13 @@
 
 package fileservice
 
-type RCBytes = RCPoolItem[[]byte]
+type RCBytes struct {
+	*RCPoolItem[[]byte]
+}
+
+func (r RCBytes) Size() int64 {
+	return int64(len(r.Value))
+}
 
 type rcBytesPool struct {
 	sizes []int
@@ -38,10 +44,12 @@ var RCBytesPool = func() *rcBytesPool {
 	return ret
 }()
 
-func (r *rcBytesPool) Get(size int) *RCBytes {
+func (r *rcBytesPool) Get(size int) RCBytes {
 	if size > rcBytesPoolMaxCap {
-		item := &RCBytes{
-			Value: make([]byte, size),
+		item := RCBytes{
+			RCPoolItem: &RCPoolItem[[]byte]{
+				Value: make([]byte, size),
+			},
 		}
 		item.Retain()
 		return item
@@ -51,7 +59,9 @@ func (r *rcBytesPool) Get(size int) *RCBytes {
 		if poolSize >= size {
 			item := r.pools[i].Get()
 			item.Value = item.Value[:size]
-			return item
+			return RCBytes{
+				RCPoolItem: item,
+			}
 		}
 	}
 
