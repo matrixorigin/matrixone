@@ -1,0 +1,329 @@
+-- @suite
+
+-- @case
+-- @desc:test for insert data
+-- @label:bvt
+drop table if exists names;
+create table names(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into names(id, name, age) values(1,"Abby", 24);
+insert into names(id, name, age) values(2,"Bob", 25);
+insert into names(id, name, age) values(3,"Carol", 23);
+insert into names(id, name, age) values(4,"Dora", 29);
+select id,name,age from names;
+drop table if exists weights;
+create table weights(a int unique);
+insert into weights values(1);
+select * from weights;
+drop table if exists test;
+create table test(id int primary key, name varchar(10), age int);
+insert into test values(1, 'Abby', 20);
+insert into test values(2, 'Bob', 21);
+select id,name,age from test;
+drop table if exists pet;
+create table pet(name char(10),owner char(10), species char(10), gender char(1), weight float,age int);
+insert into pet values ('Sunsweet01','Dsant01','otter','f',30.11,2),
+('Sunsweet02','Dsant02','otter','m',30.11,3);
+insert into pet(name, owner, species, gender, weight, age) values ('Sunsweet03','Dsant01','otter','f',30.11,2),
+('Sunsweet04','Dsant02','otter','m',30.11,3);
+select * from pet;
+drop table if exists t1;
+create table t1 (a bigint unsigned not null, primary key(a));
+insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612);
+select * from t1;
+
+drop table if exists t1;
+create table t1(a int, b int);
+insert into t1 values(), ();
+select * from t1;
+
+drop table if exists t1;
+create table t1(a int default (1+12), b int);
+insert into t1(b) values(1), (1);
+select * from t1;
+
+drop table if exists t1;
+create table t1(a int primary key default (1+12));
+insert into t1 values();
+select * from t1;
+
+drop table if exists t1;
+create table t1(a int, b int);
+insert into t1(a) values(1), (2);
+select * from t1;
+
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values (1+2), (2*2);
+select * from t1;
+
+drop table if exists t1;
+create table t1 (a datetime default now());
+insert into t1 values();
+insert into t1 values(now());
+
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values(1+2*3), (666/2);
+select * from t1;
+
+drop table if exists t;
+CREATE TABLE t (i1 INT, d1 DOUBLE, e2 DECIMAL(5,2));
+INSERT INTO t VALUES ( 6, 6.0, 10.0/3), ( null, 9.0, 10.0/3), ( 1, null, 10.0/3), ( 2, 2.0, null );
+select * from t;
+
+drop table if exists t1;
+create table t1 (a date);
+insert into t1 values(DATE("2017-06-15 09:34:21")),(DATE("2019-06-25 10:12:21")),(DATE("2019-06-25 18:20:49"));
+select * from t1;
+
+drop table if exists t1;
+create table t1 (a date default DATE("2017-06-15 09:34:21"));
+insert into t1 (a) values (default), (default), (default);
+select * from t1;
+
+drop table if exists t1;
+create table t1(a int auto_increment, b int);
+insert into t1 values(null, 2), (3, null), (null, null);
+select * from t1;
+drop table if exists t1;
+create table t1(a int auto_increment, b bigint auto_increment);
+insert into t1 values(null, 2), (3, null), (null, null);
+select * from t1;
+insert into t1 values(100, 2), (null, null), (null, null);
+select * from t1;
+
+drop table if exists t1;
+create table t1(a int, b int, primary key(a));
+insert into t1 values(null, 1);
+
+drop table if exists t1;
+create table t1(a int, b int, primary key(a, b));
+insert into t1 values(null, 1);
+
+drop table if exists t1;
+create table t1(a int, b varchar(20), primary key(a, b));
+insert into t1 values(1, '2');
+insert into t1 values(1, '3');
+insert into t1 values(2, '2');
+insert into t1 values(2, '3');
+select * from t1;
+insert into t1 values(2, '3');
+
+drop table if exists t1;
+create table t1(a int, b int, c int);
+insert into t1 values(1, 2, 3) on duplicate key update a=5;
+insert into t1 values(1, 2, 3) on duplicate key update a=5, b=6, c=7;
+insert into t1 values(1, 2, 3) on duplicate key update a=values(b)+values(c);
+
+drop table if exists t1;
+create table t1(a int, primary key(b));
+create table t1(a int, b int, primary key(b, c));
+
+-- @bvt:issue#5790
+drop table if exists t1;
+create table t1(a int, b varchar(20), unique key(a));
+insert into t1 values(1, '1');
+insert into t1 values(2, '2');
+insert into t1 values(3, '3');
+insert into t1 values(4, '4');
+select * from t1;
+insert into t1 values(1, '1');
+insert into t1 values(null, '1');
+insert into t1 values(null, '1');
+
+drop table if exists t1;
+create table t1(a int, b varchar(20), unique key(a, b));
+insert into t1 values(1, '2');
+insert into t1 values(1, '3');
+insert into t1 values(2, '2');
+insert into t1 values(2, '3');
+select * from t1;
+insert into t1 values(2, '3');
+insert into t1 values(null, '1');
+insert into t1 values(null, '2');
+insert into t1 values(null, '2');
+-- @bvt:issue
+
+drop table if exists flush_logtail;
+create table flush_logtail(a int, b int);
+insert into flush_logtail values(1, 1);
+insert into flush_logtail values(2, 2);
+insert into flush_logtail values(3, 3);
+insert into flush_logtail values(4, 4);
+insert into flush_logtail values(5, 5);
+-- @separator:table
+select mo_ctl('dn', 'AddFaultPoint', 'enable_fault_injection');
+-- @separator:table
+select mo_ctl('dn', 'AddFaultPoint', 'flush_table_error.:::.echo.0.flush_table_fault');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'insert.flush_logtail');
+select * from flush_logtail;
+-- @separator:table
+select mo_ctl('dn', 'AddFaultPoint', 'disable_fault_injection');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'insert.flush_logtail');
+drop table if exists t1;
+create table t1 (a varchar(50));
+insert into t1 values("这是一个字节数超过五十的字符串，但是utf8没有超过");
+
+drop table if exists t1;
+create table t1 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key num_phone(col2),key num_id(col4));
+insert into t1 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
+
+# test cn-write-s3
+# 1. bulk insert test
+drop table if exists t;
+create table t(a int);
+insert into t values(1);
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+insert into t select * from t;
+select count(*) from t;
+# transaction test
+begin;
+insert into t select * from t;
+select count(*) from t;
+commit;
+select count(*) from t;
+drop table t;
+# 2.primary key test
+create table t(a int primary key);
+insert into t select * from generate_series(1,200000) g;
+select count(*) from t;
+# abort,duplicate key
+-- @pattern
+insert into t select * from t;
+# transaction test
+begin;
+-- @pattern
+insert into t select * from t;
+select count(*) from t;
+commit;
+select count(*) from t;
+# not-null test
+insert into t select null;
+drop table t;
+# 3.compiste primary key test
+-- @bvt:issue#5790
+create table t(a int,b int);
+create table temp(c int);
+insert into temp select * from generate_series(1,200000) g;
+insert into t select c,c from temp;
+select count(*) from t;
+# abort,duplicate key
+insert into t select * from t order by a, b;
+# transaction test
+begin;
+insert into t select * from t order by a, b;
+select count(*) from t;
+commit;
+select count(*) from t;
+# not-null test
+insert into t select null,null;
+drop table t;
+drop table temp;
+# 4.unique key test
+create table t(a int);
+insert into t select * from generate_series(1,200000) g;
+select count(*) from t;
+# abort,duplicate key
+insert into t select * from t order by a;
+# transaction test
+begin;
+insert into t select * from t order by a;
+select count(*) from t;
+commit;
+select count(*) from t;
+# not-null test
+insert into t select null;
+select count(*) from t;
+drop table t;
+# 5.auto increment test
+create table t(a int auto_increment,b int);
+insert into t(b) select * from generate_series(1,200000) g;
+select count(*) from t;
+select a from t where a > 199990;
+drop table t;
+# 6.all load goes through s3
+drop table if exists t1;
+create table t1(
+col1 tinyint,
+col2 smallint,
+col3 int,
+col4 bigint,
+col5 tinyint unsigned,
+col6 smallint unsigned,
+col7 int unsigned,
+col8 bigint unsigned
+);
+load data infile '$resources/load_data/integer_numbers_3.csv' into table t1;
+select * from t1;
+drop table t1;
+create database ssb;use ssb;
+create table t2(c1 int) cluster by c1;
+insert into t2 values(3),(5),(1),(4),(2);
+select * from t2;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'ssb.t2');
+select * from t2;
+drop table t2;
+create table t2(c1 int) cluster by c1;
+load data infile '$resources/load_data/integer.csv' into table t2;
+select * from t2;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'ssb.t2');
+select * from t2;
+drop table t2;
+create table t2(c1 int,c2 int) cluster by (c1,c2);
+load data infile '$resources/load_data/integer2.csv' into table t2;
+select * from t2;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'ssb.t2');
+select * from t2;
+drop table t2;
+drop database ssb;
+-- @bvt:issue

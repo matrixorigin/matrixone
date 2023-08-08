@@ -60,22 +60,22 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show columns from mo_tables;
 Field    Type    Null    Key    Default    Extra    Comment
-rel_id    BIGINT UNSIGNED(0)    YES    PRI    null        
-relname    VARCHAR(5000)    YES        null        
-reldatabase    VARCHAR(5000)    YES        null        
-reldatabase_id    BIGINT UNSIGNED(0)    YES        null        
-relpersistence    VARCHAR(5000)    YES        null        
-relkind    VARCHAR(5000)    YES        null        
-rel_comment    VARCHAR(5000)    YES        null        
-rel_createsql    TEXT(0)    YES        null        
-created_time    TIMESTAMP(0)    YES        null        
-creator    INT UNSIGNED(0)    YES        null        
-owner    INT UNSIGNED(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES        null        
-partitioned    TINYINT(0)    YES        null        
-partition_info    BLOB(0)    YES        null        
-viewdef    VARCHAR(5000)    YES        null        
-constraint    VARCHAR(5000)    YES        null        
+rel_id    BIGINT UNSIGNED(0)    YES    PRI    null
+relname    VARCHAR(5000)    YES        null
+reldatabase    VARCHAR(5000)    YES        null
+reldatabase_id    BIGINT UNSIGNED(0)    YES        null
+relpersistence    VARCHAR(5000)    YES        null
+relkind    VARCHAR(5000)    YES        null
+rel_comment    VARCHAR(5000)    YES        null
+rel_createsql    TEXT(0)    YES        null
+created_time    TIMESTAMP(0)    YES        null
+creator    INT UNSIGNED(0)    YES        null
+owner    INT UNSIGNED(0)    YES        null
+account_id    INT UNSIGNED(0)    YES        null
+partitioned    TINYINT(0)    YES        null
+partition_info    BLOB(0)    YES        null
+viewdef    VARCHAR(5000)    YES        null
+constraint    VARCHAR(5000)    YES        null
 rel_version    INT UNSIGNED(0)    YES        null
 catalog_version    INT UNSIGNED(0)    YES        null
 select datname, dat_createsql from mo_database;
@@ -84,7 +84,7 @@ system    create database system
 system_metrics    create database system_metrics
 information_schema    create database information_schema
 mysql    create database mysql
-mo_catalog    
+mo_catalog
 select relname from mo_tables where relname="sql_statement_total";
 relname
 sql_statement_total
@@ -140,6 +140,8 @@ delete from mo_catalog.mo_columns;
 internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_indexes;
 internal error: do not have privilege to execute the statement
+delete from mo_catalog.mo_table_partitions;
+internal error: do not have privilege to execute the statement
 drop database information_schema;
 internal error: do not have privilege to execute the statement
 drop database mo_catalog;
@@ -181,35 +183,70 @@ name    type    name    is_visible    hidden    comment    column_name    ordina
 deptno    UNIQUE    deptno    1    0        deptno    1    null
 desc mo_catalog.mo_indexes;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT UNSIGNED(64)    NO    PRI    null        
-table_id    BIGINT UNSIGNED(64)    NO        null        
-database_id    BIGINT UNSIGNED(64)    NO        null        
-name    VARCHAR(64)    NO        null        
-type    VARCHAR(11)    NO        null        
-is_visible    TINYINT(8)    NO        null        
-hidden    TINYINT(8)    NO        null        
-comment    VARCHAR(2048)    NO        null        
-column_name    VARCHAR(256)    NO    PRI    null        
-ordinal_position    INT UNSIGNED(32)    NO        null        
-options    TEXT(0)    YES        null        
-index_table_name    VARCHAR(5000)    YES        null        
+id    BIGINT UNSIGNED(64)    NO    PRI    null
+table_id    BIGINT UNSIGNED(64)    NO        null
+database_id    BIGINT UNSIGNED(64)    NO        null
+name    VARCHAR(64)    NO        null
+type    VARCHAR(11)    NO        null
+is_visible    TINYINT(8)    NO        null
+hidden    TINYINT(8)    NO        null
+comment    VARCHAR(2048)    NO        null
+column_name    VARCHAR(256)    NO    PRI    null
+ordinal_position    INT UNSIGNED(32)    NO        null
+options    TEXT(0)    YES        null
+index_table_name    VARCHAR(5000)    YES        null
+CREATE TABLE trp (
+id INT NOT NULL,
+fname VARCHAR(30),
+lname VARCHAR(30),
+hired DATE NOT NULL DEFAULT '1970-01-01',
+separated DATE NOT NULL DEFAULT '9999-12-31',
+job_code INT,
+store_id INT
+)
+PARTITION BY RANGE ( YEAR(separated) ) (
+PARTITION p0 VALUES LESS THAN (1991),
+PARTITION p1 VALUES LESS THAN (1996),
+PARTITION p2 VALUES LESS THAN (2001),
+PARTITION p3 VALUES LESS THAN MAXVALUE
+);
+select tbl.relname, part.number, part.name, part.description_utf8, part.comment, part.options, part.partition_table_name
+from mo_catalog.mo_tables tbl left join mo_catalog.mo_table_partitions part on tbl.rel_id = part.table_id
+where tbl.relname = 'trp';
+relname    number    name    description_utf8    comment    options    partition_table_name
+trp    1    p0    1991        null    %!%p0%!%trp
+trp    2    p1    1996        null    %!%p1%!%trp
+trp    3    p2    2001        null    %!%p2%!%trp
+trp    4    p3    MAXVALUE        null    %!%p3%!%trp
+desc mo_catalog.mo_table_partitions;
+Field    Type    Null    Key    Default    Extra    Comment
+table_id    BIGINT UNSIGNED(64)    NO    PRI    null
+database_id    BIGINT UNSIGNED(64)    NO        null
+number    SMALLINT UNSIGNED(16)    NO        null
+name    VARCHAR(64)    NO    PRI    null
+partition_type    VARCHAR(50)    NO        null
+partition_expression    VARCHAR(2048)    YES        null
+description_utf8    TEXT(0)    YES        null
+comment    VARCHAR(2048)    NO        null
+options    TEXT(0)    YES        null
+partition_table_name    VARCHAR(1024)    NO        null
 create account accx11 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
 name    type    name    is_visible    hidden    comment    column_name    ordinal_position    options
 desc mo_catalog.mo_indexes;
 Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT UNSIGNED(64)    NO    PRI    null        
-table_id    BIGINT UNSIGNED(64)    NO        null        
-database_id    BIGINT UNSIGNED(64)    NO        null        
-name    VARCHAR(64)    NO        null        
-type    VARCHAR(11)    NO        null        
-is_visible    TINYINT(8)    NO        null        
-hidden    TINYINT(8)    NO        null        
-comment    VARCHAR(2048)    NO        null        
-column_name    VARCHAR(256)    NO    PRI    null        
-ordinal_position    INT UNSIGNED(32)    NO        null        
-options    TEXT(0)    YES        null        
-index_table_name    VARCHAR(5000)    YES        null        
+id    BIGINT UNSIGNED(64)    NO    PRI    null
+table_id    BIGINT UNSIGNED(64)    NO        null
+database_id    BIGINT UNSIGNED(64)    NO        null
+name    VARCHAR(64)    NO        null
+type    VARCHAR(11)    NO        null
+is_visible    TINYINT(8)    NO        null
+hidden    TINYINT(8)    NO        null
+comment    VARCHAR(2048)    NO        null
+column_name    VARCHAR(256)    NO    PRI    null
+ordinal_position    INT UNSIGNED(32)    NO        null
+options    TEXT(0)    YES        null
+index_table_name    VARCHAR(5000)    YES        null
 drop account if exists account1;
 drop account if exists inner_account;
 drop account if exists accx11;
