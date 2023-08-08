@@ -2099,8 +2099,33 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
 			}
 		} else {
-			for i, sel := range sels {
-				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+			switch tlen {
+			case 8:
+				for i, sel := range sels {
+					p1 := unsafe.Pointer(&v.data[(oldLen+i)*tlen])
+					p2 := unsafe.Pointer(&w.data[int(sel)*tlen])
+					*(*int64)(p1) = *(*int64)(p2)
+				}
+			case 4:
+				for i, sel := range sels {
+					p1 := unsafe.Pointer(&v.data[(oldLen+i)*tlen])
+					p2 := unsafe.Pointer(&w.data[int(sel)*tlen])
+					*(*int32)(p1) = *(*int32)(p2)
+				}
+			case 2:
+				for i, sel := range sels {
+					p1 := unsafe.Pointer(&v.data[(oldLen+i)*tlen])
+					p2 := unsafe.Pointer(&w.data[int(sel)*tlen])
+					*(*int16)(p1) = *(*int16)(p2)
+				}
+			case 1:
+				for i, sel := range sels {
+					v.data[(oldLen+i)*tlen] = w.data[int(sel)*tlen]
+				}
+			default:
+				for i, sel := range sels {
+					copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+				}
 			}
 		}
 	}
