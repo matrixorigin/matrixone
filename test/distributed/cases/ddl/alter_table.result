@@ -401,7 +401,6 @@ invalid input: can't add/drop column for partition table now
 drop table t5;
 create table t5(a int, b int) cluster by a;
 alter table t5 add column c int;
-invalid input: can't add/drop column for cluster table now
 alter table t5 drop column a;
-invalid input: can't add/drop column for cluster table now
+internal error: drop a column with constraint
 drop table t5;
