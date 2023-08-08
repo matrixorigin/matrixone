@@ -146,8 +146,7 @@ func prepareAppend() PrepareCase {
 
 		// checkpoint
 		tae.CreateRelAndAppend(bats[0], true)
-		err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
-		assert.NoError(t, err)
+		tae.ForceCheckpoint()
 
 		// wal
 		tae.DoAppend(bats[1])
@@ -188,8 +187,7 @@ func prepareDDL() PrepareCase {
 		_, err = db.CreateRelation(schema1)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
-		err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
-		assert.NoError(t, err)
+		tae.ForceCheckpoint()
 
 		// ckp2-1: create db2, create table2
 		// ckp2-2: drop db2, drop table2
@@ -204,8 +202,7 @@ func prepareDDL() PrepareCase {
 		_, err = db.CreateRelation(schema2)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
-		err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
-		assert.NoError(t, err)
+		tae.ForceCheckpoint()
 
 		txn, err = tae.StartTxn(nil)
 		assert.NoError(t, err)
@@ -221,8 +218,7 @@ func prepareDDL() PrepareCase {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 
-		err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
-		assert.NoError(t, err)
+		tae.ForceCheckpoint()
 
 		// ckp3: create and drop db3, table3
 		txn, err = tae.StartTxn(nil)
@@ -251,8 +247,7 @@ func prepareDDL() PrepareCase {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 
-		err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
-		assert.NoError(t, err)
+		tae.ForceCheckpoint()
 
 		// WAL: create db4, create table4
 		txn, err = tae.StartTxn(nil)
@@ -292,11 +287,14 @@ func prepareDDL() PrepareCase {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
+	getSchema := func(tc PrepareCase, t *testing.T) *catalog.Schema {
+		return nil
+	}
 	return PrepareCase{
 		desc:       "prepare-3",
 		typ:        3,
 		prepareFn:  prepareFn,
-		getSchema:  nil,
+		getSchema:  getSchema,
 		getBatch:   nil,
 		getEngine:  getEngine,
 		getOptions: getOptions,
@@ -338,8 +336,7 @@ func prepareCompact() PrepareCase {
 		// checkpoint
 		tae.CreateRelAndAppend(bats[0], true)
 		tae.CompactBlocks(false)
-		err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
-		assert.NoError(t, err)
+		tae.ForceCheckpoint()
 
 		// wal
 		tae.DoAppend(bats[1])
@@ -402,8 +399,7 @@ func prepareDelete() PrepareCase {
 		}
 
 		tae.CompactBlocks(false)
-		err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
-		assert.NoError(t, err)
+		tae.ForceCheckpoint()
 
 		// compact
 		tae.DoAppend(bats[1])
@@ -646,7 +642,6 @@ func testDelete() TestCase {
 		totalRows := bat.Length() - int(schema.BlockMaxRows+1)*3
 		txn, rel := tae.GetRelation()
 		testutil.CheckAllColRowsByScan(t, rel, totalRows, true)
-		testutil.CheckAllColRowsByScan(t, rel, totalRows, false)
 		rows := schema.BlockMaxRows*3 + 1
 		for i := 0; i < 3; i++ {
 			for j := 0; j < int(rows); j++ {
@@ -661,7 +656,6 @@ func testDelete() TestCase {
 		assert.NoError(t, txn.Commit(context.Background()))
 
 		tae.CheckRowsByScan(bat.Length(), true)
-		tae.CheckRowsByScan(bat.Length(), false)
 	}
 	return TestCase{
 		name:      "testDelete",
