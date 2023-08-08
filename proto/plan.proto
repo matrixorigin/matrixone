@@ -369,11 +369,13 @@ message PartitionByDef {
 message PartitionExpr {
 	Expr expr = 1;
 	string expr_str = 2;
+	// string expr_fmt_str = 3;
 }
 
 message PartitionColumns {
 	repeated Expr columns = 1;
 	repeated string partition_columns = 2;
+	// repeated string partition_fmt_columns = 3;
 }
 
 message PartitionItem {
@@ -481,13 +483,13 @@ message Stats {
 }
 
 message RowsetExpr {
-    int32 row_pos = 1;
-    int32 pos = 2;
-    Expr expr = 3;
+	int32 row_pos = 1;
+	int32 pos = 2;
+	Expr expr = 3;
 }
 
 message ColData {
-    repeated RowsetExpr data = 1;
+	repeated RowsetExpr data = 1;
 }
 
 message RowsetData {
@@ -568,18 +570,18 @@ message ReplaceCtx {
 }
 
 message AnalyzeInfo {
-    int64 input_rows = 1;
-    int64 output_rows = 2;
-    int64 input_size = 3;
-    int64 output_size = 4;
-    int64 time_consumed = 5;
-    int64 memory_size = 6;
-    int64 wait_time_consumed = 7;
-    int64 diskIO = 8;
-    int64 s3IO_byte = 9;
-    int64 s3IO_input_count = 10;
-    int64 s3IO_output_count = 11;
-    int64 networkIO = 12;
+	int64 input_rows = 1;
+	int64 output_rows = 2;
+	int64 input_size = 3;
+	int64 output_size = 4;
+	int64 time_consumed = 5;
+	int64 memory_size = 6;
+	int64 wait_time_consumed = 7;
+	int64 diskIO = 8;
+	int64 s3IO_byte = 9;
+	int64 s3IO_input_count = 10;
+	int64 s3IO_output_count = 11;
+	int64 networkIO = 12;
 	int64 scanTime = 13;
 	int64 insertTime = 14;
 }
@@ -708,7 +710,7 @@ message Node {
 
 	repeated int32 binding_tags = 24;
 
-  AnalyzeInfo analyze_info = 25;
+	AnalyzeInfo analyze_info = 25;
 
 	repeated Expr tbl_func_expr_list = 26;
 
@@ -734,16 +736,16 @@ message Node {
 	repeated RuntimeFilterSpec runtime_filter_probe_list = 40;
 	repeated RuntimeFilterSpec runtime_filter_build_list = 41;
 
-  bytes uuid = 42;
+	bytes uuid = 42;
 }
 
 message LockTarget {
-  uint64 table_id           	= 1;
-  int32 primary_col_idx_in_bat  = 2;
-  Type primary_col_typ          = 3;
-  int32 refresh_ts_idx_in_bat   = 4;
-  int32 filter_col_idx_in_bat   = 5;
-  bool lock_table 				= 6;
+	uint64 table_id           	= 1;
+	int32 primary_col_idx_in_bat  = 2;
+	Type primary_col_typ          = 3;
+	int32 refresh_ts_idx_in_bat   = 4;
+	int32 filter_col_idx_in_bat   = 5;
+	bool lock_table 				= 6;
 	bool is_partition_table = 7;
 	repeated uint64 partition_table_ids = 8;
 	bool                block   = 9;
@@ -1232,7 +1234,7 @@ message MetadataScanInfo {
 	enum MetadataScanInfoType {
 		COL_NAME      = 0;
 		BLOCK_ID      = 1;
-		OBJECT_NAME = 2; 
+		OBJECT_NAME = 2;
 		ENTRY_STATE   = 3;
 		SORTED        = 4;
 		IS_HIDDEN = 5;
@@ -1248,7 +1250,7 @@ message MetadataScanInfo {
 		ORIGIN_SIZE   = 15;
 		MIN           = 16;
 		MAX           =  17;
-	} 
+	}
 	string ColName  = 1;
 	bytes BlockId = 2;
 	string ObjectName = 3;

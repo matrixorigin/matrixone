@@ -40,10 +40,12 @@ type MOZapLog struct {
 	SpanContext *trace.SpanContext `json:"span"`
 	Timestamp   time.Time          `json:"timestamp"`
 	LoggerName  string
-	Caller      string `json:"caller"` // like "util/trace/trace.go:666"
-	Message     string `json:"message"`
-	Extra       string `json:"extra"` // like json text
-	Stack       string `json:"stack"`
+	Caller      string   `json:"caller"` // like "util/trace/trace.go:666"
+	Message     string   `json:"message"`
+	Extra       string   `json:"extra"` // like json text
+	Stack       string   `json:"stack"`
+	SessionID   [16]byte `json:"session_id"`
+	StatementID [16]byte `json:"statement_id"`
 }
 
 var logPool = sync.Pool{
@@ -66,7 +68,13 @@ func (m *MOZapLog) GetName() string {
 // itemName: 8
 // nodeInfo: 40 /*36+4*/
 // spanInfo: 36+16
-const deltaContentLength = int64(26 + 5 + 8 + 40 + 36 + 16)
+const (
+	deltaContentLength = int64(26 + 5 + 8 + 40 + 36 + 16)
+
+	session_id = "session_id"
+
+	statement_id = "statement_id"
+)
 
 // Size 计算近似值
 func (m *MOZapLog) Size() int64 {
@@ -104,6 +112,12 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(messageCol, table.StringField(m.Message))
 	row.SetColumnVal(extraCol, table.StringField(m.Extra))
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
+	if m.SessionID != [16]byte{} {
+		row.SetColumnVal(sessionIDCol, table.UuidField(m.SessionID[:]))
+	}
+	if m.StatementID != [16]byte{} {
+		row.SetColumnVal(sessionIDCol, table.UuidField(m.SessionID[:]))
+	}
 }
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
@@ -138,6 +152,14 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 				endIdx--
 			}
 			continue
+		}
+
+		if v.Type == zapcore.ByteStringType {
+			if v.Key == session_id {
+				copy(log.SessionID[:], v.Interface.([]byte))
+			} else if v.Key == statement_id {
+				copy(log.StatementID[:], v.Interface.([]byte))
+			}
 		}
 		if idx == endIdx {
 			break

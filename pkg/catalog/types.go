@@ -87,6 +87,9 @@ const (
 	// Non-hard-coded data dictionary table
 	MO_INDEXES = "mo_indexes"
 
+	// MO_TABLE_PARTITIONS Data dictionary table of record table partition
+	MO_TABLE_PARTITIONS = "mo_table_partitions"
+
 	// MOTaskDB mo task db name
 	MOTaskDB = "mo_task"
 )
@@ -337,7 +340,7 @@ type BlockInfo struct {
 	CommitTs   types.TS
 	SegmentID  types.Uuid
 
-	//TODO::putting them here is a bad idea, remove
+	//TODO:: putting them here is a bad idea, remove
 	//this block can be distributed to remote nodes.
 	CanRemote    bool
 	PartitionNum int
