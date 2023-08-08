@@ -414,7 +414,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 	case types.T_int8:
 		a := types.DecodeInt8(zm.GetSumBuf())
 		b := types.DecodeInt8(v)
-		sum, overflow := addi(a, b, func(s int64) bool { return (s > int64(a)) != (b > 0) })
+		sum, overflow := addi(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0
@@ -424,7 +424,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 	case types.T_int16:
 		a := types.DecodeInt16(zm.GetSumBuf())
 		b := types.DecodeInt16(v)
-		sum, overflow := addi(a, b, func(s int64) bool { return (s > int64(a)) != (b > 0) })
+		sum, overflow := addi(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0
@@ -434,7 +434,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 	case types.T_int32:
 		a := types.DecodeInt32(zm.GetSumBuf())
 		b := types.DecodeInt32(v)
-		sum, overflow := addi(a, b, func(s int64) bool { return (s > int64(a)) != (b > 0) })
+		sum, overflow := addi(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0
@@ -444,7 +444,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 	case types.T_int64:
 		a := types.DecodeInt64(zm.GetSumBuf())
 		b := types.DecodeInt64(v)
-		sum, overflow := addi(a, b, func(s int64) bool { return (s > a) != (b > 0) })
+		sum, overflow := addi(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0
@@ -454,47 +454,47 @@ func (zm ZM) updateSumFixed(v []byte) {
 	case types.T_uint8:
 		a := types.DecodeUint8(zm.GetSumBuf())
 		b := types.DecodeUint8(v)
-		sum, overflow := addi(a, b, func(s int64) bool { return (s > int64(a)) != (b > 0) })
+		sum, overflow := addu(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0
 		}
-		copy(zm.GetSumBuf(), types.EncodeInt64(&sum))
+		copy(zm.GetSumBuf(), types.EncodeUint64(&sum))
 		return
 	case types.T_uint16:
 		a := types.DecodeUint16(zm.GetSumBuf())
 		b := types.DecodeUint16(v)
-		sum, overflow := addi(a, b, func(s int64) bool { return (s > int64(a)) != (b > 0) })
+		sum, overflow := addu(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0
 		}
-		copy(zm.GetSumBuf(), types.EncodeInt64(&sum))
+		copy(zm.GetSumBuf(), types.EncodeUint64(&sum))
 		return
 	case types.T_uint32:
 		a := types.DecodeUint32(zm.GetSumBuf())
 		b := types.DecodeUint32(v)
-		sum, overflow := addi(a, b, func(s int64) bool { return (s > int64(a)) != (b > 0) })
+		sum, overflow := addu(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0
 		}
-		copy(zm.GetSumBuf(), types.EncodeInt64(&sum))
+		copy(zm.GetSumBuf(), types.EncodeUint64(&sum))
 		return
 	case types.T_uint64:
 		a := types.DecodeUint64(zm.GetSumBuf())
 		b := types.DecodeUint64(v)
-		sum, overflow := addi(a, b, func(s int64) bool { return (s > int64(a)) != (b > 0) })
+		sum, overflow := addu(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0
 		}
-		copy(zm.GetSumBuf(), types.EncodeInt64(&sum))
+		copy(zm.GetSumBuf(), types.EncodeUint64(&sum))
 		return
 	case types.T_float32:
 		a := types.DecodeFloat32(zm.GetSumBuf())
 		b := types.DecodeFloat32(v)
-		sum, overflow := addf(a, b, func(s float64) bool { return math.IsInf(s, 0) })
+		sum, overflow := addf(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0
@@ -504,7 +504,7 @@ func (zm ZM) updateSumFixed(v []byte) {
 	case types.T_float64:
 		a := types.DecodeFloat64(zm.GetSumBuf())
 		b := types.DecodeFloat64(v)
-		sum, overflow := addf(a, b, func(s float64) bool { return math.IsInf(s, 0) })
+		sum, overflow := addf(a, b)
 		if overflow {
 			zm.SetOverflow()
 			sum = 0

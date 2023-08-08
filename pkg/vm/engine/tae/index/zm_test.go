@@ -360,6 +360,7 @@ func TestZMSumOverflow(t *testing.T) {
 	t.Log(zm4.String())
 	require.Equal(t, decimal64, zm4.GetSum())
 	UpdateZMAny(zm4, types.Decimal64(1))
+	t.Log(zm4.String())
 	require.Equal(t, types.Decimal64(0), zm4.GetSum())
 	UpdateZMAny(zm4, types.Decimal64(1))
 	require.Equal(t, types.Decimal64(0), zm4.GetSum())
