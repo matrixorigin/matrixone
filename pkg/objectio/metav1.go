@@ -23,8 +23,7 @@ func buildObjectMetaV1(count uint16) objectMetaV1 {
 }
 
 func (o objectMetaV1) MustGetMeta(metaType DataMetaType) ObjectDataMeta {
-	//TODO implement me
-	panic("implement me")
+	return ObjectDataMeta(o)
 }
 
 func (o objectMetaV1) HeaderLength() uint32 {

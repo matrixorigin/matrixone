@@ -697,6 +697,7 @@ func LoadCheckpointEntries(
 	readers := make([]*blockio.BlockReader, len(locationsAndVersions)/2)
 	objectLocations := make([]objectio.Location, len(locationsAndVersions)/2)
 	versions := make([]uint32, len(locationsAndVersions)/2)
+	locations := make([]objectio.Location, len(locationsAndVersions)/2)
 	for i := 0; i < len(locationsAndVersions); i += 2 {
 		key := locationsAndVersions[i]
 		version, err := strconv.ParseUint(locationsAndVersions[i+1], 10, 32)
@@ -707,6 +708,7 @@ func LoadCheckpointEntries(
 		if err != nil {
 			return nil, nil, err
 		}
+		locations[i/2] = location
 		reader, err := blockio.NewObjectReader(fs, location)
 		if err != nil {
 			return nil, nil, err
@@ -730,23 +732,22 @@ func LoadCheckpointEntries(
 	}
 
 	closeCBs := make([]func(), 0)
-	var bats []*batch.Batch
+	bats := make([][]*batch.Batch, len(locationsAndVersions)/2)
 	var err error
 	for i, data := range datas {
-		bats, err = data.ReadFromData(ctx, tableID, readers[i], versions[i], mp)
+		var bat []*batch.Batch
+		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
 			return nil, closeCBs, err
 		}
-		if len(bats) > 0 {
-			break
-		}
+		bats[i] = bat
 	}
 
 	entries := make([]*api.Entry, 0)
 	for i := range objectLocations {
 		data := datas[i]
-		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats)
+		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
 			return nil, closeCBs, err
 		}
