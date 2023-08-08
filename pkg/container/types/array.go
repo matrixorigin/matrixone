@@ -121,7 +121,7 @@ func StringToArray[T RealNumbers](input string) ([]T, error) {
 	return result, nil
 }
 
-func CompareArray[T RealNumbers](left, right []T) int64 {
+func CompareArray[T RealNumbers](left, right []T) int {
 
 	if len(left) != len(right) {
 		//TODO: check this with Min.
