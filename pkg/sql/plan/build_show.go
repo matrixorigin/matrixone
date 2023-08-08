@@ -255,6 +255,32 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += ")"
 
+	var comment string
+	var partition string
+	for _, def := range tableDef.Defs {
+		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+			for _, kv := range proDef.Properties.Properties {
+				if kv.Key == catalog.SystemRelAttr_Comment {
+					comment = " COMMENT='" + kv.Value + "'"
+				}
+			}
+		}
+	}
+
+	if tableDef.Partition != nil {
+		partition = ` ` + tableDef.Partition.PartitionMsg
+	}
+
+	createStr += comment
+	createStr += partition
+
+	/**
+	Fix issue: https://github.com/matrixorigin/MO-Cloud/issues/1028#issuecomment-1667642384
+	Based on the grammar of the 'create table' in the file pkg/sql/parsers/dialect/mysql/mysql_sql.y
+		https://github.com/matrixorigin/matrixone/blob/68db7260e411e5a4541eaccf78ca9bb57e810f24/pkg/sql/parsers/dialect/mysql/mysql_sql.y#L6076C7-L6076C7
+		https://github.com/matrixorigin/matrixone/blob/68db7260e411e5a4541eaccf78ca9bb57e810f24/pkg/sql/parsers/dialect/mysql/mysql_sql.y#L6097
+	The 'cluster by' is after the 'partition by' and the 'table options', so we need to add the 'cluster by' string after the 'partition by' and the 'table options'.
+	*/
 	if tableDef.ClusterBy != nil {
 		clusterby := " CLUSTER BY ("
 		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
@@ -274,25 +300,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		clusterby += ")"
 		createStr += clusterby
 	}
-
-	var comment string
-	var partition string
-	for _, def := range tableDef.Defs {
-		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
-			for _, kv := range proDef.Properties.Properties {
-				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
-				}
-			}
-		}
-	}
-
-	if tableDef.Partition != nil {
-		partition = ` ` + tableDef.Partition.PartitionMsg
-	}
-
-	createStr += comment
-	createStr += partition
 
 	if tableDef.TableType == catalog.SystemExternalRel {
 		param := tree.ExternParam{}
