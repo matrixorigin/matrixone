@@ -2306,7 +2306,11 @@ func (v *Vector) String() string {
 				return col[0]
 			}
 		}
-		return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+		if v.nsp.Any() {
+			return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+		} else {
+			return fmt.Sprintf("%v", col)
+		}
 	default:
 		panic("vec to string unknown types.")
 	}
@@ -2687,7 +2691,11 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 			return fmt.Sprintf("%v", col[0])
 		}
 	}
-	return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+	if v.nsp.Any() {
+		return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+	} else {
+		return fmt.Sprintf("%v", col)
+	}
 }
 
 // Window returns a "window" into the Vec.

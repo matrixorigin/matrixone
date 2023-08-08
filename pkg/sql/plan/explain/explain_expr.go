@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -156,7 +157,9 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			}
 		}
 	case *plan.Expr_Bin:
-		buf.WriteString("binary data")
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(exprImpl.Bin.Data)
+		buf.WriteString(vec.String())
 	default:
 		panic("unsupported expr")
 	}
