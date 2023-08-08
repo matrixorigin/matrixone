@@ -114,9 +114,9 @@ type IOEntry struct {
 	ReaderForWrite io.Reader
 
 	// When reading, if the ToCacheData field is not nil, the returning object's byte slice will be set to this field
-	// Data, WriterForRead, ReadCloserForRead may be empty if ObjectBytes is not null
-	// if ToCacheData is provided, caller should always read ObjectBytes instead of Data, WriterForRead or ReadCloserForRead
-	ObjectBytes []byte
+	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
+	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
+	CachedData []byte
 
 	// ToCacheData constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns

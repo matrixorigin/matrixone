@@ -66,7 +66,7 @@ func TestCacheExample(t *testing.T) {
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 
-	value := vec.Entries[0].ObjectBytes
+	value := vec.Entries[0].CachedData
 	assert.Equal(t, []byte("42"), value)
 
 }

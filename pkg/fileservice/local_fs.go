@@ -368,7 +368,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].ObjectBytes = bs
+				vector.Entries[i].CachedData = bs
 				if entry.Size > 0 && cr.N != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
@@ -423,7 +423,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 						if err != nil {
 							return err
 						}
-						vector.Entries[i].ObjectBytes = bs
+						vector.Entries[i].CachedData = bs
 						return nil
 					},
 				}
@@ -465,7 +465,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setObjectBytesFromData(); err != nil {
+			if err := entry.setCachedData(); err != nil {
 				return err
 			}
 

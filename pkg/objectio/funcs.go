@@ -48,7 +48,7 @@ func ReadExtent(
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
-	v = ioVec.Entries[0].ObjectBytes
+	v = ioVec.Entries[0].CachedData
 	return
 }
 
@@ -213,7 +213,7 @@ func ReadOneBlockWithMeta(
 				if err != nil {
 					return
 				}
-				filledEntries[i].ObjectBytes = buf.Bytes()
+				filledEntries[i].CachedData = buf.Bytes()
 			}
 		}
 		ioVec.Entries = filledEntries

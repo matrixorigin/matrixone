@@ -660,7 +660,7 @@ func testFileService(
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
 
-		err = m.Unmarshal(vec.Entries[0].ObjectBytes)
+		err = m.Unmarshal(vec.Entries[0].CachedData)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(m.M))
 		assert.Equal(t, int64(42), m.M[42])

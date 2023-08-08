@@ -133,7 +133,7 @@ func (m *MemCache) Read(
 		bs, ok := m.objCache.Get(ctx, key, vector.Preloading)
 		numRead++
 		if ok {
-			vector.Entries[i].ObjectBytes = bs
+			vector.Entries[i].CachedData = bs
 			vector.Entries[i].done = true
 			vector.Entries[i].fromCache = m
 			numHit++
@@ -163,7 +163,7 @@ func (m *MemCache) Update(
 	}
 
 	for _, entry := range vector.Entries {
-		if entry.ObjectBytes == nil {
+		if entry.CachedData == nil {
 			continue
 		}
 		if entry.fromCache == m {
@@ -176,7 +176,7 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		m.objCache.Set(ctx, key, entry.ObjectBytes, vector.Preloading)
+		m.objCache.Set(ctx, key, entry.CachedData, vector.Preloading)
 
 	}
 	return nil

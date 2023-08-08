@@ -135,7 +135,7 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 	}
 }
 
-func (e *IOEntry) setObjectBytesFromData() error {
+func (e *IOEntry) setCachedData() error {
 	if e.ToCacheData == nil {
 		return nil
 	}
@@ -146,7 +146,7 @@ func (e *IOEntry) setObjectBytesFromData() error {
 	if err != nil {
 		return err
 	}
-	e.ObjectBytes = bs
+	e.CachedData = bs
 	return nil
 }
 
@@ -173,7 +173,7 @@ func (e *IOEntry) ReadFromOSFile(file *os.File) error {
 	if e.ReadCloserForRead != nil {
 		*e.ReadCloserForRead = io.NopCloser(bytes.NewReader(e.Data))
 	}
-	if err := e.setObjectBytesFromData(); err != nil {
+	if err := e.setCachedData(); err != nil {
 		return err
 	}
 
