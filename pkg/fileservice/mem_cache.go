@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
@@ -65,7 +65,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 			}
 		}
 
-		o.cache = lruobjcache.New[CacheKey, Bytes](capacity, postSetFn, postEvictFn)
+		o.cache = lrucache.New[CacheKey, Bytes](capacity, postSetFn, postEvictFn)
 	}
 }
 

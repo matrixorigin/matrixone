@@ -17,7 +17,7 @@ package objectio
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"sync"
 )
@@ -26,16 +26,16 @@ type CacheConfig struct {
 	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
 }
 
-var metaCache *lruobjcache.LRU[ObjectNameShort, fileservice.Bytes]
+var metaCache *lrucache.LRU[ObjectNameShort, fileservice.Bytes]
 var onceInit sync.Once
 
 func init() {
-	metaCache = lruobjcache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil)
+	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = lruobjcache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil)
+		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil)
 	})
 }
 

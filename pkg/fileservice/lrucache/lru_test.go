@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lruobjcache
+package lrucache
 
 import (
 	"context"
@@ -31,7 +31,7 @@ func TestLRU(t *testing.T) {
 	_, ok = l.kv[2]
 	assert.False(t, ok)
 	val, _ := l.Get(ctx, 1, false)
-	assert.Equal(t, []byte{42}, val)
+	assert.Equal(t, Bytes([]byte{42}), val)
 
 	l.Set(ctx, 2, []byte{43}, false)
 	_, ok = l.kv[1]
@@ -39,7 +39,7 @@ func TestLRU(t *testing.T) {
 	_, ok = l.kv[2]
 	assert.True(t, ok)
 	val, _ = l.Get(ctx, 2, false)
-	assert.Equal(t, []byte{43}, val)
+	assert.Equal(t, Bytes([]byte{43}), val)
 }
 
 func TestLRUCallbacks(t *testing.T) {
