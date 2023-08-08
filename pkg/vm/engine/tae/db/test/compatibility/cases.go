@@ -16,6 +16,7 @@ package compatibility
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,22 +30,14 @@ import (
 )
 
 func init() {
-	PrepareCaseRegister(makePrepare1())
-	TestCaseRegister(makeTest1())
+	PrepareCaseRegister(makePrepare1(1, "prepare-1"))
+	TestCaseRegister(makeTest1(1, "test-1", "prepare-1=>test-1"))
 }
 
-func initPrepareTest(pc PrepareCase, opts *options.Options, t *testing.T) *testutil.TestEngine {
-	dir, err := InitPrepareDirByType(pc.typ)
-	assert.NoError(t, err)
-	ctx := context.Background()
-	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
-	return tae
-}
-
-func makePrepare1() PrepareCase {
+func makePrepare1(id int, desc string) PrepareCase {
 	getSchema := func(tc PrepareCase, t *testing.T) *catalog.Schema {
 		schema := catalog.MockSchemaAll(18, 13)
-		schema.Name = "test-1"
+		schema.Name = fmt.Sprintf("test-%d", tc.id)
 		schema.BlockMaxRows = 10
 		schema.SegmentMaxBlocks = 2
 		return schema
@@ -58,15 +51,9 @@ func makePrepare1() PrepareCase {
 		opts := config.WithLongScanAndCKPOpts(nil)
 		return opts
 	}
-	getEngine := func(tc PrepareCase, t *testing.T) *testutil.TestEngine {
-		opts := tc.getOptions(tc, t)
-		e := initPrepareTest(tc, opts, t)
-		e.BindSchema(getSchema(tc, t))
-		return e
-	}
 
 	prepareFn := func(tc PrepareCase, t *testing.T) {
-		tae := tc.getEngine(tc, t)
+		tae := tc.GetEngine(t)
 		defer tae.Close()
 
 		schema := tc.getSchema(tc, t)
@@ -90,34 +77,19 @@ func makePrepare1() PrepareCase {
 		_ = txn.Rollback(context.Background())
 	}
 	return PrepareCase{
-		desc:       "prepare-1",
-		typ:        1,
+		desc:       desc,
+		id:         id,
 		prepareFn:  prepareFn,
 		getSchema:  getSchema,
 		getBatch:   getBatch,
-		getEngine:  getEngine,
 		getOptions: getOptions,
 	}
 }
 
-func initTestEngine(tc TestCase, t *testing.T) *testutil.TestEngine {
-	pc := GetPrepareCase(tc.dependsOn)
-	opts := pc.getOptions(pc, t)
-	dir, err := InitTestCaseExecuteDir(tc.name)
-	assert.NoError(t, err)
-	err = CopyDir(GetPrepareDirByType(pc.typ), dir)
-	assert.NoError(t, err)
-	ctx := context.Background()
-	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
-	tae.BindSchema(pc.getSchema(pc, t))
-	return tae
-}
-
-func makeTest1() TestCase {
+func makeTest1(dependsOn int, name, desc string) TestCase {
 	testFn := func(tc TestCase, t *testing.T) {
 		pc := GetPrepareCase(tc.dependsOn)
-		tae := initTestEngine(tc, t)
-		defer tae.Close()
+		tae := tc.GetEngine(t)
 
 		bat := pc.getBatch(pc, t)
 		defer bat.Close()
@@ -147,9 +119,9 @@ func makeTest1() TestCase {
 		_ = txn.Rollback(context.Background())
 	}
 	return TestCase{
-		name:      "test-1",
-		desc:      "test-1",
-		dependsOn: 1,
+		name:      name,
+		desc:      desc,
+		dependsOn: dependsOn,
 		testFn:    testFn,
 	}
 }
