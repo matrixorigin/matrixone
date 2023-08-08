@@ -52,6 +52,20 @@ var (
 			primary key(id, column_name)
 		);`, catalog.MO_CATALOG, catalog.MO_INDEXES),
 
+		fmt.Sprintf(`CREATE TABLE %s.%s (
+			  table_id bigint unsigned NOT NULL,
+			  database_id bigint unsigned not null,
+			  number smallint unsigned NOT NULL,
+			  name varchar(64) NOT NULL,
+    		  partition_type varchar(50) NOT NULL,
+              partition_expression varchar(2048) NULL,
+			  description_utf8 text,
+			  comment varchar(2048) NOT NULL,
+			  options text,
+			  partition_table_name varchar(1024) NOT NULL,
+    		  PRIMARY KEY table_id (table_id, name)
+			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS),
+
 		fmt.Sprintf(`create table %s.%s (
 			table_id   bigint unsigned, 
 			col_name   varchar(770), 

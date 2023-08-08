@@ -14,6 +14,8 @@
 
 package plan
 
+import "bytes"
+
 const (
 	SystemExternalRel = "e"
 )
@@ -73,4 +75,28 @@ func (m *Default) UnmarshalBinary(data []byte) error {
 
 func (m CreateTable) IsSystemExternalRel() bool {
 	return m.TableDef.TableType == SystemExternalRel
+}
+
+func (p *PartitionByDef) GenPartitionExprString() string {
+	switch p.Type {
+	case PartitionType_HASH, PartitionType_LINEAR_HASH,
+		PartitionType_RANGE, PartitionType_LIST:
+		return p.PartitionExpr.ExprStr
+	case PartitionType_KEY, PartitionType_LINEAR_KEY,
+		PartitionType_LIST_COLUMNS, PartitionType_RANGE_COLUMNS:
+		partitionColumns := p.PartitionColumns
+		buf := bytes.NewBuffer(make([]byte, 0, 128))
+
+		for i, column := range partitionColumns.PartitionColumns {
+			if i == 0 {
+				buf.WriteString(column)
+			} else {
+				buf.WriteString(",")
+				buf.WriteString(column)
+			}
+		}
+		return buf.String()
+	default:
+		return ""
+	}
 }
