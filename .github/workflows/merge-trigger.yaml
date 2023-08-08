@@ -337,6 +337,164 @@ jobs:
              ${{ github.workspace }}/reports
           retention-days: 7
 
+ customer_test:
+    if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
+    name: MO CHECKIN CUSTOMER TEST
+    runs-on: arm64-runner
+    needs: [setup_mo_test_env,bvt_test]
+    steps:
+      - name: Clone mo-night-regression Repo
+        if: ${{ always() && !cancelled() }}
+        uses: actions/checkout@v3
+        with:
+          repository: matrixorigin/mo-nightly-regression
+          token: ${{secrets.TOKEN_ACTION}}
+          path: ./mo-nightly-regression
+          ref: main
+      - run: |
+          cd mo-nightly-regression/tools/mo-regression-test
+          mv golden golden_full
+          cp -rp golden_sample golden
+          
+      - name: Prepare Tools
+        run: |
+          sudo apt-get update && sudo apt-get install awscli -y
+          sudo apt-get install -y ca-certificates curl pip mariadb-client
+      - name: Prepare Python env 
+        run: | 
+          cat > requirements.txt <<EOF
+          func-timeout==4.3.5
+          numpy==1.24.2
+          pandas==1.5.3
+          PyMySQL==1.0.2
+          python-dateutil==2.8.2
+          PyYAML==6.0
+          six==1.16.0
+          DBUtils==1.3
+          pytz==2023.3
+          EOF
+          python -m pip install -r ./requirements.txt
+      - name: Prepare AWS Config
+        run: |
+           aws configure<<EOF
+           ${{ secrets.AWS_ACCESSKEY_ID }}
+           ${{ secrets.AWS_SECRETACCESS_KEY }}
+           us-west-2
+           json
+           exit
+           EOF
+      
+      - name: Create Account for Test
+        id: account_for_custom
+        run: |
+          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account customer_test admin_name = 'admin' identified by '111' comment 'for customer test';"
+          echo "customer_account=customer_test:admin" >> $GITHUB_OUTPUT
+          echo "customer_password=111" >> $GITHUB_OUTPUT
+          
+      - name: Download Customer Data from S3
+        run: |
+          aws s3 ls s3://mo-load-data/customer_sample/
+          mkdir -p $GITHUB_WORKSPACE/data/customer_sample
+          aws s3 cp --recursive s3://mo-load-data/customer_sample $GITHUB_WORKSPACE/data/customer_sample
+          sudo bash -c "
+          mkdir -p /data
+          mv ${{ github.workspace }}/data/customer_sample /data
+          chown -R runner:runner /data
+          chmod -R 777 /data
+          "
+          
+      - name: Load Customer CSV Data Test
+        if: ${{ always() }}
+        run: |
+          # set variables
+          DS_LIST=("dmt_001" "etao_001" "etao_002" "etao_003" "extremevision_001" "slooong_001" "slooong_002" "slooong_003" "sutpc_001" "sutpc_002" "unre_001" "unre_002" "unre_003" "unre_004" "unre_005" "unre_006" "worthcloud_001")
+          LOAD_RESULT=("n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a.")
+          
+          cd $GITHUB_WORKSPACE/mo-nightly-regression/tools/mo-regression-test
+          ds_yaml="sample_mo_load_local_client_parallel.yaml"
+          i=0
+          RESULT="success"
+          for ds in ${DS_LIST[@]}; do
+              echo "Loading dataset ${ds}"
+              if ! python ./run.py -H ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -p ${{ steps.account_for_custom.outputs.customer_password }} -u ${{ steps.account_for_custom.outputs.customer_account }} -l ./cases/${ds}/${ds_yaml}; then
+                  LOAD_RESULT[${i}]="failed"
+              else
+                  LOAD_RESULT[${i}]="succeeded"
+              fi
+              echo "${LOAD_RESULT[${i}]}"
+              i=$((i++))  
+          done
+          echo "LOAD_RESULT=(${LOAD_RESULT[*]})" >> $GITHUB_ENV
+
+          if [ "$RESULT" == "failed" ]; then
+            exit 1;
+          fi
+ 
+      - name: Insert Customer Source Data Test
+        run: | 
+          DS_LIST=("dmt_001" "etao_001" "etao_002" "etao_003" "extremevision_001" "slooong_001" "slooong_002" "slooong_003" "sutpc_001" "sutpc_002" "unre_001" "unre_002" "unre_003" "unre_004" "unre_005" "unre_006" "worthcloud_001")
+          INSERT_RESULT=("n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a.")
+          
+          cd $GITHUB_WORKSPACE/mo-nightly-regression/tools/mo-regression-test 
+          ds_yaml="sample_mo_insert.yaml"
+          i=0
+          RESULT="success"
+          for ds in ${DS_LIST[@]}; do
+              echo "Inserting dataset ${ds}"
+              if ! python ./run.py  -H ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -p ${{ steps.account_for_custom.outputs.customer_password }} -u ${{ steps.account_for_custom.outputs.customer_account }} -l ./cases/${ds}/${ds_yaml}; then
+                  INSERT_RESULT[${i}]="failed"
+                  RESULT="failed"
+              else
+                  INSERT_RESULT[${i}]="succeeded"
+              fi
+              echo "${INSERT_RESULT[${i}]}"
+              i=$((i++))  
+          done
+          echo "INSERT_RESULT=(${INSERT_RESULT[*]})" >> $GITHUB_ENV
+          if [ "$RESULT" == "failed" ]; then
+            exit 1;
+          fi
+          
+      - name: Select Customer Data Test
+        if: ${{ always() }}
+        run: |
+          # set variables
+          DS_LIST=("dmt_001" "etao_001" "etao_002" "etao_003" "extremevision_001" "slooong_001" "slooong_002" "slooong_003" "sutpc_001" "sutpc_002" "unre_001" "unre_002" "unre_003" "unre_004" "unre_005" "unre_006" "worthcloud_001")
+          QUERY_RESULT=("n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a." "n.a.")
+          cd $GITHUB_WORKSPACE/mo-nightly-regression/tools/mo-regression-test 
+          i=0
+          RESULT="success"
+          
+          for ds in ${DS_LIST[@]}; do
+              echo "Running queries on dataset ${ds}"
+              if ! python ./run.py -H ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -p ${{ steps.account_for_custom.outputs.customer_password }} -u ${{ steps.account_for_custom.outputs.customer_account }} -c ./cases/${ds}/; then
+                  QUERY_RESULT[${i}]="failed"
+              else
+                  QUERY_RESULT[${i}]="succeeded"
+              fi
+              echo "${QUERY_RESULT[${i}]}"
+              i=$((i++))  
+          done
+          echo "QUERY_RESULT=(${QUERY_RESULT[*]})" >> $GITHUB_ENV
+          if [ "$RESULT" == "failed" ]; then
+            exit 1;
+          fi
+      - name: Print Result
+        if: ${{ always() }}
+        run: | 
+          DS_LIST=("dmt_001" "etao_001" "etao_002" "etao_003" "extremevision_001" "slooong_001" "slooong_002" "slooong_003" "sutpc_001" "sutpc_002" "unre_001" "unre_002" "unre_003" "unre_004" "unre_005" "unre_006" "worthcloud_001")
+          LOAD_RESULT=${{ env.LOAD_RESULT }}
+          INSERT_RESULT=${{ env.INSERT_RESULT }}
+          QUERY_RESULT=${{ env.QUERY_RESULT }}
+          i=0
+          echo ""
+          echo "Report:"
+          echo "dataset,load_result,insert_result,query_result"
+          for ds in ${DS_LIST[@]}; do
+              echo "${ds},${LOAD_RESULT[${i}]},${INSERT_RESULT[${i}]},${QUERY_RESULT[${i}]}"
+          done
+
+
   sysbench_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN SYSBENCH TEST
@@ -670,7 +828,7 @@ jobs:
     if: ${{ always() && github.event.pull_request.merged == true }}
     name: CLEAN ENV AND NOTICE
     runs-on: arm64-runner
-    needs: [docker_image_build,setup_mo_test_env,bvt_test,ssb_and_tpch_test,sysbench_test,tpcc_test]
+    needs: [docker_image_build,setup_mo_test_env,bvt_test,ssb_and_tpch_test,sysbench_test,tpcc_test,customer_test]
     steps:
       - name: Prepare AWS Tools
         if: ${{ needs.docker_image_build.result == 'success' }}
@@ -722,7 +880,7 @@ jobs:
           #delete namespace
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
       - name: NOTICE FAIL RESULT
-        if: ${{ failure() || cancelled() || needs.docker_image_build.result != 'success'|| needs.setup_mo_test_env.result != 'success' || needs.bvt_test.result != 'success' || needs.ssb_and_tpch_test.result != 'success' || needs.sysbench_test.result != 'success' || needs.tpcc_test.result != 'success' }}
+        if: ${{ failure() || cancelled() || needs.docker_image_build.result != 'success'|| needs.setup_mo_test_env.result != 'success' || needs.bvt_test.result != 'success' || needs.ssb_and_tpch_test.result != 'success' || needs.sysbench_test.result != 'success' || needs.tpcc_test.result != 'success' || needs.customer_test.result != 'success' }}
         uses: chf007/action-wechat-work@master
         env:
           WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}
