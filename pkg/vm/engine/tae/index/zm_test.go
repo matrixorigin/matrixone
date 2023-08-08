@@ -346,6 +346,14 @@ func TestZMSumOverflow(t *testing.T) {
 	UpdateZMAny(zm2, math.SmallestNonzeroFloat64)
 	t.Log(zm2.String())
 	require.Equal(t, float64(0), zm2.GetSum())
+
+	minf64 := -maxf64
+	zm3 := BuildZM(types.T_float64, types.EncodeFloat64(&minf64))
+	t.Log(zm3.String())
+	require.Equal(t, minf64, zm3.GetSum())
+	UpdateZMAny(zm3, minf64)
+	t.Log(zm3.String())
+	require.Equal(t, float64(0), zm3.GetSum())
 }
 
 func BenchmarkZM(b *testing.B) {

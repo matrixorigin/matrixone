@@ -12,10 +12,20 @@ type float interface {
 	float32 | float64
 }
 
-// add adds two numbers of the same type and returns the result and whether
+// addi adds two integers of the same type and returns the result and whether
 // the result overflowed.
-func add[T signed | unsigned | float](a, b T, overflow func(T) bool) (T, bool) {
-	s := a + b
+func addi[T signed | unsigned](a, b T, overflow func(int64) bool) (int64, bool) {
+	s := int64(a) + int64(b)
+	if overflow(s) {
+		return s, true
+	}
+	return s, false
+}
+
+// addf adds two floats of the same type and returns the result and whether
+// the result overflowed.
+func addf[T float](a, b T, overflow func(float64) bool) (float64, bool) {
+	s := float64(a) + float64(b)
 	if overflow(s) {
 		return s, true
 	}
