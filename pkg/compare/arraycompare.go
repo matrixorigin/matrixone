@@ -52,23 +52,23 @@ func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
 
 	switch c.vs[veci].GetType().Oid {
 	case types.T_array_int8:
-		return CompareArrayFromBytes[int8](_x, _y, c.desc)
+		return ArrayFromBytesComparison[int8](_x, _y, c.desc)
 	case types.T_array_int16:
-		return CompareArrayFromBytes[int16](_x, _y, c.desc)
+		return ArrayFromBytesComparison[int16](_x, _y, c.desc)
 	case types.T_array_int32:
-		return CompareArrayFromBytes[int32](_x, _y, c.desc)
+		return ArrayFromBytesComparison[int32](_x, _y, c.desc)
 	case types.T_array_int64:
-		return CompareArrayFromBytes[int64](_x, _y, c.desc)
+		return ArrayFromBytesComparison[int64](_x, _y, c.desc)
 	case types.T_array_float32:
-		return CompareArrayFromBytes[float32](_x, _y, c.desc)
+		return ArrayFromBytesComparison[float32](_x, _y, c.desc)
 	case types.T_array_float64:
-		return CompareArrayFromBytes[float64](_x, _y, c.desc)
+		return ArrayFromBytesComparison[float64](_x, _y, c.desc)
 	default:
 		panic("Compare Not supported")
 	}
 }
 
-func CompareArrayFromBytes[T types.RealNumbers](_x, _y []byte, desc bool) int {
+func ArrayFromBytesComparison[T types.RealNumbers](_x, _y []byte, desc bool) int {
 	x := types.BytesToArray[T](_x)
 	y := types.BytesToArray[T](_x)
 
