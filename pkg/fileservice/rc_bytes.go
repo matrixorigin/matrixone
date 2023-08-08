@@ -14,6 +14,10 @@
 
 package fileservice
 
+// RCBytes represents a reference counting []byte from a pool
+// newly created RCBytes' ref count is 1
+// owner should call Release to give it back to the pool
+// new sharing owner should call Retain to increase ref count
 type RCBytes struct {
 	*RCPoolItem[[]byte]
 }
@@ -45,6 +49,7 @@ const (
 	rcBytesPoolMaxCap = 1 * 1024 * 1024
 )
 
+// RCBytesPool is the global RCBytes pool
 var RCBytesPool = func() *rcBytesPool {
 	ret := &rcBytesPool{}
 	for size := rcBytesPoolMinCap; size <= rcBytesPoolMaxCap; size *= 2 {
@@ -57,6 +62,7 @@ var RCBytesPool = func() *rcBytesPool {
 	return ret
 }()
 
+// Get returns an RCBytes
 func (r *rcBytesPool) Get(size int) RCBytes {
 	if size > rcBytesPoolMaxCap {
 		item := RCBytes{
@@ -81,6 +87,7 @@ func (r *rcBytesPool) Get(size int) RCBytes {
 	panic("impossible")
 }
 
+// GetAndCopy gets an RCBytes and copy data to it
 func (r *rcBytesPool) GetAndCopy(from []byte) RCBytes {
 	bs := r.Get(len(from))
 	copy(bs.Value, from)
