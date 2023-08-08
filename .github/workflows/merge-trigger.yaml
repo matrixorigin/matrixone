@@ -419,6 +419,7 @@ jobs:
               echo "Loading dataset ${ds}"
               if ! python ./run.py -H ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -p ${{ steps.account_for_custom.outputs.customer_password }} -u ${{ steps.account_for_custom.outputs.customer_account }} -l ./cases/${ds}/${ds_yaml}; then
                   LOAD_RESULT[${i}]="failed"
+                  RESULT="failed"
               else
                   LOAD_RESULT[${i}]="succeeded"
               fi
@@ -470,6 +471,7 @@ jobs:
               echo "Running queries on dataset ${ds}"
               if ! python ./run.py -H ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -p ${{ steps.account_for_custom.outputs.customer_password }} -u ${{ steps.account_for_custom.outputs.customer_account }} -c ./cases/${ds}/; then
                   QUERY_RESULT[${i}]="failed"
+                  RESULT="failed"
               else
                   QUERY_RESULT[${i}]="succeeded"
               fi
