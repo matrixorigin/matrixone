@@ -85,8 +85,8 @@ func (b Bytes) Size() int64 {
 	return int64(len(b))
 }
 
-// ObjectCache caches IOEntry.CachedData
-type ObjectCache interface {
+// DataCache caches IOEntry.CachedData
+type DataCache interface {
 	Set(ctx context.Context, key CacheKey, value Bytes, preloading bool)
 	Get(ctx context.Context, key CacheKey, preloading bool) (value Bytes, ok bool)
 	Flush()

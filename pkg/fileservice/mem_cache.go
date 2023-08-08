@@ -24,7 +24,7 @@ import (
 )
 
 type MemCache struct {
-	objCache             ObjectCache
+	cache                DataCache
 	counterSets          []*perfcounter.CounterSet
 	overlapChecker       *interval.OverlapChecker
 	enableOverlapChecker bool
@@ -39,7 +39,7 @@ func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
 	return &MemCache{
 		overlapChecker:       initOpts.overlapChecker,
 		enableOverlapChecker: initOpts.enableOverlapChecker,
-		objCache:             initOpts.objCache,
+		cache:                initOpts.cache,
 		counterSets:          initOpts.counterSets,
 	}
 }
@@ -65,7 +65,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 			}
 		}
 
-		o.objCache = lruobjcache.New[CacheKey, Bytes](capacity, postSetFn, postEvictFn)
+		o.cache = lruobjcache.New[CacheKey, Bytes](capacity, postSetFn, postEvictFn)
 	}
 }
 
@@ -78,7 +78,7 @@ func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) MemCacheOptionFu
 type MemCacheOptionFunc func(*memCacheOptions)
 
 type memCacheOptions struct {
-	objCache             ObjectCache
+	cache                DataCache
 	overlapChecker       *interval.OverlapChecker
 	counterSets          []*perfcounter.CounterSet
 	enableOverlapChecker bool
@@ -107,9 +107,9 @@ func (m *MemCache) Read(
 			c.FileService.Cache.Hit.Add(numHit)
 			c.FileService.Cache.Memory.Read.Add(numRead)
 			c.FileService.Cache.Memory.Hit.Add(numHit)
-			c.FileService.Cache.Memory.Capacity.Swap(m.objCache.Capacity())
-			c.FileService.Cache.Memory.Used.Swap(m.objCache.Used())
-			c.FileService.Cache.Memory.Available.Swap(m.objCache.Available())
+			c.FileService.Cache.Memory.Capacity.Swap(m.cache.Capacity())
+			c.FileService.Cache.Memory.Used.Swap(m.cache.Used())
+			c.FileService.Cache.Memory.Available.Swap(m.cache.Available())
 		}, m.counterSets...)
 	}()
 
@@ -130,7 +130,7 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		bs, ok := m.objCache.Get(ctx, key, vector.Preloading)
+		bs, ok := m.cache.Get(ctx, key, vector.Preloading)
 		numRead++
 		if ok {
 			vector.Entries[i].CachedData = bs
@@ -176,12 +176,12 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		m.objCache.Set(ctx, key, entry.CachedData, vector.Preloading)
+		m.cache.Set(ctx, key, entry.CachedData, vector.Preloading)
 
 	}
 	return nil
 }
 
 func (m *MemCache) Flush() {
-	m.objCache.Flush()
+	m.cache.Flush()
 }
