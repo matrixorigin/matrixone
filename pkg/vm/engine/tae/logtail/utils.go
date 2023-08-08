@@ -580,6 +580,9 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32) (meta
 				i = idx
 			}
 		}
+		if i < 0 {
+			return
+		}
 	} else {
 		i = vector.OrderedFindFirstIndexInSortedSlice[uint64](tableID, tidVec)
 		if i < 0 {
