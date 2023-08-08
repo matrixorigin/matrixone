@@ -4831,22 +4831,36 @@ var supportedOthersBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+						values := vector.GenerateFunctionStrParameter(parameters[1])
 						res := vector.MustFunctionResult[bool](result)
-						for i := uint64(0); i < uint64(length); i++ {
-							flag, isNull := checkFlags.GetValue(i)
-							if isNull || !flag {
-								if parameters[1].GetType().Oid == types.T_varchar && parameters[1].GetType().Width == types.MaxVarcharLen {
-									bytes := parameters[1].GetBytesAt(int(i))
-									tuples, _, err := types.DecodeTuple(bytes)
-									if err == nil {
-										errMsg := tuples.ErrString()
-										return moerr.NewDuplicateEntry(proc.Ctx, errMsg, parameters[2].GetStringAt(int(i)))
-									}
+
+						okFlag := parameters[1].GetType().Width == types.MaxVarcharLen
+						if !okFlag {
+							for i := uint64(0); i < uint64(length); i++ {
+								flag, isNull := checkFlags.GetValue(i)
+								if isNull || !flag {
+									return moerr.NewDuplicateEntry(proc.Ctx, parameters[1].GetStringAt(int(i)), parameters[2].GetStringAt(int(i)))
 								}
-								return moerr.NewDuplicateEntry(proc.Ctx, parameters[1].GetStringAt(int(i)), parameters[2].GetStringAt(int(i)))
+								res.AppendMustValue(true)
 							}
-							res.AppendMustValue(true)
+						} else {
+							for i := uint64(0); i < uint64(length); i++ {
+								flag, isNull := checkFlags.GetValue(i)
+								if isNull || !flag {
+									bytes, isNull2 := values.GetStrValue(i)
+									if !isNull2 {
+										tuples, _, err := types.DecodeTuple(bytes)
+										if err == nil {
+											errMsg := tuples.ErrString()
+											return moerr.NewDuplicateEntry(proc.Ctx, errMsg, parameters[2].GetStringAt(int(i)))
+										}
+									}
+									return moerr.NewDuplicateEntry(proc.Ctx, parameters[1].GetStringAt(int(i)), parameters[2].GetStringAt(int(i)))
+								}
+								res.AppendMustValue(true)
+							}
 						}
+
 						return nil
 					}
 				},
