@@ -209,6 +209,8 @@ const (
 	ErrLockTableBindChanged uint16 = 20702
 	// ErrLockTableNotFound lock table not found on remote lock service instance
 	ErrLockTableNotFound uint16 = 20703
+	// ErrDeadlockCheckBusy deadlock busy error, cannot check deadlock.
+	ErrDeadlockCheckBusy uint16 = 20704
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -393,8 +395,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
-	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind chaged"},
+	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
 	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
+	ErrDeadlockCheckBusy:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -1028,6 +1031,10 @@ func NewTxnCannotRetry(ctx context.Context) *Error {
 
 func NewDeadLockDetected(ctx context.Context) *Error {
 	return newError(ctx, ErrDeadLockDetected)
+}
+
+func NewDeadlockCheckBusy(ctx context.Context) *Error {
+	return newError(ctx, ErrDeadlockCheckBusy)
 }
 
 func NewLockTableBindChanged(ctx context.Context) *Error {
