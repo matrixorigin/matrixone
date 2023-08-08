@@ -299,11 +299,11 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 				sqlType = sqlTypes[i]
 			}
 			ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
-			motrace.EndStatement(ctx, retErr, 0)
+			motrace.EndStatement(ctx, retErr, 0, 0)
 		}
 	} else {
 		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
-		motrace.EndStatement(ctx, retErr, 0)
+		motrace.EndStatement(ctx, retErr, 0, 0)
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -391,7 +391,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	begin := time.Now()
 	proto := ses.GetMysqlProtocol()
-	proto.ResetStatistics()
 
 	oq := NewOutputQueue(ses.GetRequestContext(), ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
@@ -3506,6 +3505,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
 		ses.trafficBytes.Store(int64(0))
+		proto.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
@@ -3963,11 +3963,10 @@ type jsonPlanHandler struct {
 	buffer     *bytes.Buffer
 }
 
-func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, ses *Session) *jsonPlanHandler {
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan)
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx)
-	statsBytes.WithOutTrafficBytes(float64(ses.trafficBytes.Load()))
 	return &jsonPlanHandler{
 		jsonBytes:  jsonBytes,
 		statsBytes: statsBytes,
@@ -4095,6 +4094,8 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 }
 
 func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
+	var val int64
+	var cnt int64
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		statsByte.Reset()
@@ -4108,9 +4109,19 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.RowsRead += rows
 				stats.BytesScan += bytes
 			}
+			if node.NodeType == plan.Node_PROJECT {
+				if options.Analyze && node.AnalyzeInfo != nil {
+					val += node.AnalyzeInfo.OutputSize
+					cnt++
+				}
+			}
 		}
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
+	if cnt > 1 {
+		logutil.Infof("MarshalPlan Output Project where cnt>1, stmt: %s, %s", uuid.UUID(h.stmt.StatementID).String(), h.stmt.Statement)
+	}
+	logutil.Infof("MarshalPlan Output Project: %s, %d, cnt: %d", uuid.UUID(h.stmt.StatementID).String(), val, cnt)
 	return
 }

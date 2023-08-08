@@ -395,6 +395,7 @@ endL:
 // and set RowsRead, BytesScan from ExecPlan
 func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 	var stats Statistic
+	var statsArray statistic.StatsArray
 
 	if s.ExecPlan == nil {
 		if s.statsArray.GetVersion() == 0 {
@@ -402,7 +403,8 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		}
 		return s.statsArray.ToJsonString()
 	} else {
-		s.statsArray, stats = s.ExecPlan.Stats(ctx)
+		statsArray, stats = s.ExecPlan.Stats(ctx)
+		s.statsArray.Add(&statsArray)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
 		return s.statsArray.ToJsonString()
@@ -446,7 +448,12 @@ func (s *StatementInfo) MarkResponseAt() {
 	}
 }
 
-var EndStatement = func(ctx context.Context, err error, sentRows int64) {
+// ErrorPkgConst = 56 + 13
+// 56: empty mysql tcp package size
+// 13: avg payload prefix of err msg
+const ErrorPkgConst = 69
+
+var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
@@ -462,6 +469,11 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 		s.ResultCount = sentRows
 		s.AggrCount = 0
 		s.MarkResponseAt()
+		if err != nil {
+			outBytes += ErrorPkgConst + int64(len(err.Error()))
+		}
+		s.statsArray.WithOutTrafficBytes(float64(outBytes))
+		logutil.Infof("MarshalPlan Output Traffic: %s, %d, %d", uuid.UUID(s.StatementID).String(), outBytes)
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err
