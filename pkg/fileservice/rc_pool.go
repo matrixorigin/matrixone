@@ -62,7 +62,9 @@ func (r *RCPoolItem[T]) Retain() {
 
 func (r *RCPoolItem[T]) Release() {
 	if c := r.count.Add(-1); c == 0 {
-		r.pool.pool.Put(r)
+		if r.pool != nil {
+			r.pool.pool.Put(r)
+		}
 	} else if c < 0 {
 		panic("bad release")
 	}
