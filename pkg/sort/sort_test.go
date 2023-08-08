@@ -88,6 +88,7 @@ func init() {
 
 		newTestCase(true, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
 		newTestCase(false, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
+		//TODO: Add testcase here.
 	}
 }
 
