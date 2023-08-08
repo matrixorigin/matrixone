@@ -71,3 +71,31 @@ func TestFilterWithLabel(t *testing.T) {
 	assert.False(t, NewSelector().SelectByLabel(nil, EQ).filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
 	assert.True(t, NewSelector().SelectByLabel(map[string]string{"li": "v1"}, EQ).filter("", map[string]metadata.LabelList{}))
 }
+
+func TestSelector_SelectWithoutLabel(t *testing.T) {
+	assert.False(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v1", "l2": "v2"}, EQ).
+			filter("", map[string]metadata.LabelList{
+				"l2": {
+					Labels: []string{"v2"},
+				},
+			}))
+
+	assert.True(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v1", "l2": "v2"}, EQ).
+			SelectWithoutLabel(map[string]string{"l1": "v1"}).
+			filter("", map[string]metadata.LabelList{
+				"l2": {
+					Labels: []string{"v2"},
+				},
+			}))
+}
+
+func TestLabelNum(t *testing.T) {
+	assert.Equal(t, 2, NewSelector().SelectByLabel(map[string]string{
+		"a": "a",
+		"b": "b",
+	}, EQ).LabelNum())
+}
