@@ -182,13 +182,13 @@ func (e *IOEntry) ReadFromOSFile(file *os.File) error {
 	return nil
 }
 
-func DataAsObject(r io.Reader, data []byte) (_ RCBytes, err error) {
+func DataAsObject(r io.Reader, data []byte) (_ Bytes, err error) {
 	if len(data) > 0 {
-		return RCBytesPool.GetAndCopy(data), nil
+		return data, nil
 	}
 	data, err = io.ReadAll(r)
 	if err != nil {
 		return
 	}
-	return RCBytesPool.GetAndCopy(data), nil
+	return data, nil
 }

@@ -49,7 +49,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 		o.overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
 		o.enableOverlapChecker = true
 
-		postSetFn := func(key CacheKey, valSet RCBytes, isNewEntry bool) {
+		postSetFn := func(key CacheKey, valSet Bytes, isNewEntry bool) {
 			if o.enableOverlapChecker && isNewEntry {
 				if err := o.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
 					panic(err)
@@ -57,7 +57,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 			}
 		}
 
-		postEvictFn := func(key CacheKey, valEvicted RCBytes) {
+		postEvictFn := func(key CacheKey, valEvicted Bytes) {
 			if o.enableOverlapChecker {
 				if err := o.overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Size); err != nil {
 					panic(err)
@@ -65,7 +65,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 			}
 		}
 
-		o.cache = lrucache.New[CacheKey, RCBytes](capacity, postSetFn, postEvictFn)
+		o.cache = lrucache.New[CacheKey, Bytes](capacity, postSetFn, postEvictFn)
 	}
 }
 
@@ -163,7 +163,7 @@ func (m *MemCache) Update(
 	}
 
 	for _, entry := range vector.Entries {
-		if entry.CachedData.Len() == 0 {
+		if len(entry.CachedData) == 0 {
 			continue
 		}
 		if entry.fromCache == m {

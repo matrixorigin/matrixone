@@ -57,8 +57,8 @@ func TestCacheExample(t *testing.T) {
 			{
 				Offset: 0,
 				Size:   2,
-				ToCacheData: func(_ io.Reader, data []byte) (RCBytes, error) {
-					return RCBytesPool.GetAndCopy(data), nil
+				ToCacheData: func(_ io.Reader, data []byte) (Bytes, error) {
+					return data, nil
 				},
 			},
 		},
@@ -67,6 +67,6 @@ func TestCacheExample(t *testing.T) {
 	assert.Nil(t, err)
 
 	value := vec.Entries[0].CachedData
-	assert.Equal(t, []byte("42"), value.Value)
+	assert.Equal(t, Bytes([]byte("42")), value)
 
 }

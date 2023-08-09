@@ -39,7 +39,6 @@ func ReadExtent(
 		Entries:  make([]fileservice.IOEntry, 1),
 		NoCache:  noLRUCache,
 	}
-
 	ioVec.Entries[0] = fileservice.IOEntry{
 		Offset:      int64(extent.Offset()),
 		Size:        int64(extent.Length()),
@@ -48,9 +47,7 @@ func ReadExtent(
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
-	//TODO do not copy, return RCBytes
-	// defer ioVec.Entries[0].CachedData.Release()
-	v = ioVec.Entries[0].CachedData.Copy()
+	v = ioVec.Entries[0].CachedData
 	return
 }
 
@@ -215,7 +212,7 @@ func ReadOneBlockWithMeta(
 				if err != nil {
 					return
 				}
-				filledEntries[i].CachedData = fileservice.RCBytesPool.GetAndCopy(buf.Bytes())
+				filledEntries[i].CachedData = buf.Bytes()
 			}
 		}
 		ioVec.Entries = filledEntries

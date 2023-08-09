@@ -21,12 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
-type CacheConstructor = func(r io.Reader, buf []byte) (fileservice.RCBytes, error)
+type CacheConstructor = func(r io.Reader, buf []byte) (fileservice.Bytes, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8) CacheConstructor {
-	return func(reader io.Reader, data []byte) (_ fileservice.RCBytes, err error) {
+	return func(reader io.Reader, data []byte) (_ fileservice.Bytes, err error) {
 		if len(data) == 0 {
 			data, err = io.ReadAll(reader)
 			if err != nil {
@@ -36,12 +36,12 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 
 		// no compress
 		if algo == compress.None {
-			return fileservice.RCBytesPool.GetAndCopy(data), nil
+			return fileservice.Bytes(data), nil
 		}
 
 		// lz4 compress
-		decompressed := fileservice.RCBytesPool.Get(int(size))
-		decompressed.Value, err = compress.Decompress(data, decompressed.Value, compress.Lz4)
+		decompressed := make(fileservice.Bytes, size)
+		decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
 		if err != nil {
 			return
 		}
