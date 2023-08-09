@@ -185,7 +185,11 @@ func (zm ZM) GetMaxBuf() []byte {
 }
 
 func (zm ZM) GetSumBuf() []byte {
-	return zm[8 : 8+zm[30]&0x1f]
+	t := zm.GetType()
+	if t.IsInteger() || t.IsFloat() || t == types.T_decimal64 {
+		return zm[8 : 8+zm[30]&0x1f]
+	}
+	return nil
 }
 
 func (zm ZM) GetBuf() []byte {
