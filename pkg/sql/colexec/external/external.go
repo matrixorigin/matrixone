@@ -155,10 +155,14 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		param.Fileparam.End = true
 		return process.ExecNext, err
 	}
+
 	memAfter := runtime.MemStats{}
 	runtime.ReadMemStats(&memAfter)
-	if memAfter.Alloc-memBefore.Alloc > 1024*1024*1024 {
-		runtime.GC()
+	if memAfter.Sys > memBefore.Sys {
+		diff := memAfter.Sys - memBefore.Sys
+		if diff > 0 && diff > 1024*1024*1024 {
+			runtime.GC()
+		}
 	}
 
 	proc.SetInputBatch(bat)
