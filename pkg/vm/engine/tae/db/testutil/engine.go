@@ -107,6 +107,12 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	CheckAllColRowsByScan(e.t, rel, exp, applyDelete)
 	assert.NoError(e.t, txn.Commit(context.Background()))
 }
+func (e *TestEngine) ForceCheckpoint() {
+	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second)
+	assert.NoError(e.t, err)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS())
+	assert.NoError(e.t, err)
+}
 func (e *TestEngine) DropRelation(t *testing.T) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
