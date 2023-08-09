@@ -147,8 +147,8 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 // InitSchema
 // PS: only in standalone or CN node can init schema
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
-	config := &GetTracerProvider().tracerProviderConfig
-	WithSQLExecutor(sqlExecutor).apply(config)
+	c := &GetTracerProvider().tracerProviderConfig
+	WithSQLExecutor(sqlExecutor).apply(c)
 	if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
 		return err
 	}

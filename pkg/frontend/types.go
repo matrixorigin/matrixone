@@ -28,6 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+const (
+	DefaultRpcBufferSize = 1 << 10
+)
+
 type (
 	TxnOperator = client.TxnOperator
 	TxnClient   = client.TxnClient
