@@ -3504,7 +3504,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
-		ses.trafficBytes.Store(int64(0))
+		ses.writeCsvBytes.Store(int64(0))
 		proto.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)

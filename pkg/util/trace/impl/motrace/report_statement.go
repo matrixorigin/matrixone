@@ -210,7 +210,9 @@ var stmtPool = sync.Pool{
 }
 
 func NewStatementInfo() *StatementInfo {
-	return stmtPool.Get().(*StatementInfo)
+	s := stmtPool.Get().(*StatementInfo)
+	s.statsArray.Reset()
+	return s
 }
 
 type Statistic struct {
@@ -404,7 +406,7 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		return s.statsArray.ToJsonString()
 	} else {
 		statsArray, stats = s.ExecPlan.Stats(ctx)
-		s.statsArray.Add(&statsArray)
+		s.statsArray.InitIfEmpty().Add(&statsArray)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
 		return s.statsArray.ToJsonString()
@@ -472,8 +474,7 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes
 		if err != nil {
 			outBytes += ErrorPkgConst + int64(len(err.Error()))
 		}
-		s.statsArray.WithOutTrafficBytes(float64(outBytes))
-		logutil.Infof("MarshalPlan Output Traffic: %s, %d, %d", uuid.UUID(s.StatementID).String(), outBytes)
+		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes))
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err

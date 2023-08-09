@@ -232,3 +232,33 @@ func TestStatsArray_AddV2(t *testing.T) {
 		})
 	}
 }
+
+func TestStatsArray_InitIfEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		s    StatsArray
+		want *StatsArray
+	}{
+		{
+			name: "normal",
+			s:    StatsArray{1, 2, 3, 4},
+			want: &StatsArray{1, 2, 3, 4},
+		},
+		{
+			name: "empty",
+			s:    StatsArray{},
+			want: &StatsArray{StatsArrayVersion},
+		},
+		{
+			name: "valid",
+			s:    StatsArray{0, 1},
+			want: &StatsArray{0, 1, 0, 0, 0},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.s.InitIfEmpty()
+			require.Equal(t, tt.want, got)
+		})
+	}
+}

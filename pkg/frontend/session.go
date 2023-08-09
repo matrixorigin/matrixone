@@ -162,9 +162,11 @@ type Session struct {
 
 	curResultSize float64 // MB
 
-	// sentRows and trafficBytes are used to calculate the query throughput for motrace.StatementInfo
-	sentRows     atomic.Int64
-	trafficBytes atomic.Int64
+	// sentRows used to record rows it sent to client for motrace.StatementInfo.
+	// If there is NO exec_plan, sentRows will be 0.
+	sentRows atomic.Int64
+	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
+	writeCsvBytes atomic.Int64
 
 	createdTime time.Time
 

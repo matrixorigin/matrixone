@@ -66,6 +66,15 @@ func (s *StatsArray) Init() *StatsArray {
 	return s.WithVersion(StatsArrayVersion)
 }
 
+func (s *StatsArray) InitIfEmpty() *StatsArray {
+	for i := 1; i < StatsArrayLength; i++ {
+		if s[i] != 0 {
+			return s
+		}
+	}
+	return s.WithVersion(StatsArrayVersion)
+}
+
 func (s *StatsArray) Reset() *StatsArray {
 	return s.WithVersion(StatsArrayVersion).
 		// StatsArrayVersion1

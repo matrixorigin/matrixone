@@ -289,9 +289,9 @@ func (rh *rowHandler) resetFlushCount() {
 
 // resetStartOffset reset the startOffsetInBuffer
 // How rowHandler.resetStartOffset, debugStats.writeBytes and MysqlProtocolImpl.CalculateOutTrafficBytes work together ?
-// 0. init. call rowHandler .resetStartOffset at the beginning of query
-// 1. batch write. while resetFlushOutBuffer
-// 2. last data. calculateLastOutTrafficBytes
+// 0. init. call rowHandler.resetStartOffset at the beginning of query, record the beginning offset of the current buffer.
+// 1. batch write. inc debugStats.writeBytes and do resetFlushOutBuffer()
+// 2. last data. MysqlProtocolImpl.CalculateOutTrafficBytes() with debugStats.writeBytes, rowHandler.startOffsetInBuffer and rowHandler.bytesInOutBuffer
 func (rh *rowHandler) resetStartOffset() {
 	rh.startOffsetInBuffer = rh.bytesInOutBuffer
 }
@@ -395,8 +395,10 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 
 // CalculateOutTrafficBytes calculate the bytes of the last out traffic
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() int64 {
+	// Case 1: send data as ResultSet
 	return int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
-		mp.GetSession().trafficBytes.Load()
+		// Case 2: send data as CSV
+		mp.GetSession().writeCsvBytes.Load()
 }
 
 func (mp *MysqlProtocolImpl) ResetStatistics() {
