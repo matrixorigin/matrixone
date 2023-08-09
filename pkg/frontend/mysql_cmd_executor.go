@@ -669,12 +669,11 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 			}
 
 			if strings.ToLower(name) == "autocommit" {
-				svbt := SystemVariableBoolType{}
-				newValue, err2 := svbt.Convert(value)
+				newValue, err2 := valueIsBoolTrue(value)
 				if err2 != nil {
 					return err2
 				}
-				err = ses.SetAutocommit(svbt.IsTrue(newValue))
+				err = ses.SetAutocommit(newValue)
 				if err != nil {
 					return err
 				}
@@ -893,22 +892,11 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 			return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 		}
 		row[1] = value
-		if _, ok := gsv.GetType().(SystemVariableBoolType); ok {
-			v, ok := value.(int8)
-			if ok {
-				if v == 1 {
-					row[1] = "on"
-				} else {
-					row[1] = "off"
-				}
-			}
-			_, ok = value.(int64)
-			if ok {
-				if v == 1 {
-					row[1] = "on"
-				} else {
-					row[1] = "off"
-				}
+		if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
+			if svbt.IsTrue(value) {
+				row[1] = "on"
+			} else {
+				row[1] = "off"
 			}
 		}
 		rows = append(rows, row)
