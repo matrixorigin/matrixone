@@ -162,11 +162,6 @@ func (zm ZM) GetMax() any {
 	return zm.getValue(buf)
 }
 
-func (zm ZM) supportSum() bool {
-	t := zm.GetType()
-	return t.IsInteger() || t.IsFloat() || t == types.T_decimal64
-}
-
 func (zm ZM) SetSum(v any) {
 	t := zm.GetType()
 	if t.IsFloat() {
