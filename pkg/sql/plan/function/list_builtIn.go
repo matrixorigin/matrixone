@@ -4789,14 +4789,14 @@ var supportedOthersBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 3 {
-				if inputs[0].Oid != types.T_bool || inputs[1].Oid.IsMySQLString() || inputs[2].Oid.IsMySQLString() {
+				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() || !inputs[2].Oid.IsMySQLString() {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
 				return newCheckResultWithSuccess(1)
 			}
 
 			if len(inputs) == 2 {
-				if inputs[0].Oid != types.T_bool || inputs[1].Oid.IsMySQLString() {
+				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
 				return newCheckResultWithSuccess(0)
