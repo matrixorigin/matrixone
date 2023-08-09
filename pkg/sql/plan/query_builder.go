@@ -191,7 +191,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					Col: &plan.ColRef{
 						RelPos: 0,
 						ColPos: int32(i),
-						Name:   builder.nameByColRef[internalRemapping.localToGlobal[i]],
+						Name:   col.Name,
 					},
 				},
 			})
@@ -208,7 +208,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						Col: &plan.ColRef{
 							RelPos: 0,
 							ColPos: 0,
-							Name:   builder.nameByColRef[globalRef],
+							Name:   node.TableDef.Cols[0].Name,
 						},
 					},
 				})
@@ -220,7 +220,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						Col: &plan.ColRef{
 							RelPos: 0,
 							ColPos: 0,
-							Name:   builder.nameByColRef[internalRemapping.localToGlobal[0]],
+							Name:   node.TableDef.Cols[0].Name,
 						},
 					},
 				})
@@ -1120,22 +1120,30 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	switch node.NodeType {
 	case plan.Node_AGG:
 		if len(node.GroupBy) == 0 && len(node.AggList) == 1 {
-			if agg, ok := node.AggList[0].Expr.(*plan.Expr_F); ok && agg.F.Func.ObjName == "approx_conut" {
+			agg, ok := node.AggList[0].Expr.(*plan.Expr_F)
+			if ok && agg.F.Func.ObjName == "approx_count" {
 				if len(node.Children) == 1 {
 					child := builder.qry.Nodes[node.Children[0]]
 					if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 {
 						agg.F.Func.ObjName = "sum"
+						fr, _ := function.GetFunctionByName(context.TODO(), "sum", []types.Type{types.T_int64.ToType()})
+						agg.F.Func.Obj = fr.GetEncodedOverloadID()
 						agg.F.Args[0] = &plan.Expr{
+							Typ: &Type{},
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: 0,
-									ColPos: 8,
+									ColPos: Metadata_Rows_Cnt_Pos,
 								},
 							},
 						}
 
 						var exprs []*plan.Expr
 						exprs = append(exprs, &plan.Expr{
+							Typ: &Type{
+								Id:          int32(types.T_varchar),
+								NotNullable: true,
+							},
 							Expr: &plan.Expr_C{
 								C: &plan.Const{
 									Value: &plan.Const_Sval{
@@ -1144,7 +1152,12 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 								},
 							},
 						})
+						exprs[0].Typ.Width = int32(len(exprs[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval))
 						exprs = append(exprs, &plan.Expr{
+							Typ: &Type{
+								Id:          int32(types.T_varchar),
+								NotNullable: true,
+							},
 							Expr: &plan.Expr_C{
 								C: &plan.Const{
 									Value: &plan.Const_Sval{
@@ -1153,11 +1166,14 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 								},
 							},
 						})
+						exprs[1].Typ.Width = int32(len(exprs[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval))
 						scanNode := &plan.Node{
 							NodeType: plan.Node_VALUE_SCAN,
 						}
 						childId := builder.appendNode(scanNode, nil)
 						node.Children[0] = builder.buildMetadataScan(nil, nil, exprs, childId)
+						agg.F.Args[0].Expr.(*plan.Expr_Col).Col.RelPos = builder.qry.Nodes[node.Children[0]].BindingTags[0]
+						agg.F.Args[0].Typ = builder.qry.Nodes[node.Children[0]].TableDef.Cols[agg.F.Args[0].Expr.(*plan.Expr_Col).Col.RelPos].Typ
 					}
 				}
 			}
