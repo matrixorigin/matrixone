@@ -14,8 +14,10 @@
 package upgrader
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/stretchr/testify/assert"
 )
@@ -26,6 +28,24 @@ var (
 	sessionIDCol   = table.SpanIDStringColumn("session_id", "session id")
 	statementIDCol = table.SpanIDStringColumn("statement_id", "statement id")
 )
+
+func TestParseDataTypeToColType(t *testing.T) {
+	tests := []struct {
+		input  string
+		output table.ColType
+		err    error
+	}{
+		{"datetime", table.TDatetime, nil},
+		{"unrecognizedType", table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type")},
+	}
+
+	for _, test := range tests {
+		got, err := ParseDataTypeToColType(test.input)
+		if got != test.output || (err != nil && err.Error() != test.err.Error()) || (err == nil && test.err != nil) {
+			t.Errorf("For input %q, expected (%v, %v) but got (%v, %v)", test.input, test.output, test.err, got, err)
+		}
+	}
+}
 
 func TestGenerateDiff(t *testing.T) {
 	tests := []struct {
