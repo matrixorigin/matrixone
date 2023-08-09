@@ -17,9 +17,9 @@ package external
 import (
 	"bufio"
 	"context"
-	"encoding/csv"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/mocsv"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -96,16 +96,16 @@ type Argument struct {
 func (arg *Argument) Free(*process.Process, bool) {}
 
 type ParseLineHandler struct {
-	csvReader *csv.Reader
+	csvReader *mocsv.Reader
 	//batch
 	batchSize int
 	//mo csv
-	moCsvLineArray [][]string
+	moCsvLineArray [][][]byte
 }
 
 // NewReader returns a new Reader with options that reads from r.
-func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Reader {
-	rCsv := csv.NewReader(bufio.NewReader(r))
+func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *mocsv.Reader {
+	rCsv := mocsv.NewReader(bufio.NewReader(r))
 	rCsv.Comma = cma
 	rCsv.Comment = cmnt
 	rCsv.LazyQuotes = lazyQt

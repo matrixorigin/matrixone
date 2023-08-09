@@ -22,7 +22,6 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/mocsv"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -473,16 +473,16 @@ func getBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		line := plh.moCsvLineArray[rowIdx]
 		if param.Extern.Format == tree.JSONLINE {
-			line, err = transJson2Lines(proc.Ctx, line[0], param.Attrs, param.Cols, param.Extern.JsonData, param)
-			if err != nil {
-				if errors.Is(err, io.ErrUnexpectedEOF) {
-					logutil.Infof("unexpected EOF, wait for next batch")
-					unexpectEOF = true
-					continue
-				}
-				return nil, err
-			}
-			plh.moCsvLineArray[rowIdx] = line
+			//line, err = transJson2Lines(proc.Ctx, line[0], param.Attrs, param.Cols, param.Extern.JsonData, param)
+			//if err != nil {
+			//	if errors.Is(err, io.ErrUnexpectedEOF) {
+			//		logutil.Infof("unexpected EOF, wait for next batch")
+			//		unexpectEOF = true
+			//		continue
+			//	}
+			//	return nil, err
+			//}
+			//plh.moCsvLineArray[rowIdx] = line
 		}
 		if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
 			//the column account_id of the cluster table do need to be filled here
@@ -537,7 +537,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	}
 	plh := &ParseLineHandler{
 		csvReader:      newReaderWithOptions(param.reader, rune(cma), '#', true, false),
-		moCsvLineArray: make([][]string, OneBatchMaxRow),
+		moCsvLineArray: make([][][]byte, OneBatchMaxRow),
 	}
 	return plh, nil
 }
@@ -579,7 +579,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 			if cnt >= param.IgnoreLine {
 				plh.moCsvLineArray = plh.moCsvLineArray[param.IgnoreLine:cnt]
 				cnt -= param.IgnoreLine
-				plh.moCsvLineArray = append(plh.moCsvLineArray, make([]string, param.IgnoreLine))
+				plh.moCsvLineArray = append(plh.moCsvLineArray, make([][]byte, param.IgnoreLine))
 			} else {
 				plh.moCsvLineArray = nil
 				cnt = 0
@@ -873,13 +873,13 @@ func getNullFlag(nullMap map[string]([]string), attr, field string) bool {
 
 const NULL_FLAG = "\\N"
 
-func getStrFromLine(line []string, colIdx int, param *ExternalParam) string {
+func getStrFromLine(line [][]byte, colIdx int, param *ExternalParam) []byte {
 	if catalog.ContainExternalHidenCol(param.Attrs[colIdx]) {
-		return param.Fileparam.Filepath
+		return []byte(param.Fileparam.Filepath)
 	}
 	str := line[param.Name2ColIndex[param.Attrs[colIdx]]]
 	if param.Close != 0 {
-		tmp := strings.TrimSpace(str)
+		tmp := bytes.TrimSpace(str)
 		if len(tmp) >= 2 && tmp[0] == param.Close && tmp[len(tmp)-1] == param.Close {
 			return tmp[1 : len(tmp)-1]
 		}
@@ -887,7 +887,7 @@ func getStrFromLine(line []string, colIdx int, param *ExternalParam) string {
 	return str
 }
 
-func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
+func getOneRowData(bat *batch.Batch, line [][]byte, rowIdx int, param *ExternalParam, mp *mpool.MPool) error {
 	var buf bytes.Buffer
 	for colIdx := range param.Attrs {
 		vec := bat.Vecs[colIdx]
@@ -895,7 +895,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 			nulls.Add(vec.GetNulls(), uint64(rowIdx))
 			continue
 		}
-		field := getStrFromLine(line, colIdx, param)
+		field := string(getStrFromLine(line, colIdx, param))
 		id := types.T(param.Cols[colIdx].Typ.Id)
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
 			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text {
@@ -1245,7 +1245,7 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 // A successful call returns err == nil, not err == io.EOF. Because ReadAll is
 // defined to read until EOF, it does not treat end of file as an error to be
 // reported.
-func readCountStringLimitSize(r *csv.Reader, ctx context.Context, size uint64, records [][]string) (int, bool, error) {
+func readCountStringLimitSize(r *mocsv.Reader, ctx context.Context, size uint64, records [][][]byte) (int, bool, error) {
 	var curBatchSize uint64 = 0
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
@@ -1253,7 +1253,7 @@ func readCountStringLimitSize(r *csv.Reader, ctx context.Context, size uint64, r
 			return i, true, nil
 		default:
 		}
-		record, err := r.Read()
+		record, err := r.ReadBytes()
 		if err != nil {
 			if err == io.EOF {
 				return i, true, nil
