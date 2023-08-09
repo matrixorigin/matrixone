@@ -8027,3 +8027,28 @@ func TestCheckpointReadWrite(t *testing.T) {
 	testutil.CheckCheckpointReadWrite(t, types.TS{}, t5, tae.Catalog, tae.Opts.Fs)
 	testutil.CheckCheckpointReadWrite(t, t4, t5, tae.Catalog, tae.Opts.Fs)
 }
+
+func TestCheckpointReadWrite2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	for i := 0; i < 10; i++ {
+		schema := catalog.MockSchemaAll(i+1, i)
+		schema.BlockMaxRows = 2
+		bat := catalog.MockBatch(schema, rand.Intn(30))
+		tae.BindSchema(schema)
+		createDB := false
+		if i == 0 {
+			createDB = true
+		}
+		tae.CreateRelAndAppend(bat, createDB)
+		tae.CompactBlocks(false)
+	}
+
+	t1 := tae.TxnMgr.StatMaxCommitTS()
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, tae.Opts.Fs)
+}

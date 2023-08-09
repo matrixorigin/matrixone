@@ -356,7 +356,6 @@ type BlockLocation []byte
 func BuildBlockLoaction(id uint16, start, end uint64) BlockLocation {
 	buf := make([]byte, BlockLocationLength)
 	copy(buf[StartOffsetOffset:StartOffsetOffset+StartOffsetLength], types.EncodeUint64(&start))
-	logutil.Infof("end is %d", end)
 	copy(buf[EndOffsetOffset:EndOffsetOffset+EndOffsetLength], types.EncodeUint64(&end))
 	blkLoc := BlockLocation(buf)
 	blkLoc.SetID(id)
@@ -1973,7 +1972,6 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		}
 	}
 	delEnd := segDelBat.GetVectorByName(catalog.AttrRowID).Length()
-	logutil.Infof("UpdateSegMeta delStart %d delEnd %d ", delStart, delEnd)
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
 	return nil
 }
@@ -2072,7 +2070,6 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 		metaNode := node
 		if metaNode.BaseNode.MetaLoc.IsEmpty() || metaNode.Aborted {
 			if metaNode.HasDropCommitted() {
-				logutil.Infof("metaNode.HasDropCommitted() is true, metaNode: %v", metaNode)
 				vector.AppendFixed(
 					blkDNMetaDelRowIDVec,
 					objectio.HackBlockid2Rowid(&entry.ID),
@@ -2111,7 +2108,6 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				)
 				metaNode.TxnMVCCNode.AppendTuple(blkDNMetaDelTxnBat)
 			} else {
-				logutil.Infof("!metaNode.HasDropCommitted() is true, metaNode: %v", metaNode)
 				vector.AppendFixed(
 					blkDNMetaInsIDVec,
 					entry.ID,
@@ -2197,7 +2193,6 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				metaNode.TxnMVCCNode.AppendTuple(blkDNMetaInsTxnBat)
 			}
 		} else {
-			logutil.Infof("metaNode.HasDropCommitted()111 is true, metaNode: %v", metaNode)
 			if metaNode.HasDropCommitted() {
 				vector.AppendFixed(
 					blkMetaDelRowIDVec,
@@ -2296,7 +2291,6 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					common.DefaultAllocator,
 				)
 			} else {
-				logutil.Infof("is_sorted.HasDropCommitted()111 is true, metaNode: %v", metaNode)
 				is_sorted := false
 				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
 					is_sorted = true
@@ -2387,7 +2381,6 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	}
 	insEnd := collector.data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
 	delEnd := collector.data.bats[BLKMetaDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
-	logutil.Infof("UpdateBlkMeta entry.GetSegment().GetTable().ID is %dinsStart %d insEnd %d delStart %d delEnd %d ", entry.GetSegment().GetTable().ID, insStart, insEnd, delStart, delEnd)
 	collector.data.UpdateBlkMeta(entry.GetSegment().GetTable().ID, int32(insStart), int32(insEnd), int32(delStart), int32(delEnd))
 	return nil
 }
