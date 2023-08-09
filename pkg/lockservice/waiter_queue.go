@@ -48,18 +48,13 @@ func (q *sliceBasedWaiterQueue) moveToFirst(serviceID string) *waiter {
 	}
 	v := q.waiters[0]
 	v.add(serviceID, false, q.waiters[1:]...)
-	q.waiters = q.waiters[:0]
+	q.clearWaitersLocked()
 	return v
 }
 
 func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 	q.Lock()
 	defer q.Unlock()
-
-	if len(q.waiters) == 0 || len(ws) == 0 {
-		q.waiters = ws
-		return
-	}
 
 	// no new waiter added, moved from other waiter's waiter queue.
 	if len(ws) > 1 {
@@ -90,8 +85,15 @@ func (q *sliceBasedWaiterQueue) iter(fn func(*waiter) bool) {
 func (q *sliceBasedWaiterQueue) reset() {
 	q.Lock()
 	defer q.Unlock()
-	q.waiters = q.waiters[:0]
+	q.clearWaitersLocked()
 	q.beginChangeIdx = -1
+}
+
+func (q *sliceBasedWaiterQueue) clearWaitersLocked() {
+	for i := range q.waiters {
+		q.waiters[i] = nil
+	}
+	q.waiters = q.waiters[:0]
 }
 
 func (q *sliceBasedWaiterQueue) beginChange() {

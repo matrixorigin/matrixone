@@ -83,6 +83,7 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) error {
 	tblArg := arg.(*Argument)
+	tblArg.ctr = new(container)
 
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
