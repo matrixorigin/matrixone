@@ -45,7 +45,7 @@ func TestCheckWithDeadlock(t *testing.T) {
 				}
 			}
 			return true, nil
-		}, func(txn pb.WaitTxn) {
+		}, func(txn pb.WaitTxn, err error) {
 			abortC <- txn.TxnID
 		})
 	defer d.close()
@@ -91,7 +91,7 @@ func TestCheckWithDeadlockWith2Txn(t *testing.T) {
 				}
 			}
 			return true, nil
-		}, func(txn pb.WaitTxn) {
+		}, func(txn pb.WaitTxn, err error) {
 			abortC <- txn.TxnID
 		})
 	defer d.close()

@@ -35,7 +35,7 @@ type detector struct {
 	serviceID         string
 	c                 chan deadlockTxn
 	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error)
-	waitTxnAbortFunc  func(pb.WaitTxn)
+	waitTxnAbortFunc  func(pb.WaitTxn, error)
 	ignoreTxns        sync.Map // txnID -> any
 	stopper           *stopper.Stopper
 	mu                struct {
@@ -52,7 +52,7 @@ type detector struct {
 func newDeadlockDetector(
 	serviceID string,
 	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error),
-	waitTxnAbortFunc func(pb.WaitTxn)) *detector {
+	waitTxnAbortFunc func(pb.WaitTxn, error)) *detector {
 	d := &detector{
 		serviceID:         serviceID,
 		c:                 make(chan deadlockTxn, maxWaitingCheckCount),
@@ -125,9 +125,12 @@ func (d *detector) doCheck(ctx context.Context) {
 			w.reset(txn)
 			v := string(txn.waitTxn.TxnID)
 			hasDeadlock, err := d.checkDeadlock(w)
-			if hasDeadlock || err != nil {
+			if hasDeadlock {
+				if err == nil {
+					err = ErrDeadLockDetected
+				}
 				d.ignoreTxns.Store(v, struct{}{})
-				d.waitTxnAbortFunc(txn.waitTxn)
+				d.waitTxnAbortFunc(txn.waitTxn, err)
 			}
 			d.mu.Lock()
 			delete(d.mu.activeCheckTxn, util.UnsafeBytesToString(txn.waitTxn.TxnID))
