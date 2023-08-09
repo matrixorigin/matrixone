@@ -260,7 +260,6 @@ func TestZM(t *testing.T) {
 	zm1 := BuildZM(types.T_int64, types.EncodeInt64(&int64v))
 	require.Equal(t, int64v, zm1.GetMin())
 	require.Equal(t, int64v, zm1.GetMax())
-	require.Equal(t, int64v, zm1.GetSum())
 
 	i64l := int64v - 200
 	i64h := int64v + 100
@@ -273,14 +272,12 @@ func TestZM(t *testing.T) {
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
 	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
-	require.Equal(t, int64v+i64l, zm1.GetSum())
 
 	UpdateZMAny(zm1, i64h)
 	t.Log(zm1.String())
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
-	require.Equal(t, int64v+i64l+i64h, zm1.GetSum())
 
 	minv := bytes.Repeat([]byte{0x00}, 31)
 	maxv := bytes.Repeat([]byte{0xff}, 31)
@@ -315,55 +312,35 @@ func TestZM(t *testing.T) {
 	require.True(t, zm3.MaxTruncated())
 }
 
-func TestZMSumOverflow(t *testing.T) {
-	maxi64 := int64(math.MaxInt64)
-	zm1 := BuildZM(types.T_int64, types.EncodeInt64(&maxi64))
+func TestZMSum(t *testing.T) {
+	zm := NewZM(types.T_int64, 0)
+	zm.setInited()
+	require.Equal(t, types.Decimal128{}, zm.GetSum())
+	sum, _, err := types.Parse128("10")
+	require.NoError(t, err)
+	zm.SetSum(sum)
+	t.Log(zm.String())
+	require.Equal(t, sum, zm.GetSum())
+	sum, _, err = types.Parse128("19223372036854775807")
+	require.NoError(t, err)
+	zm.SetSum(sum)
+	t.Log(zm.String())
+	require.Equal(t, sum, zm.GetSum())
+
+	zm1 := NewZM(types.T_float32, 0)
+	zm1.setInited()
+	require.Equal(t, 0.0, zm1.GetSum())
+	zm1.SetSum(10.0)
 	t.Log(zm1.String())
-	require.Equal(t, maxi64, zm1.GetSum())
-
-	i64l := int64(1)
-	UpdateZMAny(zm1, i64l)
+	require.Equal(t, 10.0, zm1.GetSum())
+	zm1.SetSum(math.NaN())
 	t.Log(zm1.String())
-	require.Equal(t, int64(0), zm1.GetSum())
+	require.True(t, math.IsNaN(zm1.GetSum().(float64)))
 
-	UpdateZMAny(zm1, i64l)
-	require.Equal(t, int64(0), zm1.GetSum())
-
-	maxf64 := math.MaxFloat64
-	zm2 := BuildZM(types.T_float64, types.EncodeFloat64(&maxf64))
+	zm2 := NewZM(types.T_varchar, 0)
+	zm2.setInited()
 	t.Log(zm2.String())
-	require.Equal(t, maxf64, zm2.GetSum())
-
-	f64l := float64(1)
-	UpdateZMAny(zm2, f64l)
-	t.Log(zm2.String())
-	require.Equal(t, maxf64, zm2.GetSum())
-
-	UpdateZMAny(zm2, maxf64)
-	t.Log(zm2.String())
-	require.Equal(t, float64(0), zm2.GetSum())
-
-	UpdateZMAny(zm2, math.SmallestNonzeroFloat64)
-	t.Log(zm2.String())
-	require.Equal(t, float64(0), zm2.GetSum())
-
-	minf64 := -maxf64
-	zm3 := BuildZM(types.T_float64, types.EncodeFloat64(&minf64))
-	t.Log(zm3.String())
-	require.Equal(t, minf64, zm3.GetSum())
-	UpdateZMAny(zm3, minf64)
-	t.Log(zm3.String())
-	require.Equal(t, float64(0), zm3.GetSum())
-
-	decimal64 := types.Decimal64(math.MaxInt64)
-	zm4 := BuildZM(types.T_decimal64, types.EncodeDecimal64(&decimal64))
-	t.Log(zm4.String())
-	require.Equal(t, decimal64, zm4.GetSum())
-	UpdateZMAny(zm4, types.Decimal64(1))
-	t.Log(zm4.String())
-	require.Equal(t, types.Decimal64(0), zm4.GetSum())
-	UpdateZMAny(zm4, types.Decimal64(1))
-	require.Equal(t, types.Decimal64(0), zm4.GetSum())
+	require.Nil(t, zm2.GetSum())
 }
 
 func BenchmarkZM(b *testing.B) {
