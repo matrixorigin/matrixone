@@ -16,7 +16,6 @@ package index
 
 import (
 	"bytes"
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -315,32 +314,17 @@ func TestZM(t *testing.T) {
 func TestZMSum(t *testing.T) {
 	zm := NewZM(types.T_int64, 0)
 	zm.setInited()
-	require.Equal(t, types.Decimal128{}, zm.GetSum())
-	sum, _, err := types.Parse128("10")
-	require.NoError(t, err)
-	zm.SetSum(sum)
-	t.Log(zm.String())
-	require.Equal(t, sum, zm.GetSum())
-	sum, _, err = types.Parse128("19223372036854775807")
-	require.NoError(t, err)
-	zm.SetSum(sum)
-	t.Log(zm.String())
-	require.Equal(t, sum, zm.GetSum())
+	require.Equal(t, int64(0), zm.GetSum())
+	int64v := int64(100)
+	zm.SetSum(types.EncodeInt64(&int64v))
+	require.Equal(t, int64v, zm.GetSum())
 
-	zm1 := NewZM(types.T_float32, 0)
-	zm1.setInited()
-	require.Equal(t, 0.0, zm1.GetSum())
-	zm1.SetSum(10.0)
-	t.Log(zm1.String())
-	require.Equal(t, 10.0, zm1.GetSum())
-	zm1.SetSum(math.NaN())
-	t.Log(zm1.String())
-	require.True(t, math.IsNaN(zm1.GetSum().(float64)))
-
-	zm2 := NewZM(types.T_varchar, 0)
+	zm2 := NewZM(types.T_int8, 0)
 	zm2.setInited()
-	t.Log(zm2.String())
-	require.Nil(t, zm2.GetSum())
+	require.Equal(t, int8(0), zm2.GetSum())
+	int8v := int8(100)
+	zm2.SetSum(types.EncodeInt8(&int8v))
+	require.Equal(t, int8v, zm2.GetSum())
 }
 
 func BenchmarkZM(b *testing.B) {

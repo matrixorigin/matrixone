@@ -91,10 +91,8 @@ func (zm ZM) String() string {
 	} else {
 		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
 			zm.GetType().String(), zm.GetScale(), zm.GetMin(), zm.GetMax()))
-		if zm.GetType().IsFloat() {
+		if zm.HasSum() {
 			_, _ = b.WriteString(fmt.Sprintf("SUM:%v", zm.GetSum()))
-		} else if zm.GetType().IsInteger() || zm.GetType() == types.T_decimal64 {
-			_, _ = b.WriteString(fmt.Sprintf("SUM:%v", zm.GetSum().(types.Decimal128).Format(0)))
 		}
 	}
 	if zm.MaxTruncated() {
@@ -162,25 +160,12 @@ func (zm ZM) GetMax() any {
 	return zm.getValue(buf)
 }
 
-func (zm ZM) SetSum(v any) {
-	t := zm.GetType()
-	if t.IsFloat() {
-		s, ok := v.(float64)
-		if !ok {
-			panic("ZM type is float but sum is not float")
-		}
-		copy(zm.GetSumBuf(), types.EncodeFloat64(&s))
-		return
-	}
-	if t.IsInteger() || t == types.T_decimal64 {
-		s, ok := v.(types.Decimal128)
-		if !ok {
-			panic("ZM type is integer but sum is not integer")
-		}
-		copy(zm.GetSumBuf(), types.EncodeDecimal128(&s))
-		return
-	}
-	panic("ZM type is not numeric")
+func (zm ZM) SetSum(v []byte) {
+	copy(zm.GetSumBuf(), v)
+}
+
+func (zm ZM) HasSum() bool {
+	return zm.GetSum() != 0
 }
 
 func (zm ZM) GetSum() any {
@@ -188,14 +173,7 @@ func (zm ZM) GetSum() any {
 		return nil
 	}
 	buf := zm.GetSumBuf()
-	t := zm.GetType()
-	if t.IsFloat() {
-		return types.DecodeFloat64(buf)
-	}
-	if t == types.T_decimal64 || t.IsInteger() {
-		return types.DecodeDecimal128(buf)
-	}
-	return nil
+	return zm.getValue(buf)
 }
 
 func (zm ZM) GetMinBuf() []byte {
@@ -207,13 +185,7 @@ func (zm ZM) GetMaxBuf() []byte {
 }
 
 func (zm ZM) GetSumBuf() []byte {
-	t := zm.GetType()
-	if t.IsFloat() {
-		// float64
-		return zm[8:16]
-	}
-	// int128
-	return zm[8:24]
+	return zm[8 : 8+zm[30]&0x1f]
 }
 
 func (zm ZM) GetBuf() []byte {
