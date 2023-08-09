@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -146,10 +147,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
+	//just for test
+	memBefore := runtime.MemStats{}
+	runtime.ReadMemStats(&memBefore)
 	bat, err := scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
 		return process.ExecNext, err
+	}
+	memAfter := runtime.MemStats{}
+	runtime.ReadMemStats(&memAfter)
+	if memAfter.Alloc-memBefore.Alloc > 1024*1024*1024 {
+		runtime.GC()
 	}
 
 	proc.SetInputBatch(bat)
