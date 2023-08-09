@@ -2931,7 +2931,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(true)
 				}
 			}
-			err = alterSessionStatus(ctx, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusRestricted.String(), ses.GetParameterUnit().QueryService)
+			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusRestricted.String(), ses.GetParameterUnit().QueryService)
 			if err != nil {
 				return err
 			}
@@ -2944,7 +2944,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(false)
 				}
 			}
-			err = alterSessionStatus(ctx, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusOpen.String(), ses.GetParameterUnit().QueryService)
+			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusOpen.String(), ses.GetParameterUnit().QueryService)
 			if err != nil {
 				return err
 			}
@@ -8906,11 +8906,11 @@ func addInitSystemVariablesSql(accountId int, accountName, variable_name string,
 }
 
 // alterSessionStatus alter all nodes session status which the tenant has been alter restricted or open.
-func alterSessionStatus(ctx context.Context, tenant string, user string, status string, qs queryservice.QueryService) error {
+func alterSessionStatus(ctx context.Context, curtenant, tenant string, user string, status string, qs queryservice.QueryService) error {
 	var nodes []string
 	labels := clusterservice.NewSelector().SelectByLabel(
 		map[string]string{"account": tenant}, clusterservice.EQ)
-	sysTenant := isSysTenant(tenant)
+	sysTenant := isSysTenant(curtenant)
 	if sysTenant {
 		disttae.SelectForSuperTenant(clusterservice.NewSelector(), user, nil,
 			func(s *metadata.CNService) {
@@ -8944,7 +8944,7 @@ func alterSessionStatus(ctx context.Context, tenant string, user string, status 
 			req := qs.NewRequest(query.CmdMethod_AlterAccount)
 			req.AlterAccountRequest = &query.AlterAccountRequest{
 				Tenant:    tenant,
-				SysTenant: sysTenant,
+				SysTenant: isSysTenant(tenant),
 				Status:    status,
 			}
 			resp, err := qs.SendMessage(ctx, addr, req)
@@ -8960,7 +8960,8 @@ func alterSessionStatus(ctx context.Context, tenant string, user string, status 
 				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
 			} else {
 				queryResp, ok := res.response.(*query.Response)
-				if !(ok && queryResp.AlterAccountResponse != nil && queryResp.AlterAccountResponse.AlterSuccess) {
+
+				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
 					retErr = moerr.NewInternalError(ctx, "alter account failed")
 				}
 			}
