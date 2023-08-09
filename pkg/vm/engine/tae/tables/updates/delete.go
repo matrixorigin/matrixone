@@ -51,8 +51,10 @@ func (node *DeleteNode) Less(b *DeleteNode) int {
 type DeleteNode struct {
 	*common.GenericDLNode[*DeleteNode]
 	*txnbase.TxnMVCCNode
-	chain    atomic.Pointer[DeleteChain]
-	mask     *roaring.Bitmap
+	chain atomic.Pointer[DeleteChain]
+	mask  *roaring.Bitmap
+	//FIXME::how to free pk vector?
+	rowid2PK map[uint32]containers.Vector
 	deltaloc objectio.Location
 	nt       NodeType
 	id       *common.ID
@@ -63,6 +65,7 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 	n := &DeleteNode{
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(commitTs),
 		mask:        roaring.New(),
+		rowid2PK:    make(map[uint32]containers.Vector),
 		nt:          NT_Merge,
 	}
 	return n
@@ -71,6 +74,7 @@ func NewEmptyDeleteNode() *DeleteNode {
 	n := &DeleteNode{
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
 		mask:        roaring.New(),
+		rowid2PK:    make(map[uint32]containers.Vector),
 		nt:          NT_Normal,
 		id:          &common.ID{},
 	}
@@ -80,6 +84,7 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	n := &DeleteNode{
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		mask:        roaring.New(),
+		rowid2PK:    make(map[uint32]containers.Vector),
 		nt:          NT_Normal,
 		dt:          dt,
 	}
@@ -165,12 +170,18 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 	return node.mask.Contains(row)
 }
 
-func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
+func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vector) {
 	// logutil.Debugf("RangeDelete BLK-%d Start=%d End=%d",
 	// 	node.chain.mvcc.meta.ID,
 	// 	start,
 	// 	end)
 	node.mask.AddRange(uint64(start), uint64(end+1))
+	if pk != nil && pk.Length() > 0 {
+		begin := start
+		for ; start < end+1; start++ {
+			node.rowid2PK[start] = pk.Window(int(start-begin), 1)
+		}
+	}
 	node.chain.Load().insertInMaskByRange(start, end)
 	for i := start; i < end+1; i++ {
 		node.chain.Load().InsertInDeleteView(i, node)
@@ -185,6 +196,15 @@ func (node *DeleteNode) DeletedRows() (rows []uint32) {
 	rows = node.mask.ToArray()
 	return
 }
+
+func (node *DeleteNode) DeletedPK() (pkVec map[uint32]containers.Vector) {
+	if node.mask == nil {
+		return
+	}
+	pkVec = node.rowid2PK
+	return
+}
+
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
 func (node *DeleteNode) PrepareCommit() (err error) {

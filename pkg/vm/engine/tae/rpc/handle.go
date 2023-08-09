@@ -955,17 +955,21 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			vec := containers.ToDNVector(bat.Vecs[0])
-			defer vec.Close()
-			if err = tb.DeleteByPhyAddrKeys(vec); err != nil {
+			rowIDVec := containers.ToDNVector(bat.Vecs[0])
+			defer rowIDVec.Close()
+			pkVec := containers.ToDNVector(bat.Vecs[1])
+			//defer pkVec.Close()
+			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
 			}
 		}
 		return
 	}
-	vec := containers.ToDNVector(req.Batch.GetVector(0))
-	defer vec.Close()
-	err = tb.DeleteByPhyAddrKeys(vec)
+	rowIDVec := containers.ToDNVector(req.Batch.GetVector(0))
+	defer rowIDVec.Close()
+	pkVec := containers.ToDNVector(req.Batch.GetVector(1))
+	//defer pkVec.Close()
+	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return
 }
 

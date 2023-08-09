@@ -21,7 +21,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -202,24 +201,28 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 	}
 
 	it := deletes.Iterator()
-	dels := nulls.Nulls{}
+	rowid2PK := node.DeletedPK()
+	//dels := nulls.Nulls{}
 	for it.HasNext() {
 		del := it.Next()
 		rowid := objectio.NewRowid(&meta.ID, del)
 		rowIDVec.Append(*rowid, false)
 		commitTSVec.Append(b.txn.GetPrepareTS(), false)
-		dels.Add(uint64(del))
+		//dels.Add(uint64(del))
+		pkVec.Extend(rowid2PK[del])
+
 	}
-	_ = meta.GetBlockData().Foreach(
-		ctx,
-		schema,
-		pkDef.Idx,
-		func(v any, isNull bool, row int) error {
-			pkVec.Append(v, false)
-			return nil
-		},
-		&dels,
-	)
+
+	//_ = meta.GetBlockData().Foreach(
+	//	ctx,
+	//	schema,
+	//	pkDef.Idx,
+	//	func(v any, isNull bool, row int) error {
+	//		pkVec.Append(v, false)
+	//		return nil
+	//	},
+	//	&dels,
+	//)
 }
 
 func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
