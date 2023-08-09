@@ -15,26 +15,54 @@
 package compatibility
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/stretchr/testify/assert"
 )
 
 var (
 	version = 1
 )
 
+func initPrepareTest(pc PrepareCase, opts *options.Options, t *testing.T) *testutil.TestEngine {
+	dir, err := InitPrepareDirByType(pc.id)
+	assert.NoError(t, err)
+	ctx := context.Background()
+	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
+	tae.BindSchema(pc.getSchema(pc, t))
+	return tae
+}
+func initTestEngine(tc TestCase, t *testing.T) *testutil.TestEngine {
+	pc := GetPrepareCase(tc.dependsOn)
+	opts := pc.getOptions(pc, t)
+	dir, err := InitTestCaseExecuteDir(tc.name)
+	assert.NoError(t, err)
+	err = CopyDir(GetPrepareDirByType(pc.id), dir)
+	assert.NoError(t, err)
+	ctx := context.Background()
+	tae := testutil.NewTestEngineWithDir(ctx, dir, t, opts)
+	tae.BindSchema(pc.getSchema(pc, t))
+	return tae
+}
+
 type PrepareCase struct {
-	typ        int
+	id         int
 	desc       string
 	prepareFn  func(tc PrepareCase, t *testing.T)
 	getBatch   func(tc PrepareCase, t *testing.T) *containers.Batch
 	getSchema  func(tc PrepareCase, t *testing.T) *catalog.Schema
-	getEngine  func(tc PrepareCase, t *testing.T) *testutil.TestEngine
 	getOptions func(tc PrepareCase, t *testing.T) *options.Options
+}
+
+func (pc PrepareCase) GetEngine(t *testing.T) *testutil.TestEngine {
+	opts := pc.getOptions(pc, t)
+	e := initPrepareTest(pc, opts, t)
+	return e
 }
 
 type TestCase struct {
@@ -42,6 +70,11 @@ type TestCase struct {
 	desc      string
 	dependsOn int
 	testFn    func(tc TestCase, t *testing.T)
+}
+
+func (tc TestCase) GetEngine(t *testing.T) *testutil.TestEngine {
+	tae := initTestEngine(tc, t)
+	return tae
 }
 
 var PrepareCases map[int]PrepareCase
@@ -61,14 +94,14 @@ func PrepareCaseRegister(prepareCase PrepareCase) {
 	if PrepareCases == nil {
 		PrepareCases = make(map[int]PrepareCase)
 	}
-	if _, ok := PrepareCases[prepareCase.typ]; ok {
+	if _, ok := PrepareCases[prepareCase.id]; ok {
 		panic("PrepareCaseRegister: duplicate prepare case type")
 	}
-	PrepareCases[prepareCase.typ] = prepareCase
+	PrepareCases[prepareCase.id] = prepareCase
 }
 
-func GetPrepareCase(typ int) PrepareCase {
-	if prepareCase, ok := PrepareCases[typ]; ok {
+func GetPrepareCase(id int) PrepareCase {
+	if prepareCase, ok := PrepareCases[id]; ok {
 		return prepareCase
 	}
 	panic("GetPrepareCase: prepare case not found")
