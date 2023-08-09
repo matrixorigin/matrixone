@@ -1252,7 +1252,7 @@ func (data *CheckpointData) WriteTo(
 				} else if table.End <= block.GetEndOffset() && table.End >= block.GetStartOffset() {
 					blockLoc := BuildBlockLoactionWithLocation(
 						name, blks[block.GetID()].GetExtent(), 0, block.GetID(),
-						0, block.GetEndOffset()-table.End)
+						0, table.End-block.GetStartOffset())
 					table.locations.Append(blockLoc)
 				}
 			}
