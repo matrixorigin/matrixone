@@ -7372,15 +7372,6 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	return err
 }
 
-// createTablesInInformationSchema creates the database information_schema and the views or tables.
-func createTablesInInformationSchema(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit) error {
-	err := bh.Exec(ctx, "create database if not exists information_schema;")
-	if err != nil {
-		return err
-	}
-	return err
-}
-
 func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName string) (bool, error) {
 	var sqlForCheckTenant string
 	var erArray []ExecResult
