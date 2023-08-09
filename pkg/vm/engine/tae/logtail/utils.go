@@ -1403,8 +1403,6 @@ func prefetchCheckpointData(
 	service fileservice.FileService,
 	key objectio.Location,
 ) (err error) {
-	// FIXME
-	return nil
 	pref, err := blockio.BuildSubPrefetchParams(service, key)
 	if err != nil {
 		return
