@@ -202,15 +202,20 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 
 	it := deletes.Iterator()
 	rowid2PK := node.DeletedPK()
-	//dels := nulls.Nulls{}
 	for it.HasNext() {
 		del := it.Next()
 		rowid := objectio.NewRowid(&meta.ID, del)
 		rowIDVec.Append(*rowid, false)
 		commitTSVec.Append(b.txn.GetPrepareTS(), false)
-		//dels.Add(uint64(del))
-		pkVec.Extend(rowid2PK[del])
 
+		v, ok := rowid2PK[del]
+		if ok {
+			pkVec.Extend(v)
+		}
+		//if !ok {
+		//	panic(fmt.Sprintf("rowid %d 's pk not found in rowid2PK.\n", del))
+		//}
+		//pkVec.Extend(v)
 	}
 
 	//_ = meta.GetBlockData().Foreach(
