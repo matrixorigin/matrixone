@@ -331,7 +331,7 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
 
-				ToObjectBytes: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
+				ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
 			})
 		}
 	}

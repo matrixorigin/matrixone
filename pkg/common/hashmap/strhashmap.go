@@ -69,6 +69,10 @@ func (m *StrHashMap) Free() {
 	m.hashMap.Free(m.m)
 }
 
+func (m *StrHashMap) PreAlloc(n uint64, mp *mpool.MPool) error {
+	return m.hashMap.PreAlloc(n, mp)
+}
+
 func (m *StrHashMap) GroupCount() uint64 {
 	return m.rows
 }
