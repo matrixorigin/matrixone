@@ -57,6 +57,8 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int32
+
+	ioLocks IOLocks
 }
 
 // key mapping scheme:
@@ -425,6 +427,15 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
+	}
+
+	unlock, wait := s.ioLocks.Lock(IOLockKey{
+		File: vector.FilePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
 	}
 
 	if s.memCache != nil {
