@@ -106,7 +106,7 @@ func (d *detector) check(
 	}:
 	default:
 		// too many txns waiting for deadlock check, just return error
-		return ErrDeadlockDetectorClosed
+		return ErrDeadlockCheckBusy
 	}
 	return nil
 }
