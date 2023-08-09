@@ -178,8 +178,8 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vecto
 	node.mask.AddRange(uint64(start), uint64(end+1))
 	if pk != nil && pk.Length() > 0 {
 		begin := start
-		for ; start < end+1; start++ {
-			node.rowid2PK[start] = pk.Window(int(start-begin), 1)
+		for ; begin < end+1; begin++ {
+			node.rowid2PK[begin] = pk.Window(int(begin-start), 1)
 		}
 	}
 	node.chain.Load().insertInMaskByRange(start, end)
