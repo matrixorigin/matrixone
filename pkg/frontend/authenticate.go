@@ -780,6 +780,7 @@ var (
 		"mo_mysql_compatibility_mode": 0,
 		catalog.MOAutoIncrTable:       0,
 		"mo_indexes":                  0,
+		"mo_table_partitions":         0,
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
 	}
@@ -794,7 +795,7 @@ var (
 	);`, catalog.MOAutoIncrTable)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
-	createMoIndexesSql = `create table mo_indexes(
+	createMoIndexesSql = fmt.Sprintf(`create table %s(
 				id 			bigint unsigned not null,
 				table_id 	bigint unsigned not null,
 				database_id bigint unsigned not null,
@@ -808,7 +809,21 @@ var (
 				options     text,
 				index_table_name varchar(5000),
 				primary key(id, column_name)
-			);`
+			);`, catalog.MO_INDEXES)
+
+	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
+			  table_id bigint unsigned NOT NULL,
+			  database_id bigint unsigned not null,
+			  number smallint unsigned NOT NULL,
+			  name varchar(64) NOT NULL,
+        	  partition_type varchar(50) NOT NULL,
+              partition_expression varchar(2048) NULL,
+			  description_utf8 text,
+			  comment varchar(2048) NOT NULL,
+			  options text,
+			  partition_table_name varchar(1024) NOT NULL,
+			  PRIMARY KEY table_id (table_id, name)
+			);`, catalog.MO_TABLE_PARTITIONS)
 
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
@@ -956,10 +971,11 @@ var (
 		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
 		`drop table if exists mo_catalog.mo_stages;`,
 	}
-	dropMoPubsSql     = `drop table if exists mo_catalog.mo_pubs;`
-	deleteMoPubsSql   = `delete from mo_catalog.mo_pubs;`
-	dropAutoIcrColSql = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
-	dropMoIndexes     = `drop table if exists mo_catalog.mo_indexes;`
+	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
+	deleteMoPubsSql       = `delete from mo_catalog.mo_pubs;`
+	dropAutoIcrColSql     = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
+	dropMoIndexes         = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
+	dropMoTablePartitions = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -4092,6 +4108,12 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 
 		//step 11: drop mo_catalog.mo_indexes under general tenant
 		err = bh.Exec(deleteCtx, dropMoIndexes)
+		if err != nil {
+			return err
+		}
+
+		// drop mo_catalog.mo_table_partitions under general tenant
+		err = bh.Exec(deleteCtx, dropMoTablePartitions)
 		if err != nil {
 			return err
 		}
@@ -7495,6 +7517,12 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if err != nil {
 			return err
 		}
+
+		err = bh.Exec(newTenantCtx, createMoTablePartitionsSql)
+		if err != nil {
+			return err
+		}
+
 		err = bh.Exec(newTenantCtx, createAutoTableSql)
 		if err != nil {
 			return err
