@@ -84,12 +84,12 @@ func EnsurePrepareEnvOK() error {
 	return nil
 }
 
-func GetPrepareDirByType(typ int) string {
-	return filepath.Join("/tmp", "tae-compatibility-test", PrepareDir, fmt.Sprintf("p%d", typ))
+func GetPrepareDirByName(name string) string {
+	return filepath.Join("/tmp", "tae-compatibility-test", PrepareDir, name)
 }
 
-func InitPrepareDirByType(typ int) (string, error) {
-	dir := GetPrepareDirByType(typ)
+func InitPrepareDirByName(name string) (string, error) {
+	dir := GetPrepareDirByName(name)
 	os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
