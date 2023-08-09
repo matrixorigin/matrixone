@@ -359,17 +359,16 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
 
-			if entry.ToObjectBytes != nil {
+			if entry.ToCacheData != nil {
 				r = io.TeeReader(r, entry.WriterForRead)
 				cr := &countingReader{
 					R: r,
 				}
-				bs, size, err := entry.ToObjectBytes(cr, nil)
+				bs, err := entry.ToCacheData(cr, nil)
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].ObjectBytes = bs
-				vector.Entries[i].ObjectSize = size
+				vector.Entries[i].CachedData = bs
 				if entry.Size > 0 && cr.N != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
@@ -408,7 +407,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
 
-			if entry.ToObjectBytes == nil {
+			if entry.ToCacheData == nil {
 				*entry.ReadCloserForRead = &readCloser{
 					r:         r,
 					closeFunc: file.Close,
@@ -420,12 +419,11 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer file.Close()
-						bs, size, err := entry.ToObjectBytes(buf, buf.Bytes())
+						bs, err := entry.ToCacheData(buf, buf.Bytes())
 						if err != nil {
 							return err
 						}
-						vector.Entries[i].ObjectBytes = bs
-						vector.Entries[i].ObjectSize = size
+						vector.Entries[i].CachedData = bs
 						return nil
 					},
 				}
@@ -467,7 +465,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setObjectBytesFromData(); err != nil {
+			if err := entry.setCachedData(); err != nil {
 				return err
 			}
 
