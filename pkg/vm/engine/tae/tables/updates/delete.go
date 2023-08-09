@@ -246,6 +246,7 @@ func (node *DeleteNode) ApplyRollback() (err error) {
 	defer node.chain.Load().mvcc.Unlock()
 	_, err = node.TxnMVCCNode.ApplyRollback()
 	node.chain.Load().mvcc.DecChangeIntentionCnt()
+	node.rowid2PK = nil
 	return
 }
 

@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -824,11 +825,15 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 			//ebat.Vecs = e.bat.Vecs[:1]
 			//ebat.Attrs = e.bat.Attrs[:1]
 			if e.fileName == "" {
-				ebat.Vecs = e.bat.Vecs[:1]
-				ebat.Attrs = e.bat.Attrs[:1]
-			} else {
+				if len(e.bat.Vecs) < 2 {
+					fmt.Printf("database name = %s, table name = %s.\n", e.databaseName, e.tableName)
+					os.Exit(0)
+				}
 				ebat.Vecs = e.bat.Vecs[:2]
-				ebat.Attrs = e.bat.Attrs[:2]
+				//ebat.Attrs = e.bat.Attrs[:2]
+			} else {
+				ebat.Vecs = e.bat.Vecs[:1]
+				//ebat.Attrs = e.bat.Attrs[:1]
 			}
 
 		}
