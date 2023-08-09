@@ -23,6 +23,7 @@ import (
 )
 
 func currentAccountPrepare(proc *process.Process, arg *Argument) error {
+	arg.ctr.state = dataProducing
 	if len(arg.Args) > 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "current_account: no argument is required")
 	}
@@ -54,27 +55,37 @@ func getUserId(proc *process.Process) *vector.Vector {
 }
 
 func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
-	rbat := batch.NewWithSize(len(arg.Attrs))
-	rbat.Attrs = arg.Attrs
-	for i, attr := range arg.Attrs {
-		switch attr {
-		case "account_name":
-			rbat.Vecs[i] = getAccountName(proc)
-		case "account_id":
-			rbat.Vecs[i] = getAccountId(proc)
-		case "user_name":
-			rbat.Vecs[i] = getUserName(proc)
-		case "user_id":
-			rbat.Vecs[i] = getUserId(proc)
-		case "role_name":
-			rbat.Vecs[i] = getRoleName(proc)
-		case "role_id":
-			rbat.Vecs[i] = getRoleId(proc)
-		default:
-			return false, moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
+	switch arg.ctr.state {
+	case dataProducing:
+		rbat := batch.NewWithSize(len(arg.Attrs))
+		rbat.Attrs = arg.Attrs
+		for i, attr := range arg.Attrs {
+			switch attr {
+			case "account_name":
+				rbat.Vecs[i] = getAccountName(proc)
+			case "account_id":
+				rbat.Vecs[i] = getAccountId(proc)
+			case "user_name":
+				rbat.Vecs[i] = getUserName(proc)
+			case "user_id":
+				rbat.Vecs[i] = getUserId(proc)
+			case "role_name":
+				rbat.Vecs[i] = getRoleName(proc)
+			case "role_id":
+				rbat.Vecs[i] = getRoleId(proc)
+			default:
+				return false, moerr.NewInvalidInput(proc.Ctx, "%v is not supported by current_account()", attr)
+			}
 		}
+		rbat.SetRowCount(1)
+		proc.SetInputBatch(rbat)
+		arg.ctr.state = dataFinished
+		return false, nil
+
+	case dataFinished:
+		proc.SetInputBatch(nil)
+		return true, nil
+	default:
+		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
 	}
-	rbat.SetRowCount(1)
-	proc.SetInputBatch(rbat)
-	return true, nil
 }
