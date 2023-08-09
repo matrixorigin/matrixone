@@ -1061,7 +1061,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 				dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
 					Op:  vm.Dispatch,
-					Arg: constructDispatchLocal(false, false, false, regs, false),
+					Arg: constructDispatchLocal(false, false, false, regs, false, ""),
 				})
 				for i := range scopes {
 					insertArg, err := constructInsert(n, c.e, c.proc)
@@ -1230,13 +1230,33 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		rs := c.newMergeScope(ss)
 		isLog := false
-		if strings.Contains(c.sql, "indup_02") && strings.Contains(c.sql, "duplicate") {
+		tableName := ""
+		if strings.Contains(c.sql, "duplicate") {
 			isLog = true
+			if strings.Contains(c.sql, "indup_00") {
+				tableName = "indup_00"
+			} else if strings.Contains(c.sql, "indup_01") {
+				tableName = "indup_01"
+			} else if strings.Contains(c.sql, "indup_02") {
+				tableName = "indup_02"
+			} else if strings.Contains(c.sql, "indup_03") {
+				tableName = "indup_03"
+			} else if strings.Contains(c.sql, "indup_04") {
+				tableName = "indup_04"
+			} else if strings.Contains(c.sql, "indup_05") {
+				tableName = "indup_05"
+			} else if strings.Contains(c.sql, "indup_06") {
+				tableName = "indup_06"
+			} else if strings.Contains(c.sql, "indup_07") {
+				tableName = "indup_07"
+			} else if strings.Contains(c.sql, "indup_07") {
+				tableName = "indup_07"
+			}
 		}
 
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, true, len(receivers) > 1, receivers, isLog),
+			Arg: constructDispatchLocal(true, true, len(receivers) > 1, receivers, isLog, tableName),
 		})
 
 		return []*Scope{rs}, nil
@@ -1642,8 +1662,29 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	isLog := false
-	if strings.Contains(c.sql, "indup_02") && strings.Contains(c.sql, "duplicate") {
+	tableName := ""
+	if strings.Contains(c.sql, "duplicate") {
 		isLog = true
+
+		if strings.Contains(c.sql, "indup_00") {
+			tableName = "indup_00"
+		} else if strings.Contains(c.sql, "indup_01") {
+			tableName = "indup_01"
+		} else if strings.Contains(c.sql, "indup_02") {
+			tableName = "indup_02"
+		} else if strings.Contains(c.sql, "indup_03") {
+			tableName = "indup_03"
+		} else if strings.Contains(c.sql, "indup_04") {
+			tableName = "indup_04"
+		} else if strings.Contains(c.sql, "indup_05") {
+			tableName = "indup_05"
+		} else if strings.Contains(c.sql, "indup_06") {
+			tableName = "indup_06"
+		} else if strings.Contains(c.sql, "indup_07") {
+			tableName = "indup_07"
+		} else if strings.Contains(c.sql, "indup_07") {
+			tableName = "indup_07"
+		}
 	}
 
 	currentFirstFlag := c.anal.isFirst
@@ -1652,7 +1693,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Projection,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructProjection(n, isLog),
+			Arg:     constructProjection(n, isLog, tableName),
 		})
 	}
 	c.anal.isFirst = false
@@ -2720,7 +2761,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(false, false, false, extraRegisters(ss, 0), false),
+			Arg: constructDispatchLocal(false, false, false, extraRegisters(ss, 0), false, ""),
 		})
 	}
 	rs.IsEnd = true
@@ -2760,7 +2801,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, false, false, extraRegisters(ss, s.BuildIdx), false),
+			Arg: constructDispatchLocal(true, false, false, extraRegisters(ss, s.BuildIdx), false, ""),
 		})
 	}
 	rs.IsEnd = true

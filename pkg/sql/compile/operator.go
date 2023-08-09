@@ -412,6 +412,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 				LocalRegs:  make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
 				RemoteRegs: make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs)),
 				IsLog:      sourceArg.IsLog,
+				TableName:  sourceArg.TableName,
 			}
 			for j := range arg.LocalRegs {
 				sourceReg := sourceArg.LocalRegs[j]
@@ -629,10 +630,11 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	}, nil
 }
 
-func constructProjection(n *plan.Node, isLog bool) *projection.Argument {
+func constructProjection(n *plan.Node, isLog bool, tableName string) *projection.Argument {
 	return &projection.Argument{
-		Es:    n.ProjectList,
-		IsLog: isLog,
+		Es:        n.ProjectList,
+		IsLog:     isLog,
+		TableName: tableName,
 	}
 }
 
@@ -1002,12 +1004,13 @@ func constructIntersect(ibucket, nbucket int) *intersect.Argument {
 	}
 }
 
-func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.WaitRegister, isLog bool) *dispatch.Argument {
+func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.WaitRegister, isLog bool, tableName string) *dispatch.Argument {
 	arg := new(dispatch.Argument)
 	arg.LocalRegs = regs
 	arg.IsSink = isSink
 	arg.RecSink = RecSink
 	arg.IsLog = isLog
+	arg.TableName = tableName
 	if all {
 		arg.FuncId = dispatch.SendToAllLocalFunc
 	} else {

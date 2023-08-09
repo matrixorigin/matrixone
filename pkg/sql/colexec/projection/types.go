@@ -21,9 +21,10 @@ import (
 )
 
 type Argument struct {
-	ctr   *container
-	Es    []*plan.Expr
-	IsLog bool
+	ctr       *container
+	Es        []*plan.Expr
+	IsLog     bool
+	TableName string
 }
 
 type container struct {

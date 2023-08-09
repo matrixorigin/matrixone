@@ -61,6 +61,7 @@ message Dispatch {
   bool  is_sink = 6;
   bool  rec_sink = 7;
   bool is_log = 8;
+  string table_name = 9;
 }
 
 message Merge {

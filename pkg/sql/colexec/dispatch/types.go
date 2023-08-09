@@ -94,6 +94,7 @@ type Argument struct {
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 	IsLog               bool
+	TableName           string
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
