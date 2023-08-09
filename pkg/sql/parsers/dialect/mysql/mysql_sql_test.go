@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "alter table t1 add column x varchar(20) primary key after b",
-		output: "alter table t1 add column x varchar(20) primary key after b",
+		input:  "CREATE STREAM enriched WITH (\n    VALUE_SCHEMA_ID = 1\n  ) AS\n  SELECT\n     cs.*,\n     u.name,\n     u.classification,\n     u.level\n  FROM clickstream cs\n    JOIN users u ON u.id = cs.userId",
+		output: "create stream enriched with (value_schema_id = 1) as select cs.*, u.name, u.classification, u.level from clickstream as cs inner join users as u on u.id = cs.userid",
 	}
 )
 
@@ -78,6 +78,21 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "CREATE STREAM enriched WITH (\n    VALUE_SCHEMA_ID = 1\n  ) AS\n  SELECT\n     cs.*,\n     u.name,\n     u.classification,\n     u.level\n  FROM clickstream cs\n    JOIN users u ON u.id = cs.userId",
+		output: "create stream enriched with (value_schema_id = 1) as select cs.*, u.name, u.classification, u.level from clickstream as cs inner join users as u on u.id = cs.userid",
+	}, {
+		input:  "CREATE STREAM filtered AS\n   SELECT \n     a, \n     few,\n     columns \n   FROM source_stream",
+		output: "create stream filtered as select a, few, columns from source_stream",
+	}, {
+		input:  "CREATE STREAM pageviews (\n    page_id BIGINT KEY\n  ) WITH (\n    KAFKA_TOPIC = 'keyed-pageviews-topic',\n    VALUE_FORMAT = 'JSON_SR',\n    VALUE_SCHEMA_ID = 2\n  );",
+		output: "create stream pageviews (page_id bigint key) with (kafka_topic = keyed-pageviews-topic, value_format = JSON_SR, value_schema_id = 2)",
+	}, {
+		input:  "CREATE STREAM pageviews (\n    viewtime BIGINT,\n    user_id VARCHAR\n  ) WITH (\n    KAFKA_TOPIC = 'keyless-pageviews-topic',\n    KEY_FORMAT = 'AVRO',\n    KEY_SCHEMA_ID = 1,\n    VALUE_FORMAT = 'JSON_SR'\n  );",
+		output: "create stream pageviews (viewtime bigint, user_id varchar) with (kafka_topic = keyless-pageviews-topic, key_format = AVRO, key_schema_id = 1, value_format = JSON_SR)",
+	}, {
+		input:  "CREATE STREAM pageviews (page_id BIGINT, viewtime BIGINT, user_id VARCHAR) WITH (\n    KAFKA_TOPIC = 'keyless-pageviews-topic',\n    VALUE_FORMAT = 'JSON'\n  )",
+		output: "create stream pageviews (page_id bigint, viewtime bigint, user_id varchar) with (kafka_topic = keyless-pageviews-topic, value_format = JSON)",
+	}, {
 		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 	}, {
