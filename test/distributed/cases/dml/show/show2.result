@@ -1,0 +1,16 @@
+set global enable_privilege_cache = off;
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+create account test_show_var_acc1 admin_name 'root' identified by '111';
+show variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+show global variables like 'autocommit';
+Variable_name    Value
+autocommit    on
+drop account test_show_var_acc1;
+set global enable_privilege_cache = on;
