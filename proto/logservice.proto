@@ -109,6 +109,7 @@ message CNStoreHeartbeat {
   metadata.CNRole Role               = 6;
   bool            TaskServiceCreated = 7;
   string          QueryAddress       = 8;
+  string          InitWorkState      = 9;
 }
 
 

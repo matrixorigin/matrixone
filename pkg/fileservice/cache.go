@@ -73,16 +73,22 @@ type IOVectorCache interface {
 	Flush()
 }
 
-type IOVectorCacheKey struct {
+type CacheKey struct {
 	Path   string
 	Offset int64
 	Size   int64
 }
 
-// ObjectCache caches IOEntry.ObjectBytes
-type ObjectCache interface {
-	Set(key any, value []byte, size int64, preloading bool)
-	Get(key any, preloading bool) (value []byte, size int64, ok bool)
+type Bytes []byte
+
+func (b Bytes) Size() int64 {
+	return int64(len(b))
+}
+
+// DataCache caches IOEntry.CachedData
+type DataCache interface {
+	Set(ctx context.Context, key CacheKey, value RCBytes, preloading bool)
+	Get(ctx context.Context, key CacheKey, preloading bool) (value RCBytes, ok bool)
 	Flush()
 	Capacity() int64
 	Used() int64

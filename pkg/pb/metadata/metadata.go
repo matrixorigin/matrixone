@@ -111,3 +111,22 @@ func (m DNService) DebugString() string {
 	buf.WriteString("]")
 	return buf.String()
 }
+
+// ToTitle converts the state string to title-like string.
+func ToTitle(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+}
+
+// ValidStateString returns true if the state string is valid.
+func ValidStateString(s string) bool {
+	title := ToTitle(s)
+	for v := range WorkState_value {
+		if title == v {
+			return true
+		}
+	}
+	return false
+}

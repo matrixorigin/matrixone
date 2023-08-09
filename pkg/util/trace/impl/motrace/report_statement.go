@@ -65,7 +65,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.ExecPlan2Stats(ctx)
 		// remove the plan
 		s.jsonByte = nil
-		s.ExecPlan = nil
+		s.FreeExecPlan()
 
 		// remove the TransacionID
 		s.TransactionID = NilTxnID
@@ -104,6 +104,7 @@ func StatementInfoUpdate(existing, new Item) {
 		// handle error
 		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
 	}
+	n.FreeExecPlan()
 }
 
 func StatementInfoFilter(i Item) bool {
@@ -245,33 +246,51 @@ func (s *StatementInfo) Size() int64 {
 	return num
 }
 
+// FreeExecPlan will free StatementInfo.ExecPlan.
+// Please make sure it called after StatementInfo.ExecPlan2Stats
+func (s *StatementInfo) FreeExecPlan() {
+	if s.ExecPlan != nil {
+		s.ExecPlan.Free()
+		s.ExecPlan = nil
+	}
+}
+
 func (s *StatementInfo) Free() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if s.end && s.exported { // cooperate with s.mux
-		s.RoleId = 0
-		s.Statement = ""
-		s.StatementFingerprint = ""
-		s.StatementTag = ""
-		if s.ExecPlan != nil {
-			s.ExecPlan.Free()
-		}
-		s.RequestAt = time.Time{}
-		s.ResponseAt = time.Time{}
-		s.ExecPlan = nil
-		s.Status = StatementStatusRunning
-		s.Error = nil
-		s.RowsRead = 0
-		s.BytesScan = 0
-		s.ResultCount = 0
-		s.end = false
-		s.reported = false
-		s.exported = false
-		// clean []byte
-		s.jsonByte = nil
-		s.statsArray.Reset()
-		stmtPool.Put(s)
+		s.free()
 	}
+}
+
+// freeNoLocked will free StatementInfo if StatementInfo.end is true.
+// Please make sure it called after EndStatement.
+func (s *StatementInfo) freeNoLocked() {
+	if s.end {
+		s.free()
+	}
+}
+
+func (s *StatementInfo) free() {
+	s.RoleId = 0
+	s.Statement = ""
+	s.StatementFingerprint = ""
+	s.StatementTag = ""
+	s.FreeExecPlan()
+	s.RequestAt = time.Time{}
+	s.ResponseAt = time.Time{}
+	s.Status = StatementStatusRunning
+	s.Error = nil
+	s.RowsRead = 0
+	s.BytesScan = 0
+	s.ResultCount = 0
+	s.end = false
+	s.reported = false
+	s.exported = false
+	// clean []byte
+	s.jsonByte = nil
+	s.statsArray.Reset()
+	stmtPool.Put(s)
 }
 
 func (s *StatementInfo) GetTable() *table.Table { return SingleStatementTable }
@@ -417,10 +436,6 @@ func (s *StatementInfo) IsZeroTxnID() bool {
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {
-	if s.Status == StatementStatusRunning && GetTracerProvider().skipRunningStmt {
-		return
-	}
-	s.reported = true
 	ReportStatement(ctx, s)
 }
 
@@ -489,18 +504,25 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
+	// Filter out the Running record.
+	if s.Status == StatementStatusRunning && GetTracerProvider().skipRunningStmt {
+		return nil
+	}
 	// Filter out the MO_LOGGER SQL statements
 	if s.User == db_holder.MOLoggerUser {
-		return nil
+		goto DiscardAndFreeL
 	}
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
 	if s.User == "internal" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
-			go s.Free()
-			return nil
+			goto DiscardAndFreeL
 		}
 	}
 
+	s.reported = true
 	return GetGlobalBatchProcessor().Collect(ctx, s)
+DiscardAndFreeL:
+	s.freeNoLocked()
+	return nil
 }
