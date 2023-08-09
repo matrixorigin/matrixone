@@ -9,7 +9,7 @@ x-mo-common: &mo-common
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.org,direct"
-    image: jacksonxie/matrixone:dev-663f7589b
+    image: matrixorigin/matrixone:latest
     volumes:
       - ../../etc/launch-tae-compose/config:/config
       - ../../test:/test

@@ -4094,8 +4094,6 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 }
 
 func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
-	var val int64
-	var cnt int64
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		statsByte.Reset()
@@ -4109,19 +4107,9 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.RowsRead += rows
 				stats.BytesScan += bytes
 			}
-			if node.NodeType == plan.Node_PROJECT {
-				if options.Analyze && node.AnalyzeInfo != nil {
-					val += node.AnalyzeInfo.OutputSize
-					cnt++
-				}
-			}
 		}
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
-	if cnt > 1 {
-		logutil.Infof("MarshalPlan Output Project where cnt>1, stmt: %s, %s", uuid.UUID(h.stmt.StatementID).String(), h.stmt.Statement)
-	}
-	logutil.Infof("MarshalPlan Output Project: %s, %d, cnt: %d", uuid.UUID(h.stmt.StatementID).String(), val, cnt)
 	return
 }
