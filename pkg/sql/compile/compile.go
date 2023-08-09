@@ -1738,22 +1738,12 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 	}
 
 	parent, children := c.newShuffleJoinScopeList(lefts, rights, node)
-	if parent != nil {
-		lastOperator := make([]vm.Instruction, 0, len(children))
-		for i := range children {
-			ilen := len(children[i].Instructions) - 1
-			lastOperator = append(lastOperator, children[i].Instructions[ilen])
-			children[i].Instructions = children[i].Instructions[:ilen]
-		}
-
-		defer func() {
-			// recovery the children's last operator
-			for i := range children {
-				children[i].appendInstruction(lastOperator[i])
-			}
-		}()
+	lastOperator := make([]vm.Instruction, 0, len(children))
+	for i := range children {
+		ilen := len(children[i].Instructions) - 1
+		lastOperator = append(lastOperator, children[i].Instructions[ilen])
+		children[i].Instructions = children[i].Instructions[:ilen]
 	}
-
 	switch node.JoinType {
 	case plan.Node_INNER:
 		for i := range children {
@@ -1822,11 +1812,12 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 	default:
 		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join type '%v'", node.JoinType)))
 	}
-
-	if parent != nil {
-		return parent
+	// recovery the children's last operator
+	for i := range children {
+		children[i].appendInstruction(lastOperator[i])
 	}
-	return children
+
+	return parent
 }
 
 func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
@@ -2596,8 +2587,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 }
 
 func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([]*Scope, []*Scope) {
-	single := len(c.cnList) <= 1
-	var parent []*Scope
+	parent := make([]*Scope, 0, len(c.cnList))
 	children := make([]*Scope, 0, len(c.cnList))
 	lnum := len(left)
 	sum := lnum + len(right)
@@ -2617,9 +2607,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			}
 		}
 		children = append(children, ss...)
-		if !single {
-			parent = append(parent, c.newMergeRemoteScope(ss, n))
-		}
+		parent = append(parent, c.newMergeRemoteScope(ss, n))
 	}
 
 	currentFirstFlag := c.anal.isFirst
