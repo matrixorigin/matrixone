@@ -44,13 +44,14 @@ func LoadColumns(ctx context.Context,
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].ObjectBytes)
+		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Value)
 		if err != nil {
 			return
 		}
 		bat.Vecs[i] = obj.(*vector.Vector)
 		bat.SetRowCount(bat.Vecs[i].Length())
 	}
+	//TODO call CachedData.Release
 	return
 }
 
@@ -61,7 +62,7 @@ func LoadBF(
 	fs fileservice.FileService,
 	noLoad bool,
 ) (bf objectio.BloomFilter, err error) {
-	v, ok := cache.Get(*loc.ShortName())
+	v, ok := cache.Get(ctx, *loc.ShortName())
 	if ok {
 		bf = objectio.BloomFilter(v)
 		return
@@ -70,11 +71,11 @@ func LoadBF(
 		return
 	}
 	r, _ := NewObjectReader(fs, loc)
-	v, size, err := r.LoadAllBF(ctx)
+	v, _, err = r.LoadAllBF(ctx)
 	if err != nil {
 		return
 	}
-	cache.Set(*loc.ShortName(), v, int64(size))
+	cache.Set(ctx, *loc.ShortName(), v)
 	bf = objectio.BloomFilter(v)
 	return
 }
