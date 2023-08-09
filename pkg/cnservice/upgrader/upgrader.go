@@ -31,29 +31,29 @@ type Upgrader struct {
 	IEFactory func() ie.InternalExecutor
 }
 
-func ParseDataTypeToColType(dataType string) table.ColType {
+func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 	switch {
 	case strings.Contains(strings.ToLower(dataType), "datetime"):
-		return table.TDatetime
+		return table.TDatetime, nil
 	case strings.Contains(strings.ToLower(dataType), "bigint"):
 		if strings.Contains(strings.ToLower(dataType), "unsigned") {
-			return table.TUint64
+			return table.TUint64, nil
 		}
-		return table.TInt64
+		return table.TInt64, nil
 	case strings.Contains(strings.ToLower(dataType), "double"):
-		return table.TFloat64
+		return table.TFloat64, nil
 	case strings.Contains(strings.ToLower(dataType), "json"):
-		return table.TJson
+		return table.TJson, nil
 	case strings.Contains(strings.ToLower(dataType), "text"):
-		return table.TText
+		return table.TText, nil
 	case strings.Contains(strings.ToLower(dataType), "varchar"):
-		return table.TVarchar
+		return table.TVarchar, nil
 	case strings.Contains(strings.ToLower(dataType), "bytes"):
-		return table.TBytes
+		return table.TBytes, nil
 	case strings.Contains(strings.ToLower(dataType), "uuid"):
-		return table.TUuid
+		return table.TUuid, nil
 	default:
-		panic("Unknown data type: " + dataType)
+		return table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type")
 	}
 }
 
@@ -83,7 +83,12 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 			errors = append(errors, err)
 			continue
 		}
-		cols = append(cols, table.Column{Name: name, ColType: ParseDataTypeToColType(dataType)})
+		colType, err := ParseDataTypeToColType(dataType)
+		if err != nil {
+			errors = append(errors, err)
+			continue
+		}
+		cols = append(cols, table.Column{Name: name, ColType: colType})
 	}
 
 	// If errors occurred, return them
