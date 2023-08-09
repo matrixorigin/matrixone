@@ -48,4 +48,11 @@ insert into t select * from t;
 select approx_count(*) from t;
 approx_count(*)
 8192
+select sleep(5);
+sleep(5)
+0
+select approx_count(*) from t;
+approx_count(*)
+32768
+
 drop table if exists t;
