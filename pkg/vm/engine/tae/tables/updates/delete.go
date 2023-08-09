@@ -237,6 +237,7 @@ func (node *DeleteNode) ApplyCommit() (err error) {
 	case NT_Normal, NT_Merge:
 		node.chain.Load().AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	}
+	node.rowid2PK = nil
 	return node.OnApply()
 }
 
