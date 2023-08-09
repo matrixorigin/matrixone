@@ -1640,13 +1640,19 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	if len(n.ProjectList) == 0 {
 		return ss
 	}
+
+	isLog := false
+	if strings.Contains(c.sql, "indup_02") && strings.Contains(c.sql, "duplicate") {
+		isLog = true
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Projection,
 			Idx:     c.anal.curr,
 			IsFirst: currentFirstFlag,
-			Arg:     constructProjection(n),
+			Arg:     constructProjection(n, isLog),
 		})
 	}
 	c.anal.isFirst = false

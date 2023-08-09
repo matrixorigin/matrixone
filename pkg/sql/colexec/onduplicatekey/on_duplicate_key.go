@@ -51,7 +51,7 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus,
 	var err error
 	arg := x.(*Argument)
 	bat := proc.Reg.InputBatch
-	logutil.Infof("Table[%s] on duplicate key operator, ptr:[%p]", arg.TableDef.Name)
+	logutil.Infof("Table[%s] on duplicate key operator, ptr:[%p]", arg.TableDef.Name, arg)
 	anal.Input(bat, isFirst)
 	if bat == nil {
 		if arg.ctr.insertBat != nil {

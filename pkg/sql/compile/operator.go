@@ -629,9 +629,10 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	}, nil
 }
 
-func constructProjection(n *plan.Node) *projection.Argument {
+func constructProjection(n *plan.Node, isLog bool) *projection.Argument {
 	return &projection.Argument{
-		Es: n.ProjectList,
+		Es:    n.ProjectList,
+		IsLog: isLog,
 	}
 }
 

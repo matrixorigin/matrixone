@@ -102,13 +102,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			ap.ctr.hasData = false
 		}
 	} else if bat.RowCount() == 0 {
+		if ap.IsLog {
+			logutil.Infof("table[indup_02] dispatch operator input batch RowCount() == 0")
+		}
 		bat.Clean(proc.Mp())
 		return process.ExecNext, nil
 	} else {
 		ap.ctr.hasData = true
 	}
 	if ap.IsLog {
-		logutil.Infof("dipatch operator input batch: %s", bat.PrintBatch())
+		logutil.Infof("table[indup_02] dispatch operator input batch: %s", bat.PrintBatch())
 	}
 
 	ok, err := ap.ctr.sendFunc(bat, ap, proc)

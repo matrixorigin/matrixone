@@ -372,6 +372,60 @@ func (bat *Batch) PrintBatch() string {
 					stringBuffer.WriteString("null")
 				} else if vec.IsConstNull() {
 					stringBuffer.WriteString("null")
+				} else if vec.IsConst() {
+					switch vec.GetType().Oid {
+					case types.T_bool:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[bool](vec)[0]))
+					case types.T_int8:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[int8](vec)[0]))
+					case types.T_int16:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[int16](vec)[0]))
+					case types.T_int32:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[int32](vec)[0]))
+					case types.T_int64:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[int64](vec)[0]))
+					case types.T_uint8:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[uint8](vec)[0]))
+					case types.T_uint16:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[uint16](vec)[0]))
+					case types.T_uint32:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[uint32](vec)[0]))
+					case types.T_uint64:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[uint64](vec)[0]))
+					case types.T_float32:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[float32](vec)[0]))
+					case types.T_float64:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vector.MustFixedCol[float64](vec)[0]))
+					case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+						stringBuffer.WriteString(fmt.Sprintf("%v", vec.GetStringAt(i)))
+					case types.T_decimal64:
+						val := vector.GetFixedAt[types.Decimal64](vec, i)
+						stringBuffer.WriteString(val.Format(vec.GetType().Scale))
+					case types.T_decimal128:
+						val := vector.GetFixedAt[types.Decimal128](vec, i)
+						stringBuffer.WriteString(val.Format(vec.GetType().Scale))
+					case types.T_json:
+						val := vec.GetBytesAt(i)
+						byteJson := types.DecodeJson(val)
+						stringBuffer.WriteString(byteJson.String())
+					case types.T_uuid:
+						val := vector.MustFixedCol[types.Uuid](vec)[0]
+						stringBuffer.WriteString(val.ToString())
+					case types.T_date:
+						val := vector.MustFixedCol[types.Date](vec)[0]
+						stringBuffer.WriteString(val.String())
+					case types.T_time:
+						val := vector.MustFixedCol[types.Time](vec)[0]
+						stringBuffer.WriteString(val.String())
+					case types.T_datetime:
+						val := vector.MustFixedCol[types.Datetime](vec)[0]
+						stringBuffer.WriteString(val.String())
+					case types.T_timestamp:
+						val := vector.MustFixedCol[types.Timestamp](vec)[0]
+						stringBuffer.WriteString(val.String2(time.Local, vec.GetType().Scale))
+					default:
+						stringBuffer.WriteString("UNSUPPORT TYPE")
+					}
 				} else {
 					switch vec.GetType().Oid {
 					case types.T_bool:

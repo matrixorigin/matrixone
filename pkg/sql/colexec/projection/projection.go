@@ -16,8 +16,8 @@ package projection
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -48,28 +48,46 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	defer anal.Stop()
 
 	bat := proc.InputBatch()
+	ap := arg.(*Argument)
+
 	if bat == nil {
+		if ap.IsLog {
+			logutil.Infof("table[indup_02] projection operator input batch is NULL")
+		}
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
 	if bat.Last() {
+		if ap.IsLog {
+			logutil.Infof("table[indup_02] projection operator input batch is last")
+		}
 		proc.SetInputBatch(bat)
 		return process.ExecNext, nil
 	}
 	if bat.IsEmpty() {
+		if ap.IsLog {
+			logutil.Infof("table[indup_02] projection operator input batch is empty")
+		}
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
 
+	if ap.IsLog {
+		logutil.Infof("table[indup_02] projection operator input batch: %s", bat.PrintBatch())
+	}
+
 	anal.Input(bat, isFirst)
-	ap := arg.(*Argument)
+	//ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
 
 	// do projection.
 	for i := range ap.ctr.projExecutors {
 		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
+			if ap.IsLog {
+				logutil.Infof("table[indup_02] projection operator do projection err1: %s", err.Error())
+			}
 			return process.ExecNext, err
 		}
 		rbat.Vecs[i] = vec
@@ -77,6 +95,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 
 	newAlloc, err := colexec.FixProjectionResult(proc, ap.ctr.projExecutors, rbat, bat)
 	if err != nil {
+		if ap.IsLog {
+			logutil.Infof("table[indup_02] projection operator do projection err2: %s", err.Error())
+		}
 		bat.Clean(proc.Mp())
 		return process.ExecNext, err
 	}
@@ -87,5 +108,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	proc.PutBatch(bat)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
+	if ap.IsLog {
+		logutil.Infof("table[indup_02] projection operator output batch: %s", rbat.PrintBatch())
+	}
 	return process.ExecNext, nil
 }
