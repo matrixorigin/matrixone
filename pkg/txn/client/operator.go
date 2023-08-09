@@ -35,11 +35,6 @@ import (
 )
 
 var (
-	_ EventableTxnOperator = (*txnOperator)(nil)
-	_ DebugableTxnOperator = (*txnOperator)(nil)
-)
-
-var (
 	readTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERead:      {},
 		moerr.ErrRpcError:     {},
