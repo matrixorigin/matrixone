@@ -91,7 +91,7 @@ func (zm ZM) String() string {
 	} else {
 		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
 			zm.GetType().String(), zm.GetScale(), zm.GetMin(), zm.GetMax()))
-		if zm.HasSum() {
+		if zm.supportSum() {
 			_, _ = b.WriteString(fmt.Sprintf("SUM:%v", zm.GetSum()))
 		}
 	}
@@ -102,6 +102,11 @@ func (zm ZM) String() string {
 		_, _ = b.WriteString("--")
 	}
 	return b.String()
+}
+
+func (zm ZM) supportSum() bool {
+	t := zm.GetType()
+	return t.IsInteger() || t.IsFloat() || t == types.T_decimal64
 }
 
 func (zm ZM) Clone() ZM {
@@ -185,8 +190,7 @@ func (zm ZM) GetMaxBuf() []byte {
 }
 
 func (zm ZM) GetSumBuf() []byte {
-	t := zm.GetType()
-	if t.IsInteger() || t.IsFloat() || t == types.T_decimal64 {
+	if zm.supportSum() {
 		return zm[8 : 8+zm[30]&0x1f]
 	}
 	return nil
