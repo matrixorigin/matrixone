@@ -29,7 +29,7 @@ select approx_count(*) from t;
 insert into t select * from t;
 insert into t select * from t;
 select approx_count(*) from t;
-select sleep(5);
+select sleep(10);
 select approx_count(*) from t;
 
 drop table if exists t;

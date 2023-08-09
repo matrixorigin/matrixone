@@ -54,5 +54,4 @@ sleep(5)
 select approx_count(*) from t;
 approx_count(*)
 32768
-
 drop table if exists t;
