@@ -808,6 +808,7 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 			ebat.Vecs = e.bat.Vecs
 			ebat.Attrs = e.bat.Attrs
 		} else {
+			//e.bat.Vecs[0] is rowid vector
 			ebat.Vecs = e.bat.Vecs[1:]
 			ebat.Attrs = e.bat.Attrs[1:]
 		}
@@ -820,8 +821,16 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		if e.tableId != catalog.MO_TABLES_ID &&
 			e.tableId != catalog.MO_DATABASE_ID {
 			ebat = batch.NewWithSize(0)
-			ebat.Vecs = e.bat.Vecs[:1]
-			ebat.Attrs = e.bat.Attrs[:1]
+			//ebat.Vecs = e.bat.Vecs[:1]
+			//ebat.Attrs = e.bat.Attrs[:1]
+			if e.fileName == "" {
+				ebat.Vecs = e.bat.Vecs[:1]
+				ebat.Attrs = e.bat.Attrs[:1]
+			} else {
+				ebat.Vecs = e.bat.Vecs[:2]
+				ebat.Attrs = e.bat.Attrs[:2]
+			}
+
 		}
 	} else if e.typ == UPDATE {
 		typ = api.Entry_Update
