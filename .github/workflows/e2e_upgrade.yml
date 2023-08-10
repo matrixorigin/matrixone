@@ -103,6 +103,8 @@ jobs:
           rm -rf mo-data/etl
           rm -rf etc
           rm -rf optools
+          # delete for clear the start finish status of mo
+          rm -rf mo-data/local/system_init_completed
           mv $GITHUB_WORKSPACE/head/etc .
           mv $GITHUB_WORKSPACE/head/optools .
           mv $GITHUB_WORKSPACE/head/mo-service .
