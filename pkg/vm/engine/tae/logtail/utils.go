@@ -1202,6 +1202,26 @@ func (data *CheckpointData) PrintData() {
 	logutil.Info(BatchToString("BLK-META-INS-BAT", data.bats[BLKMetaInsertIDX], true))
 }
 
+func formatBatch(bat *containers.Batch) {
+	length := bat.Length()
+	if length == 0 {
+		for _, vec := range bat.Vecs {
+			if vec.Length() > 0 {
+				length = vec.Length()
+				break
+			}
+		}
+		if length == 0 {
+			return
+		}
+	}
+	for i := range bat.Vecs {
+		if bat.Vecs[i].Length() == 0 {
+			bat.Vecs[i] = containers.NewConstNullVector(*bat.Vecs[i].GetType(), length)
+		}
+	}
+}
+
 func (data *CheckpointData) WriteTo(
 	fs fileservice.FileService,
 	blockRows int,
@@ -1218,16 +1238,30 @@ func (data *CheckpointData) WriteTo(
 			continue
 		}
 		offset := 0
-		bats := containers.SplitDNBatch(data.bats[i], blockRows)
-		for _, bat := range bats {
-			var block objectio.BlockObject
-			if block, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
+		formatBatch(data.bats[i])
+		var block objectio.BlockObject
+		var bat *containers.Batch
+		if data.bats[i].Length() == 0 {
+			if block, err = writer.WriteSubBatch(containers.ToCNBatch(data.bats[i]), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 				return
 			}
-			Endoffset := offset + bat.Length()
-			blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(Endoffset))
+			blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(0))
 			blockIndexs[i] = append(blockIndexs[i], &blockLoc)
-			offset += bat.Length()
+		} else {
+			split := containers.NewBatchSplitter(data.bats[i], blockRows)
+			for {
+				bat, err = split.Next()
+				if err != nil {
+					break
+				}
+				if block, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
+					return
+				}
+				Endoffset := offset + bat.Length()
+				blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(Endoffset))
+				blockIndexs[i] = append(blockIndexs[i], &blockLoc)
+				offset += bat.Length()
+			}
 		}
 	}
 	blks, _, err := writer.Sync(context.Background())
