@@ -311,7 +311,7 @@ type BuiltinNumber interface {
 }
 
 type OrderedT interface {
-	constraints.Ordered | Date | Time | Datetime | Timestamp
+	constraints.Ordered
 }
 
 type Decimal interface {

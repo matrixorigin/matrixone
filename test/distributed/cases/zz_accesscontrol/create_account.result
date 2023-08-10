@@ -107,7 +107,7 @@ cm2    abcddddddfsfafaffsefsfsefljofiseosfjosissssssssssssssssssssssssssssssssss
 create account cm3 ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment '';
 select account_name,comments from mo_catalog.mo_account where account_name='cm3';
 account_name    comments
-cm3    
+cm3
 create accout a1 ADMIN_NAME ' admin' IDENTIFIED BY '123456';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 ADMIN_NAME ' admin' IDENTIFIED BY '123456';";
 create account a1;
@@ -158,6 +158,7 @@ use mo_catalog;
 show tables;
 Tables_in_mo_catalog
 mo_indexes
+mo_table_partitions
 mo_tables
 mo_user
 mo_role

@@ -3,13 +3,13 @@ Number of tables in mo_task
 2
 show table_number from information_schema;
 Number of tables in information_schema
-14
+15
 show table_number from mysql;
 Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-15
+16
 show table_number from system_metrics;
 Number of tables in system_metrics
 19
@@ -32,7 +32,7 @@ Number of columns in columns
 23
 show column_number from profiling;
 Number of columns in profiling
-19
+20
 show column_number from processlist;
 Number of columns in processlist
 17
@@ -110,10 +110,13 @@ Number of columns in mo_columns
 show column_number from mo_indexes;
 Number of columns in mo_indexes
 14
+show column_number from mo_table_partitions;
+Number of columns in mo_table_partitions
+12
 use system_metrics;
 show column_number from metric;
 Number of columns in metric
-8
+10
 show column_number from sql_statement_total;
 Number of columns in sql_statement_total
 7
@@ -168,13 +171,13 @@ Number of columns in statement_info
 31
 show column_number from rawlog;
 Number of columns in rawlog
-24
+26
 show column_number from log_info;
 Number of columns in log_info
 13
 show column_number from error_info;
 Number of columns in error_info
-11
+10
 show column_number from span_info;
 Number of columns in span_info
 13
@@ -337,13 +340,13 @@ drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 show table_number from information_schema;
 Number of tables in information_schema
-14
+15
 show table_number from mysql;
 Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-14
+15
 show table_number from system_metrics;
 Number of tables in system_metrics
 7
@@ -359,7 +362,7 @@ Number of columns in columns
 23
 show column_number from profiling;
 Number of columns in profiling
-19
+20
 show column_number from processlist;
 Number of columns in processlist
 17
@@ -387,6 +390,9 @@ Number of columns in parameters
 show column_number from keywords;
 Number of columns in keywords
 4
+show column_number from partitions;
+Number of columns in partitions
+26
 use mysql;
 show column_number from user;
 Number of columns in user
@@ -548,10 +554,10 @@ null    null
 insert into t3 values(3.3);
 show table_values from t3;
 max(col1)    min(col1)
-3.30    3.30
+3    3
 insert into t3 values(3.2);
 show table_values from t3;
 max(col1)    min(col1)
-3.30    3.20
+3    3
 drop database test_db;
 drop account if exists test_account;

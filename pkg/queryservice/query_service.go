@@ -93,6 +93,8 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config, sm *Ses
 func (s *queryService) registerHandlers() {
 	s.handler.RegisterHandleFunc(uint32(pb.CmdMethod_ShowProcessList),
 		s.handleRequest, false)
+	s.handler.RegisterHandleFunc(uint32(pb.CmdMethod_AlterAccount),
+		s.handleRequest, false)
 }
 
 // SendMessage implements the QueryService interface.

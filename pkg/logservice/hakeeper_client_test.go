@@ -553,7 +553,7 @@ func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
 		require.NoError(t, err)
 		info, ok1 = state.CNState.Stores[s.ID()]
 		assert.True(t, ok1)
-		require.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		require.Equal(t, metadata.WorkState_Working, info.WorkState)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -646,7 +646,7 @@ func TestHAKeeperClientPatchCNStore(t *testing.T) {
 		require.NoError(t, err)
 		info, ok1 = state.CNState.Stores[s.ID()]
 		assert.True(t, ok1)
-		require.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		require.Equal(t, metadata.WorkState_Working, info.WorkState)
 		labels1, ok2 = info.Labels["account"]
 		assert.True(t, ok2)
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})

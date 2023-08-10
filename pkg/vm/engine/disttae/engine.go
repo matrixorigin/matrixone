@@ -43,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -75,13 +74,12 @@ func New(
 	}
 
 	e := &Engine{
-		mp:         mp,
-		fs:         fs,
-		ls:         ls.(lockservice.LockService),
-		cli:        cli,
-		idGen:      idGen,
-		dnID:       dnID,
-		partitions: make(map[[2]uint64]*logtailreplay.Partition),
+		mp:    mp,
+		fs:    fs,
+		ls:    ls.(lockservice.LockService),
+		cli:   cli,
+		idGen: idGen,
+		dnID:  dnID,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {

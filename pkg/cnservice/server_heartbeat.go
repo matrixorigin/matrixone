@@ -73,6 +73,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		Role:               s.metadata.Role,
 		TaskServiceCreated: s.GetTaskRunner() != nil,
 		QueryAddress:       s.queryServiceServiceAddr(),
+		InitWorkState:      s.cfg.InitWorkState,
 	}
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	if err != nil {
@@ -92,6 +93,7 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
 			s.createProxyUser(cmd.CreateTaskService)
+			s.upgrade()
 		}
 	}
 }
