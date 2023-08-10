@@ -1249,6 +1249,33 @@ func getOneRowData(bat *batch.Batch, line [][]byte, rowIdx int, param *ExternalP
 // defined to read until EOF, it does not treat end of file as an error to be
 // reported.
 func readCountStringLimitSize(r *mocsv.Reader, ctx context.Context, size uint64, records [][][]byte) (int, bool, error) {
+	return skipline(ctx, r, size)
+	//var curBatchSize uint64 = 0
+	//for i := 0; i < OneBatchMaxRow; i++ {
+	//	select {
+	//	case <-ctx.Done():
+	//		return i, true, nil
+	//	default:
+	//	}
+	//	record, err := r.ReadBytes()
+	//	if err != nil {
+	//		if err == io.EOF {
+	//			return i, true, nil
+	//		}
+	//		return i, true, err
+	//	}
+	//	records[i] = record
+	//	for j := 0; j < len(record); j++ {
+	//		curBatchSize += uint64(len(record[j]))
+	//	}
+	//	if curBatchSize >= size {
+	//		return i + 1, false, nil
+	//	}
+	//}
+	//return OneBatchMaxRow, false, nil
+}
+
+func skipline(ctx context.Context, r *mocsv.Reader, size uint64) (int, bool, error) {
 	var curBatchSize uint64 = 0
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
@@ -1263,7 +1290,6 @@ func readCountStringLimitSize(r *mocsv.Reader, ctx context.Context, size uint64,
 			}
 			return i, true, err
 		}
-		records[i] = record
 		for j := 0; j < len(record); j++ {
 			curBatchSize += uint64(len(record[j]))
 		}

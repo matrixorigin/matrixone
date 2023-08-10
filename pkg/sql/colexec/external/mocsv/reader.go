@@ -214,6 +214,12 @@ func (r *Reader) ReadBytes() (record [][]byte, err error) {
 	return record, err
 }
 
+func (r *Reader) SkipLine() ([]byte, int, error) {
+	line, err := r.readLine()
+	bufLen := r.r.Size()
+	return line, bufLen, err
+}
+
 // FieldPos returns the line and column corresponding to
 // the start of the field with the given index in the slice most recently
 // returned by Read. Numbering of lines and columns starts at 1;
