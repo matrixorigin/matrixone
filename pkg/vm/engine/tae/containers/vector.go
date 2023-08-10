@@ -357,9 +357,6 @@ func (vec *vectorWrapper) tryCOW() {
 }
 
 func (vec *vectorWrapper) Window(offset, length int) Vector {
-	if vec.wrapped.IsConst() {
-		panic(moerr.NewInternalErrorNoCtx("foreach to const vectorWrapper"))
-	}
 	var err error
 	win := new(vectorWrapper)
 	win.mpool = vec.mpool

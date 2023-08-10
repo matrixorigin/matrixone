@@ -1452,7 +1452,7 @@ func doShowBackendServers(ses *Session) error {
 		// For super use dump and root, we should list all servers.
 		if isSuperUser(u) {
 			clusterservice.GetMOCluster().GetCNService(
-				clusterservice.NewSelector(), func(s metadata.CNService) bool {
+				clusterservice.NewSelectAll(), func(s metadata.CNService) bool {
 					appendFn(&s)
 					return true
 				})
