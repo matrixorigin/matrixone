@@ -59,6 +59,9 @@ var DisabledCacheConfig = CacheConfig{
 
 const DisableCacheCapacity = 1
 
+// var DefaultCacheDataAllocator = RCBytesPool
+var DefaultCacheDataAllocator = new(bytesAllocator)
+
 // VectorCache caches IOVector
 type IOVectorCache interface {
 	Read(
@@ -79,16 +82,10 @@ type CacheKey struct {
 	Size   int64
 }
 
-type Bytes []byte
-
-func (b Bytes) Size() int64 {
-	return int64(len(b))
-}
-
 // DataCache caches IOEntry.CachedData
 type DataCache interface {
-	Set(ctx context.Context, key CacheKey, value RCBytes, preloading bool)
-	Get(ctx context.Context, key CacheKey, preloading bool) (value RCBytes, ok bool)
+	Set(ctx context.Context, key CacheKey, value CacheData, preloading bool)
+	Get(ctx context.Context, key CacheKey, preloading bool) (value CacheData, ok bool)
 	Flush()
 	Capacity() int64
 	Used() int64
