@@ -1244,5 +1244,14 @@ select `c`.col_int,`dd`.col_time, min(`dd`.col_int) over (partition by `c`.col_i
 drop table `c`;
 drop table `dd`;
 drop table `e`;
-
+drop table if exists t2;
+CREATE TABLE t2 (a int, b int);
+insert into t2 values(1,1);
+insert into t2 values(2,2);
+insert into t2 values(3,3);
+insert into t2 values(4,4);
+insert into t2 values(1,1);
+insert into t2 values(5,5);
+insert into t2 values(6,6);
+select a,min(a) over (partition by a) ,sum(a+1) over (partition by a) from t2;
 drop database test;

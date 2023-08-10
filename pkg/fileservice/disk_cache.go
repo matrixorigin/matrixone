@@ -171,6 +171,8 @@ func (d *DiskCache) Read(
 			continue
 		}
 
+		entry.done = true
+		entry.fromCache = d
 		vector.Entries[i] = entry
 		numHit++
 		d.cacheHit(time.Since(t0))
@@ -238,6 +240,10 @@ func (d *DiskCache) Update(
 		}
 		if entry.Size < 0 {
 			// ignore size unknown entry
+			continue
+		}
+		if entry.fromCache == d {
+			// no need to update
 			continue
 		}
 

@@ -50,31 +50,32 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		return process.ExecStop, nil
 	}
 	if bat != nil {
-		b, err := bat.Dup(proc.GetMPool())
-		if err != nil {
-			return process.ExecStop, err
-		}
-		b.Recursive = bat.Recursive
-		ctr.bats = append(ctr.bats, b)
-		if b.Last() {
+		//b, err := bat.Dup(proc.GetMPool())
+		//if err != nil {
+		//	return process.ExecStop, err
+		//}
+		//b.Recursive = bat.Recursive
+		ctr.bats = append(ctr.bats, bat)
+		if bat.Last() {
 			ctr.last = true
 		}
 	}
 
 	switch ctr.status {
 	case SendA:
-		bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+		sb, _, err = ctr.ReceiveFromSingleReg(0, anal)
 		if err != nil {
 			return process.ExecStop, err
 		}
-		if bat == nil {
+		if sb == nil {
 			ctr.status = SendLastBatch
-		} else {
-			sb, err = bat.Dup(proc.Mp())
-			if err != nil {
-				return process.ExecStop, err
-			}
 		}
+		//else {
+		//	sb, err = bat.Dup(proc.Mp())
+		//	if err != nil {
+		//		return process.ExecStop, err
+		//	}
+		//}
 		fallthrough
 	case SendLastBatch:
 		if ctr.status == SendLastBatch {
@@ -83,7 +84,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		}
 	case SendB:
 		for !ctr.last {
-			bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+			bat, _, err = ctr.ReceiveFromSingleReg(1, anal)
 			if err != nil {
 				return process.ExecStop, err
 			}
@@ -91,13 +92,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				proc.SetInputBatch(nil)
 				return process.ExecStop, nil
 			}
-			b, err := bat.Dup(proc.Mp())
-			if err != nil {
-				return process.ExecStop, err
-			}
-			b.Recursive = bat.Recursive
-			ctr.bats = append(ctr.bats, b)
-			if b.Last() {
+			//b, err := bat.Dup(proc.Mp())
+			//if err != nil {
+			//	return process.ExecStop, err
+			//}
+			//b.Recursive = bat.Recursive
+			ctr.bats = append(ctr.bats, bat)
+			if bat.Last() {
 				ctr.last = true
 			}
 		}
@@ -110,6 +111,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 
 	if sb.End() {
+		sb.Clean(proc.Mp())
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}

@@ -15,10 +15,8 @@
 package vector
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"unsafe"
 
@@ -618,113 +616,4 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Blockid](vec)
 	}
 	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
-}
-
-func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](v T) func(*Vector) int {
-	return func(vec *Vector) int {
-		rows := MustFixedCol[T](vec)
-		offset := sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= v
-		})
-		if offset < vec.Length() && rows[offset] == v {
-			return offset
-		}
-		return -1
-	}
-}
-
-func VarlenBinarySearchOffsetByValFactory(val []byte) func(*Vector) int {
-	return func(data *Vector) int {
-		offset := -1
-		start, end := 0, data.Length()-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			res := bytes.Compare(data.GetBytesAt(mid), val)
-			if res > 0 {
-				end = mid - 1
-			} else if res < 0 {
-				start = mid + 1
-			} else {
-				offset = mid
-				break
-			}
-		}
-		return offset
-	}
-}
-
-func BinarySearchOffsetByValFactory(t types.T, v any) func(*Vector) int {
-	if !t.IsFixedLen() {
-		val := v.([]byte)
-		return VarlenBinarySearchOffsetByValFactory(val)
-	}
-	switch t {
-	case types.T_int8:
-		return OrderedBinarySearchOffsetByValFactory[int8](v.(int8))
-	case types.T_int16:
-		return OrderedBinarySearchOffsetByValFactory[int16](v.(int16))
-	case types.T_int32:
-		return OrderedBinarySearchOffsetByValFactory[int32](v.(int32))
-	case types.T_int64:
-		return OrderedBinarySearchOffsetByValFactory[int64](v.(int64))
-	case types.T_uint8:
-		return OrderedBinarySearchOffsetByValFactory[uint8](v.(uint8))
-	case types.T_uint16:
-		return OrderedBinarySearchOffsetByValFactory[uint16](v.(uint16))
-	case types.T_uint32:
-		return OrderedBinarySearchOffsetByValFactory[uint32](v.(uint32))
-	case types.T_uint64:
-		return OrderedBinarySearchOffsetByValFactory[uint64](v.(uint64))
-	case types.T_float32:
-		return OrderedBinarySearchOffsetByValFactory[float32](v.(float32))
-	case types.T_float64:
-		return OrderedBinarySearchOffsetByValFactory[float64](v.(float64))
-	case types.T_date:
-		return OrderedBinarySearchOffsetByValFactory[types.Date](v.(types.Date))
-	case types.T_datetime:
-		return OrderedBinarySearchOffsetByValFactory[types.Datetime](v.(types.Datetime))
-	case types.T_time:
-		return OrderedBinarySearchOffsetByValFactory[types.Time](v.(types.Time))
-	case types.T_timestamp:
-		return OrderedBinarySearchOffsetByValFactory[types.Timestamp](v.(types.Timestamp))
-	case types.T_decimal64:
-		return FixSizedBinarySearchOffsetByValFactory[types.Decimal64](v.(types.Decimal64), types.CompareDecimal64)
-	case types.T_decimal128:
-		return FixSizedBinarySearchOffsetByValFactory[types.Decimal128](v.(types.Decimal128), types.CompareDecimal128)
-	case types.T_decimal256:
-		return FixSizedBinarySearchOffsetByValFactory[types.Decimal256](v.(types.Decimal256), types.CompareDecimal256)
-	case types.T_Rowid:
-		return FixSizedBinarySearchOffsetByValFactory[types.Rowid](v.(types.Rowid), types.CompareRowidRowidAligned)
-	case types.T_Blockid:
-		return FixSizedBinarySearchOffsetByValFactory[types.Blockid](v.(types.Blockid), types.CompareBlockidBlockidAligned)
-	case types.T_TS:
-		return FixSizedBinarySearchOffsetByValFactory[types.TS](v.(types.TS), types.CompareTSTSAligned)
-	case types.T_uuid:
-		return FixSizedBinarySearchOffsetByValFactory[types.Uuid](v.(types.Uuid), types.CompareUuid)
-	default:
-		return nil
-	}
-}
-
-func FixSizedBinarySearchOffsetByValFactory[T any](v T, comp func(T, T) int64) func(*Vector) int {
-	return func(data *Vector) int {
-		offset := -1
-		vals := MustFixedCol[T](data)
-		start, end := 0, len(vals)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			res := comp(vals[mid], v)
-			if res > 0 {
-				end = mid - 1
-			} else if res < 0 {
-				start = mid + 1
-			} else {
-				offset = mid
-				break
-			}
-		}
-		return offset
-	}
 }

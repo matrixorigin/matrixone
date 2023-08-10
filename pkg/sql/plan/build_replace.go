@@ -37,31 +37,34 @@ func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool) (
 	keys := getAllKeys(tableDef)
 	deleteCond := ""
 
-	if len(stmt.Columns) != 0 {
-		// replace into table set col1 = val1, col2 = val2, ...
-		row := stmt.Rows.Select.(*tree.ValuesClause).Rows[0]
-		keyToRow := getKeyToRowMatch(stmt.Columns)
-		keepKeys := filterKeys(keys, stmt.Columns)
-		disjunction := make([]string, 0, len(keepKeys))
-		for _, key := range keepKeys {
-			disjunction = append(disjunction, buildConjunction(key, row, keyToRow))
-		}
-		deleteCond = strings.Join(disjunction, " or ")
-	} else {
-		// replace into table values (...);
-		keyToRow := make(map[string]int, len(tableDef.Cols))
-		for i, col := range tableDef.Cols {
-			keyToRow[col.Name] = i
-		}
-
-		rows := stmt.Rows.Select.(*tree.ValuesClause).Rows
-		disjunction := make([]string, 0, len(rows)*len(keys))
-		for _, row := range rows {
-			for _, key := range keys {
+	if keys != nil {
+		// table has keys
+		if len(stmt.Columns) != 0 {
+			// replace into table set col1 = val1, col2 = val2, ...
+			row := stmt.Rows.Select.(*tree.ValuesClause).Rows[0]
+			keyToRow := getKeyToRowMatch(stmt.Columns)
+			keepKeys := filterKeys(keys, stmt.Columns)
+			disjunction := make([]string, 0, len(keepKeys))
+			for _, key := range keepKeys {
 				disjunction = append(disjunction, buildConjunction(key, row, keyToRow))
 			}
+			deleteCond = strings.Join(disjunction, " or ")
+		} else {
+			// replace into table values (...);
+			keyToRow := make(map[string]int, len(tableDef.Cols))
+			for i, col := range tableDef.Cols {
+				keyToRow[col.Name] = i
+			}
+
+			rows := stmt.Rows.Select.(*tree.ValuesClause).Rows
+			disjunction := make([]string, 0, len(rows)*len(keys))
+			for _, row := range rows {
+				for _, key := range keys {
+					disjunction = append(disjunction, buildConjunction(key, row, keyToRow))
+				}
+			}
+			deleteCond = strings.Join(disjunction, " or ")
 		}
-		deleteCond = strings.Join(disjunction, " or ")
 	}
 
 	return &Plan{
@@ -97,6 +100,9 @@ func getAllKeys(tableDef *plan.TableDef) []map[string]struct{} {
 	}
 	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		n++
+	}
+	if n == 0 {
+		return nil
 	}
 
 	keys := make([]map[string]struct{}, 0, n)

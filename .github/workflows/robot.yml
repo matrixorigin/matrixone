@@ -43,7 +43,7 @@ jobs:
         uses: guguducken/milestone-add-action@check_mill_exist
         with:
           action-token: ${{ secrets.TOKEN_ACTION }}
-          milestone: "v0.8.0"
+          milestone: "1.0.0"
 
   check-bvt-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'
@@ -117,16 +117,6 @@ jobs:
           labeled: kind/bug,kind/docs,kind/enhancement,kind/feature,kind/questions,kind/performance,kind/refactoring,kind/subtask
           label-operator: OR
 
-  Rerun-Actions:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'issue_comment' && github.event.action == 'created'
-    steps:
-      - uses: guguducken/workflow-rerun-action@v0.0.3
-        with:
-          action-token: ${{ secrets.TOKEN_ACTION }}
-          user: matrix-meow
-          workflow-this: Command to Rerun Workflows
-
   nightly-check:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: arm64-runner
@@ -176,12 +166,12 @@ jobs:
         timeout-minutes: 10
         run: |
           cd $GITHUB_WORKSPACE/matrixone
-          sed -i.bak 's/level = "info"/level = "error"/g'  ./etc/launch-tae-CN-tae-DN/log.toml
+          sed -i.bak 's/level = "info"/level = "error"/g'  ./etc/launch/log.toml
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
           GOLDFLAGS=-ldflags="-X 'main.GoVersion=$(go version)' -X 'main.BranchName=$(git rev-parse --abbrev-ref HEAD)' -X 'main.CommitID=$(git rev-parse HEAD)' -X 'main.BuildTime=$(date)' -X 'main.Version=$(git describe --always --tags $(git rev-list --tags --max-count=1))'"
           export GOCOVERDIR=$GITHUB_WORKSPACE/matrixone
           go build -cover "$GOLDFLAGS" -o mo-service ./cmd/mo-service/
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch-tae-CN-tae-DN        
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch
       - name: Start BVT Test
         if: ${{ always() && !cancelled() }}
         id: bvt_on_pr_version

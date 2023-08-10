@@ -68,6 +68,10 @@ jobs:
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
 
+      - name: Check Log Messages Count per second
+        if: ${{ always() && !cancelled() }}
+        run: |
+          ./optools/check_log_count.sh 1000 60 # {count threshold} {metric collected interval}
 
       - name: shutdown containers
         if: ${{ always() }}
@@ -103,9 +107,15 @@ jobs:
 
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |
-          sed -i 's/\[cn.txn\]/\[cn.txn\]\nmode = "Pessimistic"/g' ./etc/launch-tae-compose/config/cn-0.toml
-          sed -i 's/\[cn.txn\]/\[cn.txn\]\nmode = "Pessimistic"/g' ./etc/launch-tae-compose/config/cn-1.toml
-          sed -i 's/\[dn.txn\]/\[dn.txn\]\nmode = "Pessimistic"/g' ./etc/launch-tae-compose/config/dn.toml
+          echo ""  >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo ""  >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo ""  >> ./etc/launch-tae-compose/config/dn.toml
+          echo '[dn.txn]' >> ./etc/launch-tae-compose/config/dn.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/dn.toml    
           cat ./etc/launch-tae-compose/config/cn-0.toml
           cat ./etc/launch-tae-compose/config/cn-1.toml
           cat ./etc/launch-tae-compose/config/dn.toml
@@ -146,6 +156,12 @@ jobs:
           mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
+
+      - name: Check Log Messages Count per second
+        if: ${{ always() && !cancelled() }}
+        run: |
+          ./optools/check_log_count.sh 1000 60 # {count threshold} {metric collected interval}
+
       - name: shutdown containers
         if: ${{ always() }}
         run: |

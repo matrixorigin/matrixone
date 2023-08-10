@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	stdhttp "net/http"
 	"net/url"
 	"os"
@@ -56,6 +57,8 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int32
+
+	ioLocks IOLocks
 }
 
 // key mapping scheme:
@@ -426,6 +429,15 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
+	unlock, wait := s.ioLocks.Lock(IOLockKey{
+		File: vector.FilePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
+	}
+
 	if s.memCache != nil {
 		if err := s.memCache.Read(ctx, vector); err != nil {
 			return err
@@ -696,8 +708,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			}
 		}
 
-		// set ObjectBytes field
-		if err := entry.setObjectBytesFromData(); err != nil {
+		if err := entry.setCachedData(); err != nil {
 			return err
 		}
 
@@ -916,6 +927,24 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		}
 	}
 
+	// http client
+	dialer := &net.Dialer{
+		KeepAlive: 5 * time.Second,
+	}
+	httpClient := &stdhttp.Client{
+		Transport: &stdhttp.Transport{
+			Proxy:                 stdhttp.ProxyFromEnvironment,
+			DialContext:           dialer.DialContext,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       180 * time.Second,
+			MaxIdleConnsPerHost:   100,
+			MaxConnsPerHost:       100,
+			TLSHandshakeTimeout:   3 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ForceAttemptHTTP2:     true,
+		},
+	}
+
 	// options for loading configs
 	loadConfigOptions := []func(*config.LoadOptions) error{
 		config.WithLogger(logutil.GetS3Logger()),
@@ -928,6 +957,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 				aws.LogRequestEventMessage |
 				aws.LogResponseEventMessage,
 		),
+		config.WithHTTPClient(httpClient),
 	}
 
 	// shared config profile
@@ -972,10 +1002,12 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	// options for s3 client
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
+
 			opts.Retryer = retry.NewStandard(func(o *retry.StandardOptions) {
 				o.MaxAttempts = maxRetryAttemps
 				o.RateLimiter = noOpRateLimit{}
 			})
+
 		},
 	}
 

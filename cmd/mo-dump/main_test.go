@@ -16,7 +16,9 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"encoding/csv"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"os"
 	"testing"
 
@@ -64,6 +66,13 @@ func TestConvertValue(t *testing.T) {
 func makeValue(val string) interface{} {
 	tmp := sql.RawBytes(val)
 	return &tmp
+}
+
+func TestConvertValue2(t *testing.T) {
+	v := makeValue("\\10\\11\\12")
+	v2, f := convertValue2(v, "string")
+	assert.Equal(t, *(v.(*sql.RawBytes)), v2)
+	assert.Equal(t, f, defaultFmt)
 }
 
 func TestShowCreateTable(t *testing.T) {
@@ -148,4 +157,39 @@ func TestViewOrder(t *testing.T) {
 		require.Equal(t, createTable[i], createTarget[i])
 		require.Equal(t, tables[i], tableTarget[i])
 	}
+}
+
+func Test_toCsvFields(t *testing.T) {
+	bys1 := []byte{0x5C, 0x31, 0x30, 0x5C, 0x33, 0x36, 0x5C, 0x38, 0x36, 0x5c}
+	args1 := []any{makeValue(string(bys1))}
+	cols1 := []*Column{
+		{
+			Name: "col1",
+			Type: "varchar",
+		},
+	}
+	line := make([]string, 1)
+	toCsvFields(args1, cols1, line)
+	want := "\\10\\36\\86\\"
+	assert.Equal(t, want, line[0])
+}
+
+func Test_toCsvLine(t *testing.T) {
+	bys1 := []byte{0x5C, 0x31, 0x30, 0x5C, 0x33, 0x36, 0x5C, 0x38, 0x36, 0x5c}
+	args1 := []any{makeValue(string(bys1))}
+	cols1 := []*Column{
+		{
+			Name: "col1",
+			Type: "varchar",
+		},
+	}
+	line := make([]string, 1)
+	bb := bytes.Buffer{}
+	cw1 := csv.NewWriter(&bb)
+	cw1.Comma = '\t'
+	err := toCsvLine(cw1, args1, cols1, line)
+	assert.NoError(t, err)
+	want := "\\10\\36\\86\\"
+	assert.Equal(t, want, line[0])
+	assert.Equal(t, bb.Bytes()[:len(bys1)], bys1)
 }

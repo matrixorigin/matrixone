@@ -59,6 +59,7 @@ message Dispatch {
   repeated int32 ShuffleRegIdxLocal=4;
   repeated int32 ShuffleRegIdxRemote=5;
   bool  is_sink = 6;
+  bool  rec_sink = 7;
 }
 
 message Merge {
@@ -430,6 +431,7 @@ message Pipeline {
   int32 children_count = 12;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 13;
+  int32 build_idx = 14;
 }
 
 message WrapNode {

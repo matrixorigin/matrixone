@@ -1532,7 +1532,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	if err = tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 		return
 	}
-	if err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
+	if _, err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
 		return
 	}
 
@@ -1541,25 +1541,25 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keysVector *vector.Vector) (bool, error) {
-
 	switch tbl.tableId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return true, nil
 	}
 
-	part, err := tbl.getPartitionState(ctx)
+	part, err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
 
+	snap := part.Snapshot()
 	var packer *types.Packer
 	put := tbl.db.txn.engine.packerPool.Get(&packer)
 	defer put.Put()
 	packer.Reset()
-	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
 
+	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
 	for _, key := range keys {
-		if part.PrimaryKeyMayBeModified(from, to, key) {
+		if snap.PrimaryKeyMayBeModified(from, to, key) {
 			return true, nil
 		}
 	}

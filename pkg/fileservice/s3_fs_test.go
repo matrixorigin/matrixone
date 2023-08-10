@@ -19,9 +19,12 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http/httptrace"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -452,8 +455,8 @@ func BenchmarkS3FS(b *testing.B) {
 
 	b.ResetTimer()
 
-	benchmarkFileService(b, func() FileService {
-		ctx := context.Background()
+	ctx := context.Background()
+	benchmarkFileService(ctx, b, func() FileService {
 		fs, err := NewS3FS(
 			ctx,
 			"",
@@ -500,5 +503,237 @@ func TestS3FSWithSubPath(t *testing.T) {
 		assert.Nil(t, err)
 		return SubPath(fs, "foo/")
 	})
+
+}
+
+func BenchmarkS3ConcurrentRead(b *testing.B) {
+	config, err := loadS3TestConfig()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if config.Endpoint == "" {
+		// no config
+		b.Skip()
+	}
+	b.Setenv("AWS_REGION", config.Region)
+	b.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	b.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+
+	var numRead atomic.Int64
+	var numGotConn, numReuse, numConnect atomic.Int64
+	var numTLSHandshake atomic.Int64
+	ctx := context.Background()
+	trace := &httptrace.ClientTrace{
+
+		GetConn: func(hostPort string) {
+			//fmt.Printf("get conn: %s\n", hostPort)
+		},
+
+		GotConn: func(info httptrace.GotConnInfo) {
+			numGotConn.Add(1)
+			if info.Reused {
+				numReuse.Add(1)
+			}
+			//fmt.Printf("got conn: %+v\n", info)
+		},
+
+		PutIdleConn: func(err error) {
+			//if err != nil {
+			//	fmt.Printf("put idle conn failed: %v\n", err)
+			//}
+		},
+
+		ConnectStart: func(network, addr string) {
+			numConnect.Add(1)
+			//fmt.Printf("connect %v %v\n", network, addr)
+		},
+
+		TLSHandshakeStart: func() {
+			numTLSHandshake.Add(1)
+		},
+	}
+
+	ctx = httptrace.WithClientTrace(ctx, trace)
+	defer func() {
+		fmt.Printf("read %v, got %v conns, reuse %v, connect %v, tls handshake %v\n",
+			numRead.Load(),
+			numGotConn.Load(),
+			numReuse.Load(),
+			numConnect.Load(),
+			numTLSHandshake.Load(),
+		)
+	}()
+
+	fs, err := NewS3FS(
+		ctx,
+		"",
+		"bench",
+		config.Endpoint,
+		config.Bucket,
+		time.Now().Format("2006-01-02.15:04:05.000000"),
+		DisabledCacheConfig,
+		nil,
+		true,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if fs == nil {
+		b.Fatal(err)
+	}
+
+	vector := IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Size: 3,
+				Data: []byte("foo"),
+			},
+		},
+	}
+	err = fs.Write(ctx, vector)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		sem := make(chan struct{}, 128)
+		for pb.Next() {
+			sem <- struct{}{}
+			go func() {
+				defer func() {
+					<-sem
+				}()
+				err := fs.Read(ctx, &IOVector{
+					FilePath: "foo",
+					Entries: []IOEntry{
+						{
+							Size: 3,
+						},
+					},
+				})
+				if err != nil {
+					panic(err)
+				}
+				numRead.Add(1)
+			}()
+		}
+		for i := 0; i < cap(sem); i++ {
+			sem <- struct{}{}
+		}
+	})
+
+}
+
+func TestSequentialS3Read(t *testing.T) {
+	config, err := loadS3TestConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Endpoint == "" {
+		// no config
+		t.Skip()
+	}
+	t.Setenv("AWS_REGION", config.Region)
+	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+
+	var numRead atomic.Int64
+	var numGotConn, numReuse, numConnect atomic.Int64
+	var numTLSHandshake atomic.Int64
+	ctx := context.Background()
+	trace := &httptrace.ClientTrace{
+
+		GetConn: func(hostPort string) {
+			fmt.Printf("get conn: %s\n", hostPort)
+		},
+
+		GotConn: func(info httptrace.GotConnInfo) {
+			numGotConn.Add(1)
+			if info.Reused {
+				numReuse.Add(1)
+			} else {
+				fmt.Printf("got conn not reuse: %+v\n", info)
+			}
+		},
+
+		PutIdleConn: func(err error) {
+			if err != nil {
+				fmt.Printf("put idle conn failed: %v\n", err)
+			}
+		},
+
+		ConnectDone: func(network string, addr string, err error) {
+			numConnect.Add(1)
+			fmt.Printf("connect done: %v %v\n", network, addr)
+			if err != nil {
+				fmt.Printf("connect error: %v\n", err)
+			}
+		},
+
+		TLSHandshakeStart: func() {
+			numTLSHandshake.Add(1)
+		},
+	}
+
+	ctx = httptrace.WithClientTrace(ctx, trace)
+	defer func() {
+		fmt.Printf("read %v, got %v conns, reuse %v, connect %v, tls handshake %v\n",
+			numRead.Load(),
+			numGotConn.Load(),
+			numReuse.Load(),
+			numConnect.Load(),
+			numTLSHandshake.Load(),
+		)
+	}()
+
+	fs, err := NewS3FS(
+		ctx,
+		"",
+		"bench",
+		config.Endpoint,
+		config.Bucket,
+		time.Now().Format("2006-01-02.15:04:05.000000"),
+		DisabledCacheConfig,
+		nil,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fs == nil {
+		t.Fatal(err)
+	}
+
+	vector := IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Size: 3,
+				Data: []byte("foo"),
+			},
+		},
+	}
+	err = fs.Write(ctx, vector)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 128; i++ {
+		err := fs.Read(ctx, &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: 3,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		numRead.Add(1)
+	}
 
 }

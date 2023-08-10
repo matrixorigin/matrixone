@@ -15,8 +15,11 @@
 package fileservice
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -41,9 +44,51 @@ func TestMemoryFS(t *testing.T) {
 }
 
 func BenchmarkMemoryFS(b *testing.B) {
-	benchmarkFileService(b, func() FileService {
+	benchmarkFileService(context.Background(), b, func() FileService {
 		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
 		assert.Nil(b, err)
 		return fs
 	})
+}
+
+func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
+	ctx := context.Background()
+	var counterSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
+
+	benchmarkFileService(ctx, b, func() FileService {
+		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
+		assert.Nil(b, err)
+		fs.caches = append(fs.caches, NewMemCache(
+			WithLRU(128*1024*1024),
+		))
+		return fs
+	})
+
+	read := counterSet.FileService.Cache.Memory.Read.Load()
+	hit := counterSet.FileService.Cache.Memory.Hit.Load()
+	fmt.Printf("hit rate: %v / %v = %.4v\n", hit, read, float64(hit)/float64(read))
+	fmt.Printf("capacity %+v\n", counterSet.FileService.Cache.Memory.Capacity.Load())
+	fmt.Printf("used %+v\n", counterSet.FileService.Cache.Memory.Used.Load())
+}
+
+func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
+	ctx := context.Background()
+	var counterSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
+
+	benchmarkFileService(ctx, b, func() FileService {
+		fs, err := NewMemoryFS("memory", DisabledCacheConfig, nil)
+		assert.Nil(b, err)
+		fs.caches = append(fs.caches, NewMemCache(
+			WithLRU(2*1024*1024),
+		))
+		return fs
+	})
+
+	read := counterSet.FileService.Cache.Memory.Read.Load()
+	hit := counterSet.FileService.Cache.Memory.Hit.Load()
+	fmt.Printf("hit rate: %v / %v = %.4v\n", hit, read, float64(hit)/float64(read))
+	fmt.Printf("capacity %+v\n", counterSet.FileService.Cache.Memory.Capacity.Load())
+	fmt.Printf("used %+v\n", counterSet.FileService.Cache.Memory.Used.Load())
 }

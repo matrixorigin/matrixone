@@ -1598,7 +1598,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 	}
 	if tableDef.ViewSql != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
+		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statement for View")
 	}
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
@@ -1879,15 +1879,16 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
-					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
-						KeyParts: []*tree.KeyPart{
-							{
-								ColName: opt.Column.Name,
-							},
-						},
-						Name: opt.Column.Name.Parts[0],
-					})
-					indexs = append(indexs, opt.Column.Name.Parts[0])
+					return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport add unique index constraints when adding new column")
+					//uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
+					//	KeyParts: []*tree.KeyPart{
+					//		{
+					//			ColName: opt.Column.Name,
+					//		},
+					//	},
+					//	Name: opt.Column.Name.Parts[0],
+					//})
+					//indexs = append(indexs, opt.Column.Name.Parts[0])
 				}
 			}
 			if len(pks) > 0 {
@@ -2130,46 +2131,61 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 
 	columnIdPos := make(map[uint64]int)
 	columnNamePos := make(map[string]int)
-	uniqueColumn := make(map[string]uint64)
+	uniqueColumns := make([]map[string]uint64, 0, len(tableRef.Cols))
 	for i, col := range tableRef.Cols {
 		columnIdPos[col.ColId] = i
 		columnNamePos[col.Name] = i
-		if col.Primary {
-			uniqueColumn[col.Name] = col.ColId
-		}
 	}
 	if tableRef.Pkey != nil {
+		uniqueMap := make(map[string]uint64)
 		for _, colName := range tableRef.Pkey.Names {
-			uniqueColumn[colName] = tableRef.Cols[columnNamePos[colName]].ColId
+			uniqueMap[colName] = tableRef.Cols[columnNamePos[colName]].ColId
 		}
+		uniqueColumns = append(uniqueColumns, uniqueMap)
 	}
 
 	// now tableRef.Indices is empty, you can not test it
 	for _, index := range tableRef.Indexes {
 		if index.Unique {
-			if len(index.Parts) == 1 {
-				uniqueColName := index.Parts[0]
+			uniqueMap := make(map[string]uint64)
+			for _, uniqueColName := range index.Parts {
 				colId := tableRef.Cols[columnNamePos[uniqueColName]].ColId
-				uniqueColumn[uniqueColName] = colId
+				uniqueMap[uniqueColName] = colId
 			}
+			uniqueColumns = append(uniqueColumns, uniqueMap)
 		}
 	}
 
-	for i, keyPart := range refer.KeyParts {
-		colName := keyPart.ColName.Parts[0]
-		if _, exists := columnNamePos[colName]; exists {
-			if colId, ok := uniqueColumn[colName]; ok {
-				// check column type
-				if tableRef.Cols[columnIdPos[colId]].Typ.Id != fkColTyp[i].Id {
-					return nil, moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkColName[i])
+	matchCol := make([]uint64, 0, len(refer.KeyParts))
+	for _, uniqueColumn := range uniqueColumns {
+		for i, keyPart := range refer.KeyParts {
+			colName := keyPart.ColName.Parts[0]
+			if _, exists := columnNamePos[colName]; exists {
+				if colId, ok := uniqueColumn[colName]; ok {
+					// check column type
+					if tableRef.Cols[columnIdPos[colId]].Typ.Id != fkColTyp[i].Id {
+						return nil, moerr.NewInternalError(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkColName[i])
+					}
+					matchCol = append(matchCol, colId)
+				} else {
+					matchCol = matchCol[:0]
+					break
 				}
-				fkData.Def.ForeignCols[i] = colId
 			} else {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "reference column '%v' is not unique constraint(Unique index or Primary Key)", colName)
+				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkTableName)
 			}
-		} else {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkTableName)
+		}
+
+		if len(matchCol) > 0 {
+			break
 		}
 	}
+
+	if len(matchCol) == 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "failed to add the foreign key constraint")
+	} else {
+		fkData.Def.ForeignCols = matchCol
+	}
+
 	return &fkData, nil
 }

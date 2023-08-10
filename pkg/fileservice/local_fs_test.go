@@ -72,8 +72,8 @@ func TestLocalFS(t *testing.T) {
 }
 
 func BenchmarkLocalFS(b *testing.B) {
-	benchmarkFileService(b, func() FileService {
-		ctx := context.Background()
+	ctx := context.Background()
+	benchmarkFileService(ctx, b, func() FileService {
 		dir := b.TempDir()
 		fs, err := NewLocalFS(ctx, "local", dir, DisabledCacheConfig, nil)
 		assert.Nil(b, err)

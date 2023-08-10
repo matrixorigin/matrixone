@@ -15,21 +15,22 @@
 package client
 
 import (
-	"bytes"
 	"context"
-	"sort"
+	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	cutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"go.uber.org/ratelimit"
 	"go.uber.org/zap"
 )
 
@@ -64,7 +65,7 @@ func WithLockService(lockService lockservice.LockService) TxnClientCreateOption 
 // the start time of the next transaction cannot be less than this value.
 //
 // If we need to ensure that all the transactions on a CN can read the writes of the previous committed
-// transaction, then we can use WithEenableCNBasedConsistency to turn on.
+// transaction, then we can use WithEnableCNBasedConsistency to turn on.
 func WithEnableSacrificingFreshness() TxnClientCreateOption {
 	return func(tc *txnClient) {
 		tc.enableSacrificingFreshness = true
@@ -98,7 +99,7 @@ func WithEnableRefreshExpression() TxnClientCreateOption {
 	}
 }
 
-// WithEnableLeakCheck enable txn leak check. Used to found any txn is not committed or rollbacked.
+// WithEnableLeakCheck enable txn leak check. Used to found any txn is not committed or rolled back.
 func WithEnableLeakCheck(
 	maxActiveAges time.Duration,
 	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)) TxnClientCreateOption {
@@ -107,13 +108,28 @@ func WithEnableLeakCheck(
 	}
 }
 
+// WithTxnLimit flow control of transaction creation, maximum number of transactions per second
+func WithTxnLimit(n int) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.limiter = ratelimit.New(n, ratelimit.Per(time.Second))
+	}
+}
+
+// WithMaxActiveTxn is the count of max active txn in current cn.  If reached max value, the txn is
+// added to a FIFO queue. Default is unlimited.
+func WithMaxActiveTxn(n int) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.maxActiveTxn = n
+	}
+}
+
 var _ TxnClient = (*txnClient)(nil)
 
-type txnClientStatus bool
+type status int
 
 const (
-	paused txnClientStatus = false
-	normal txnClientStatus = true
+	paused        = status(0)
+	normal status = status(1)
 )
 
 type txnClient struct {
@@ -123,26 +139,33 @@ type txnClient struct {
 	lockService                lockservice.LockService
 	timestampWaiter            TimestampWaiter
 	leakChecker                *leakChecker
+	limiter                    ratelimit.Limiter
+	maxActiveTxn               int
 	enableCNBasedConsistency   bool
 	enableSacrificingFreshness bool
 	enableRefreshExpression    bool
 
-	mu struct {
-		sync.RWMutex
-		txns []txn.TxnMeta
-
-		// indicate whether the CN can provide service normally.
-		state txnClientStatus
-
-		// Minimum Active Transaction Timestamp
-		minTS timestamp.Timestamp
-
+	atomic struct {
 		// we maintain a CN-based last commit timestamp to ensure that
 		// a txn with that CN can see previous writes.
 		// FIXME(fagongzi): this is a remedial solution to disable the
 		// cn-based commit ts when the session-level last commit ts have
 		// been processed.
-		latestCommitTS timestamp.Timestamp
+		latestCommitTS atomic.Pointer[timestamp.Timestamp]
+		// just for bvt testing
+		forceSyncCommitTimes atomic.Uint64
+	}
+
+	mu struct {
+		sync.RWMutex
+		// indicate whether the CN can provide service normally.
+		state status
+		// user active txns
+		users int
+		// all active txns
+		activeTxns map[string]*txnOperator
+		// FIFO queue for ready to active txn
+		waitActiveTxns []*txnOperator
 	}
 }
 
@@ -155,6 +178,7 @@ func NewTxnClient(
 		sender: sender,
 	}
 	c.mu.state = paused
+	c.mu.activeTxns = make(map[string]*txnOperator, 100000)
 	for _, opt := range options {
 		opt(c)
 	}
@@ -170,12 +194,21 @@ func (client *txnClient) adjust() {
 	if runtime.ProcessLevelRuntime().Clock() == nil {
 		panic("txn clock not set")
 	}
+	if client.limiter == nil {
+		client.limiter = ratelimit.NewUnlimited()
+	}
+	if client.maxActiveTxn == 0 {
+		client.maxActiveTxn = math.MaxInt
+	}
 }
 
 func (client *txnClient) New(
 	ctx context.Context,
 	minTS timestamp.Timestamp,
 	options ...TxnOption) (TxnOperator, error) {
+	// we take a token from the limiter to control the number of transactions created per second.
+	client.limiter.Take()
+
 	ts, err := client.determineTxnSnapshot(ctx, minTS)
 	if err != nil {
 		return nil, err
@@ -190,11 +223,6 @@ func (client *txnClient) New(
 		txnMeta.LockService = client.lockService.GetConfig().ServiceID
 	}
 
-	err = client.pushTransaction(txnMeta)
-	if err != nil {
-		return nil, err
-	}
-
 	options = append(options,
 		WithTxnCNCoordinator(),
 		WithTxnLockService(client.lockService))
@@ -206,8 +234,15 @@ func (client *txnClient) New(
 	op.timestampWaiter = client.timestampWaiter
 	op.AppendEventCallback(ClosedEvent,
 		client.updateLastCommitTS,
-		client.popTransaction)
-	client.addToLeakCheck(op)
+		client.closeTxn)
+
+	if err := client.openTxn(op); err != nil {
+		return nil, err
+	}
+	if err := op.waitActive(ctx); err != nil {
+		_ = op.Rollback(ctx)
+		return nil, err
+	}
 	return op, nil
 }
 
@@ -228,9 +263,17 @@ func (client *txnClient) Close() error {
 }
 
 func (client *txnClient) MinTimestamp() timestamp.Timestamp {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	return client.mu.minTS
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+
+	min := timestamp.Timestamp{}
+	for _, op := range client.mu.activeTxns {
+		if min.IsEmpty() ||
+			op.Txn().SnapshotTS.Less(min) {
+			min = op.Txn().SnapshotTS
+		}
+	}
+	return min
 }
 
 func (client *txnClient) WaitLogTailAppliedAt(
@@ -257,10 +300,17 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 }
 
 func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if client.mu.latestCommitTS.Less(txn.CommitTS) {
-		client.mu.latestCommitTS = txn.CommitTS
+	var old *timestamp.Timestamp
+	new := &txn.CommitTS
+	for {
+		old = client.atomic.latestCommitTS.Load()
+		if old != nil && old.GreaterEq(txn.CommitTS) {
+			return
+		}
+
+		if client.atomic.latestCommitTS.CompareAndSwap(old, new) {
+			return
+		}
 	}
 }
 
@@ -296,10 +346,9 @@ func (client *txnClient) determineTxnSnapshot(
 }
 
 func (client *txnClient) adjustTimestamp(ts timestamp.Timestamp) timestamp.Timestamp {
-	client.mu.RLock()
-	defer client.mu.RUnlock()
-	if ts.Less(client.mu.latestCommitTS) {
-		return client.mu.latestCommitTS
+	v := client.atomic.latestCommitTS.Load()
+	if v != nil && v.Greater(ts) {
+		return *v
 	}
 	return ts
 }
@@ -308,7 +357,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 	return client.adjustTimestamp(timestamp.Timestamp{})
 }
 
-func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
+func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
@@ -318,56 +367,82 @@ func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
 			util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
 		}
 	}
+	client.atomic.forceSyncCommitTimes.Add(1)
 }
 
-func (client *txnClient) popTransaction(txn txn.TxnMeta) {
-	var i int
-
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	for i = 0; i < len(client.mu.txns); i++ {
-		if bytes.Equal(client.mu.txns[i].ID, txn.ID) {
-			break
-		}
-	}
-	client.mu.txns = append(client.mu.txns[:i], client.mu.txns[i+1:]...)
-	switch {
-	case len(client.mu.txns) == 0:
-		client.mu.minTS = timestamp.Timestamp{}
-	case i == 0:
-		client.mu.minTS = client.mu.txns[i].SnapshotTS
-	}
-
-	client.removeFromLeakCheck(txn.ID)
+func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
+	return client.atomic.forceSyncCommitTimes.Load()
 }
 
-func (client *txnClient) pushTransaction(txn txn.TxnMeta) error {
+func (client *txnClient) openTxn(op *txnOperator) error {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
 	if client.mu.state == normal {
-		i := sort.Search(len(client.mu.txns), func(i int) bool {
-			return client.mu.txns[i].SnapshotTS.GreaterEq(txn.SnapshotTS)
-		})
-		if i == len(client.mu.txns) {
-			client.mu.txns = append(client.mu.txns, txn)
-		} else {
-			client.mu.txns = append(client.mu.txns[:i+1], client.mu.txns[i:]...)
-			client.mu.txns[i] = txn
+		if !op.isUserTxn() ||
+			client.mu.users < client.maxActiveTxn {
+			client.addActiveTxnLocked(op)
+			return nil
 		}
-		if client.mu.minTS.IsEmpty() || txn.SnapshotTS.Less(client.mu.minTS) {
-			client.mu.minTS = txn.SnapshotTS
-		}
+		op.waiter = newWaiter(timestamp.Timestamp{})
+		op.waiter.ref()
+		client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
 		return nil
 	}
-	return moerr.NewInternalErrorNoCtx("cn service is not ready, plz retry later")
+	return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
+}
+
+func (client *txnClient) closeTxn(txn txn.TxnMeta) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	key := cutil.UnsafeBytesToString(txn.ID)
+	if op, ok := client.mu.activeTxns[key]; ok {
+		delete(client.mu.activeTxns, key)
+		client.removeFromLeakCheck(txn.ID)
+		if !op.isUserTxn() {
+			return
+		}
+		client.mu.users--
+		if client.mu.users < 0 {
+			panic("BUG: user txns < 0")
+		}
+		if len(client.mu.waitActiveTxns) > 0 {
+			newCanAdded := client.maxActiveTxn - client.mu.users
+			for i := 0; i < newCanAdded; i++ {
+				op := client.fetchWaitActiveOpLocked()
+				if op == nil {
+					return
+				}
+				client.addActiveTxnLocked(op)
+				op.notifyActive()
+			}
+		}
+	}
+}
+
+func (client *txnClient) addActiveTxnLocked(op *txnOperator) {
+	if op.isUserTxn() {
+		client.mu.users++
+	}
+	client.mu.activeTxns[cutil.UnsafeBytesToString(op.txnID)] = op
+	client.addToLeakCheck(op)
+}
+
+func (client *txnClient) fetchWaitActiveOpLocked() *txnOperator {
+	if len(client.mu.waitActiveTxns) == 0 {
+		return nil
+	}
+	op := client.mu.waitActiveTxns[0]
+	client.mu.waitActiveTxns = append(client.mu.waitActiveTxns[:0], client.mu.waitActiveTxns[1:]...)
+	return op
 }
 
 func (client *txnClient) Pause() {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	logutil.Infof("txn client status changed to paused")
+	util.GetLogger().Info("txn client status changed to paused")
 	client.mu.state = paused
 }
 
@@ -375,16 +450,27 @@ func (client *txnClient) Resume() {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	logutil.Infof("txn client status changed to normal")
+	util.GetLogger().Info("txn client status changed to normal")
 	client.mu.state = normal
 }
 
 func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
-	defer client.mu.Unlock()
+	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
+	for key, op := range client.mu.activeTxns {
+		ops = append(ops, op)
+		delete(client.mu.activeTxns, key)
+	}
+	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
+	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
+	client.mu.Unlock()
 
-	for i := 0; i < len(client.mu.txns); i++ {
-		client.mu.txns[i].Status = txn.TxnStatus_Aborted
+	for _, op := range ops {
+		_ = op.Rollback(context.Background())
+	}
+	for _, op := range waitOps {
+		_ = op.Rollback(context.Background())
+		op.notifyActive()
 	}
 }
 

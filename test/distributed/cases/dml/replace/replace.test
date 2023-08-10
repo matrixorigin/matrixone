@@ -13,3 +13,11 @@ replace into names set id = 2, name = "Ciro";
 select name, age from names where id = 2;
 replace into names set id = 2, name = "Ciro", age = 17;
 select name, age from names where id = 2;
+REPLACE INTO names values (2, "Bob", 19);
+select name, age from names where id = 2;
+-- table without keys
+drop table if exists t1;
+create table t1(a int, b int, c int);
+insert into t1 values (1,1,1), (2,2,2), (3,3,3);
+replace t1 values (1,2,3), (2,3,4);
+select a, b, c from t1;

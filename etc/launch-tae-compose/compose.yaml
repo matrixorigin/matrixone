@@ -93,6 +93,7 @@ services:
       - "32000"
       - "32001"
       - "32002"
+      - "42345:12345"
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123

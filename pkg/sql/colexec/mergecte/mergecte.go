@@ -55,6 +55,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			if ap.ctr.curNodeCnt == 0 {
 				ap.ctr.curNodeCnt = ap.ctr.nodeCnt
 				break
+			} else {
+				sb.Clean(proc.Mp())
 			}
 		} else {
 			break

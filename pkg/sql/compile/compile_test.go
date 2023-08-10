@@ -117,7 +117,7 @@ func TestCompile(t *testing.T) {
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 
-	txnClient := mock_frontend.NewMockTxnClientWithFeature(ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
