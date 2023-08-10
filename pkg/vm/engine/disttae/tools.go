@@ -808,6 +808,7 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 			ebat.Vecs = e.bat.Vecs
 			ebat.Attrs = e.bat.Attrs
 		} else {
+			//e.bat.Vecs[0] is rowid vector
 			ebat.Vecs = e.bat.Vecs[1:]
 			ebat.Attrs = e.bat.Attrs[1:]
 		}
@@ -820,8 +821,21 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		if e.tableId != catalog.MO_TABLES_ID &&
 			e.tableId != catalog.MO_DATABASE_ID {
 			ebat = batch.NewWithSize(0)
-			ebat.Vecs = e.bat.Vecs[:1]
-			ebat.Attrs = e.bat.Attrs[:1]
+			//ebat.Vecs = e.bat.Vecs[:1]
+			//ebat.Attrs = e.bat.Attrs[:1]
+			if e.fileName == "" {
+				if len(e.bat.Vecs) != 2 {
+					panic(fmt.Sprintf("e.bat should contain 2 vectors, "+
+						"one is rowid vector, the other is pk vector,"+
+						"database name = %s, table name = %s", e.databaseName, e.tableName))
+				}
+				ebat.Vecs = e.bat.Vecs[:2]
+				//ebat.Attrs = e.bat.Attrs[:2]
+			} else {
+				ebat.Vecs = e.bat.Vecs[:1]
+				//ebat.Attrs = e.bat.Attrs[:1]
+			}
+
 		}
 	} else if e.typ == UPDATE {
 		typ = api.Entry_Update
