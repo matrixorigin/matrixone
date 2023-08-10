@@ -346,6 +346,7 @@ func (c *Compile) Run(_ uint64) error {
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 			c.proc.TxnOperator.Txn().IsRCIsolation() {
 			c.proc.TxnOperator.ResetRetry(true)
+			c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 
 			// clear the workspace of the failed statement
 			if err = c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); err != nil {
