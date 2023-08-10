@@ -484,6 +484,7 @@ func init() {
 		"zonemap":                    ZONEMAP,
 		"adddate":                    ADDDATE,
 		"count":                      COUNT,
+		"approx_count":               APPROX_COUNT,
 		"approx_count_distinct":      APPROX_COUNT_DISTINCT,
 		"approx_percentile":          APPROX_PERCENTILE,
 		"curdate":                    CURDATE,
