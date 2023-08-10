@@ -1139,41 +1139,47 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 						}
 
 						var exprs []*plan.Expr
+						str := child.ObjRef.SchemaName + "." + child.TableDef.Name
 						exprs = append(exprs, &plan.Expr{
 							Typ: &Type{
 								Id:          int32(types.T_varchar),
 								NotNullable: true,
+								Width:       int32(len(str)),
 							},
 							Expr: &plan.Expr_C{
 								C: &plan.Const{
 									Value: &plan.Const_Sval{
-										Sval: child.ObjRef.SchemaName + "." + child.TableDef.Name,
+										Sval: str,
 									},
 								},
 							},
 						})
-						exprs[0].Typ.Width = int32(len(exprs[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval))
+						str = child.TableDef.Cols[0].Name
 						exprs = append(exprs, &plan.Expr{
 							Typ: &Type{
 								Id:          int32(types.T_varchar),
 								NotNullable: true,
+								Width:       int32(len(str)),
 							},
 							Expr: &plan.Expr_C{
 								C: &plan.Const{
 									Value: &plan.Const_Sval{
-										Sval: child.TableDef.Cols[0].Name,
+										Sval: str,
 									},
 								},
 							},
 						})
-						exprs[1].Typ.Width = int32(len(exprs[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval))
 						scanNode := &plan.Node{
 							NodeType: plan.Node_VALUE_SCAN,
 						}
 						childId := builder.appendNode(scanNode, nil)
 						node.Children[0] = builder.buildMetadataScan(nil, nil, exprs, childId)
-						agg.F.Args[0].Expr.(*plan.Expr_Col).Col.RelPos = builder.qry.Nodes[node.Children[0]].BindingTags[0]
-						agg.F.Args[0].Typ = builder.qry.Nodes[node.Children[0]].TableDef.Cols[agg.F.Args[0].Expr.(*plan.Expr_Col).Col.RelPos].Typ
+						child = builder.qry.Nodes[node.Children[0]]
+						switch expr := agg.F.Args[0].Expr.(type) {
+						case *plan.Expr_Col:
+							expr.Col.RelPos = child.BindingTags[0]
+							agg.F.Args[0].Typ = child.TableDef.Cols[expr.Col.ColPos].Typ
+						}
 					}
 				}
 			}
