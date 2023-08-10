@@ -468,7 +468,7 @@ func (x Decimal64) Add64(y Decimal64) (Decimal64, error) {
 	signx := x.Sign()
 	err := error(nil)
 	z := x + y
-	if signx == y.Sign() && signx != x.Sign() {
+	if signx == y.Sign() && signx != z.Sign() {
 		err = moerr.NewInvalidInputNoCtx("Decimal64 Add overflow: %s+%s", x.Format(0), y.Format(0))
 	}
 	return z, err
