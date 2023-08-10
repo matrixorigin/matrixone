@@ -62,7 +62,8 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug("task schedule query tasks", zap.Int("created", len(createdTasks)),
+	runtime.ProcessLevelRuntime().Logger().Debug("task schedule query tasks",
+		zap.Int("created", len(createdTasks)),
 		zap.Int("running", len(runningTasks)))
 	if len(tasks) == 0 {
 		return
@@ -141,19 +142,5 @@ func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (ordered
 			expired = append(expired, t)
 		}
 	}
-	for _, t := range tasks {
-		if heartbeatTimeout(t.LastHeartbeat) {
-			for _, e := range expired {
-				if t.ID == e.ID {
-					break
-				}
-			}
-			expired = append(expired, t)
-		}
-	}
 	return orderedMap, expired
-}
-
-func heartbeatTimeout(lastHeartbeat int64) bool {
-	return time.Since(time.UnixMilli(lastHeartbeat)) > taskDefaultTimeout
 }
