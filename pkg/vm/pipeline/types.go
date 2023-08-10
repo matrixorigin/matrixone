@@ -88,6 +88,8 @@ type Pipeline struct {
 
 // cleanup do memory release work for whole pipeline.
 func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
+	proc.Cancel()
+
 	// clean all the coming batches.
 	if pipelineFailed {
 		bat := proc.InputBatch()
