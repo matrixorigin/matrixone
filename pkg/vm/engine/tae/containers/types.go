@@ -37,6 +37,9 @@ type ItOpT[T any] func(v T, isNull bool, row int) error
 type Vector interface {
 	GetType() *types.Type
 
+	IsConst() bool
+	IsConstNull() bool
+
 	// Deep copy ops
 	Get(i int) any
 	Append(v any, isNull bool)
