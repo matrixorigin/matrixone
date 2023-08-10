@@ -543,7 +543,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 }
 
 func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	var bat *batch.Batch
+	//var bat *batch.Batch
 	var err error
 	var cnt int
 	_, span := trace.Start(ctx, "scanCsvFile")
@@ -588,11 +588,13 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 		}
 	}
 	plh.batchSize = cnt
-	bat, err = getBatchData(param, plh, proc)
-	if err != nil {
-		return nil, err
-	}
-	return bat, nil
+	//TODO:test
+	//bat, err = getBatchData(param, plh, proc)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//return bat, nil
+	return batch.EmptyBatch, nil
 }
 
 func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (*batch.Batch, error) {
