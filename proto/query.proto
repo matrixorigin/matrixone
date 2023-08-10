@@ -25,6 +25,8 @@ enum CmdMethod {
   Query = 0;
   // ShowProcessList represents the show process list query.
   ShowProcessList = 1;
+  // AlterAccount represent set account status as restricted 
+  AlterAccount = 2;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -52,6 +54,8 @@ message Request {
   QueryRequest QueryRequest = 3;
   // ShowProcessListRequest is the request for show process list.
   ShowProcessListRequest ShowProcessListRequest = 4;
+  // AlterAccountRequest is the request for alter account restricted
+  AlterAccountRequest AlterAccountRequest = 5;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -69,5 +73,21 @@ message Response {
   bytes Error = 3;
   // ShowProcessListResponse is the response of ShowProcessListRequest.
   ShowProcessListResponse ShowProcessListResponse = 4;
+  // AlterAccountResponse is the response of AlterAccount.
+  AlterAccountResponse AlterAccountResponse = 5;
 }
 
+// AlterAccountRequest is the "alter account restricted" query request.
+message AlterAccountRequest {
+  // Tenant is the tenant which to alter.
+  string Tenant = 1;
+  // SysTenet is true if the tenant is a system tenant.
+  bool SysTenant = 2;
+  // Status is the tenant which will be alter to.
+  string Status = 3;
+}
+
+// AlterAccountResponse is the response of command AlterAccount.
+message AlterAccountResponse {
+  bool alterSuccess = 1;
+}
