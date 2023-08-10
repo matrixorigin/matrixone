@@ -40,4 +40,18 @@ b    8192    4096    197698
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
 sum(origin_size)
 230504
+select approx_count(*) from t;
+approx_count(*)
+8192
+insert into t select * from t;
+insert into t select * from t;
+select approx_count(*) from t;
+approx_count(*)
+8192
+select sleep(20);
+sleep(20)
+0
+select approx_count(*) from t;
+approx_count(*)
+32768
 drop table if exists t;
