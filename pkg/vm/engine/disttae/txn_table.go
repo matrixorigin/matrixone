@@ -412,6 +412,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 			zm := colmeta.ZoneMap()
 			newInfo.Max = zm.GetMaxBuf()
 			newInfo.Min = zm.GetMinBuf()
+			newInfo.Sum = zm.GetSumBuf()
 
 			infoList = append(infoList, newInfo)
 		}

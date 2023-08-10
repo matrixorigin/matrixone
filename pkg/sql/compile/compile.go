@@ -346,6 +346,7 @@ func (c *Compile) Run(_ uint64) error {
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 			c.proc.TxnOperator.Txn().IsRCIsolation() {
 			c.proc.TxnOperator.ResetRetry(true)
+			c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 
 			// clear the workspace of the failed statement
 			if err = c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); err != nil {
@@ -1820,7 +1821,7 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 			})
 		}
 	default:
-		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join typ '%v'", node.JoinType)))
+		panic(moerr.NewNYI(ctx, fmt.Sprintf("shuffle join do not support join type '%v'", node.JoinType)))
 	}
 
 	if parent != nil {

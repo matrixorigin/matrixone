@@ -183,7 +183,7 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 
 			// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
 			// bootstrap data.
-			b.client.(client.TxnClientWithCtl).SetLatestCommitTS(b.now())
+			b.client.SyncLatestCommitTS(b.now())
 		}
 
 		getLogger().Info("successfully completed bootstrap")

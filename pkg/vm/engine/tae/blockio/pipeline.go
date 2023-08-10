@@ -185,23 +185,19 @@ func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 
 // prefetch metadata job
 func prefetchMetaJob(ctx context.Context, params PrefetchParams) *tasks.Job {
-	reader := fetchReader(params)
+	name := params.key.Name().String()
 	return getJob(
 		ctx,
-		makeName(reader.GetName()),
+		makeName(name),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
-			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := reader.ReadMeta(ctx, nil)
+			objectMeta, err := objectio.FastLoadObjectMeta(ctx, &params.key, params.fs)
 			if err != nil {
 				res.Err = err
 				return
 			}
-			res.Res = ioVectors
-			if params.reader == nil {
-				putReader(reader)
-			}
+			res.Res = objectMeta
 			return
 		},
 	)

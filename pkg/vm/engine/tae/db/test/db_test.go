@@ -448,7 +448,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, view.DeleteMask)
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 
-		_, err = dataBlk.RangeDelete(txn, 1, 2, handle.DT_Normal)
+		_, err = dataBlk.RangeDelete(txn, 1, 2, nil, handle.DT_Normal)
 		assert.Nil(t, err)
 
 		view, err = dataBlk.GetColumnDataById(context.Background(), txn, readSchema, 2)
@@ -5091,7 +5091,7 @@ func TestMergeBlocks3(t *testing.T) {
 		view, err := blk11Handle.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		view.GetData()
 		require.NoError(t, err)
-		err = rel.DeleteByPhyAddrKeys(view.GetData())
+		err = rel.DeleteByPhyAddrKeys(view.GetData(), nil)
 		require.NoError(t, err)
 
 		require.NoError(t, rel.DeleteByFilter(context.Background(), filter5))
