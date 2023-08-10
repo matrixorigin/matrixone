@@ -58,7 +58,7 @@ func TestDeleteChain1(t *testing.T) {
 	// 1. Txn1 delete from 1 to 10 -- PASS
 	err := chain.PrepareRangeDelete(1, 10, txn1.GetStartTS())
 	assert.Nil(t, err)
-	n1.RangeDeleteLocked(1, 10)
+	n1.RangeDeleteLocked(1, 10, nil)
 	assert.Equal(t, uint32(10), n1.GetCardinalityLocked())
 	t.Log(n1.mask.String())
 
@@ -75,7 +75,7 @@ func TestDeleteChain1(t *testing.T) {
 	err = chain.PrepareRangeDelete(20, 30, txn2.GetStartTS())
 	assert.Nil(t, err)
 	n2 := chain.AddNodeLocked(txn2, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
-	n2.RangeDeleteLocked(20, 30)
+	n2.RangeDeleteLocked(20, 30, nil)
 	assert.Equal(t, uint32(11), n2.GetCardinalityLocked())
 	t.Log(n2.mask.String())
 
@@ -120,7 +120,7 @@ func TestDeleteChain1(t *testing.T) {
 	err = chain.PrepareRangeDelete(31, 33, txn3.GetStartTS())
 	assert.Nil(t, err)
 	n3 := chain.AddNodeLocked(txn3, handle.DeleteType(handle.DT_Normal))
-	n3.RangeDeleteLocked(31, 33)
+	n3.RangeDeleteLocked(31, 33, nil)
 
 	collected, err = chain.CollectDeletesLocked(txn3, nil)
 	assert.NoError(t, err)
@@ -158,7 +158,7 @@ func TestDeleteChain2(t *testing.T) {
 	n1 := chain.AddNodeLocked(txn1, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	err := chain.PrepareRangeDelete(1, 4, txn1.GetStartTS())
 	assert.Nil(t, err)
-	n1.RangeDeleteLocked(1, 4)
+	n1.RangeDeleteLocked(1, 4, nil)
 	commitTxn(txn1)
 	err = n1.PrepareCommit()
 	assert.Nil(t, err)
@@ -170,14 +170,14 @@ func TestDeleteChain2(t *testing.T) {
 	n2 := chain.AddNodeLocked(txn2, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	err = chain.PrepareRangeDelete(5, 8, txn2.GetStartTS())
 	assert.Nil(t, err)
-	n2.RangeDeleteLocked(5, 8)
+	n2.RangeDeleteLocked(5, 8, nil)
 	t.Log(chain.StringLocked())
 
 	txn3 := mockTxn()
 	n3 := chain.AddNodeLocked(txn3, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	err = chain.PrepareRangeDelete(9, 12, txn3.GetStartTS())
 	assert.Nil(t, err)
-	n3.RangeDeleteLocked(9, 12)
+	n3.RangeDeleteLocked(9, 12, nil)
 	commitTxn(txn3)
 	err = n3.PrepareCommit()
 	assert.Nil(t, err)
