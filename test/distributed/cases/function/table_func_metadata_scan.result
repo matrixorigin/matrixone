@@ -48,8 +48,8 @@ insert into t select * from t;
 select approx_count(*) from t;
 approx_count(*)
 8192
-select sleep(10);
-sleep(10)
+select sleep(15);
+sleep(15)
 0
 select approx_count(*) from t;
 approx_count(*)
