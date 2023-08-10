@@ -2728,6 +2728,21 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 // The returned object is NOT allowed to be modified (
 // TODO: Nulls are deep copied.
 func (v *Vector) Window(start, end int) (*Vector, error) {
+	if v.IsConstNull() {
+		return NewConstNull(v.typ, end-start, nil), nil
+	} else if v.IsConst() {
+		vec := NewVec(v.typ)
+		vec.class = v.class
+		vec.col = v.col
+		vec.data = v.data
+		vec.area = v.area
+		vec.capacity = v.capacity
+		vec.length = end - start
+		vec.cantFreeArea = true
+		vec.cantFreeData = true
+		vec.sorted = v.sorted
+		return vec, nil
+	}
 	w := NewVec(v.typ)
 	if start == end {
 		return w, nil
