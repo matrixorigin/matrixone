@@ -556,8 +556,79 @@ func (data *CNCheckpointData) PrefetchFrom(
 	ctx context.Context,
 	version uint32,
 	service fileservice.FileService,
-	key objectio.Location) (err error) {
-	return prefetchCheckpointData(ctx, version, service, key)
+	key objectio.Location,
+	reader *blockio.BlockReader,
+	tableID uint64) (err error) {
+	if version < CheckpointVersion4 {
+		return prefetchCheckpointData(ctx, version, service, key)
+	}
+	var metaBats []*batch.Batch
+	metaIdx := checkpointDataReferVersions[version][MetaIDX]
+	metaBats, err = LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
+	if err != nil {
+		return
+	}
+	metaBat := metaBats[0]
+	data.bats[MetaIDX] = metaBat
+	meta := data.GetTableMeta(tableID, version)
+	if meta == nil {
+		return
+	}
+	var pref blockio.PrefetchParams
+	for i, table := range meta.tables {
+		if table == nil {
+			continue
+		}
+		idx := uint16(i)
+		if i > BlockDelete {
+			if tableID == pkgcatalog.MO_DATABASE_ID ||
+				tableID == pkgcatalog.MO_TABLES_ID ||
+				tableID == pkgcatalog.MO_COLUMNS_ID {
+				break
+			}
+		}
+
+		if i == BlockInsert {
+			idx = BLKMetaInsertIDX
+		} else if i == BlockDelete {
+			idx = BLKMetaDeleteIDX
+		} else if i == CNBlockInsert {
+			idx = BLKCNMetaInsertIDX
+		} else if i == SegmentDelete {
+			idx = SEGDeleteIDX
+		}
+		switch tableID {
+		case pkgcatalog.MO_DATABASE_ID:
+			if i == BlockInsert {
+				idx = DBInsertIDX
+			} else if i == BlockDelete {
+				idx = DBDeleteIDX
+			}
+		case pkgcatalog.MO_TABLES_ID:
+			if i == BlockInsert {
+				idx = TBLInsertIDX
+			} else if i == BlockDelete {
+				idx = TBLDeleteIDX
+			}
+		case pkgcatalog.MO_COLUMNS_ID:
+			if i == BlockInsert {
+				idx = TBLColInsertIDX
+			} else if i == BlockDelete {
+				idx = TBLColDeleteIDX
+			}
+		}
+		pref, err = blockio.BuildSubPrefetchParams(service, key)
+		if err != nil {
+			return
+		}
+		schema := checkpointDataReferVersions[version][uint32(idx)]
+		idxes := make([]uint16, len(schema.attrs))
+		for i := range schema.attrs {
+			idxes[i] = uint16(i)
+		}
+		pref.AddBlock(idxes, []uint16{idx})
+	}
+	return blockio.PrefetchWithMerged(pref)
 }
 
 func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32) (meta *CheckpointMeta) {
@@ -1405,16 +1476,9 @@ func prefetchCheckpointData(
 	key objectio.Location,
 ) (err error) {
 	var pref blockio.PrefetchParams
-	if version <= CheckpointVersion3 {
-		pref, err = blockio.BuildPrefetchParams(service, key)
-		if err != nil {
-			return
-		}
-	} else {
-		pref, err = blockio.BuildSubPrefetchParams(service, key)
-		if err != nil {
-			return
-		}
+	pref, err = blockio.BuildPrefetchParams(service, key)
+	if err != nil {
+		return
 	}
 	for idx, item := range checkpointDataReferVersions[version] {
 		idxes := make([]uint16, len(item.attrs))

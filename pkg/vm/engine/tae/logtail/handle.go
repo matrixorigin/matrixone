@@ -724,7 +724,7 @@ func LoadCheckpointEntries(
 
 	for i := range objectLocations {
 		data := NewCNCheckpointData()
-		err := data.PrefetchFrom(ctx, versions[i], fs, objectLocations[i])
+		err := data.PrefetchFrom(ctx, versions[i], fs, objectLocations[i], readers[i], tableID)
 		if err != nil {
 			return nil, nil, err
 		}
