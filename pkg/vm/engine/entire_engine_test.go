@@ -353,3 +353,11 @@ func (o *testOperator) ResetRetry(retry bool) {
 func (o *testOperator) IsRetry() bool {
 	panic("unimplemented")
 }
+
+func (o *testOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
+	panic("unimplemented")
+}
+
+func (o *testOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
+	panic("unimplemented")
+}
