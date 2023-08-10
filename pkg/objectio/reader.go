@@ -321,18 +321,20 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 	for _, opt := range opts {
 		meta, _ := metaHeader.SubMeta(uint16(ConvertToSchemaType(opt.Id)))
 		for seqnum := range opt.Idxes {
-			blkmeta := meta.GetBlockMeta(uint32(opt.Id))
-			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
-				// prefetch, do not generate
-				continue
-			}
-			col := blkmeta.ColumnMeta(seqnum)
-			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-				Offset: int64(col.Location().Offset()),
-				Size:   int64(col.Location().Length()),
+			for i := uint32(0); i < meta.BlockCount(); i++ {
+				blkmeta := meta.GetBlockMeta(uint32(meta.BlockHeader().StartID()) + i)
+				if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+					// prefetch, do not generate
+					continue
+				}
+				col := blkmeta.ColumnMeta(seqnum)
+				ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
+					Offset: int64(col.Location().Offset()),
+					Size:   int64(col.Location().Length()),
 
-				ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
-			})
+					ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
+				})
+			}
 		}
 	}
 
