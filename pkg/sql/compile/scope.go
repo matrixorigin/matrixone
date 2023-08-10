@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -227,8 +228,63 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 					s.NodeInfo.Data = s.NodeInfo.Data[:0]
 					break
 				}
-				if filter.Typ == pbpipeline.RuntimeFilter_NO_FILTER {
+				switch filter.Typ {
+				case pbpipeline.RuntimeFilter_NO_FILTER:
 					continue
+
+				case pbpipeline.RuntimeFilter_IN:
+					inExpr := &plan.Expr{
+						Typ: &plan.Type{
+							Id:          int32(types.T_bool),
+							NotNullable: spec.Expr.Typ.NotNullable,
+						},
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									Obj:     function.InFunctionEncodedID,
+									ObjName: function.InFunctionName,
+								},
+								Args: []*plan.Expr{
+									spec.Expr,
+									{
+										Typ: &plan.Type{
+											Id: int32(types.T_tuple),
+										},
+										Expr: &plan.Expr_Bin{
+											Bin: &plan.BinaryData{
+												Data: filter.Data,
+											},
+										},
+									},
+								},
+							},
+						},
+					}
+
+					if s.DataSource.Expr == nil {
+						s.DataSource.Expr = inExpr
+					} else {
+						s.DataSource.Expr = &plan.Expr{
+							Typ: &plan.Type{
+								Id:          int32(types.T_bool),
+								NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
+							},
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{
+										Obj:     function.AndFunctionEncodedID,
+										ObjName: function.AndFunctionName,
+									},
+									Args: []*plan.Expr{
+										s.DataSource.Expr,
+										inExpr,
+									},
+								},
+							},
+						}
+					}
+
+					// TODO: implement BETWEEN expression
 				}
 
 				exprs = append(exprs, spec.Expr)

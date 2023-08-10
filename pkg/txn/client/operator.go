@@ -35,11 +35,6 @@ import (
 )
 
 var (
-	_ EventableTxnOperator = (*txnOperator)(nil)
-	_ DebugableTxnOperator = (*txnOperator)(nil)
-)
-
-var (
 	readTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERead:      {},
 		moerr.ErrRpcError:     {},
@@ -68,6 +63,14 @@ var (
 		moerr.ErrTxnNotActive: {},
 	}
 )
+
+// WithUserTxn setup user transaction flag. Only user transactions need to be controlled for the maximum
+// number of active transactions.
+func WithUserTxn() TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.user = true
+	}
+}
 
 // WithTxnReadyOnly setup readonly flag
 func WithTxnReadyOnly() TxnOption {
@@ -150,6 +153,7 @@ type txnOperator struct {
 	txnID  []byte
 
 	option struct {
+		user             bool
 		readyOnly        bool
 		enableCacheWrite bool
 		disable1PCOpt    bool
@@ -209,6 +213,10 @@ func newTxnOperatorWithSnapshot(
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
 	return tc, nil
+}
+
+func (tc *txnOperator) isUserTxn() bool {
+	return tc.option.user
 }
 
 func (tc *txnOperator) waitActive(ctx context.Context) error {

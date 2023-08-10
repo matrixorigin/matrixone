@@ -12,24 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package fileservice
 
-import (
-	"testing"
+import "sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/stretchr/testify/assert"
-)
+type IOLockKey struct {
+	File string
+}
 
-func TestFeatureEnabled(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	c := NewTxnClient(newTestTxnSender())
-	assert.False(t, c.CNBasedConsistencyEnabled())
-	assert.False(t, c.RefreshExpressionEnabled())
+type IOLocks struct {
+	locks sync.Map
+}
 
-	c = NewTxnClient(newTestTxnSender(),
-		WithEnableCNBasedConsistency(),
-		WithEnableRefreshExpression())
-	assert.True(t, c.CNBasedConsistencyEnabled())
-	assert.True(t, c.RefreshExpressionEnabled())
+func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
+	ch := make(chan struct{})
+	v, loaded := i.locks.LoadOrStore(key, ch)
+	if loaded {
+		// not locked
+		wait = func() {
+			<-v.(chan struct{})
+		}
+		return
+	}
+	// locked
+	unlock = func() {
+		i.locks.Delete(key)
+		close(ch)
+	}
+	return
 }

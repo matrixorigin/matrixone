@@ -12,24 +12,50 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package fileservice
 
 import (
+	"sync"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/stretchr/testify/assert"
 )
 
-func TestFeatureEnabled(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	c := NewTxnClient(newTestTxnSender())
-	assert.False(t, c.CNBasedConsistencyEnabled())
-	assert.False(t, c.RefreshExpressionEnabled())
+func TestIOLock(t *testing.T) {
+	locks := new(IOLocks)
+	n := 1024
+	key := IOLockKey{
+		File: "foo",
+	}
 
-	c = NewTxnClient(newTestTxnSender(),
-		WithEnableCNBasedConsistency(),
-		WithEnableRefreshExpression())
-	assert.True(t, c.CNBasedConsistencyEnabled())
-	assert.True(t, c.RefreshExpressionEnabled())
+	wg := new(sync.WaitGroup)
+	wg.Add(n)
+	var c int
+	var cs []int
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			for {
+				unlock, wait := locks.Lock(key)
+				if unlock != nil {
+					cs = append(cs, c)
+					c++
+					unlock()
+					return
+				} else {
+					wait()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if c != 1024 {
+		t.Fatal()
+	}
+
+	// should be no race and sequential
+	for i, c := range cs {
+		if c != i {
+			t.Fatalf("got %v", cs)
+		}
+	}
 }

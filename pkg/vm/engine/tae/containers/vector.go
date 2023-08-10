@@ -42,6 +42,61 @@ type vectorWrapper struct {
 	element *vectorPoolElement
 }
 
+func NewConstFixed[T any](typ types.Type, val T, length int, opts ...Options) *vectorWrapper {
+	var (
+		alloc *mpool.MPool
+	)
+	if len(opts) > 0 {
+		alloc = opts[0].Allocator
+	}
+	if alloc == nil {
+		alloc = common.DefaultAllocator
+	}
+	vec := &vectorWrapper{
+		wrapped: vector.NewConstFixed[T](typ, val, length, alloc),
+	}
+	vec.mpool = alloc
+	return vec
+}
+
+func NewConstBytes(typ types.Type, val []byte, length int, opts ...Options) *vectorWrapper {
+	var (
+		alloc *mpool.MPool
+	)
+	if len(opts) > 0 {
+		alloc = opts[0].Allocator
+	}
+	if alloc == nil {
+		alloc = common.DefaultAllocator
+	}
+	vec := &vectorWrapper{
+		wrapped: vector.NewConstBytes(typ, val, length, alloc),
+	}
+	vec.mpool = alloc
+	return vec
+}
+
+func NewConstNullVector(
+	typ types.Type,
+	length int,
+	opts ...Options,
+) *vectorWrapper {
+	vec := &vectorWrapper{
+		wrapped: vector.NewConstNull(typ, length, nil),
+	}
+	var (
+		alloc *mpool.MPool
+	)
+	if len(opts) > 0 {
+		alloc = opts[0].Allocator
+	}
+	if alloc == nil {
+		alloc = common.DefaultAllocator
+	}
+	vec.mpool = alloc
+	return vec
+}
+
 func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 	vec := &vectorWrapper{
 		wrapped: vector.NewVec(typ),
@@ -215,6 +270,14 @@ func (vec *vectorWrapper) NullCount() int {
 		return vec.NullMask().GetCardinality()
 	}
 	return 0
+}
+
+func (vec *vectorWrapper) IsConst() bool {
+	return vec.wrapped.IsConst()
+}
+
+func (vec *vectorWrapper) IsConstNull() bool {
+	return vec.wrapped.IsConstNull()
 }
 
 // conver a const vectorWrapper to a normal one, getting ready to edit
