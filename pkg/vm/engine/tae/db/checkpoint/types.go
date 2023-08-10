@@ -43,6 +43,7 @@ type Runner interface {
 	RunnerReader
 	Start()
 	Stop()
+	String() string
 	EnqueueWait(any) error
 	Replay(catalog.DataFactory) (types.TS, error)
 
