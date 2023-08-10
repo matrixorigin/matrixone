@@ -160,7 +160,9 @@ type txnClient struct {
 		sync.RWMutex
 		// indicate whether the CN can provide service normally.
 		state status
-		// order by snapshot ts
+		// user active txns
+		users int
+		// all active txns
 		activeTxns map[string]*txnOperator
 		// FIFO queue for ready to active txn
 		waitActiveTxns []*txnOperator
@@ -377,8 +379,8 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 	defer client.mu.Unlock()
 
 	if client.mu.state == normal {
-		n := len(client.mu.activeTxns)
-		if n < client.maxActiveTxn {
+		if !op.isUserTxn() ||
+			client.mu.users < client.maxActiveTxn {
 			client.addActiveTxnLocked(op)
 			return nil
 		}
@@ -394,23 +396,35 @@ func (client *txnClient) closeTxn(txn txn.TxnMeta) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	delete(client.mu.activeTxns, cutil.UnsafeBytesToString(txn.ID))
-	client.removeFromLeakCheck(txn.ID)
-
-	if len(client.mu.waitActiveTxns) > 0 {
-		newCanAdded := client.maxActiveTxn - len(client.mu.activeTxns)
-		for i := 0; i < newCanAdded; i++ {
-			op := client.fetchWaitActiveOpLocked()
-			if op == nil {
-				return
+	key := cutil.UnsafeBytesToString(txn.ID)
+	if op, ok := client.mu.activeTxns[key]; ok {
+		delete(client.mu.activeTxns, key)
+		client.removeFromLeakCheck(txn.ID)
+		if !op.isUserTxn() {
+			return
+		}
+		client.mu.users--
+		if client.mu.users < 0 {
+			panic("BUG: user txns < 0")
+		}
+		if len(client.mu.waitActiveTxns) > 0 {
+			newCanAdded := client.maxActiveTxn - client.mu.users
+			for i := 0; i < newCanAdded; i++ {
+				op := client.fetchWaitActiveOpLocked()
+				if op == nil {
+					return
+				}
+				client.addActiveTxnLocked(op)
+				op.notifyActive()
 			}
-			client.addActiveTxnLocked(op)
-			op.notifyActive()
 		}
 	}
 }
 
 func (client *txnClient) addActiveTxnLocked(op *txnOperator) {
+	if op.isUserTxn() {
+		client.mu.users++
+	}
 	client.mu.activeTxns[cutil.UnsafeBytesToString(op.txnID)] = op
 	client.addToLeakCheck(op)
 }

@@ -153,13 +153,13 @@ func TestMaxActiveTxnWithWaitPrevClosed(t *testing.T) {
 	RunTxnTests(
 		func(tc TxnClient, ts rpc.TxnSender) {
 			ctx := context.Background()
-			op1, err := tc.New(ctx, newTestTimestamp(0))
+			op1, err := tc.New(ctx, newTestTimestamp(0), WithUserTxn())
 			require.NoError(t, err)
 
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				_, err = tc.New(ctx, newTestTimestamp(0))
+				_, err = tc.New(ctx, newTestTimestamp(0), WithUserTxn())
 				require.NoError(t, err)
 			}()
 
@@ -173,7 +173,7 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 	RunTxnTests(
 		func(tc TxnClient, ts rpc.TxnSender) {
 			ctx := context.Background()
-			op1, err := tc.New(ctx, newTestTimestamp(0))
+			op1, err := tc.New(ctx, newTestTimestamp(0), WithUserTxn())
 			require.NoError(t, err)
 			defer func() {
 				require.NoError(t, op1.Rollback(ctx))
@@ -181,7 +181,7 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 
 			ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			_, err = tc.New(ctx2, newTestTimestamp(0))
+			_, err = tc.New(ctx2, newTestTimestamp(0), WithUserTxn())
 			require.Error(t, err)
 		},
 		WithMaxActiveTxn(1))
