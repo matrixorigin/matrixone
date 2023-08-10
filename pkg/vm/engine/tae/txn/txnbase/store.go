@@ -123,7 +123,7 @@ func (store *NoopTxnStore) BatchDedup(uint64, uint64, containers.Vector) (err er
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }
-func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
+func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32, containers.Vector, handle.DeleteType) (err error) {
 	return
 }
 func (store *NoopTxnStore) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
