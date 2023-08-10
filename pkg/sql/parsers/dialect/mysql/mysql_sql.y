@@ -397,7 +397,7 @@ import (
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
 // Built-in function
-%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
+%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
@@ -7953,26 +7953,6 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   APPROX_COUNT '(' func_type_opt expression_list ')' window_spec_opt
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: $4,
-            Type: $3,
-            WindowSpec: $6,
-        }
-    }
-|   APPROX_COUNT '(' '*' ')' window_spec_opt
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
-            WindowSpec: $5,
-        }
-    }
 |   APPROX_COUNT_DISTINCT '(' expression_list ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
@@ -10158,7 +10138,6 @@ not_keyword:
 |   BIT_XOR
 |   CAST
 |   COUNT
-|   APPROX_COUNT
 |   APPROX_COUNT_DISTINCT
 |   APPROX_PERCENTILE
 |   CURDATE
