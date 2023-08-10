@@ -193,6 +193,8 @@ type MysqlProtocol interface {
 
 	GetStats() string
 
+	CalculateOutTrafficBytes() int64
+
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
@@ -211,6 +213,9 @@ func (ses *Session) GetMysqlProtocol() MysqlProtocol {
 
 type debugStats struct {
 	writeCount uint64
+	// record 2 cases data, all belong to flush op.
+	// 1) MysqlProtocolImpl.flushOutBuffer do flush buffer op
+	// 2) MysqlProtocolImpl.writePackets do write with goetty.WriteOptions{Flush: true}
 	writeBytes uint64
 }
 
@@ -231,6 +236,10 @@ func (ds *debugStats) String() string {
 	)
 }
 
+func (ds *debugStats) AddFlushBytes(b uint64) {
+	ds.writeBytes += b
+}
+
 /*
 rowHandler maintains the states in encoding the result row
 */
@@ -246,6 +255,8 @@ type rowHandler struct {
 	untilBytesInOutbufToFlush int
 	//the count of the flush
 	flushCount int
+	//the bytes have been response
+	startOffsetInBuffer int
 }
 
 /*
@@ -274,6 +285,15 @@ resetFlushCount reset flushCount
 */
 func (rh *rowHandler) resetFlushCount() {
 	rh.flushCount = 0
+}
+
+// resetStartOffset reset the startOffsetInBuffer
+// How rowHandler.resetStartOffset, debugStats.writeBytes and MysqlProtocolImpl.CalculateOutTrafficBytes work together ?
+// 0. init. call rowHandler.resetStartOffset at the beginning of query, record the beginning offset of the current buffer.
+// 1. batch write. inc debugStats.writeBytes and do resetFlushOutBuffer()
+// 2. last data. MysqlProtocolImpl.CalculateOutTrafficBytes() with debugStats.writeBytes, rowHandler.startOffsetInBuffer and rowHandler.bytesInOutBuffer
+func (rh *rowHandler) resetStartOffset() {
+	rh.startOffsetInBuffer = rh.bytesInOutBuffer
 }
 
 type MysqlProtocolImpl struct {
@@ -373,9 +393,18 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
+// CalculateOutTrafficBytes calculate the bytes of the last out traffic
+func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() int64 {
+	// Case 1: send data as ResultSet
+	return int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
+		// Case 2: send data as CSV
+		mp.GetSession().writeCsvBytes.Load()
+}
+
 func (mp *MysqlProtocolImpl) ResetStatistics() {
 	mp.ResetStats()
 	mp.resetFlushCount()
+	mp.resetStartOffset()
 }
 
 func (mp *MysqlProtocolImpl) GetConnectAttrs() map[string]string {
@@ -2607,6 +2636,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		if err != nil {
 			return err
 		}
+		mp.AddFlushBytes(uint64(len(packet)))
 		mp.AddSequenceId(1)
 
 		if i+curLen == length && curLen == int(MaxPayloadSize) {
@@ -2618,6 +2648,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 			mp.incDebugCount(6)
 			//send header / zero-sized packet
 			err := mp.tcpConn.Write(header[:], goetty.WriteOptions{Flush: true})
+			mp.AddFlushBytes(uint64(len(header)))
 			mp.incDebugCount(7)
 			if err != nil {
 				return err

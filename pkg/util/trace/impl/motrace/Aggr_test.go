@@ -191,20 +191,20 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, aggrWindow, results[1].(*StatementInfo).Duration)
 	assert.Equal(t, aggrWindow, results[2].(*StatementInfo).Duration)
 	assert.Equal(t, aggrWindow, results[3].(*StatementInfo).Duration)
-	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
-	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
-	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
-	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
 	item, _ := results[0].(*StatementInfo)
 	row := item.GetTable().GetRow(ctx)
 	results[0].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[1,5,0.020,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,0.020,15,20,25]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 	results[1].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[1,5,0.020,15,20]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,0.020,15,20,25]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
 	results[2].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[1,5,0.020,15,20]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,0.020,15,20,25]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
 	results[3].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[1,5,0.020,15,20]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,0.020,15,20,25]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
 
 	aggregator.Close()
 
@@ -269,9 +269,9 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, fixedTime.Add(4*time.Second), results[0].(*StatementInfo).RequestAt)
 	// ResponseAt should be end of the window
 	assert.Equal(t, fixedTime.Add(9*time.Second), results[0].(*StatementInfo).ResponseAt)
-	require.Equal(t, []byte(`[1,5,10.000,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 	results[0].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[1,5,0.024,15,20]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[2,5,0.024,15,20,25]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 
 	_, err = aggregator.AddItem(&StatementInfo{
 		Account:       "MO",

@@ -299,11 +299,11 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 				sqlType = sqlTypes[i]
 			}
 			ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
-			motrace.EndStatement(ctx, retErr, 0)
+			motrace.EndStatement(ctx, retErr, 0, 0)
 		}
 	} else {
 		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
-		motrace.EndStatement(ctx, retErr, 0)
+		motrace.EndStatement(ctx, retErr, 0, 0)
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -391,7 +391,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	begin := time.Now()
 	proto := ses.GetMysqlProtocol()
-	proto.ResetStatistics()
 
 	oq := NewOutputQueue(ses.GetRequestContext(), ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
@@ -3493,6 +3492,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
+		ses.writeCsvBytes.Store(int64(0))
+		proto.ResetStatistics() // move from getDataFromPipeline, for record column fields' data
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
