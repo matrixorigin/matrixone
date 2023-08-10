@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,36 @@ func init() {
 	))
 	TestCaseRegister(
 		MakeTestCase(test1, "prepare-1", "test-1", "prepare-1=>test-1"),
+	)
+
+	PrepareCaseRegister(MakePrepareCase(
+		prepareDDL, "prepare-2", "prepare case ddl",
+		schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
+	))
+	TestCaseRegister(
+		MakeTestCase(testDDL, "prepare-2", "test-2", "prepare-2=>test-2"),
+	)
+
+	PrepareCaseRegister(MakePrepareCase(
+		prepareCompact, "prepare-3", "prepare case compact", schemaCfg{10, 2, 18, 13}, (10*3+1)*2, longOpt))
+	TestCaseRegister(
+		MakeTestCase(testCompact, "prepare-3", "test-3", "prepare-3=>test-3"),
+	)
+
+	PrepareCaseRegister(MakePrepareCase(
+		prepareDelete, "prepare-4", "prepare case delete",
+		schemaCfg{10, 2, 18, 13}, (10*3+1)*3, longOpt,
+	))
+	TestCaseRegister(
+		MakeTestCase(testDelete, "prepare-4", "test-4", "prepare-4=>test-4"),
+	)
+
+	PrepareCaseRegister(MakePrepareCase(
+		prepareAppend, "prepare-5", "prepare case append",
+		schemaCfg{10, 2, 18, 13}, 10*3+1, longOpt,
+	))
+	TestCaseRegister(
+		MakeTestCase(testAppend, "prepare-5", "test-5", "prepare-5=>test-5"),
 	)
 }
 
@@ -57,6 +88,203 @@ func prepare1(tc PrepareCase, t *testing.T) {
 	err = rel.Append(context.Background(), window)
 	assert.NoError(t, err)
 	_ = txn.Rollback(context.Background())
+}
+
+func prepareAppend(tc PrepareCase, t *testing.T) {
+	tae := tc.GetEngine(t)
+	defer tae.Close()
+
+	bat := tc.GetBatch(t)
+	defer bat.Close()
+	bats := bat.Split(2)
+
+	// checkpoint
+	tae.CreateRelAndAppend(bats[0], true)
+	tae.ForceCheckpoint()
+
+	// wal
+	tae.DoAppend(bats[1])
+}
+
+func prepareDDL(tc PrepareCase, t *testing.T) {
+	tae := tc.GetEngine(t)
+	defer tae.Close()
+
+	// ckp1: create db1, create table1
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db1", "sql", "type")
+	assert.NoError(t, err)
+	schema1 := catalog.MockSchema(20, 2)
+	schema1.Name = "table1"
+	_, err = db.CreateRelation(schema1)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.ForceCheckpoint()
+
+	// ckp2-1: create db2, create table2
+	// ckp2-2: drop db2, drop table2
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db2", "sql", "type")
+	assert.NoError(t, err)
+	db, err = txn.CreateDatabase("db_of_table2", "sql", "type")
+	assert.NoError(t, err)
+	schema2 := catalog.MockSchema(20, 2)
+	schema2.Name = "table2"
+	_, err = db.CreateRelation(schema2)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	tae.ForceCheckpoint()
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db_of_table2")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema2.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db2")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	tae.ForceCheckpoint()
+
+	// ckp3: create and drop db3, table3
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db3", "sql", "type")
+	assert.NoError(t, err)
+	db, err = txn.CreateDatabase("db_of_table3", "sql", "type")
+	assert.NoError(t, err)
+	schema3 := catalog.MockSchema(20, 2)
+	schema3.Name = "table3"
+	_, err = db.CreateRelation(schema3)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db_of_table3")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema3.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db3")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	tae.ForceCheckpoint()
+
+	// WAL: create db4, create table4
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.CreateDatabase("db4", "sql", "type")
+	assert.NoError(t, err)
+	schema4 := catalog.MockSchema(20, 2)
+	schema4.Name = "table4"
+	_, err = db.CreateRelation(schema4)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	// WAL: create and drop db5, create ane drop table5
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db5", "sql", "type")
+	assert.NoError(t, err)
+	db, err = txn.CreateDatabase("db_of_table5", "sql", "type")
+	assert.NoError(t, err)
+	schema5 := catalog.MockSchema(20, 2)
+	schema5.Name = "table5"
+	_, err = db.CreateRelation(schema5)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db_of_table5")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema5.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db5")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+}
+
+func prepareCompact(tc PrepareCase, t *testing.T) {
+	tae := tc.GetEngine(t)
+	defer tae.Close()
+
+	bat := tc.GetBatch(t)
+	defer bat.Close()
+	bats := bat.Split(2)
+
+	// checkpoint
+	tae.CreateRelAndAppend(bats[0], true)
+	tae.CompactBlocks(false)
+	tae.ForceCheckpoint()
+
+	// wal
+	tae.DoAppend(bats[1])
+	tae.CompactBlocks(false)
+}
+
+func prepareDelete(tc PrepareCase, t *testing.T) {
+	tae := tc.GetEngine(t)
+	defer tae.Close()
+
+	bat := tc.GetBatch(t)
+	defer bat.Close()
+	bats := bat.Split(3)
+
+	// compact and checkpoint
+	tae.CreateRelAndAppend(bats[0], true)
+
+	schema := tc.GetSchema(t)
+	for i := 0; i < int(schema.BlockMaxRows+1); i++ {
+		txn, rel := tae.GetRelation()
+		v := testutil.GetSingleSortKeyValue(bats[0], schema, i)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	tae.CompactBlocks(false)
+	tae.ForceCheckpoint()
+
+	// compact
+	tae.DoAppend(bats[1])
+	for i := 0; i < int(schema.BlockMaxRows+1); i++ {
+		txn, rel := tae.GetRelation()
+		v := testutil.GetSingleSortKeyValue(bats[1], schema, i)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+	tae.CompactBlocks(false)
+
+	// not compact
+	tae.DoAppend(bats[2])
+	for i := 0; i < int(schema.BlockMaxRows+1); i++ {
+		txn, rel := tae.GetRelation()
+		v := testutil.GetSingleSortKeyValue(bats[2], schema, i)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
 }
 
 func test1(tc TestCase, t *testing.T) {
@@ -89,4 +317,148 @@ func test1(tc TestCase, t *testing.T) {
 	err = rel.Append(context.Background(), window)
 	assert.NoError(t, err)
 	_ = txn.Rollback(context.Background())
+}
+
+func testAppend(tc TestCase, t *testing.T) {
+	pc := GetPrepareCase(tc.dependsOn)
+	tae := initTestEngine(tc, t)
+	defer tae.Close()
+
+	bat := pc.GetBatch(t)
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	txn, rel := tae.GetRelation()
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length(), true)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
+	for _, b := range bats {
+		err := rel.Append(context.Background(), b)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	tae.CheckRowsByScan(bat.Length(), true)
+	tae.CheckRowsByScan(bat.Length(), false)
+}
+
+func testDDL(tc TestCase, t *testing.T) {
+	tae := initTestEngine(tc, t)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+
+	db, err := txn.GetDatabase("db1")
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db1", "sql", "type")
+	assert.Error(t, err)
+	_, err = db.GetRelationByName("table1")
+	assert.NoError(t, err)
+	schema1 := catalog.MockSchema(20, 2)
+	schema1.Name = "table1"
+	_, err = db.CreateRelation(schema1)
+	assert.Error(t, err)
+
+	_, err = txn.GetDatabase("db2")
+	assert.Error(t, err)
+	_, err = txn.CreateDatabase("db2", "sql", "type")
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db_of_table2")
+	assert.NoError(t, err)
+	_, err = db.GetRelationByName("table2")
+	assert.Error(t, err)
+	schema2 := catalog.MockSchema(20, 2)
+	schema2.Name = "table2"
+	_, err = db.CreateRelation(schema2)
+	assert.NoError(t, err)
+
+	_, err = txn.GetDatabase("db3")
+	assert.Error(t, err)
+	_, err = txn.CreateDatabase("db3", "sql", "type")
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db_of_table3")
+	assert.NoError(t, err)
+	_, err = db.GetRelationByName("table3")
+	assert.Error(t, err)
+	schema3 := catalog.MockSchema(20, 2)
+	schema3.Name = "table3"
+	_, err = db.CreateRelation(schema3)
+	assert.NoError(t, err)
+
+	db, err = txn.GetDatabase("db4")
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db4", "sql", "type")
+	assert.Error(t, err)
+	_, err = db.GetRelationByName("table4")
+	assert.NoError(t, err)
+	schema4 := catalog.MockSchema(20, 2)
+	schema4.Name = "table4"
+	_, err = db.CreateRelation(schema4)
+	assert.Error(t, err)
+
+	_, err = txn.GetDatabase("db5")
+	assert.Error(t, err)
+	_, err = txn.CreateDatabase("db5", "sql", "type")
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db_of_table5")
+	assert.NoError(t, err)
+	_, err = db.GetRelationByName("table5")
+	assert.Error(t, err)
+	schema5 := catalog.MockSchema(20, 2)
+	schema5.Name = "table5"
+	_, err = db.CreateRelation(schema5)
+	assert.NoError(t, err)
+
+	assert.NoError(t, txn.Commit(context.Background()))
+}
+
+func testCompact(tc TestCase, t *testing.T) {
+	pc := GetPrepareCase(tc.dependsOn)
+	tae := initTestEngine(tc, t)
+	defer tae.Close()
+
+	bat := pc.GetBatch(t)
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	txn, rel := tae.GetRelation()
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length(), true)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
+	for _, b := range bats {
+		err := rel.Append(context.Background(), b)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	tae.CheckRowsByScan(bat.Length(), true)
+	tae.CheckRowsByScan(bat.Length(), false)
+}
+
+func testDelete(tc TestCase, t *testing.T) {
+	pc := GetPrepareCase(tc.dependsOn)
+	tae := initTestEngine(tc, t)
+	defer tae.Close()
+
+	bat := pc.GetBatch(t)
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	schema := pc.GetSchema(t)
+	totalRows := bat.Length() - int(schema.BlockMaxRows+1)*3
+	txn, rel := tae.GetRelation()
+	testutil.CheckAllColRowsByScan(t, rel, totalRows, true)
+	rows := schema.BlockMaxRows*3 + 1
+	for i := 0; i < 3; i++ {
+		for j := 0; j < int(rows); j++ {
+			err := rel.Append(context.Background(), bats[i*int(rows)+j])
+			if j < int(schema.BlockMaxRows+1) {
+				assert.NoError(t, err)
+			} else {
+				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+			}
+		}
+	}
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	tae.CheckRowsByScan(bat.Length(), true)
 }
