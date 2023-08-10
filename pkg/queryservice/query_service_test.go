@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -135,6 +136,33 @@ func TestQueryService(t *testing.T) {
 			_, err := svc.SendMessage(ctx, addr, req)
 			assert.Error(t, err)
 			assert.Equal(t, "not supported: 10 not support in current service", err.Error())
+		})
+	})
+}
+
+func TestQueryServiceAlterAccount(t *testing.T) {
+	cn := metadata.CNService{
+		ServiceID: "s1",
+	}
+
+	t.Run("sys tenant", func(t *testing.T) {
+		runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+			sm.AddSession(&mockSession{id: "s1", tenant: "t1"})
+			sm.AddSession(&mockSession{id: "s2", tenant: "t2"})
+			sm.AddSession(&mockSession{id: "s3", tenant: "t3"})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := svc.NewRequest(pb.CmdMethod_AlterAccount)
+			req.AlterAccountRequest = &pb.AlterAccountRequest{
+				Tenant:    "s1",
+				SysTenant: false,
+				Status:    tree.AccountStatusRestricted.String(),
+			}
+			resp, err := svc.SendMessage(ctx, addr, req)
+			assert.NoError(t, err)
+			defer svc.Release(resp)
+			assert.NotNil(t, resp.AlterAccountResponse)
+			assert.Equal(t, true, resp.AlterAccountResponse.AlterSuccess)
 		})
 	})
 }
