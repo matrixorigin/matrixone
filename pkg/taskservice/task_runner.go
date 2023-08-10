@@ -283,11 +283,13 @@ func (r *taskRunner) doFetch() ([]task.Task, error) {
 		return nil, err
 	}
 	newTasks := tasks[:0]
+	r.mu.RLock()
 	for _, t := range tasks {
 		if _, ok := r.mu.runningTasks[t.ID]; !ok {
 			newTasks = append(newTasks, t)
 		}
 	}
+	r.mu.RUnlock()
 	if len(newTasks) == 0 {
 		return nil, nil
 	}
