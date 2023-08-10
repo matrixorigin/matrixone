@@ -152,6 +152,8 @@ type txnClient struct {
 		// cn-based commit ts when the session-level last commit ts have
 		// been processed.
 		latestCommitTS atomic.Pointer[timestamp.Timestamp]
+		// just for bvt testing
+		forceSyncCommitTimes atomic.Uint64
 	}
 
 	mu struct {
@@ -355,7 +357,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 	return client.adjustTimestamp(timestamp.Timestamp{})
 }
 
-func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
+func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
@@ -365,6 +367,11 @@ func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
 			util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
 		}
 	}
+	client.atomic.forceSyncCommitTimes.Add(1)
+}
+
+func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
+	return client.atomic.forceSyncCommitTimes.Load()
 }
 
 func (client *txnClient) openTxn(op *txnOperator) error {

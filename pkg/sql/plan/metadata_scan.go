@@ -74,6 +74,8 @@ func init() {
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
+			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		default:
 			panic("unknow types when gen metadata scan info")
 		}
