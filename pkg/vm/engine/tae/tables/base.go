@@ -518,6 +518,7 @@ func (blk *baseBlock) DeletesInfo() string {
 func (blk *baseBlock) RangeDelete(
 	txn txnif.AsyncTxn,
 	start, end uint32,
+	pk containers.Vector,
 	dt handle.DeleteType) (node txnif.DeleteNode, err error) {
 	blk.Lock()
 	defer blk.Unlock()
@@ -525,7 +526,7 @@ func (blk *baseBlock) RangeDelete(
 		return
 	}
 	node = blk.mvcc.CreateDeleteNode(txn, dt)
-	node.RangeDeleteLocked(start, end)
+	node.RangeDeleteLocked(start, end, pk)
 	return
 }
 
