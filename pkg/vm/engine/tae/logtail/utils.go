@@ -617,7 +617,16 @@ func (data *CNCheckpointData) PrefetchFrom(
 				idx = TBLColDeleteIDX
 			}
 		}
-		pref, err = blockio.BuildSubPrefetchParams(service, key)
+		it := table.locations.MakeIterator()
+		var location objectio.Location
+		for it.HasNext() {
+			loc := it.Next()
+			if !loc.GetLocation().IsEmpty() {
+				location = loc.GetLocation()
+				break
+			}
+		}
+		pref, err = blockio.BuildSubPrefetchParams(service, location)
 		if err != nil {
 			return
 		}
@@ -1618,16 +1627,6 @@ func (data *CheckpointData) replayMetaBatch() {
 			}
 		}
 	}
-}
-
-func (data *CheckpointData) prefetchMetaBatch(
-	ctx context.Context,
-	version uint32,
-	service fileservice.FileService,
-	key objectio.Location,
-) (err error) {
-	err = prefetchMetaBatch(ctx, version, service, key)
-	return
 }
 
 func (data *CheckpointData) readAll(
