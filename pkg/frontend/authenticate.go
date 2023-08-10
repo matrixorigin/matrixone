@@ -30,13 +30,17 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -46,6 +50,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	errors2 "github.com/pkg/errors"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -2941,6 +2947,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(true)
 				}
 			}
+			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusRestricted.String(), ses.GetParameterUnit().QueryService)
+			if err != nil {
+				return err
+			}
 		}
 
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusOpen && accountStatus == tree.AccountStatusRestricted.String() {
@@ -2949,6 +2959,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 				for rt := range rtMap {
 					rt.setResricted(false)
 				}
+			}
+			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusOpen.String(), ses.GetParameterUnit().QueryService)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -8917,4 +8931,73 @@ func addInitSystemVariablesSql(accountId int, accountName, variable_name string,
 	}
 
 	return initMoMysqlCompatibilityMode
+}
+
+// alterSessionStatus alter all nodes session status which the tenant has been alter restricted or open.
+func alterSessionStatus(ctx context.Context, curtenant, tenant string, user string, status string, qs queryservice.QueryService) error {
+	var nodes []string
+	labels := clusterservice.NewSelector().SelectByLabel(
+		map[string]string{"account": tenant}, clusterservice.EQ)
+	sysTenant := isSysTenant(curtenant)
+	if sysTenant {
+		disttae.SelectForSuperTenant(clusterservice.NewSelector(), user, nil,
+			func(s *metadata.CNService) {
+				nodes = append(nodes, s.QueryAddress)
+			})
+	} else {
+		disttae.SelectForCommonTenant(labels, nil, func(s *metadata.CNService) {
+			nodes = append(nodes, s.QueryAddress)
+		})
+	}
+	nodesLeft := len(nodes)
+
+	type nodeResponse struct {
+		nodeAddr string
+		response interface{}
+		err      error
+	}
+	responseChan := make(chan nodeResponse, nodesLeft)
+
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var retErr error
+	for _, node := range nodes {
+		// Invalid node address, ignore it.
+		if len(node) == 0 {
+			nodesLeft--
+			continue
+		}
+
+		go func(addr string) {
+			req := qs.NewRequest(query.CmdMethod_AlterAccount)
+			req.AlterAccountRequest = &query.AlterAccountRequest{
+				Tenant:    tenant,
+				SysTenant: isSysTenant(tenant),
+				Status:    status,
+			}
+			resp, err := qs.SendMessage(ctx, addr, req)
+			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
+		}(node)
+	}
+
+	// Wait for all responses.
+	for nodesLeft > 0 {
+		select {
+		case res := <-responseChan:
+			if res.err != nil && retErr != nil {
+				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+			} else {
+				queryResp, ok := res.response.(*query.Response)
+
+				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
+					retErr = moerr.NewInternalError(ctx, "alter account failed")
+				}
+			}
+		case <-ctx.Done():
+			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+		}
+		nodesLeft--
+	}
+
+	return retErr
 }

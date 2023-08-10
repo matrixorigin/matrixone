@@ -1146,6 +1146,7 @@ func (ses *Session) InitSetSessionVar(name string, value interface{}) error {
 		cv, err := def.GetType().Convert(value)
 		if err != nil {
 			errutil.ReportError(ses.GetRequestContext(), err)
+			errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "convert to the system variable type failed, bad value %s", value))
 			return err
 		}
 
@@ -1549,6 +1550,7 @@ func (ses *Session) InitGlobalSystemVariables() error {
 					}
 					val, err := sv.GetType().ConvertFromString(variable_value)
 					if err != nil {
+						errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "convert from string value to the system variable type failed, bad value %s", variable_value))
 						return err
 					}
 					err = ses.InitSetSessionVar(variable_name, val)
@@ -2050,6 +2052,20 @@ func (ses *Session) StatusSession() *status.Session {
 		SQLSourceType: sqlSourceType,
 		QueryStart:    queryStart,
 	}
+}
+
+func (ses *Session) SetSessionRoutineStatus(status string) error {
+	var err error
+	if status == tree.AccountStatusRestricted.String() {
+		ses.getRoutine().setResricted(true)
+	} else if status == tree.AccountStatusSuspend.String() {
+		ses.getRoutine().setResricted(false)
+	} else if status == tree.AccountStatusOpen.String() {
+		ses.getRoutine().setResricted(false)
+	} else {
+		err = moerr.NewInternalErrorNoCtx("SetSessionRoutineStatus have invalid status : %s", status)
+	}
+	return err
 }
 
 func checkPlanIsInsertValues(proc *process.Process,
