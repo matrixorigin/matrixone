@@ -22,16 +22,14 @@ import (
 )
 
 func runPrepareCase(prepareCase PrepareCase, t *testing.T) {
+	t.Logf("Prepare case: [%s: %s]", prepareCase.name, prepareCase.desc)
 	prepareCase.prepareFn(
 		prepareCase, t,
 	)
 }
 
 func runAllPrepare(t *testing.T) {
-	if os.Getenv("PREPCOMP") != "true" {
-		t.Skip("skip prepare compatibility test")
-		return
-	}
+	t.Log("Run all compatibility prepare cases")
 	err := InitPrepareEnv()
 	require.NoError(t, err)
 	for _, prepareCase := range PrepareCases {
@@ -40,16 +38,14 @@ func runAllPrepare(t *testing.T) {
 }
 
 func runTestCase(testCase TestCase, t *testing.T) {
+	t.Logf("Execute case: [%s: %s]", testCase.name, testCase.desc)
 	testCase.testFn(
 		testCase, t,
 	)
 }
 
 func runAllTestCase(t *testing.T) {
-	if os.Getenv("EXECCOMP") != "true" {
-		t.Skip("skip execute compatibility test")
-		return
-	}
+	t.Log("Run all compatibility test cases")
 	err := EnsurePrepareEnvOK()
 	require.NoError(t, err)
 	err = InitExecuteEnv()
@@ -59,10 +55,17 @@ func runAllTestCase(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	runAllPrepare(t)
-}
-
-func TestExecute(t *testing.T) {
-	runAllTestCase(t)
+func TestAll(t *testing.T) {
+	prepareEnv := os.Getenv("PREPCOMP")
+	execEnv := os.Getenv("EXECCOMP")
+	if prepareEnv == "false" && execEnv == "false" {
+		t.Skip("skip compatibility test")
+	} else if prepareEnv == "true" {
+		runAllPrepare(t)
+	} else if execEnv == "true" {
+		runAllTestCase(t)
+	} else {
+		runAllPrepare(t)
+		runAllTestCase(t)
+	}
 }
