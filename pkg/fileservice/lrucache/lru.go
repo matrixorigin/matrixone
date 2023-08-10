@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
-type LRU[K comparable, V Sized] struct {
+type LRU[K comparable, V BytesLike] struct {
 	sync.Mutex
 	capacity  int64
 	size      int64
@@ -32,8 +32,8 @@ type LRU[K comparable, V Sized] struct {
 	postEvict func(key K, value V)
 }
 
-type Sized interface {
-	Size() int64
+type BytesLike interface {
+	Bytes() []byte
 }
 
 type Bytes []byte
@@ -42,14 +42,22 @@ func (b Bytes) Size() int64 {
 	return int64(len(b))
 }
 
-type lruItem[K comparable, V Sized] struct {
+func (b Bytes) Bytes() []byte {
+	return b
+}
+
+func (b Bytes) SetBytes() {
+	panic("not supported")
+}
+
+type lruItem[K comparable, V BytesLike] struct {
 	Key     K
 	Value   V
 	Size    int64
 	NumRead int
 }
 
-func New[K comparable, V Sized](
+func New[K comparable, V BytesLike](
 	capacity int64,
 	postSet func(keySet K, valSet V, isNewEntry bool),
 	postEvict func(keyEvicted K, valEvicted V),
@@ -73,21 +81,23 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 		isNewEntry = false
 		item := elem.Value.(*lruItem[K, V])
 		l.size -= item.Size
-		l.size += value.Size()
+		size := int64(len(value.Bytes()))
+		l.size += size
 		if !preloading {
 			l.evicts.MoveToFront(elem)
 		}
-		item.Size = value.Size()
+		item.Size = size
 		item.Key = key
 		item.Value = value
 
 	} else {
 		// insert
 		isNewEntry = true
+		size := int64(len(value.Bytes()))
 		item := &lruItem[K, V]{
 			Key:   key,
 			Value: value,
-			Size:  value.Size(),
+			Size:  size,
 		}
 		var elem *list.Element
 		if preloading {
@@ -96,7 +106,7 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 			elem = l.evicts.PushFront(item)
 		}
 		l.kv[key] = elem
-		l.size += value.Size()
+		l.size += size
 	}
 
 	if l.postSet != nil {
