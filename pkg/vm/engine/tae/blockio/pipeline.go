@@ -133,7 +133,7 @@ func jobFactory(
 	)
 }
 
-func fetchReader(params prefetchParams) (reader *objectio.ObjectReader) {
+func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
 	if params.reader != nil {
 		reader = params.reader
 	} else {
@@ -143,7 +143,7 @@ func fetchReader(params prefetchParams) (reader *objectio.ObjectReader) {
 }
 
 // prefetch data job
-func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
+func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
 	return getJob(
 		ctx,
@@ -177,7 +177,7 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 }
 
 // prefetch metadata job
-func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
+func prefetchMetaJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
 	return getJob(
 		ctx,
@@ -201,13 +201,13 @@ func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
 }
 
 type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
-type PrefetchFunc = func(params prefetchParams) error
+type PrefetchFunc = func(params PrefetchParams) error
 
 func readColumns(ctx context.Context, params fetchParams) (any, error) {
 	return params.reader.ReadOneBlock(ctx, params.idxes, params.typs, params.blk, nil)
 }
 
-func noopPrefetch(params prefetchParams) error {
+func noopPrefetch(params PrefetchParams) error {
 	// Synchronous prefetch does not need to do anything
 	return nil
 }
@@ -377,7 +377,7 @@ func (p *IoPipeline) doAsyncFetch(
 	return
 }
 
-func (p *IoPipeline) Prefetch(params prefetchParams) (err error) {
+func (p *IoPipeline) Prefetch(params PrefetchParams) (err error) {
 	return p.prefetchFunc(params)
 }
 
@@ -395,7 +395,7 @@ func (p *IoPipeline) doFetch(
 	return
 }
 
-func (p *IoPipeline) doPrefetch(params prefetchParams) (err error) {
+func (p *IoPipeline) doPrefetch(params PrefetchParams) (err error) {
 	if _, err = p.prefetch.queue.Enqueue(params); err != nil {
 		return
 	}
@@ -442,13 +442,13 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		return
 	}
 
-	processes := make([]prefetchParams, 0)
+	processes := make([]PrefetchParams, 0)
 	for _, item := range items {
-		option := item.(prefetchParams)
+		option := item.(PrefetchParams)
 		if len(option.ids) == 0 {
 			job := prefetchMetaJob(
 				context.Background(),
-				item.(prefetchParams),
+				item.(PrefetchParams),
 			)
 			p.schedulerPrefetch(job)
 			continue

@@ -301,7 +301,7 @@ func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 }
 
 // The caller has merged the block information that needs to be prefetched
-func PrefetchWithMerged(params prefetchParams) error {
+func PrefetchWithMerged(params PrefetchParams) error {
 	return pipeline.Prefetch(params)
 }
 

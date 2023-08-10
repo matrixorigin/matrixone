@@ -1404,9 +1404,17 @@ func prefetchCheckpointData(
 	service fileservice.FileService,
 	key objectio.Location,
 ) (err error) {
-	pref, err := blockio.BuildSubPrefetchParams(service, key)
-	if err != nil {
-		return
+	var pref blockio.PrefetchParams
+	if version <= CheckpointVersion3 {
+		pref, err = blockio.BuildPrefetchParams(service, key)
+		if err != nil {
+			return
+		}
+	} else {
+		pref, err = blockio.BuildSubPrefetchParams(service, key)
+		if err != nil {
+			return
+		}
 	}
 	for idx, item := range checkpointDataReferVersions[version] {
 		idxes := make([]uint16, len(item.attrs))
@@ -1424,9 +1432,17 @@ func prefetchMetaBatch(
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
 
-	pref, err := blockio.BuildSubPrefetchParams(service, key)
-	if err != nil {
-		return
+	var pref blockio.PrefetchParams
+	if version <= CheckpointVersion3 {
+		pref, err = blockio.BuildPrefetchParams(service, key)
+		if err != nil {
+			return
+		}
+	} else {
+		pref, err = blockio.BuildSubPrefetchParams(service, key)
+		if err != nil {
+			return
+		}
 	}
 	item := checkpointDataReferVersions[version][MetaIDX]
 	idxes := make([]uint16, len(item.attrs))
@@ -1434,28 +1450,6 @@ func prefetchMetaBatch(
 		idxes[i] = uint16(i)
 	}
 	pref.AddBlock(idxes, []uint16{uint16(MetaIDX)})
-	return blockio.PrefetchWithMerged(pref)
-}
-
-func prefetchBatches(
-	ctx context.Context,
-	version uint32,
-	service fileservice.FileService,
-	schemaIdxes []uint16,
-	key objectio.Location,
-) (err error) {
-	pref, err := blockio.BuildSubPrefetchParams(service, key)
-	if err != nil {
-		return
-	}
-	for _, idx := range schemaIdxes {
-		item := checkpointDataReferVersions[version][idx]
-		idxes := make([]uint16, len(item.attrs))
-		for i := range item.attrs {
-			idxes[i] = uint16(i)
-		}
-		pref.AddBlock(idxes, []uint16{uint16(idx)})
-	}
 	return blockio.PrefetchWithMerged(pref)
 }
 
