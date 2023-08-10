@@ -69,6 +69,12 @@ func TestKeeper(t *testing.T) {
 					pb.LockTable{ServiceID: "s2"},
 					c,
 					func(lt pb.LockTable) {}))
+			m.Store(1,
+				newRemoteLockTable(
+					"s1",
+					pb.LockTable{ServiceID: "s1"},
+					c,
+					func(lt pb.LockTable) {}))
 			k := NewLockTableKeeper(
 				"s1",
 				c,
