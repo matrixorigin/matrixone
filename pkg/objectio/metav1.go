@@ -78,8 +78,7 @@ func (o objectMetaV1) SetTombstoneMetaOffset(offset uint32) {
 }
 
 func (o objectMetaV1) SubMeta(pos uint16) (ObjectDataMeta, bool) {
-	//TODO implement me
-	panic("implement me")
+	return ObjectDataMeta(o), true
 }
 
 func (o objectMetaV1) SubMetaCount() uint16 {
