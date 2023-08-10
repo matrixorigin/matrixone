@@ -47,6 +47,8 @@ type LocalFS struct {
 	asyncUpdate bool
 
 	perfCounterSets []*perfcounter.CounterSet
+
+	ioLocks IOLocks
 }
 
 var _ FileService = new(LocalFS)
@@ -272,6 +274,15 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
+	}
+
+	unlock, wait := l.ioLocks.Lock(IOLockKey{
+		File: vector.FilePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
 	}
 
 	if l.memCache != nil {
