@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -140,32 +139,6 @@ func (e *CheckpointEntry) String() string {
 	}
 	state := e.GetState()
 	return fmt.Sprintf("CKP[%s][%v](%s->%s)", t, state, e.start.ToString(), e.end.ToString())
-}
-
-func (e *CheckpointEntry) Replay(
-	ctx context.Context,
-	c *catalog.Catalog,
-	fs *objectio.ObjectFS,
-	dataFactory catalog.DataFactory) (readDuration, applyDuration time.Duration, err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.location)
-	if err != nil {
-		return
-	}
-
-	data := logtail.NewCheckpointData()
-	defer data.Close()
-	t0 := time.Now()
-	if err = data.PrefetchFrom(ctx, e.version, fs.Service, e.location); err != nil {
-		return
-	}
-	if err = data.ReadFrom(ctx, e.version, e.location, reader, fs.Service, common.DefaultAllocator); err != nil {
-		return
-	}
-	readDuration = time.Since(t0)
-	t0 = time.Now()
-	err = data.ApplyReplayTo(c, dataFactory)
-	applyDuration = time.Since(t0)
-	return
 }
 
 func (e *CheckpointEntry) Prefetch(

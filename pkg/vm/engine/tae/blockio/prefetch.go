@@ -42,6 +42,12 @@ func BuildSubPrefetchParams(service fileservice.FileService, key objectio.Locati
 	return pp, nil
 }
 
+func BuildAllSubPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
+	pp := buildPrefetchParams(service, key)
+	pp.dataType = objectio.CkpAllData
+	return pp, nil
+}
+
 func buildPrefetchParams(service fileservice.FileService, key objectio.Location) PrefetchParams {
 	ids := make(map[uint16]*objectio.ReadBlockOptions)
 	return PrefetchParams{

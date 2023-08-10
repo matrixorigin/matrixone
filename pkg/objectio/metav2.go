@@ -25,6 +25,7 @@ const (
 	SchemaTombstone DataMetaType = 1
 
 	CkpMetaStart DataMetaType = 2
+	CkpAllData   DataMetaType = 0xFFFF
 )
 
 const (

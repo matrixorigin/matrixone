@@ -644,8 +644,8 @@ func (data *CNCheckpointData) PrefetchFrom(
 				if err != nil {
 					return
 				}
-				pref.AddSubBlock(idxes, []uint16{block.GetID()}, idx)
 			}
+			pref.AddSubBlock(idxes, []uint16{block.GetID()}, idx)
 		}
 	}
 	return blockio.PrefetchWithMerged(pref)
@@ -1202,11 +1202,6 @@ func (data *CheckpointData) PrintData() {
 	logutil.Info(BatchToString("BLK-META-INS-BAT", data.bats[BLKMetaInsertIDX], true))
 }
 
-type blockIndex struct {
-	offset *common.ClosedInterval
-	id     []uint32
-}
-
 func (data *CheckpointData) WriteTo(
 	fs fileservice.FileService,
 	blockRows int,
@@ -1243,7 +1238,6 @@ func (data *CheckpointData) WriteTo(
 				continue
 			}
 
-			idx := uint16(i)
 			if i > BlockDelete {
 				if tid == pkgcatalog.MO_DATABASE_ID ||
 					tid == pkgcatalog.MO_TABLES_ID ||
@@ -1251,36 +1245,7 @@ func (data *CheckpointData) WriteTo(
 					break
 				}
 			}
-
-			if i == BlockInsert {
-				idx = BLKMetaInsertIDX
-			} else if i == BlockDelete {
-				idx = BLKMetaDeleteIDX
-			} else if i == CNBlockInsert {
-				idx = BLKCNMetaInsertIDX
-			} else if i == SegmentDelete {
-				idx = SEGDeleteIDX
-			}
-			switch tid {
-			case pkgcatalog.MO_DATABASE_ID:
-				if i == BlockInsert {
-					idx = DBInsertIDX
-				} else if i == BlockDelete {
-					idx = DBDeleteIDX
-				}
-			case pkgcatalog.MO_TABLES_ID:
-				if i == BlockInsert {
-					idx = TBLInsertIDX
-				} else if i == BlockDelete {
-					idx = TBLDeleteIDX
-				}
-			case pkgcatalog.MO_COLUMNS_ID:
-				if i == BlockInsert {
-					idx = TBLColInsertIDX
-				} else if i == BlockDelete {
-					idx = TBLColDeleteIDX
-				}
-			}
+			idx := swithCheckpointIdx(uint16(i), tid)
 			for _, block := range blockIndexs[idx] {
 				if table.End <= block.GetStartOffset() {
 					break
@@ -1451,7 +1416,38 @@ func (data *CheckpointData) PrefetchFrom(
 	version uint32,
 	service fileservice.FileService,
 	key objectio.Location) (err error) {
-	return prefetchCheckpointData(ctx, version, service, key)
+	if version < CheckpointVersion4 {
+		return prefetchCheckpointData(ctx, version, service, key)
+	}
+	reader, err := blockio.NewObjectReader(service, key)
+	if err != nil {
+		return
+	}
+	err = data.readMetaBatch(ctx, version, reader, nil)
+	if err != nil {
+		return
+	}
+	data.replayMetaBatch()
+	var pref blockio.PrefetchParams
+	for _, location := range data.locations {
+		if location.IsEmpty() {
+			continue
+		}
+		pref, err = blockio.BuildAllSubPrefetchParams(service, location)
+		if err != nil {
+			return
+		}
+		for idx := range checkpointDataReferVersions[version] {
+			schema := checkpointDataReferVersions[version][uint32(idx)]
+			idxes := make([]uint16, len(schema.attrs))
+			for attr := range schema.attrs {
+				idxes[attr] = uint16(attr)
+			}
+			pref.AddBlock(idxes, []uint16{uint16(idx)})
+		}
+		return blockio.PrefetchWithMerged(pref)
+	}
+	return nil
 }
 
 func prefetchCheckpointData(
@@ -1472,33 +1468,6 @@ func prefetchCheckpointData(
 		}
 		pref.AddBlock(idxes, []uint16{uint16(idx)})
 	}
-	return blockio.PrefetchWithMerged(pref)
-}
-
-func prefetchMetaBatch(
-	ctx context.Context,
-	version uint32,
-	service fileservice.FileService,
-	key objectio.Location) (err error) {
-
-	var pref blockio.PrefetchParams
-	if version <= CheckpointVersion3 {
-		pref, err = blockio.BuildPrefetchParams(service, key)
-		if err != nil {
-			return
-		}
-	} else {
-		pref, err = blockio.BuildSubPrefetchParams(service, key)
-		if err != nil {
-			return
-		}
-	}
-	item := checkpointDataReferVersions[version][MetaIDX]
-	idxes := make([]uint16, len(item.attrs))
-	for i := range item.attrs {
-		idxes[i] = uint16(i)
-	}
-	pref.AddBlock(idxes, []uint16{uint16(MetaIDX)})
 	return blockio.PrefetchWithMerged(pref)
 }
 
@@ -1547,14 +1516,16 @@ func (data *CheckpointData) readMetaBatch(
 	reader *blockio.BlockReader,
 	m *mpool.MPool,
 ) (err error) {
-	var bats []*containers.Batch
-	item := checkpointDataReferVersions[version][MetaIDX]
-	bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, uint16(0), reader)
-	if err != nil {
-		return
+	if data.bats[MetaIDX].Length() == 0 {
+		var bats []*containers.Batch
+		item := checkpointDataReferVersions[version][MetaIDX]
+		bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, uint16(0), reader)
+		if err != nil {
+			return
+		}
+		// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
+		data.bats[MetaIDX] = bats[0]
 	}
-	// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
-	data.bats[MetaIDX] = bats[0]
 	return
 }
 func (data *CheckpointData) setMetaBatch(bat *containers.Batch) {
@@ -1564,6 +1535,29 @@ func (data *CheckpointData) getMetaBatch() (bat *containers.Batch) {
 	return data.bats[MetaIDX]
 }
 
+/*
+	func (data *CheckpointData) replayMetaBatch() {
+		bat := data.getMetaBatch()
+		data.locations = make(map[string]objectio.Location)
+		for i, attr := range bat.Attrs {
+			if i == 0 {
+				continue
+			}
+			logutil.Infof("attr is %v", attr)
+			vec := vector.MustBytesCol(bat.GetVectorByName(attr).GetDownstreamVector())
+			if len(vec) == 0 {
+				continue
+			}
+
+			blockLocation := BlockLocation(vec[0])
+			location := blockLocation.GetLocation()
+			if location.IsEmpty() {
+				continue
+			}
+			data.locations[location.Name().String()] = location
+		}
+	}
+*/
 func (data *CheckpointData) replayMetaBatch() {
 	bat := data.getMetaBatch()
 	data.locations = make(map[string]objectio.Location)
