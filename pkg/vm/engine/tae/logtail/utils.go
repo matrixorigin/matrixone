@@ -552,6 +552,53 @@ func NewCNCheckpointData() *CNCheckpointData {
 	}
 }
 
+func swithCheckpointIdx(i uint16, tableID uint64) uint16 {
+	idx := uint16(i)
+
+	if i == BlockInsert {
+		idx = BLKMetaInsertIDX
+	} else if i == BlockDelete {
+		idx = BLKMetaDeleteIDX
+	} else if i == CNBlockInsert {
+		idx = BLKCNMetaInsertIDX
+	} else if i == SegmentDelete {
+		idx = SEGDeleteIDX
+	}
+	switch tableID {
+	case pkgcatalog.MO_DATABASE_ID:
+		if i == BlockInsert {
+			idx = DBInsertIDX
+		} else if i == BlockDelete {
+			idx = DBDeleteIDX
+		}
+	case pkgcatalog.MO_TABLES_ID:
+		if i == BlockInsert {
+			idx = TBLInsertIDX
+		} else if i == BlockDelete {
+			idx = TBLDeleteIDX
+		}
+	case pkgcatalog.MO_COLUMNS_ID:
+		if i == BlockInsert {
+			idx = TBLColInsertIDX
+		} else if i == BlockDelete {
+			idx = TBLColDeleteIDX
+		}
+	}
+	return idx
+}
+
+func (data *CNCheckpointData) initMetaIdx(ctx context.Context, version uint32, reader *blockio.BlockReader) error {
+	if data.bats[MetaIDX] == nil {
+		metaIdx := checkpointDataReferVersions[version][MetaIDX]
+		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
+		if err != nil {
+			return err
+		}
+		data.bats[MetaIDX] = metaBats[0]
+	}
+	return nil
+}
+
 func (data *CNCheckpointData) PrefetchFrom(
 	ctx context.Context,
 	version uint32,
@@ -562,14 +609,9 @@ func (data *CNCheckpointData) PrefetchFrom(
 	if version < CheckpointVersion4 {
 		return prefetchCheckpointData(ctx, version, service, key)
 	}
-	var metaBats []*batch.Batch
-	metaIdx := checkpointDataReferVersions[version][MetaIDX]
-	metaBats, err = LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
-	if err != nil {
+	if err = data.initMetaIdx(ctx, version, reader); err != nil {
 		return
 	}
-	metaBat := metaBats[0]
-	data.bats[MetaIDX] = metaBat
 	meta := data.GetTableMeta(tableID, version)
 	if meta == nil {
 		return
@@ -579,7 +621,6 @@ func (data *CNCheckpointData) PrefetchFrom(
 		if table == nil {
 			continue
 		}
-		idx := uint16(i)
 		if i > BlockDelete {
 			if tableID == pkgcatalog.MO_DATABASE_ID ||
 				tableID == pkgcatalog.MO_TABLES_ID ||
@@ -587,55 +628,25 @@ func (data *CNCheckpointData) PrefetchFrom(
 				break
 			}
 		}
-
-		if i == BlockInsert {
-			idx = BLKMetaInsertIDX
-		} else if i == BlockDelete {
-			idx = BLKMetaDeleteIDX
-		} else if i == CNBlockInsert {
-			idx = BLKCNMetaInsertIDX
-		} else if i == SegmentDelete {
-			idx = SEGDeleteIDX
-		}
-		switch tableID {
-		case pkgcatalog.MO_DATABASE_ID:
-			if i == BlockInsert {
-				idx = DBInsertIDX
-			} else if i == BlockDelete {
-				idx = DBDeleteIDX
-			}
-		case pkgcatalog.MO_TABLES_ID:
-			if i == BlockInsert {
-				idx = TBLInsertIDX
-			} else if i == BlockDelete {
-				idx = TBLDeleteIDX
-			}
-		case pkgcatalog.MO_COLUMNS_ID:
-			if i == BlockInsert {
-				idx = TBLColInsertIDX
-			} else if i == BlockDelete {
-				idx = TBLColDeleteIDX
-			}
+		idx := swithCheckpointIdx(uint16(i), tableID)
+		schema := checkpointDataReferVersions[version][uint32(idx)]
+		idxes := make([]uint16, len(schema.attrs))
+		for attr := range schema.attrs {
+			idxes[attr] = uint16(attr)
 		}
 		it := table.locations.MakeIterator()
 		var location objectio.Location
 		for it.HasNext() {
-			loc := it.Next()
-			if !loc.GetLocation().IsEmpty() {
-				location = loc.GetLocation()
-				break
+			block := it.Next()
+			if location.IsEmpty() {
+				location = block.GetLocation()
+				pref, err = blockio.BuildSubPrefetchParams(service, location)
+				if err != nil {
+					return
+				}
+				pref.AddSubBlock(idxes, []uint16{block.GetID()}, idx)
 			}
 		}
-		pref, err = blockio.BuildSubPrefetchParams(service, location)
-		if err != nil {
-			return
-		}
-		schema := checkpointDataReferVersions[version][uint32(idx)]
-		idxes := make([]uint16, len(schema.attrs))
-		for i := range schema.attrs {
-			idxes[i] = uint16(i)
-		}
-		pref.AddBlock(idxes, []uint16{idx})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -799,14 +810,9 @@ func (data *CNCheckpointData) ReadFromData(
 	m *mpool.MPool,
 ) (dataBats []*batch.Batch, err error) {
 
-	var metaBats []*batch.Batch
-	metaIdx := checkpointDataReferVersions[version][MetaIDX]
-	metaBats, err = LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, m)
-	if err != nil {
+	if err = data.initMetaIdx(ctx, version, reader); err != nil {
 		return
 	}
-	metaBat := metaBats[0]
-	data.bats[MetaIDX] = metaBat
 	if version <= CheckpointVersion3 {
 		if tableID == pkgcatalog.MO_DATABASE_ID || tableID == pkgcatalog.MO_TABLES_ID || tableID == pkgcatalog.MO_COLUMNS_ID {
 			dataBats = make([]*batch.Batch, MetaMaxIdx)
@@ -916,7 +922,6 @@ func (data *CNCheckpointData) ReadFromData(
 		if table == nil {
 			continue
 		}
-		idx := uint16(i)
 		if i > BlockDelete {
 			if tableID == pkgcatalog.MO_DATABASE_ID ||
 				tableID == pkgcatalog.MO_TABLES_ID ||
@@ -924,36 +929,7 @@ func (data *CNCheckpointData) ReadFromData(
 				break
 			}
 		}
-
-		if i == BlockInsert {
-			idx = BLKMetaInsertIDX
-		} else if i == BlockDelete {
-			idx = BLKMetaDeleteIDX
-		} else if i == CNBlockInsert {
-			idx = BLKCNMetaInsertIDX
-		} else if i == SegmentDelete {
-			idx = SEGDeleteIDX
-		}
-		switch tableID {
-		case pkgcatalog.MO_DATABASE_ID:
-			if i == BlockInsert {
-				idx = DBInsertIDX
-			} else if i == BlockDelete {
-				idx = DBDeleteIDX
-			}
-		case pkgcatalog.MO_TABLES_ID:
-			if i == BlockInsert {
-				idx = TBLInsertIDX
-			} else if i == BlockDelete {
-				idx = TBLDeleteIDX
-			}
-		case pkgcatalog.MO_COLUMNS_ID:
-			if i == BlockInsert {
-				idx = TBLColInsertIDX
-			} else if i == BlockDelete {
-				idx = TBLColDeleteIDX
-			}
-		}
+		idx := swithCheckpointIdx(uint16(i), tableID)
 		it := table.locations.MakeIterator()
 		for it.HasNext() {
 			block := it.Next()

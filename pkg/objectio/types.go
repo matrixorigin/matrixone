@@ -55,8 +55,9 @@ type WriteOptions struct {
 }
 
 type ReadBlockOptions struct {
-	Id    uint16
-	Idxes map[uint16]bool
+	Id       uint16
+	DataType uint16
+	Idxes    map[uint16]bool
 }
 
 // Writer is to virtualize batches into multiple blocks

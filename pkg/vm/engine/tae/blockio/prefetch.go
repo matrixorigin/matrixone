@@ -73,6 +73,21 @@ func (p *PrefetchParams) AddBlock(idxes []uint16, ids []uint16) {
 	}
 	p.mergeIds(blocks)
 }
+func (p *PrefetchParams) AddSubBlock(idxes []uint16, ids []uint16, dataType uint16) {
+	blocks := make(map[uint16]*objectio.ReadBlockOptions)
+	columns := make(map[uint16]bool)
+	for _, idx := range idxes {
+		columns[idx] = true
+	}
+	for _, id := range ids {
+		blocks[id] = &objectio.ReadBlockOptions{
+			Id:       id,
+			DataType: dataType,
+			Idxes:    columns,
+		}
+	}
+	p.mergeIds(blocks)
+}
 
 func (p *PrefetchParams) mergeIds(ids2 map[uint16]*objectio.ReadBlockOptions) {
 	for id, block := range ids2 {
