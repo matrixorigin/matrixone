@@ -16,8 +16,8 @@ package vm
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -73,6 +73,9 @@ func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err
 			end = true
 		} else if ok == process.ExecHasMore {
 			fubarStack = append(fubarStack, i)
+			if proc.LogTableName != "" {
+				logutil.Infof("Table[%s] -------------fubarRun ExecHasMore", proc.LogTableName)
+			}
 		}
 	}
 

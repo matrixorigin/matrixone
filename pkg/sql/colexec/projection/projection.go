@@ -52,21 +52,21 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 
 	if bat == nil {
 		if ap.IsLog {
-			logutil.Infof("Table[%s] projection operator input batch is NULL", ap.TableName)
+			logutil.Infof("Table[%s] projection operator input batch is NULL, ap ptr[%p]", ap.TableName, ap)
 		}
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
 	if bat.Last() {
 		if ap.IsLog {
-			logutil.Infof("Table[%s] projection operator input batch is last", ap.TableName)
+			logutil.Infof("Table[%s] projection operator input batch is last, ap ptr[%p]", ap.TableName, ap)
 		}
 		proc.SetInputBatch(bat)
 		return process.ExecNext, nil
 	}
 	if bat.IsEmpty() {
 		if ap.IsLog {
-			logutil.Infof("Table[%s] projection operator input batch is empty", ap.TableName)
+			logutil.Infof("Table[%s] projection operator input batch is empty, ap ptr[%p]", ap.TableName, ap)
 		}
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
@@ -74,7 +74,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 
 	if ap.IsLog {
-		logutil.Infof("Table[%s] projection operator input batch: %s", ap.TableName, bat.PrintBatch())
+		logutil.Infof("Table[%s] projection operator input batch: %s, ap ptr[%p]", ap.TableName, bat.PrintBatch(), ap)
 	}
 
 	anal.Input(bat, isFirst)
@@ -86,7 +86,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			if ap.IsLog {
-				logutil.Infof("Table[%s] projection operator do projection err1: %s", ap.TableName, err.Error())
+				logutil.Infof("Table[%s] projection operator do projection err1: %s, ap ptr[%p]", ap.TableName, err.Error(), ap)
 			}
 			return process.ExecNext, err
 		}
@@ -96,7 +96,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	newAlloc, err := colexec.FixProjectionResult(proc, ap.ctr.projExecutors, rbat, bat)
 	if err != nil {
 		if ap.IsLog {
-			logutil.Infof("Table[%s] projection operator do projection err2: %s", ap.TableName, err.Error())
+			logutil.Infof("Table[%s] projection operator do projection err2: %s, ap ptr[%p]", ap.TableName, err.Error(), ap)
 		}
 		bat.Clean(proc.Mp())
 		return process.ExecNext, err
@@ -109,7 +109,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	if ap.IsLog {
-		logutil.Infof("Table[%s] projection operator output batch: %s", ap.TableName, rbat.PrintBatch())
+		logutil.Infof("Table[%s] projection operator output batch: %s, ap ptr[%p]", ap.TableName, rbat.PrintBatch(), ap)
 	}
 	return process.ExecNext, nil
 }

@@ -1767,9 +1767,34 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 }
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+	tableName := ""
+	if strings.Contains(c.sql, "duplicate") {
+		if strings.Contains(c.sql, "indup_00") {
+			tableName = "indup_00"
+		} else if strings.Contains(c.sql, "indup_01") {
+			tableName = "indup_01"
+		} else if strings.Contains(c.sql, "indup_02") {
+			tableName = "indup_02"
+		} else if strings.Contains(c.sql, "indup_03") {
+			tableName = "indup_03"
+		} else if strings.Contains(c.sql, "indup_04") {
+			tableName = "indup_04"
+		} else if strings.Contains(c.sql, "indup_05") {
+			tableName = "indup_05"
+		} else if strings.Contains(c.sql, "indup_06") {
+			tableName = "indup_06"
+		} else if strings.Contains(c.sql, "indup_07") {
+			tableName = "indup_07"
+		} else if strings.Contains(c.sql, "indup_07") {
+			tableName = "indup_07"
+		}
+	}
+
 	if node.Stats.HashmapStats.Shuffle {
+		logutil.Infof("Table[%s] compileJoin result Shuffle", tableName)
 		return c.compileShuffleJoin(ctx, node, left, right, ss, children)
 	}
+	logutil.Infof("Table[%s] compileJoin result Broad castJoin", tableName)
 	return c.compileBroadcastJoin(ctx, node, left, right, ss, children)
 }
 

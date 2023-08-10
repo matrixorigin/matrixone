@@ -16,6 +16,7 @@ package deletion
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -141,6 +142,18 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 
 	var affectedRows uint64
 	delCtx := p.DeleteCtx
+
+	tableName := delCtx.Source.GetTableName()
+	if tableName == "indup_00" ||
+		tableName == "indup_01" ||
+		tableName == "indup_02" ||
+		tableName == "indup_03" ||
+		tableName == "indup_04" ||
+		tableName == "indup_05" ||
+		tableName == "indup_06" ||
+		tableName == "indup_07" {
+		logutil.Infof("Table[%s] on delete operator1 input batch: %s", tableName, bat.PrintBatch())
+	}
 
 	if len(delCtx.PartitionTableIDs) > 0 {
 		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch,

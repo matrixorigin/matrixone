@@ -108,12 +108,12 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 
 		// chosen == 0 means the info comes from proc context.Done
 		if chosen == 0 {
-			logutil.Debugf("process context done during merge receive")
+			logutil.Infof("process context done during merge receive, r ptr[%p]", r)
 			return nil, true, nil
 		}
 
 		if !ok {
-			logutil.Errorf("children pipeline closed unexpectedly")
+			logutil.Infof("children pipeline closed unexpectedly, r ptr[%p]", r)
 			r.removeChosen(chosen)
 			return nil, true, nil
 		}

@@ -207,6 +207,8 @@ type Process struct {
 	prepareParams       *vector.Vector
 
 	QueryService queryservice.QueryService
+
+	LogTableName string
 }
 
 type vectorPool struct {

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -63,6 +64,31 @@ import (
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
+
+	if strings.Contains(c.sql, "duplicate") {
+		logTableName := ""
+		if strings.Contains(c.sql, "indup_00") {
+			logTableName = "indup_00"
+		} else if strings.Contains(c.sql, "indup_01") {
+			logTableName = "indup_01"
+		} else if strings.Contains(c.sql, "indup_02") {
+			logTableName = "indup_02"
+		} else if strings.Contains(c.sql, "indup_03") {
+			logTableName = "indup_03"
+		} else if strings.Contains(c.sql, "indup_04") {
+			logTableName = "indup_04"
+		} else if strings.Contains(c.sql, "indup_05") {
+			logTableName = "indup_05"
+		} else if strings.Contains(c.sql, "indup_06") {
+			logTableName = "indup_06"
+		} else if strings.Contains(c.sql, "indup_07") {
+			logTableName = "indup_07"
+		} else if strings.Contains(c.sql, "indup_07") {
+			logTableName = "indup_07"
+		}
+		s.Proc.LogTableName = logTableName
+	}
+
 	// DataSource == nil specify the empty scan
 	if s.DataSource == nil {
 		p := pipeline.New(nil, s.Instructions, s.Reg)
