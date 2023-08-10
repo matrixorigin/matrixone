@@ -47,6 +47,7 @@ func init() {
 //	       len(min)    len(max) |   |
 //	                       reserved |
 //	                              type
+
 type ZM []byte
 
 func NewZM(t types.T, scale int32) ZM {
@@ -90,6 +91,9 @@ func (zm ZM) String() string {
 	} else {
 		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
 			zm.GetType().String(), zm.GetScale(), zm.GetMin(), zm.GetMax()))
+		if zm.supportSum() {
+			_, _ = b.WriteString(fmt.Sprintf("SUM:%v", zm.GetSum()))
+		}
 	}
 	if zm.MaxTruncated() {
 		_ = b.WriteByte('+')
@@ -98,6 +102,11 @@ func (zm ZM) String() string {
 		_, _ = b.WriteString("--")
 	}
 	return b.String()
+}
+
+func (zm ZM) supportSum() bool {
+	t := zm.GetType()
+	return t.IsInteger() || t.IsFloat() || t == types.T_decimal64
 }
 
 func (zm ZM) Clone() ZM {
@@ -156,12 +165,35 @@ func (zm ZM) GetMax() any {
 	return zm.getValue(buf)
 }
 
+func (zm ZM) SetSum(v []byte) {
+	copy(zm.GetSumBuf(), v)
+}
+
+func (zm ZM) HasSum() bool {
+	return zm.GetSum() != 0
+}
+
+func (zm ZM) GetSum() any {
+	if !zm.IsInited() {
+		return nil
+	}
+	buf := zm.GetSumBuf()
+	return zm.getValue(buf)
+}
+
 func (zm ZM) GetMinBuf() []byte {
 	return zm[0 : zm[30]&0x1f]
 }
 
 func (zm ZM) GetMaxBuf() []byte {
 	return zm[31 : 31+zm[61]&0x1f]
+}
+
+func (zm ZM) GetSumBuf() []byte {
+	if zm.supportSum() {
+		return zm[8 : 8+zm[30]&0x1f]
+	}
+	return nil
 }
 
 func (zm ZM) GetBuf() []byte {
