@@ -98,14 +98,14 @@ func (ka *KafkaAdapter) DescribeTopicDetails(ctx context.Context, topicName stri
 	return nil, moerr.NewInternalError(ctx, "topic not found")
 }
 
-func (ka *KafkaAdapter) ReadMessages(topic string, offset int64, limit int) ([]*kafka.Message, error) {
+func (ka *KafkaAdapter) ReadMessagesFromPartition(topic string, partition int32, offset int64, limit int) ([]*kafka.Message, error) {
 	if ka.Consumer == nil {
 		return nil, fmt.Errorf("consumer not initialized")
 	}
 
-	// Set the starting offset for the topic
+	// Assign the specific partition with the desired offset
 	err := ka.Consumer.Assign([]kafka.TopicPartition{
-		{Topic: &topic, Partition: 0, Offset: kafka.Offset(offset)},
+		{Topic: &topic, Partition: partition, Offset: kafka.Offset(offset)},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to assign partition: %w", err)
@@ -128,27 +128,81 @@ func (ka *KafkaAdapter) ReadMessages(topic string, offset int64, limit int) ([]*
 	return messages, nil
 }
 
+func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int) ([]*kafka.Message, error) {
+	if ka.Consumer == nil {
+		return nil, fmt.Errorf("consumer not initialized")
+	}
+
+	// Fetch metadata to get all partitions
+	meta, err := ka.Consumer.GetMetadata(&topic, false, 5000) // timeout in ms
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch metadata: %w", err)
+	}
+
+	var partitions []kafka.TopicPartition
+	topicMetadata, ok := meta.Topics[topic]
+	if !ok {
+		return nil, fmt.Errorf("topic not found in metadata")
+	}
+
+	for _, p := range topicMetadata.Partitions {
+		partitions = append(partitions, kafka.TopicPartition{Topic: &topic, Partition: p.ID, Offset: kafka.Offset(offset)})
+	}
+
+	err = ka.Consumer.Assign(partitions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to assign partitions: %w", err)
+	}
+
+	var messages []*kafka.Message
+	for i := 0; i < limit; i++ {
+		msg, err := ka.Consumer.ReadMessage(-1) // Wait indefinitely until a message is available
+		if err != nil {
+			// Check for timeout
+			if kafkaErr, ok := err.(kafka.Error); ok && kafkaErr.Code() == kafka.ErrTimedOut {
+				break // Exit the loop if a timeout occurs
+			} else {
+				return nil, fmt.Errorf("failed to read message: %w", err)
+			}
+		}
+		messages = append(messages, msg)
+	}
+
+	return messages, nil
+}
+
 func (ka *KafkaAdapter) BatchRead(topic string, startOffset int64, limit int, batchSize int) ([]*kafka.Message, error) {
-	// Calculate how many goroutines to spawn based on the limit and batch size
+	// Fetch metadata to get all partitions
+	meta, err := ka.Consumer.GetMetadata(&topic, false, 5000) // timeout in ms
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch metadata: %w", err)
+	}
+
+	topicMetadata, ok := meta.Topics[topic]
+	if !ok {
+		return nil, fmt.Errorf("topic not found in metadata")
+	}
+
 	numGoroutines := (limit + batchSize - 1) / batchSize
 
 	messagesCh := make(chan []*kafka.Message, numGoroutines)
 	errCh := make(chan error, numGoroutines)
 	var wg sync.WaitGroup
 
-	for i := 0; i < numGoroutines; i++ {
+	// Loop over each partition and start goroutines for reading
+	for _, p := range topicMetadata.Partitions {
 		wg.Add(1)
-		go func(offset int64) {
+		go func(partition int32) {
 			defer wg.Done()
 
 			// Read a batch of messages
-			messages, err := ka.readBatch(topic, offset, batchSize)
+			messages, err := ka.ReadMessagesFromPartition(topic, partition, startOffset, batchSize)
 			if err != nil {
 				errCh <- err
 				return
 			}
 			messagesCh <- messages
-		}(startOffset + int64(i*batchSize))
+		}(p.ID)
 	}
 
 	// Wait for all goroutines to finish
@@ -169,22 +223,4 @@ func (ka *KafkaAdapter) BatchRead(topic string, startOffset int64, limit int, ba
 	}
 
 	return allMessages, nil
-}
-
-func (ka *KafkaAdapter) readBatch(topic string, offset int64, batchSize int) ([]*kafka.Message, error) {
-	var messages []*kafka.Message
-
-	ka.Consumer.Assign([]kafka.TopicPartition{
-		{Topic: &topic, Partition: 0, Offset: kafka.Offset(offset)},
-	})
-
-	for i := 0; i < batchSize; i++ {
-		msg, err := ka.Consumer.ReadMessage(-1) // blocking read
-		if err != nil {
-			return nil, err
-		}
-		messages = append(messages, msg)
-	}
-
-	return messages, nil
 }
