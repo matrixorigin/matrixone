@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -71,10 +70,6 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			if txnOp == nil {
 				return nil, moerr.NewInternalError(ctx, "ctl: txn operator is nil")
 			}
-			op, ok := txnOp.(client.DebugableTxnOperator)
-			if !ok {
-				return nil, moerr.NewNotSupported(proc.Ctx, "debug function not supported")
-			}
 
 			debugRequests := make([]txn.TxnRequest, 0, len(requests))
 			for _, req := range requests {
@@ -82,7 +77,7 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 				tq.Method = txn.TxnMethod_DEBUG
 				debugRequests = append(debugRequests, tq)
 			}
-			result, err := op.Debug(ctx, debugRequests)
+			result, err := txnOp.Debug(ctx, debugRequests)
 			if err != nil {
 				return nil, err
 			}

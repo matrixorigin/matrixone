@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 func (s *service) initCtlService() {
@@ -43,7 +42,7 @@ func (s *service) initCtlCommandHandler() {
 			ctx context.Context,
 			req *ctl.Request,
 			resp *ctl.Response) error {
-			resp.GetCommit.CurrentCommitTS = s._txnClient.(client.TxnClientWithCtl).GetLatestCommitTS()
+			resp.GetCommit.CurrentCommitTS = s._txnClient.GetLatestCommitTS()
 			return nil
 		},
 		false)
@@ -54,7 +53,7 @@ func (s *service) initCtlCommandHandler() {
 			ctx context.Context,
 			req *ctl.Request,
 			resp *ctl.Response) error {
-			s._txnClient.(client.TxnClientWithCtl).SetLatestCommitTS(req.SycnCommit.LatestCommitTS)
+			s._txnClient.SyncLatestCommitTS(req.SycnCommit.LatestCommitTS)
 			return nil
 		},
 		false)

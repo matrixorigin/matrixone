@@ -46,9 +46,7 @@ func TestNewTxn(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
-	if tc, ok := c.(TxnClientWithFeature); ok {
-		tc.Resume()
-	}
+	c.Resume()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0))
@@ -67,9 +65,7 @@ func TestNewTxnWithSnapshotTS(t *testing.T) {
 		}, 0)))
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
-	if tc, ok := c.(TxnClientWithFeature); ok {
-		tc.Resume()
-	}
+	c.Resume()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	tx, err := c.New(ctx, newTestTimestamp(0), WithSnapshotTS(timestamp.Timestamp{PhysicalTime: 10}))
@@ -89,9 +85,7 @@ func TestTxnClientAbortAllRunningTxn(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(rt)
 
 	c := NewTxnClient(newTestTxnSender())
-	if tc, ok := c.(TxnClientWithFeature); ok {
-		tc.Resume()
-	}
+	c.Resume()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
@@ -119,13 +113,10 @@ func TestTxnClientPauseAndResume(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(rt)
 	c := NewTxnClient(newTestTxnSender())
 
-	tcFeature, ok1 := c.(TxnClientWithFeature)
-	tcClient, ok2 := c.(*txnClient)
-	require.Equal(t, true, ok1 && ok2)
-	tcFeature.Pause()
-	require.Equal(t, paused, tcClient.mu.state)
-	tcFeature.Resume()
-	require.Equal(t, normal, tcClient.mu.state)
+	c.Pause()
+	require.Equal(t, paused, c.(*txnClient).mu.state)
+	c.Resume()
+	require.Equal(t, normal, c.(*txnClient).mu.state)
 }
 
 func TestLimit(t *testing.T) {
