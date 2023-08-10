@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/confluentinc/confluent-kafka-go/schemaregistry"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -15,12 +16,22 @@ type AdminClientInterface interface {
 }
 
 type KafkaAdapter struct {
-	Producer    *kafka.Producer
-	Consumer    *kafka.Consumer
-	AdminClient *kafka.AdminClient
-	Brokers     []string
-	ConfigMap   *kafka.ConfigMap
-	Connected   bool
+	Producer       *kafka.Producer
+	Consumer       *kafka.Consumer
+	AdminClient    *kafka.AdminClient
+	SchemaRegistry schemaregistry.Client
+	Brokers        []string
+	ConfigMap      *kafka.ConfigMap
+	Connected      bool
+}
+
+func (ka *KafkaAdapter) InitSchemaRegistry(url string) error {
+	client, err := schemaregistry.NewClient(schemaregistry.NewConfig(url))
+	if err != nil {
+		return fmt.Errorf("failed to create schema registry client: %w", err)
+	}
+	ka.SchemaRegistry = client
+	return nil
 }
 
 func NewKafkaAdapter(brokers []string, configMap *kafka.ConfigMap) (*KafkaAdapter, error) {
@@ -223,4 +234,23 @@ func (ka *KafkaAdapter) BatchRead(topic string, startOffset int64, limit int, ba
 	}
 
 	return allMessages, nil
+}
+
+func (ka *KafkaAdapter) GetSchemaForTopic(topic string, isKey bool) (string, error) {
+	if ka.SchemaRegistry == nil {
+		return "", fmt.Errorf("schema registry not initialized")
+	}
+
+	subjectSuffix := "value"
+	if isKey {
+		subjectSuffix = "key"
+	}
+	subject := fmt.Sprintf("%s-%s", topic, subjectSuffix)
+
+	// Fetch the schema for the subject
+	schema, err := ka.SchemaRegistry.GetLatestSchemaMetadata(subject)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch schema for topic %s: %w", topic, err)
+	}
+	return schema.Schema, nil
 }
