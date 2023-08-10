@@ -83,6 +83,14 @@ func (*StorageTxnClient) WaitLogTailAppliedAt(
 	return timestamp.Timestamp{}, nil
 }
 
+func (*StorageTxnClient) GetLatestCommitTS() timestamp.Timestamp { panic("unimplemented") }
+func (*StorageTxnClient) SyncLatestCommitTS(timestamp.Timestamp) { panic("unimplemented") }
+func (*StorageTxnClient) GetSyncLatestCommitTSTimes() uint64     { panic("unimplemented") }
+func (*StorageTxnClient) Pause()                                 { panic("unimplemented") }
+func (*StorageTxnClient) Resume()                                { panic("unimplemented") }
+func (*StorageTxnClient) RefreshExpressionEnabled() bool         { panic("unimplemented") }
+func (*StorageTxnClient) CNBasedConsistencyEnabled() bool        { panic("unimplemented") }
+
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
@@ -107,6 +115,14 @@ func (s *StorageTxnOperator) ResetRetry(retry bool) {
 }
 
 func (s *StorageTxnOperator) IsRetry() bool {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	panic("unimplemented")
 }
 

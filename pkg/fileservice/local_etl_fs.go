@@ -223,11 +223,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				cr := &countingReader{
 					R: r,
 				}
-				bs, err := entry.ToCacheData(cr, nil)
+				cacheData, err := entry.ToCacheData(cr, nil, DefaultCacheDataAllocator)
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].CachedData = bs
+				vector.Entries[i].CachedData = cacheData
 				if entry.Size > 0 && cr.N != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
@@ -273,11 +273,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer f.Close()
-						bs, err := entry.ToCacheData(buf, buf.Bytes())
+						cacheData, err := entry.ToCacheData(buf, buf.Bytes(), DefaultCacheDataAllocator)
 						if err != nil {
 							return err
 						}
-						vector.Entries[i].CachedData = bs
+						vector.Entries[i].CachedData = cacheData
 						return nil
 					},
 				}

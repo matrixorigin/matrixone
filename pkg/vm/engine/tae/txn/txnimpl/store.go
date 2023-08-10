@@ -193,13 +193,14 @@ func (store *txnStore) AddBlksWithMetaLoc(
 }
 
 func (store *txnStore) RangeDelete(
-	id *common.ID, start, end uint32, dt handle.DeleteType,
+	id *common.ID, start, end uint32,
+	pkVec containers.Vector, dt handle.DeleteType,
 ) (err error) {
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
-	return db.RangeDelete(id, start, end, dt)
+	return db.RangeDelete(id, start, end, pkVec, dt)
 }
 
 func (store *txnStore) TryDeleteByDeltaloc(
