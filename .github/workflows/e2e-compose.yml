@@ -32,9 +32,9 @@ jobs:
 
           mkdir -p ${{ github.workspace }}/docker-compose-log
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+          
           # wait for ready
-          sleep 10
-          while [ $(mariadb -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'show databases;' 2>&1 | wc -l) -le 1 ]; do
+          while [ $(mysql -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'show databases;' 2>&1 | wc -l) -le 5 ]; do
              echo 'wait mo init finished'
              sleep 1
           done
@@ -125,8 +125,9 @@ jobs:
           cat ./etc/launch-tae-compose/config/dn.toml
           mkdir -p ${{ github.workspace }}/docker-compose-log
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+          
           # wait for ready
-          while [ $(mariadb -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'show databases;' 2>&1 | wc -l) -le 1 ]; do
+          while [ $(mysql -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'show databases;' 2>&1 | wc -l) -le 5 ]; do
              echo 'wait mo init finished'
              sleep 1
           done
