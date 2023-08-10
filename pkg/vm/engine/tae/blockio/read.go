@@ -52,23 +52,36 @@ func ReadByFilter(
 	if err != nil {
 		return
 	}
-	var deleteMask nulls.Bitmap
+	var deleteMask *nulls.Nulls
 
 	// merge persisted deletes
 	if !info.DeltaLocation().IsEmpty() {
+		now := time.Now()
 		var persistedDeletes *batch.Batch
 		var persistedByCN bool
 		// load from storage
 		if persistedDeletes, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
 			return
 		}
+		readcost := time.Since(now)
 		var rows *nulls.Nulls
+		var bisect time.Duration
 		if persistedByCN {
 			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
 		} else {
+			nowx := time.Now()
 			rows = evalDeleteRowsByTimestamp(persistedDeletes, ts, &info.BlockID)
+			bisect = time.Since(nowx)
 		}
-		deleteMask.Merge(rows)
+		if rows != nil {
+			deleteMask = rows
+		}
+		readtotal := time.Since(now)
+		RecordReadDel(readtotal, readcost, bisect)
+	}
+
+	if deleteMask == nil {
+		deleteMask = nulls.NewWithSize(len(inputDeletes))
 	}
 
 	// merge input deletes
@@ -264,21 +277,29 @@ func BlockReadInner(
 	if !info.DeltaLocation().IsEmpty() {
 		var deletes *batch.Batch
 		var persistedByCN bool
+		now := time.Now()
 		// load from storage
 		if deletes, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
 			return
 		}
+		readcost := time.Since(now)
 
 		// eval delete rows by timestamp
 		var rows *nulls.Nulls
+		var bisect time.Duration
 		if persistedByCN {
 			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
 		} else {
+			nowx := time.Now()
 			rows = evalDeleteRowsByTimestamp(deletes, ts, &info.BlockID)
+			bisect = time.Since(nowx)
 		}
 
 		// merge delete rows
 		deleteMask.Merge(rows)
+
+		readtotal := time.Since(now)
+		RecordReadDel(readtotal, readcost, bisect)
 
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debugf(
@@ -512,7 +533,7 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types
 		return
 	}
 	// record visible delete rows
-	rows = nulls.NewWithSize(0)
+	rows = nulls.NewWithSize(64)
 
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
@@ -574,6 +595,10 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 		}
 	}
 	return nil
+}
+
+func RecordReadDel(total, read, bisect time.Duration) {
+	pipeline.stats.selectivityStats.RecordReadDel(total, read, bisect)
 }
 
 func RecordReadFilterSelectivity(hit, total int) {

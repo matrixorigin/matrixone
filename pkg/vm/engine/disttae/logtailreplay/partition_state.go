@@ -381,6 +381,7 @@ func (p *PartitionState) HandleRowsDelete(
 		)
 	}
 
+	numDeletes := int64(0)
 	for i, rowID := range rowIDVector {
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleDel, func() {
 
@@ -394,6 +395,7 @@ func (p *PartitionState) HandleRowsDelete(
 			if !ok {
 				entry = pivot
 				entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
+				numDeletes++
 			}
 
 			entry.Deleted = true
@@ -432,6 +434,7 @@ func (p *PartitionState) HandleRowsDelete(
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.DeleteEntries.Add(1)
+		c.DistTAE.Logtail.DeleteRows.Add(numDeletes)
 	})
 }
 
