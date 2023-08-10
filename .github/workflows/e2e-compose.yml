@@ -34,6 +34,10 @@ jobs:
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
+          while [ $(mariadb -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'show databases;' 2>&1 | wc -l) -le 1 ]; do
+             echo 'wait mo init finished'
+             sleep 1
+          done
 
       - name: Clone test-tool repository
         # Node.js 12 actions are deprecated.
@@ -122,7 +126,10 @@ jobs:
           mkdir -p ${{ github.workspace }}/docker-compose-log
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
-          sleep 10
+          while [ $(mariadb -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'show databases;' 2>&1 | wc -l) -le 1 ]; do
+             echo 'wait mo init finished'
+             sleep 1
+          done
           docker ps
       - name: Clone test-tool repository
         # Node.js 12 actions are deprecated.
