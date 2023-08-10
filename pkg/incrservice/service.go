@@ -82,10 +82,9 @@ func (s *service) Create(
 	if txnOp == nil {
 		panic("txn operator is nil")
 	}
-	txnOp.(client.EventableTxnOperator).
-		AppendEventCallback(
-			client.ClosedEvent,
-			s.txnClosed)
+	txnOp.AppendEventCallback(
+		client.ClosedEvent,
+		s.txnClosed)
 	if err := s.store.Create(ctx, tableID, cols, txnOp); err != nil {
 		s.logger.Error("create auto increment cache failed",
 			zap.Uint64("table-id", tableID),
@@ -156,10 +155,9 @@ func (s *service) Delete(
 	if txnOp == nil {
 		panic("txn operator is nil")
 	}
-	txnOp.(client.EventableTxnOperator).
-		AppendEventCallback(
-			client.ClosedEvent,
-			s.txnClosed)
+	txnOp.AppendEventCallback(
+		client.ClosedEvent,
+		s.txnClosed)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
