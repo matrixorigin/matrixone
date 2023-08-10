@@ -84,12 +84,12 @@ func EnsurePrepareEnvOK() error {
 	return nil
 }
 
-func GetPrepareDirByType(typ int) string {
-	return filepath.Join("/tmp", "tae-compatibility-test", PrepareDir, fmt.Sprintf("p%d", typ))
+func GetPrepareDirByName(name string) string {
+	return filepath.Join("/tmp", "tae-compatibility-test", PrepareDir, name)
 }
 
-func InitPrepareDirByType(typ int) (string, error) {
-	dir := GetPrepareDirByType(typ)
+func InitPrepareDirByName(name string) (string, error) {
+	dir := GetPrepareDirByName(name)
 	os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
@@ -113,17 +113,18 @@ func InitExecuteEnv() error {
 
 func InitTestCaseExecuteDir(name string) (string, error) {
 	dir := filepath.Join(GetExecureDirName(), name)
-	os.RemoveAll(dir)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	return dir, nil
+	err := os.RemoveAll(dir)
+	return dir, err
 }
 
 func CopyDir(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, _ error) error {
 		if info.IsDir() {
-			return nil
+			rel, err := filepath.Rel(src, path)
+			if err != nil {
+				return err
+			}
+			return os.Mkdir(filepath.Join(dst, rel), 0755)
 		}
 		rel, err := filepath.Rel(src, path)
 		if err != nil {

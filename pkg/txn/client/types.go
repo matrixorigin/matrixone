@@ -48,22 +48,12 @@ type TxnClient interface {
 	Close() error
 	// WaitLogTailAppliedAt wait log tail applied at ts
 	WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error)
-}
-
-// TxnClientWithCtl TxnClient to support ctl command.
-type TxnClientWithCtl interface {
-	TxnClient
-
 	// GetLatestCommitTS get latest commit timestamp
 	GetLatestCommitTS() timestamp.Timestamp
-	// SetLatestCommitTS set latest commit timestamp
-	SetLatestCommitTS(timestamp.Timestamp)
-}
-
-// TxnClientWithFeature is similar to TxnClient, except that some methods have been added to determine
-// whether certain features are supported.
-type TxnClientWithFeature interface {
-	TxnClient
+	// SyncLatestCommitTS sync latest commit timestamp
+	SyncLatestCommitTS(timestamp.Timestamp)
+	// GetSyncLatestCommitTSTimes returns times of sync latest commit ts
+	GetSyncLatestCommitTSTimes() uint64
 	// Pause the txn client to prevent new txn from being created.
 	Pause()
 	// Resume the txn client to allow new txn to be created.
@@ -122,7 +112,7 @@ type TxnOperator interface {
 
 	// AddLockTable for pessimistic transactions, if the current transaction is successfully
 	// locked, the metadata corresponding to the lockservice needs to be recorded to the txn, and
-	// at transaction commit time, the metadata of all lockservices accessed by the transaction
+	// at transaction commit time, the metadata of all lock services accessed by the transaction
 	// will be committed to dn to check. If the metadata of the lockservice changes in [lock, commit],
 	// the transaction will be rolled back.
 	AddLockTable(locktable lock.LockTable) error
@@ -134,24 +124,14 @@ type TxnOperator interface {
 
 	ResetRetry(bool)
 	IsRetry() bool
-}
 
-// DebugableTxnOperator debugable txn operator
-type DebugableTxnOperator interface {
-	TxnOperator
+	// AppendEventCallback append callback. All append callbacks will be called sequentially
+	// if event happen.
+	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))
 
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
-}
-
-// CallbackTxnOperator callback txn operator
-type EventableTxnOperator interface {
-	TxnOperator
-
-	// AppendEventCallback append callback. All append callbacks will be called sequentially
-	// if event happend.
-	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))
 }
 
 // TxnIDGenerator txn id generator
