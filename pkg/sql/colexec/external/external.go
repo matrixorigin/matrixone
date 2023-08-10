@@ -113,6 +113,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
+	param.MoCsvLineArray = make([][][]byte, OneBatchMaxRow)
 	return nil
 }
 
@@ -536,7 +537,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	}
 	plh := &ParseLineHandler{
 		csvReader:      newReaderWithOptions(param.reader, rune(cma), '#', true, false),
-		moCsvLineArray: make([][][]byte, OneBatchMaxRow),
+		moCsvLineArray: param.MoCsvLineArray,
 	}
 	return plh, nil
 }
