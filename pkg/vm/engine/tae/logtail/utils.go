@@ -39,7 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
-const CheckpointBlockRows = 10
+const DefaultCheckpointBlockRows = 10000
 
 const (
 	CheckpointVersion1 uint32 = 1
@@ -1153,6 +1153,7 @@ type blockIndex struct {
 
 func (data *CheckpointData) WriteTo(
 	fs fileservice.FileService,
+	blockRows int,
 ) (location objectio.Location, err error) {
 	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
@@ -1166,7 +1167,7 @@ func (data *CheckpointData) WriteTo(
 			continue
 		}
 		offset := 0
-		bats := containers.SplitDNBatch(data.bats[i], CheckpointBlockRows)
+		bats := containers.SplitDNBatch(data.bats[i], blockRows)
 		for _, bat := range bats {
 			var block objectio.BlockObject
 			if block, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {

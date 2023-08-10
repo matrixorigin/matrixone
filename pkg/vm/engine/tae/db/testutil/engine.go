@@ -358,12 +358,18 @@ func InitTestDB(
 	return db
 }
 
-func writeIncrementalCheckpoint(t *testing.T, start, end types.TS, c *catalog.Catalog, fs fileservice.FileService) objectio.Location {
+func writeIncrementalCheckpoint(
+	t *testing.T,
+	start, end types.TS,
+	c *catalog.Catalog,
+	checkpointBlockRows int,
+	fs fileservice.FileService,
+) objectio.Location {
 	factory := logtail.IncrementalCheckpointDataFactory(start, end)
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
-	location, err := data.WriteTo(fs)
+	location, err := data.WriteTo(fs, checkpointBlockRows)
 	assert.NoError(t, err)
 	return location
 }
@@ -554,8 +560,14 @@ func checkUserTables(t *testing.T, tid uint64, ins, del, cnIns, segDel *api.Batc
 	isProtoDNBatchEqual(t, segDel, segDel2)
 }
 
-func CheckCheckpointReadWrite(t *testing.T, start, end types.TS, c *catalog.Catalog, fs fileservice.FileService) {
-	location := writeIncrementalCheckpoint(t, start, end, c, fs)
+func CheckCheckpointReadWrite(
+	t *testing.T,
+	start, end types.TS,
+	c *catalog.Catalog,
+	checkpointBlockRows int,
+	fs fileservice.FileService,
+) {
+	location := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, fs)
 	dnData := dnReadCheckpoint(t, location, fs)
 
 	checkDNCheckpointData(t, dnData, start, end, c)
