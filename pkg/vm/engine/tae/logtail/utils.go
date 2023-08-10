@@ -42,8 +42,9 @@ const (
 	CheckpointVersion1 uint32 = 1
 	CheckpointVersion2 uint32 = 2
 	CheckpointVersion3 uint32 = 3
+	CheckpointVersion4 uint32 = 4
 
-	CheckpointCurrentVersion = CheckpointVersion3
+	CheckpointCurrentVersion = CheckpointVersion4
 )
 
 const (
@@ -95,11 +96,13 @@ type checkpointDataItem struct {
 var checkpointDataSchemas_V1 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V2 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V3 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V4 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataRefer_V1 [MaxIDX]*checkpointDataItem
 var checkpointDataRefer_V2 [MaxIDX]*checkpointDataItem
 var checkpointDataRefer_V3 [MaxIDX]*checkpointDataItem
+var checkpointDataRefer_V4 [MaxIDX]*checkpointDataItem
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
 
 func init() {
@@ -113,7 +116,7 @@ func init() {
 		TblDNSchema,
 		DelSchema, // 7
 		TblDNSchema,
-		catalog.SystemColumnSchema,
+		catalog.SystemColumnSchema_V1,
 		DelSchema,
 		SegSchema, // 11
 		SegDNSchema,
@@ -139,7 +142,7 @@ func init() {
 		TblDNSchema,
 		DelSchema, // 7
 		TblDNSchema,
-		catalog.SystemColumnSchema,
+		catalog.SystemColumnSchema_V1,
 		DelSchema,
 		SegSchema, // 11
 		SegDNSchema,
@@ -156,6 +159,32 @@ func init() {
 		BlkMetaSchema, // 23
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
+		MetaSchema,
+		catalog.SystemDBSchema,
+		TxnNodeSchema,
+		DBDelSchema, // 3
+		DBDNSchema,
+		catalog.SystemTableSchema,
+		TblDNSchema,
+		TblDelSchema, // 7
+		TblDNSchema,
+		catalog.SystemColumnSchema_V1,
+		ColumnDelSchema,
+		SegSchema, // 11
+		SegDNSchema,
+		DelSchema,
+		SegDNSchema,
+		BlkMetaSchema, // 15
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 19
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 23
+	}
+	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
 		MetaSchema,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
@@ -182,7 +211,7 @@ func init() {
 		BlkMetaSchema, // 23
 	}
 
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V3
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V4
 	checkpointDataReferVersions = make(map[uint32][24]*checkpointDataItem)
 
 	for idx, schema := range checkpointDataSchemas_V1 {
@@ -209,6 +238,14 @@ func init() {
 		}
 	}
 	checkpointDataReferVersions[CheckpointVersion3] = checkpointDataRefer_V3
+	for idx, schema := range checkpointDataSchemas_V4 {
+		checkpointDataRefer_V4[idx] = &checkpointDataItem{
+			schema,
+			append(BaseTypes, schema.Types()...),
+			append(BaseAttr, schema.AllNames()...),
+		}
+	}
+	checkpointDataReferVersions[CheckpointVersion4] = checkpointDataRefer_V4
 }
 
 func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (*CheckpointData, error) {
@@ -466,6 +503,23 @@ func (data *CNCheckpointData) ReadFrom(
 		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
 		bat.Vecs = append(bat.Vecs, pkVec2)
 	}
+	if version <= CheckpointVersion3 {
+		bat := data.bats[TBLColInsertIDX]
+		if bat == nil {
+			return
+		}
+		rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+		length := len(rowIDVec)
+		enumVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		for i := 0; i < length; i++ {
+			err := vector.AppendAny(enumVec, []byte(""), false, m)
+			if err != nil {
+				return err
+			}
+		}
+		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_EnumValues)
+		bat.Vecs = append(bat.Vecs, enumVec)
+	}
 	return
 }
 
@@ -477,6 +531,9 @@ func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() 
 		if version <= CheckpointVersion2 {
 			data.closeVector(DBDeleteIDX, 2, m)
 			data.closeVector(TBLDeleteIDX, 2, m)
+		}
+		if version <= CheckpointVersion3 {
+			data.closeVector(TBLColInsertIDX, 25, m)
 		}
 	}
 }
@@ -816,7 +873,48 @@ func (data *CheckpointData) ReadFrom(
 		}
 		bat.AddVector(pkgcatalog.SystemRelAttr_CatalogVersion, vec)
 	}
+	if version <= CheckpointVersion2 {
+		bat := data.bats[DBDeleteIDX]
+		if bat == nil {
+			return
+		}
+		rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
+		length := rowIDVec.Length()
+		pkVec := containers.MakeVector(types.T_uint64.ToType())
+		for i := 0; i < length; i++ {
+			pkVec.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
+		}
+		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
+		bat.Vecs = append(bat.Vecs, pkVec)
 
+		bat = data.bats[TBLDeleteIDX]
+		if bat == nil {
+			return
+		}
+		rowIDVec = bat.GetVectorByName(catalog.AttrRowID)
+		length = rowIDVec.Length()
+		pkVec2 := containers.MakeVector(types.T_uint64.ToType())
+		for i := 0; i < length; i++ {
+			pkVec2.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
+			if err != nil {
+				return err
+			}
+		}
+		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
+		bat.Vecs = append(bat.Vecs, pkVec2)
+	}
+	if version <= CheckpointVersion3 {
+		bat := data.bats[TBLColInsertIDX]
+		if bat == nil {
+			return
+		}
+		length := bat.GetVectorByName(catalog.AttrRowID).Length()
+		vec := containers.MakeVector(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		for i := 0; i < length; i++ {
+			vec.Append([]byte(""), false)
+		}
+		bat.AddVector(pkgcatalog.SystemColAttr_EnumValues, vec)
+	}
 	return
 }
 
@@ -830,14 +928,35 @@ func (data *CheckpointData) Close() {
 }
 
 func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
-	switch version {
-	case CheckpointVersion1:
+	if version <= CheckpointVersion1 {
 		bat := data.bats[TBLInsertIDX]
 		if bat == nil {
 			return
 		}
 		vec := data.bats[TBLInsertIDX].GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion)
 		vec.Close()
+	}
+	if version <= CheckpointVersion2 {
+		bat := data.bats[DBDeleteIDX]
+		if bat == nil {
+			return
+		}
+		vec := data.bats[DBDeleteIDX].GetVectorByName(pkgcatalog.SystemDBAttr_ID)
+		vec.Close()
+		bat = data.bats[TBLDeleteIDX]
+		if bat == nil {
+			return
+		}
+		vec = data.bats[TBLDeleteIDX].GetVectorByName(pkgcatalog.SystemRelAttr_ID)
+		vec.Close()
+	}
+	if version <= CheckpointVersion3 {
+		bat := data.bats[TBLColInsertIDX]
+		if bat == nil {
+			return
+		}
+		vec := data.bats[TBLColInsertIDX].GetVectorByName(pkgcatalog.SystemColAttr_EnumValues)
+		vec.Close()		
 	}
 }
 

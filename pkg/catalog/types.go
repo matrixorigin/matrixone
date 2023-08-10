@@ -508,6 +508,31 @@ var (
 		SystemColAttr_Seqnum,
 		SystemColAttr_EnumValues,
 	}
+	MoColumnsSchema_V1 = []string{
+		SystemColAttr_UniqName,
+		SystemColAttr_AccID,
+		SystemColAttr_DBID,
+		SystemColAttr_DBName,
+		SystemColAttr_RelID,
+		SystemColAttr_RelName,
+		SystemColAttr_Name,
+		SystemColAttr_Type,
+		SystemColAttr_Num,
+		SystemColAttr_Length,
+		SystemColAttr_NullAbility,
+		SystemColAttr_HasExpr,
+		SystemColAttr_DefaultExpr,
+		SystemColAttr_IsDropped,
+		SystemColAttr_ConstraintType,
+		SystemColAttr_IsUnsigned,
+		SystemColAttr_IsAutoIncrement,
+		SystemColAttr_Comment,
+		SystemColAttr_IsHidden,
+		SystemColAttr_HasUpdate,
+		SystemColAttr_Update,
+		SystemColAttr_IsClusterBy,
+		SystemColAttr_Seqnum,
+	}
 	MoTableMetaSchema = []string{
 		BlockMeta_ID,
 		BlockMeta_EntryState,
@@ -592,6 +617,31 @@ var (
 		types.New(types.T_int8, 0, 0),                      // att_is_clusterby
 		types.New(types.T_uint16, 0, 0),                    // att_seqnum
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // att_enum
+	}
+	MoColumnsTypes_V1 = []types.Type{
+		types.New(types.T_varchar, 256, 0),  // att_uniq_name
+		types.New(types.T_uint32, 0, 0),     // account_id
+		types.New(types.T_uint64, 0, 0),     // att_database_id
+		types.New(types.T_varchar, 256, 0),  // att_database
+		types.New(types.T_uint64, 0, 0),     // att_relname_id
+		types.New(types.T_varchar, 256, 0),  // att_relname
+		types.New(types.T_varchar, 256, 0),  // attname
+		types.New(types.T_varchar, 256, 0),  // atttyp
+		types.New(types.T_int32, 0, 0),      // attnum
+		types.New(types.T_int32, 0, 0),      // att_length
+		types.New(types.T_int8, 0, 0),       // attnotnull
+		types.New(types.T_int8, 0, 0),       // atthasdef
+		types.New(types.T_varchar, 2048, 0), // att_default
+		types.New(types.T_int8, 0, 0),       // attisdropped
+		types.New(types.T_char, 1, 0),       // att_constraint_type
+		types.New(types.T_int8, 0, 0),       // att_is_unsigned
+		types.New(types.T_int8, 0, 0),       // att_is_auto_increment
+		types.New(types.T_varchar, 2048, 0), // att_comment
+		types.New(types.T_int8, 0, 0),       // att_is_hidden
+		types.New(types.T_int8, 0, 0),       // att_has_update
+		types.New(types.T_varchar, 2048, 0), // att_update
+		types.New(types.T_int8, 0, 0),       // att_is_clusterby
+		types.New(types.T_uint16, 0, 0),     // att_seqnum
 	}
 	MoTableMetaTypes = []types.Type{
 		types.New(types.T_Blockid, 0, 0),                   // block_id
