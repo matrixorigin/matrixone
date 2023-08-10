@@ -1254,7 +1254,8 @@ message MetadataScanInfo {
 		COMPRESS_SIZE = 14;
 		ORIGIN_SIZE   = 15;
 		MIN           = 16;
-		MAX           =  17;
+		MAX           = 17;
+		SUM						= 18;
 	}
 	string ColName  = 1;
 	bytes BlockId = 2;
@@ -1274,4 +1275,5 @@ message MetadataScanInfo {
 	int64 OriginSize  = 16;
 	bytes Min          = 17;
 	bytes Max          = 18;
+	bytes Sum					 = 19;
 }

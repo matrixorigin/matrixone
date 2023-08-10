@@ -23,8 +23,9 @@ import (
 )
 
 var (
-	MetadataScanColDefs  = []*plan.ColDef{}
-	MetadataScanColTypes = []types.Type{}
+	MetadataScanColDefs   = []*plan.ColDef{}
+	MetadataScanColTypes  = []types.Type{}
+	Metadata_Rows_Cnt_Pos int32
 )
 
 func init() {
@@ -62,6 +63,7 @@ func init() {
 			tp = types.New(types.T_uuid, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_ROWS_CNT:
 			tp = types.New(types.T_int64, 0, 0)
+			Metadata_Rows_Cnt_Pos = i
 		case plan.MetadataScanInfo_NULL_CNT:
 			tp = types.New(types.T_int64, 0, 0)
 		case plan.MetadataScanInfo_COMPRESS_SIZE:
@@ -71,6 +73,8 @@ func init() {
 		case plan.MetadataScanInfo_MIN: // TODO: find a way to show this info
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
+			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		default:
 			panic("unknow types when gen metadata scan info")
