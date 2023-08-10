@@ -751,3 +751,82 @@ func TestVectorPool3(t *testing.T) {
 	vec1.Close()
 	vec2.Close()
 }
+
+func TestConstNullVector(t *testing.T) {
+	vec := NewConstNullVector(types.T_int32.ToType(), 10)
+	defer vec.Close()
+	assert.Equal(t, 10, vec.Length())
+	assert.True(t, vec.IsConstNull())
+
+	for i := 0; i < vec.Length(); i++ {
+		assert.True(t, vec.IsNull(i))
+	}
+
+	var w bytes.Buffer
+	_, err := vec.WriteTo(&w)
+	assert.NoError(t, err)
+
+	vec2 := MakeVector(types.T_int32.ToType())
+	defer vec2.Close()
+	_, err = vec2.ReadFrom(&w)
+	assert.NoError(t, err)
+	assert.Equal(t, 10, vec2.Length())
+	assert.True(t, vec2.IsConstNull())
+	for i := 0; i < vec2.Length(); i++ {
+		assert.True(t, vec2.IsNull(i))
+	}
+}
+
+func TestConstVector(t *testing.T) {
+	vec := NewConstFixed[int32](types.T_int32.ToType(), int32(1), 10)
+	defer vec.Close()
+
+	assert.Equal(t, 10, vec.Length())
+	assert.True(t, vec.IsConst())
+	assert.False(t, vec.IsConstNull())
+
+	for i := 0; i < vec.Length(); i++ {
+		v := vec.Get(i).(int32)
+		assert.Equal(t, int32(1), v)
+	}
+
+	vec2 := NewConstBytes(types.T_char.ToType(), []byte("abc"), 10)
+	defer vec2.Close()
+	assert.Equal(t, 10, vec2.Length())
+	assert.True(t, vec2.IsConst())
+	assert.False(t, vec2.IsConstNull())
+
+	for i := 0; i < vec2.Length(); i++ {
+		assert.Equal(t, []byte("abc"), vec2.Get(i).([]byte))
+	}
+
+	var w bytes.Buffer
+	_, err := vec.WriteTo(&w)
+	assert.NoError(t, err)
+
+	vec3 := MakeVector(types.T_int32.ToType())
+	defer vec3.Close()
+	_, err = vec3.ReadFrom(&w)
+	assert.NoError(t, err)
+	assert.True(t, vec3.IsConst())
+	assert.False(t, vec3.IsConstNull())
+	assert.Equal(t, 10, vec3.Length())
+	for i := 0; i < vec3.Length(); i++ {
+		assert.Equal(t, int32(1), vec3.Get(i).(int32))
+	}
+
+	w.Reset()
+	_, err = vec2.WriteTo(&w)
+	assert.NoError(t, err)
+
+	vec4 := MakeVector(types.T_char.ToType())
+	defer vec4.Close()
+	_, err = vec4.ReadFrom(&w)
+	assert.NoError(t, err)
+	assert.True(t, vec4.IsConst())
+	assert.False(t, vec4.IsConstNull())
+	assert.Equal(t, 10, vec4.Length())
+	for i := 0; i < vec4.Length(); i++ {
+		assert.Equal(t, []byte("abc"), vec4.Get(i).([]byte))
+	}
+}
