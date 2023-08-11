@@ -152,7 +152,7 @@ func (e *CheckpointEntry) Prefetch(
 	if err != nil {
 		return
 	}
-	data.ReadDNMetaBatch(ctx, e.version, reader)
+	data.ReadDNMetaBatch(ctx, e.version,e.dnLocation, reader)
 	if err = data.PrefetchFrom(
 		ctx,
 		e.version,

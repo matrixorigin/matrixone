@@ -149,6 +149,7 @@ func init() {
 		DelSchema,
 		BlkDNSchema,
 		BlkMetaSchema, // 23
+		DNMetaSchema,
 	}
 	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -175,6 +176,7 @@ func init() {
 		DelSchema,
 		BlkDNSchema,
 		BlkMetaSchema, // 23
+		DNMetaSchema,
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -201,6 +203,7 @@ func init() {
 		DelSchema,
 		BlkDNSchema,
 		BlkMetaSchema, // 23
+		DNMetaSchema,
 	}
 	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
 		MetaSchema,
@@ -234,9 +237,6 @@ func init() {
 	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
 
 	for idx, schema := range checkpointDataSchemas_V1 {
-		if schema == nil {
-			continue
-		}
 		checkpointDataRefer_V1[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
@@ -245,9 +245,6 @@ func init() {
 	}
 	checkpointDataReferVersions[CheckpointVersion1] = checkpointDataRefer_V1
 	for idx, schema := range checkpointDataSchemas_V2 {
-		if schema == nil {
-			continue
-		}
 		checkpointDataRefer_V2[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
@@ -256,9 +253,6 @@ func init() {
 	}
 	checkpointDataReferVersions[CheckpointVersion2] = checkpointDataRefer_V2
 	for idx, schema := range checkpointDataSchemas_V3 {
-		if schema == nil {
-			continue
-		}
 		checkpointDataRefer_V3[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
@@ -272,9 +266,6 @@ func init() {
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
 	var checkpointDataRefer [MaxIDX]*checkpointDataItem
 	for idx, schema := range schemas {
-		if schema == nil {
-			continue
-		}
 		checkpointDataRefer[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
@@ -1484,17 +1475,26 @@ func LoadCNSubBlkColumnsByMetaWithId(
 func (data *CheckpointData) ReadDNMetaBatch(
 	ctx context.Context,
 	version uint32,
+	location objectio.Location,
 	reader *blockio.BlockReader,
 ) (err error) {
 	if data.bats[DNMetaIDX].Length() == 0 {
-		var bats []*containers.Batch
-		item := checkpointDataReferVersions[version][DNMetaIDX]
-		bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, DNMetaIDX, reader)
-		if err != nil {
-			return
+		if version < CheckpointVersion4 {
+			var bats []*containers.Batch
+			item := checkpointDataReferVersions[version][DNMetaIDX]
+			bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, DNMetaIDX, reader)
+			if err != nil {
+				return
+			}
+			// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
+			data.bats[DNMetaIDX] = bats[0]
+		} else {
+			for i := 2; i < MetaMaxIdx; i++ {
+				location := objectio.BuildLocation(location.Name(), location.Extent(), 0, uint16(i))
+				data.bats[DNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).Append([]byte(location), false)
+				data.bats[DNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).Append(uint16(i), false)
+			}
 		}
-		// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
-		data.bats[DNMetaIDX] = bats[0]
 	}
 	return
 }
