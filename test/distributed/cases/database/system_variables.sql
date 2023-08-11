@@ -14,9 +14,9 @@ set tx_isolation = default;
 
 
 -- auto_increment_increment
--- @bvt:issue#10898
+
 show variables like 'auto%';
--- @bvt:issue
+
 show variables like 'auto_increment_increment';
 set auto_increment_increment = 2;
 show variables like 'auto_increment_increment';
