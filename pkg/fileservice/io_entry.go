@@ -27,7 +27,7 @@ func (e *IOEntry) setCachedData() error {
 	if len(e.Data) == 0 {
 		return nil
 	}
-	bs, err := e.ToCacheData(bytes.NewReader(e.Data), e.Data)
+	bs, err := e.ToCacheData(bytes.NewReader(e.Data), e.Data, DefaultCacheDataAllocator)
 	if err != nil {
 		return err
 	}
@@ -67,13 +67,14 @@ func (e *IOEntry) ReadFromOSFile(file *os.File) error {
 	return nil
 }
 
-func DataAsObject(r io.Reader, data []byte) (_ RCBytes, err error) {
-	if len(data) > 0 {
-		return RCBytesPool.GetAndCopy(data), nil
+func DataAsObject(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData CacheData, err error) {
+	if len(data) == 0 {
+		data, err = io.ReadAll(r)
+		if err != nil {
+			return
+		}
 	}
-	data, err = io.ReadAll(r)
-	if err != nil {
-		return
-	}
-	return RCBytesPool.GetAndCopy(data), nil
+	cacheData = allocator.Alloc(len(data))
+	copy(cacheData.Bytes(), data)
+	return
 }
