@@ -1453,6 +1453,7 @@ func (data *CheckpointData) PrefetchFrom(
 	if version < CheckpointVersion4 {
 		return prefetchCheckpointData(ctx, version, service, key)
 	}
+	return
 	reader, err := blockio.NewObjectReader(service, key)
 	if err != nil {
 		return
