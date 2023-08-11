@@ -534,6 +534,21 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
+	case types.T_enum:
+		if vec.IsConstNull() {
+			var zero types.Enum
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vector.MustFixedCol[types.Enum](vec)[i],
+		}
+		return
+
 	case types.T_decimal64:
 		if vec.IsConstNull() {
 			var zero types.Decimal64

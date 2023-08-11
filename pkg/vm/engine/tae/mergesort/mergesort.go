@@ -57,6 +57,8 @@ func SortBlockColumns(
 		Sort(cols[pk], numericLess[types.Datetime], sortedIdx)
 	case types.T_timestamp:
 		Sort(cols[pk], numericLess[types.Timestamp], sortedIdx)
+	case types.T_enum:
+		Sort(cols[pk], numericLess[types.Enum], sortedIdx)
 	case types.T_decimal64:
 		Sort(cols[pk], ltTypeLess[types.Decimal64], sortedIdx)
 	case types.T_decimal128:
@@ -119,6 +121,8 @@ func MergeSortedColumn(
 		ret, mapping = Merge(column, sortedIdx, numericLess[types.Datetime], fromLayout, toLayout, pool)
 	case types.T_timestamp:
 		ret, mapping = Merge(column, sortedIdx, numericLess[types.Timestamp], fromLayout, toLayout, pool)
+	case types.T_enum:
+		ret, mapping = Merge(column, sortedIdx, numericLess[types.Enum], fromLayout, toLayout, pool)
 	case types.T_decimal64:
 		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Decimal64], fromLayout, toLayout, pool)
 	case types.T_decimal128:
