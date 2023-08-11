@@ -97,7 +97,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
+		types.T_binary, types.T_varbinary, types.T_enum,
 	},
 
 	types.T_uint8: {
@@ -108,7 +108,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
+		types.T_binary, types.T_varbinary, types.T_enum,
 	},
 
 	types.T_uint16: {
@@ -119,7 +119,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
+		types.T_binary, types.T_varbinary, types.T_enum,
 	},
 
 	types.T_uint32: {
@@ -130,7 +130,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
+		types.T_binary, types.T_varbinary, types.T_enum,
 	},
 
 	types.T_uint64: {
@@ -141,7 +141,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
+		types.T_binary, types.T_varbinary, types.T_enum,
 	},
 
 	types.T_float32: {
@@ -317,6 +317,12 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_Rowid: {
 		types.T_Rowid,
 	},
+
+	types.T_enum: {
+		types.T_enum, types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
+		types.T_char, types.T_varchar, types.T_blob,
+		types.T_binary, types.T_varbinary, types.T_text,
+	},
 }
 
 func IfTypeCastSupported(sourceType, targetType types.T) bool {
@@ -409,6 +415,9 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = jsonToOthers(proc.Ctx, s, *toType, result, length)
+	case types.T_enum:
+		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
+		err = enumToOthers(proc.Ctx, s, *toType, result, length)
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
 		err = formatCastError(proc.Ctx, from, *toType, "")
@@ -731,6 +740,9 @@ func int64ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int64 to %s", toType))
 }
@@ -788,6 +800,9 @@ func uint8ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint8 to %s", toType))
 }
@@ -845,6 +860,9 @@ func uint16ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint16 to %s", toType))
 }
@@ -902,6 +920,9 @@ func uint32ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint32 to %s", toType))
 }
@@ -959,6 +980,9 @@ func uint64ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return integerToEnum(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint64 to %s", toType))
 }
@@ -1471,6 +1495,20 @@ func jsonToOthers(ctx context.Context,
 		return jsonToStr(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
+}
+
+func enumToOthers(ctx context.Context,
+	source vector.FunctionParameterWrapper[types.Enum],
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	switch toType.Oid {
+	case types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128:
+		rs := vector.MustFunctionResult[uint16](result)
+		return enumToUint16(source, rs, length)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return enumToStr(source, rs, length)
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from enum to %s", toType.String()))
 }
 
 func integerToFixFloat[T1, T2 constraints.Integer | constraints.Float](
@@ -2030,6 +2068,36 @@ func integerToTime[T constraints.Integer](
 				return moerr.NewOutOfRange(ctx, "time", "value %d", v)
 			}
 			result, err := types.ParseInt64ToTime(vI64, toType.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func integerToEnum[T constraints.Integer](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[types.Enum], length int) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Enum
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		vI64 := int64(v)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			if vI64 < 1 || vI64 > types.MaxEnumLen {
+				return moerr.NewOutOfRange(ctx, "enum", "value %d", v)
+			}
+			result, err := types.ParseIntToEnum(vI64)
 			if err != nil {
 				return err
 			}
@@ -3838,6 +3906,44 @@ func jsonToStr(
 				return err
 			}
 			if err = to.AppendBytes(val, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func enumToUint16(
+	from vector.FunctionParameterWrapper[types.Enum],
+	to *vector.FunctionResult[uint16], length int) error {
+	var i uint64
+	for i = 0; i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := to.Append(uint16(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func enumToStr(
+	from vector.FunctionParameterWrapper[types.Enum],
+	to *vector.FunctionResult[types.Varlena], length int) error {
+	var i uint64
+	for i = 0; i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			if err := to.AppendBytes([]byte(strconv.FormatUint(uint64(v), 10)), false); err != nil {
 				return err
 			}
 		}

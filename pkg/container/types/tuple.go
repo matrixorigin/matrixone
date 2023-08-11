@@ -176,7 +176,8 @@ const timestampCode = 0x43
 const decimal64Code = 0x44
 const decimal128Code = 0x45
 const stringTypeCode = 0x46
-const timeCode = 0x47 // TODO: reorder the list to put timeCode next to date type code?
+const timeCode = 0x47
+const enumCode = 0x50 // TODO: reorder the list to put timeCode next to date type code?
 
 var sizeLimits = []uint64{
 	1<<(0*8) - 1,
@@ -436,6 +437,11 @@ func (p *Packer) EncodeTimestamp(e Timestamp) {
 	p.encodeInt(int64(e))
 }
 
+func (p *Packer) EncodeEnum(e Enum) {
+	p.putByte(enumCode)
+	p.EncodeUint16(uint16(e))
+}
+
 func (p *Packer) EncodeDecimal64(e Decimal64) {
 	p.putByte(decimal64Code)
 	b := *(*[8]byte)(unsafe.Pointer(&e))
@@ -556,6 +562,8 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 		return Datetime(ret), n + 1
 	case timestampCode:
 		return Timestamp(ret), n + 1
+	case enumCode:
+		return Enum(ret), n + 1
 	default:
 		return ret, n + 1
 	}

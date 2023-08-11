@@ -144,6 +144,11 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	}
 	opts = append(opts,
 		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)))
+
+	if th.ses != nil && th.ses.GetFromRealUser() {
+		opts = append(opts,
+			client.WithUserTxn())
+	}
 	th.txnOperator, err = th.txnClient.New(
 		txnCtx,
 		th.ses.getLastCommitTS(),

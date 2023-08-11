@@ -134,7 +134,7 @@ func init() {
 		TblDNSchema,
 		DelSchema, // 7
 		TblDNSchema,
-		catalog.SystemColumnSchema,
+		catalog.SystemColumnSchema_V1,
 		DelSchema,
 		SegSchema, // 11
 		SegDNSchema,
@@ -161,7 +161,7 @@ func init() {
 		TblDNSchema,
 		DelSchema, // 7
 		TblDNSchema,
-		catalog.SystemColumnSchema,
+		catalog.SystemColumnSchema_V1,
 		DelSchema,
 		SegSchema, // 11
 		SegDNSchema,
@@ -204,6 +204,32 @@ func init() {
 		BlkDNSchema,
 		BlkMetaSchema, // 23
 		DNMetaSchema,
+	}
+	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
+		MetaSchema,
+		catalog.SystemDBSchema,
+		TxnNodeSchema,
+		DBDelSchema, // 3
+		DBDNSchema,
+		catalog.SystemTableSchema,
+		TblDNSchema,
+		TblDelSchema, // 7
+		TblDNSchema,
+		catalog.SystemColumnSchema_V1,
+		ColumnDelSchema,
+		SegSchema, // 11
+		SegDNSchema,
+		DelSchema,
+		SegDNSchema,
+		BlkMetaSchema, // 15
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 19
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema, // 23
 	}
 	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
 		MetaSchema,
@@ -728,6 +754,9 @@ func (data *CNCheckpointData) GetTableMeta(tableID uint64, version uint32) (meta
 		i = vector.OrderedFindFirstIndexInSortedSlice[uint64](tableID, tidVec)
 		if i < 0 {
 			return
+		}
+		if version <= CheckpointVersion3 {
+			data.closeVector(TBLColInsertIDX, 25, m)
 		}
 	}
 	tid := tidVec[i]

@@ -113,6 +113,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
+	param.MoCsvLineArray = make([][]string, OneBatchMaxRow)
 	return nil
 }
 
@@ -524,7 +525,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	}
 	plh := &ParseLineHandler{
 		csvReader:      newReaderWithOptions(param.reader, rune(cma), '#', true, false),
-		moCsvLineArray: make([][]string, OneBatchMaxRow),
+		moCsvLineArray: param.MoCsvLineArray,
 	}
 	return plh, nil
 }
@@ -1176,6 +1177,26 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 			}
 			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
 				return err
+			}
+		case types.T_enum:
+			d, err := strconv.ParseUint(field, 10, 16)
+			if err == nil {
+				if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
+					return err
+				}
+			} else {
+				if errors.Is(err, strconv.ErrRange) {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field, colIdx)
+				}
+				f, err := strconv.ParseFloat(field, 64)
+				if err != nil || f < 0 || f > math.MaxUint16 {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field, colIdx)
+				}
+				if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
+					return err
+				}
 			}
 		case types.T_decimal64:
 			d, err := types.ParseDecimal64(field, vec.GetType().Width, vec.GetType().Scale)
