@@ -248,7 +248,6 @@ type rowHandler struct {
 	//the begin position of writing.
 	//the range [beginWriteIndex,beginWriteIndex+3]
 	//for the length and sequenceId of the mysql protocol packet
-	//beginWriteIndex int
 	beginOffset int
 	//the bytes in the outbuffer
 	bytesInOutBuffer int
@@ -2382,6 +2381,9 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 }
 
 func beginWriteIndex(outbuf *goetty_buf.ByteBuf, offset int) int {
+	if offset < 0 {
+		panic("invalid offset")
+	}
 	return outbuf.GetReadIndex() + offset
 }
 
