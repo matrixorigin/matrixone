@@ -72,6 +72,7 @@ func SortBlockColumns(
 	case types.T_char, types.T_json, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		Sort(cols[pk], bytesLess, sortedIdx)
+		//TODO: should I Add T_array
 	default:
 		panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
 	}
