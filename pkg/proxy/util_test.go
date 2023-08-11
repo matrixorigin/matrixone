@@ -168,31 +168,31 @@ func TestParseLabel(t *testing.T) {
 			ret: nil,
 		},
 		{
-			str: "a:1",
+			str: "a=1",
 			ret: map[string]string{"a": "1"},
 		},
 		{
-			str: "a:1,",
+			str: "a=1,",
 			ret: map[string]string{"a": "1"},
 		},
 		{
-			str: "a:1,b:2",
+			str: "a=1,b=2",
 			ret: map[string]string{"b": "2", "a": "1"},
 		},
 		{
-			str: "a:1,b",
+			str: "a=1,b",
 			ret: map[string]string{"a": "1"},
 		},
 		{
-			str: "a:1,b:",
+			str: "a=1,b=",
 			ret: map[string]string{"a": "1"},
 		},
 		{
-			str: "a:1,:2",
+			str: "a=1,=2",
 			ret: map[string]string{"a": "1"},
 		},
 		{
-			str: "a:1,:",
+			str: "a=1,=",
 			ret: map[string]string{"a": "1"},
 		},
 	}
