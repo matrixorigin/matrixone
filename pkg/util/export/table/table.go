@@ -51,6 +51,12 @@ type ColType int
 const (
 	TSkip ColType = iota
 	TDatetime
+	TUint8
+	TInt8
+	TUint16
+	TInt16
+	TUint32
+	TInt32
 	TUint64
 	TInt64
 	TFloat64
@@ -210,6 +216,24 @@ func UInt64Column(name, comment string) Column {
 	return Column{
 		Name:    name,
 		ColType: TUint64,
+		Default: "0",
+		Comment: comment,
+	}
+}
+
+func Int16Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TInt16,
+		Default: "0",
+		Comment: comment,
+	}
+}
+
+func UInt16Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TUint16,
 		Default: "0",
 		Comment: comment,
 	}

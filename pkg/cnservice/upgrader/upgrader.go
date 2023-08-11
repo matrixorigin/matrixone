@@ -17,6 +17,7 @@ package upgrader
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -197,6 +198,47 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := u.UpgradeNewAddTable(ctx); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func (u *Upgrader) UpgradeNewAddTable(ctx context.Context) error {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil
+	}
+
+	for _, tbl := range needUpgradNewTable {
+		currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
+		if err != nil {
+			return err
+		}
+
+		if currentSchema != nil {
+			return nil
+		}
+
+		createSql := fmt.Sprintf(`CREATE TABLE %s.%s (
+			  table_id bigint unsigned NOT NULL,
+			  database_id bigint unsigned not null,
+			  number smallint unsigned NOT NULL,
+			  name varchar(64) NOT NULL,
+    		  partition_type varchar(50) NOT NULL,
+              partition_expression varchar(2048) NULL,
+			  description_utf8 text,
+			  comment varchar(2048) NOT NULL,
+			  options text,
+			  partition_table_name varchar(1024) NOT NULL,
+    		  PRIMARY KEY table_id (table_id, name)
+			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+
+		// Execute upgrade SQL
+		if err := exec.Exec(ctx, createSql, ie.NewOptsBuilder().Finish()); err != nil {
+			return err
+		}
+		return nil
+	}
 }
