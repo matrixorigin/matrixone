@@ -1471,7 +1471,6 @@ func LoadCNSubBlkColumnsByMetaWithId(
 }
 func (data *CheckpointData) ReadDNMetaBatch(
 	ctx context.Context,
-	location objectio.Location,
 	version uint32,
 	reader *blockio.BlockReader,
 ) (err error) {
@@ -1485,6 +1484,7 @@ func (data *CheckpointData) ReadDNMetaBatch(
 		// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
 		data.bats[MetaIDX] = bats[0]
 	}
+	return
 }
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
