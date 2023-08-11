@@ -176,7 +176,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 			require.Equal(t, tt.fields.doExport, s.exported)
 
 			stmCtx := ContextWithStatement(tt.args.ctx, s)
-			EndStatement(stmCtx, tt.args.err, 0)
+			EndStatement(stmCtx, tt.args.err, 0, 0)
 			require.Equal(t, tt.wantReportCntAfterEnd, gotCnt)
 		})
 	}
@@ -185,7 +185,8 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
-var dummyStatsArray = *statistic.NewStatsArray().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4)
+var dummyStatsArray = *statistic.NewStatsArray().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4).
+	WithOutTrafficBytes(5)
 
 var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {
@@ -320,7 +321,7 @@ func TestMergeStats(t *testing.T) {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes := []byte("[1,228295,3600.000,1,0]")
+	wantBytes := []byte("[2,228295,3600.000,1,0,0]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 	n = &StatementInfo{}
@@ -331,7 +332,7 @@ func TestMergeStats(t *testing.T) {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes = []byte("[1,228296,3601.000,1,0]")
+	wantBytes = []byte("[2,228296,3601.000,1,0,0]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 }

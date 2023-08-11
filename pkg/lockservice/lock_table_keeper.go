@@ -31,6 +31,7 @@ type lockTableKeeper struct {
 	keepLockTableBindInterval time.Duration
 	keepRemoteLockInterval    time.Duration
 	tables                    *sync.Map
+	canDoKeep                 bool
 }
 
 // NewLockTableKeeper create a locktable keeper, an internal timer is started
@@ -166,6 +167,20 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
+	if !k.canDoKeep {
+		k.tables.Range(func(key, value any) bool {
+			lb := value.(lockTable)
+			bind := lb.getBind()
+			if bind.ServiceID == k.serviceID {
+				k.canDoKeep = true
+			}
+			return true
+		})
+	}
+	if !k.canDoKeep {
+		return
+	}
+
 	req := acquireRequest()
 	defer releaseRequest(req)
 

@@ -775,6 +775,13 @@ func TestConstNullVector(t *testing.T) {
 	for i := 0; i < vec2.Length(); i++ {
 		assert.True(t, vec2.IsNull(i))
 	}
+
+	vecw := vec.Window(0, 5)
+	assert.Equal(t, 5, vecw.Length())
+	assert.True(t, vecw.IsConstNull())
+	for i := 0; i < vecw.Length(); i++ {
+		assert.True(t, vecw.IsNull(i))
+	}
 }
 
 func TestConstVector(t *testing.T) {
@@ -829,4 +836,21 @@ func TestConstVector(t *testing.T) {
 	for i := 0; i < vec4.Length(); i++ {
 		assert.Equal(t, []byte("abc"), vec4.Get(i).([]byte))
 	}
+
+	vecw := vec.Window(0, 5)
+	assert.Equal(t, 5, vecw.Length())
+	assert.True(t, vecw.IsConst())
+	assert.False(t, vecw.IsConstNull())
+	for i := 0; i < vecw.Length(); i++ {
+		assert.Equal(t, int32(1), vecw.Get(i).(int32))
+	}
+
+	vecw4 := vec4.Window(0, 5)
+	assert.Equal(t, 5, vecw4.Length())
+	assert.True(t, vecw4.IsConst())
+	assert.False(t, vecw4.IsConstNull())
+	for i := 0; i < vecw4.Length(); i++ {
+		assert.Equal(t, []byte("abc"), vecw4.Get(i).([]byte))
+	}
+
 }
