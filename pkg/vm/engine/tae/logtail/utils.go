@@ -263,7 +263,6 @@ func init() {
 		DNMetaSchema,
 	}
 
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V4
 	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
 
 	registerCheckpointDataReferVersion(CheckpointVersion1, checkpointDataSchemas_V1[:])
@@ -271,6 +270,7 @@ func init() {
 	registerCheckpointDataReferVersion(CheckpointVersion3, checkpointDataSchemas_V3[:])
 	registerCheckpointDataReferVersion(CheckpointVersion4, checkpointDataSchemas_V4[:])
 	registerCheckpointDataReferVersion(CheckpointVersion5, checkpointDataSchemas_V5[:])
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V5
 }
 
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {

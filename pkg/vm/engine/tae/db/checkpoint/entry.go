@@ -98,7 +98,7 @@ func (e *CheckpointEntry) GetLocation() objectio.Location {
 	return e.cnLocation
 }
 
-func (e *CheckpointEntry) GetVersion() uint32{
+func (e *CheckpointEntry) GetVersion() uint32 {
 	return e.version
 }
 
@@ -220,10 +220,27 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 		return
 	}
 	data := logtail.NewCNCheckpointData()
-	// FIXME
-	/*if err = data.PrefetchFrom(ctx, e.version, fs.Service, e.location); err != nil {
+	err = blockio.PrefetchMeta(fs.Service, e.cnLocation)
+	if err != nil {
 		return
-	}*/
+	}
+
+	err = data.PrefetchMetaIdx(ctx, e.version, logtail.GetMetaIdxesByVersion(e.version), e.cnLocation, fs.Service)
+	if err != nil {
+		return
+	}
+	err = data.InitMetaIdx(ctx, e.version, reader, e.cnLocation, common.DefaultAllocator)
+	if err != nil {
+		return
+	}
+	err = data.PrefetchMetaFrom(ctx, e.version, e.cnLocation, fs.Service, tid)
+	if err != nil {
+		return
+	}
+	err = data.PrefetchFrom(ctx, e.version, fs.Service, e.cnLocation, tid)
+	if err != nil {
+		return
+	}
 	var bats []*batch.Batch
 	if bats, err = data.ReadFromData(ctx, tid, e.cnLocation, reader, e.version, common.DefaultAllocator); err != nil {
 		return
