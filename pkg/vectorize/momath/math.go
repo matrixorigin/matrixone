@@ -49,6 +49,14 @@ func Exp(v float64) (float64, error) {
 	return math.Exp(v), nil
 }
 
+func Sqrt(v float64) (float64, error) {
+	if v < 0 {
+		return 0, moerr.NewInvalidArgNoCtx("Sqrt", v)
+	} else {
+		return math.Sqrt(v), nil
+	}
+}
+
 func Ln(v float64) (float64, error) {
 	if v <= 0 {
 		return 0, moerr.NewInvalidArgNoCtx("ln", v)

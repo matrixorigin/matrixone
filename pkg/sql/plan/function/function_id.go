@@ -187,6 +187,7 @@ const (
 	SPACE
 	SPLIT         // SPLIT
 	SPLIT_PART    // SPLIT_PART
+	SQRT          // SQRT
 	STARCOUNT     // STARTCOUNT
 	STARTSWITH    // STARTSWITH
 	STDDEV_POP    // STDDEV_POP
@@ -312,6 +313,10 @@ const (
 	INTERNAL_COLUMN_CHARACTER_SET
 	INTERNAL_AUTO_INCREMENT
 
+	// be uesed: enum
+	CAST_INDEX_TO_VALUE
+	CAST_VALUE_TO_INDEX
+
 	//Sequence function
 	NEXTVAL
 	SETVAL
@@ -436,6 +441,7 @@ var functionIdRegister = map[string]int32{
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
+	"sqrt":                           SQRT,
 	"to_seconds":                     TO_SECONDS,
 	"day":                            DAY,
 	"to_days":                        TO_DAYS,
@@ -560,4 +566,6 @@ var functionIdRegister = map[string]int32{
 	"setval":                         SETVAL,
 	"currval":                        CURRVAL,
 	"lastval":                        LASTVAL,
+	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
+	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 }

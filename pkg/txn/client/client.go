@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"math"
+	gotrace "runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -207,6 +208,8 @@ func (client *txnClient) New(
 	minTS timestamp.Timestamp,
 	options ...TxnOption) (TxnOperator, error) {
 	// we take a token from the limiter to control the number of transactions created per second.
+	_, task := gotrace.NewTask(context.TODO(), "transaction.New")
+	defer task.End()
 	client.limiter.Take()
 
 	ts, err := client.determineTxnSnapshot(ctx, minTS)
@@ -247,6 +250,8 @@ func (client *txnClient) New(
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.NewWithSnapshot")
+	defer task.End()
 	op, err := newTxnOperatorWithSnapshot(client.sender, snapshot)
 	if err != nil {
 		return nil, err
@@ -263,6 +268,8 @@ func (client *txnClient) Close() error {
 }
 
 func (client *txnClient) MinTimestamp() timestamp.Timestamp {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.MinTimestamp")
+	defer task.End()
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 
@@ -279,6 +286,8 @@ func (client *txnClient) MinTimestamp() timestamp.Timestamp {
 func (client *txnClient) WaitLogTailAppliedAt(
 	ctx context.Context,
 	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.WaitLogTailAppliedAt")
+	defer task.End()
 	if client.timestampWaiter == nil {
 		return timestamp.Timestamp{}, nil
 	}

@@ -15,14 +15,17 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"go/constant"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const (
-	moRecursiveLevelCol      = "__mo_recursive_level_col"
-	moDefaultRecursionMax    = 100
-	moCheckRecursionLevelFun = "mo_check_level"
+	moRecursiveLevelCol       = "__mo_recursive_level_col"
+	moDefaultRecursionMax     = 100
+	moCheckRecursionLevelFun  = "mo_check_level"
+	moEnumCastIndexToValueFun = "cast_index_to_value"
+	moEnumCastValueToIndexFun = "cast_value_to_index"
 )
 
 func makeZeroRecursiveLevel() tree.SelectExpr {
