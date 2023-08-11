@@ -451,6 +451,8 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 	case types.T_timestamp:
 		val := vector.MustFixedCol[types.Timestamp](vec)[0]
 		return val.String2(ses.GetTimeZone(), vec.GetType().Scale), nil
+	case types.T_enum:
+		return vector.MustFixedCol[types.Enum](vec)[0], nil
 	default:
 		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
 	}
@@ -461,6 +463,9 @@ type statementStatus int
 const (
 	success statementStatus = iota
 	fail
+	session_id = "session_id"
+
+	statement_id = "statement_id"
 )
 
 func (s statementStatus) String() string {
@@ -489,11 +494,12 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	outBytes := ses.GetMysqlProtocol().CalculateOutTrafficBytes()
 	if status == success {
-		motrace.EndStatement(ctx, nil, ses.sentRows.Load())
+		motrace.EndStatement(ctx, nil, ses.sentRows.Load(), outBytes)
 		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
-		motrace.EndStatement(ctx, err, ses.sentRows.Load())
+		motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes)
 		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 }
@@ -503,16 +509,14 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	sessionId := ""
-	statementId := ""
 	if ses != nil {
-		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
 		if ses.tStmt != nil {
-			statementId = string(ses.tStmt.StatementID[:])
+			fields = append(fields, zap.ByteString(session_id, ses.tStmt.SessionID[:]))
+			fields = append(fields, zap.ByteString(statement_id, ses.tStmt.StatementID[:]))
+		} else {
+			fields = append(fields, zap.ByteString(session_id, ses.GetUUID()))
 		}
 	}
-	fields = append(fields, zap.String("session_id", sessionId))
-	fields = append(fields, zap.String("statement_id", statementId))
 	logutil.Info(msg, fields...)
 }
 
@@ -521,16 +525,14 @@ func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	sessionId := ""
-	statementId := ""
 	if ses != nil {
-		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
 		if ses.tStmt != nil {
-			statementId = string(ses.tStmt.StatementID[:])
+			fields = append(fields, zap.ByteString(session_id, ses.tStmt.SessionID[:]))
+			fields = append(fields, zap.ByteString(statement_id, ses.tStmt.StatementID[:]))
+		} else {
+			fields = append(fields, zap.ByteString(session_id, ses.GetUUID()))
 		}
 	}
-	fields = append(fields, zap.String("session_id", sessionId))
-	fields = append(fields, zap.String("statement_id", statementId))
 	logutil.Debug(msg, fields...)
 }
 
@@ -539,16 +541,14 @@ func logError(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	sessionId := ""
-	statementId := ""
 	if ses != nil {
-		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
 		if ses.tStmt != nil {
-			statementId = string(ses.tStmt.StatementID[:])
+			fields = append(fields, zap.ByteString(session_id, ses.tStmt.SessionID[:]))
+			fields = append(fields, zap.ByteString(statement_id, ses.tStmt.StatementID[:]))
+		} else {
+			fields = append(fields, zap.ByteString(session_id, ses.GetUUID()))
 		}
 	}
-	fields = append(fields, zap.String("session_id", sessionId))
-	fields = append(fields, zap.String("statement_id", statementId))
 	logutil.Error(msg, fields...)
 }
 

@@ -16,24 +16,24 @@ package store
 
 import (
 	"math/rand"
-	"os"
 	"strconv"
 	"testing"
 
 	// "net/http"
 	// _ "net/http/pprof"
 
-	// "github.com/lni/vfs"
-	// "github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/stretchr/testify/assert"
+)
+
+const (
+	ModuleName = "logstore"
 )
 
 // var buf []byte
@@ -47,9 +47,8 @@ import (
 // }
 
 func newTestDriver(t *testing.T, size int) driver.Driver {
-	dir := "/tmp/logstore/teststore/store"
-	name := "mock"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := "test"
 	cfg := &batchstoredriver.StoreCfg{
 		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(size),
 	}
@@ -59,8 +58,8 @@ func newTestDriver(t *testing.T, size int) driver.Driver {
 }
 
 func restartTestDriver(t *testing.T, size int) driver.Driver {
-	dir := "/tmp/logstore/teststore/store"
-	name := "mock"
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := "test"
 	cfg := &batchstoredriver.StoreCfg{
 		RotateChecker: batchstoredriver.NewMaxSizeRotateChecker(size),
 	}

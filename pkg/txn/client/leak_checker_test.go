@@ -38,9 +38,7 @@ func TestLeakCheck(t *testing.T) {
 			func(txnID []byte, createAt time.Time, createBy string) {
 				close(cc)
 			}))
-	if tc, ok := c.(TxnClientWithFeature); ok {
-		tc.Resume()
-	}
+	c.Resume()
 	_, err := c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	<-cc
@@ -61,9 +59,7 @@ func TestLeakCheckWithNoLeak(t *testing.T) {
 			func(txnID []byte, createAt time.Time, createBy string) {
 				n++
 			}))
-	if tc, ok := c.(TxnClientWithFeature); ok {
-		tc.Resume()
-	}
+	c.Resume()
 	op, err := c.New(ctx, newTestTimestamp(0))
 	require.NoError(t, err)
 	require.NoError(t, op.Rollback(ctx))

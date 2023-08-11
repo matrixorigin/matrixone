@@ -44,13 +44,9 @@ func (lpb *listPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 	if len(partitionType.ColumnList) == 0 {
 		//PARTITION BY LIST(expr)
 		partitionDef.Type = plan.PartitionType_LIST
-		planExpr, err := partitionBinder.BindExpr(partitionType.Expr, 0, true)
+		err := buildPartitionExpr(ctx, tableDef, partitionBinder, partitionDef, partitionType.Expr)
 		if err != nil {
 			return err
-		}
-		partitionDef.PartitionExpr = &plan.PartitionExpr{
-			Expr:    planExpr,
-			ExprStr: tree.String(partitionType.Expr, dialect.MYSQL),
 		}
 	} else {
 		//PARTITION BY LIST COLUMNS(col1,col2,...)

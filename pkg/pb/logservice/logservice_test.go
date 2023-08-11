@@ -474,7 +474,7 @@ func TestCNWorkStateUpdate(t *testing.T) {
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
 		Role:           metadata.CNRole_AP,
-		WorkState:      metadata.WorkState_Draining,
+		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
 	})
 }
@@ -572,7 +572,7 @@ func TestCNStateLabelPatch(t *testing.T) {
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
 		Role:           metadata.CNRole_AP,
-		WorkState:      metadata.WorkState_Drained,
+		WorkState:      metadata.WorkState_Working,
 		Labels: map[string]metadata.LabelList{
 			"role": {
 				Labels: []string{"r1"},

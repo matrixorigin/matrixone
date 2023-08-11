@@ -16,7 +16,9 @@ package testutils
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"testing"
 	"time"
@@ -57,7 +59,9 @@ func WaitChTimeout[T any](
 }
 
 func GetDefaultTestPath(module string, t *testing.T) string {
-	return filepath.Join("/tmp", module, t.Name())
+	usr, _ := user.Current()
+	dirName := fmt.Sprintf("%s-ut-workspace", usr.Username)
+	return filepath.Join("/tmp", dirName, module, t.Name())
 }
 
 func MakeDefaultTestPath(module string, t *testing.T) string {

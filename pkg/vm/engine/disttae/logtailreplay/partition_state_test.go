@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func BenchmarkPartitionState(b *testing.B) {
+func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
 	partition := NewPartition()
 	end := make(chan struct{})
 	defer func() {

@@ -663,7 +663,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
+
+		insertSQL2, err := makeInsertTablePartitionsSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
+		if err != nil {
+			return err
+		}
+		err = c.runSql(insertSQL2)
+		if err != nil {
+			return err
+		}
 	}
+
 	return maybeCreateAutoIncrement(
 		c.ctx,
 		dbSource,
@@ -1444,6 +1454,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				AutoIncrement: col.Typ.GetAutoIncr(),
 				IsHidden:      col.Hidden,
 				Seqnum:        uint16(col.Seqnum),
+				EnumVlaues:    colTyp.GetEnumvalues(),
 			},
 		}
 	}

@@ -30,13 +30,17 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -46,6 +50,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	errors2 "github.com/pkg/errors"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -774,6 +780,7 @@ var (
 		"mo_mysql_compatibility_mode": 0,
 		catalog.MOAutoIncrTable:       0,
 		"mo_indexes":                  0,
+		"mo_table_partitions":         0,
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
 	}
@@ -788,7 +795,7 @@ var (
 	);`, catalog.MOAutoIncrTable)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
-	createMoIndexesSql = `create table mo_indexes(
+	createMoIndexesSql = fmt.Sprintf(`create table %s(
 				id 			bigint unsigned not null,
 				table_id 	bigint unsigned not null,
 				database_id bigint unsigned not null,
@@ -802,7 +809,21 @@ var (
 				options     text,
 				index_table_name varchar(5000),
 				primary key(id, column_name)
-			);`
+			);`, catalog.MO_INDEXES)
+
+	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
+			  table_id bigint unsigned NOT NULL,
+			  database_id bigint unsigned not null,
+			  number smallint unsigned NOT NULL,
+			  name varchar(64) NOT NULL,
+        	  partition_type varchar(50) NOT NULL,
+              partition_expression varchar(2048) NULL,
+			  description_utf8 text,
+			  comment varchar(2048) NOT NULL,
+			  options text,
+			  partition_table_name varchar(1024) NOT NULL,
+			  PRIMARY KEY table_id (table_id, name)
+			);`, catalog.MO_TABLE_PARTITIONS)
 
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
@@ -950,10 +971,11 @@ var (
 		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
 		`drop table if exists mo_catalog.mo_stages;`,
 	}
-	dropMoPubsSql     = `drop table if exists mo_catalog.mo_pubs;`
-	deleteMoPubsSql   = `delete from mo_catalog.mo_pubs;`
-	dropAutoIcrColSql = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
-	dropMoIndexes     = `drop table if exists mo_catalog.mo_indexes;`
+	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
+	deleteMoPubsSql       = `delete from mo_catalog.mo_pubs;`
+	dropAutoIcrColSql     = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
+	dropMoIndexes         = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
+	dropMoTablePartitions = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -2925,6 +2947,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(true)
 				}
 			}
+			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusRestricted.String(), ses.GetParameterUnit().QueryService)
+			if err != nil {
+				return err
+			}
 		}
 
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusOpen && accountStatus == tree.AccountStatusRestricted.String() {
@@ -2933,6 +2959,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 				for rt := range rtMap {
 					rt.setResricted(false)
 				}
+			}
+			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusOpen.String(), ses.GetParameterUnit().QueryService)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -4078,6 +4108,12 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 
 		//step 11: drop mo_catalog.mo_indexes under general tenant
 		err = bh.Exec(deleteCtx, dropMoIndexes)
+		if err != nil {
+			return err
+		}
+
+		// drop mo_catalog.mo_table_partitions under general tenant
+		err = bh.Exec(deleteCtx, dropMoTablePartitions)
 		if err != nil {
 			return err
 		}
@@ -7481,6 +7517,12 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if err != nil {
 			return err
 		}
+
+		err = bh.Exec(newTenantCtx, createMoTablePartitionsSql)
+		if err != nil {
+			return err
+		}
+
 		err = bh.Exec(newTenantCtx, createAutoTableSql)
 		if err != nil {
 			return err
@@ -8889,4 +8931,73 @@ func addInitSystemVariablesSql(accountId int, accountName, variable_name string,
 	}
 
 	return initMoMysqlCompatibilityMode
+}
+
+// alterSessionStatus alter all nodes session status which the tenant has been alter restricted or open.
+func alterSessionStatus(ctx context.Context, curtenant, tenant string, user string, status string, qs queryservice.QueryService) error {
+	var nodes []string
+	labels := clusterservice.NewSelector().SelectByLabel(
+		map[string]string{"account": tenant}, clusterservice.EQ)
+	sysTenant := isSysTenant(curtenant)
+	if sysTenant {
+		disttae.SelectForSuperTenant(clusterservice.NewSelector(), user, nil,
+			func(s *metadata.CNService) {
+				nodes = append(nodes, s.QueryAddress)
+			})
+	} else {
+		disttae.SelectForCommonTenant(labels, nil, func(s *metadata.CNService) {
+			nodes = append(nodes, s.QueryAddress)
+		})
+	}
+	nodesLeft := len(nodes)
+
+	type nodeResponse struct {
+		nodeAddr string
+		response interface{}
+		err      error
+	}
+	responseChan := make(chan nodeResponse, nodesLeft)
+
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var retErr error
+	for _, node := range nodes {
+		// Invalid node address, ignore it.
+		if len(node) == 0 {
+			nodesLeft--
+			continue
+		}
+
+		go func(addr string) {
+			req := qs.NewRequest(query.CmdMethod_AlterAccount)
+			req.AlterAccountRequest = &query.AlterAccountRequest{
+				Tenant:    tenant,
+				SysTenant: isSysTenant(tenant),
+				Status:    status,
+			}
+			resp, err := qs.SendMessage(ctx, addr, req)
+			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
+		}(node)
+	}
+
+	// Wait for all responses.
+	for nodesLeft > 0 {
+		select {
+		case res := <-responseChan:
+			if res.err != nil && retErr != nil {
+				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+			} else {
+				queryResp, ok := res.response.(*query.Response)
+
+				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
+					retErr = moerr.NewInternalError(ctx, "alter account failed")
+				}
+			}
+		case <-ctx.Done():
+			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+		}
+		nodesLeft--
+	}
+
+	return retErr
 }

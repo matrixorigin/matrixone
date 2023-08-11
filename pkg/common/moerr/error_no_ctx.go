@@ -284,6 +284,10 @@ func NewDeadLockDetectedNoCtx() *Error {
 	return newError(Context(), ErrDeadLockDetected)
 }
 
+func NewDeadlockCheckBusyNoCtx() *Error {
+	return newError(Context(), ErrDeadlockCheckBusy)
+}
+
 func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }
@@ -306,4 +310,8 @@ func NewProcedureAlreadyExistsNoCtx(f string) *Error {
 
 func NewTxnNeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnNeedRetry)
+}
+
+func NewTxnCannotRetryNoCtx() *Error {
+	return newError(Context(), ErrTxnCannotRetry)
 }

@@ -17,6 +17,7 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
@@ -400,6 +401,10 @@ func CharsetType(oid T) uint8 {
 	}
 }
 
+func TypeSize(oid T) int {
+	return oid.TypeLen()
+}
+
 func (t *Type) SetNotNull(b bool) {
 	if b {
 		t.notNull = 1
@@ -492,7 +497,6 @@ func (t Type) String() string {
 	return t.Oid.String()
 }
 
-// DescString No usage
 func (t Type) DescString() string {
 	switch t.Oid {
 	case T_char:
@@ -582,6 +586,8 @@ func (t T) ToType() Type {
 	case T_varbinary:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarBinaryLen
+	case T_enum:
+		typ.Size = 2
 	case T_any:
 		// XXX I don't know about this one ...
 		typ.Size = 0
@@ -661,6 +667,8 @@ func (t T) String() string {
 		return "ARRAY FLOAT"
 	case T_array_float64:
 		return "ARRAY DOUBLE"
+	case T_enum:
+		return "ENUM"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -728,6 +736,8 @@ func (t T) OidString() string {
 		return "T_Blockid"
 	case T_interval:
 		return "T_interval"
+	case T_enum:
+		return "T_enum"
 	case T_array_float32:
 		return "T_array_float32"
 	case T_array_float64:
@@ -779,6 +789,8 @@ func (t T) TypeLen() int {
 		return BlockidSize
 	case T_tuple, T_interval:
 		return 0
+	case T_enum:
+		return 2
 	}
 	panic(fmt.Sprintf("unknown type %d", t))
 }
@@ -812,6 +824,8 @@ func (t T) FixedLength() int {
 		return BlockidSize
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
 		return -24
+	case T_enum:
+		return 2
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
 }

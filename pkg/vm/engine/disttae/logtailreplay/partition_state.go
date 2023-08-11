@@ -633,15 +633,18 @@ func (p *PartitionState) BlockVisible(blockID types.Blockid, ts types.TS) bool {
 	return entry.Visible(ts)
 }
 
-func (p *PartitionState) AppendCheckpoint(checkpoint string) {
+func (p *PartitionState) AppendCheckpoint(checkpoint string, partiton *Partition) {
+	if partiton.checkpointConsumed.Load() {
+		panic("checkpoints already consumed")
+	}
 	p.checkpoints = append(p.checkpoints, checkpoint)
 }
 
-func (p *PartitionState) ConsumeCheckpoints(
-	fn func(checkpoint string) error,
+func (p *PartitionState) consumeCheckpoints(
+	fn func(checkpoint string, state *PartitionState) error,
 ) error {
 	for _, checkpoint := range p.checkpoints {
-		if err := fn(checkpoint); err != nil {
+		if err := fn(checkpoint, p); err != nil {
 			return err
 		}
 	}

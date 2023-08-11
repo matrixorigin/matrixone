@@ -200,6 +200,7 @@ const (
 	ErrDuplicateKey              uint16 = 20627
 	ErrTxnNeedRetry              uint16 = 20628
 	ErrTAENeedRetry              uint16 = 20629
+	ErrTxnCannotRetry            uint16 = 20630
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -208,6 +209,8 @@ const (
 	ErrLockTableBindChanged uint16 = 20702
 	// ErrLockTableNotFound lock table not found on remote lock service instance
 	ErrLockTableNotFound uint16 = 20703
+	// ErrDeadlockCheckBusy deadlock busy error, cannot check deadlock.
+	ErrDeadlockCheckBusy uint16 = 20704
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -388,11 +391,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 	ErrTxnNeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
 	ErrTAENeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae need retry"},
+	ErrTxnCannotRetry:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
-	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind chaged"},
+	ErrLockTableBindChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
 	ErrLockTableNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
+	ErrDeadlockCheckBusy:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -1020,8 +1025,16 @@ func NewTxnNeedRetry(ctx context.Context) *Error {
 	return newError(ctx, ErrTxnNeedRetry)
 }
 
+func NewTxnCannotRetry(ctx context.Context) *Error {
+	return newError(ctx, ErrTxnCannotRetry)
+}
+
 func NewDeadLockDetected(ctx context.Context) *Error {
 	return newError(ctx, ErrDeadLockDetected)
+}
+
+func NewDeadlockCheckBusy(ctx context.Context) *Error {
+	return newError(ctx, ErrDeadlockCheckBusy)
 }
 
 func NewLockTableBindChanged(ctx context.Context) *Error {

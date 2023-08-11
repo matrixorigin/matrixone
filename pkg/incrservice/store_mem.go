@@ -49,7 +49,7 @@ func (s *memStore) Create(
 	if txnOp != nil {
 		m = make(map[uint64][]AutoColumn)
 		s.uncommitted[string(txnOp.Txn().ID)] = m
-		txnOp.(client.EventableTxnOperator).AppendEventCallback(
+		txnOp.AppendEventCallback(
 			client.ClosedEvent,
 			func(txnMeta txn.TxnMeta) {
 				s.Lock()

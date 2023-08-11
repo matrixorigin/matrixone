@@ -181,6 +181,7 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
+	syncCommittedTSCount uint64
 }
 
 type Pos struct {
@@ -274,21 +275,10 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
 
-	// For RC isolation, update the snapshot TS of transaction for each statement including
-	// the first one. Means that, the timestamp of the first statement is not the transaction's
-	// begin timestamp, but its own timestamp.
-	if !commit && txn.meta.IsRCIsolation() && txn.GetSQLCount() > 0 {
-		if err := txn.op.UpdateSnapshot(
-			ctx,
-			timestamp.Timestamp{}); err != nil {
-			return err
-		}
-		txn.resetSnapshot()
-	}
-	return nil
+	return txn.handleRCSnapshot(ctx, commit)
 }
 
-// Adjust
+// Adjust adjust writes order
 func (txn *Transaction) Adjust() error {
 	txn.Lock()
 	defer txn.Unlock()
@@ -327,7 +317,7 @@ func (txn *Transaction) adjustUpdateOrderLocked() error {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	// If has s3 operation, can not rollback.
 	if txn.hasS3Op.Load() {
-		return moerr.NewTxnWWConflict(ctx)
+		return moerr.NewTxnCannotRetry(ctx)
 	}
 
 	txn.Lock()
@@ -368,6 +358,29 @@ func (txn *Transaction) IncrSQLCount() {
 
 func (txn *Transaction) GetSQLCount() uint64 {
 	return txn.sqlCount.Load()
+}
+
+// For RC isolation, update the snapshot TS of transaction for each statement.
+// only 2 cases need to reset snapshot
+// 1. cn sync latest commit ts from mo_ctl
+// 2. not first sql
+func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error {
+	needResetSnapshot := false
+	newTimes := txn.proc.TxnClient.GetSyncLatestCommitTSTimes()
+	if newTimes > txn.syncCommittedTSCount {
+		txn.syncCommittedTSCount = newTimes
+		needResetSnapshot = true
+	}
+	if !commit && txn.meta.IsRCIsolation() &&
+		(txn.GetSQLCount() > 1 || needResetSnapshot) {
+		if err := txn.op.UpdateSnapshot(
+			ctx,
+			timestamp.Timestamp{}); err != nil {
+			return err
+		}
+		txn.resetSnapshot()
+	}
+	return nil
 }
 
 // Entry represents a delete/insert
@@ -500,6 +513,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	seqnum          uint16
+	enumValues      string
 }
 
 type withFilterMixin struct {

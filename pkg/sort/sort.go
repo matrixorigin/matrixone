@@ -193,6 +193,13 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(col, os, genericGreater[types.Timestamp])
 		}
+	case types.T_enum:
+		col := vector.MustFixedCol[types.Enum](vec)
+		if !desc {
+			genericSort(col, os, genericLess[types.Enum])
+		} else {
+			genericSort(col, os, genericGreater[types.Enum])
+		}
 	case types.T_decimal64:
 		col := vector.MustFixedCol[types.Decimal64](vec)
 		if !desc {

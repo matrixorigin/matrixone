@@ -29,6 +29,7 @@ var (
 	defaultSendQueueSize         = 10240
 	defaultBufferSize            = 1024
 	defaultPayloadCopyBufferSize = 16 * 1024
+	defaultMaxMessageSize        = 1024 * 1024 * 100 // 100MB
 )
 
 // Config rpc client config
@@ -102,6 +103,9 @@ func (c *Config) Adjust() {
 	}
 	if c.ServerBufferQueueSize == 0 {
 		c.ServerBufferQueueSize = 100000
+	}
+	if c.MaxMessageSize == 0 {
+		c.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
 	}
 }
 

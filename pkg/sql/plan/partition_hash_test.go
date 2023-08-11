@@ -217,6 +217,14 @@ func TestHashPartitionError(t *testing.T) {
 			job_code INT,
 			store_id INT
 		) PARTITION BY HASH(store_id) PARTITIONS 102400000000;`,
+
+		`create table p_hash_table_03(
+				col1 bigint ,
+				col2 date default '1970-01-01',
+				col3 varchar(30)
+			)
+			partition by hash(col4)
+			partitions 8;`,
 	}
 
 	mock := NewMockOptimizer(false)

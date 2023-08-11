@@ -149,7 +149,7 @@ func TestCompareUuid(t *testing.T) {
 		name   string
 		left   string
 		right  string
-		expect int64
+		expect int
 	}{
 		{
 			name:   "test01",

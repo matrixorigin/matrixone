@@ -982,7 +982,7 @@ func updatePartitionOfPush(
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
-			state.AppendCheckpoint(tl.CkpLocation)
+			state.AppendCheckpoint(tl.CkpLocation, partition)
 		}
 
 		err = consumeLogTailOfPushWithLazyLoad(
