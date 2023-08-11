@@ -724,11 +724,37 @@ func LoadCheckpointEntries(
 
 	for i := range objectLocations {
 		data := NewCNCheckpointData()
-		err := data.PrefetchFrom(ctx, versions[i], fs, objectLocations[i], readers[i], tableID)
+		meteIdxSchema := checkpointDataReferVersions[versions[i]][MetaIDX]
+		idxes := make([]uint16, len(meteIdxSchema.attrs))
+		for attr := range meteIdxSchema.attrs {
+			idxes[attr] = uint16(attr)
+		}
+		err := data.PrefetchMetaIdx(ctx, versions[i],idxes, objectLocations[i], fs)
 		if err != nil {
 			return nil, nil, err
 		}
 		datas[i] = data
+	}
+
+	for i := range datas {
+		err := datas[i].InitMetaIdx(ctx,versions[i], readers[i])
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	for i := range datas {
+		err := datas[i].PrefetchMetaFrom(ctx, versions[i], fs, tableID)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	for i := range datas {
+		err := datas[i].PrefetchFrom(ctx, versions[i], fs, locations[i],tableID)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	closeCBs := make([]func(), 0)

@@ -587,7 +587,7 @@ func swithCheckpointIdx(i uint16, tableID uint64) uint16 {
 	return idx
 }
 
-func (data *CNCheckpointData) initMetaIdx(ctx context.Context, version uint32, reader *blockio.BlockReader) error {
+func (data *CNCheckpointData) InitMetaIdx(ctx context.Context, version uint32, reader *blockio.BlockReader) error {
 	if data.bats[MetaIDX] == nil {
 		metaIdx := checkpointDataReferVersions[version][MetaIDX]
 		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
@@ -599,18 +599,61 @@ func (data *CNCheckpointData) initMetaIdx(ctx context.Context, version uint32, r
 	return nil
 }
 
+func (data *CNCheckpointData) PrefetchMetaIdx(
+	ctx context.Context,
+	version uint32,
+	idxes []uint16,
+	key objectio.Location,
+	service fileservice.FileService,
+) (err error) {
+	var pref blockio.PrefetchParams
+	if version < CheckpointVersion4 {
+		pref, err = blockio.BuildPrefetchParams(service, key)
+		pref.AddBlock(idxes, []uint16{key.ID()})
+	} else {
+		pref, err = blockio.BuildSubPrefetchParams(service, key)
+		pref.AddBlockWithType(idxes, []uint16{key.ID()}, MetaIDX)
+	}
+	return blockio.PrefetchWithMerged(pref)
+}
+
+func (data *CNCheckpointData) PrefetchMetaFrom(
+	ctx context.Context,
+	version uint32,
+	service fileservice.FileService,
+	tableID uint64) (err error) {
+	meta := data.GetTableMeta(tableID, version)
+	if meta == nil {
+		return
+	}
+	var locations map[string]objectio.Location
+	for _, table := range meta.tables {
+		if table == nil {
+			continue
+		}
+		it := table.locations.MakeIterator()
+		for it.HasNext() {
+			block := it.Next()
+			name := block.GetLocation().Name().String()
+			if locations[name] != nil {
+				locations[name] = block.GetLocation()
+			}
+		}
+	}
+	for _, location := range locations {
+		err = blockio.PrefetchMeta(service, location)
+	}
+	return err
+}
+
 func (data *CNCheckpointData) PrefetchFrom(
 	ctx context.Context,
 	version uint32,
 	service fileservice.FileService,
 	key objectio.Location,
-	reader *blockio.BlockReader,
 	tableID uint64) (err error) {
 	if version < CheckpointVersion4 {
 		return prefetchCheckpointData(ctx, version, service, key)
-	}
-	if err = data.initMetaIdx(ctx, version, reader); err != nil {
-		return
 	}
 	meta := data.GetTableMeta(tableID, version)
 	if meta == nil {
@@ -645,7 +688,7 @@ func (data *CNCheckpointData) PrefetchFrom(
 					return
 				}
 			}
-			pref.AddSubBlock(idxes, []uint16{block.GetID()}, idx)
+			pref.AddBlockWithType(idxes, []uint16{block.GetID()}, idx)
 		}
 	}
 	return blockio.PrefetchWithMerged(pref)
@@ -801,6 +844,7 @@ func (data *CNCheckpointData) fillInMetaBatchWithLocation(location objectio.Loca
 	data.bats[MetaIDX].Vecs[Checkpoint_Meta_Segment_LOC_IDX] = segVec
 	return
 }
+
 func (data *CNCheckpointData) ReadFromData(
 	ctx context.Context,
 	tableID uint64,
@@ -809,8 +853,7 @@ func (data *CNCheckpointData) ReadFromData(
 	version uint32,
 	m *mpool.MPool,
 ) (dataBats []*batch.Batch, err error) {
-
-	if err = data.initMetaIdx(ctx, version, reader); err != nil {
+	if err = data.InitMetaIdx(ctx, version, reader); err != nil {
 		return
 	}
 	if version <= CheckpointVersion3 {
