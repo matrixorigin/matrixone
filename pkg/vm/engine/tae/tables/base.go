@@ -217,7 +217,6 @@ func (blk *baseBlock) loadPersistedDeletes(ctx context.Context) (bat *containers
 	if location.IsEmpty() {
 		return
 	}
-	logutil.Infof("blk.meta.GetDeltaLoc() is %v", location.String())
 	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
 	bat, persistedByCN, err = LoadPersistedDeletes(
 		ctx,

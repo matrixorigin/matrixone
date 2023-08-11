@@ -689,7 +689,7 @@ func LoadCheckpointEntries(
 	}
 	now := time.Now()
 	defer func() {
-		logutil.Debugf("LoadCheckpointEntries latency: %v", time.Since(now))
+		logutil.Infof("LoadCheckpointEntries latency: %v", time.Since(now))
 	}()
 	locationsAndVersions := strings.Split(metLoc, ";")
 	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
