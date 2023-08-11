@@ -16,6 +16,7 @@ package partition
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -127,6 +128,8 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		return genericPartition[types.Time](sels, diffs, partitions, vec)
 	case types.T_timestamp:
 		return genericPartition[types.Timestamp](sels, diffs, partitions, vec)
+	case types.T_enum:
+		return genericPartition[types.Enum](sels, diffs, partitions, vec)
 	case types.T_decimal64:
 		return genericPartition[types.Decimal64](sels, diffs, partitions, vec)
 	case types.T_decimal128:
