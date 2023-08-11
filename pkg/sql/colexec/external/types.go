@@ -112,6 +112,5 @@ func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Re
 	rCsv.LazyQuotes = lazyQt
 	rCsv.TrimLeadingSpace = tls
 	rCsv.FieldsPerRecord = -1
-	rCsv.ReuseRecord = true
 	return rCsv
 }
