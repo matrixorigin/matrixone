@@ -956,7 +956,7 @@ func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
 			return
 		}
 		vec := data.bats[TBLColInsertIDX].GetVectorByName(pkgcatalog.SystemColAttr_EnumValues)
-		vec.Close()		
+		vec.Close()
 	}
 }
 
