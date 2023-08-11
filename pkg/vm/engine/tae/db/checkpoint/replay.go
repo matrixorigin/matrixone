@@ -101,7 +101,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	readfn := func(i int, prefetch bool) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
-		metaloc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		cnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
 		isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
 		typ := ET_Global
 		if isIncremental {
@@ -113,13 +113,20 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		} else {
 			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
 		}
+		var dnLoc objectio.Location
+		if version <= logtail.CheckpointVersion3 {
+			dnLoc = cnLoc
+		} else {
+			dnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
+		}
 		checkpointEntry := &CheckpointEntry{
-			start:     start,
-			end:       end,
-			location:  metaloc,
-			state:     ST_Finished,
-			entryType: typ,
-			version:   version,
+			start:      start,
+			end:        end,
+			cnLocation: cnLoc,
+			dnLocation: dnLoc,
+			state:      ST_Finished,
+			entryType:  typ,
+			version:    version,
 		}
 		var err2 error
 		if prefetch {
