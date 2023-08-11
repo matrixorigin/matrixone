@@ -60,6 +60,8 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 
 func StatementInfoNew(i Item, ctx context.Context) Item {
 	windowSize, _ := ctx.Value(DurationKey).(time.Duration)
+	// fixme: if recording status=Running entity, here has data-trace issue.
+	// Should clone the StatementInfo as new one.
 	if s, ok := i.(*StatementInfo); ok {
 		// process the execplan
 		s.ExecPlan2Stats(ctx)
@@ -105,6 +107,10 @@ func StatementInfoUpdate(existing, new Item) {
 		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
 	}
 	n.FreeExecPlan()
+	// NO need n.mux.Lock()
+	// Because of this op is between EndStatement and FillRow.
+	// This function is called in Aggregator, and StatementInfoFilter must return true.
+	n.exported = true
 }
 
 func StatementInfoFilter(i Item) bool {
@@ -185,9 +191,11 @@ type StatementInfo struct {
 	// query-quick flow: case 1->3->4
 	end bool // cooperate with mux
 	mux sync.Mutex
-	// mark reported
+	// reported mark reported
+	// set by ReportStatement
 	reported bool
-	// mark exported
+	// exported mark exported
+	// set by FillRow or StatementInfoUpdate
 	exported bool
 
 	// keep []byte as elem
