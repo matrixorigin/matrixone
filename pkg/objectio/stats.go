@@ -21,29 +21,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
-type selectivityStats struct {
+type hitStats struct {
 	hit   stats.Counter
 	total stats.Counter
 }
 
-func (s *selectivityStats) Record(hit, total int) {
+func (s *hitStats) Record(hit, total int) {
 	s.total.Add(int64(total))
 	s.hit.Add(int64(hit))
 }
 
-func (s *selectivityStats) Export() (hit, total int64) {
+func (s *hitStats) Export() (hit, total int64) {
 	hit = s.hit.Load()
 	total = s.total.Load()
 	return
 }
 
-func (s *selectivityStats) ExportW() (hit, total int64) {
+func (s *hitStats) ExportW() (hit, total int64) {
 	hit = s.hit.SwapW(0)
 	total = s.total.SwapW(0)
 	return
 }
 
-func (s *selectivityStats) ExportAll() (whit, wtotal int64, hit, total int64) {
+func (s *hitStats) ExportAll() (whit, wtotal int64, hit, total int64) {
 	whit = s.hit.SwapW(0)
 	wtotal = s.total.SwapW(0)
 	hit = s.hit.Swap(0)
@@ -52,9 +52,9 @@ func (s *selectivityStats) ExportAll() (whit, wtotal int64, hit, total int64) {
 }
 
 type Stats struct {
-	blockSelectivity      selectivityStats
-	columnSelectivity     selectivityStats
-	readFilterSelectivity selectivityStats
+	blockSelectivity      hitStats
+	columnSelectivity     hitStats
+	readFilterSelectivity hitStats
 }
 
 func NewStats() *Stats {
