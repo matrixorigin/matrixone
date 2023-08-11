@@ -223,7 +223,7 @@ type SessionAllocator struct {
 }
 
 func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
-	pool, err := mpool.NewMPool("load-pool", pu.SV.GuestMmuLimitation, mpool.NoFixed)
+	pool, err := mpool.NewMPool("frontend-goetty-pool-cn-level", pu.SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
 		panic(err)
 	}
