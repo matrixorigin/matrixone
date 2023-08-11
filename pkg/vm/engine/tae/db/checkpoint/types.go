@@ -90,6 +90,7 @@ const (
 	CheckpointAttr_MetaLocation = "meta_location"
 	CheckpointAttr_EntryType    = "entry_type"
 	CheckpointAttr_Version      = "version"
+	CheckpointAttr_AllLocations = "all_locations"
 )
 
 var (
@@ -103,6 +104,7 @@ var (
 		CheckpointAttr_MetaLocation,
 		CheckpointAttr_EntryType,
 		CheckpointAttr_Version,
+		CheckpointAttr_AllLocations,
 	}
 	CheckpointSchemaTypes = []types.Type{
 		types.New(types.T_TS, 0, 0),
@@ -110,6 +112,7 @@ var (
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_bool, 0, 0), // true for incremental
 		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
 )
 

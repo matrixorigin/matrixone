@@ -81,9 +81,11 @@ const (
 	BLKDNMetaDeleteTxnIDX
 
 	BLKCNMetaInsertIDX
+
+	DNMetaIDX
 )
 
-const MaxIDX = BLKCNMetaInsertIDX + 1
+const MaxIDX = DNMetaIDX + 1
 
 const (
 	Checkpoint_Meta_TID_IDX                 = 2
@@ -225,10 +227,11 @@ func init() {
 		DelSchema,
 		BlkDNSchema,
 		BlkMetaSchema, // 23
+		DNMetaSchema,
 	}
 
 	checkpointDataSchemas_Curr = checkpointDataSchemas_V4
-	checkpointDataReferVersions = make(map[uint32][24]*checkpointDataItem)
+	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
 
 	for idx, schema := range checkpointDataSchemas_V1 {
 		checkpointDataRefer_V1[idx] = &checkpointDataItem{
@@ -1222,10 +1225,18 @@ func formatBatch(bat *containers.Batch) {
 	}
 }
 
+func (data *CheckpointData) prepareDNMetaBatch(name objectio.ObjectName, blks []objectio.BlockObject, schemaType []uint16) {
+	for i, blk := range blks {
+		location := objectio.BuildLocation(name, blk.GetExtent(), 0, blk.GetID())
+		data.bats[DNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).Append([]byte(location), false)
+		data.bats[DNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).Append(schemaType[i], false)
+	}
+}
+
 func (data *CheckpointData) WriteTo(
 	fs fileservice.FileService,
 	blockRows int,
-) (location objectio.Location, err error) {
+) (CNLocation, DNLocation objectio.Location, err error) {
 	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
 	writer, err := blockio.NewBlockWriterNew(fs, name, 0, nil)
@@ -1233,8 +1244,9 @@ func (data *CheckpointData) WriteTo(
 		return
 	}
 	blockIndexs := make([][]*BlockLocation, MaxIDX)
+	schemaTypes := make([]uint16, 0)
 	for i := range checkpointDataSchemas_Curr {
-		if i == int(MetaIDX) {
+		if i == int(MetaIDX) || i == int(DNMetaIDX) {
 			continue
 		}
 		offset := 0
@@ -1247,6 +1259,7 @@ func (data *CheckpointData) WriteTo(
 			}
 			blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(0))
 			blockIndexs[i] = append(blockIndexs[i], &blockLoc)
+			schemaTypes = append(schemaTypes, uint16(i))
 		} else {
 			split := containers.NewBatchSplitter(data.bats[i], blockRows)
 			for {
@@ -1260,11 +1273,14 @@ func (data *CheckpointData) WriteTo(
 				Endoffset := offset + bat.Length()
 				blockLoc := BuildBlockLoaction(block.GetID(), uint64(offset), uint64(Endoffset))
 				blockIndexs[i] = append(blockIndexs[i], &blockLoc)
+				schemaTypes = append(schemaTypes, uint16(i))
 				offset += bat.Length()
 			}
 		}
 	}
 	blks, _, err := writer.Sync(context.Background())
+
+	data.prepareDNMetaBatch(name, blks, schemaTypes)
 
 	for tid, mata := range data.meta {
 		for i, table := range mata.tables {
@@ -1339,8 +1355,17 @@ func (data *CheckpointData) WriteTo(
 	if err != nil {
 		return
 	}
+	if _, err = writer2.WriteSubBatch(
+		containers.ToCNBatch(data.bats[DNMetaIDX]),
+		objectio.ConvertToSchemaType(uint16(DNMetaIDX))); err != nil {
+		return
+	}
+	if err != nil {
+		return
+	}
 	blks2, _, err := writer2.Sync(context.Background())
-	location = objectio.BuildLocation(name2, blks2[0].GetExtent(), 0, blks2[0].GetID())
+	CNLocation = objectio.BuildLocation(name2, blks2[0].GetExtent(), 0, blks2[0].GetID())
+	DNLocation = objectio.BuildLocation(name2, blks2[1].GetExtent(), 0, blks2[1].GetID())
 	return
 }
 
@@ -1444,7 +1469,23 @@ func LoadCNSubBlkColumnsByMetaWithId(
 	copy(ioResult.Attrs, colNames)
 	return ioResult, nil
 }
-
+func (data *CheckpointData) ReadDNMetaBatch(
+	ctx context.Context,
+	location objectio.Location,
+	version uint32,
+	reader *blockio.BlockReader,
+) (err error) {
+	if data.bats[MetaIDX].Length() == 0 {
+		var bats []*containers.Batch
+		item := checkpointDataReferVersions[version][DNMetaIDX]
+		bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, MetaIDX, reader)
+		if err != nil {
+			return
+		}
+		// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
+		data.bats[MetaIDX] = bats[0]
+	}
+}
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
 	version uint32,

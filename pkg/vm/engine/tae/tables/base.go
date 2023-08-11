@@ -17,7 +17,6 @@ package tables
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
 	"time"

@@ -52,6 +52,8 @@ const (
 	SnapshotMetaAttr_SegDeleteBatchStart        = "seg_delete_batch_start"
 	SnapshotMetaAttr_SegDeleteBatchEnd          = "seg_delete_batch_end"
 	SnapshotMetaAttr_SegDeleteBatchLocation     = "seg_delete_batch_location"
+	CheckpointMetaAttr_BlockLocation            = "checkpoint_meta_block_location"
+	CheckpointMetaAttr_SchemaType               = "checkpoint_meta_schema_type"
 
 	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
@@ -71,6 +73,7 @@ var (
 	DBDelSchema     *catalog.Schema
 	TblDelSchema    *catalog.Schema
 	ColumnDelSchema *catalog.Schema
+	DNMetaSchema    *catalog.Schema
 )
 
 var (
@@ -239,6 +242,14 @@ var (
 	}
 	ColumnDelSchemaTypes = []types.Type{
 		types.T_varchar.ToType(),
+	}
+	DNMetaSchemaAttr = []string{
+		CheckpointMetaAttr_BlockLocation,
+		CheckpointMetaAttr_SchemaType,
+	}
+	DNMetaShcemaTypes = []types.Type{
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_uint16, 0, 0),
 	}
 
 	BaseAttr = []string{
@@ -430,6 +441,19 @@ func init() {
 			}
 		} else {
 			if err := ColumnDelSchema.AppendCol(colname, ColumnDelSchemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	
+	DNMetaSchema = catalog.NewEmptySchema("meta")
+	for i, colname := range DNMetaSchemaAttr {
+		if i == 0 {
+			if err := DNMetaSchema.AppendPKCol(colname, DNMetaShcemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := DNMetaSchema.AppendCol(colname, DNMetaShcemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}

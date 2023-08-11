@@ -35,7 +35,8 @@ type CheckpointEntry struct {
 	start, end types.TS
 	state      State
 	entryType  EntryType
-	location   objectio.Location
+	cnLocation objectio.Location
+	dnLocation objectio.Location
 	lastPrint  time.Time
 	version    uint32
 }
@@ -84,16 +85,17 @@ func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
 func (e *CheckpointEntry) LessEq(ts types.TS) bool {
 	return e.end.LessEq(ts)
 }
-func (e *CheckpointEntry) SetLocation(location objectio.Location) {
+func (e *CheckpointEntry) SetLocation(cn, dn objectio.Location) {
 	e.Lock()
 	defer e.Unlock()
-	e.location = location
+	e.cnLocation = cn
+	e.dnLocation = dn
 }
 
 func (e *CheckpointEntry) GetLocation() objectio.Location {
 	e.RLock()
 	defer e.RUnlock()
-	return e.location
+	return e.cnLocation
 }
 
 func (e *CheckpointEntry) SetState(state State) (ok bool) {
@@ -150,7 +152,7 @@ func (e *CheckpointEntry) Prefetch(
 		ctx,
 		e.version,
 		fs.Service,
-		e.location,
+		e.dnLocation,
 	); err != nil {
 		return
 	}
@@ -161,7 +163,7 @@ func (e *CheckpointEntry) Read(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.location)
+	reader, err := blockio.NewObjectReader(fs.Service, e.dnLocation)
 	if err != nil {
 		return
 	}
@@ -170,7 +172,7 @@ func (e *CheckpointEntry) Read(
 	if err = data.ReadFrom(
 		ctx,
 		e.version,
-		e.location,
+		e.dnLocation,
 		reader,
 		fs.Service,
 		common.DefaultAllocator,
@@ -180,7 +182,7 @@ func (e *CheckpointEntry) Read(
 	return
 }
 func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.location)
+	reader, err := blockio.NewObjectReader(fs.Service, e.cnLocation)
 	if err != nil {
 		return
 	}
@@ -190,7 +192,7 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 		return
 	}*/
 	var bats []*batch.Batch
-	if bats, err = data.ReadFromData(ctx, tid, e.location, reader, e.version, common.DefaultAllocator); err != nil {
+	if bats, err = data.ReadFromData(ctx, tid, e.cnLocation, reader, e.version, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, segDel, err = data.GetTableDataFromBats(tid, bats)
@@ -205,7 +207,7 @@ func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
 }
 
 func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
-	err := fs.Delete(e.location.Name().String())
+	err := fs.Delete(e.cnLocation.Name().String())
 	defer logutil.Debugf("GC checkpoint metadata %v, err %v", e.String(), err)
 	return err
 }

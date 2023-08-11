@@ -35,7 +35,7 @@ func TestCkpCheck(t *testing.T) {
 			start:    types.BuildTS(int64(i), 0),
 			end:      types.BuildTS(int64(i+9), 0),
 			state:    ST_Finished,
-			location: objectio.Location(fmt.Sprintf("loc-%d", i)),
+			cnLocation: objectio.Location(fmt.Sprintf("loc-%d", i)),
 			version:  1,
 		})
 	}
@@ -44,7 +44,7 @@ func TestCkpCheck(t *testing.T) {
 		start:    types.BuildTS(int64(100), 0),
 		end:      types.BuildTS(int64(109), 0),
 		state:    ST_Running,
-		location: objectio.Location("loc-100"),
+		cnLocation: objectio.Location("loc-100"),
 		version:  1,
 	})
 
@@ -80,7 +80,7 @@ func TestGetCheckpoints1(t *testing.T) {
 			start:    timestamps[i].Next(),
 			end:      timestamps[i+1],
 			state:    ST_Finished,
-			location: objectio.Location(fmt.Sprintf("ckp%d", i)),
+			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
 			version:  1,
 		}
 		if i == 4 {
@@ -163,7 +163,7 @@ func TestGetCheckpoints2(t *testing.T) {
 				start:    types.TS{},
 				end:      timestamps[i].Next(),
 				state:    ST_Finished,
-				location: objectio.Location(fmt.Sprintf("global%d", i)),
+				cnLocation: objectio.Location(fmt.Sprintf("global%d", i)),
 				version:  100,
 			}
 			r.storage.globals.Set(entry)
@@ -176,7 +176,7 @@ func TestGetCheckpoints2(t *testing.T) {
 			start:    start,
 			end:      timestamps[i+1],
 			state:    ST_Finished,
-			location: objectio.Location(fmt.Sprintf("ckp%d", i)),
+			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
 			version:  uint32(i),
 		}
 		if i == 4 {
@@ -261,7 +261,7 @@ func TestICKPSeekLT(t *testing.T) {
 			start:    timestamps[i].Next(),
 			end:      timestamps[i+1],
 			state:    ST_Finished,
-			location: objectio.Location(fmt.Sprintf("ckp%d", i)),
+			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
 			version:  uint32(i),
 		}
 		if i == 4 {
@@ -276,7 +276,7 @@ func TestICKPSeekLT(t *testing.T) {
 		t.Log(e.String())
 	}
 	assert.Equal(t, 1, len(ckps))
-	assert.Equal(t, "ckp0", ckps[0].location.String())
+	assert.Equal(t, "ckp0", ckps[0].cnLocation.String())
 
 	// 0, 0
 	ckps = r.ICKPSeekLT(types.BuildTS(0, 0), 0)
@@ -291,8 +291,8 @@ func TestICKPSeekLT(t *testing.T) {
 		t.Log(e.String())
 	}
 	assert.Equal(t, 4, len(ckps))
-	assert.Equal(t, "ckp0", ckps[0].location.String())
-	assert.Equal(t, "ckp1", ckps[1].location.String())
+	assert.Equal(t, "ckp0", ckps[0].cnLocation.String())
+	assert.Equal(t, "ckp1", ckps[1].cnLocation.String())
 
 	// 0, 4
 	ckps = r.ICKPSeekLT(types.BuildTS(0, 0), 4)
@@ -300,10 +300,10 @@ func TestICKPSeekLT(t *testing.T) {
 		t.Log(e.String())
 	}
 	assert.Equal(t, 4, len(ckps))
-	assert.Equal(t, "ckp0", ckps[0].location.String())
-	assert.Equal(t, "ckp1", ckps[1].location.String())
-	assert.Equal(t, "ckp2", ckps[2].location.String())
-	assert.Equal(t, "ckp3", ckps[3].location.String())
+	assert.Equal(t, "ckp0", ckps[0].cnLocation.String())
+	assert.Equal(t, "ckp1", ckps[1].cnLocation.String())
+	assert.Equal(t, "ckp2", ckps[2].cnLocation.String())
+	assert.Equal(t, "ckp3", ckps[3].cnLocation.String())
 
 	// 0,10
 	ckps = r.ICKPSeekLT(types.BuildTS(0, 0), 10)
@@ -311,10 +311,10 @@ func TestICKPSeekLT(t *testing.T) {
 		t.Log(e.String())
 	}
 	assert.Equal(t, 4, len(ckps))
-	assert.Equal(t, "ckp0", ckps[0].location.String())
-	assert.Equal(t, "ckp1", ckps[1].location.String())
-	assert.Equal(t, "ckp2", ckps[2].location.String())
-	assert.Equal(t, "ckp3", ckps[3].location.String())
+	assert.Equal(t, "ckp0", ckps[0].cnLocation.String())
+	assert.Equal(t, "ckp1", ckps[1].cnLocation.String())
+	assert.Equal(t, "ckp2", ckps[2].cnLocation.String())
+	assert.Equal(t, "ckp3", ckps[3].cnLocation.String())
 
 	// 5,1
 	ckps = r.ICKPSeekLT(types.BuildTS(5, 0), 1)
@@ -322,7 +322,7 @@ func TestICKPSeekLT(t *testing.T) {
 		t.Log(e.String())
 	}
 	assert.Equal(t, 1, len(ckps))
-	assert.Equal(t, "ckp1", ckps[0].location.String())
+	assert.Equal(t, "ckp1", ckps[0].cnLocation.String())
 
 	// 50,1
 	ckps = r.ICKPSeekLT(types.BuildTS(50, 0), 1)
@@ -358,7 +358,7 @@ func TestICKPSeekLT(t *testing.T) {
 		t.Log(e.String())
 	}
 	assert.Equal(t, 1, len(ckps))
-	assert.Equal(t, "ckp3", ckps[0].location.String())
+	assert.Equal(t, "ckp3", ckps[0].cnLocation.String())
 
 	// 30-2,3
 	ckps = r.ICKPSeekLT(types.BuildTS(30, 2), 3)
