@@ -148,7 +148,7 @@ func (e *CheckpointEntry) Prefetch(
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
 	data = logtail.NewCheckpointData()
-	reader, err := blockio.NewObjectReader(fs.Service, e.cnLocation)
+	reader, err := blockio.NewObjectReader(fs.Service, e.dnLocation)
 	if err != nil {
 		return
 	}

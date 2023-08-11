@@ -234,6 +234,9 @@ func init() {
 	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
 
 	for idx, schema := range checkpointDataSchemas_V1 {
+		if schema == nil {
+			continue
+		}
 		checkpointDataRefer_V1[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
@@ -242,6 +245,9 @@ func init() {
 	}
 	checkpointDataReferVersions[CheckpointVersion1] = checkpointDataRefer_V1
 	for idx, schema := range checkpointDataSchemas_V2 {
+		if schema == nil {
+			continue
+		}
 		checkpointDataRefer_V2[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
@@ -250,6 +256,9 @@ func init() {
 	}
 	checkpointDataReferVersions[CheckpointVersion2] = checkpointDataRefer_V2
 	for idx, schema := range checkpointDataSchemas_V3 {
+		if schema == nil {
+			continue
+		}
 		checkpointDataRefer_V3[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
@@ -263,6 +272,9 @@ func init() {
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
 	var checkpointDataRefer [MaxIDX]*checkpointDataItem
 	for idx, schema := range schemas {
+		if schema == nil {
+			continue
+		}
 		checkpointDataRefer[idx] = &checkpointDataItem{
 			schema,
 			append(BaseTypes, schema.Types()...),
@@ -1474,15 +1486,15 @@ func (data *CheckpointData) ReadDNMetaBatch(
 	version uint32,
 	reader *blockio.BlockReader,
 ) (err error) {
-	if data.bats[MetaIDX].Length() == 0 {
+	if data.bats[DNMetaIDX].Length() == 0 {
 		var bats []*containers.Batch
 		item := checkpointDataReferVersions[version][DNMetaIDX]
-		bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, MetaIDX, reader)
+		bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, DNMetaIDX, reader)
 		if err != nil {
 			return
 		}
 		// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
-		data.bats[MetaIDX] = bats[0]
+		data.bats[DNMetaIDX] = bats[0]
 	}
 	return
 }
