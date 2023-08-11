@@ -34,7 +34,7 @@ func BatchToProtoBatch(bat *Batch) (*api.Batch, error) {
 }
 
 func ProtoBatchToBatch(bat *api.Batch) (*Batch, error) {
-	rbat := NewWithSize(len(bat.Attrs))
+	rbat := NewWithSize(len(bat.Vecs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, v := range bat.Vecs {
 		vec, err := vector.ProtoVectorToVector(v)

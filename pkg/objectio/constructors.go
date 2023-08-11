@@ -18,41 +18,37 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
-type CacheConstructor = func(r io.Reader, buf []byte) ([]byte, int64, error)
+type CacheConstructor = func(r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fileservice.CacheData, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8) CacheConstructor {
-	return func(reader io.Reader, data []byte) ([]byte, int64, error) {
-		fn := func() ([]byte, int64, error) {
-			var err error
-			if len(data) == 0 {
-				data, err = io.ReadAll(reader)
-				if err != nil {
-					return nil, 0, err
-				}
-			}
-
-			// no compress
-			if algo == compress.None {
-				return data, int64(len(data)), nil
-			}
-
-			// lz4 compress
-			decompressed := make([]byte, size)
-			decompressed, err = compress.Decompress(data, decompressed, compress.Lz4)
+	return func(reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fileservice.CacheData, err error) {
+		if len(data) == 0 {
+			data, err = io.ReadAll(reader)
 			if err != nil {
-				return nil, 0, err
+				return
 			}
-			return decompressed, int64(len(decompressed)), nil
 		}
-		buf, size, err := fn()
+
+		// no compress
+		if algo == compress.None {
+			cacheData = allocator.Alloc(len(data))
+			copy(cacheData.Bytes(), data)
+			return cacheData, nil
+		}
+
+		// lz4 compress
+		decompressed := allocator.Alloc(int(size))
+		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
 		if err != nil {
-			return buf, size, err
+			return
 		}
-		return buf, size, nil
+		decompressed = decompressed.Slice(len(bs))
+		return decompressed, nil
 	}
 }
 

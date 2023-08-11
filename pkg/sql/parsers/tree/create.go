@@ -192,7 +192,6 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		for _, t := range node.Options {
 			ctx.WriteString(prefix)
 			t.Format(ctx)
-			prefix = " "
 		}
 	}
 

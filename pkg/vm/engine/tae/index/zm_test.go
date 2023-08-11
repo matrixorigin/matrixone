@@ -311,6 +311,22 @@ func TestZM(t *testing.T) {
 	require.True(t, zm3.MaxTruncated())
 }
 
+func TestZMSum(t *testing.T) {
+	zm := NewZM(types.T_int64, 0)
+	zm.setInited()
+	require.Equal(t, int64(0), zm.GetSum())
+	int64v := int64(100)
+	zm.SetSum(types.EncodeInt64(&int64v))
+	require.Equal(t, int64v, zm.GetSum())
+
+	zm2 := NewZM(types.T_int8, 0)
+	zm2.setInited()
+	require.Equal(t, int8(0), zm2.GetSum())
+	int8v := int8(100)
+	zm2.SetSum(types.EncodeInt8(&int8v))
+	require.Equal(t, int8v, zm2.GetSum())
+}
+
 func BenchmarkZM(b *testing.B) {
 	vec := containers.MockVector(types.T_char.ToType(), 10000, true, nil)
 	defer vec.Close()

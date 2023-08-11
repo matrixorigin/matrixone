@@ -68,6 +68,9 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		return
 	}
 	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, workingCN)
+	runtime.ProcessLevelRuntime().Logger().Info("task schedule query tasks",
+		zap.Int("created", len(createdTasks)),
+		zap.Int("expired", len(expiredTasks)))
 	s.allocateTasks(createdTasks, orderedCN)
 	s.allocateTasks(expiredTasks, orderedCN)
 }
@@ -132,22 +135,33 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 	orderedCN.inc(t.TaskRunner)
 }
 
-func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (orderedMap *cnMap, expired []task.Task) {
-	orderedMap = newOrderedMap(workingCN)
+func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (*cnMap, []task.Task) {
 	for _, t := range tasks {
-		if contains(workingCN, t.TaskRunner) {
-			orderedMap.inc(t.TaskRunner)
+		runtime.ProcessLevelRuntime().Logger().Info("running task",
+			zap.String("task", t.Metadata.String()),
+			zap.String("runner", t.TaskRunner),
+			zap.Int64("last-heartbeat", t.LastHeartbeat))
+	}
+	orderedMap := newOrderedMap(workingCN)
+	n := 0
+	for _, t := range tasks {
+		if heartbeatTimeout(t.LastHeartbeat) || !contains(workingCN, t.TaskRunner) {
+			n++
 		} else {
-			expired = append(expired, t)
+			orderedMap.inc(t.TaskRunner)
 		}
 	}
+	if n == 0 {
+		return orderedMap, nil
+	}
+	for _, cn := range orderedMap.orderedKeys {
+		runtime.ProcessLevelRuntime().Logger().Info("working cn",
+			zap.String("cn", cn),
+			zap.Uint32("running tasks", orderedMap.get(cn)))
+	}
+	expired := make([]task.Task, 0, n)
 	for _, t := range tasks {
-		if heartbeatTimeout(t.LastHeartbeat) {
-			for _, e := range expired {
-				if t.ID == e.ID {
-					break
-				}
-			}
+		if heartbeatTimeout(t.LastHeartbeat) || !contains(workingCN, t.TaskRunner) {
 			expired = append(expired, t)
 		}
 	}

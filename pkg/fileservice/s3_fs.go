@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	pathpkg "path"
+	gotrace "runtime/trace"
 	"sort"
 	"strings"
 	"time"
@@ -57,6 +58,8 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int32
+
+	ioLocks IOLocks
 }
 
 // key mapping scheme:
@@ -427,6 +430,15 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
+	unlock, wait := s.ioLocks.Lock(IOLockKey{
+		File: vector.FilePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
+	}
+
 	if s.memCache != nil {
 		if err := s.memCache.Read(ctx, vector); err != nil {
 			return err
@@ -697,8 +709,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			}
 		}
 
-		// set ObjectBytes field
-		if err := entry.setObjectBytesFromData(); err != nil {
+		if err := entry.setCachedData(); err != nil {
 			return err
 		}
 
@@ -1079,6 +1090,8 @@ func newS3FS(arguments []string) (*S3FS, error) {
 const maxRetryAttemps = 128
 
 func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "S3FS.s3ListObjects")
+	defer task.End()
 	t0 := time.Now()
 	defer func() {
 		FSProfileHandler.AddSample(time.Since(t0))
@@ -1097,6 +1110,8 @@ func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, o
 }
 
 func (s *S3FS) s3HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "S3FS.s3HeadBucket")
+	defer task.End()
 	return doWithRetry(
 		"s3 head bucket",
 		func() (*s3.HeadBucketOutput, error) {
@@ -1108,6 +1123,8 @@ func (s *S3FS) s3HeadBucket(ctx context.Context, params *s3.HeadBucketInput, opt
 }
 
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "S3FS.s3HeadObject")
+	defer task.End()
 	t0 := time.Now()
 	defer func() {
 		FSProfileHandler.AddSample(time.Since(t0))
@@ -1126,6 +1143,8 @@ func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, opt
 }
 
 func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "S3FS.s3PutObject")
+	defer task.End()
 	t0 := time.Now()
 	defer func() {
 		FSProfileHandler.AddSample(time.Since(t0))
@@ -1138,6 +1157,8 @@ func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 }
 
 func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {
+	ctx, task := gotrace.NewTask(ctx, "S3FS.s3GetObject")
+	defer task.End()
 	t0 := time.Now()
 	defer func() {
 		FSProfileHandler.AddSample(time.Since(t0))
@@ -1177,6 +1198,8 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 }
 
 func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "S3FS.s3DeleteObjects")
+	defer task.End()
 	t0 := time.Now()
 	defer func() {
 		FSProfileHandler.AddSample(time.Since(t0))
@@ -1195,6 +1218,8 @@ func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInpu
 }
 
 func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "S3FS.s3DeleteObject")
+	defer task.End()
 	t0 := time.Now()
 	defer func() {
 		FSProfileHandler.AddSample(time.Since(t0))

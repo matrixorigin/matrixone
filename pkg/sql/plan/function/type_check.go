@@ -15,8 +15,9 @@
 package function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // a fixed type cast rule for
@@ -1875,6 +1876,22 @@ func initFixed3() {
 				{toType: types.T_binary, preferLevel: 2},
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
+			},
+		},
+		{
+			from: types.T_enum,
+			toList: []toRule{
+				{toType: types.T_uint16, preferLevel: 1},
+				{toType: types.T_uint8, preferLevel: 2},
+				{toType: types.T_uint32, preferLevel: 2},
+				{toType: types.T_uint64, preferLevel: 2},
+				{toType: types.T_uint128, preferLevel: 2},
+				{toType: types.T_char, preferLevel: 2},
+				{toType: types.T_varchar, preferLevel: 2},
+				{toType: types.T_binary, preferLevel: 2},
+				{toType: types.T_varbinary, preferLevel: 2},
+				{toType: types.T_blob, preferLevel: 2},
+				{toType: types.T_text, preferLevel: 2},
 			},
 		},
 	}

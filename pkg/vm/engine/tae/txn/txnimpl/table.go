@@ -211,6 +211,7 @@ func (tbl *txnTable) recurTransferDelete(
 	page *model.TransferHashPage,
 	id *common.ID,
 	row uint32,
+	pk containers.Vector,
 	depth int) error {
 
 	var page2 *common.PinnedItem[*model.TransferHashPage]
@@ -247,10 +248,10 @@ func (tbl *txnTable) recurTransferDelete(
 			page2.Item(),
 			newID,
 			offset,
+			pk,
 			depth+1)
 	}
-
-	if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
+	if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
 		return err
 	}
 	common.DoIfDebugEnabled(func() {
@@ -268,7 +269,8 @@ func (tbl *txnTable) TransferDeleteNode(
 	id *common.ID, node *deleteNode, phase string,
 ) (transferred bool, err error) {
 	rows := node.DeletedRows()
-	if transferred, err = tbl.TransferDeleteRows(id, rows, phase); err != nil {
+	pk := node.DeletedPK()
+	if transferred, err = tbl.TransferDeleteRows(id, rows, pk, phase); err != nil {
 		return
 	}
 
@@ -284,7 +286,11 @@ func (tbl *txnTable) TransferDeleteNode(
 	return
 }
 
-func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32, phase string) (transferred bool, err error) {
+func (tbl *txnTable) TransferDeleteRows(
+	id *common.ID,
+	rows []uint32,
+	pk map[uint32]containers.Vector,
+	phase string) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
@@ -320,7 +326,7 @@ func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32, phase stri
 	page := pinned.Item()
 	depth := 0
 	for _, row := range rows {
-		if err = tbl.recurTransferDelete(memo, page, id, row, depth); err != nil {
+		if err = tbl.recurTransferDelete(memo, page, id, row, pk[row], depth); err != nil {
 			return
 		}
 	}
@@ -699,7 +705,13 @@ func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
 	return tbl.localSegment.IsDeleted(row)
 }
 
-func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+// RangeDelete delete block rows in range [start, end]
+func (tbl *txnTable) RangeDelete(
+	id *common.ID,
+	start,
+	end uint32,
+	pk containers.Vector,
+	dt handle.DeleteType) (err error) {
 	defer func() {
 		if err == nil {
 			return
@@ -733,7 +745,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		mvcc := chain.GetController()
 		mvcc.Lock()
 		if err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS()); err == nil {
-			node.RangeDeleteLocked(start, end)
+			node.RangeDeleteLocked(start, end, pk)
 		}
 		mvcc.Unlock()
 		if err != nil {
@@ -750,7 +762,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		return
 	}
 	blkData := blk.GetBlockData()
-	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, dt)
+	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, pk, dt)
 	if err == nil {
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
 			return
