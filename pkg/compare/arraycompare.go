@@ -51,14 +51,6 @@ func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
 	_y := c.vs[vecj].GetBytesAt(int(vj))
 
 	switch c.vs[veci].GetType().Oid {
-	case types.T_array_int8:
-		return ArrayFromBytesComparison[int8](_x, _y, c.desc)
-	case types.T_array_int16:
-		return ArrayFromBytesComparison[int16](_x, _y, c.desc)
-	case types.T_array_int32:
-		return ArrayFromBytesComparison[int32](_x, _y, c.desc)
-	case types.T_array_int64:
-		return ArrayFromBytesComparison[int64](_x, _y, c.desc)
 	case types.T_array_float32:
 		return ArrayFromBytesComparison[float32](_x, _y, c.desc)
 	case types.T_array_float64:

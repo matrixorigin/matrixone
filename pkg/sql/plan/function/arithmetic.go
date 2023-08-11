@@ -31,7 +31,7 @@ func plusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
-	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -48,7 +48,7 @@ func minusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
 	case types.T_date, types.T_datetime:
-	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -64,7 +64,7 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
-	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -166,14 +166,6 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 			return r, err
 		})
 
-	case types.T_array_int8:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[int8])
-	case types.T_array_int16:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[int16])
-	case types.T_array_int32:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[int32])
-	case types.T_array_int64:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[int64])
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32])
 	case types.T_array_float64:
@@ -243,15 +235,6 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, int64](parameters, result, proc, length, func(v1, v2 types.Datetime) int64 {
 			return v1.DatetimeMinusWithSecond(v2)
 		})
-
-	case types.T_array_int8:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[int8])
-	case types.T_array_int16:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[int16])
-	case types.T_array_int32:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[int32])
-	case types.T_array_int64:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[int64])
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float32])
 	case types.T_array_float64:
@@ -314,14 +297,6 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return r, err
 		})
 
-	case types.T_array_int8:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[int8])
-	case types.T_array_int16:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[int16])
-	case types.T_array_int32:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[int32])
-	case types.T_array_int64:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[int64])
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32])
 	case types.T_array_float64:

@@ -215,7 +215,7 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 			genericSort(col, os, uuidGreater)
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary,
-		types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64, types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64:
 		if strCol == nil {
 			strCol = vector.MustStrCol(vec)
 		}

@@ -99,8 +99,6 @@ func SummationReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {
 	case types.T_array_float32, types.T_array_float64:
 		return types.T_float64.ToType()
-	case types.T_array_int8, types.T_array_int16, types.T_array_int32, types.T_array_int64:
-		return types.T_int64.ToType()
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupport type '%v' for summation", typs[0]))
 }

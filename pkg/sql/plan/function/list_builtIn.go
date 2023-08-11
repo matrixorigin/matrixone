@@ -1510,49 +1510,8 @@ var supportedMathBuiltIns = []FuncNew{
 					return AbsDecimal128
 				},
 			},
-
 			{
 				overloadId: 4,
-				args:       []types.T{types.T_array_int8},
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[0] //TODO: is this OK? or should I use return types.T_array_int8.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return AbsArray[int8]
-				},
-			},
-			{
-				overloadId: 5,
-				args:       []types.T{types.T_array_int16},
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
-				},
-				newOp: func() executeLogicOfOverload {
-					return AbsArray[int16]
-				},
-			},
-			{
-				overloadId: 6,
-				args:       []types.T{types.T_array_int32},
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
-				},
-				newOp: func() executeLogicOfOverload {
-					return AbsArray[int32]
-				},
-			},
-			{
-				overloadId: 7,
-				args:       []types.T{types.T_array_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
-				},
-				newOp: func() executeLogicOfOverload {
-					return AbsArray[int64]
-				},
-			},
-			{
-				overloadId: 8,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -1562,7 +1521,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 9,
+				overloadId: 5,
 				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -1584,38 +1543,6 @@ var supportedMathBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_array_int8},
-				retType:    SummationReturnType,
-				newOp: func() executeLogicOfOverload {
-					return SummationArray[int8, int64]
-				},
-			},
-			{
-				overloadId: 1,
-				args:       []types.T{types.T_array_int16},
-				retType:    SummationReturnType,
-				newOp: func() executeLogicOfOverload {
-					return SummationArray[int16, int64]
-				},
-			},
-			{
-				overloadId: 2,
-				args:       []types.T{types.T_array_int32},
-				retType:    SummationReturnType,
-				newOp: func() executeLogicOfOverload {
-					return SummationArray[int32, int64]
-				},
-			},
-			{
-				overloadId: 3,
-				args:       []types.T{types.T_array_int64},
-				retType:    SummationReturnType,
-				newOp: func() executeLogicOfOverload {
-					return SummationArray[int64, int64]
-				},
-			},
-			{
-				overloadId: 4,
 				args:       []types.T{types.T_array_float32},
 				retType:    SummationReturnType,
 				newOp: func() executeLogicOfOverload {
@@ -1623,7 +1550,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 5,
+				overloadId: 1,
 				args:       []types.T{types.T_array_float64},
 				retType:    SummationReturnType,
 				newOp: func() executeLogicOfOverload {
@@ -1653,46 +1580,6 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 1,
-				args:       []types.T{types.T_array_int8},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return builtInSqrtArray[int8]
-				},
-			},
-			{
-				overloadId: 2,
-				args:       []types.T{types.T_array_int16},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return builtInSqrtArray[int16]
-				},
-			},
-			{
-				overloadId: 3,
-				args:       []types.T{types.T_array_int32},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return builtInSqrtArray[int32]
-				},
-			},
-			{
-				overloadId: 4,
-				args:       []types.T{types.T_array_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return builtInSqrtArray[int64]
-				},
-			},
-			{
-				overloadId: 5,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_array_float64.ToType()
@@ -1702,7 +1589,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 6,
+				overloadId: 2,
 				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_array_float64.ToType()
