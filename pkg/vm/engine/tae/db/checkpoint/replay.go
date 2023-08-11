@@ -98,7 +98,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
 	closecbs := make([]func(), 0)
-	readfn := func(i int, prefetch bool) {
+	readfn := func(i int, prefetch int) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
 		cnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
@@ -129,9 +129,19 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			version:    version,
 		}
 		var err2 error
-		if prefetch {
+		if prefetch == 0 {
 			if datas[i], err2 = checkpointEntry.Prefetch(ctx, r.rt.Fs); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
+			}
+		} else if prefetch == 1 {
+			err = checkpointEntry.PrefetchMetaIdx(ctx, r.rt.Fs)
+			if err != nil {
+				return
+			}
+		} else if prefetch == 2 {
+			err = checkpointEntry.ReadMetaIdx(ctx, r.rt.Fs)
+			if err != nil {
+				return
 			}
 		} else {
 			if datas[i], err2 = checkpointEntry.Read(ctx, r.rt.Fs); err2 != nil {
@@ -159,12 +169,17 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			return
 		}
 	}
-
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, true)
+		readfn(i, 1)
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, false)
+		readfn(i, 2)
+	}
+	for i := 0; i < bat.Length(); i++ {
+		readfn(i, 0)
+	}
+	for i := 0; i < bat.Length(); i++ {
+		readfn(i, 3)
 	}
 	readDuration += time.Since(t0)
 	if err != nil {

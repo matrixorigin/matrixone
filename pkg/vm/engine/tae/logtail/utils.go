@@ -1543,6 +1543,32 @@ func (data *CheckpointData) ReadDNMetaBatch(
 	}
 	return
 }
+
+func (data *CheckpointData) PrefetchMeta(
+	ctx context.Context,
+	version uint32,
+	service fileservice.FileService,
+	key objectio.Location) (err error) {
+	if version < CheckpointVersion4 {
+		return
+	}
+	var pref blockio.PrefetchParams
+	pref, err = blockio.BuildSubPrefetchParams(service, key)
+	meteIdxSchema := checkpointDataReferVersions[version][MetaIDX]
+	dnMeteIdxSchema := checkpointDataReferVersions[version][DNMetaIDX]
+	var idxes []uint16
+	var dnIdxes []uint16
+	for attr := range meteIdxSchema.attrs {
+		idxes = append(idxes, uint16(attr))
+	}
+	for attr := range dnMeteIdxSchema.attrs {
+		dnIdxes = append(dnIdxes, uint16(attr))
+	}
+	pref.AddBlockWithType(idxes, []uint16{0}, MetaIDX)
+	pref.AddBlockWithType(dnIdxes, []uint16{1}, DNMetaIDX)
+	return blockio.PrefetchWithMerged(pref)
+}
+
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
 	version uint32,
@@ -1551,7 +1577,7 @@ func (data *CheckpointData) PrefetchFrom(
 	if version < CheckpointVersion4 {
 		return prefetchCheckpointData(ctx, version, service, key)
 	}
-	return
+	//return
 	reader, err := blockio.NewObjectReader(service, key)
 	if err != nil {
 		return

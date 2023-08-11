@@ -152,7 +152,7 @@ func (e *CheckpointEntry) Prefetch(
 	if err != nil {
 		return
 	}
-	data.ReadDNMetaBatch(ctx, e.version,e.dnLocation, reader)
+	data.ReadDNMetaBatch(ctx, e.version, e.dnLocation, reader)
 	if err = data.PrefetchFrom(
 		ctx,
 		e.version,
@@ -186,6 +186,35 @@ func (e *CheckpointEntry) Read(
 	}
 	return
 }
+
+func (e *CheckpointEntry) PrefetchMetaIdx(
+	ctx context.Context,
+	fs *objectio.ObjectFS,
+) (err error) {
+	data := logtail.NewCheckpointData()
+	if err = data.PrefetchMeta(
+		ctx,
+		e.version,
+		fs.Service,
+		e.dnLocation,
+	); err != nil {
+		return
+	}
+	return
+}
+
+func (e *CheckpointEntry) ReadMetaIdx(
+	ctx context.Context,
+	fs *objectio.ObjectFS,
+) (err error) {
+	reader, err := blockio.NewObjectReader(fs.Service, e.dnLocation)
+	if err != nil {
+		return
+	}
+	data := logtail.NewCheckpointData()
+	return data.ReadDNMetaBatch(ctx, e.version, e.dnLocation, reader)
+}
+
 func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
 	reader, err := blockio.NewObjectReader(fs.Service, e.cnLocation)
 	if err != nil {
