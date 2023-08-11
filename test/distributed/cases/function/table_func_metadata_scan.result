@@ -48,7 +48,7 @@ insert into t select * from t;
 select approx_count(*) from t;
 approx_count(*)
 8192
-select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t')
+select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select approx_count(*) from t;
 approx_count(*)
