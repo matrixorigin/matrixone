@@ -169,6 +169,15 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
+	st := time.Now()
+	defer func() {
+		cost := time.Since(st)
+		if cost > time.Second {
+			util.GetLogger().Warn("commit txn too slow",
+				zap.Duration("cost", cost))
+		}
+	}()
+
 	util.LogTxnHandleRequest(request)
 	defer util.LogTxnHandleResult(response)
 
