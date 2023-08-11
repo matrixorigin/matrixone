@@ -22,15 +22,13 @@ type RCBytes struct {
 	*RCPoolItem[[]byte]
 }
 
-func (r RCBytes) Size() int64 {
-	return int64(len(r.Value))
+func (r RCBytes) Bytes() []byte {
+	return r.Value
 }
 
-func (r RCBytes) Len() int {
-	if r.RCPoolItem == nil {
-		return 0
-	}
-	return len(r.Value)
+func (r RCBytes) Slice(length int) CacheData {
+	r.Value = r.Value[:length]
+	return r
 }
 
 func (r RCBytes) Copy() []byte {
@@ -92,4 +90,10 @@ func (r *rcBytesPool) GetAndCopy(from []byte) RCBytes {
 	bs := r.Get(len(from))
 	copy(bs.Value, from)
 	return bs
+}
+
+var _ CacheDataAllocator = new(rcBytesPool)
+
+func (r *rcBytesPool) Alloc(size int) CacheData {
+	return r.Get(size)
 }

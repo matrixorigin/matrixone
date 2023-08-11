@@ -83,46 +83,6 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	}
 	typExpressionExecutor.Free()
 	require.Equal(t, curr2, proc.Mp().CurrNB())
-
-	// Expr_List
-	lis1 := &plan.Expr{
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: []*plan.Expr{
-					makePlan2Int64ConstExprWithType(0),
-					makePlan2Int64ConstExprWithType(2),
-				},
-			},
-		},
-	}
-	curr3 := proc.Mp().CurrNB()
-	lisExpressionExecutor1, err := NewExpressionExecutor(proc, lis1)
-	require.NoError(t, err)
-
-	emptyBatch.SetRowCount(3)
-	vec, err = lisExpressionExecutor1.Eval(proc, []*batch.Batch{emptyBatch})
-	require.NoError(t, err)
-	{
-		require.Equal(t, 2, vec.Length())
-		require.Equal(t, int64(0), vector.MustFixedCol[int64](vec)[0])
-		require.Equal(t, int64(2), vector.MustFixedCol[int64](vec)[1])
-	}
-	lisExpressionExecutor1.Free()
-	require.Equal(t, curr3, proc.Mp().CurrNB())
-
-	lis2 := &plan.Expr{
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: []*plan.Expr{
-					makePlan2Int64ConstExprWithType(0),
-					makePlan2Int64ConstExprWithType(2),
-					{Expr: &plan.Expr_Sub{}},
-				},
-			},
-		},
-	}
-	_, err = NewExpressionExecutor(proc, lis2)
-	require.True(t, err != nil)
 }
 
 func TestColumnExpressionExecutor(t *testing.T) {

@@ -42,6 +42,7 @@ var dedupNABlkFunctions = map[types.T]any{
 	types.T_date:       dedupNABlkOrderedFunc[types.Date],
 	types.T_time:       dedupNABlkOrderedFunc[types.Time],
 	types.T_datetime:   dedupNABlkOrderedFunc[types.Datetime],
+	types.T_enum:       dedupNABlkOrderedFunc[types.Enum],
 	types.T_decimal64:  dedupNABlkFuncFactory(types.CompareDecimal64),
 	types.T_decimal128: dedupNABlkFuncFactory(types.CompareDecimal128),
 	types.T_decimal256: dedupNABlkFuncFactory(types.CompareDecimal256),
@@ -75,6 +76,7 @@ var dedupAlkFunctions = map[types.T]any{
 	types.T_date:       dedupABlkFuncFactory(compute.CompareOrdered[types.Date]),
 	types.T_time:       dedupABlkFuncFactory(compute.CompareOrdered[types.Time]),
 	types.T_datetime:   dedupABlkFuncFactory(compute.CompareOrdered[types.Datetime]),
+	types.T_enum:       dedupABlkFuncFactory(compute.CompareOrdered[types.Enum]),
 	types.T_decimal64:  dedupABlkFuncFactory(types.CompareDecimal64),
 	types.T_decimal128: dedupABlkFuncFactory(types.CompareDecimal128),
 	types.T_decimal256: dedupABlkFuncFactory(types.CompareDecimal256),
@@ -124,7 +126,7 @@ func parseADedeupArgs(args ...any) (
 	return
 }
 
-func dedupNABlkFuncFactory[T any](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
+func dedupNABlkFuncFactory[T any](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, mask, def := parseNADedeupArgs(args...)
 		vs := vector.MustFixedCol[T](vec)
@@ -214,7 +216,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 	}
 }
 
-func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args ...any) func(T, bool, int) error {
+func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, mask, def, scan, txn := parseADedeupArgs(args...)
 		return func(v1 T, _ bool, _ int) error {

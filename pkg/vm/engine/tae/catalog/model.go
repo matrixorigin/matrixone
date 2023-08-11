@@ -35,6 +35,7 @@ var SystemDBSchema *Schema
 var SystemTableSchema *Schema
 var SystemTableSchema_V1 *Schema
 var SystemColumnSchema *Schema
+var SystemColumnSchema_V1 *Schema
 
 var SystemSegment_DB_ID types.Uuid
 var SystemSegment_Table_ID types.Uuid
@@ -127,6 +128,22 @@ func init() {
 		}
 	}
 	if err = SystemColumnSchema.Finalize(true); err != nil {
+		panic(err)
+	}
+
+	SystemColumnSchema_V1 = NewEmptySchema(catalog.MO_COLUMNS)
+	for i, colname := range catalog.MoColumnsSchema_V1 {
+		if i == 0 {
+			if err = SystemColumnSchema_V1.AppendPKCol(colname, catalog.MoColumnsTypes_V1[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err = SystemColumnSchema_V1.AppendCol(colname, catalog.MoColumnsTypes_V1[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err = SystemColumnSchema_V1.Finalize(true); err != nil {
 		panic(err)
 	}
 }
