@@ -683,6 +683,8 @@ func (data *CNCheckpointData) PrefetchFrom(
 	}
 	var pref blockio.PrefetchParams
 	var location objectio.Location
+	// for ver less than 5, some tablemeta is empty
+	empty := true
 	for i, table := range meta.tables {
 		if table == nil {
 			continue
@@ -711,7 +713,11 @@ func (data *CNCheckpointData) PrefetchFrom(
 				}
 			}
 			pref.AddBlockWithType(idxes, []uint16{block.GetID()}, idx)
+			empty = false
 		}
+	}
+	if empty {
+		return
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
