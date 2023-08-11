@@ -16,10 +16,11 @@ package objectio
 
 import (
 	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"sync"
 )
 
 type CacheConfig struct {
@@ -28,6 +29,7 @@ type CacheConfig struct {
 
 var metaCache *lrucache.LRU[ObjectNameShort, fileservice.Bytes]
 var onceInit sync.Once
+var metaCacheHitStats hitStats
 
 func init() {
 	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil)
@@ -39,21 +41,32 @@ func InitMetaCache(size int64) {
 	})
 }
 
+func ExportMetaCacheHitWindow() (int64, int64) {
+	return metaCacheHitStats.ExportW()
+}
+
+func ExportMetaCacheHitTotal() (int64, int64) {
+	return metaCacheHitStats.Export()
+}
+
 func LoadObjectMetaByExtent(
 	ctx context.Context,
 	name *ObjectName,
 	extent *Extent,
 	noLRUCache bool,
-	fs fileservice.FileService) (meta ObjectMeta, err error) {
+	fs fileservice.FileService,
+) (meta ObjectMeta, err error) {
 	v, ok := metaCache.Get(ctx, *name.Short(), false)
 	if ok {
 		meta = ObjectMeta(v)
+		metaCacheHitStats.Record(1, 1)
 		return
 	}
 	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
 		return
 	}
 	metaCache.Set(ctx, *name.Short(), fileservice.Bytes(meta), false)
+	metaCacheHitStats.Record(0, 1)
 	return
 }
 
