@@ -187,6 +187,7 @@ const (
 	SPACE
 	SPLIT         // SPLIT
 	SPLIT_PART    // SPLIT_PART
+	SQRT          // SQRT
 	STARCOUNT     // STARTCOUNT
 	STARTSWITH    // STARTSWITH
 	STDDEV_POP    // STDDEV_POP
@@ -436,6 +437,7 @@ var functionIdRegister = map[string]int32{
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
+	"sqrt":                           SQRT,
 	"to_seconds":                     TO_SECONDS,
 	"day":                            DAY,
 	"to_days":                        TO_DAYS,
