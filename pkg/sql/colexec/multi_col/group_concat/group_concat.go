@@ -464,6 +464,8 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_datetime:
 		val := vector.GetFixedAt[types.Datetime](vec, rowIndex)
 		return val.String(), nil
+	case types.T_enum:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
 	default:
 		return "", nil
 	}
