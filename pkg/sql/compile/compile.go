@@ -2461,6 +2461,11 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]
 	for _, n := range c.cnList {
 		c.anal.isFirst = currentFirstFlag
 		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
+		for _, s := range scopes {
+			for _, rr := range s.Proc.Reg.MergeReceivers {
+				rr.Ch = make(chan *batch.Batch, 16)
+			}
+		}
 		children = append(children, scopes...)
 		parent = append(parent, c.newMergeRemoteScope(scopes, n))
 	}
@@ -2740,6 +2745,10 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 			},
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
+		// this is for shuffle join
+		for _, mr := range rs.Proc.Reg.MergeReceivers {
+			mr.Ch = make(chan *batch.Batch, 16)
+		}
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
