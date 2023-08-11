@@ -737,7 +737,7 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range datas {
-		if versions[i] < CheckpointVersion4 {
+		if versions[i] < CheckpointVersion5 {
 			continue
 		}
 		err := datas[i].InitMetaIdx(ctx,versions[i], readers[i])
@@ -747,7 +747,7 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range datas {
-		err := datas[i].PrefetchMetaFrom(ctx, versions[i], fs, tableID)
+		err := datas[i].PrefetchMetaFrom(ctx, versions[i], locations[i], fs, tableID)
 		if err != nil {
 			return nil, nil, err
 		}

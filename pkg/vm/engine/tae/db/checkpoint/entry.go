@@ -148,11 +148,6 @@ func (e *CheckpointEntry) Prefetch(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.dnLocation)
-	if err != nil {
-		return
-	}
-	data.ReadDNMetaBatch(ctx, e.version, e.dnLocation, reader)
 	if err = data.PrefetchFrom(
 		ctx,
 		e.version,
