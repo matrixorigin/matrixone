@@ -737,6 +737,9 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range datas {
+		if versions[i] < CheckpointVersion4 {
+			continue
+		}
 		err := datas[i].InitMetaIdx(ctx,versions[i], readers[i])
 		if err != nil {
 			return nil, nil, err

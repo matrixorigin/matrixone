@@ -608,12 +608,11 @@ func (data *CNCheckpointData) PrefetchMetaIdx(
 ) (err error) {
 	var pref blockio.PrefetchParams
 	if version < CheckpointVersion4 {
-		pref, err = blockio.BuildPrefetchParams(service, key)
-		pref.AddBlock(idxes, []uint16{key.ID()})
-	} else {
-		pref, err = blockio.BuildSubPrefetchParams(service, key)
-		pref.AddBlockWithType(idxes, []uint16{key.ID()}, MetaIDX)
+		return
 	}
+	pref, err = blockio.BuildSubPrefetchParams(service, key)
+	pref.AddBlockWithType(idxes, []uint16{key.ID()}, MetaIDX)
+
 	return blockio.PrefetchWithMerged(pref)
 }
 
@@ -622,6 +621,9 @@ func (data *CNCheckpointData) PrefetchMetaFrom(
 	version uint32,
 	service fileservice.FileService,
 	tableID uint64) (err error) {
+	if version < CheckpointVersion4 {
+		return
+	}
 	meta := data.GetTableMeta(tableID, version)
 	if meta == nil {
 		return
