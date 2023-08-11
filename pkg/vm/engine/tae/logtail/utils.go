@@ -546,7 +546,7 @@ func (data *CNCheckpointData) closeVector(batIdx uint16, colIdx int, m *mpool.MP
 	if len(bat.Vecs) <= colIdx {
 		return
 	}
-	vec := data.bats[TBLInsertIDX].Vecs[colIdx]
+	vec := data.bats[batIdx].Vecs[colIdx]
 	vec.Free(m)
 
 }
