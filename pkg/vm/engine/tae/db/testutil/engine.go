@@ -16,6 +16,9 @@ package testutil
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -389,22 +392,40 @@ func dnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.F
 	assert.NoError(t, err)
 	return data
 }
-
-func cnReadCheckpoint(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService) (ins, del, cnIns, segDel *api.Batch) {
-	reader, err := blockio.NewObjectReader(fs, location)
-	assert.NoError(t, err)
-	data := logtail.NewCNCheckpointData()
-	bats, err := data.ReadFromData(
+func cnReadCheckpoint(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService) (ins, del, cnIns, segDel *api.Batch, cb []func()) {
+	ins, del, cnIns, segDel, cb = cnReadCheckpointWithVersion(t, tid, location, fs, logtail.CheckpointCurrentVersion)
+	return
+}
+func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService, ver uint32) (ins, del, cnIns, segDel *api.Batch, cb []func()) {
+	locs := make([]string, 0)
+	locs = append(locs, location.String())
+	locs = append(locs, strconv.Itoa(int(ver)))
+	locations := strings.Join(locs, ";")
+	entries, cb, err := logtail.LoadCheckpointEntries(
 		context.Background(),
+		locations,
 		tid,
-		location,
-		reader,
-		logtail.CheckpointCurrentVersion,
+		"tbl",
+		0,
+		"db",
 		common.DefaultAllocator,
+		fs,
 	)
 	assert.NoError(t, err)
-	ins, del, cnIns, segDel, err = data.GetTableDataFromBats(tid, bats)
-	assert.NoError(t, err)
+	for i := 0; i < len(entries); i++ {
+		e := entries[i]
+		if e.TableName == fmt.Sprintf("_%d_seg", tid) {
+			segDel = e.Bat
+		} else if e.EntryType == api.Entry_Delete {
+			del = e.Bat
+			if tid != pkgcatalog.MO_DATABASE_ID && tid != pkgcatalog.MO_TABLES_ID && tid != pkgcatalog.MO_COLUMNS_ID {
+				cnIns = entries[i+1].Bat
+				i++
+			}
+		} else {
+			ins = e.Bat
+		}
+	}
 	return
 }
 
@@ -549,8 +570,8 @@ func checkUserTables(t *testing.T, tid uint64, ins, del, cnIns, segDel *api.Batc
 	assert.NoError(t, err)
 	data2 := collector.OrphanData()
 	bats := data2.GetBatches()
-	ins2 := bats[logtail.TBLColInsertIDX]
-	del2 := bats[logtail.TBLColDeleteIDX]
+	ins2 := bats[logtail.BLKMetaInsertIDX]
+	del2 := bats[logtail.BLKMetaDeleteIDX]
 	cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
 	segDel2 := bats[logtail.SEGDeleteIDX]
 
@@ -573,16 +594,59 @@ func CheckCheckpointReadWrite(
 	checkDNCheckpointData(t, dnData, start, end, c)
 	p := &catalog.LoopProcessor{}
 
-	ins, del, cnIns, seg := cnReadCheckpoint(t, pkgcatalog.MO_DATABASE_ID, location, fs)
+	ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, pkgcatalog.MO_DATABASE_ID, location, fs)
 	checkCNCheckpointData(t, pkgcatalog.MO_DATABASE_ID, ins, del, cnIns, seg, start, end, c)
-	ins, del, cnIns, seg = cnReadCheckpoint(t, pkgcatalog.MO_TABLES_ID, location, fs)
+	for _, cb := range cbs {
+		if cb != nil {
+			cb()
+		}
+	}
+	ins, del, cnIns, seg, cbs = cnReadCheckpoint(t, pkgcatalog.MO_TABLES_ID, location, fs)
 	checkCNCheckpointData(t, pkgcatalog.MO_TABLES_ID, ins, del, cnIns, seg, start, end, c)
-	ins, del, cnIns, seg = cnReadCheckpoint(t, pkgcatalog.MO_COLUMNS_ID, location, fs)
+	for _, cb := range cbs {
+		if cb != nil {
+			cb()
+		}
+	}
+	ins, del, cnIns, seg, cbs = cnReadCheckpoint(t, pkgcatalog.MO_COLUMNS_ID, location, fs)
 	checkCNCheckpointData(t, pkgcatalog.MO_COLUMNS_ID, ins, del, cnIns, seg, start, end, c)
+	for _, cb := range cbs {
+		if cb != nil {
+			cb()
+		}
+	}
 
 	p.TableFn = func(te *catalog.TableEntry) error {
-		ins, del, cnIns, seg := cnReadCheckpoint(t, te.ID, location, fs)
+		ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, te.ID, location, fs)
 		checkCNCheckpointData(t, te.ID, ins, del, cnIns, seg, start, end, c)
+		for _, cb := range cbs {
+			if cb != nil {
+				cb()
+			}
+		}
 		return nil
+	}
+}
+
+func (e *TestEngine) CheckReadCNCheckpoint() {
+	tids := []uint64{1, 2, 3}
+	p := &catalog.LoopProcessor{}
+	p.TableFn = func(te *catalog.TableEntry) error {
+		tids = append(tids, te.ID)
+		return nil
+	}
+	err := e.Catalog.RecurLoop(p)
+	assert.NoError(e.t, err)
+	ckps := e.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	for _, ckp := range ckps {
+		for _, tid := range tids {
+			ins, del, cnIns, seg, cbs := cnReadCheckpointWithVersion(e.t, tid, ckp.GetLocation(), e.Opts.Fs, ckp.GetVersion())
+			checkCNCheckpointData(e.t, tid, ins, del, cnIns, seg, ckp.GetStart(), ckp.GetEnd(), e.Catalog)
+			for _, cb := range cbs {
+				if cb != nil {
+					cb()
+				}
+			}
+		}
 	}
 }

@@ -98,6 +98,10 @@ func (e *CheckpointEntry) GetLocation() objectio.Location {
 	return e.cnLocation
 }
 
+func (e *CheckpointEntry) GetVersion() uint32{
+	return e.version
+}
+
 func (e *CheckpointEntry) SetState(state State) (ok bool) {
 	e.Lock()
 	defer e.Unlock()

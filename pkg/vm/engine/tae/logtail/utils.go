@@ -603,7 +603,7 @@ func swithCheckpointIdx(i uint16, tableID uint64) uint16 {
 	return idx
 }
 
-func (data *CNCheckpointData) InitMetaIdx(ctx context.Context, version uint32, reader *blockio.BlockReader) error {
+func (data *CNCheckpointData) InitMetaIdx(ctx context.Context, version uint32, reader *blockio.BlockReader, location objectio.Location, m *mpool.MPool) error {
 	if data.bats[MetaIDX] == nil {
 		metaIdx := checkpointDataReferVersions[version][MetaIDX]
 		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
@@ -611,6 +611,12 @@ func (data *CNCheckpointData) InitMetaIdx(ctx context.Context, version uint32, r
 			return err
 		}
 		data.bats[MetaIDX] = metaBats[0]
+		if version < CheckpointVersion5 {
+			err = data.fillInMetaBatchWithLocation(location, m)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -906,10 +912,10 @@ func (data *CNCheckpointData) ReadFromData(
 	version uint32,
 	m *mpool.MPool,
 ) (dataBats []*batch.Batch, err error) {
-	if err = data.InitMetaIdx(ctx, version, reader); err != nil {
-		return
-	}
-	if version <= CheckpointVersion3 {
+	// if err = data.InitMetaIdx(ctx, version, reader,location,m); err != nil {
+	// 	return
+	// }
+	if version <= CheckpointVersion4 {
 		if tableID == pkgcatalog.MO_DATABASE_ID || tableID == pkgcatalog.MO_TABLES_ID || tableID == pkgcatalog.MO_COLUMNS_ID {
 			dataBats = make([]*batch.Batch, MetaMaxIdx)
 			switch tableID {
@@ -1002,10 +1008,23 @@ func (data *CNCheckpointData) ReadFromData(
 				}
 
 			}
-			return
-		}
-		err = data.fillInMetaBatchWithLocation(location, m)
-		if err != nil {
+			if version <= CheckpointVersion4 {
+				bat := data.bats[TBLColInsertIDX]
+				if bat == nil {
+					return
+				}
+				rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+				length := len(rowIDVec)
+				enumVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+				for i := 0; i < length; i++ {
+					err = vector.AppendAny(enumVec, []byte(""), false, m)
+					if err != nil {
+						return
+					}
+				}
+				bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_EnumValues)
+				bat.Vecs = append(bat.Vecs, enumVec)
+			}
 			return
 		}
 	}
@@ -1127,6 +1146,15 @@ func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() 
 			data.closeVector(DBDeleteIDX, 2, m)
 			data.closeVector(TBLDeleteIDX, 2, m)
 		}
+		if version <= CheckpointVersion3 {
+			data.closeVector(TBLColInsertIDX, 25, m)
+		}
+		if version <= CheckpointVersion4 {
+			data.closeVector(MetaIDX, Checkpoint_Meta_Insert_Block_LOC_IDX, m)
+			data.closeVector(MetaIDX, Checkpoint_Meta_CN_Delete_Block_LOC_IDX, m)
+			data.closeVector(MetaIDX, Checkpoint_Meta_Delete_Block_LOC_IDX, m)
+			data.closeVector(MetaIDX, Checkpoint_Meta_Segment_LOC_IDX, m)
+		}
 	}
 }
 
@@ -1138,7 +1166,7 @@ func (data *CNCheckpointData) closeVector(batIdx uint16, colIdx int, m *mpool.MP
 	if len(bat.Vecs) <= colIdx {
 		return
 	}
-	vec := data.bats[TBLInsertIDX].Vecs[colIdx]
+	vec := data.bats[batIdx].Vecs[colIdx]
 	vec.Free(m)
 
 }
@@ -1520,7 +1548,7 @@ func LoadCNSubBlkColumnsByMeta(
 	}
 	var err error
 	var ioResults []*batch.Batch
-	if version <= CheckpointVersion3 {
+	if version <= CheckpointVersion4 {
 		ioResults = make([]*batch.Batch, 1)
 		ioResults[0], err = reader.LoadColumns(cxt, idxs, nil, id, nil)
 	} else {
@@ -1864,7 +1892,7 @@ func (data *CheckpointData) readAll(
 		}
 		var bats []*containers.Batch
 		for idx := range checkpointDataReferVersions[version] {
-			if uint16(idx) == MetaIDX || uint16(idx) == DNMetaIDX{
+			if uint16(idx) == MetaIDX || uint16(idx) == DNMetaIDX {
 				continue
 			}
 			item := checkpointDataReferVersions[version][idx]
