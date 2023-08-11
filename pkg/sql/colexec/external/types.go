@@ -17,9 +17,9 @@ package external
 import (
 	"bufio"
 	"context"
+	"encoding/csv"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external/mocsv"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -67,7 +67,7 @@ type ExParam struct {
 	Fileparam      *ExFileparam
 	Zoneparam      *ZonemapFileparam
 	Filter         *FilterParam
-	MoCsvLineArray [][][]byte
+	MoCsvLineArray [][]string
 }
 
 type ExFileparam struct {
@@ -97,16 +97,16 @@ type Argument struct {
 func (arg *Argument) Free(*process.Process, bool) {}
 
 type ParseLineHandler struct {
-	csvReader *mocsv.Reader
+	csvReader *csv.Reader
 	//batch
 	batchSize int
 	//mo csv
-	moCsvLineArray [][][]byte
+	moCsvLineArray [][]string
 }
 
 // NewReader returns a new Reader with options that reads from r.
-func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *mocsv.Reader {
-	rCsv := mocsv.NewReader(bufio.NewReader(r))
+func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Reader {
+	rCsv := csv.NewReader(bufio.NewReader(r))
 	rCsv.Comma = cma
 	rCsv.Comment = cmnt
 	rCsv.LazyQuotes = lazyQt
