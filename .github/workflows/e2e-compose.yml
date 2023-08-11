@@ -77,7 +77,8 @@ jobs:
       - name: export log
         if: ${{ failure() }}
         run: |
-          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
+          mkdir -p ${{ github.workspace }}/mo-tester/report
+          mv ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
 
@@ -150,10 +151,6 @@ jobs:
           done
           docker ps
       - name: Clone test-tool repository
-        # Node.js 12 actions are deprecated.
-        # For more information see:
-        #     - https://github.blog/changelog/2022-09-22-github-actions-all-actions-will-begin-running-on-node16-instead-of-node12/.
-        # Please update the following actions to use Node.js 16: actions/checkout@v3
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
@@ -177,7 +174,8 @@ jobs:
       - name: export log
         if: ${{ failure() }}
         run: |
-          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
+          mkdir -p ${{ github.workspace }}/mo-tester/report
+          mv ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
 
@@ -197,7 +195,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: multi-cn-e2e-push-docker-compose-log
+          name: multi-cn-e2e-push-docker-compose-log-pessimistic
           path: |
             ${{ github.workspace }}/docker-compose-log
           retention-days: 7
