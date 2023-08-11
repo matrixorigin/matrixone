@@ -3442,6 +3442,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("xa_detach_on_prepare"),
 		Default:           int64(1),
 	},
+	"version": {
+		Name:              "version",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("version"),
+		Default:           "8.0.30-MatrixOne-v1.0.0",
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
