@@ -198,9 +198,9 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := u.UpgradeNewAddTable(ctx); err != nil {
-		return err
-	}
+	//if err := u.UpgradeNewAddTable(ctx); err != nil {
+	//	return err
+	//}
 
 	return nil
 }
@@ -239,6 +239,6 @@ func (u *Upgrader) UpgradeNewAddTable(ctx context.Context) error {
 		if err := exec.Exec(ctx, createSql, ie.NewOptsBuilder().Finish()); err != nil {
 			return err
 		}
-		return nil
 	}
+	return nil
 }
