@@ -137,7 +137,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 			leftSorted = false
 		}
 		if !leftSorted {
-			if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > 1000*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
+			if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > 25*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
 				return
 			}
 		}
