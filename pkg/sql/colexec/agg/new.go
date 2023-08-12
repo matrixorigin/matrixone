@@ -245,13 +245,13 @@ func newAvg(typ types.Type, dist bool) Agg[any] {
 		if dist {
 			return NewUnaryDistAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewD128Avg(typ)
 		if dist {
 			return NewUnaryDistAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for avg", typ))
 }
@@ -283,13 +283,13 @@ func newSum(typ types.Type, dist bool) Agg[any] {
 		if dist {
 			return NewUnaryDistAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewD128Sum()
 		if dist {
 			return NewUnaryDistAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for sum", typ))
 }
@@ -808,7 +808,7 @@ func newGenericCount[T types.OrderedT | Decimal128AndString](typ types.Type, dis
 	if dist {
 		return NewUnaryDistAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+	return NewUnaryAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
 func newGenericApproxcd[T any](typ types.Type, dist bool) Agg[any] {
