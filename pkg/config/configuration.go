@@ -132,8 +132,8 @@ var (
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
 
-	// defaultKillRountinesInterval default: 1 minutes
-	defaultKillRountinesInterval = 1
+	// defaultKillRountinesInterval default: 10 seconds
+	defaultKillRountinesInterval = 10
 
 	//defaultCleanKillQueueInterval default: 60 minutes
 	defaultCleanKillQueueInterval = 60
@@ -255,6 +255,7 @@ type FrontendParameters struct {
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
 
+	// Interval in seconds
 	KillRountinesInterval int `toml:"killRountinesInterval"`
 
 	CleanKillQueueInterval int `toml:"cleanKillQueueInterval"`
