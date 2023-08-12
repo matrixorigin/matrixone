@@ -116,7 +116,7 @@ func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
 	}
 	ts := opts.Txn().Txn().CommitTS
 	if !ts.IsEmpty() {
-		s.txnClient.(client.TxnClientWithCtl).SetLatestCommitTS(ts)
+		s.txnClient.SyncLatestCommitTS(ts)
 	}
 }
 

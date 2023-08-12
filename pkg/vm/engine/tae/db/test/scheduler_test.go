@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package test
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -35,7 +36,7 @@ func TestCheckpoint1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := initDB(ctx, t, opts)
+	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 1000
@@ -91,7 +92,7 @@ func TestCheckpoint2(t *testing.T) {
 	// opts.CheckpointCfg.ScannerInterval = 10
 	// opts.CheckpointCfg.ExecutionLevels = 2
 	// opts.CheckpointCfg.ExecutionInterval = 1
-	tae := initDB(ctx, t, opts)
+	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema1 := catalog.MockSchema(4, 2)
 	schema1.BlockMaxRows = 10
@@ -124,7 +125,7 @@ func TestCheckpoint2(t *testing.T) {
 		} else {
 			name = schema2.Name
 		}
-		appendClosure(t, data, name, tae, nil)()
+		testutil.AppendClosure(t, data, name, tae, nil)()
 	}
 	var meta *catalog.BlockEntry
 	testutils.WaitExpect(1000, func() bool {
@@ -132,7 +133,7 @@ func TestCheckpoint2(t *testing.T) {
 	})
 	assert.Equal(t, uint64(9), tae.Wal.GetPenddingCnt())
 	t.Log(tae.Wal.GetPenddingCnt())
-	appendClosure(t, bats[8], schema1.Name, tae, nil)()
+	testutil.AppendClosure(t, bats[8], schema1.Name, tae, nil)()
 	// t.Log(tae.MTBufMgr.String())
 
 	{
@@ -176,7 +177,7 @@ func TestSchedule1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	db := initDB(ctx, t, nil)
+	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -190,7 +191,7 @@ func TestSchedule1(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
-	compactBlocks(t, 0, db, "db", schema, false)
+	testutil.CompactBlocks(t, 0, db, "db", schema, false)
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	db.Close()
 }

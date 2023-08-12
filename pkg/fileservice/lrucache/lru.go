@@ -12,42 +12,66 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lruobjcache
+package lrucache
 
 import (
 	"container/list"
+	"context"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
-type LRU struct {
+type LRU[K comparable, V BytesLike] struct {
 	sync.Mutex
 	capacity  int64
 	size      int64
 	evicts    *list.List
-	kv        map[any]*list.Element
-	postSet   func(key any, value []byte, sz int64, isNewEntry bool)
-	postEvict func(key any, value []byte, sz int64)
+	kv        map[K]*list.Element
+	postSet   func(key K, value V, isNewEntry bool)
+	postEvict func(key K, value V)
 }
 
-type lruItem struct {
-	Key   any
-	Value []byte
-	Size  int64
+type BytesLike interface {
+	Bytes() []byte
 }
 
-func New(capacity int64,
-	postSet func(keySet any, valSet []byte, szSet int64, isNewEntry bool),
-	postEvict func(keyEvicted any, valEvicted []byte, szEvicted int64)) *LRU {
-	return &LRU{
+type Bytes []byte
+
+func (b Bytes) Size() int64 {
+	return int64(len(b))
+}
+
+func (b Bytes) Bytes() []byte {
+	return b
+}
+
+func (b Bytes) SetBytes() {
+	panic("not supported")
+}
+
+type lruItem[K comparable, V BytesLike] struct {
+	Key     K
+	Value   V
+	Size    int64
+	NumRead int
+}
+
+func New[K comparable, V BytesLike](
+	capacity int64,
+	postSet func(keySet K, valSet V, isNewEntry bool),
+	postEvict func(keyEvicted K, valEvicted V),
+) *LRU[K, V] {
+	return &LRU[K, V]{
 		capacity:  capacity,
 		evicts:    list.New(),
-		kv:        make(map[any]*list.Element),
+		kv:        make(map[K]*list.Element),
 		postSet:   postSet,
 		postEvict: postEvict,
 	}
 }
 
-func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
+func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 	l.Lock()
 	defer l.Unlock()
 
@@ -55,8 +79,9 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
 	if elem, ok := l.kv[key]; ok {
 		// replace
 		isNewEntry = false
-		item := elem.Value.(*lruItem)
+		item := elem.Value.(*lruItem[K, V])
 		l.size -= item.Size
+		size := int64(len(value.Bytes()))
 		l.size += size
 		if !preloading {
 			l.evicts.MoveToFront(elem)
@@ -68,7 +93,8 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
 	} else {
 		// insert
 		isNewEntry = true
-		item := &lruItem{
+		size := int64(len(value.Bytes()))
+		item := &lruItem[K, V]{
 			Key:   key,
 			Value: value,
 			Size:  size,
@@ -84,13 +110,23 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
 	}
 
 	if l.postSet != nil {
-		l.postSet(key, value, size, isNewEntry)
+		l.postSet(key, value, isNewEntry)
 	}
 
-	l.evict()
+	l.evict(ctx)
 }
 
-func (l *LRU) evict() {
+func (l *LRU[K, V]) evict(ctx context.Context) {
+	var numEvict, numEvictWithZeroRead int64
+	defer func() {
+		if numEvict > 0 || numEvictWithZeroRead > 0 {
+			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+				set.FileService.Cache.LRU.Evict.Add(numEvict)
+				set.FileService.Cache.LRU.EvictWithZeroRead.Add(numEvictWithZeroRead)
+			})
+		}
+	}()
+
 	for {
 		if l.size <= l.capacity {
 			return
@@ -104,12 +140,16 @@ func (l *LRU) evict() {
 			if elem == nil {
 				return
 			}
-			item := elem.Value.(*lruItem)
+			item := elem.Value.(*lruItem[K, V])
 			l.size -= item.Size
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)
 			if l.postEvict != nil {
-				l.postEvict(item.Key, item.Value, item.Size)
+				l.postEvict(item.Key, item.Value)
+			}
+			numEvict++
+			if item.NumRead == 0 {
+				numEvictWithZeroRead++
 			}
 			break
 		}
@@ -117,38 +157,39 @@ func (l *LRU) evict() {
 	}
 }
 
-func (l *LRU) Get(key any, preloading bool) (value []byte, size int64, ok bool) {
+func (l *LRU[K, V]) Get(ctx context.Context, key K, preloading bool) (value V, ok bool) {
 	l.Lock()
 	defer l.Unlock()
 	if elem, ok := l.kv[key]; ok {
 		if !preloading {
 			l.evicts.MoveToFront(elem)
 		}
-		item := elem.Value.(*lruItem)
-		return item.Value, item.Size, true
+		item := elem.Value.(*lruItem[K, V])
+		item.NumRead++
+		return item.Value, true
 	}
-	return nil, 0, false
+	return
 }
 
-func (l *LRU) Flush() {
+func (l *LRU[K, V]) Flush() {
 	l.Lock()
 	defer l.Unlock()
 	l.size = 0
 	l.evicts = list.New()
-	l.kv = make(map[any]*list.Element)
+	l.kv = make(map[K]*list.Element)
 }
 
-func (l *LRU) Capacity() int64 {
+func (l *LRU[K, V]) Capacity() int64 {
 	return l.capacity
 }
 
-func (l *LRU) Used() int64 {
+func (l *LRU[K, V]) Used() int64 {
 	l.Lock()
 	defer l.Unlock()
 	return l.size
 }
 
-func (l *LRU) Available() int64 {
+func (l *LRU[K, V]) Available() int64 {
 	l.Lock()
 	defer l.Unlock()
 	return l.capacity - l.size

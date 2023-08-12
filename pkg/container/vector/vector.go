@@ -477,6 +477,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	var err error
+
 	// read class
 	v.class = int(data[0])
 	data = data[1:]
@@ -648,6 +649,8 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Time](v, sels, negate)
 	case types.T_timestamp:
 		shrinkFixed[types.Timestamp](v, sels, negate)
+	case types.T_enum:
+		shrinkFixed[types.Enum](v, sels, negate)
 	case types.T_decimal64:
 		shrinkFixed[types.Decimal64](v, sels, negate)
 	case types.T_decimal128:
@@ -704,6 +707,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) error {
 		shuffleFixed[types.Time](v, sels, mp)
 	case types.T_timestamp:
 		shuffleFixed[types.Timestamp](v, sels, mp)
+	case types.T_enum:
+		shuffleFixed[types.Enum](v, sels, mp)
 	case types.T_decimal64:
 		shuffleFixed[types.Decimal64](v, sels, mp)
 	case types.T_decimal128:
@@ -1214,6 +1219,36 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			v.length += w.length
 			return nil
 		}
+	case types.T_enum:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Enum](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(&w.nsp, uint64(i)) {
+						nulls.Add(&v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
 	case types.T_decimal64:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
@@ -1691,6 +1726,17 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(&w.nsp, uint64(sel)), mp)
 		}
+	case types.T_enum:
+		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Enum(0), true, mp)
+			}
+			ws := MustFixedCol[types.Enum](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
+			return appendOneFixed(v, ws[sel], nulls.Contains(&w.nsp, uint64(sel)), mp)
+		}
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.GetUnionOneFunction", typ))
 	}
@@ -1865,6 +1911,17 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
+	case types.T_enum:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedCol[types.Enum](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
 	case types.T_decimal64:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
@@ -1973,7 +2030,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	}
 
 	if v.GetType().IsVarlen() {
-		err := BuildVarlenaFromValena(v, &v.col.([]types.Varlena)[oldLen], &(w.col.([]types.Varlena)[sel]), &w.area, mp)
+		err := BuildVarlenaFromValena(v, &v.col.([]types.Varlena)[oldLen], &w.col.([]types.Varlena)[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2011,7 +2068,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	if v.GetType().IsVarlen() {
 		var err error
 		var va types.Varlena
-		err = BuildVarlenaFromValena(v, &va, &(w.col.([]types.Varlena)[sel]), &w.area, mp)
+		err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2046,7 +2103,7 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			err = BuildVarlenaFromValena(v, &va, &(w.col.([]types.Varlena)[0]), &w.area, mp)
+			err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
@@ -2099,8 +2156,33 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
 			}
 		} else {
-			for i, sel := range sels {
-				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+			switch tlen {
+			case 8:
+				for i, sel := range sels {
+					p1 := unsafe.Pointer(&v.data[(oldLen+i)*8])
+					p2 := unsafe.Pointer(&w.data[int(sel)*8])
+					*(*int64)(p1) = *(*int64)(p2)
+				}
+			case 4:
+				for i, sel := range sels {
+					p1 := unsafe.Pointer(&v.data[(oldLen+i)*4])
+					p2 := unsafe.Pointer(&w.data[int(sel)*4])
+					*(*int32)(p1) = *(*int32)(p2)
+				}
+			case 2:
+				for i, sel := range sels {
+					p1 := unsafe.Pointer(&v.data[(oldLen+i)*2])
+					p2 := unsafe.Pointer(&w.data[int(sel)*2])
+					*(*int16)(p1) = *(*int16)(p2)
+				}
+			case 1:
+				for i, sel := range sels {
+					v.data[(oldLen + i)] = w.data[int(sel)]
+				}
+			default:
+				for i, sel := range sels {
+					copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+				}
 			}
 		}
 	}
@@ -2134,7 +2216,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			err = BuildVarlenaFromValena(v, &va, &(w.col.([]types.Varlena)[0]), &w.area, mp)
+			err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
@@ -2162,7 +2244,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
-						err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
+						err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 						if err != nil {
 							return err
 						}
@@ -2177,7 +2259,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
-						err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
+						err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 						if err != nil {
 							return err
 						}
@@ -2188,7 +2270,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
-					err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
+					err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -2199,7 +2281,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if flags[i] == 0 {
 						continue
 					}
-					err = BuildVarlenaFromValena(v, &vCol[v.length], &(wCol[int(offset)+i]), &w.area, mp)
+					err = BuildVarlenaFromValena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 					if err != nil {
 						return err
 					}
@@ -2285,6 +2367,8 @@ func (v *Vector) String() string {
 		return vecToString[types.Time](v)
 	case types.T_timestamp:
 		return vecToString[types.Timestamp](v)
+	case types.T_enum:
+		return vecToString[types.Enum](v)
 	case types.T_decimal64:
 		return vecToString[types.Decimal64](v)
 	case types.T_decimal128:
@@ -2306,7 +2390,11 @@ func (v *Vector) String() string {
 				return col[0]
 			}
 		}
-		return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+		if v.nsp.Any() {
+			return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+		} else {
+			return fmt.Sprintf("%v", col)
+		}
 	default:
 		panic("vec to string unknown types.")
 	}
@@ -2396,6 +2484,8 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(types.Time), false, mp)
 	case types.T_timestamp:
 		return appendOneFixed(vec, val.(types.Timestamp), false, mp)
+	case types.T_enum:
+		return appendOneFixed(vec, val.(types.Enum), false, mp)
 	case types.T_decimal64:
 		return appendOneFixed(vec, val.(types.Decimal64), false, mp)
 	case types.T_decimal128:
@@ -2687,7 +2777,11 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 			return fmt.Sprintf("%v", col[0])
 		}
 	}
-	return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+	if v.nsp.Any() {
+		return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
+	} else {
+		return fmt.Sprintf("%v", col)
+	}
 }
 
 // Window returns a "window" into the Vec.
@@ -2695,6 +2789,21 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 // The returned object is NOT allowed to be modified (
 // TODO: Nulls are deep copied.
 func (v *Vector) Window(start, end int) (*Vector, error) {
+	if v.IsConstNull() {
+		return NewConstNull(v.typ, end-start, nil), nil
+	} else if v.IsConst() {
+		vec := NewVec(v.typ)
+		vec.class = v.class
+		vec.col = v.col
+		vec.data = v.data
+		vec.area = v.area
+		vec.capacity = v.capacity
+		vec.length = end - start
+		vec.cantFreeArea = true
+		vec.cantFreeData = true
+		vec.sorted = v.sorted
+		return vec, nil
+	}
 	w := NewVec(v.typ)
 	if start == end {
 		return w, nil
@@ -2871,6 +2980,11 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minVal, maxVal := OrderedGetMinAndMax[types.Timestamp](v)
 		minv = types.EncodeTimestamp(&minVal)
 		maxv = types.EncodeTimestamp(&maxVal)
+
+	case types.T_enum:
+		minVal, maxVal := OrderedGetMinAndMax[types.Enum](v)
+		minv = types.EncodeEnum(&minVal)
+		maxv = types.EncodeEnum(&maxVal)
 
 	case types.T_decimal64:
 		col := MustFixedCol[types.Decimal64](v)
@@ -3079,7 +3193,7 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 	vlen := len(*bs)
 	area1 := vec.GetArea()
 	voff := len(area1)
-	if voff+vlen < cap(area1) || m == nil {
+	if voff+vlen <= cap(area1) || m == nil {
 		area1 = append(area1, *bs...)
 		v1.SetOffsetLen(uint32(voff), uint32(vlen))
 		vec.SetArea(area1)

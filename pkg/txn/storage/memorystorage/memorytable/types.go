@@ -194,6 +194,8 @@ func TypeMatch(v any, typ types.T) bool {
 		_, ok = v.(types.Datetime)
 	case types.T_timestamp:
 		_, ok = v.(types.Timestamp)
+	case types.T_enum:
+		_, ok = v.(types.Enum)
 	case types.T_interval:
 		_, ok = v.(types.IntervalType)
 	case types.T_char:

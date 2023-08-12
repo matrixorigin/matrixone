@@ -8,11 +8,11 @@ set tx_isolation = default;
 set tx_isolation = default;
 show variables like 'auto%';
 Variable_name    Value
-auto_generate_certs    off
+auto_generate_certs    on
 auto_increment_increment    1
 auto_increment_offset    1
 autocommit    on
-automatic_sp_privileges    off
+automatic_sp_privileges    on
 show variables like 'auto_increment_increment';
 Variable_name    Value
 auto_increment_increment    1
@@ -30,8 +30,8 @@ Variable_name    Value
 auto_increment_increment    6
 show variables like 'init%';
 Variable_name    Value
-init_connect
-init_file
+init_connect    
+init_file    
 show variables like 'init_connect';
 Variable_name    Value
 init_connect    
@@ -140,6 +140,7 @@ schemata
 character_sets
 triggers
 tables
+partitions
 views
 engines
 routines

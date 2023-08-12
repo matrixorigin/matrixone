@@ -20,6 +20,9 @@ var EqualFunctionName = "="
 var EqualFunctionEncodedID = encodeOverloadID(EQUAL, 0)
 var SerialFunctionEncodeID = encodeOverloadID(SERIAL, 0)
 
+var InFunctionEncodedID = encodeOverloadID(IN, 0)
+var InFunctionName = "in"
+
 func init() {
 	// init fixed type cast rule for binary operator like
 	// +, -, x, /, div, >=, =, != and so on.

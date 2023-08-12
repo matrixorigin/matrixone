@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -723,9 +724,15 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	cv, err := blk.GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer cv.Close()
+
+	pk, err := blk.GetColumnDataByName(context.Background(), schema.GetPrimaryKey().GetName())
+	assert.NoError(t, err)
+	defer pk.Close()
+
 	assert.NoError(t, txn.Commit(context.Background()))
-	delBat := batch.New(true, []string{hideCol[0].Name})
+	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0], _ = cv.GetData().GetDownstreamVector().Window(0, 20)
+	delBat.Vecs[1], _ = pk.GetData().GetDownstreamVector().Window(0, 20)
 
 	//delete 20 rows
 	deleteTxn := mock1PCTxn(handle.db)
@@ -983,10 +990,15 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	cv, err := it.GetBlock().GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer cv.Close()
+	pk, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.GetPrimaryKey().GetName())
+	assert.NoError(t, err)
+	defer pk.Close()
+
 	_ = it.Close()
 
-	delBat := batch.New(true, []string{hideCol[0].Name})
+	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = cv.GetData().GetDownstreamVector()
+	delBat.Vecs[1] = pk.GetData().GetDownstreamVector()
 
 	assert.NoError(t, txn.Commit(ctx))
 
@@ -1295,9 +1307,15 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	v, err := it.GetBlock().GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer v.Close()
+
+	pk, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.GetPrimaryKey().GetName())
+	assert.NoError(t, err)
+	defer pk.Close()
+
 	_ = it.Close()
-	delBat := batch.New(true, []string{hideCol[0].Name})
+	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = v.GetData().GetDownstreamVector()
+	delBat.Vecs[1] = pk.GetData().GetDownstreamVector()
 
 	assert.NoError(t, txn.Commit(ctx))
 
@@ -1634,10 +1652,17 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		it := tbH.MakeBlockIt()
 		v, err := it.GetBlock().GetColumnDataByName(context.Background(), hideCol[0].Name)
 		assert.NoError(t, err)
+		defer v.Close()
+
+		pk, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.GetPrimaryKey().GetName())
+		assert.NoError(t, err)
+		defer pk.Close()
+
 		_ = it.Close()
 
-		delBat = batch.New(true, []string{hideCol[0].Name})
+		delBat = batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 		delBat.Vecs[0] = v.GetData().GetDownstreamVector()
+		delBat.Vecs[1] = pk.GetData().GetDownstreamVector()
 
 		assert.NoError(t, txn.Commit(ctx))
 	}
@@ -1787,8 +1812,11 @@ func TestApplyDeltaloc(t *testing.T) {
 		assert.NoError(t, err)
 		rowIDVec := containers.MakeVector(types.T_Rowid.ToType())
 		rowIDVec.Append(*objectio.NewRowid(&id.BlockID, offset), false)
+		pkVec := containers.MakeVector(schema.GetPrimaryKey().GetType())
+		pkVec.Append(val, false)
 		bat := containers.NewBatch()
 		bat.AddVector(catalog.AttrRowID, rowIDVec)
+		bat.AddVector(schema.GetPrimaryKey().GetName(), pkVec)
 		insertEntry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "", containers.ToCNBatch(bat))
 		assert.NoError(t, err)
 
@@ -1837,7 +1865,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		assert.NoError(t, err)
 		blk, err := seg.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(t, err)
-		deltaLoc, err := mockCNDeleteInS3(h.db.Runtime.Fs, blk.GetBlockData(), schema, txn0, offsets)
+		deltaLoc, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, blk.GetBlockData(), schema, txn0, offsets)
 		assert.NoError(t, err)
 		delLocBat.Vecs[0].Append([]byte(deltaLoc.String()), false)
 	}
