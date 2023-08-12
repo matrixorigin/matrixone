@@ -63,6 +63,10 @@ func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err
 	var fubarStack []int
 	var ok process.ExecStatus
 
+	if proc.LogTableName != "" {
+		ShowInstructionsList(ins, proc.LogTableName)
+	}
+
 	for i := start; i < len(ins); i++ {
 		if ok, err = execFunc[ins[i].Op](ins[i].Idx, proc, ins[i].Arg, ins[i].IsFirst, ins[i].IsLast); err != nil {
 			// error handling weirdness
@@ -87,4 +91,65 @@ func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err
 		}
 	}
 	return end, err
+}
+
+func ShowInstructionsList(ins Instructions, tableName string) {
+	insflow := ""
+	for i, in := range ins {
+		if i == 0 {
+			insflow += debugInstructionNames[in.Op]
+		} else {
+			insflow += "->"
+			insflow += debugInstructionNames[in.Op]
+		}
+	}
+	logutil.Infof("Table[%s] ----------------------- Instructions flow is:  %s", tableName, insflow)
+}
+
+var debugInstructionNames = map[OpType]string{
+	Top:            "top",
+	Join:           "join",
+	Semi:           "semi",
+	RightSemi:      "right semi",
+	RightAnti:      "right anti",
+	Left:           "left",
+	Right:          "right",
+	Limit:          "limit",
+	Merge:          "merge",
+	Order:          "order",
+	Group:          "group",
+	Output:         "output",
+	Offset:         "offset",
+	Product:        "product",
+	Restrict:       "restrict",
+	Dispatch:       "dispatch",
+	Shuffle:        "shuffle",
+	Connector:      "connect",
+	Projection:     "projection",
+	Anti:           "anti",
+	Single:         "single",
+	Mark:           "mark",
+	LoopJoin:       "loop join",
+	LoopLeft:       "loop left",
+	LoopSemi:       "loop semi",
+	LoopAnti:       "loop anti",
+	LoopSingle:     "loop single",
+	LoopMark:       "loop mark",
+	MergeTop:       "merge top",
+	MergeLimit:     "merge limit",
+	MergeOrder:     "merge order",
+	MergeGroup:     "merge group",
+	MergeOffset:    "merge offset",
+	MergeRecursive: "merge recursive",
+	MergeCTE:       "merge cte",
+	Deletion:       "delete",
+	Insert:         "insert",
+	PreInsert:      "pre insert",
+	External:       "external",
+	Minus:          "minus",
+	Intersect:      "intersect",
+	IntersectAll:   "intersect all",
+	HashBuild:      "hash build",
+	MergeDelete:    "merge delete",
+	LockOp:         "lockop",
 }

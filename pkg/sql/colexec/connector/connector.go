@@ -33,9 +33,15 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 	reg := ap.Reg
 	bat := proc.InputBatch()
 	if bat == nil {
+		if ap.IsLog {
+			logutil.Infof("Table[%s] connector operator input batch is NULL, arg ptr[%p]", ap.TableName, arg)
+		}
 		return process.ExecStop, nil
 	}
 	if bat.RowCount() == 0 {
+		if ap.IsLog {
+			logutil.Infof("Table[%s] connector operator input batch RowCount() == 0, arg ptr[%p]", ap.TableName, arg)
+		}
 		bat.Clean(proc.Mp())
 		return process.ExecNext, nil
 	}
