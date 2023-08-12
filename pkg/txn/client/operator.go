@@ -514,17 +514,14 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	if tc.option.readyOnly {
 		util.GetLogger().Fatal("can not write on ready only transaction")
 	}
-
+	var payload []*txn.TxnRequest
 	if commit {
-		if len(requests) == 0 && tc.workspace != nil {
+		if tc.workspace != nil {
 			reqs, err := tc.workspace.Commit(ctx)
 			if err != nil {
 				return nil, errors.Join(err, tc.Rollback(ctx))
 			}
-			requests = reqs
-			for idx := range requests {
-				requests[idx].Method = txn.TxnMethod_Write
-			}
+			payload = reqs
 		}
 		tc.mu.Lock()
 		defer func() {
@@ -545,6 +542,15 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		return nil, err
 	}
 
+	if payload != nil {
+		txnReqs := make([]txn.TxnRequest, 0, len(payload))
+		for _, req := range payload {
+			req.Txn = tc.getTxnMeta(true)
+			txnReqs = append(txnReqs, *req)
+		}
+		tc.updateWritePartitions(txnReqs, commit)
+	}
+
 	tc.updateWritePartitions(requests, commit)
 
 	// delayWrites enabled, no responses
@@ -562,6 +568,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			Method: txn.TxnMethod_Commit,
 			Flag:   txn.SkipResponseFlag,
 			CommitRequest: &txn.TxnCommitRequest{
+				Payload:       payload,
 				Disable1PCOpt: tc.option.disable1PCOpt,
 			}})
 	}

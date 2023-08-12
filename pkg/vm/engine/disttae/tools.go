@@ -735,7 +735,7 @@ func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 	}
 }
 
-func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error) {
+func genWriteReqs(ctx context.Context, writes []Entry) ([]*txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByDN{})
@@ -766,7 +766,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 			mq[e.dnStore.ServiceID] = e.dnStore
 		}
 	}
-	reqs := make([]txn.TxnRequest, 0, len(mp))
+	reqs := make([]*txn.TxnRequest, 0, len(mp))
 	for k := range mp {
 		payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: mp[k]})
 		if err != nil {
@@ -774,7 +774,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 		}
 		dn := mq[k]
 		for _, info := range dn.Shards {
-			reqs = append(reqs, txn.TxnRequest{
+			reqs = append(reqs, &txn.TxnRequest{
 				CNRequest: &txn.CNOpRequest{
 					OpCode:  uint32(api.OpCode_OpPreCommit),
 					Payload: payload,

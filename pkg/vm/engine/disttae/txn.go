@@ -643,7 +643,7 @@ func (txn *Transaction) getCachedTable(
 	return nil
 }
 
-func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
+func (txn *Transaction) Commit(ctx context.Context) ([]*txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
 	txn.IncrStatementID(ctx, true)
 	defer txn.delTransaction()
