@@ -69,6 +69,7 @@ const (
 	T_uuid      T = 63
 	T_binary    T = 64
 	T_varbinary T = 65
+	T_enum      T = 66
 
 	// blobs
 	T_blob T = 70
@@ -177,6 +178,8 @@ type Timestamp int64
 type Time int64
 
 type Decimal64 uint64
+
+type Enum uint16
 
 type Decimal128 struct {
 	B0_63   uint64
@@ -309,7 +312,7 @@ type BuiltinNumber interface {
 }
 
 type OrderedT interface {
-	constraints.Ordered | Date | Time | Datetime | Timestamp
+	constraints.Ordered
 }
 
 type Decimal interface {
@@ -366,6 +369,8 @@ var Types map[string]T = map[string]T{
 
 	"binary":    T_binary,
 	"varbinary": T_varbinary,
+
+	"enum": T_enum,
 
 	"json": T_json,
 	"text": T_text,
