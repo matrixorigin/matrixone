@@ -294,6 +294,8 @@ func TestNewObjectReader(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = objectWriter.WriteSubBlock(bat, 2)
 	assert.Nil(t, err)
+	_, err = objectWriter.WriteSubBlock(bat, 26)
+	assert.Nil(t, err)
 	ts := time.Now()
 	option := WriteOptions{
 		Type: WriteTS,
@@ -301,7 +303,7 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
-	assert.Equal(t, 4, len(blocks))
+	assert.Equal(t, 5, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	ext := blocks[0].BlockHeader().MetaLocation()
@@ -313,6 +315,8 @@ func TestNewObjectReader(t *testing.T) {
 	meta, _ = metaHeader.TombstoneMeta()
 	assert.Equal(t, uint32(1), meta.BlockCount())
 	meta, _ = metaHeader.SubMeta(0)
+	assert.Equal(t, uint32(1), meta.BlockCount())
+	meta, _ = metaHeader.SubMeta(24)
 	assert.Equal(t, uint32(1), meta.BlockCount())
 }
 

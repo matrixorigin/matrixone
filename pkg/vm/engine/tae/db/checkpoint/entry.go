@@ -146,8 +146,8 @@ func (e *CheckpointEntry) String() string {
 func (e *CheckpointEntry) Prefetch(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
-) (data *logtail.CheckpointData, err error) {
-	data = logtail.NewCheckpointData()
+	data *logtail.CheckpointData,
+) (err error) {
 	reader, err := blockio.NewObjectReader(fs.Service, e.dnLocation)
 	if err != nil {
 		return
@@ -167,13 +167,13 @@ func (e *CheckpointEntry) Prefetch(
 func (e *CheckpointEntry) Read(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
-) (data *logtail.CheckpointData, err error) {
+	data *logtail.CheckpointData,
+) (err error) {
 	reader, err := blockio.NewObjectReader(fs.Service, e.dnLocation)
 	if err != nil {
 		return
 	}
 
-	data = logtail.NewCheckpointData()
 	if err = data.ReadFrom(
 		ctx,
 		e.version,
@@ -190,8 +190,8 @@ func (e *CheckpointEntry) Read(
 func (e *CheckpointEntry) PrefetchMetaIdx(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
-) (err error) {
-	data := logtail.NewCheckpointData()
+) (data *logtail.CheckpointData, err error) {
+	data = logtail.NewCheckpointData()
 	if err = data.PrefetchMeta(
 		ctx,
 		e.version,
@@ -206,12 +206,12 @@ func (e *CheckpointEntry) PrefetchMetaIdx(
 func (e *CheckpointEntry) ReadMetaIdx(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
+	data *logtail.CheckpointData,
 ) (err error) {
 	reader, err := blockio.NewObjectReader(fs.Service, e.dnLocation)
 	if err != nil {
 		return
 	}
-	data := logtail.NewCheckpointData()
 	return data.ReadDNMetaBatch(ctx, e.version, e.dnLocation, reader)
 }
 

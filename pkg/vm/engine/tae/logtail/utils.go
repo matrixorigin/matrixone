@@ -1524,7 +1524,7 @@ func (data *CheckpointData) ReadDNMetaBatch(
 	reader *blockio.BlockReader,
 ) (err error) {
 	if data.bats[DNMetaIDX].Length() == 0 {
-		if version < CheckpointVersion4 {
+		if version == CheckpointVersion4 {
 			var bats []*containers.Batch
 			item := checkpointDataReferVersions[version][DNMetaIDX]
 			bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, DNMetaIDX, reader)
@@ -1569,6 +1569,11 @@ func (data *CheckpointData) PrefetchMeta(
 	return blockio.PrefetchWithMerged(pref)
 }
 
+type blockIdx struct {
+	location objectio.Location
+	dataType uint16
+}
+
 func (data *CheckpointData) PrefetchFrom(
 	ctx context.Context,
 	version uint32,
@@ -1577,36 +1582,37 @@ func (data *CheckpointData) PrefetchFrom(
 	if version < CheckpointVersion4 {
 		return prefetchCheckpointData(ctx, version, service, key)
 	}
-	//return
-	reader, err := blockio.NewObjectReader(service, key)
-	if err != nil {
-		return
-	}
-	err = data.readMetaBatch(ctx, version, reader, nil)
-	if err != nil {
-		return
-	}
-	data.replayMetaBatch()
+	blocks := vector.MustBytesCol(data.bats[DNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).GetDownstreamVector())
+	dataType := vector.MustFixedCol[uint16](data.bats[DNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).GetDownstreamVector())
 	var pref blockio.PrefetchParams
-	for _, location := range data.locations {
+	locations := make(map[string][]blockIdx)
+	for i := 0; i < len(blocks); i++ {
+		location := objectio.Location(blocks[i])
 		if location.IsEmpty() {
 			continue
 		}
-		pref, err = blockio.BuildAllSubPrefetchParams(service, location)
-		if err != nil {
-			return
+		name := location.Name()
+		if locations[name.String()] == nil {
+			locations[name.String()] = make([]blockIdx, 0)
 		}
-		for idx := range checkpointDataReferVersions[version] {
-			schema := checkpointDataReferVersions[version][uint32(idx)]
+		locations[name.String()] = append(locations[name.String()], blockIdx{location: location, dataType: dataType[i]})
+	}
+	for _, blockIdxes := range locations {
+		pref, err = blockio.BuildSubPrefetchParams(service, blockIdxes[0].location)
+		for _, idx := range blockIdxes {
+			schema := checkpointDataReferVersions[version][idx.dataType]
 			idxes := make([]uint16, len(schema.attrs))
 			for attr := range schema.attrs {
 				idxes[attr] = uint16(attr)
 			}
-			pref.AddBlock(idxes, []uint16{uint16(idx)})
+			pref.AddBlockWithType(idxes, []uint16{idx.location.ID()}, idx.dataType)
 		}
-		return blockio.PrefetchWithMerged(pref)
+		err = blockio.PrefetchWithMerged(pref)
+		if err != nil {
+			logutil.Warnf("PrefetchFrom PrefetchWithMerged error %v", err)
+		}
 	}
-	return nil
+	return
 }
 
 func prefetchCheckpointData(
