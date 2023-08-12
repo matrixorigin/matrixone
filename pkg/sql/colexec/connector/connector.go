@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	golang "runtime/debug"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -40,7 +41,7 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 	}
 	if bat.RowCount() == 0 {
 		if ap.IsLog {
-			logutil.Infof("Table[%s] connector operator input batch RowCount() == 0, arg ptr[%p]", ap.TableName, arg)
+			logutil.Infof("Table[%s] connector operator input batch RowCount() == 0, arg ptr[%p], bat ptr[%p], bat cnt: %d, function call stack: %s", ap.TableName, arg, bat, bat.Cnt, golang.Stack())
 		}
 		bat.Clean(proc.Mp())
 		return process.ExecNext, nil
@@ -48,19 +49,19 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 	select {
 	case <-proc.Ctx.Done():
 		if ap.IsLog {
-			logutil.Infof("Table[%s] proc context done during connector send, input batch is: %s , arg ptr[%p]", ap.TableName, bat.PrintBatch(), arg)
+			logutil.Infof("Table[%s] proc context done during connector send, input batch is: %s , arg ptr[%p], bat ptr[%p], bat cnt: %d", ap.TableName, bat.PrintBatch(), arg, bat, bat.Cnt)
 		}
 		proc.PutBatch(bat)
 		return process.ExecStop, nil
 	case <-reg.Ctx.Done():
 		if ap.IsLog {
-			logutil.Infof("Table[%s] reg.Ctx done during connector send, input batch is: %s , arg ptr[%p]", ap.TableName, bat.PrintBatch(), arg)
+			logutil.Infof("Table[%s] reg.Ctx done during connector send, input batch is: %s , arg ptr[%p], bat ptr[%p], bat cnt: %d", ap.TableName, bat.PrintBatch(), arg, bat, bat.Cnt)
 		}
 		proc.PutBatch(bat)
 		return process.ExecStop, nil
 	case reg.Ch <- bat:
 		if ap.IsLog {
-			logutil.Infof("Table[%s] proc.SetInputBatch(nil) send ok, input batch is:%s, arg ptr[%p]", ap.TableName, bat.PrintBatch(), arg)
+			logutil.Infof("Table[%s] proc.SetInputBatch(nil) send ok, input batch is:%s, arg ptr[%p], bat ptr[%p], bat cnt: %d", ap.TableName, bat.PrintBatch(), arg, bat, bat.Cnt)
 		}
 		proc.SetInputBatch(nil)
 		return process.ExecNext, nil

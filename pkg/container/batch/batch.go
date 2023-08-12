@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	golang "runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -218,6 +220,10 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	bat.Attrs = nil
 	bat.rowCount = 0
 	bat.Vecs = nil
+	logutil.Infof("Clean() clean batch ptr is: [%p], bat cnt: %d", bat, bat.Cnt)
+	if bat.TableName != "" {
+		logutil.Infof("Clean()  Table[%s] ,clean batch ptr is: [%p], bat cnt: %d , function Call stack is: %s", bat.TableName, bat, bat.Cnt, golang.Stack())
+	}
 }
 
 func (bat *Batch) Last() bool {
@@ -243,6 +249,7 @@ func (bat *Batch) CleanOnlyData() {
 		}
 	}
 	bat.rowCount = 0
+	logutil.Infof("CleanOnlyData() clean batch ptr is: [%p], bat cnt: %d", bat, bat.Cnt)
 }
 
 // XXX Useless function, cannot provide any information.

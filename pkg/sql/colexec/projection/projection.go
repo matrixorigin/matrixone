@@ -59,14 +59,14 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 	if bat.Last() {
 		if ap.IsLog {
-			logutil.Infof("Table[%s] projection operator input batch is last, ap ptr[%p]", ap.TableName, ap)
+			logutil.Infof("Table[%s] projection operator input batch is last, ap ptr[%p], bat ptr[%p], bat cnt: %d", ap.TableName, ap, bat, bat.Cnt)
 		}
 		proc.SetInputBatch(bat)
 		return process.ExecNext, nil
 	}
 	if bat.IsEmpty() {
 		if ap.IsLog {
-			logutil.Infof("Table[%s] projection operator input batch is empty, ap ptr[%p]", ap.TableName, ap)
+			logutil.Infof("Table[%s] projection operator input batch is empty, ap ptr[%p], bat ptr[%p], bat cnt: %d", ap.TableName, ap, bat, bat.Cnt)
 		}
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(batch.EmptyBatch)
@@ -74,7 +74,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 
 	if ap.IsLog {
-		logutil.Infof("Table[%s] projection operator input batch: %s, ap ptr[%p]", ap.TableName, bat.PrintBatch(), ap)
+		logutil.Infof("Table[%s] projection operator input batch: %s, ap ptr[%p], bat ptr[%p], bat cnt: %d", ap.TableName, bat.PrintBatch(), ap, bat, bat.Cnt)
 	}
 
 	anal.Input(bat, isFirst)
@@ -86,7 +86,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			if ap.IsLog {
-				logutil.Infof("Table[%s] projection operator do projection err1: %s, ap ptr[%p]", ap.TableName, err.Error(), ap)
+				logutil.Infof("Table[%s] projection operator do projection err1: %s, ap ptr[%p], bat ptr[%p], bat cnt: %d", ap.TableName, err.Error(), ap, bat, bat.Cnt)
 			}
 			return process.ExecNext, err
 		}
@@ -109,7 +109,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	if ap.IsLog {
-		logutil.Infof("Table[%s] projection operator output batch: %s, ap ptr[%p]", ap.TableName, rbat.PrintBatch(), ap)
+		rbat.TableName = ap.TableName
+		logutil.Infof("Table[%s] projection operator output batch: %s, ap ptr[%p], rbat ptr[%p], rbat cnt: %d", ap.TableName, rbat.PrintBatch(), ap, rbat, rbat.Cnt)
 	}
 	return process.ExecNext, nil
 }
