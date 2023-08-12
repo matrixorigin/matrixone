@@ -2701,7 +2701,6 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		// this is for shuffle join
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *batch.Batch, 16),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
