@@ -29,6 +29,7 @@ select approx_count(*) from t;
 insert into t select * from t;
 insert into t select * from t;
 select approx_count(*) from t;
+-- @separator:table
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
 select approx_count(*) from t;
 
