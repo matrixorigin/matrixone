@@ -2698,7 +2698,6 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	}
 
 	if ss == nil {
-		// this is for shuffle join
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
 		}
