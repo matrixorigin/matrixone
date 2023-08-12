@@ -229,6 +229,14 @@ func DecodeTimestamp(v []byte) Timestamp {
 	return *(*Timestamp)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeEnum(v *Enum) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 2)
+}
+
+func DecodeEnum(v []byte) Enum {
+	return *(*Enum)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeDecimal64(v *Decimal64) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(v)), Decimal64Size)
 }
@@ -341,6 +349,8 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[Rowid](val)
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return val
+	case T_enum:
+		return DecodeFixed[Enum](val)
 	default:
 		panic(fmt.Sprintf("unsupported type %v", t))
 	}
@@ -390,6 +400,8 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(Rowid))
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
 		return val.([]byte)
+	case T_enum:
+		return EncodeFixed(val.(Enum))
 	default:
 		panic(fmt.Sprintf("unsupported type %v", t))
 	}

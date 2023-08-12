@@ -408,6 +408,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 			zm := colmeta.ZoneMap()
 			newInfo.Max = zm.GetMaxBuf()
 			newInfo.Min = zm.GetMinBuf()
+			newInfo.Sum = zm.GetSumBuf()
 
 			infoList = append(infoList, newInfo)
 		}
@@ -803,10 +804,11 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 					Name:  attr.Attr.Name,
 					ColId: attr.Attr.ID,
 					Typ: &plan.Type{
-						Id:       int32(attr.Attr.Type.Oid),
-						Width:    attr.Attr.Type.Width,
-						Scale:    attr.Attr.Type.Scale,
-						AutoIncr: attr.Attr.AutoIncrement,
+						Id:         int32(attr.Attr.Type.Oid),
+						Width:      attr.Attr.Type.Width,
+						Scale:      attr.Attr.Type.Scale,
+						AutoIncr:   attr.Attr.AutoIncrement,
+						Enumvalues: attr.Attr.EnumVlaues,
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,

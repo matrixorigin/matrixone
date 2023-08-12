@@ -167,6 +167,24 @@ func TestQueryServiceAlterAccount(t *testing.T) {
 	})
 }
 
+func TestQueryServiceKillConn(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1"}
+	runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		defer cancel()
+		req := svc.NewRequest(pb.CmdMethod_KillConn)
+		req.KillConnRequest = &pb.KillConnRequest{
+			AccountID: 10,
+			Version:   10,
+		}
+		resp, err := svc.SendMessage(ctx, addr, req)
+		assert.NoError(t, err)
+		defer svc.Release(resp)
+		assert.NotNil(t, resp.KillConnResponse)
+		assert.Equal(t, true, resp.KillConnResponse.Success)
+	})
+}
+
 func runTestWithQueryService(t *testing.T, cn metadata.CNService,
 	fn func(svc QueryService, addr string, sm *SessionManager)) {
 	defer leaktest.AfterTest(t)()
@@ -190,6 +208,10 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService,
 	sm := NewSessionManager()
 	qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{}, sm)
 	assert.NoError(t, err)
+	qs.AddHandleFunc(pb.CmdMethod_KillConn, func(ctx context.Context, request *pb.Request, response *pb.Response) error {
+		response.KillConnResponse = &pb.KillConnResponse{Success: true}
+		return nil
+	}, false)
 	err = qs.Start()
 	assert.NoError(t, err)
 
