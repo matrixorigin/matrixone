@@ -311,6 +311,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 						joinHashCol, _ := GetHashColumn(arg)
 						if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
 							n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+							return
 						}
 					}
 				}
