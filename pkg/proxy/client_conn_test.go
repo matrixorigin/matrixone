@@ -166,26 +166,6 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		c.prepareStmts = append(c.prepareStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
 		return nil
-	case *suspendAccountEvent:
-		cns, err := c.router.SelectByTenant(ev.account)
-		if err != nil {
-			sendResp([]byte(err.Error()), resp)
-			return err
-		}
-		for _, cn := range cns {
-			sendResp([]byte(cn.addr), resp)
-		}
-		return nil
-	case *dropAccountEvent:
-		cns, err := c.router.SelectByTenant(ev.account)
-		if err != nil {
-			sendResp([]byte(err.Error()), resp)
-			return err
-		}
-		for _, cn := range cns {
-			sendResp([]byte(cn.addr), resp)
-		}
-		return nil
 	default:
 		sendResp([]byte("type not supported"), resp)
 		return moerr.NewInternalErrorNoCtx("type not supported")

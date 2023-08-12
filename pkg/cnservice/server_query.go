@@ -15,6 +15,10 @@
 package cnservice
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 )
 
@@ -25,4 +29,26 @@ func (s *service) initQueryService() {
 		panic(err)
 	}
 	s.queryService = svc
+	s.initQueryCommandHandler()
+}
+
+func (s *service) initQueryCommandHandler() {
+	s.queryService.AddHandleFunc(query.CmdMethod_KillConn, s.handleKillConn, false)
+}
+
+func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req == nil || req.KillConnRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	if rm == nil {
+		return moerr.NewInternalError(ctx, "routine manager not initialized")
+	}
+	accountMgr := rm.GetAccountRoutineManager()
+	if accountMgr == nil {
+		return moerr.NewInternalError(ctx, "account routine manager not initialized")
+	}
+
+	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+	return nil
 }
