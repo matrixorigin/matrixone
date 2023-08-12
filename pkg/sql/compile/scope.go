@@ -478,6 +478,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 			probeScope := c.newJoinProbeScope(s, nil)
 			s.PreScopes = append(s.PreScopes, probeScope)
 		}
+		// this is for shuffle join
+		s.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, 16)
 		s.Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 16)
 		return s.MergeRun(c)
 	}
