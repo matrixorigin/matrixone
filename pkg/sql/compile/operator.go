@@ -974,7 +974,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		Exprs:     n.GroupBy,
 		Ibucket:   uint64(ibucket),
 		Nbucket:   uint64(nbucket),
-		IsShuffle: n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
+		IsShuffle: n.Stats != nil && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
