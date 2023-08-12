@@ -617,7 +617,7 @@ func (data *CNCheckpointData) PrefetchMetaIdx(
 		return
 	}
 	pref, err = blockio.BuildSubPrefetchParams(service, key)
-	pref.AddBlockWithType(idxes, []uint16{key.ID()}, MetaIDX)
+	pref.AddBlockWithType(idxes, []uint16{0}, MetaIDX)
 
 	return blockio.PrefetchWithMerged(pref)
 }
