@@ -16,7 +16,9 @@ package frontend
 
 import (
 	"context"
-
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -212,4 +214,31 @@ func (prepareStmt *PrepareStmt) Close() {
 			}
 		}
 	}
+}
+
+var _ buf.Allocator = &SessionAllocator{}
+
+type SessionAllocator struct {
+	mp *mpool.MPool
+}
+
+func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+	pool, err := mpool.NewMPool("frontend-goetty-pool-cn-level", pu.SV.GuestMmuLimitation, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	ret := &SessionAllocator{mp: pool}
+	return ret
+}
+
+func (s *SessionAllocator) Alloc(capacity int) []byte {
+	alloc, err := s.mp.Alloc(capacity)
+	if err != nil {
+		panic(err)
+	}
+	return alloc
+}
+
+func (s SessionAllocator) Free(bs []byte) {
+	s.mp.Free(bs)
 }
