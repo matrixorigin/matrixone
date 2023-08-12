@@ -309,6 +309,10 @@ type Table struct {
 	name2ColumnIdx map[string]int
 	// accessIdx used in Row
 	accountIdx int
+
+	TableType      int
+	CreateTableSql string
+	CreateViewSql  string
 }
 
 func (tbl *Table) Clone() *Table {

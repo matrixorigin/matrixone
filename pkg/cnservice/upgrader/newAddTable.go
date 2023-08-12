@@ -15,67 +15,80 @@
 package upgrader
 
 import (
-	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var (
 	// mo_table_partitions;
-	//+----------------------+-----------------------+------+------+---------+-------+---------+
-	//| Field                | Type                  | Null | Key  | Default | Extra | Comment |
-	//+----------------------+-----------------------+------+------+---------+-------+---------+
-	//| table_id             | BIGINT UNSIGNED(64)   | NO   | PRI  | NULL    |       |         |
-	//| database_id          | BIGINT UNSIGNED(64)   | NO   |      | NULL    |       |         |
-	//| number               | SMALLINT UNSIGNED(16) | NO   |      | NULL    |       |         |
-	//| name                 | VARCHAR(64)           | NO   | PRI  | NULL    |       |         |
-	//| partition_type       | VARCHAR(50)           | NO   |      | NULL    |       |         |
-	//| partition_expression | VARCHAR(2048)         | YES  |      | NULL    |       |         |
-	//| description_utf8     | TEXT(0)               | YES  |      | NULL    |       |         |
-	//| comment              | VARCHAR(2048)         | NO   |      | NULL    |       |         |
-	//| options              | TEXT(0)               | YES  |      | NULL    |       |         |
-	//| partition_table_name | VARCHAR(1024)         | NO   |      | NULL    |       |         |
-	//+----------------------+-----------------------+------+------+---------+-------+---------+
-	tableIdCol          = table.UInt64Column("table_id", "")
-	databaseIdCol       = table.UInt64Column("database_id", "")
-	numberCol           = table.UInt16Column("number", "")
-	nameCol             = table.UInt16Column("name", "")
-	partitionTypeCol    = table.UInt16Column("partition_type", "")
-	partitionExprCol    = table.UInt16Column("partition_expression", "")
-	descriptionUtf8Col  = table.UInt16Column("description_utf8", "")
-	commentCol          = table.UInt16Column("comment", "")
-	optionsCol          = table.UInt16Column("options", "")
-	partitionTblNameCol = table.UInt16Column("partition_table_name", "")
-
 	MoTablePartitionsTable = &table.Table{
 		Account:  table.AccountSys,
-		Database: catalog2.MO_CATALOG,
-		Table:    catalog2.MO_TABLE_PARTITIONS,
-		Columns: []table.Column{
-			tableIdCol,
-			databaseIdCol,
-			numberCol,
-			nameCol,
-			partitionTypeCol,
-			partitionExprCol,
-			descriptionUtf8Col,
-			commentCol,
-			optionsCol,
-			partitionTblNameCol,
-		},
-		PrimaryKeyColumn: []table.Column{tableIdCol, nameCol},
-		ClusterBy:        nil,
-		// Engine
-		Engine:        table.NormalTableEngine, // XXX ???
-		Comment:       "",
-		PathBuilder:   nil,
-		AccountColumn: nil,
-		// TimestampColumn
-		TimestampColumn: nil,
-		// SupportUserAccess
-		SupportUserAccess: true,
-		// SupportConstAccess
-		SupportConstAccess: true,
+		Database: catalog.MO_CATALOG,
+		Table:    catalog.MO_TABLE_PARTITIONS,
+		CreateTableSql: fmt.Sprintf(`CREATE TABLE %s.%s (
+			  table_id bigint unsigned NOT NULL,
+			  database_id bigint unsigned not null,
+			  number smallint unsigned NOT NULL,
+			  name varchar(64) NOT NULL,
+    		  partition_type varchar(50) NOT NULL,
+              partition_expression varchar(2048) NULL,
+			  description_utf8 text,
+			  comment varchar(2048) NOT NULL,
+			  options text,
+			  partition_table_name varchar(1024) NOT NULL,
+    		  PRIMARY KEY table_id (table_id, name)
+			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS),
 	}
 )
 
 var needUpgradNewTable = []*table.Table{MoTablePartitionsTable}
+
+var PARTITIONSView = &table.Table{
+	Account:  table.AccountSys,
+	Database: sysview.InformationDBConst,
+	Table:    "PARTITIONS",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PARTITIONS` AS " +
+		"SELECT " +
+		"'def' AS `TABLE_CATALOG`," +
+		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
+		"`tbl`.`relname` AS `TABLE_NAME`," +
+		"`part`.`name` AS `PARTITION_NAME`," +
+		"NULL AS `SUBPARTITION_NAME`," +
+		"`part`.`number` AS `PARTITION_ORDINAL_POSITION`," +
+		"NULL AS `SUBPARTITION_ORDINAL_POSITION`," +
+		"(case `part`.`partition_type` when 'HASH' then 'HASH' " +
+		"when 'RANGE' then 'RANGE' " +
+		"when 'LIST' then 'LIST' " +
+		"when 'AUTO' then 'AUTO' " +
+		"when 'KEY_51' then 'KEY' " +
+		"when 'KEY_55' then 'KEY' " +
+		"when 'LINEAR_KEY_51' then 'LINEAR KEY' " +
+		"when 'LINEAR_KEY_55' then 'LINEAR KEY' " +
+		"when 'LINEAR_HASH' then 'LINEAR HASH' " +
+		"when 'RANGE_COLUMNS' then 'RANGE COLUMNS' " +
+		"when 'LIST_COLUMNS' then 'LIST COLUMNS' else NULL end) AS `PARTITION_METHOD`," +
+		"NULL AS `SUBPARTITION_METHOD`," +
+		"`part`.`partition_expression` AS `PARTITION_EXPRESSION`," +
+		"NULL AS `SUBPARTITION_EXPRESSION`," +
+		"`part`.`description_utf8` AS `PARTITION_DESCRIPTION`," +
+		"mo_table_rows(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `TABLE_ROWS`," +
+		"0 AS `AVG_ROW_LENGTH`," +
+		"mo_table_size(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `DATA_LENGTH`," +
+		"0 AS `MAX_DATA_LENGTH`," +
+		"0 AS `INDEX_LENGTH`," +
+		"0 AS `DATA_FREE`," +
+		"`tbl`.`created_time` AS `CREATE_TIME`," +
+		"NULL AS `UPDATE_TIME`," +
+		"NULL AS `CHECK_TIME`," +
+		"NULL AS `CHECKSUM`," +
+		"ifnull(`part`.`comment`,'')  AS `PARTITION_COMMENT`," +
+		"'default' AS `NODEGROUP`," +
+		"NULL AS `TABLESPACE_NAME` " +
+		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
+		"ON `part`.`table_id` = `tbl`.`rel_id` " +
+		"WHERE `tbl`.`partitioned` = 1;",
+}
+
+var needUpgradNewView = []*table.Table{PARTITIONSView}

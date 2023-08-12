@@ -17,13 +17,11 @@ package upgrader
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"strings"
 )
 
 var registeredTable = []*table.Table{motrace.SingleRowLogTable}
@@ -68,6 +66,11 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 	// Check for errors
 	if err := result.Error(); err != nil {
 		return nil, err
+	}
+
+	cnt := result.RowCount()
+	if cnt == 0 {
+		return nil, nil
 	}
 
 	// Build a list of table.Columns based on the query result
@@ -177,68 +180,99 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		return nil
 	}
 
-	for _, tbl := range registeredTable {
-		currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
-		if err != nil {
-			return err
-		}
-
-		diff, err := u.GenerateDiff(currentSchema, tbl)
-		if err != nil {
-			return err
-		}
-
-		upgradeSQL, err := u.GenerateUpgradeSQL(diff)
-		if err != nil {
-			return err
-		}
-
-		// Execute upgrade SQL
-		if err := exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
-			return err
-		}
-	}
-	//if err := u.UpgradeNewAddTable(ctx); err != nil {
-	//	return err
+	//for _, tbl := range registeredTable {
+	//	currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	diff, err := u.GenerateDiff(currentSchema, tbl)
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	upgradeSQL, err := u.GenerateUpgradeSQL(diff)
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	// Execute upgrade SQL
+	//	if err := exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
+	//		return err
+	//	}
 	//}
+	if err := u.UpgradeNewTable(ctx); err != nil {
+		return err
+	}
+
+	if err := u.UpgradeNewView(ctx); err != nil {
+		return err
+	}
 
 	return nil
 }
 
-func (u *Upgrader) UpgradeNewAddTable(ctx context.Context) error {
+func (u *Upgrader) UpgradeNewTable(ctx context.Context) error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
 	for _, tbl := range needUpgradNewTable {
-		currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
+		isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
 		if err != nil {
 			return err
 		}
-
-		if currentSchema != nil {
+		if isExist {
 			return nil
 		}
-
-		createSql := fmt.Sprintf(`CREATE TABLE %s.%s (
-			  table_id bigint unsigned NOT NULL,
-			  database_id bigint unsigned not null,
-			  number smallint unsigned NOT NULL,
-			  name varchar(64) NOT NULL,
-    		  partition_type varchar(50) NOT NULL,
-              partition_expression varchar(2048) NULL,
-			  description_utf8 text,
-			  comment varchar(2048) NOT NULL,
-			  options text,
-			  partition_table_name varchar(1024) NOT NULL,
-    		  PRIMARY KEY table_id (table_id, name)
-			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
-
 		// Execute upgrade SQL
-		if err := exec.Exec(ctx, createSql, ie.NewOptsBuilder().Finish()); err != nil {
+		if err = exec.Exec(ctx, tbl.CreateTableSql, ie.NewOptsBuilder().Finish()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (u *Upgrader) UpgradeNewView(ctx context.Context) error {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil
+	}
+
+	for _, tbl := range needUpgradNewView {
+		isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
+		if err != nil {
+			return err
+		}
+		if isExist {
+			return nil
+		}
+		// Execute upgrade SQL
+		if err = exec.Exec(ctx, tbl.CreateViewSql, ie.NewOptsBuilder().Finish()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Check if the table exists
+func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecutor, database, tbl string) (bool, error) {
+	// Query information_schema.columns to get column info
+	query := fmt.Sprintf("SELECT COLUMN_NAME, DATA_TYPE FROM `information_schema`.columns WHERE TABLE_SCHEMA = '%s' AND TABLE_NAME = '%s'", database, tbl)
+
+	// Execute the query
+	result := exec.Query(ctx, query, ie.NewOptsBuilder().Finish())
+
+	// Check for errors
+	if err := result.Error(); err != nil {
+		return false, err
+	}
+
+	cnt := result.RowCount()
+	if cnt == 0 {
+		return false, nil
+	} else {
+		return true, nil
+	}
 }
