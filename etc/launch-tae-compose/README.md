@@ -45,12 +45,12 @@ password: minio123
 
 cn-0
 ```shell
-mysql -h 127.0.0.1 -P 7001 -udump -p111
+mysql -h 127.0.0.1 -P 6001 -udump -p111
 ```
 
 cn-1:
 ```shell
-mysql -h 127.0.0.1 -P 8001 -udump -p111
+mysql -h 127.0.0.1 -P 7001 -udump -p111
 ```
 
 ## down
