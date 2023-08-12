@@ -157,6 +157,29 @@ func (s *Scope) MergeRun(c *Compile) error {
 		s.notifyAndReceiveFromRemote(errReceiveChan)
 	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
+	if strings.Contains(c.sql, "duplicate") {
+		logTableName := ""
+		if strings.Contains(c.sql, "indup_00") {
+			logTableName = "indup_00"
+		} else if strings.Contains(c.sql, "indup_01") {
+			logTableName = "indup_01"
+		} else if strings.Contains(c.sql, "indup_02") {
+			logTableName = "indup_02"
+		} else if strings.Contains(c.sql, "indup_03") {
+			logTableName = "indup_03"
+		} else if strings.Contains(c.sql, "indup_04") {
+			logTableName = "indup_04"
+		} else if strings.Contains(c.sql, "indup_05") {
+			logTableName = "indup_05"
+		} else if strings.Contains(c.sql, "indup_06") {
+			logTableName = "indup_06"
+		} else if strings.Contains(c.sql, "indup_07") {
+			logTableName = "indup_07"
+		} else if strings.Contains(c.sql, "indup_07") {
+			logTableName = "indup_07"
+		}
+		s.Proc.LogTableName = logTableName
+	}
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}

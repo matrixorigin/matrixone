@@ -16,6 +16,8 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	golang "runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -185,6 +187,15 @@ func (proc *Process) OperatorOutofMemory(size int64) bool {
 }
 
 func (proc *Process) SetInputBatch(bat *batch.Batch) {
+	if proc.LogTableName != "" {
+		logutil.Infof("Table[%s] Process[%p] SetInputBatch InputBatch ptr [%p], new bat ptr[%p]", proc.LogTableName, proc, proc.Reg.InputBatch, bat)
+		if bat == batch.EmptyBatch {
+			logutil.Infof("Table[%s] Process[%p] SetInputBatch InputBatch ptr [%p], new bat ptr[%p], function Call stack is: %s", proc.LogTableName, proc, proc.Reg.InputBatch, bat, golang.Stack())
+		}
+	} else {
+		logutil.Infof("Process[%p] SetInputBatch InputBatch ptr [%p], new bat ptr[%p]", proc, proc.Reg.InputBatch, bat)
+	}
+
 	proc.Reg.InputBatch = bat
 }
 

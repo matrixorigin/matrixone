@@ -110,7 +110,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	proc.SetInputBatch(rbat)
 	if ap.IsLog {
 		rbat.TableName = ap.TableName
-		logutil.Infof("Table[%s] projection operator output batch: %s, ap ptr[%p], rbat ptr[%p], rbat cnt: %d", ap.TableName, rbat.PrintBatch(), ap, rbat, rbat.Cnt)
+		logutil.Infof("Table[%s], process ptr[%s] projection operator output batch: %s, ap ptr[%p], rbat ptr[%p], rbat cnt: %d", proc, ap.TableName, rbat.PrintBatch(), ap, rbat, rbat.Cnt)
 	}
 	return process.ExecNext, nil
 }
