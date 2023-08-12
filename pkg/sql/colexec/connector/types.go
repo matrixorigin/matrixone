@@ -20,7 +20,9 @@ import (
 
 // Argument pipe connector
 type Argument struct {
-	Reg *process.WaitRegister
+	Reg       *process.WaitRegister
+	IsLog     bool
+	TableName string
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

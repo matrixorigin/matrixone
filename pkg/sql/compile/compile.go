@@ -2466,6 +2466,31 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 }
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
+	isLog := false
+	tableName := ""
+	if strings.Contains(c.sql, "duplicate") {
+		isLog = true
+		if strings.Contains(c.sql, "indup_00") {
+			tableName = "indup_00"
+		} else if strings.Contains(c.sql, "indup_01") {
+			tableName = "indup_01"
+		} else if strings.Contains(c.sql, "indup_02") {
+			tableName = "indup_02"
+		} else if strings.Contains(c.sql, "indup_03") {
+			tableName = "indup_03"
+		} else if strings.Contains(c.sql, "indup_04") {
+			tableName = "indup_04"
+		} else if strings.Contains(c.sql, "indup_05") {
+			tableName = "indup_05"
+		} else if strings.Contains(c.sql, "indup_06") {
+			tableName = "indup_06"
+		} else if strings.Contains(c.sql, "indup_07") {
+			tableName = "indup_07"
+		} else if strings.Contains(c.sql, "indup_07") {
+			tableName = "indup_07"
+		}
+	}
+
 	rs := &Scope{
 		PreScopes: ss,
 		Magic:     Merge,
@@ -2489,7 +2514,10 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		Op:      vm.Merge,
 		Idx:     c.anal.curr,
 		IsFirst: c.anal.isFirst,
-		Arg:     &merge.Argument{},
+		Arg: &merge.Argument{
+			IsLog:     isLog,
+			TableName: tableName,
+		},
 	})
 	c.anal.isFirst = false
 
@@ -2499,7 +2527,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 			ss[i].appendInstruction(vm.Instruction{
 				Op: vm.Connector,
 				Arg: &connector.Argument{
-					Reg: rs.Proc.Reg.MergeReceivers[j],
+					Reg:       rs.Proc.Reg.MergeReceivers[j],
+					IsLog:     isLog,
+					TableName: tableName,
 				},
 			})
 			j++

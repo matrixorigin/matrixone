@@ -17,6 +17,7 @@ package merge
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,6 +44,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 
 	for {
 		bat, end, _ = ctr.ReceiveFromAllRegs(anal)
+		if ap.IsLog {
+			logutil.Infof("Table[%s] merge operator receive input batch is: %s ,is end [%v], arg ptr[%p]", ap.TableName, bat.PrintBatch(), end, arg)
+		}
 		if end {
 			proc.SetInputBatch(nil)
 			return process.ExecStop, nil

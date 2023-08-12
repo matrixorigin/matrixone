@@ -357,6 +357,9 @@ func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
 
 // PrintBatch Convert batch to a two-dimensional table string
 func (bat *Batch) PrintBatch() string {
+	if bat == nil {
+		return ""
+	}
 	stringBuffer := bytes.NewBufferString("")
 	if bat.RowCount() > 0 {
 		for i := 0; i < bat.RowCount(); i++ {

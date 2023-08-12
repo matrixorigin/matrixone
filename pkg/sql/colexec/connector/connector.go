@@ -41,15 +41,21 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 	}
 	select {
 	case <-proc.Ctx.Done():
+		if ap.IsLog {
+			logutil.Infof("Table[%s] proc context done during connector send, input batch is: %s , arg ptr[%p]", ap.TableName, bat.PrintBatch(), arg)
+		}
 		proc.PutBatch(bat)
-		logutil.Infof("proc context done during connector send, arg ptr[%p]", arg)
 		return process.ExecStop, nil
 	case <-reg.Ctx.Done():
+		if ap.IsLog {
+			logutil.Infof("Table[%s] reg.Ctx done during connector send, input batch is: %s , arg ptr[%p]", ap.TableName, bat.PrintBatch(), arg)
+		}
 		proc.PutBatch(bat)
-		logutil.Infof("reg.Ctx done during connector send, arg ptr[%p]", arg)
 		return process.ExecStop, nil
 	case reg.Ch <- bat:
-		logutil.Infof("reg.Ctx done during connector send ok, arg ptr[%p]", arg)
+		if ap.IsLog {
+			logutil.Infof("Table[%s] proc.SetInputBatch(nil) send ok, input batch is:%s, arg ptr[%p]", ap.TableName, bat.PrintBatch(), arg)
+		}
 		proc.SetInputBatch(nil)
 		return process.ExecNext, nil
 	}
