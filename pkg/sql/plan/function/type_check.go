@@ -245,6 +245,16 @@ func setTargetScaleFromSource(source, target *types.Type) {
 		return
 	}
 
+	if target.IsFloat() {
+		if source.IsInt() || source.IsUInt() {
+			target.Scale = 0
+		} else if source.IsFloat() || source.IsDecimal() {
+			target.Scale = int32(math.Min(float64(source.Scale), 30))
+		} else {
+			target.Scale = -1
+		}
+	}
+
 	if target.Oid == types.T_datetime {
 		if source.Oid.IsMySQLString() {
 			target.Scale = 6

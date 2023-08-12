@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -282,10 +283,9 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 }
 
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
-	var expectInvalidArgErr bool
-	var expectedInvalidArgLengthErr bool
-	var badValue string
+	var matchNum int
 	var argstr string
+	var argTypeStr string
 	var sql string
 	var erArray []ExecResult
 
@@ -303,10 +303,10 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
-		if expectedInvalidArgLengthErr {
-			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args)))
-		} else if expectInvalidArgErr {
-			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args", badValue))
+		if matchNum < 1 {
+			err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("No matching function for call to %s(%s)", name, argTypeStr)))
+		} else if matchNum > 1 {
+			err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("call to %s(%s) is ambiguous", name, argTypeStr)))
 		}
 	}()
 	if err != nil {
@@ -325,11 +325,30 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	if execResultArrayHasData(erArray) { // TODO function reload
+	if execResultArrayHasData(erArray) {
+		fromList := make([]types.Type, len(args))
+		for i, arg := range args {
+			fromList[i] = types.Type{
+				Oid:   types.T(arg.Typ.Id),
+				Width: arg.Typ.Width,
+				Scale: arg.Typ.Scale,
+			}
+
+			argTypeStr += strings.ToLower(fromList[i].String())
+			if i+1 != len(args) {
+				argTypeStr += ", "
+			}
+		}
+
+		// find function which has min type cast cost in reload functions
+		type MatchUdf struct {
+			Udf      *function.Udf
+			Cost     int
+			TypeList []types.T
+		}
+		matchedList := make([]*MatchUdf, 0)
+
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			// reset flag
-			expectedInvalidArgLengthErr = false
-			expectInvalidArgErr = false
 			argstr, err = erArray[0].GetString(ctx, i, 0)
 			if err != nil {
 				return nil, err
@@ -353,36 +372,52 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			if err != nil {
 				return nil, err
 			}
-			if len(argList) != len(args) {
-				expectedInvalidArgLengthErr = true
+			if len(argList) != len(args) { // mismatch
 				continue
 			}
 
-			for j, arg := range argList {
-				switch t := int32(types.Types[arg.Type]); {
-				case t >= 20 && t <= 29: // int family
-					if args[j].Typ.Id < 20 || args[j].Typ.Id > 29 {
-						expectInvalidArgErr = true
-						badValue = arg.Type
-					}
-				case t == 10: // bool family
-					if args[j].Typ.Id != 10 {
-						expectInvalidArgErr = true
-						badValue = arg.Type
-					}
-				case t >= 30 && t <= 33: // float family
-					if args[j].Typ.Id < 30 || args[j].Typ.Id > 33 {
-						expectInvalidArgErr = true
-						badValue = arg.Type
-					}
+			toList := make([]types.T, len(args))
+			for j := range argList {
+				if fromList[j].IsDecimal() && argList[j].Type == "decimal" {
+					toList[j] = fromList[j].Oid
+				} else {
+					toList[j] = types.Types[argList[j].Type]
 				}
-
 			}
-			if (!expectInvalidArgErr) && (!expectedInvalidArgLengthErr) {
-				udf.Args = argList
-				return udf, err
+
+			canCast, cost := function.UdfArgTypeMatch(fromList, toList)
+			if !canCast { // mismatch
+				continue
+			}
+
+			udf.Args = argList
+			matchedList = append(matchedList, &MatchUdf{
+				Udf:      udf,
+				Cost:     cost,
+				TypeList: toList,
+			})
+		}
+
+		if len(matchedList) == 0 {
+			return nil, err
+		}
+
+		sort.Slice(matchedList, func(i, j int) bool {
+			return matchedList[i].Cost < matchedList[j].Cost
+		})
+
+		minCost := matchedList[0].Cost
+		for _, matchUdf := range matchedList {
+			if matchUdf.Cost == minCost {
+				matchNum++
 			}
 		}
+
+		if matchNum == 1 {
+			matchedList[0].Udf.ArgsType = function.UdfArgTypeCast(fromList, matchedList[0].TypeList)
+			return matchedList[0].Udf, err
+		}
+
 		return nil, err
 	} else {
 		return nil, moerr.NewNotSupported(ctx, "function or operator '%s'", name)

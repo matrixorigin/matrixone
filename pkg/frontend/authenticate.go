@@ -1425,7 +1425,7 @@ const (
 
 	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
 
-	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$**.type') = '%s';`
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s;`
 
 	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s";`
 
@@ -4486,7 +4486,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 	var checkDatabase string
 	var dbName string
 	var funcId int64
-	var fmtctx *tree.FmtCtx
 	var erArray []ExecResult
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -4502,8 +4501,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 		dbName = string(df.Name.Name.SchemaName)
 	}
 
-	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-
 	// validate database name and signature (name + args)
 	bh.ClearExecResultSet()
 	checkDatabase = fmt.Sprintf(checkUdfArgs, string(df.Name.Name.ObjectName), dbName)
@@ -4518,6 +4515,15 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 	}
 
 	if execResultArrayHasData(erArray) {
+		receivedArgsType := make([]string, len(df.Args))
+		for i, arg := range df.Args {
+			typ, err := plan2.GetFunctionArgTypeStrFromAst(arg)
+			if err != nil {
+				return err
+			}
+			receivedArgsType[i] = typ
+		}
+
 		// function with provided name and db exists, now check arguments
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			argstr, err = erArray[0].GetString(ctx, i, 0)
@@ -4533,8 +4539,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 			if len(argList) == len(df.Args) {
 				match := true
 				for j, arg := range argList {
-					typ := df.Args[j].GetType(fmtctx)
-					fmtctx.Reset()
+					typ := receivedArgsType[j]
 					if arg.Type != typ {
 						match = false
 						break
@@ -8342,7 +8347,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	var dbName string
 	var checkExistence string
 	var argsJson []byte
-	var typesJson []byte
+	var argsCondition string
 	var fmtctx *tree.FmtCtx
 	var argList []*function.Arg
 	var typeList []string
@@ -8363,9 +8368,10 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 
 	// format return type
 	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	cf.ReturnType.Format(fmtctx)
-	retTypeStr = fmtctx.String()
-	fmtctx.Reset()
+	retTypeStr, err = plan2.GetFunctionTypeStrFromAst(cf.ReturnType.Type)
+	if err != nil {
+		return err
+	}
 
 	// build argmap and marshal as json
 	argList = make([]*function.Arg, len(cf.Args))
@@ -8374,24 +8380,30 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		argList[i] = &function.Arg{}
 		argList[i].Name = cf.Args[i].GetName(fmtctx)
 		fmtctx.Reset()
-		typ := cf.Args[i].GetType(fmtctx)
+		typ, err := plan2.GetFunctionArgTypeStrFromAst(cf.Args[i])
+		if err != nil {
+			return err
+		}
 		argList[i].Type = typ
 		typeList[i] = typ
-		fmtctx.Reset()
 	}
 	argsJson, err = json.Marshal(argList)
 	if err != nil {
 		return err
 	}
 
-	typesJson, err = json.Marshal(typeList)
-	if err != nil {
-		return err
+	if len(typeList) == 0 {
+		argsCondition = "is null"
+	} else if len(typeList) == 1 {
+		argsCondition = fmt.Sprintf(`= '"%v"'`, typeList[0])
+	} else {
+		typesJson, _ := json.Marshal(typeList)
+		argsCondition = fmt.Sprintf(`= '%v'`, string(typesJson))
 	}
 
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
-	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(typesJson))
+	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, argsCondition)
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
 		return err

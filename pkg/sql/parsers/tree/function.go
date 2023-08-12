@@ -24,6 +24,7 @@ type FunctionArg interface {
 	NodeFormatter
 	Expr
 	GetName(ctx *FmtCtx) string
+	// Deprecated: use plan.GetFunctionArgTypeStrFromAst instead
 	GetType(ctx *FmtCtx) string
 }
 
@@ -58,6 +59,9 @@ func (node *FunctionArgDecl) Format(ctx *FmtCtx) {
 }
 
 func (node *FunctionArgDecl) GetName(ctx *FmtCtx) string {
+	if node.Name == nil {
+		return ""
+	}
 	node.Name.Format(ctx)
 	return ctx.String()
 }

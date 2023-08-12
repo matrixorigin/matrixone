@@ -354,6 +354,7 @@ var Types map[string]T = map[string]T{
 	"bigint unsigned":   T_uint64,
 
 	"decimal64":  T_decimal64,
+	"decimal":    T_decimal128,
 	"decimal128": T_decimal128,
 	"decimal256": T_decimal256,
 

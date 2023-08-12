@@ -1,3 +1,17 @@
+// Copyright 2023 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package function
 
 import (
@@ -20,6 +34,8 @@ type Udf struct {
 	Language string `json:"language"`
 	RetType  string `json:"rettype"`
 	Args     []*Arg `json:"args"`
+
+	ArgsType []types.Type `json:"-"`
 }
 
 // Arg of Udf
@@ -58,11 +74,7 @@ func (u *Udf) GetRetPlanType() *plan.Type {
 }
 
 func (u *Udf) GetArgsType() []types.Type {
-	typ := make([]types.Type, len(u.Args))
-	for i, arg := range u.Args {
-		typ[i] = types.Types[arg.Type].ToType()
-	}
-	return typ
+	return u.ArgsType
 }
 
 func (u *Udf) GetRetType() types.Type {
@@ -596,4 +608,22 @@ func getPythonUdfClient() (PythonUdfServiceClient, error) {
 		pythonUdfClientMutex.Unlock()
 	}
 	return pythonUdfClient, nil
+}
+
+func UdfArgTypeMatch(from []types.Type, to []types.T) (bool, int) {
+	sta, cost := tryToMatch(from, to)
+	return sta != matchFailed, cost
+}
+
+func UdfArgTypeCast(from []types.Type, to []types.T) []types.Type {
+	castType := make([]types.Type, len(from))
+	for i := range castType {
+		if to[i] == from[i].Oid {
+			castType[i] = from[i]
+		} else {
+			castType[i] = to[i].ToType()
+			setTargetScaleFromSource(&from[i], &castType[i])
+		}
+	}
+	return castType
 }
