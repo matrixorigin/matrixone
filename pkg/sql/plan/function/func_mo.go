@@ -560,7 +560,6 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 // CastIndexValueToIndex returns enum type index according to the index value
-// CastIndexValueToIndex returns enum type index according to the index value
 func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint16](result)
 	tbls := vector.GenerateFunctionStrParameter(ivecs[0])
