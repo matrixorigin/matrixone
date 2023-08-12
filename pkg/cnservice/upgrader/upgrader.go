@@ -175,40 +175,45 @@ func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 }
 
 func (u *Upgrader) Upgrade(ctx context.Context) error {
+	if err := u.UpgradeNewTableColumn(ctx); err != nil {
+		return err
+	}
+	if err := u.UpgradeNewTable(ctx); err != nil {
+		return err
+	}
+	if err := u.UpgradeNewView(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
-	//for _, tbl := range registeredTable {
-	//	currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	diff, err := u.GenerateDiff(currentSchema, tbl)
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	upgradeSQL, err := u.GenerateUpgradeSQL(diff)
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	// Execute upgrade SQL
-	//	if err := exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
-	//		return err
-	//	}
-	//}
-	if err := u.UpgradeNewTable(ctx); err != nil {
-		return err
-	}
+	for _, tbl := range registeredTable {
+		currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
+		if err != nil {
+			return err
+		}
 
-	if err := u.UpgradeNewView(ctx); err != nil {
-		return err
-	}
+		diff, err := u.GenerateDiff(currentSchema, tbl)
+		if err != nil {
+			return err
+		}
 
+		upgradeSQL, err := u.GenerateUpgradeSQL(diff)
+		if err != nil {
+			return err
+		}
+
+		// Execute upgrade SQL
+		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
