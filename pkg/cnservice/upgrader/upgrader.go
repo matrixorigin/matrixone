@@ -18,9 +18,12 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"strconv"
 	"strings"
 )
 
@@ -175,13 +178,21 @@ func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 }
 
 func (u *Upgrader) Upgrade(ctx context.Context) error {
-	if err := u.UpgradeNewTableColumn(ctx); err != nil {
+	allTenants, err := u.GetAllTenantInfo(ctx)
+	if err != nil {
 		return err
 	}
-	if err := u.UpgradeNewTable(ctx); err != nil {
+	fmt.Println(allTenants)
+
+	//if err = u.UpgradeNewTableColumn(ctx); err != nil {
+	//	return err
+	//}
+
+	if err = u.UpgradeNewTable(ctx, allTenants); err != nil {
 		return err
 	}
-	if err := u.UpgradeNewView(ctx); err != nil {
+
+	if err = u.UpgradeNewView(ctx, allTenants); err != nil {
 		return err
 	}
 	return nil
@@ -217,46 +228,57 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) error {
 	return nil
 }
 
-func (u *Upgrader) UpgradeNewTable(ctx context.Context) error {
+func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.TenantInfo) error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
 	for _, tbl := range needUpgradNewTable {
-		isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
-		if err != nil {
-			return err
-		}
-		if isExist {
-			return nil
-		}
-		// Execute upgrade SQL
-		if err = exec.Exec(ctx, tbl.CreateTableSql, ie.NewOptsBuilder().Finish()); err != nil {
-			return err
+		for _, tenant := range tenants {
+			// Switch Tenants
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
+			//ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(2))
+			//ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(2))
+			isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
+			if err != nil {
+				return err
+			}
+			if isExist {
+				continue
+			}
+			// Execute upgrade SQL
+			if err = exec.Exec(ctx, tbl.CreateTableSql, ie.NewOptsBuilder().Finish()); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (u *Upgrader) UpgradeNewView(ctx context.Context) error {
+func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.TenantInfo) error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
 	for _, tbl := range needUpgradNewView {
-		isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
-		if err != nil {
-			return err
+		for _, tenant := range tenants {
+			// Switch Tenants
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
+			isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
+			if err != nil {
+				return err
+			}
+			if isExist {
+				continue
+			}
+			// Execute upgrade SQL
+			if err = exec.Exec(ctx, tbl.CreateViewSql, ie.NewOptsBuilder().Finish()); err != nil {
+				return err
+			}
 		}
-		if isExist {
-			return nil
-		}
-		// Execute upgrade SQL
-		if err = exec.Exec(ctx, tbl.CreateViewSql, ie.NewOptsBuilder().Finish()); err != nil {
-			return err
-		}
+
 	}
 	return nil
 }
@@ -264,7 +286,7 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context) error {
 // Check if the table exists
 func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecutor, database, tbl string) (bool, error) {
 	// Query information_schema.columns to get column info
-	query := fmt.Sprintf("SELECT COLUMN_NAME, DATA_TYPE FROM `information_schema`.columns WHERE TABLE_SCHEMA = '%s' AND TABLE_NAME = '%s'", database, tbl)
+	query := fmt.Sprintf("select rel_id, relname from `mo_catalog`.`mo_tables` where reldatabase = '%s' and relname = '%s'", database, tbl)
 
 	// Execute the query
 	result := exec.Query(ctx, query, ie.NewOptsBuilder().Finish())
@@ -280,4 +302,53 @@ func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecu
 	} else {
 		return true, nil
 	}
+}
+
+// GetAllTenantInfo Obtain all tenant information in the system
+func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo, error) {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil, moerr.NewInternalError(ctx, "can not get the Internal Executor")
+	}
+
+	tenantInfos := make([]*frontend.TenantInfo, 0)
+
+	// Query information_schema.columns to get column info
+	query := "SELECT ACCOUNT_ID, ACCOUNT_NAME, VERSION FROM `mo_catalog`.`mo_account`"
+	// Execute the query
+	result := exec.Query(ctx, query, ie.NewOptsBuilder().Finish())
+
+	errors := []error{}
+	for i := uint64(0); i < result.RowCount(); i++ {
+		tenantName, err := result.StringValueByName(ctx, i, "account_name")
+		if err != nil {
+			errors = append(errors, err)
+			continue
+		}
+
+		accountIdStr, err := result.StringValueByName(ctx, i, "account_id")
+		if err != nil {
+			errors = append(errors, err)
+			continue
+		}
+
+		accountId, err := strconv.Atoi(accountIdStr)
+		if err != nil {
+			errors = append(errors, err)
+			continue
+		}
+
+		tenantInfos = append(tenantInfos, &frontend.TenantInfo{
+			Tenant:      tenantName,
+			TenantID:    uint32(accountId),
+			User:        "internal",
+			DefaultRole: "moadmin",
+		})
+	}
+
+	// If errors occurred, return them
+	if len(errors) > 0 {
+		return nil, moerr.NewInternalError(ctx, "can not get the schema")
+	}
+	return tenantInfos, nil
 }
