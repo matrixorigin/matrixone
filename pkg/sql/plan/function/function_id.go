@@ -316,6 +316,7 @@ const (
 	// be uesed: enum
 	CAST_INDEX_TO_VALUE
 	CAST_VALUE_TO_INDEX
+	CAST_INDEX_VALUE_TO_INDEX
 
 	//Sequence function
 	NEXTVAL
@@ -568,4 +569,5 @@ var functionIdRegister = map[string]int32{
 	"lastval":                        LASTVAL,
 	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
+	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
 }
