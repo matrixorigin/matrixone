@@ -249,7 +249,8 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("checkpoint"),
 		common.AnyField("apply cost", applyDuration),
-		common.AnyField("read cost", readDuration))
+		common.AnyField("read cost", readDuration),
+		common.AnyField("size cost", blockio.CheckpointSize))
 	r.source.Init(maxTs)
 	return
 }

@@ -16,20 +16,25 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
 	AsyncIo = 1
 	SyncIo  = 2
 )
+
+var CheckpointSize uint64
+
+func init() {
+	CheckpointSize = 0
+}
 
 var IoModel = SyncIo
 
@@ -152,6 +157,7 @@ func (r *BlockReader) LoadSubColumns(
 		var obj any
 		for i := range cols {
 			obj, err = objectio.Decode(ioVectors[idx].Entries[i].CachedData.Bytes())
+			CheckpointSize += uint64(len(ioVectors[idx].Entries[i].CachedData.Bytes()))
 			if err != nil {
 				return
 			}
