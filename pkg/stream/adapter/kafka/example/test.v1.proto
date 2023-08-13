@@ -1,0 +1,7 @@
+syntax = "proto3";
+option go_package = "./proto/test_v1";
+package test_v1;
+
+message MOTestMessage {
+  int32 Value = 1;
+}

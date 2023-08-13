@@ -1,11 +1,10 @@
-package kafka
+package mokafka
 
 import (
 	"context"
 	"fmt"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
@@ -114,45 +113,4 @@ func TestNewKafkaAdapter(t *testing.T) {
 
 	fmt.Println("received message: ", string(msg.Value))
 
-}
-
-func main() {
-	// Define your Kafka configuration
-	config := &kafka.ConfigMap{
-		"bootstrap.servers":     "127.0.0.1:51266",
-		"group.id":              "myGroup",
-		"auto.offset.reset":     "earliest", // Read from the beginning
-		"enable.auto.commit":    false,
-		"session.timeout.ms":    6000,
-		"broker.address.family": "v4",
-	}
-
-	// Create a new consumer
-	c, err := kafka.NewConsumer(config)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create consumer: %s\n", err)
-		os.Exit(1)
-	}
-	defer c.Close()
-
-	// Define your topic
-	topic := "your-topic-name"
-
-	// Subscribe to the topic
-	err = c.Subscribe(topic, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to subscribe to topic: %s\n", err)
-		os.Exit(1)
-	}
-
-	// Read messages from the topic
-	for {
-		msg, err := c.ReadMessage(1 * time.Second)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to read message: %s\n", err)
-			break
-		}
-		fmt.Printf("Received message on %s: %s\n", msg.TopicPartition, string(msg.Value))
-	}
 }

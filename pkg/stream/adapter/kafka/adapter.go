@@ -1,4 +1,4 @@
-package kafka
+package mokafka
 
 import (
 	"context"
@@ -20,7 +20,6 @@ type KafkaAdapter struct {
 	Consumer       *kafka.Consumer
 	AdminClient    *kafka.AdminClient
 	SchemaRegistry schemaregistry.Client
-	Brokers        []string
 	ConfigMap      *kafka.ConfigMap
 	Connected      bool
 }
@@ -28,18 +27,13 @@ type KafkaAdapter struct {
 func (ka *KafkaAdapter) InitSchemaRegistry(url string) error {
 	client, err := schemaregistry.NewClient(schemaregistry.NewConfig(url))
 	if err != nil {
-		return fmt.Errorf("failed to create schema registry client: %w", err)
+		return err
 	}
 	ka.SchemaRegistry = client
 	return nil
 }
 
-func NewKafkaAdapter(brokers []string, configMap *kafka.ConfigMap) (*KafkaAdapter, error) {
-	// Ensure provided brokers are not empty
-	if len(brokers) == 0 {
-		return nil, fmt.Errorf("brokers list is empty")
-	}
-
+func NewKafkaAdapter(configMap *kafka.ConfigMap) (*KafkaAdapter, error) {
 	// Create a new admin client instance
 	adminClient, err := kafka.NewAdminClient(configMap)
 	if err != nil {
@@ -63,7 +57,6 @@ func NewKafkaAdapter(brokers []string, configMap *kafka.ConfigMap) (*KafkaAdapte
 		Producer:    producer,
 		AdminClient: adminClient,
 		Consumer:    consumer,
-		Brokers:     brokers,
 		ConfigMap:   configMap,
 		Connected:   true,
 	}, nil
@@ -141,42 +134,48 @@ func (ka *KafkaAdapter) ReadMessagesFromPartition(topic string, partition int32,
 
 func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int) ([]*kafka.Message, error) {
 	if ka.Consumer == nil {
-		return nil, fmt.Errorf("consumer not initialized")
+		return nil, moerr.NewInternalError(context.Background(), "consumer not initialized")
 	}
 
 	// Fetch metadata to get all partitions
-	meta, err := ka.Consumer.GetMetadata(&topic, false, 5000) // timeout in ms
+	meta, err := ka.Consumer.GetMetadata(&topic, false, -1) // timeout in ms
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch metadata: %w", err)
+		return nil, err
 	}
 
-	var partitions []kafka.TopicPartition
 	topicMetadata, ok := meta.Topics[topic]
 	if !ok {
-		return nil, fmt.Errorf("topic not found in metadata")
-	}
-
-	for _, p := range topicMetadata.Partitions {
-		partitions = append(partitions, kafka.TopicPartition{Topic: &topic, Partition: p.ID, Offset: kafka.Offset(offset)})
-	}
-
-	err = ka.Consumer.Assign(partitions)
-	if err != nil {
-		return nil, fmt.Errorf("failed to assign partitions: %w", err)
+		return nil, moerr.NewInternalError(context.Background(), "topic not found in metadata")
 	}
 
 	var messages []*kafka.Message
-	for i := 0; i < limit; i++ {
-		msg, err := ka.Consumer.ReadMessage(-1) // Wait indefinitely until a message is available
+	for _, p := range topicMetadata.Partitions {
+		// Assign the specific partition with the desired offset
+		err = ka.Consumer.Assign([]kafka.TopicPartition{
+			{Topic: &topic, Partition: p.ID, Offset: kafka.Offset(offset)},
+		})
 		if err != nil {
-			// Check for timeout
-			if kafkaErr, ok := err.(kafka.Error); ok && kafkaErr.Code() == kafka.ErrTimedOut {
-				break // Exit the loop if a timeout occurs
-			} else {
-				return nil, fmt.Errorf("failed to read message: %w", err)
-			}
+			return nil, err
 		}
-		messages = append(messages, msg)
+
+		// Calculate the number of messages to read from this partition
+		partitionLimit := limit - len(messages)
+		if partitionLimit <= 0 {
+			break
+		}
+
+		for i := 0; i < partitionLimit; i++ {
+			msg, err := ka.Consumer.ReadMessage(-1) // Wait indefinitely until a message is available
+			if err != nil {
+				// Check for timeout
+				if kafkaErr, ok := err.(kafka.Error); ok && kafkaErr.Code() == kafka.ErrTimedOut {
+					break // Exit the loop if a timeout occurs
+				} else {
+					return nil, fmt.Errorf("failed to read message: %w", err)
+				}
+			}
+			messages = append(messages, msg)
+		}
 	}
 
 	return messages, nil
@@ -253,4 +252,29 @@ func (ka *KafkaAdapter) GetSchemaForTopic(topic string, isKey bool) (string, err
 		return "", fmt.Errorf("failed to fetch schema for topic %s: %w", topic, err)
 	}
 	return schema.Schema, nil
+}
+
+func (ka *KafkaAdapter) ProduceMessage(topic string, key, value []byte) (int64, error) {
+
+	deliveryChan := make(chan kafka.Event)
+	defer close(deliveryChan)
+
+	message := &kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &topic},
+		Key:            key,
+		Value:          value,
+	}
+
+	err := ka.Producer.Produce(message, deliveryChan)
+	if err != nil {
+		return -1, moerr.NewInternalError(context.Background(), fmt.Sprintf("failed to produce message: %s", err))
+	}
+
+	e := <-deliveryChan
+	m := e.(*kafka.Message)
+	if m.TopicPartition.Error != nil {
+		return -1, m.TopicPartition.Error
+	}
+
+	return int64(m.TopicPartition.Offset), nil
 }
