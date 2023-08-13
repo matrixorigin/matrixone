@@ -134,13 +134,22 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			break
 		}
 		if bat.RowCount() == 0 {
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 			continue
 		}
 		anal.Input(bat, isFirst)
 		anal.Alloc(int64(bat.Size()))
-		batches = append(batches, bat)
+
 		rowCount += bat.RowCount()
+		if bat.RowCount() < 512 {
+			// release small batches to reuse this batch
+			if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
+				bat.Clean(proc.Mp())
+				return err
+			}
+		} else {
+			batches = append(batches, bat)
+		}
 	}
 
 	err = ctr.bat.PreExtend(proc.Mp(), rowCount)
