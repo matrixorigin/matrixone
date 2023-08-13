@@ -142,7 +142,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 		rowCount += bat.RowCount()
 		if bat.RowCount() < 512 {
-			// release small batches to reuse this batch
+			// reuse small batch
 			if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
 				bat.Clean(proc.Mp())
 				return err
