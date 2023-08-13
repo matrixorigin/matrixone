@@ -668,6 +668,7 @@ func (data *CNCheckpointData) PrefetchFrom(
 		return
 	}
 	var pref blockio.PrefetchParams
+	var location objectio.Location
 	for i, table := range meta.tables {
 		if table == nil {
 			continue
@@ -686,7 +687,6 @@ func (data *CNCheckpointData) PrefetchFrom(
 			idxes[attr] = uint16(attr)
 		}
 		it := table.locations.MakeIterator()
-		var location objectio.Location
 		for it.HasNext() {
 			block := it.Next()
 			if location.IsEmpty() {
