@@ -137,9 +137,9 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 			leftSorted = false
 		}
 		if !leftSorted {
-			var threshHold float64 = 25
+			var threshHold float64 = 32
 			if n.BuildOnLeft {
-				threshHold = 500
+				threshHold = 512
 			}
 			if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > threshHold*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
 				return
