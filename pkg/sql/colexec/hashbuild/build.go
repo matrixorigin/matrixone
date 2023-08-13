@@ -143,8 +143,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		rowCount += bat.RowCount()
 		if bat.RowCount() < 512 {
 			// reuse small batch
-			if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
-				bat.Clean(proc.Mp())
+			ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat)
+			proc.PutBatch(bat)
+			if err != nil {
 				return err
 			}
 		} else {
@@ -157,10 +158,11 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 	for i := range batches {
-		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), batches[i]); err != nil {
+		ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), batches[i])
+		proc.PutBatch(batches[i])
+		if err != nil {
 			return err
 		}
-		proc.PutBatch(batches[i])
 	}
 
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
