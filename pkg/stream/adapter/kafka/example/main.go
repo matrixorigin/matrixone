@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	topicName         = "test_topic14"
+	topicName         = "test_topic17"
 	partitions        = 1
 	replicationFactor = 1
 )
@@ -48,7 +48,6 @@ func main() {
 	err = ka.CreateTopic(context.Background(), topicName, partitions, replicationFactor)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create topic: %s\n", err)
-		os.Exit(1)
 	}
 
 	// Serialize the message
@@ -77,7 +76,7 @@ func main() {
 	// Deserialize the message
 
 	d, err := protobuf.NewDeserializer(ka.SchemaRegistry, serde.ValueSerde, protobuf.NewDeserializerConfig())
-
+	// Register the message type
 	err = d.ProtoRegistry.RegisterMessage((&test_v1.MOTestMessage{}).ProtoReflect().Type())
 	if err != nil {
 		return
@@ -89,6 +88,9 @@ func main() {
 			return
 		}
 		fmt.Printf("message %v with offset %d\n", m, offset)
-
 	}
+
+	// dynamic parse the proto message to json  without generated protobuf code
+	res, err := mokafka.DeserializeProtobuf(schema, msgs[0].Value)
+	fmt.Printf("message %v with offset %d\n", res, offset)
 }

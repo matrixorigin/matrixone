@@ -2,12 +2,17 @@ package mokafka
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/confluentinc/confluent-kafka-go/schemaregistry"
+	"github.com/gogo/protobuf/proto"
+	"github.com/jhump/protoreflect/desc/protoparse"
+	"github.com/jhump/protoreflect/dynamic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -277,4 +282,46 @@ func (ka *KafkaAdapter) ProduceMessage(topic string, key, value []byte) (int64, 
 	}
 
 	return int64(m.TopicPartition.Offset), nil
+}
+
+func DeserializeProtobuf(schema string, in []byte) (proto.Message, error) {
+	files := map[string]string{
+		"test.proto": schema,
+	}
+
+	parser := protoparse.Parser{
+		Accessor: protoparse.FileContentsFromMap(files),
+	}
+	fds, err := parser.ParseFiles("test.proto")
+
+	if err != nil {
+		log.Fatalf("Failed to parse proto content: %v", err)
+	}
+	fd := fds[0]
+	md := fd.FindMessage("test_v1.MOTestMessage")
+	dm := dynamic.NewMessage(md)
+	bytesRead, _, err := readMessageIndexes(in[5:])
+	err = proto.Unmarshal(in[5+bytesRead:], dm)
+	return dm, err
+}
+
+func readMessageIndexes(payload []byte) (int, []int, error) {
+	arrayLen, bytesRead := binary.Varint(payload)
+	if bytesRead <= 0 {
+		return bytesRead, nil, fmt.Errorf("unable to read message indexes")
+	}
+	if arrayLen == 0 {
+		// Handle the optimization for the first message in the schema
+		return bytesRead, []int{0}, nil
+	}
+	msgIndexes := make([]int, arrayLen)
+	for i := 0; i < int(arrayLen); i++ {
+		idx, read := binary.Varint(payload[bytesRead:])
+		if read <= 0 {
+			return bytesRead, nil, fmt.Errorf("unable to read message indexes")
+		}
+		bytesRead += read
+		msgIndexes[i] = int(idx)
+	}
+	return bytesRead, msgIndexes, nil
 }
