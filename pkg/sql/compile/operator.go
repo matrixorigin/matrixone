@@ -509,14 +509,14 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	}, nil
 }
 
-func constructOnduplicateKey(n *plan.Node, eg engine.Engine) (*onduplicatekey.Argument, error) {
+func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Argument {
 	oldCtx := n.OnDuplicateKey
 	return &onduplicatekey.Argument{
 		Engine:          eg,
 		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 		TableDef:        oldCtx.TableDef,
-	}, nil
+	}
 }
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {

@@ -16,14 +16,23 @@ package onduplicatekey
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	Build = iota
+	Eval
+	End
+)
+
 type proc = process.Process
 
 type container struct {
+	colexec.ReceiverOperator
+	state            int
 	checkConflictBat *batch.Batch //batch to check conflict
 	insertBat        *batch.Batch //the final batch
 	emptyBat         *batch.Batch //use pass this batch before compute finished
@@ -49,6 +58,7 @@ type Argument struct {
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.ctr != nil {
+		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
 		if arg.ctr.insertBat != nil {
 			arg.ctr.insertBat.Clean(proc.GetMPool())
 		}
