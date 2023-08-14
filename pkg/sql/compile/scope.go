@@ -538,6 +538,14 @@ func (s *Scope) JoinRun(c *Compile) error {
 	return s.MergeRun(c)
 }
 
+func (s *Scope) isShuffle() bool {
+	if s != nil && (s.Instructions[0].Op == vm.Group) {
+		arg := s.Instructions[0].Arg.(*group.Argument)
+		return arg.IsShuffle
+	}
+	return false
+}
+
 func (s *Scope) isRight() bool {
 	return s != nil && (s.Instructions[0].Op == vm.Right || s.Instructions[0].Op == vm.RightSemi || s.Instructions[0].Op == vm.RightAnti)
 }
