@@ -126,13 +126,6 @@ func WithTLSKeyFile(f string) Option {
 	}
 }
 
-// WithTest set the test field to true.
-func WithTest() Option {
-	return func(s *Server) {
-		s.test = true
-	}
-}
-
 // FillDefault fill the default config values of proxy server.
 func (c *Config) FillDefault() {
 	if c.ListenAddress == "" {

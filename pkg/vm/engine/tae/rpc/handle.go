@@ -17,6 +17,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -930,7 +931,8 @@ func (h *Handle) HandleWrite(
 		if deadline, ok := ctx.Deadline(); ok {
 			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
-		columnIdx := 0
+		rowidIdx := 0
+		pkIdx := 1
 		for _, key := range req.DeltaLocs {
 			var location objectio.Location
 			location, err = blockio.EncodeLocationFromString(key)
@@ -941,7 +943,7 @@ func (h *Handle) HandleWrite(
 			var bat *batch.Batch
 			bat, err = blockio.LoadColumns(
 				ctx,
-				[]uint16{uint16(columnIdx)},
+				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
 				h.db.Runtime.Fs.Service,
 				location,
@@ -967,17 +969,24 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			vec := containers.ToDNVector(bat.Vecs[0])
-			defer vec.Close()
-			if err = tb.DeleteByPhyAddrKeys(vec); err != nil {
+			rowIDVec := containers.ToDNVector(bat.Vecs[0])
+			defer rowIDVec.Close()
+			pkVec := containers.ToDNVector(bat.Vecs[1])
+			//defer pkVec.Close()
+			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
 			}
 		}
 		return
 	}
-	vec := containers.ToDNVector(req.Batch.GetVector(0))
-	defer vec.Close()
-	err = tb.DeleteByPhyAddrKeys(vec)
+	if len(req.Batch.Vecs) != 2 {
+		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
+	}
+	rowIDVec := containers.ToDNVector(req.Batch.GetVector(0))
+	defer rowIDVec.Close()
+	pkVec := containers.ToDNVector(req.Batch.GetVector(1))
+	//defer pkVec.Close()
+	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return
 }
 

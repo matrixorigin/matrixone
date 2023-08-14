@@ -659,6 +659,11 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 			return err
 		}
 	}
+	if s.isShuffle() {
+		for _, rr := range s.Proc.Reg.MergeReceivers {
+			rr.Ch = make(chan *batch.Batch, 16)
+		}
+	}
 	return nil
 }
 
@@ -774,6 +779,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *group.Argument:
 		in.Agg = &pipeline.Group{
+			IsShuffle: t.IsShuffle,
 			NeedEval:  t.NeedEval,
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
@@ -1163,6 +1169,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Group:
 		t := opr.GetAgg()
 		v.Arg = &group.Argument{
+			IsShuffle: t.IsShuffle,
 			NeedEval:  t.NeedEval,
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,

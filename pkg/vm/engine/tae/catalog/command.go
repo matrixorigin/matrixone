@@ -35,11 +35,12 @@ const (
 	IOET_WALTxnCommand_Database_V1 uint16 = 1
 	IOET_WALTxnCommand_Table_V1    uint16 = 1
 	IOET_WALTxnCommand_Table_V2    uint16 = 2
+	IOET_WALTxnCommand_Table_V3    uint16 = 3
 	IOET_WALTxnCommand_Segment_V1  uint16 = 1
 	IOET_WALTxnCommand_Block_V1    uint16 = 1
 
 	IOET_WALTxnCommand_Database_CurrVer = IOET_WALTxnCommand_Database_V1
-	IOET_WALTxnCommand_Table_CurrVer    = IOET_WALTxnCommand_Table_V2
+	IOET_WALTxnCommand_Table_CurrVer    = IOET_WALTxnCommand_Table_V3
 	IOET_WALTxnCommand_Segment_CurrVer  = IOET_WALTxnCommand_Segment_V1
 	IOET_WALTxnCommand_Block_CurrVer    = IOET_WALTxnCommand_Block_V1
 )
@@ -94,6 +95,20 @@ func init() {
 				NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
 				func() *TableNode { return &TableNode{} },
 				IOET_WALTxnCommand_Table_V2)
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Table,
+			Version: IOET_WALTxnCommand_Table_V3,
+		}, nil,
+		func(b []byte) (any, error) {
+			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Table,
+				NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
+				func() *TableNode { return &TableNode{} },
+				IOET_WALTxnCommand_Table_V3)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},

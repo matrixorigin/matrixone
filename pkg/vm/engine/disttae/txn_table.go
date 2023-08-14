@@ -192,7 +192,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		if objectio.IsSameObjectLocVsMeta(location, meta) {
 			return nil
 		}
-		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
 		if inited {
@@ -327,7 +327,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			continue
 		}
 
-		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			biter.Close()
 			return 0, err
 		}
@@ -376,7 +376,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		var err error
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
-			if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+			if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 				return err
 			}
 		}
@@ -408,6 +408,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 			zm := colmeta.ZoneMap()
 			newInfo.Max = zm.GetMaxBuf()
 			newInfo.Min = zm.GetMinBuf()
+			newInfo.Sum = zm.GetSumBuf()
 
 			infoList = append(infoList, newInfo)
 		}
@@ -736,7 +737,7 @@ func (tbl *txnTable) rangesOnePart(
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
 			if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 					return
 				}
 
@@ -803,10 +804,11 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 					Name:  attr.Attr.Name,
 					ColId: attr.Attr.ID,
 					Typ: &plan.Type{
-						Id:       int32(attr.Attr.Type.Oid),
-						Width:    attr.Attr.Type.Width,
-						Scale:    attr.Attr.Type.Scale,
-						AutoIncr: attr.Attr.AutoIncrement,
+						Id:         int32(attr.Attr.Type.Oid),
+						Width:      attr.Attr.Type.Width,
+						Scale:      attr.Attr.Type.Scale,
+						AutoIncr:   attr.Attr.AutoIncrement,
+						Enumvalues: attr.Attr.EnumVlaues,
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,
@@ -1642,8 +1644,9 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	for _, blk := range blks {
 		location := blk.MetaLocation()
 		if hit, ok := objFilterMap[*location.ShortName()]; !ok {
-			if objMeta, err = objectio.FastLoadObjectMeta(tbl.proc.Ctx, &location,
-				tbl.db.txn.engine.fs); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(
+				tbl.proc.Ctx, &location, false, tbl.db.txn.engine.fs,
+			); err != nil {
 				return rowid, false, err
 			}
 			hit = colexec.EvaluateFilterByZoneMap(tbl.proc.Ctx, tbl.proc, filter,

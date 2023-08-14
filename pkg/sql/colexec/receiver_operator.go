@@ -30,9 +30,11 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool)
 	r.proc = proc
 	if isMergeType {
 		r.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
+		r.chs = make([]chan *batch.Batch, r.aliveMergeReceiver)
 		r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver+1)
 		r.receiverListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
 		for i, mr := range proc.Reg.MergeReceivers {
+			r.chs[i] = mr.Ch
 			r.receiverListener[i+1] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(mr.Ch),
@@ -79,12 +81,12 @@ func (r *ReceiverOperator) FreeAllReg() {
 
 // clean up the batch left in channel
 func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
-	for {
-		bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch
-		if !ok || bat == nil {
-			break
+	ch := r.proc.Reg.MergeReceivers[regIdx].Ch
+	for len(ch) > 0 {
+		bat := <-ch
+		if bat != nil {
+			bat.Clean(r.proc.GetMPool())
 		}
-		bat.Clean(r.proc.GetMPool())
 	}
 }
 
@@ -140,19 +142,15 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 		r.receiverListener = r.receiverListener[1:]
 	}
 
-	for r.aliveMergeReceiver > 0 {
-		chosen, value, ok := reflect.Select(r.receiverListener)
-		if !ok {
-			r.removeChosen(chosen)
-			continue
+	mp := r.proc.Mp()
+	// Senders will never send more because the context is done.
+	for _, ch := range r.chs {
+		for len(ch) > 0 {
+			bat := <-ch
+			if bat != nil {
+				bat.Clean(mp)
+			}
 		}
-
-		bat := (*batch.Batch)(value.UnsafePointer())
-		if bat == nil {
-			r.removeChosen(chosen)
-			continue
-		}
-		bat.Clean(r.proc.Mp())
 	}
 }
 

@@ -498,6 +498,9 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 			case types.T_Blockid:
 				val := vector.GetFixedAt[types.Blockid](vec, i)
 				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
+			case types.T_enum:
+				val := vector.GetFixedAt[types.Blockid](vec, i)
+				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
 			default:
 				logError(ses, ses.GetDebugString(),
 					"Failed to construct byte due to unsupported type",
@@ -516,6 +519,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 		writeByte: writeByte,
 		err:       nil,
 	}
+	ses.writeCsvBytes.Add(int64(len(writeByte))) // statistic out traffic, CASE 2: select into
 	bat.Clean(ses.GetMemPool())
 }
 

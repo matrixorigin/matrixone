@@ -514,6 +514,8 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 		return v.String(), nil
 	case types.TS:
 		return v.ToString(), nil
+	case types.Enum:
+		return strconv.FormatUint(uint64(v), 10), nil
 	default:
 		return "", moerr.NewInternalError(ctx, "unsupported type %d ", v)
 	}

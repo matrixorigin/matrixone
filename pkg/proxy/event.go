@@ -32,10 +32,6 @@ func (t eventType) String() string {
 		return "KillQuery"
 	case TypeSetVar:
 		return "SetVar"
-	case TypeSuspendAccount:
-		return "SuspendAccount"
-	case TypeDropAccount:
-		return "DropAccount"
 	case TypePrepare:
 		return "Prepare"
 	}
@@ -49,10 +45,6 @@ const (
 	TypeKillQuery eventType = 1
 	// TypeSetVar indicates the set variable statement.
 	TypeSetVar eventType = 2
-	// TypeSuspendAccount indicates the suspend account statement.
-	TypeSuspendAccount eventType = 3
-	// TypeDropAccount indicates the drop account statement.
-	TypeDropAccount eventType = 4
 	// TypePrepare indicates the prepare statement.
 	TypePrepare eventType = 5
 )
@@ -107,14 +99,6 @@ func makeEvent(msg []byte) (IEvent, bool) {
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
 			return makeSetVarEvent(sql), false
-		case *tree.AlterAccount:
-			if s.StatusOption.Option == tree.AccountStatusSuspend {
-				// The suspend statement could be handled directly, and whatever its
-				// result is, trigger kill connection operation.
-				return makeSuspendAccountEvent(sql, s.Name), false
-			}
-		case *tree.DropAccount:
-			return makeDropAccountEvent(sql, s.Name), false
 		case *tree.PrepareString:
 			return makePrepareEvent(sql), false
 		default:
@@ -171,56 +155,6 @@ func makeSetVarEvent(stmt string) IEvent {
 // eventType implements the IEvent interface.
 func (e *setVarEvent) eventType() eventType {
 	return TypeSetVar
-}
-
-// suspendAccountEvent is the event that "alter account xxx suspend" statement
-// is captured. We need to send this alter statement to event and execute it,
-// and if the result is ok, then construct "kill connection" statement and send it
-// to CN servers which have connections with the account.
-type suspendAccountEvent struct {
-	baseEvent
-	// stmt is the statement that will be sent to server.
-	stmt string
-	// account is the tenant text value.
-	account Tenant
-}
-
-// makeSuspendAccountEvent creates a event with TypeSuspendAccount type.
-func makeSuspendAccountEvent(stmt string, account string) IEvent {
-	e := &suspendAccountEvent{
-		stmt:    stmt,
-		account: Tenant(account),
-	}
-	e.typ = TypeSuspendAccount
-	return e
-}
-
-func (e *suspendAccountEvent) eventType() eventType {
-	return TypeSuspendAccount
-}
-
-// dropAccountEvent is the event that "drop account xxx" statement
-// is captured. The actions are the same as suspendAccountEvent.
-type dropAccountEvent struct {
-	baseEvent
-	// stmt is the statement that will be sent to server.
-	stmt string
-	// account is the tenant text value.
-	account Tenant
-}
-
-// makeDropAccountEvent creates a event with TypeDropAccount type.
-func makeDropAccountEvent(stmt string, account string) IEvent {
-	e := &dropAccountEvent{
-		stmt:    stmt,
-		account: Tenant(account),
-	}
-	e.typ = TypeDropAccount
-	return e
-}
-
-func (e *dropAccountEvent) eventType() eventType {
-	return TypeDropAccount
 }
 
 // prepareEvent is the event that execute a prepare statement.
