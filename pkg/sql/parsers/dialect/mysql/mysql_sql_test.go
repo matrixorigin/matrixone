@@ -487,7 +487,7 @@ var (
 		output: "select group_concat(distinct 2, ,) from t1",
 	}, {
 		input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
-		output: "select group_concat(distinct a, ,) from t1",
+		output: "select group_concat(distinct a, ,order by a) from t1",
 	}, {
 		input: "select variance(2) from t1",
 	}, {
@@ -903,6 +903,8 @@ var (
 			input: "select avg(u.a), count(u.b), cast(u.c as varchar) from u",
 		}, {
 			input: "select avg(u.a), count(*) from u",
+		}, {
+			input: "select approx_count(*) from u",
 		}, {
 			input: "select avg(u.a), count(u.b) from u",
 		}, {

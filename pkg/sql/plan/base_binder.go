@@ -973,6 +973,24 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 		}
+	case "approx_count":
+		if b.ctx == nil {
+			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid field reference to COUNT")
+		}
+		switch nval := astArgs[0].(type) {
+		case *tree.NumVal:
+			if nval.String() == "*" {
+				if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
+					name = "count"
+				} else {
+					astArgs = []tree.Expr{tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)}
+				}
+			} else {
+				name = "count"
+			}
+		default:
+			name = "count"
+		}
 	case "trim":
 		astArgs = astArgs[1:]
 	}
@@ -1471,6 +1489,16 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		}
+	}
+
+	if name == NameGroupConcat {
+		expressionList := args[:len(args)-1]
+		separator := args[len(args)-1]
+		compactCol, e := bindFuncExprImplByPlanExpr(ctx, "serial", expressionList)
+		if e != nil {
+			return nil, e
+		}
+		args = []*plan.Expr{compactCol, separator}
 	}
 
 	// return new expr
