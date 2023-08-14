@@ -68,17 +68,28 @@ func LoadObjectMetaByExtent(
 ) (meta ObjectMeta, err error) {
 	v, ok := metaCache.Get(ctx, *name.Short(), false)
 	if ok {
-		meta = ObjectMeta(v)
+		var obj any
+		obj, err = Decode(v)
+		if err != nil {
+			return
+		}
+		meta = obj.(ObjectMeta)
 		metaCacheStats.Record(1, 1)
 		if !prefetch {
 			metaCacheHitStats.Record(1, 1)
 		}
 		return
 	}
-	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
+	if v, err = ReadExtent(ctx, name.String(), extent, noLRUCache, fs, constructorFactory); err != nil {
 		return
 	}
-	metaCache.Set(ctx, *name.Short(), fileservice.Bytes(meta), false)
+	var obj any
+	obj, err = Decode(v)
+	if err != nil {
+		return
+	}
+	meta = obj.(ObjectMeta)
+	metaCache.Set(ctx, *name.Short(), v[:], false)
 	metaCacheStats.Record(0, 1)
 	if !prefetch {
 		metaCacheHitStats.Record(0, 1)

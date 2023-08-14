@@ -35,19 +35,25 @@ const (
 )
 
 const (
-	SnapshotAttr_TID                       = catalog.SnapshotAttr_TID
-	SnapshotAttr_DBID                      = catalog.SnapshotAttr_DBID
-	SegmentAttr_ID                         = catalog.SegmentAttr_ID
-	SegmentAttr_CreateAt                   = catalog.SegmentAttr_CreateAt
-	SegmentAttr_SegNode                    = catalog.SegmentAttr_SegNode
-	SnapshotAttr_BlockMaxRow               = catalog.SnapshotAttr_BlockMaxRow
-	SnapshotAttr_SegmentMaxBlock           = catalog.SnapshotAttr_SegmentMaxBlock
-	SnapshotMetaAttr_BlockInsertBatchStart = "block_insert_batch_start"
-	SnapshotMetaAttr_BlockInsertBatchEnd   = "block_insert_batch_end"
-	SnapshotMetaAttr_BlockDeleteBatchStart = "block_delete_batch_start"
-	SnapshotMetaAttr_BlockDeleteBatchEnd   = "block_delete_batch_end"
-	SnapshotMetaAttr_SegDeleteBatchStart   = "seg_delete_batch_start"
-	SnapshotMetaAttr_SegDeleteBatchEnd     = "seg_delete_batch_end"
+	SnapshotAttr_TID                            = catalog.SnapshotAttr_TID
+	SnapshotAttr_DBID                           = catalog.SnapshotAttr_DBID
+	SegmentAttr_ID                              = catalog.SegmentAttr_ID
+	SegmentAttr_CreateAt                        = catalog.SegmentAttr_CreateAt
+	SegmentAttr_SegNode                         = catalog.SegmentAttr_SegNode
+	SnapshotAttr_BlockMaxRow                    = catalog.SnapshotAttr_BlockMaxRow
+	SnapshotAttr_SegmentMaxBlock                = catalog.SnapshotAttr_SegmentMaxBlock
+	SnapshotMetaAttr_BlockInsertBatchStart      = "block_insert_batch_start"
+	SnapshotMetaAttr_BlockInsertBatchEnd        = "block_insert_batch_end"
+	SnapshotMetaAttr_BlockInsertBatchLocation   = "block_insert_batch_location"
+	SnapshotMetaAttr_BlockDeleteBatchStart      = "block_delete_batch_start"
+	SnapshotMetaAttr_BlockDeleteBatchEnd        = "block_delete_batch_end"
+	SnapshotMetaAttr_BlockDeleteBatchLocation   = "block_delete_batch_location"
+	SnapshotMetaAttr_BlockCNInsertBatchLocation = "block_cn_insert_batch_location"
+	SnapshotMetaAttr_SegDeleteBatchStart        = "seg_delete_batch_start"
+	SnapshotMetaAttr_SegDeleteBatchEnd          = "seg_delete_batch_end"
+	SnapshotMetaAttr_SegDeleteBatchLocation     = "seg_delete_batch_location"
+	CheckpointMetaAttr_BlockLocation            = "checkpoint_meta_block_location"
+	CheckpointMetaAttr_SchemaType               = "checkpoint_meta_schema_type"
 
 	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
@@ -62,10 +68,12 @@ var (
 	TblDNSchema     *catalog.Schema
 	SegDNSchema     *catalog.Schema
 	BlkDNSchema     *catalog.Schema
+	MetaSchema_V1   *catalog.Schema
 	MetaSchema      *catalog.Schema
 	DBDelSchema     *catalog.Schema
 	TblDelSchema    *catalog.Schema
 	ColumnDelSchema *catalog.Schema
+	DNMetaSchema    *catalog.Schema
 )
 
 var (
@@ -185,7 +193,7 @@ var (
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
-	MetaSchemaAttr = []string{
+	MetaSchemaAttr_V1 = []string{
 		SnapshotAttr_TID,
 		SnapshotMetaAttr_BlockInsertBatchStart,
 		SnapshotMetaAttr_BlockInsertBatchEnd,
@@ -194,7 +202,7 @@ var (
 		SnapshotMetaAttr_SegDeleteBatchStart,
 		SnapshotMetaAttr_SegDeleteBatchEnd,
 	}
-	MetaShcemaTypes = []types.Type{
+	MetaShcemaTypes_V1 = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),
@@ -202,6 +210,20 @@ var (
 		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),
+	}
+	MetaSchemaAttr = []string{
+		SnapshotAttr_TID,
+		SnapshotMetaAttr_BlockInsertBatchLocation,
+		SnapshotMetaAttr_BlockCNInsertBatchLocation,
+		SnapshotMetaAttr_BlockDeleteBatchLocation,
+		SnapshotMetaAttr_SegDeleteBatchLocation,
+	}
+	MetaShcemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
 	DBDelSchemaAttr = []string{
 		pkgcatalog.SystemDBAttr_ID,
@@ -220,6 +242,14 @@ var (
 	}
 	ColumnDelSchemaTypes = []types.Type{
 		types.T_varchar.ToType(),
+	}
+	DNMetaSchemaAttr = []string{
+		CheckpointMetaAttr_BlockLocation,
+		CheckpointMetaAttr_SchemaType,
+	}
+	DNMetaShcemaTypes = []types.Type{
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_uint16, 0, 0),
 	}
 
 	BaseAttr = []string{
@@ -364,6 +394,19 @@ func init() {
 		}
 	}
 
+	MetaSchema_V1 = catalog.NewEmptySchema("meta")
+	for i, colname := range MetaSchemaAttr_V1 {
+		if i == 0 {
+			if err := MetaSchema_V1.AppendPKCol(colname, MetaShcemaTypes_V1[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := MetaSchema_V1.AppendCol(colname, MetaShcemaTypes_V1[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
 	DBDelSchema = catalog.NewEmptySchema("meta")
 	for i, colname := range DBDelSchemaAttr {
 		if i == 0 {
@@ -398,6 +441,19 @@ func init() {
 			}
 		} else {
 			if err := ColumnDelSchema.AppendCol(colname, ColumnDelSchemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	DNMetaSchema = catalog.NewEmptySchema("meta")
+	for i, colname := range DNMetaSchemaAttr {
+		if i == 0 {
+			if err := DNMetaSchema.AppendPKCol(colname, DNMetaShcemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := DNMetaSchema.AppendCol(colname, DNMetaShcemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}
