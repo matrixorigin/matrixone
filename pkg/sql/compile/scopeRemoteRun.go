@@ -381,6 +381,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 		procInfo.Id = proc.Id
 		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
 		procInfo.UnixTime = proc.UnixTime
+		procInfo.LogTableName = proc.LogTableName
 		procInfo.AccountId = defines.GetAccountId(proc.Ctx)
 		snapshot, err := proc.TxnOperator.Snapshot()
 		if err != nil {

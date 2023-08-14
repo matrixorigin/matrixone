@@ -68,6 +68,7 @@ type processHelper struct {
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
 	analysisNodeList []int32
+	LogTableName     string
 }
 
 // messageSenderOnClient is a structure
@@ -272,6 +273,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
+	proc.LogTableName = pHelper.LogTableName
 	proc.SessionInfo = pHelper.sessionInfo
 	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
@@ -407,6 +409,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		accountId:        procInfo.AccountId,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
+		LogTableName:     procInfo.LogTableName,
 	}
 	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
 	if err != nil {

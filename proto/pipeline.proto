@@ -396,6 +396,7 @@ message ProcessInfo {
   string snapshot = 5;
   SessionInfo session_info = 6;
   repeated int32 analysis_node_list = 7;
+  string log_table_name = 8;
 }
 
 message SessionInfo {
