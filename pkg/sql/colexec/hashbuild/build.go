@@ -131,7 +131,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			break
 		}
 		if bat.RowCount() == 0 {
-			proc.PutBatch(bat)
+			bat.Clean(proc.Mp())
 			continue
 		}
 		anal.Input(bat, isFirst)
