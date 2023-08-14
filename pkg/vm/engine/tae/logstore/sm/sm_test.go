@@ -63,8 +63,8 @@ func TestNewNonBlockingQueue(t *testing.T) {
 	}
 
 	item, err := queue.Enqueue(11)
-	assert.Nil(t, item)
-	assert.Nil(t, err)
+	assert.NotNil(t, item)
+	assert.Equal(t, err, ErrFull)
 
 	wait.Done()
 	time.Sleep(time.Millisecond * 100)

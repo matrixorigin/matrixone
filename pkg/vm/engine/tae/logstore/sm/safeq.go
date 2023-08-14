@@ -139,7 +139,7 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 			q.pending.Add(1)
 			return item, nil
 		default:
-			return nil, nil
+			return item, ErrFull
 		}
 	}
 }

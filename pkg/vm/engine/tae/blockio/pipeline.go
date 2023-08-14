@@ -381,8 +381,7 @@ func (p *IoPipeline) doFetch(
 }
 
 func (p *IoPipeline) doPrefetch(params prefetchParams) (err error) {
-	item, err := p.prefetch.queue.Enqueue(params)
-	if item == nil || err != nil {
+	if _, err = p.prefetch.queue.Enqueue(params); err == sm.ErrFull {
 		p.stats.prefetchDropStats.Add(1)
 	}
 	// prefetch doesn't care about what type of err has occurred

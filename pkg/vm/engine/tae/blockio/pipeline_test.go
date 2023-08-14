@@ -15,13 +15,89 @@
 package blockio
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/stretchr/testify/assert"
 )
+
+func makeIOPipelineOptions(depth int) Option {
+	return func(p *IoPipeline) {
+		p.options.queueDepth = depth
+	}
+}
+
+func makeFileService(t *testing.T) fileservice.FileService {
+	dir := os.TempDir()
+	fs, err := fileservice.NewLocalFS(
+		context.TODO(), "local", dir, fileservice.DisabledCacheConfig, nil)
+	assert.Nil(t, err)
+	return fs
+}
+
+func makeLocation() objectio.Location {
+	uuid, _ := types.BuildUuid()
+	name := objectio.BuildObjectName(&uuid, 1)
+	extent := objectio.NewExtent(1, 1, 1, 1)
+	return objectio.BuildLocation(name, extent, 1, 1)
+}
+
+func makeTaskJob() *tasks.Job {
+	job := _jobPool.Get().(*tasks.Job)
+	job.Init(context.TODO(), "0", tasks.JTInvalid, func(context.Context) *tasks.JobResult {
+		return nil
+	})
+	return job
+}
+
+func TestNewIOPipeline(t *testing.T) {
+	p := NewIOPipeline(makeIOPipelineOptions(0))
+	p.Start()
+	assert.Equal(t, p.active.Load(), true)
+	// waiting pipeline's queue initial done
+	time.Sleep(time.Millisecond * 100)
+
+	service := makeFileService(t)
+	location := makeLocation()
+
+	// step 1: all queue can accept item
+	para := buildPrefetchParams(service, location)
+	item, err := p.prefetch.queue.Enqueue(para)
+	assert.Nil(t, err)
+	assert.NotNil(t, item)
+
+	item, err = p.fetch.queue.Enqueue(makeTaskJob())
+	assert.Nil(t, err)
+	assert.NotNil(t, item)
+
+	// step 2: shut down all queue
+	p.prefetch.queue.Stop()
+	item, err = p.prefetch.queue.Enqueue(para)
+	assert.Equal(t, err, sm.ErrClose)
+	assert.NotNil(t, item)
+
+	p.fetch.queue.Stop()
+	item, err = p.fetch.queue.Enqueue(makeTaskJob())
+	assert.Equal(t, err, sm.ErrClose)
+	assert.NotNil(t, item)
+
+	// step 3: recreate queue to make sure pipeline.close() will not try to
+	// close a closed channel
+	p.fetch.queue = sm.NewSafeQueue(0, 0, nil)
+	p.prefetch.queue = sm.NewSafeQueue(0, 0, nil)
+
+	// step 4: close pipeline
+	p.Stop()
+
+}
 
 func TestIoPipeline_Prefetch(t *testing.T) {
 	wait := sync.WaitGroup{}

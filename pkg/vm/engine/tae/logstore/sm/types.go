@@ -22,6 +22,7 @@ import (
 
 var (
 	ErrClose = moerr.NewInternalErrorNoCtx("closed")
+	ErrFull  = moerr.NewInternalErrorNoCtx("nonblocking queue is full, dropped item")
 )
 
 type OnFinCB = func()
@@ -51,7 +52,7 @@ type Queue interface {
 
 	// Enqueue puts an item into this queue
 	// it will return directly when if it is an unblocking queue and there has no more free space,
-	// and the first out-parameter will be set as nil and returned to notify the producer.
+	// and ErrFull will be return to notify the producer.
 	Enqueue(any) (any, error)
 }
 
