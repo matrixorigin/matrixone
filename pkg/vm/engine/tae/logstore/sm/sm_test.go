@@ -15,12 +15,12 @@
 package sm
 
 import (
-	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestLoop1(t *testing.T) {
