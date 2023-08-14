@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
 	"time"
 
@@ -249,7 +250,10 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 		if bat.Vecs[i] != nil {
 			if !bat.Vecs[i].IsConst() && !bat.Vecs[i].NeedDup() {
 				vec := bat.Vecs[i]
-				if proc.vp.putVector(vec) {
+				if vec.Capacity() > 8192*64 {
+					logutil.Infof("!!!!!!!!! release a large vector, capacity %v", bat.Vecs[i].Capacity())
+					bat.Vecs[i].Free(proc.Mp())
+				} else if proc.vp.putVector(vec) {
 					bat.ReplaceVector(vec, nil)
 				}
 			} else {
