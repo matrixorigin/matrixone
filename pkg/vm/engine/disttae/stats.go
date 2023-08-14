@@ -73,6 +73,8 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 		return float64(types.DecodeFixed[types.Datetime](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Datetime](zm.GetMinBuf())) + 1
 	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
 		return -1
+	case types.T_enum:
+		return float64(types.DecodeFixed[types.Enum](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Enum](zm.GetMinBuf())) + 1
 	default:
 		return -1
 	}
@@ -100,7 +102,7 @@ func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDe
 		}
 
 		if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
-			if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+			if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 				return nil, err
 			}
 			lenobjs++

@@ -252,6 +252,9 @@ func (idx *simpleTableIndex) BatchInsert(
 	case types.T_datetime:
 		vs := vector.MustFixedCol[types.Datetime](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
+	case types.T_enum:
+		vs := vector.MustFixedCol[types.Enum](col.GetDownstreamVector())
+		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_TS:
 		vs := vector.MustFixedCol[types.TS](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
@@ -347,6 +350,9 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_timestamp:
 		vals := vector.MustFixedCol[types.Timestamp](col.GetDownstreamVector())
+		return DedupOp(colType, attr, vals, idx.tree)
+	case types.T_enum:
+		vals := vector.MustFixedCol[types.Enum](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_TS:
 		vals := vector.MustFixedCol[types.TS](col.GetDownstreamVector())

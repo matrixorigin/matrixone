@@ -27,6 +27,8 @@ enum CmdMethod {
   ShowProcessList = 1;
   // AlterAccount represent set account status as restricted 
   AlterAccount = 2;
+  // KillConn represents the kill connection request.
+  KillConn = 3;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -56,6 +58,8 @@ message Request {
   ShowProcessListRequest ShowProcessListRequest = 4;
   // AlterAccountRequest is the request for alter account restricted
   AlterAccountRequest AlterAccountRequest = 5;
+  // KillConnRequest is the request which kills the connections.
+  KillConnRequest KillConnRequest = 6;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -75,6 +79,8 @@ message Response {
   ShowProcessListResponse ShowProcessListResponse = 4;
   // AlterAccountResponse is the response of AlterAccount.
   AlterAccountResponse AlterAccountResponse = 5;
+  // KillConnResponse is the response of KillConnRequest.
+  KillConnResponse KillConnResponse = 6;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -90,4 +96,16 @@ message AlterAccountRequest {
 // AlterAccountResponse is the response of command AlterAccount.
 message AlterAccountResponse {
   bool alterSuccess = 1;
+}
+
+// KillConnRequest is the request that kill the connections belongs
+// to the account.
+message KillConnRequest {
+  int64 AccountID = 1;
+  uint64 Version = 2;
+}
+
+// KillConnResponse is the response to the kill connection request.
+message KillConnResponse {
+  bool Success = 1;
 }

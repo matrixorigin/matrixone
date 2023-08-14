@@ -1515,6 +1515,27 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `sqrt`
+	{
+		functionId: SQRT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqrt
+				},
+			},
+		},
+	},
+
 	// function `acos`
 	{
 		functionId: ACOS,
@@ -4412,6 +4433,52 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInMoShowVisibleBin
+				},
+			},
+		},
+	},
+
+	// function `cast_index_to_value`
+	{
+		functionId: CAST_INDEX_TO_VALUE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_uint16},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastIndexToValue
+				},
+			},
+		},
+	},
+
+	// function `cast_value_to_index`
+	{
+		functionId: CAST_VALUE_TO_INDEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastValueToIndex
 				},
 			},
 		},

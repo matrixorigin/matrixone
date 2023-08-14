@@ -16,8 +16,9 @@ package plan
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"unicode/utf8"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
