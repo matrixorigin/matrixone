@@ -3106,7 +3106,7 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 			return err
 		}
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, fs); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, false, fs); err != nil {
 				return err
 			}
 			objDataMeta = objMeta.MustDataMeta()

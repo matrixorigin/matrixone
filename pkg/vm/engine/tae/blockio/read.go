@@ -493,7 +493,7 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 }
 
 func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bool, error) {
-	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, fs)
+	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, false, fs)
 	if err != nil {
 		return false, err
 	}

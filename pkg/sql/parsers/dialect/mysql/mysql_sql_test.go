@@ -904,6 +904,8 @@ var (
 		}, {
 			input: "select avg(u.a), count(*) from u",
 		}, {
+			input: "select approx_count(*) from u",
+		}, {
 			input: "select avg(u.a), count(u.b) from u",
 		}, {
 			input: "select sum(col_1d) from tbl1 where col_1d < 13 group by col_1e",

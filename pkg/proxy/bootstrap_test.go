@@ -37,7 +37,7 @@ func TestBootstrap(t *testing.T) {
 		RebalanceInterval: toml.Duration{Duration: time.Second},
 	}
 	cfg.Cluster.RefreshInterval = toml.Duration{Duration: defaultRefreshInterval}
-	h, err := newProxyHandler(ctx, rt, cfg, st, nil, &c, true)
+	h, err := newProxyHandler(ctx, rt, cfg, st, nil, &c)
 	require.NoError(t, err)
 	h.bootstrap(ctx)
 

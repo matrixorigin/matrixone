@@ -192,7 +192,7 @@ func prefetchMetaJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			res = &tasks.JobResult{}
-			objectMeta, err := objectio.FastLoadObjectMeta(ctx, &params.key, params.fs)
+			objectMeta, err := objectio.FastLoadObjectMeta(ctx, &params.key, true, params.fs)
 			if err != nil {
 				res.Err = err
 				return
@@ -496,13 +496,7 @@ func (p *IoPipeline) crontask(ctx context.Context) {
 		if wdrops > 0 {
 			logutil.Infof("PrefetchDropStats: %d", wdrops)
 		}
-		cacheHitWindow, cacheWindow := objectio.ExportMetaCacheHitWindow()
-		cacheHit, cacheTotal := objectio.ExportMetaCacheHitTotal()
-		logutil.Infof(
-			"MetaCacheHitWindow: %d/%d, MetaCacheHitTotal: %d/%d",
-			cacheHitWindow, cacheWindow,
-			cacheHit, cacheTotal,
-		)
+		logutil.Info(objectio.ExportMetaCacheStats())
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

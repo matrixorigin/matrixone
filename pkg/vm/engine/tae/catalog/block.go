@@ -472,8 +472,7 @@ func (entry *BlockEntry) GetPKZoneMap(
 	}
 	location := entry.GetMetaLoc()
 	var meta objectio.ObjectMeta
-
-	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
 	seqnum := entry.GetSchema().GetSingleSortKeyIdx()

@@ -116,7 +116,7 @@ func ApplyRuntimeFilters(
 		location := blk.MetaLocation()
 
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, fs); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, false, fs); err != nil {
 				return nil, err
 			}
 			objDataMeta = objMeta.MustDataMeta()

@@ -37,7 +37,7 @@ func LoadColumnsData(
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
-	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
 	dataMeta := meta.MustGetMeta(metaType)
