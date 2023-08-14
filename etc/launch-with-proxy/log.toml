@@ -14,7 +14,7 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "mo-data/s3"
+data-dir = "mo-data/shared"
 
 [fileservice.cache]
 memory-capacity = "512MB"
