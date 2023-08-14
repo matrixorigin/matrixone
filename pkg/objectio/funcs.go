@@ -35,9 +35,9 @@ func ReadExtent(
 	factory CacheConstructorFactory,
 ) (v []byte, err error) {
 	ioVec := &fileservice.IOVector{
-		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 1),
-		NoCache:  noLRUCache,
+		FilePath:    name,
+		Entries:     make([]fileservice.IOEntry, 1),
+		CachePolicy: fileservice.SkipAll,
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{
@@ -270,9 +270,9 @@ func ReadAllBlocksWithMeta(
 	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	ioVec = &fileservice.IOVector{
-		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
-		NoCache:  noLRUCache,
+		FilePath:    name,
+		Entries:     make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
+		CachePolicy: fileservice.SkipAll,
 	}
 	for blk := uint32(0); blk < meta.BlockCount(); blk++ {
 		for _, seqnum := range cols {
