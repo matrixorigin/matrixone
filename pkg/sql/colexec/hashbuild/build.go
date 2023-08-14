@@ -115,9 +115,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
 
-	batches := make([]*batch.Batch, 0)
-	rowCount := 0
-
 	for {
 		var bat *batch.Batch
 		if ap.ctr.isMerge {
@@ -134,33 +131,13 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			break
 		}
 		if bat.RowCount() == 0 {
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 			continue
 		}
 		anal.Input(bat, isFirst)
 		anal.Alloc(int64(bat.Size()))
-
-		rowCount += bat.RowCount()
-
-		if float64(bat.RowCount())/float64(bat.Vecs[0].Capacity()) < 0.25 {
-			// reuse small batch
-			ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat)
-			proc.PutBatch(bat)
-			if err != nil {
-				return err
-			}
-		} else {
-			batches = append(batches, bat)
-		}
-	}
-
-	err = ctr.bat.PreExtend(proc.Mp(), rowCount)
-	if err != nil {
-		return err
-	}
-	for i := range batches {
-		ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), batches[i])
-		proc.PutBatch(batches[i])
+		ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat)
+		proc.PutBatch(bat)
 		if err != nil {
 			return err
 		}
