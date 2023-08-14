@@ -34,11 +34,12 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("processing on duplicate key before insert")
 }
 
-func Prepare(_ *proc, arg any) error {
+func Prepare(p *proc, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = &container{
 		emptyBat: batch.EmptyBatch,
 	}
+	ap.ctr.InitReceiver(p, true)
 	return nil
 }
 
@@ -47,37 +48,74 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus,
 	anal.Start()
 	defer anal.Stop()
 
-	var err error
 	arg := x.(*Argument)
-	bat := proc.Reg.InputBatch
-	anal.Input(bat, isFirst)
-	if bat == nil {
-		if arg.ctr.insertBat != nil {
-			newBat, err := arg.ctr.insertBat.Dup(proc.Mp())
-			if err != nil {
-				return process.ExecNext, err
+	ctr := arg.ctr
+
+	for {
+		switch ctr.state {
+		case Build:
+			for {
+				bat, end, err := ctr.ReceiveFromAllRegs(anal)
+				if err != nil {
+					return process.ExecStop, nil
+				}
+
+				if end {
+					break
+				}
+				anal.Input(bat, isFirst)
+				err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
+				if err != nil {
+					bat.Clean(proc.Mp())
+					return process.ExecNext, err
+				}
+
 			}
-			anal.Output(newBat, isLast)
-			proc.SetInputBatch(newBat)
+			ctr.state = Eval
+
+		case Eval:
+			if ctr.insertBat != nil {
+				anal.Output(ctr.insertBat, isLast)
+				proc.SetInputBatch(ctr.insertBat)
+				ctr.insertBat = nil
+				ctr.state = End
+				return process.ExecNext, nil
+			}
+			ctr.state = End
+
+		case End:
+			proc.SetInputBatch(nil)
+			return process.ExecStop, nil
 		}
-		return process.ExecStop, nil
 	}
 
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
-		proc.SetInputBatch(arg.ctr.emptyBat)
-		return process.ExecNext, nil
-	}
+	// if bat == nil {
+	// 	if arg.ctr.insertBat != nil {
+	// 		newBat, err := arg.ctr.insertBat.Dup(proc.Mp())
+	// 		if err != nil {
+	// 			return process.ExecNext, err
+	// 		}
+	// 		anal.Output(newBat, isLast)
+	// 		proc.SetInputBatch(newBat)
+	// 	}
+	// 	return process.ExecStop, nil
+	// }
 
-	defer proc.PutBatch(bat)
-	err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
-	if err != nil {
-		return process.ExecNext, err
-	}
+	// if bat.RowCount() == 0 {
+	// 	bat.Clean(proc.Mp())
+	// 	proc.SetInputBatch(arg.ctr.emptyBat)
+	// 	return process.ExecNext, nil
+	// }
 
-	anal.Output(arg.ctr.emptyBat, isLast)
-	proc.SetInputBatch(arg.ctr.emptyBat)
-	return process.ExecNext, nil
+	// defer proc.PutBatch(bat)
+	// err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
+	// if err != nil {
+	// 	return process.ExecNext, err
+	// }
+
+	// anal.Output(arg.ctr.emptyBat, isLast)
+	// proc.SetInputBatch(arg.ctr.emptyBat)
+	// return process.ExecNext, nil
 }
 
 func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *Argument) error {

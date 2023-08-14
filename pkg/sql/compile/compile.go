@@ -327,6 +327,7 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) error {
+	fmt.Println(DebugShowScopes(c.scope))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer task.End()
 	defer func() {
@@ -961,20 +962,15 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		rs := c.newMergeScope(ss)
-		rs.Magic = Merge
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		onDuplicateKeyArg, err := constructOnduplicateKey(n, c.e)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.OnDuplicateKey,
-			Arg: onDuplicateKeyArg,
-		})
-		ss = []*Scope{rs}
 		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
+
+		rs := c.newMergeScope(ss)
+		rs.Instructions[0] = vm.Instruction{
+			Op:  vm.OnDuplicateKey,
+			Idx: c.anal.curr,
+			Arg: constructOnduplicateKey(n, c.e),
+		}
+		return []*Scope{rs}, nil
 	case plan.Node_PRE_INSERT_UK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
