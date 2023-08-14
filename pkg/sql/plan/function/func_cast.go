@@ -202,8 +202,8 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_decimal64: {
 		types.T_float32, types.T_float64,
-		types.T_int32, types.T_int64,
-		types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -212,8 +212,8 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_decimal128: {
 		types.T_float32, types.T_float64,
-		types.T_int32, types.T_int64,
-		types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -1280,12 +1280,24 @@ func decimal64ToOthers(ctx context.Context,
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		return decimal64ToFloat(ctx, source, rs, length, 64)
+	case types.T_int8:
+		rs := vector.MustFunctionResult[int8](result)
+		return decimal64ToSigned(ctx, source, rs, 8, length)
+	case types.T_int16:
+		rs := vector.MustFunctionResult[int16](result)
+		return decimal64ToSigned(ctx, source, rs, 16, length)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
 		return decimal64ToSigned(ctx, source, rs, 32, length)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return decimal64ToSigned(ctx, source, rs, 64, length)
+	case types.T_uint8:
+		rs := vector.MustFunctionResult[uint8](result)
+		return decimal64ToUnsigned(ctx, source, rs, 8, length)
+	case types.T_uint16:
+		rs := vector.MustFunctionResult[uint16](result)
+		return decimal64ToUnsigned(ctx, source, rs, 16, length)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
 		return decimal64ToUnsigned(ctx, source, rs, 32, length)
@@ -1324,12 +1336,24 @@ func decimal128ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Decimal128],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	switch toType.Oid {
+	case types.T_int8:
+		rs := vector.MustFunctionResult[int8](result)
+		return decimal128ToSigned(ctx, source, rs, 8, length)
+	case types.T_int16:
+		rs := vector.MustFunctionResult[int16](result)
+		return decimal128ToSigned(ctx, source, rs, 16, length)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
 		return decimal128ToSigned(ctx, source, rs, 32, length)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return decimal128ToSigned(ctx, source, rs, 64, length)
+	case types.T_uint8:
+		rs := vector.MustFunctionResult[uint8](result)
+		return decimal128ToUnsigned(ctx, source, rs, 8, length)
+	case types.T_uint16:
+		rs := vector.MustFunctionResult[uint16](result)
+		return decimal128ToUnsigned(ctx, source, rs, 16, length)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
 		return decimal128ToUnsigned(ctx, source, rs, 32, length)
