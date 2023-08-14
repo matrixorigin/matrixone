@@ -16,7 +16,6 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
 	"time"
 
@@ -251,7 +250,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 			if !bat.Vecs[i].IsConst() && !bat.Vecs[i].NeedDup() {
 				vec := bat.Vecs[i]
 				if vec.Capacity() > 8192*64 {
-					logutil.Infof("!!!!!!!!! release a large vector, capacity %v", bat.Vecs[i].Capacity())
+					// very large vectors should not put back into pool, which cause these memory can not release
 					bat.Vecs[i].Free(proc.Mp())
 				} else if proc.vp.putVector(vec) {
 					bat.ReplaceVector(vec, nil)
