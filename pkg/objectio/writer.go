@@ -399,6 +399,9 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	for i := range w.blocks {
 		// prepare object meta and block index
 		metas[i], metaExtents[i], err = w.prepareDataMeta(objectMetas[i], w.blocks[i], offset, startID)
+		if err != nil {
+			return nil, err
+		}
 		if i == int(SchemaData) {
 			start = metaExtents[SchemaData].Offset()
 			metaHeader.SetDataMetaOffset(idxStart)

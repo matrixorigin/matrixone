@@ -16,12 +16,6 @@ package objectio
 
 type objectMetaV1 []byte
 
-func buildObjectMetaV1(count uint16) objectMetaV1 {
-	length := headerLen + uint32(count)*colMetaLen
-	buf := make([]byte, length)
-	return buf[:]
-}
-
 func (o objectMetaV1) MustGetMeta(metaType DataMetaType) ObjectDataMeta {
 	return ObjectDataMeta(o)
 }

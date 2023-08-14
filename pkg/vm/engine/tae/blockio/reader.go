@@ -30,12 +30,6 @@ const (
 	SyncIo  = 2
 )
 
-var CheckpointSize uint64
-
-func init() {
-	CheckpointSize = 0
-}
-
 var IoModel = SyncIo
 
 type BlockReader struct {
@@ -157,7 +151,6 @@ func (r *BlockReader) LoadSubColumns(
 		var obj any
 		for i := range cols {
 			obj, err = objectio.Decode(ioVectors[idx].Entries[i].CachedData.Bytes())
-			CheckpointSize += uint64(len(ioVectors[idx].Entries[i].CachedData.Bytes()))
 			if err != nil {
 				return
 			}

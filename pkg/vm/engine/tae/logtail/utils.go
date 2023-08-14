@@ -119,11 +119,6 @@ var checkpointDataSchemas_V4 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V5 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
-var checkpointDataRefer_V1 [MaxIDX]*checkpointDataItem
-var checkpointDataRefer_V2 [MaxIDX]*checkpointDataItem
-var checkpointDataRefer_V3 [MaxIDX]*checkpointDataItem
-var checkpointDataRefer_V4 [MaxIDX]*checkpointDataItem
-var checkpointDataRefer_V5 [MaxIDX]*checkpointDataItem
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
 
 func init() {
@@ -478,7 +473,6 @@ func (m *CheckpointMeta) String() string {
 type CheckpointData struct {
 	meta      map[uint64]*CheckpointMeta
 	locations map[string]objectio.Location
-	metaLocs  [MaxIDX][]objectio.Location
 	bats      [MaxIDX]*containers.Batch
 }
 
@@ -1057,6 +1051,9 @@ func (data *CNCheckpointData) ReadFromData(
 			var bat *batch.Batch
 			schema := checkpointDataReferVersions[version][uint32(idx)]
 			reader, err = blockio.NewObjectReader(reader.GetObjectReader().GetObject().GetFs(), block.GetLocation())
+			if err != nil {
+				return
+			}
 			bat, err = LoadCNSubBlkColumnsByMetaWithId(ctx, schema.types, schema.attrs, uint16(idx), block.GetID(), version, reader, m)
 			if err != nil {
 				return
@@ -1256,7 +1253,7 @@ func (data *CheckpointData) prepareMeta() {
 	segDelLoc := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
 
 	tidVec := bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	var sortMeta []int
+	sortMeta := make([]int, 0)
 	for tid := range data.meta {
 		sortMeta = append(sortMeta, int(tid))
 	}
@@ -1633,10 +1630,13 @@ func (data *CheckpointData) PrefetchMeta(
 	}
 	var pref blockio.PrefetchParams
 	pref, err = blockio.BuildSubPrefetchParams(service, key)
+	if err != nil {
+		return
+	}
 	meteIdxSchema := checkpointDataReferVersions[version][MetaIDX]
 	dnMeteIdxSchema := checkpointDataReferVersions[version][DNMetaIDX]
-	var idxes []uint16
-	var dnIdxes []uint16
+	idxes := make([]uint16, 0)
+	dnIdxes := make([]uint16, 0)
 	for attr := range meteIdxSchema.attrs {
 		idxes = append(idxes, uint16(attr))
 	}
@@ -1813,38 +1813,9 @@ func (data *CheckpointData) readMetaBatch(
 	}
 	return
 }
-func (data *CheckpointData) setMetaBatch(bat *containers.Batch) {
-	data.bats[MetaIDX].Append(bat)
-}
-func (data *CheckpointData) getMetaBatch() (bat *containers.Batch) {
-	return data.bats[MetaIDX]
-}
 
-/*
-	func (data *CheckpointData) replayMetaBatch() {
-		bat := data.getMetaBatch()
-		data.locations = make(map[string]objectio.Location)
-		for i, attr := range bat.Attrs {
-			if i == 0 {
-				continue
-			}
-			logutil.Infof("attr is %v", attr)
-			vec := vector.MustBytesCol(bat.GetVectorByName(attr).GetDownstreamVector())
-			if len(vec) == 0 {
-				continue
-			}
-
-			blockLocation := BlockLocation(vec[0])
-			location := blockLocation.GetLocation()
-			if location.IsEmpty() {
-				continue
-			}
-			data.locations[location.Name().String()] = location
-		}
-	}
-*/
 func (data *CheckpointData) replayMetaBatch() {
-	bat := data.getMetaBatch()
+	bat := data.bats[MetaIDX]
 	data.locations = make(map[string]objectio.Location)
 	tidVec := vector.MustFixedCol[uint64](bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	insVec := vector.MustBytesCol(bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector())
@@ -1911,22 +1882,6 @@ func (data *CheckpointData) readAll(
 			}
 		}
 	}
-	return
-}
-
-func (data *CheckpointData) readBatch(
-	ctx context.Context,
-	version uint32,
-	service fileservice.FileService,
-) (err error) {
-	return
-}
-
-func (data *CheckpointData) prefetchAll(
-	ctx context.Context,
-	version uint32,
-	service fileservice.FileService,
-) (err error) {
 	return
 }
 

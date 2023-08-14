@@ -31,6 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
+const (
+	PrefetchData uint16 = iota
+	PrefetchMetaIdx
+	ReadMetaIdx
+	ReadData
+)
+
 type metaFile struct {
 	index int
 	start types.TS
@@ -98,7 +105,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
 	closecbs := make([]func(), 0)
-	readfn := func(i int, prefetch int) {
+	readfn := func(i int, readType uint16) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
 		cnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
@@ -129,16 +136,16 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			version:    version,
 		}
 		var err2 error
-		if prefetch == 0 {
+		if readType == PrefetchData {
 			if err2 = checkpointEntry.Prefetch(ctx, r.rt.Fs, datas[i]); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 			}
-		} else if prefetch == 1 {
+		} else if readType == PrefetchMetaIdx {
 			datas[i], err = checkpointEntry.PrefetchMetaIdx(ctx, r.rt.Fs)
 			if err != nil {
 				return
 			}
-		} else if prefetch == 2 {
+		} else if readType == ReadMetaIdx {
 			err = checkpointEntry.ReadMetaIdx(ctx, r.rt.Fs, datas[i])
 			if err != nil {
 				return
@@ -161,7 +168,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 	}()
 	t0 = time.Now()
-	now := time.Now()
 	for i := 0; i < bat.Length(); i++ {
 		metaLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
 
@@ -170,27 +176,18 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			return
 		}
 	}
-	logutil.Infof("prefetch meta duration: %v", time.Since(now))
-	now = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, 1)
+		readfn(i, PrefetchMetaIdx)
 	}
-	logutil.Infof("prefetch meta idx duration: %v", time.Since(now))
-	now = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, 2)
+		readfn(i, ReadMetaIdx)
 	}
-	logutil.Infof("read meta idx duration: %v", time.Since(now))
-	now = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, 0)
+		readfn(i, PrefetchData)
 	}
-	logutil.Infof("prefetch data duration: %v", time.Since(now))
-	now = time.Now()
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, 3)
+		readfn(i, ReadData)
 	}
-	logutil.Infof("read data duration: %v", time.Since(now))
 	readDuration += time.Since(t0)
 	if err != nil {
 		return
@@ -249,8 +246,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("checkpoint"),
 		common.AnyField("apply cost", applyDuration),
-		common.AnyField("read cost", readDuration),
-		common.AnyField("size cost", blockio.CheckpointSize))
+		common.AnyField("read cost", readDuration))
 	r.source.Init(maxTs)
 	return
 }
