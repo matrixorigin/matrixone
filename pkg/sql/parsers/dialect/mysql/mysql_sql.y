@@ -8017,14 +8017,14 @@ window_spec:
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
-            Type: $3,
-            WindowSpec: $8,
-            AggType: 2,
-        }
+	    name := tree.SetUnresolvedName(strings.ToLower($1))
+	        $$ = &tree.FuncExpr{
+	        Func: tree.FuncName2ResolvableFunctionReference(name),
+	        Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
+	        Type: $3,
+	        WindowSpec: $8,
+            OrderBy:$5,
+	    }
     }
 |   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
@@ -8202,8 +8202,10 @@ function_call_aggregate:
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
 	    WindowSpec: $6,
-	}
+	    }
     }
+
+
 
 std_dev_pop:
     STD

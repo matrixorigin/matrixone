@@ -73,9 +73,10 @@ var Names = [...]string{
 }
 
 type Aggregate struct {
-	Op   int
-	Dist bool
-	E    *plan.Expr
+	Op     int
+	Dist   bool
+	E      *plan.Expr
+	Config []byte
 }
 
 // Agg agg interface
