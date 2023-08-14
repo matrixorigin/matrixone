@@ -407,6 +407,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	nums := vector.MustFixedCol[int32](bat.GetVector(catalog.MO_COLUMNS_ATTNUM_IDX + MO_OFF))
 	clusters := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
 	seqnums := vector.MustFixedCol[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
+	enumValues := bat.GetVector(catalog.MO_COLUMNS_ATT_ENUM_IDX + MO_OFF)
 	for i, account := range accounts {
 		key.AccountId = account
 		key.Name = tableNames.GetStringAt(i)
@@ -432,6 +433,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				constraintType:  constraintTypes.GetStringAt(i),
 				isClusterBy:     clusters[i],
 				seqnum:          seqnums[i],
+				enumValues:      enumValues.GetStringAt(i),
 			}
 			copy(col.rowid[:], rowids[i][:])
 			col.typ = append(col.typ, typs.GetBytesAt(i)...)
@@ -525,6 +527,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	attr.ClusterBy = col.isClusterBy == 1
 	attr.AutoIncrement = col.isAutoIncrement == 1
 	attr.Seqnum = col.seqnum
+	attr.EnumVlaues = col.enumValues
 	if err := types.Decode(col.typ, &attr.Type); err != nil {
 		panic(err)
 	}
@@ -559,10 +562,11 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
 				Typ: &plan.Type{
-					Id:       int32(attr.Attr.Type.Oid),
-					Width:    attr.Attr.Type.Width,
-					Scale:    attr.Attr.Type.Scale,
-					AutoIncr: attr.Attr.AutoIncrement,
+					Id:         int32(attr.Attr.Type.Oid),
+					Width:      attr.Attr.Type.Width,
+					Scale:      attr.Attr.Type.Scale,
+					AutoIncr:   attr.Attr.AutoIncrement,
+					Enumvalues: attr.Attr.EnumVlaues,
 				},
 				Primary:  attr.Attr.Primary,
 				Default:  attr.Attr.Default,

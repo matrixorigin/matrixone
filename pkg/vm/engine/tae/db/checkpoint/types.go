@@ -91,6 +91,8 @@ const (
 	CheckpointAttr_EntryType    = "entry_type"
 	CheckpointAttr_Version      = "version"
 	CheckpointAttr_AllLocations = "all_locations"
+
+	CheckpointSchemaColumnCountV1 = 5 // start, end, loc, type, ver
 )
 
 var (

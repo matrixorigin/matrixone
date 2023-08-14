@@ -737,17 +737,14 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range datas {
-		if versions[i] < CheckpointVersion4 {
-			continue
-		}
-		err := datas[i].InitMetaIdx(ctx,versions[i], readers[i])
+		err := datas[i].InitMetaIdx(ctx,versions[i], readers[i],locations[i],mp)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
 	for i := range datas {
-		err := datas[i].PrefetchMetaFrom(ctx, versions[i], fs, tableID)
+		err := datas[i].PrefetchMetaFrom(ctx, versions[i], locations[i], fs, tableID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -796,17 +793,6 @@ func LoadCheckpointEntries(
 			}
 			entries = append(entries, entry)
 		}
-		if cnIns != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_Insert,
-				TableId:      tableID,
-				TableName:    tableName,
-				DatabaseId:   dbID,
-				DatabaseName: dbName,
-				Bat:          cnIns,
-			}
-			entries = append(entries, entry)
-		}
 		if del != nil {
 			entry := &api.Entry{
 				EntryType:    api.Entry_Delete,
@@ -815,6 +801,17 @@ func LoadCheckpointEntries(
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
 				Bat:          del,
+			}
+			entries = append(entries, entry)
+		}
+		if cnIns != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Insert,
+				TableId:      tableID,
+				TableName:    tableName,
+				DatabaseId:   dbID,
+				DatabaseName: dbName,
+				Bat:          cnIns,
 			}
 			entries = append(entries, entry)
 		}

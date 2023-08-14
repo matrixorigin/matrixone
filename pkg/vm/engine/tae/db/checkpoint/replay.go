@@ -76,7 +76,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	t0 := time.Now()
 	var isCheckpointVersion1 bool
 	// in version 1, checkpoint metadata doesn't contain 'version'.
-	if len(bats[0].Vecs) < len(colNames) {
+	if len(bats[0].Vecs) < CheckpointSchemaColumnCountV1 {
 		isCheckpointVersion1 = true
 	}
 	for i := range bats[0].Vecs {
@@ -114,7 +114,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
 		}
 		var dnLoc objectio.Location
-		if version <= logtail.CheckpointVersion3 {
+		if version <= logtail.CheckpointVersion4 {
 			dnLoc = cnLoc
 		} else {
 			dnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
