@@ -1456,7 +1456,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("back_log", 1, 65535, false),
-		Default:           int64(-1),
+		Default:           int64(1),
 	},
 	"basedir": {
 		Name:              "basedir",
@@ -1995,7 +1995,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           int64(262144),
 	},
 	"keep_files_on_create": {
-		Name:              "join_buffer_size",
+		Name:              "keep_files_on_create",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
@@ -2714,14 +2714,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("print_identified_with_as_hex"),
 		Default:           int64(0),
 	},
-	"protocol_compression_algorithms": {
-		Name:              "protocol_compression_algorithms",
-		Scope:             ScopeGlobal,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableSetType("protocol_compression_algorithms", "zlib", "zstd", "uncompressed"),
-		Default:           "zlib",
-	},
 	"protocol_version": {
 		Name:              "protocol_version",
 		Scope:             ScopeGlobal,
@@ -3184,7 +3176,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("table_definition_cache", 400, 524288, false),
-		Default:           int64(-1),
+		Default:           int64(500),
 	},
 	"table_encryption_privilege_check": {
 		Name:              "table_encryption_privilege_check",
@@ -3248,7 +3240,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("thread_cache_size", 0, 16384, false),
-		Default:           int64(-1),
+		Default:           int64(1),
 	},
 	"thread_handling": {
 		Name:              "thread_handling",
@@ -3449,6 +3441,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("xa_detach_on_prepare"),
 		Default:           int64(1),
+	},
+	"version": {
+		Name:              "version",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("version"),
+		Default:           "8.0.30-MatrixOne-v1.0.0",
 	},
 }
 

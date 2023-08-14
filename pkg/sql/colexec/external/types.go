@@ -61,12 +61,13 @@ type ExParamConst struct {
 }
 
 type ExParam struct {
-	prevStr   string
-	reader    io.ReadCloser
-	plh       *ParseLineHandler
-	Fileparam *ExFileparam
-	Zoneparam *ZonemapFileparam
-	Filter    *FilterParam
+	prevStr        string
+	reader         io.ReadCloser
+	plh            *ParseLineHandler
+	Fileparam      *ExFileparam
+	Zoneparam      *ZonemapFileparam
+	Filter         *FilterParam
+	MoCsvLineArray [][]string
 }
 
 type ExFileparam struct {

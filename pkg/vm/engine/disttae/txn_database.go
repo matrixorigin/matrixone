@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -115,7 +116,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return nil, moerr.NewTxnClosedNoCtx(txn.meta.ID)
 	}
 
-	//check the table is deleted or not
+	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(genTableKey(ctx, name, db.databaseId)); exist {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
@@ -161,6 +162,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		Ts:         db.txn.meta.SnapshotTS,
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
+		logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) does not exist", name, defines.GetAccountId(ctx), db.databaseId)
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 	tbl := &txnTable{
