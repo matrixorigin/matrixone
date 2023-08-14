@@ -63,8 +63,6 @@ type container struct {
 	multiVecs [][]evalVector
 
 	vecs []*vector.Vector
-	// we use this to distinct bat.Aggs[i] is UnaryAgg or MultiAgg
-	mapAggType map[int32]int
 
 	bat *batch.Batch
 
