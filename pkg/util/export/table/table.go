@@ -221,24 +221,6 @@ func UInt64Column(name, comment string) Column {
 	}
 }
 
-func Int16Column(name, comment string) Column {
-	return Column{
-		Name:    name,
-		ColType: TInt16,
-		Default: "0",
-		Comment: comment,
-	}
-}
-
-func UInt16Column(name, comment string) Column {
-	return Column{
-		Name:    name,
-		ColType: TUint16,
-		Default: "0",
-		Comment: comment,
-	}
-}
-
 type Column struct {
 	Name    string
 	ColType ColType
@@ -310,7 +292,6 @@ type Table struct {
 	// accessIdx used in Row
 	accountIdx int
 
-	TableType      int
 	CreateTableSql string
 	CreateViewSql  string
 }
