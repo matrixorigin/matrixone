@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,59 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sm
+package blockio
 
 import (
-	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestLoop1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	q1 := make(chan any, 100)
-	fn := func(batch []any, q chan any) {
-		for _, item := range batch {
-			t.Logf("loop1 %d", item.(int))
-		}
-	}
-	loop := NewLoop(q1, nil, fn, 100)
-	loop.Start()
-	for i := 0; i < 10; i++ {
-		q1 <- i
-	}
-	loop.Stop()
-}
-
-func TestNewNonBlockingQueue(t *testing.T) {
+func TestIoPipeline_Prefetch(t *testing.T) {
 	wait := sync.WaitGroup{}
 	wait.Add(1)
-	defer func() {
-		testutils.AfterTest(t)
-	}()
 
 	queueSize := 10
 	batchSize := 0
-	queue := NewNonBlockingQueue(queueSize, batchSize, func(items ...any) {
-		// blocking handler
+	p := new(IoPipeline)
+
+	p.prefetch.queue = sm.NewNonBlockingQueue(queueSize, batchSize, func(items ...any) {
 		wait.Wait()
 	})
 
-	queue.Start()
+	p.stats.prefetchDropStats.Reset()
+	p.prefetch.queue.Start()
 
 	for i := 0; i < queueSize+1; i++ {
-		item, err := queue.Enqueue(i)
-		assert.NotNil(t, item)
+		err := p.doPrefetch(buildPrefetchParams(nil, nil))
 		assert.Nil(t, err)
+		assert.Equal(t, int64(0), p.stats.prefetchDropStats.Load())
 		time.Sleep(time.Millisecond * 10)
 	}
 
-	item, err := queue.Enqueue(11)
-	assert.Nil(t, item)
+	err := p.doPrefetch(buildPrefetchParams(nil, nil))
 	assert.Nil(t, err)
+	assert.Equal(t, int64(1), p.stats.prefetchDropStats.Load())
 
 	wait.Done()
 	time.Sleep(time.Millisecond * 100)

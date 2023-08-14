@@ -252,13 +252,9 @@ func NewIOPipeline(
 		100,
 		p.onWait)
 
-	p.prefetch.queue = sm.NewSafeQueue(
-		p.options.queueDepth,
-		64,
-		p.onPrefetch)
-	p.prefetch.scheduler = tasks.NewParallelJobScheduler(p.options.prefetchParallism)
 	// the prefetch queue is supposed to be an unblocking queue
-	p.prefetch.queue.SetBlocking(false)
+	p.prefetch.queue = sm.NewNonBlockingQueue(p.options.queueDepth, 64, p.onPrefetch)
+	p.prefetch.scheduler = tasks.NewParallelJobScheduler(p.options.prefetchParallism)
 
 	p.fetch.queue = sm.NewSafeQueue(
 		p.options.queueDepth,
@@ -388,8 +384,8 @@ func (p *IoPipeline) doPrefetch(params prefetchParams) (err error) {
 	item, err := p.prefetch.queue.Enqueue(params)
 	if item == nil || err != nil {
 		p.stats.prefetchDropStats.Add(1)
-		return err
 	}
+	// prefetch doesn't care about what type of err has occurred
 	return nil
 }
 

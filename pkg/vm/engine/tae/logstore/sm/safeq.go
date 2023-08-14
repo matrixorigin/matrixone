@@ -42,15 +42,22 @@ type safeQueue struct {
 	blocking bool
 }
 
+// NewSafeQueue is blocking queue by default
 func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
 	q := &safeQueue{
 		queue:     make(chan any, queueSize),
 		batchSize: batchSize,
 		onItemsCB: onItem,
 	}
-	q.SetBlocking(true)
+	q.blocking = true
 	q.state.Store(Created)
 	q.ctx, q.cancel = context.WithCancel(context.Background())
+	return q
+}
+
+func NewNonBlockingQueue(queueSize int, batchSize int, onItem OnItemsCB) *safeQueue {
+	q := NewSafeQueue(queueSize, batchSize, onItem)
+	q.blocking = false
 	return q
 }
 
@@ -117,9 +124,6 @@ func (q *safeQueue) waitStop() {
 	q.wg.Wait()
 }
 
-// Enqueue puts an item into this queue
-// it will return directly when if it is an unblocking queue and there has no more free space,
-// and the item returned will be set as nil to notify producer.
 func (q *safeQueue) Enqueue(item any) (any, error) {
 	if q.state.Load() != Running {
 		return item, ErrClose
@@ -138,9 +142,4 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 			return nil, nil
 		}
 	}
-}
-
-// SetBlocking specified whether producer will be blocked when queue use out of its capacity
-func (q *safeQueue) SetBlocking(blocking bool) {
-	q.blocking = blocking
 }
