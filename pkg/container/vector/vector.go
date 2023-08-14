@@ -2554,7 +2554,6 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 
 func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
-	var va types.Varlena
 
 	if vec.capacity == 0 {
 		if err := extend(vec, 1, mp); err != nil {
@@ -2563,11 +2562,11 @@ func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mp
 	}
 	vec.class = CONSTANT
 	col := vec.col.([]types.Varlena)
-	err = BuildVarlenaFromArray[T](vec, &va, &val, mp)
+	err = BuildVarlenaFromArray[T](vec, &col[0], &val, mp)
 	if err != nil {
 		return err
 	}
-	col[0] = va
+	vec.data = vec.data[:cap(vec.data)]
 	vec.SetLength(length)
 	return nil
 }
@@ -2923,7 +2922,6 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 
 func appendArrayList[T types.RealNumbers](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
 	var err error
-	var va types.Varlena
 
 	if err = extend(vec, len(vals), mp); err != nil {
 		return err
@@ -2936,11 +2934,10 @@ func appendArrayList[T types.RealNumbers](vec *Vector, vals [][]T, isNulls []boo
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
 			bs := w
-			err = BuildVarlenaFromArray[T](vec, &va, &bs, mp)
+			err = BuildVarlenaFromArray[T](vec, &col[length+i], &bs, mp)
 			if err != nil {
 				return err
 			}
-			col[length+i] = va
 		}
 	}
 	return nil
@@ -3452,6 +3449,23 @@ func BuildVarlenaFromValena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m 
 }
 
 func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpool.MPool) error {
+	vlen := len(*bs)
+	if vlen <= types.VarlenaInlineSize {
+		// first clear varlena to 0
+		p1 := v.UnsafePtr()
+		*(*int64)(p1) = 0
+		*(*int64)(unsafe.Add(p1, 8)) = 0
+		*(*int64)(unsafe.Add(p1, 16)) = 0
+		v[0] = byte(vlen)
+		copy(v[1:1+vlen], *bs)
+		return nil
+	}
+	return BuildVarlenaNoInline(vec, v, bs, m)
+}
+
+func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
+	_bs := types.ArrayToBytes[T](*array)
+	bs := &_bs
 	vlen := len(*bs)
 	if vlen <= types.VarlenaInlineSize {
 		// first clear varlena to 0
