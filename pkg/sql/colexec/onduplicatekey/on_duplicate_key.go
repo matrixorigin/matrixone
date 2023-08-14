@@ -88,34 +88,6 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus,
 			return process.ExecStop, nil
 		}
 	}
-
-	// if bat == nil {
-	// 	if arg.ctr.insertBat != nil {
-	// 		newBat, err := arg.ctr.insertBat.Dup(proc.Mp())
-	// 		if err != nil {
-	// 			return process.ExecNext, err
-	// 		}
-	// 		anal.Output(newBat, isLast)
-	// 		proc.SetInputBatch(newBat)
-	// 	}
-	// 	return process.ExecStop, nil
-	// }
-
-	// if bat.RowCount() == 0 {
-	// 	bat.Clean(proc.Mp())
-	// 	proc.SetInputBatch(arg.ctr.emptyBat)
-	// 	return process.ExecNext, nil
-	// }
-
-	// defer proc.PutBatch(bat)
-	// err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
-	// if err != nil {
-	// 	return process.ExecNext, err
-	// }
-
-	// anal.Output(arg.ctr.emptyBat, isLast)
-	// proc.SetInputBatch(arg.ctr.emptyBat)
-	// return process.ExecNext, nil
 }
 
 func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *Argument) error {
