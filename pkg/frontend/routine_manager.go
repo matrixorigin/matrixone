@@ -98,7 +98,7 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 	}
 }
 
-func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
+func (ar *AccountRoutineManager) EnKillQueue(tenantID int64, version uint64) {
 	if tenantID == sysAccountID {
 		return
 	}
@@ -197,6 +197,10 @@ func (rm *RoutineManager) setSessionMgr(sessionMgr *queryservice.SessionManager)
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.sessionManager = sessionMgr
+}
+
+func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
+	return rm.accountRoutine
 }
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
@@ -595,7 +599,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 			default:
 			}
 			rm.KillRoutineConnections()
-			time.Sleep(time.Duration(time.Duration(pu.SV.KillRountinesInterval) * time.Minute))
+			time.Sleep(time.Duration(time.Duration(pu.SV.KillRountinesInterval) * time.Second))
 		}
 	}()
 
