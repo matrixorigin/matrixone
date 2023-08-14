@@ -114,7 +114,6 @@ type taskRunner struct {
 	runnerID     string
 	service      TaskService
 	stopper      stopper.Stopper
-	lastTaskID   uint64
 	waitTasksC   chan task.Task
 	parallelismC chan struct{}
 	doneC        chan runningTask
@@ -276,7 +275,6 @@ func (r *taskRunner) doFetch() ([]task.Task, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), r.options.fetchTimeout)
 	tasks, err := r.service.QueryTask(ctx,
 		WithTaskStatusCond(EQ, task.TaskStatus_Running),
-		WithTaskIDCond(GT, r.lastTaskID),
 		WithLimitCond(r.options.queryLimit),
 		WithTaskRunnerCond(EQ, r.runnerID))
 	cancel()
@@ -284,15 +282,20 @@ func (r *taskRunner) doFetch() ([]task.Task, error) {
 		r.logger.Error("fetch task failed", zap.Error(err))
 		return nil, err
 	}
-	if len(tasks) == 0 {
+	newTasks := tasks[:0]
+	r.mu.RLock()
+	for _, t := range tasks {
+		if _, ok := r.mu.runningTasks[t.ID]; !ok {
+			newTasks = append(newTasks, t)
+		}
+	}
+	r.mu.RUnlock()
+	if len(newTasks) == 0 {
 		return nil, nil
 	}
 
-	r.lastTaskID = tasks[len(tasks)-1].ID
-	r.logger.Debug("new task fetched",
-		zap.Int("count", len(tasks)),
-		zap.Uint64("last-task-id", r.lastTaskID))
-	return tasks, nil
+	r.logger.Debug("new task fetched", zap.Int("count", len(newTasks)))
+	return newTasks, nil
 }
 
 func (r *taskRunner) addTasks(ctx context.Context, tasks []task.Task) {
