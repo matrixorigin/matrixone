@@ -1115,8 +1115,6 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	if name != catalog.Row_ID {
 		return tbl.EnhanceDelete(bat, name)
 	}
-	bat.SetAttributes([]string{catalog.Row_ID})
-
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.RowCount() == 0 {
 		return nil
