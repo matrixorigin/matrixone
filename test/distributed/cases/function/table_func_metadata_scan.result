@@ -40,4 +40,15 @@ b    8192    4096    197698
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
 sum(origin_size)
 230504
+select approx_count(*) from t;
+approx_count(*)
+8192
+insert into t select * from t;
+insert into t select * from t;
+select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
+mo_ctl(dn, flush, table_func_metadata_scan.t)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select approx_count(*) from t;
+approx_count(*)
+32768
 drop table if exists t;
