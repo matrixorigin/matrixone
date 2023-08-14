@@ -14,20 +14,27 @@ import (
 )
 
 const (
-	topicName         = "test_topic17"
-	partitions        = 1
-	replicationFactor = 1
+	topicName           = "test_topic17"
+	partitions          = 1
+	replicationFactor   = 1
+	bootstrapServers    = "127.0.0.1:62610"
+	groupID             = "myGroup"
+	autoOffsetReset     = "earliest"
+	enableAutoCommit    = false
+	sessionTimeoutMs    = 6000
+	brokerAddressFamily = "v4"
+	schemaRegistryURL   = "http://localhost:8081"
 )
 
 func main() {
 	// Define your Kafka configuratio
 	config := &kafka.ConfigMap{
-		"bootstrap.servers":     "127.0.0.1:62610",
-		"group.id":              "myGroup",
-		"auto.offset.reset":     "earliest", // Read from the beginning
-		"enable.auto.commit":    false,
-		"session.timeout.ms":    6000,
-		"broker.address.family": "v4",
+		"bootstrap.servers":     bootstrapServers,
+		"group.id":              groupID,
+		"auto.offset.reset":     autoOffsetReset,
+		"enable.auto.commit":    enableAutoCommit,
+		"session.timeout.ms":    sessionTimeoutMs,
+		"broker.address.family": brokerAddressFamily,
 	}
 
 	// Initialize KafkaAdapter
@@ -38,7 +45,7 @@ func main() {
 	}
 
 	// Initialize Schema Registry
-	err = ka.InitSchemaRegistry("http://localhost:8081")
+	err = ka.InitSchemaRegistry(schemaRegistryURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize schema registry: %s\n", err)
 		os.Exit(1)
@@ -81,7 +88,6 @@ func main() {
 	if err != nil {
 		return
 	}
-
 	for _, msg := range msgs {
 		m, err := d.Deserialize(topicName, msg.Value)
 		if err != nil {
@@ -90,7 +96,7 @@ func main() {
 		fmt.Printf("message %v with offset %d\n", m, offset)
 	}
 
-	// dynamic parse the proto message to json  without generated protobuf code
+	// dynamic parse the proto message  without  using generated protobuf code
 	res, err := mokafka.DeserializeProtobuf(schema, msgs[0].Value)
 	fmt.Printf("message %v with offset %d\n", res, offset)
 }
