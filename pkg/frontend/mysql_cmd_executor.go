@@ -3398,6 +3398,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
+	if len(input.getSql()) != 0 {
+		fmt.Println("===>", input.getSql())
+	} else {
+		fmt.Println("===>", "!!!stmt")
+	}
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	input.genSqlSourceType(ses)
