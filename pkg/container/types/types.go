@@ -609,6 +609,12 @@ func (t T) ToType() Type {
 	return typ
 }
 
+func (t T) ToTypeWithScale(scale int32) Type {
+	typ := t.ToType()
+	typ.Scale = scale
+	return typ
+}
+
 func (t T) String() string {
 	switch t {
 	case T_any:

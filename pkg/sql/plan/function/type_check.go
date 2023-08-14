@@ -249,7 +249,13 @@ func setTargetScaleFromSource(source, target *types.Type) {
 		if source.IsInt() || source.IsUInt() {
 			target.Scale = 0
 		} else if source.IsFloat() || source.IsDecimal() {
-			target.Scale = int32(math.Min(float64(source.Scale), 30))
+			if target.Oid == types.T_float32 {
+				// significant figures of float32 are 7
+				target.Scale = int32(math.Min(float64(source.Scale), 7))
+			} else if target.Oid == types.T_float64 {
+				// significant figures of float64 are 16
+				target.Scale = int32(math.Min(float64(source.Scale), 16))
+			}
 		} else {
 			target.Scale = -1
 		}

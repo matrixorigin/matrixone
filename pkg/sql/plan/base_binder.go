@@ -1094,6 +1094,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 }
 
 func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []tree.Expr, depth int32) (*plan.Expr, error) {
+	if udf == nil {
+		return nil, moerr.NewNotSupported(b.GetContext(), "function '%s'", name)
+	}
+
 	switch udf.Language {
 	case tree.SQL.String():
 		sql := udf.Body
