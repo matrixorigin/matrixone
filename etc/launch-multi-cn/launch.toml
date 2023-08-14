@@ -1,12 +1,12 @@
 logservices = [
-    "./etc/launch-with-proxy/log.toml",
+    "./etc/launch-multi-cn/log.toml",
 ]
 
 dnservices = [
-    "./etc/launch-with-proxy/dn.toml"
+    "./etc/launch-multi-cn/dn.toml"
 ]
 
 cnservices = [
-    "./etc/launch-with-proxy/cn1.toml",
-    "./etc/launch-with-proxy/cn2.toml"
+    "./etc/launch-multi-cn/cn1.toml",
+    "./etc/launch-multi-cn/cn2.toml"
 ]
