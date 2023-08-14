@@ -15,7 +15,10 @@
 package sm
 
 import (
+	"github.com/stretchr/testify/assert"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 )
@@ -34,4 +37,36 @@ func TestLoop1(t *testing.T) {
 		q1 <- i
 	}
 	loop.Stop()
+}
+
+func TestSafeQueueWithUnBlocking(t *testing.T) {
+	wait := sync.WaitGroup{}
+	wait.Add(1)
+	defer func() {
+		wait.Done()
+		testutils.AfterTest(t)
+	}()
+
+	queue := NewSafeQueue(10, 0, func(items ...any) {
+		// blocking handler
+		wait.Wait()
+	})
+
+	queue.Start()
+
+	queue.SetBlocking(false)
+
+	for i := 0; i < 11; i++ {
+		item, err := queue.Enqueue(i)
+		assert.NotNil(t, item)
+		assert.Nil(t, err)
+		time.Sleep(time.Millisecond * 10)
+	}
+
+	item, err := queue.Enqueue(10)
+	assert.Nil(t, item)
+	assert.Nil(t, err)
+
+	time.Sleep(time.Millisecond * 100)
+
 }
