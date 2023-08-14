@@ -16,8 +16,9 @@ package objectio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -131,7 +132,7 @@ func (r *objectReaderV1) ReadMeta(
 	}
 	if r.oname != nil {
 		// read table data block
-		if meta, err = LoadObjectMetaByExtent(ctx, r.oname, r.metaExt, r.noLRUCache, r.fs); err != nil {
+		if meta, err = LoadObjectMetaByExtent(ctx, r.oname, r.metaExt, false, r.noLRUCache, r.fs); err != nil {
 			return
 		}
 	} else {
