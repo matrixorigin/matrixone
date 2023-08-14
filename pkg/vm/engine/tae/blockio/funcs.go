@@ -44,7 +44,7 @@ func LoadColumns(ctx context.Context,
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Value)
+		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {
 			return
 		}

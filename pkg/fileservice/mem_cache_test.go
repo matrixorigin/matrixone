@@ -50,8 +50,10 @@ func TestMemCacheLeak(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToCacheData: func(reader io.Reader, data []byte) (RCBytes, error) {
-					return RCBytesPool.GetAndCopy([]byte{42}), nil
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
+					cacheData := allocator.Alloc(1)
+					cacheData.Bytes()[0] = 42
+					return cacheData, nil
 				},
 			},
 		},
@@ -72,8 +74,10 @@ func TestMemCacheLeak(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToCacheData: func(reader io.Reader, data []byte) (RCBytes, error) {
-					return RCBytesPool.GetAndCopy([]byte{42}), nil
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
+					cacheData := allocator.Alloc(1)
+					cacheData.Bytes()[0] = 42
+					return cacheData, nil
 				},
 			},
 		},

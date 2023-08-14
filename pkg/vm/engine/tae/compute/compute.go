@@ -102,7 +102,7 @@ func GetOffsetOfBytes(
 func GetOffsetWithFunc[T any](
 	vals []T,
 	val T,
-	compare func(a, b T) int64,
+	compare func(a, b T) int,
 	skipmask *nulls.Bitmap,
 ) (offset int, exist bool) {
 	start, end := 0, len(vals)-1
@@ -195,6 +195,9 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offs
 	case types.T_timestamp:
 		vs := vector.MustFixedCol[types.Timestamp](vec)
 		return GetOffsetOfOrdered(vs, v.(types.Timestamp), skipmask)
+	case types.T_enum:
+		vs := vector.MustFixedCol[types.Enum](vec)
+		return GetOffsetOfOrdered(vs, v.(types.Enum), skipmask)
 	case types.T_decimal64:
 		vs := vector.MustFixedCol[types.Decimal64](vec)
 		return GetOffsetWithFunc(

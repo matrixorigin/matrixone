@@ -225,6 +225,10 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 
 		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
 			vector.AppendBytes(opBat.Vecs[i], info.Max, false, mp)
+
+		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
+			vector.AppendBytes(opBat.Vecs[i], info.Sum, false, mp)
+
 		default:
 		}
 	}

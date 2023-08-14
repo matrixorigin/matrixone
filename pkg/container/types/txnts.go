@@ -297,12 +297,14 @@ func MockColTypes(colCnt int) (ct []Type) {
 			typ = T_binary.ToType()
 		case 19:
 			typ = T_varbinary.ToType()
+		case 20:
+			typ = T_enum.ToType()
 		}
 		ct = append(ct, typ)
 	}
 	return
 }
 
-func CompareTSTSAligned(a, b TS) int64 {
-	return int64(bytes.Compare(a[:], b[:]))
+func CompareTSTSAligned(a, b TS) int {
+	return bytes.Compare(a[:], b[:])
 }

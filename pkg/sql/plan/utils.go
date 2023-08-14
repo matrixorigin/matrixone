@@ -1096,28 +1096,35 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
-		exprList := exprImpl.List
-		for i, exprElem := range exprList.List {
-			_, ok2 := exprElem.Expr.(*plan.Expr_F)
-			if ok2 {
-				foldExpr, err := ConstantFold(bat, exprElem, proc, varAndParamIsConst)
-				if err != nil {
-					return e, nil
-				}
-				exprImpl.List.List[i] = foldExpr
+		exprList := exprImpl.List.List
+		for i := range exprList {
+			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
+			if err != nil {
+				return e, nil
 			}
+			exprList[i] = foldExpr
 		}
-		return e, nil
-	}
 
-	var err error
-	if elist, ok := e.Expr.(*plan.Expr_List); ok {
-		for i, expr := range elist.List.List {
-			if elist.List.List[i], err = ConstantFold(bat, expr, proc, varAndParamIsConst); err != nil {
-				return nil, err
-			}
+		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
+		if err != nil {
+			return nil, err
 		}
-		return e, nil
+		defer vec.Free(proc.Mp())
+
+		colexec.SortInFilter(vec)
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+
+		return &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Bin{
+				Bin: &plan.BinaryData{
+					Data: data,
+				},
+			},
+		}, nil
 	}
 
 	ef, ok := e.Expr.(*plan.Expr_F)
