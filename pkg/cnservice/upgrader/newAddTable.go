@@ -24,7 +24,7 @@ import (
 var (
 	// mo_table_partitions;
 	MoTablePartitionsTable = &table.Table{
-		Account:  table.AccountSys,
+		Account:  table.AccountAll,
 		Database: catalog.MO_CATALOG,
 		Table:    catalog.MO_TABLE_PARTITIONS,
 		CreateTableSql: fmt.Sprintf(`CREATE TABLE %s.%s (
@@ -46,7 +46,7 @@ var (
 var needUpgradNewTable = []*table.Table{MoTablePartitionsTable}
 
 var PARTITIONSView = &table.Table{
-	Account:  table.AccountSys,
+	Account:  table.AccountAll,
 	Database: sysview.InformationDBConst,
 	Table:    "PARTITIONS",
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PARTITIONS` AS " +

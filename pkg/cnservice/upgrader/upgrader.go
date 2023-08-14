@@ -17,6 +17,7 @@ package upgrader
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -182,7 +183,6 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(allTenants)
 
 	if err = u.UpgradeNewTableColumn(ctx); err != nil {
 		return err
@@ -238,24 +238,39 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 		return nil
 	}
 
+	upgradeFunc := func(tbl *table.Table, tenant *frontend.TenantInfo) error {
+		// Switch Tenants
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())
+		isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
+		if err != nil {
+			return err
+		}
+		if isExist {
+			return nil
+		}
+		// Execute upgrade SQL
+		if err = exec.Exec(ctx, tbl.CreateTableSql, ie.NewOptsBuilder().Finish()); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	for _, tbl := range needUpgradNewTable {
-		for _, tenant := range tenants {
-			// Switch Tenants
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
-			//ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(2))
-			//ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(2))
-			isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
-			if err != nil {
-				return err
+		if tbl.Account == table.AccountAll {
+			for _, tenant := range tenants {
+				if err := upgradeFunc(tbl, tenant); err != nil {
+					return err
+				}
 			}
-			if isExist {
-				continue
-			}
-			// Execute upgrade SQL
-			if err = exec.Exec(ctx, tbl.CreateTableSql, ie.NewOptsBuilder().Finish()); err != nil {
+		} else {
+			if err := upgradeFunc(tbl, &frontend.TenantInfo{
+				Tenant:   frontend.GetDefaultTenant(),
+				TenantID: catalog.System_Account,
+			}); err != nil {
 				return err
 			}
 		}
+
 	}
 	return nil
 }
@@ -267,23 +282,38 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 		return nil
 	}
 
+	upgradeFunc := func(tbl *table.Table, tenant *frontend.TenantInfo) error {
+		// Switch Tenants
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())
+		isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
+		if err != nil {
+			return err
+		}
+		if isExist {
+			return nil
+		}
+		// Execute upgrade SQL
+		if err = exec.Exec(ctx, tbl.CreateViewSql, ie.NewOptsBuilder().Finish()); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	for _, tbl := range needUpgradNewView {
-		for _, tenant := range tenants {
-			// Switch Tenants
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
-			isExist, err := u.CheckSchemaIsExist(ctx, exec, tbl.Database, tbl.Table)
-			if err != nil {
-				return err
+		if tbl.Account == table.AccountAll {
+			for _, tenant := range tenants {
+				if err := upgradeFunc(tbl, tenant); err != nil {
+					return err
+				}
 			}
-			if isExist {
-				continue
-			}
-			// Execute upgrade SQL
-			if err = exec.Exec(ctx, tbl.CreateViewSql, ie.NewOptsBuilder().Finish()); err != nil {
+		} else {
+			if err := upgradeFunc(tbl, &frontend.TenantInfo{
+				Tenant:   frontend.GetDefaultTenant(),
+				TenantID: catalog.System_Account,
+			}); err != nil {
 				return err
 			}
 		}
-
 	}
 	return nil
 }
