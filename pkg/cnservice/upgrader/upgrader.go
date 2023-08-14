@@ -290,7 +290,7 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 
 // Check if the table exists
 func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecutor, database, tbl string) (bool, error) {
-	// Query information_schema.columns to get column info
+	// Query mo_catalog.mo_tables to get table info
 	query := fmt.Sprintf("select rel_id, relname from `mo_catalog`.`mo_tables` where reldatabase = '%s' and relname = '%s'", database, tbl)
 
 	// Execute the query
