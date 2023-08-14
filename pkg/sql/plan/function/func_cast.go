@@ -1463,7 +1463,7 @@ func strTypeToOthers(proc *process.Process,
 		}
 		return strToTimestamp(source, rs, zone, length)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(proc.Ctx, source, rs, length, toType)
 
@@ -3874,34 +3874,12 @@ func strToStr(
 	return nil
 }
 
-func strToArray[T types.RealNumbers](
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
-
-	var i uint64
-	var l = uint64(length)
-	for i = 0; i < l; i++ {
-		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
-			if err := to.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			//TODO: Improve
-			s, err := types.StringToArray[T](convertByteSliceToString(v))
-			if err != nil {
-				return err
-			}
-			b := types.ArrayToBytes[T](s)
-			if err := to.AppendBytes(b, false); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
+//func strToArray[T types.RealNumbers](
+//	ctx context.Context,
+//	from vector.FunctionParameterWrapper[types.Varlena],
+//	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+//
+//}
 
 func uuidToStr(
 	from vector.FunctionParameterWrapper[types.Uuid],
