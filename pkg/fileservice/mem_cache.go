@@ -96,7 +96,8 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	if vector.NoCache {
+
+	if vector.CachePolicy.Any(SkipMemoryReads) {
 		return nil
 	}
 
@@ -153,7 +154,8 @@ func (m *MemCache) Update(
 	vector *IOVector,
 	async bool,
 ) error {
-	if vector.NoCache {
+
+	if vector.CachePolicy.Any(SkipMemoryWrites) {
 		return nil
 	}
 

@@ -68,6 +68,7 @@ const (
 	AES_DECRYPT    // AES_DECRYPT
 	AES_ENCRYPT    // AES_ENCRYPT
 	ANY_VALUE      // ANY_VALUE
+	APPROX_COUNT   // APPROX_COUNT
 	ARRAY_AGG      // ARRAY_AGG
 	ARRAY_APPEND   // ARRAY_APPEND
 	ARRAY_CAT      // ARRAY_CAT
@@ -396,6 +397,7 @@ var functionIdRegister = map[string]int32{
 	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,
+	"approx_count":          APPROX_COUNT,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,

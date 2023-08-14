@@ -46,8 +46,6 @@ func (h *handler) bootstrap(ctx context.Context) {
 			if state.TaskTableUser.GetUsername() != "" && state.TaskTableUser.GetPassword() != "" {
 				db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, state.TaskTableUser.GetPassword())
 				db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(getClient))
-				h.sqlWorker.SetSQLUser(SQLUserName, state.TaskTableUser.GetPassword())
-				h.sqlWorker.SetAddressFn(util.AddressFunc(getClient))
 				h.logger.Info("proxy bootstrap succeeded")
 				return
 			}

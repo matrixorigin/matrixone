@@ -59,10 +59,6 @@ func (r *mockRouter) SelectByConnID(connID uint32) (*CNServer, error) {
 	return nil, nil
 }
 
-func (r *mockRouter) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
-	return nil, nil
-}
-
 func (r *mockRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
 	return nil, nil, nil
 }

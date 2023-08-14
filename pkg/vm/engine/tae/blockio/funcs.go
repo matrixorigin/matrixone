@@ -16,7 +16,6 @@ package blockio
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,19 +25,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
-func LoadColumns(ctx context.Context,
+func LoadColumnsData(
+	ctx context.Context,
+	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
-	m *mpool.MPool) (bat *batch.Batch, err error) {
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
-	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &meta, name.String(), location.ID(), cols, typs, m, fs); err != nil {
+	dataMeta := meta.MustGetMeta(metaType)
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs); err != nil {
 		return
 	}
 	bat = batch.NewWithSize(len(cols))
@@ -53,6 +56,28 @@ func LoadColumns(ctx context.Context,
 	}
 	//TODO call CachedData.Release
 	return
+}
+
+func LoadColumns(
+	ctx context.Context,
+	cols []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
+	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m)
+}
+
+func LoadTombstoneColumns(
+	ctx context.Context,
+	cols []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
+	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m)
 }
 
 func LoadBF(

@@ -472,7 +472,6 @@ func readBlockData(
 
 	return
 }
-
 func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, err error) {
 	isPersistedByCN, err = persistedByCN(ctx, deltaloc, fs)
 	if err != nil {
@@ -485,7 +484,7 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 		}
 		return
 	} else {
-		bat, err = LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
+		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
@@ -494,9 +493,13 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 }
 
 func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bool, error) {
-	meta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, fs)
+	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, false, fs)
 	if err != nil {
 		return false, err
+	}
+	meta, ok := objectMeta.TombstoneMeta()
+	if !ok {
+		meta = objectMeta.MustDataMeta()
 	}
 	blkmeta := meta.GetBlockMeta(uint32(deltaloc.ID()))
 	columnCount := blkmeta.GetColumnCount()
