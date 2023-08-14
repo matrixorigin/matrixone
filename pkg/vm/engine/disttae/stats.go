@@ -102,7 +102,7 @@ func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDe
 		}
 
 		if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
-			if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+			if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 				return nil, err
 			}
 			lenobjs++
