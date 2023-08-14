@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,29 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package objectio
+package fileservice
 
-import "github.com/matrixorigin/matrixone/pkg/fileservice"
+type CachePolicy uint32
 
-const Magic = 0xFFFFFFFF
-const Version = 1
-const FSName = "local"
+const (
+	SkipMemoryReads = 1 << iota
+	SkipMemoryWrites
+	SkipDiskReads
+	SkipDiskWrites
+)
 
-type Object struct {
-	// name is the object file's name
-	name string
-	// fs is an instance of fileservice
-	fs fileservice.FileService
-}
+const (
+	SkipReads  = SkipMemoryReads | SkipDiskReads
+	SkipWrites = SkipMemoryWrites | SkipDiskWrites
+	SkipDisk   = SkipDiskReads | SkipDiskWrites
+	SkipMemory = SkipMemoryReads | SkipMemoryWrites
+	SkipAll    = SkipDisk | SkipMemory
+)
 
-func NewObject(name string, fs fileservice.FileService) *Object {
-	object := &Object{
-		name: name,
-		fs:   fs,
+func (c CachePolicy) Any(policies ...CachePolicy) bool {
+	for _, policy := range policies {
+		if policy&c > 0 {
+			return true
+		}
 	}
-	return object
-}
-
-func (o *Object) GetFs() fileservice.FileService {
-	return o.fs
+	return false
 }

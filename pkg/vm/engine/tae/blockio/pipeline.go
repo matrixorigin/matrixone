@@ -133,7 +133,7 @@ func jobFactory(
 	)
 }
 
-func fetchReader(params prefetchParams) (reader *objectio.ObjectReader) {
+func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
 	if params.reader != nil {
 		reader = params.reader
 	} else {
@@ -143,7 +143,7 @@ func fetchReader(params prefetchParams) (reader *objectio.ObjectReader) {
 }
 
 // prefetch data job
-func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
+func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
 	return getJob(
 		ctx,
@@ -152,13 +152,29 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := reader.ReadMultiBlocks(ctx,
-				params.ids, nil)
-			if err != nil {
-				res.Err = err
-				return
+			if params.dataType == objectio.CkpMetaStart {
+				ioVectors, err := reader.ReadMultiSubBlocks(ctx, params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				res.Res = ioVectors
+			} else if params.dataType == objectio.CkpAllData {
+				ioVectors, err := reader.ReadMultiAllSubBlocks(ctx, params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				res.Res = ioVectors
+			} else {
+				ioVectors, err := reader.ReadMultiBlocks(ctx,
+					params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				res.Res = ioVectors
 			}
-			res.Res = ioVectors
 			if params.reader == nil {
 				putReader(reader)
 			}
@@ -168,7 +184,7 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 }
 
 // prefetch metadata job
-func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
+func prefetchMetaJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	name := params.key.Name().String()
 	return getJob(
 		ctx,
@@ -188,13 +204,13 @@ func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
 }
 
 type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
-type PrefetchFunc = func(params prefetchParams) error
+type PrefetchFunc = func(params PrefetchParams) error
 
 func readColumns(ctx context.Context, params fetchParams) (any, error) {
 	return params.reader.ReadOneBlock(ctx, params.idxes, params.typs, params.blk, nil)
 }
 
-func noopPrefetch(params prefetchParams) error {
+func noopPrefetch(params PrefetchParams) error {
 	// Synchronous prefetch does not need to do anything
 	return nil
 }
@@ -362,7 +378,7 @@ func (p *IoPipeline) doAsyncFetch(
 	return
 }
 
-func (p *IoPipeline) Prefetch(params prefetchParams) (err error) {
+func (p *IoPipeline) Prefetch(params PrefetchParams) (err error) {
 	return p.prefetchFunc(params)
 }
 
@@ -380,7 +396,7 @@ func (p *IoPipeline) doFetch(
 	return
 }
 
-func (p *IoPipeline) doPrefetch(params prefetchParams) (err error) {
+func (p *IoPipeline) doPrefetch(params PrefetchParams) (err error) {
 	if _, err = p.prefetch.queue.Enqueue(params); err == sm.ErrFull {
 		p.stats.prefetchDropStats.Add(1)
 	}
@@ -419,13 +435,13 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		return
 	}
 
-	processes := make([]prefetchParams, 0)
+	processes := make([]PrefetchParams, 0)
 	for _, item := range items {
-		option := item.(prefetchParams)
+		option := item.(PrefetchParams)
 		if len(option.ids) == 0 {
 			job := prefetchMetaJob(
 				context.Background(),
-				item.(prefetchParams),
+				item.(PrefetchParams),
 			)
 			p.schedulerPrefetch(job)
 			continue
@@ -449,6 +465,11 @@ func (p *IoPipeline) onWait(jobs ...any) {
 	for _, j := range jobs {
 		job := j.(*tasks.Job)
 		res := job.WaitDone()
+		if res == nil {
+			logutil.Infof("job is %v", job.String())
+			putJob(job)
+			return
+		}
 		if res.Err != nil {
 			logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)
 		}

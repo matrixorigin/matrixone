@@ -16,10 +16,18 @@ package testutil
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -28,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -350,4 +359,294 @@ func InitTestDB(
 			return !ckp.GetEnd().GreaterEq(min)
 		})
 	return db
+}
+
+func writeIncrementalCheckpoint(
+	t *testing.T,
+	start, end types.TS,
+	c *catalog.Catalog,
+	checkpointBlockRows int,
+	fs fileservice.FileService,
+) (objectio.Location, objectio.Location) {
+	factory := logtail.IncrementalCheckpointDataFactory(start, end)
+	data, err := factory(c)
+	assert.NoError(t, err)
+	defer data.Close()
+	cnLocation, dnLocation, err := data.WriteTo(fs, checkpointBlockRows)
+	assert.NoError(t, err)
+	return cnLocation, dnLocation
+}
+
+func dnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.FileService) *logtail.CheckpointData {
+	reader, err := blockio.NewObjectReader(fs, location)
+	assert.NoError(t, err)
+	data := logtail.NewCheckpointData()
+	err = data.ReadFrom(
+		context.Background(),
+		logtail.CheckpointCurrentVersion,
+		location,
+		reader,
+		fs,
+		common.DefaultAllocator,
+	)
+	assert.NoError(t, err)
+	return data
+}
+func cnReadCheckpoint(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService) (ins, del, cnIns, segDel *api.Batch, cb []func()) {
+	ins, del, cnIns, segDel, cb = cnReadCheckpointWithVersion(t, tid, location, fs, logtail.CheckpointCurrentVersion)
+	return
+}
+func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService, ver uint32) (ins, del, cnIns, segDel *api.Batch, cb []func()) {
+	locs := make([]string, 0)
+	locs = append(locs, location.String())
+	locs = append(locs, strconv.Itoa(int(ver)))
+	locations := strings.Join(locs, ";")
+	entries, cb, err := logtail.LoadCheckpointEntries(
+		context.Background(),
+		locations,
+		tid,
+		"tbl",
+		0,
+		"db",
+		common.DefaultAllocator,
+		fs,
+	)
+	assert.NoError(t, err)
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.TableName == fmt.Sprintf("_%d_seg", tid) {
+			segDel = e.Bat
+		} else if e.EntryType == api.Entry_Delete {
+			del = e.Bat
+			if tid != pkgcatalog.MO_DATABASE_ID && tid != pkgcatalog.MO_TABLES_ID && tid != pkgcatalog.MO_COLUMNS_ID {
+				cnIns = entries[i-1].Bat
+				i--
+			}
+		} else {
+			ins = e.Bat
+		}
+	}
+	return
+}
+
+func checkDNCheckpointData(t *testing.T, data *logtail.CheckpointData, start, end types.TS, c *catalog.Catalog) {
+	factory := logtail.IncrementalCheckpointDataFactory(start, end)
+	data2, err := factory(c)
+	assert.NoError(t, err)
+	defer data2.Close()
+
+	bats1 := data.GetBatches()
+	bats2 := data2.GetBatches()
+	assert.Equal(t, len(bats1), len(bats2))
+	for i, bat := range bats1 {
+		// skip metabatch
+		if i == 0 {
+			continue
+		}
+		bat2 := bats2[i]
+		// t.Logf("check bat %d", i)
+		isBatchEqual(t, bat, bat2)
+	}
+}
+
+func getBatchLength(bat *containers.Batch) int {
+	length := 0
+	for _, vec := range bat.Vecs {
+		if vec.Length() > length {
+			length = vec.Length()
+		}
+	}
+	return length
+}
+
+func isBatchEqual(t *testing.T, bat1, bat2 *containers.Batch) {
+	assert.Equal(t, getBatchLength(bat1), getBatchLength(bat2))
+	assert.Equal(t, len(bat1.Vecs), len(bat2.Vecs))
+	for i := 0; i < getBatchLength(bat1); i++ {
+		for j, vec1 := range bat1.Vecs {
+			vec2 := bat2.Vecs[j]
+			// for commitTS and rowid in checkpoint
+			if vec1.Length() == 0 || vec2.Length() == 0 {
+				// logutil.Warnf("empty vec attr %v", bat1.Attrs[j])
+				continue
+			}
+			// t.Logf("attr %v, row %d", bat1.Attrs[j], i)
+			assert.Equal(t, vec1.Get(i), vec2.Get(i))
+		}
+	}
+}
+
+func isProtoDNBatchEqual(t *testing.T, bat1 *api.Batch, bat2 *containers.Batch) {
+	if bat1 == nil {
+		if bat2 == nil {
+			return
+		}
+		assert.Equal(t, 0, getBatchLength(bat2))
+	} else {
+		moIns, err := batch.ProtoBatchToBatch(bat1)
+		assert.NoError(t, err)
+		dnIns := containers.ToDNBatch(moIns)
+		isBatchEqual(t, dnIns, bat2)
+	}
+}
+
+func checkCNCheckpointData(t *testing.T, tid uint64, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
+	if tid == pkgcatalog.MO_DATABASE_ID {
+		checkMODatabase(t, ins, del, cnIns, segDel, start, end, c)
+	} else if tid == pkgcatalog.MO_TABLES_ID {
+		checkMOTables(t, ins, del, cnIns, segDel, start, end, c)
+	} else if tid == pkgcatalog.MO_COLUMNS_ID {
+		checkMOColumns(t, ins, del, cnIns, segDel, start, end, c)
+	} else {
+		checkUserTables(t, tid, ins, del, cnIns, segDel, start, end, c)
+	}
+}
+
+func checkMODatabase(t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
+	collector := logtail.NewIncrementalCollector(start, end)
+	p := &catalog.LoopProcessor{}
+	p.DatabaseFn = collector.VisitDB
+	err := c.RecurLoop(p)
+	assert.NoError(t, err)
+	data2 := collector.OrphanData()
+	defer data2.Close()
+	ins2, _, del2, _ := data2.GetDBBatchs()
+
+	isProtoDNBatchEqual(t, ins, ins2)
+	isProtoDNBatchEqual(t, del, del2)
+	assert.Nil(t, cnIns)
+	assert.Nil(t, segDel)
+}
+
+func checkMOTables(t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
+	collector := logtail.NewIncrementalCollector(start, end)
+	p := &catalog.LoopProcessor{}
+	p.TableFn = collector.VisitTable
+	err := c.RecurLoop(p)
+	assert.NoError(t, err)
+	data2 := collector.OrphanData()
+	defer data2.Close()
+	ins2, _, _, del2, _ := data2.GetTblBatchs()
+
+	isProtoDNBatchEqual(t, ins, ins2)
+	isProtoDNBatchEqual(t, del, del2)
+	assert.Nil(t, cnIns)
+	assert.Nil(t, segDel)
+}
+
+func checkMOColumns(t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
+	collector := logtail.NewIncrementalCollector(start, end)
+	p := &catalog.LoopProcessor{}
+	p.TableFn = collector.VisitTable
+	err := c.RecurLoop(p)
+	assert.NoError(t, err)
+	data2 := collector.OrphanData()
+	bats := data2.GetBatches()
+	ins2 := bats[logtail.TBLColInsertIDX]
+	del2 := bats[logtail.TBLColDeleteIDX]
+
+	isProtoDNBatchEqual(t, ins, ins2)
+	isProtoDNBatchEqual(t, del, del2)
+	assert.Nil(t, cnIns)
+	assert.Nil(t, segDel)
+}
+
+func checkUserTables(t *testing.T, tid uint64, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
+	collector := logtail.NewIncrementalCollector(start, end)
+	p := &catalog.LoopProcessor{}
+	p.BlockFn = func(be *catalog.BlockEntry) error {
+		if be.GetSegment().GetTable().ID != tid {
+			return nil
+		}
+		return collector.VisitBlk(be)
+	}
+	p.SegmentFn = func(se *catalog.SegmentEntry) error {
+		if se.GetTable().ID != tid {
+			return nil
+		}
+		return collector.VisitSeg(se)
+	}
+	err := c.RecurLoop(p)
+	assert.NoError(t, err)
+	data2 := collector.OrphanData()
+	bats := data2.GetBatches()
+	ins2 := bats[logtail.BLKMetaInsertIDX]
+	del2 := bats[logtail.BLKMetaDeleteIDX]
+	cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
+	segDel2 := bats[logtail.SEGDeleteIDX]
+
+	isProtoDNBatchEqual(t, ins, ins2)
+	isProtoDNBatchEqual(t, del, del2)
+	isProtoDNBatchEqual(t, cnIns, cnIns2)
+	isProtoDNBatchEqual(t, segDel, segDel2)
+}
+
+func CheckCheckpointReadWrite(
+	t *testing.T,
+	start, end types.TS,
+	c *catalog.Catalog,
+	checkpointBlockRows int,
+	fs fileservice.FileService,
+) {
+	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, fs)
+	dnData := dnReadCheckpoint(t, location, fs)
+
+	checkDNCheckpointData(t, dnData, start, end, c)
+	p := &catalog.LoopProcessor{}
+
+	ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, pkgcatalog.MO_DATABASE_ID, location, fs)
+	checkCNCheckpointData(t, pkgcatalog.MO_DATABASE_ID, ins, del, cnIns, seg, start, end, c)
+	for _, cb := range cbs {
+		if cb != nil {
+			cb()
+		}
+	}
+	ins, del, cnIns, seg, cbs = cnReadCheckpoint(t, pkgcatalog.MO_TABLES_ID, location, fs)
+	checkCNCheckpointData(t, pkgcatalog.MO_TABLES_ID, ins, del, cnIns, seg, start, end, c)
+	for _, cb := range cbs {
+		if cb != nil {
+			cb()
+		}
+	}
+	ins, del, cnIns, seg, cbs = cnReadCheckpoint(t, pkgcatalog.MO_COLUMNS_ID, location, fs)
+	checkCNCheckpointData(t, pkgcatalog.MO_COLUMNS_ID, ins, del, cnIns, seg, start, end, c)
+	for _, cb := range cbs {
+		if cb != nil {
+			cb()
+		}
+	}
+
+	p.TableFn = func(te *catalog.TableEntry) error {
+		ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, te.ID, location, fs)
+		checkCNCheckpointData(t, te.ID, ins, del, cnIns, seg, start, end, c)
+		for _, cb := range cbs {
+			if cb != nil {
+				cb()
+			}
+		}
+		return nil
+	}
+}
+
+func (e *TestEngine) CheckReadCNCheckpoint() {
+	tids := []uint64{1, 2, 3}
+	p := &catalog.LoopProcessor{}
+	p.TableFn = func(te *catalog.TableEntry) error {
+		tids = append(tids, te.ID)
+		return nil
+	}
+	err := e.Catalog.RecurLoop(p)
+	assert.NoError(e.t, err)
+	ckps := e.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	for _, ckp := range ckps {
+		for _, tid := range tids {
+			ins, del, cnIns, seg, cbs := cnReadCheckpointWithVersion(e.t, tid, ckp.GetLocation(), e.Opts.Fs, ckp.GetVersion())
+			checkCNCheckpointData(e.t, tid, ins, del, cnIns, seg, ckp.GetStart(), ckp.GetEnd(), e.Catalog)
+			for _, cb := range cbs {
+				if cb != nil {
+					cb()
+				}
+			}
+		}
+	}
 }
