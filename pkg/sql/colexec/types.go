@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"reflect"
 	"sync"
 
@@ -85,6 +86,7 @@ type ReceiverOperator struct {
 	// Merge/MergeGroup/MergeLimit ... are Merge-Type
 	// while Join/Intersect/Minus ... are not
 	aliveMergeReceiver int
+	chs                []chan *batch.Batch
 	receiverListener   []reflect.SelectCase
 }
 

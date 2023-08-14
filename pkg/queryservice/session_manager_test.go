@@ -44,6 +44,10 @@ func (s *mockSession) StatusSession() *status.Session {
 	}
 }
 
+func (s *mockSession) SetSessionRoutineStatus(status string) error {
+	return nil
+}
+
 func TestNewSessionManager(t *testing.T) {
 	sm := NewSessionManager()
 	assert.NotNil(t, sm)

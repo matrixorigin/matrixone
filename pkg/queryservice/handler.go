@@ -22,26 +22,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 )
 
-// handleRequest handles the requests from client.
-func (s *queryService) handleRequest(ctx context.Context, req *pb.Request, resp *pb.Response) error {
-	switch pb.CmdMethod(req.Method()) {
-	case pb.CmdMethod_ShowProcessList:
-		if req.ShowProcessListRequest == nil {
-			return moerr.NewInternalError(ctx, "bad request")
-		}
-		sessions, err := s.processList(req.ShowProcessListRequest.Tenant,
-			req.ShowProcessListRequest.SysTenant)
-		if err != nil {
-			resp.WrapError(err)
-			return nil
-		}
-		resp.ShowProcessListResponse = &pb.ShowProcessListResponse{
-			Sessions: sessions,
-		}
-		return nil
-	default:
-		return moerr.NewInternalError(ctx, "Unsupported cmd: %s", req.CmdMethod)
+// handleRequest handles the show process list request.
+func (s *queryService) handleShowProcessList(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+	if req.ShowProcessListRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
 	}
+	sessions, err := s.processList(req.ShowProcessListRequest.Tenant,
+		req.ShowProcessListRequest.SysTenant)
+	if err != nil {
+		resp.WrapError(err)
+		return nil
+	}
+	resp.ShowProcessListResponse = &pb.ShowProcessListResponse{
+		Sessions: sessions,
+	}
+	return nil
+}
+
+// handleRequest handles the alter account request.
+func (s *queryService) handleAlterAccount(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+	if req.AlterAccountRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	err := s.alterSessionsStatus(req.AlterAccountRequest.Tenant, req.AlterAccountRequest.SysTenant, req.AlterAccountRequest.Status)
+	if err != nil {
+		resp.WrapError(err)
+		return nil
+	}
+	resp.AlterAccountResponse = &pb.AlterAccountResponse{
+		AlterSuccess: true,
+	}
+
+	return nil
 }
 
 // processList returns all the sessions. For sys tenant, return all sessions; but for common
@@ -59,4 +71,22 @@ func (s *queryService) processList(tenant string, sysTenant bool) ([]*status.Ses
 		sessions = append(sessions, ses.StatusSession())
 	}
 	return sessions, nil
+}
+
+// alterSessionStatus alter session routine accoring to the input status
+func (s *queryService) alterSessionsStatus(tenant string, sysTenant bool, status string) error {
+	var ss []Session
+	if sysTenant {
+		ss = s.sessionMgr.GetAllSessions()
+	} else {
+		ss = s.sessionMgr.GetSessionsByTenant(tenant)
+	}
+	for _, ses := range ss {
+		if ses.GetTenantName() == tenant {
+			if err := ses.SetSessionRoutineStatus(status); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

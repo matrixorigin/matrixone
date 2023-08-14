@@ -16,6 +16,7 @@ package address
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 )
@@ -88,7 +89,8 @@ type addressManager struct {
 	address       Address
 	mu            struct {
 		sync.Mutex
-		services map[int]struct{}
+		portAdvanced int
+		services     map[int]int // slot => port number
 	}
 }
 
@@ -101,7 +103,8 @@ func NewAddressManager(serviceAddress string, portBase int) AddressManager {
 		portBase:      portBase,
 		reservedSlots: defaultReservedSlots,
 	}
-	am.mu.services = make(map[int]struct{})
+	am.mu.portAdvanced = 0
+	am.mu.services = make(map[int]int)
 	return am
 }
 
@@ -109,31 +112,62 @@ func NewAddressManager(serviceAddress string, portBase int) AddressManager {
 func (m *addressManager) Register(portSlot int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if portSlot > m.reservedSlots {
-		panic("the number of requested ports exceeds the limit")
+	if m.portBase == 0 {
+		return
 	}
 	if _, ok := m.mu.services[portSlot]; ok {
-		panic(fmt.Sprintf("slot %d has already been registered", portSlot))
+		return
 	}
-	m.mu.services[portSlot] = struct{}{}
+	m.mu.services[portSlot] = m.portAdvanceLocked()
 }
 
 // ListenAddress implements the AddressManager interface.
 func (m *addressManager) ListenAddress(slot int) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.mu.services[slot]; !ok {
+	p, ok := m.mu.services[slot]
+	if !ok {
 		panic(fmt.Sprintf("slot %d has not been registered yet", slot))
 	}
-	return fmt.Sprintf("%s:%d", m.address.ListenAddress, m.portBase+slot)
+	return fmt.Sprintf("%s:%d", m.address.ListenAddress, p)
 }
 
 // ServiceAddress implements the AddressManager interface.
 func (m *addressManager) ServiceAddress(slot int) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.mu.services[slot]; !ok {
+	p, ok := m.mu.services[slot]
+	if !ok {
 		panic(fmt.Sprintf("slot %d has not been registered yet", slot))
 	}
-	return fmt.Sprintf("%s:%d", m.address.ServiceAddress, m.portBase+slot)
+	return fmt.Sprintf("%s:%d", m.address.ServiceAddress, p)
+}
+
+// portAdvanceLocked advances the port and return the first available one.
+func (m *addressManager) portAdvanceLocked() int {
+	var port int
+	for {
+		port = m.portBase + m.mu.portAdvanced
+		if portCheck(port) {
+			break
+		}
+		m.mu.portAdvanced++
+		if m.mu.portAdvanced > m.reservedSlots {
+			panic(fmt.Sprintf("no ports are available between %d and %d",
+				m.portBase, m.portBase+m.reservedSlots))
+		}
+	}
+	m.mu.portAdvanced++
+	return port
+}
+
+// portCheck checks if the port is available to use. If the port is not used, return
+// true; otherwise, return false.
+func portCheck(port int) bool {
+	l, err := net.Listen("tcp4", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return false
+	}
+	defer l.Close()
+	return true
 }

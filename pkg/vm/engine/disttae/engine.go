@@ -43,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -75,13 +74,12 @@ func New(
 	}
 
 	e := &Engine{
-		mp:         mp,
-		fs:         fs,
-		ls:         ls.(lockservice.LockService),
-		cli:        cli,
-		idGen:      idGen,
-		dnID:       dnID,
-		partitions: make(map[[2]uint64]*logtailreplay.Partition),
+		mp:    mp,
+		fs:    fs,
+		ls:    ls.(lockservice.LockService),
+		cli:   cli,
+		idGen: idGen,
+		dnID:  dnID,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -380,6 +378,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
+		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
 	}
 	if txn.meta.IsRCIsolation() {
 		txn.tableCache.cachedIndex = e.catalog.GetDeletedTableIndex()
@@ -496,12 +495,10 @@ func (e *Engine) setPushClientStatus(ready bool) {
 	e.Lock()
 	defer e.Unlock()
 
-	if tc, ok := e.cli.(client.TxnClientWithFeature); ok {
-		if ready {
-			tc.Resume()
-		} else {
-			tc.Pause()
-		}
+	if ready {
+		e.cli.Resume()
+	} else {
+		e.cli.Pause()
 	}
 
 	e.pClient.receivedLogTailTime.ready.Store(ready)

@@ -68,7 +68,7 @@ func newTestProxyHandler(t *testing.T) *testProxyHandler {
 		hc:     hc,
 		mc:     mc,
 		re:     re,
-		ru:     newRouter(mc, re, re.connManager, false),
+		ru:     newRouter(mc, re, false),
 		closeFn: func() {
 			mc.Close()
 			st.Stop()
@@ -422,7 +422,7 @@ func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {
 
 	// start proxy.
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
-		WithHAKeeperClient(hc), WithTest())
+		WithHAKeeperClient(hc))
 	defer func() {
 		err := s.Close()
 		require.NoError(t, err)
@@ -495,94 +495,6 @@ func TestHandler_HandleEventSetVar(t *testing.T) {
 	})
 }
 
-func TestHandler_HandleEventSuspendAccount(t *testing.T) {
-	testWithServer(t, func(t *testing.T, addr string, s *Server) {
-		db1, err := sql.Open("mysql", fmt.Sprintf("a1#root:111@unix(%s)/db1", addr))
-		// connect to server.
-		require.NoError(t, err)
-		require.NotNil(t, db1)
-		defer func() {
-			_ = db1.Close()
-		}()
-		_, err = db1.Exec("select 1")
-		require.NoError(t, err)
-
-		db2, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
-		// connect to server.
-		require.NoError(t, err)
-		require.NotNil(t, db2)
-		defer func() {
-			_ = db2.Close()
-		}()
-
-		_, err = db2.Exec("alter account a1 suspend")
-		require.NoError(t, err)
-
-		time.Sleep(time.Millisecond * 200)
-		res, err := db1.Query("show global variables")
-		require.NoError(t, err)
-		defer res.Close()
-		var rows int
-		var varName, varValue string
-		for res.Next() {
-			rows += 1
-			err := res.Scan(&varName, &varValue)
-			require.NoError(t, err)
-			require.Equal(t, "killed", varName)
-			require.Equal(t, "yes", varValue)
-		}
-		require.Equal(t, 1, rows)
-		err = res.Err()
-		require.NoError(t, err)
-
-		require.Equal(t, int64(2), s.counterSet.connAccepted.Load())
-	})
-}
-
-func TestHandler_HandleEventDropAccount(t *testing.T) {
-	testWithServer(t, func(t *testing.T, addr string, s *Server) {
-		db1, err := sql.Open("mysql", fmt.Sprintf("a1#root:111@unix(%s)/db1", addr))
-		// connect to server.
-		require.NoError(t, err)
-		require.NotNil(t, db1)
-		defer func() {
-			_ = db1.Close()
-		}()
-		_, err = db1.Exec("select 1")
-		require.NoError(t, err)
-
-		db2, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
-		// connect to server.
-		require.NoError(t, err)
-		require.NotNil(t, db2)
-		defer func() {
-			_ = db2.Close()
-		}()
-
-		_, err = db2.Exec("drop account a1")
-		require.NoError(t, err)
-
-		time.Sleep(time.Millisecond * 200)
-		res, err := db1.Query("show global variables")
-		require.NoError(t, err)
-		defer res.Close()
-		var rows int
-		var varName, varValue string
-		for res.Next() {
-			rows += 1
-			err := res.Scan(&varName, &varValue)
-			require.NoError(t, err)
-			require.Equal(t, "killed", varName)
-			require.Equal(t, "yes", varValue)
-		}
-		require.Equal(t, 1, rows)
-		err = res.Err()
-		require.NoError(t, err)
-
-		require.Equal(t, int64(2), s.counterSet.connAccepted.Load())
-	})
-}
-
 func TestHandler_HandleTxn(t *testing.T) {
 	testWithServer(t, func(t *testing.T, addr string, s *Server) {
 		db1, err := sql.Open("mysql", fmt.Sprintf("a1#root:111@unix(%s)/db1", addr))
@@ -595,5 +507,27 @@ func TestHandler_HandleTxn(t *testing.T) {
 		_, err = db1.Exec("select 1")
 		require.NoError(t, err)
 
+	})
+}
+
+func TestHandler_HandleEventPrepare(t *testing.T) {
+	testWithServer(t, func(t *testing.T, addr string, s *Server) {
+		db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
+		// connect to server.
+		require.NoError(t, err)
+		require.NotNil(t, db1)
+		defer func() {
+			_ = db1.Close()
+		}()
+		_, err = db1.Exec("prepare p1 from 'select ?'")
+		require.NoError(t, err)
+
+		res, err := db1.Query("execute p1 using @pp") // we're just searching the PREPARE stmt.
+		require.NoError(t, err)
+		defer res.Close()
+		err = res.Err()
+		require.NoError(t, err)
+
+		require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 	})
 }

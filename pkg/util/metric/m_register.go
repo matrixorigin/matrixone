@@ -21,6 +21,8 @@ const constTenantKey = "account"
 // this constant lable is used for sys_* and process_* table
 var sysTenantID = prom.Labels{constTenantKey: "sys"}
 
+// InitCollectors contains all the collectors that belong to SubSystemSql, SubSystemServer, SubSystemProcess and
+// SubSystemStatement.
 var InitCollectors = []Collector{
 	// sql metric
 	StatementCounterFactory,
@@ -36,6 +38,12 @@ var InitCollectors = []Collector{
 	hardwareStatsCollector,
 }
 
+// InternalCollectors contains all the collectors that belong to SubSystemMO
+var InternalCollectors = []Collector{
+	// mo metric
+	MOLogMessageFactory,
+}
+
 type SubSystem struct {
 	Name              string
 	Comment           string
@@ -48,9 +56,23 @@ func RegisterSubSystem(s *SubSystem) {
 	AllSubSystem[s.Name] = s
 }
 
+const (
+	// SubSystemSql is the subsystem which base on query action.
+	SubSystemSql = "sql"
+	// SubSystemServer is the subsystem which base on server status, trigger by client query.
+	SubSystemServer = "server"
+	// SubSystemProcess is the subsystem which base on process status.
+	SubSystemProcess = "process"
+	// SubSystemSys is the subsystem which base on OS status.
+	SubSystemSys = "sys"
+	// SubSystemMO is the subsystem which show mo internal status
+	SubSystemMO = "mo"
+)
+
 func init() {
-	RegisterSubSystem(&SubSystem{"sql", "base on query action", true})
-	RegisterSubSystem(&SubSystem{"server", "MO Server status, observe from inside", true})
-	RegisterSubSystem(&SubSystem{"process", "MO process status", false})
-	RegisterSubSystem(&SubSystem{"sys", "OS status", false})
+	RegisterSubSystem(&SubSystem{SubSystemSql, "base on query action", true})
+	RegisterSubSystem(&SubSystem{SubSystemServer, "MO Server status, observe from inside", true})
+	RegisterSubSystem(&SubSystem{SubSystemProcess, "MO process status", false})
+	RegisterSubSystem(&SubSystem{SubSystemSys, "OS status", false})
+	RegisterSubSystem(&SubSystem{SubSystemMO, "MO internal status", false})
 }

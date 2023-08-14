@@ -349,7 +349,6 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend.SetLogAndVersion(&c.Log, version.Version)
-	cfg.Frontend.StorePath = filepath.Join(c.DataDir, "cn-data", cfg.UUID)
 	return cfg
 }
 

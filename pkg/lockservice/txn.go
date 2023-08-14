@@ -149,7 +149,10 @@ func (txn *activeTxn) close(
 	return nil
 }
 
-func (txn *activeTxn) abort(serviceID string, waitTxn pb.WaitTxn) {
+func (txn *activeTxn) abort(
+	serviceID string,
+	waitTxn pb.WaitTxn,
+	err error) {
 	// abort is called by deadlock detection, so it is not necessary to lock
 	txn.Lock()
 	defer txn.Unlock()
@@ -166,7 +169,7 @@ func (txn *activeTxn) abort(serviceID string, waitTxn pb.WaitTxn) {
 		return
 	}
 	for _, w := range txn.blockedWaiters {
-		w.notify(serviceID, notifyValue{err: ErrDeadLockDetected})
+		w.notify(serviceID, notifyValue{err: err})
 	}
 }
 

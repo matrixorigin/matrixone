@@ -1019,6 +1019,19 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		if err != nil {
 			return nil, err
 		}
+
+		tableDef := preNode.GetTableDef()
+		if tableDef.Partition != nil {
+			partitionIdx := len(preNode.ProjectList)
+			partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
+			preNode.ProjectList = append(preNode.ProjectList, partitionExpr)
+
+			partTableIDs, _ := getPartTableIdsAndNames(builder.compCtx, preNode.GetObjRef(), tableDef)
+			node.LockTargets[0].IsPartitionTable = true
+			node.LockTargets[0].PartitionTableIds = partTableIDs
+			node.LockTargets[0].FilterColIdxInBat = int32(partitionIdx)
+		}
+
 		if newPos, ok := childRemapping.globalToLocal[oldPos]; ok {
 			node.LockTargets[0].PrimaryColIdxInBat = newPos[1]
 		}

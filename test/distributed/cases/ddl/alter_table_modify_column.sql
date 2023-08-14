@@ -270,3 +270,24 @@ alter table emp modify deptno varchar(10);
 alter table emp modify deptno varchar(25);
 desc emp;
 select * from emp;
+
+drop table emp;
+drop table dept;
+----------------------------------------------------------------------------------------
+drop table if exists t1;
+CREATE TABLE t1(col1 int not null, col2 varchar(10));
+insert into t1 values (1, '137iu2');
+insert into t1 values (1, '73ujf34f');
+select * from t1;
+
+alter table t1 modify col1 int primary key;
+--ERROR 1062 (23000): Duplicate entry '1' for key 't1.PRIMARY'
+desc t1;
+
+alter table t1 modify col2 varchar(10) primary key;
+desc t1;
+
+insert into t1 values (1, 'cdsdsa');
+select * from t1;
+drop table t1;
+drop database if exists db2;

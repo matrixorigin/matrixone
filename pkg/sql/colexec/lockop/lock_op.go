@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -198,7 +197,6 @@ func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
 	arg *Argument) error {
-	txnFeature := proc.TxnClient.(client.TxnClientWithFeature)
 	needRetry := false
 	for idx, target := range arg.targets {
 		getLogger().Debug("lock",
@@ -243,7 +241,7 @@ func performLock(
 		}
 
 		// refreshTS is last commit ts + 1, because we need see the committed data.
-		if txnFeature.RefreshExpressionEnabled() &&
+		if proc.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
 			ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
@@ -437,8 +435,8 @@ func doLock(
 			fn = hasNewVersionInRange
 		}
 
-		// if [snapshotTS, lockedTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, tableID, eng, vec, snapshotTS.Prev(), lockedTS)
+		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
+		changed, err := fn(proc, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, timestamp.Timestamp{}, err
 		}

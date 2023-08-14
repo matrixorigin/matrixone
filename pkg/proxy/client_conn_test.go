@@ -94,12 +94,13 @@ func (c *mockNetConn) SetWriteDeadline(t time.Time) error {
 }
 
 type mockClientConn struct {
-	conn        net.Conn
-	tenant      Tenant
-	clientInfo  clientInfo // need to set it explicitly
-	router      Router
-	tun         *tunnel
-	setVarStmts []string
+	conn         net.Conn
+	tenant       Tenant
+	clientInfo   clientInfo // need to set it explicitly
+	router       Router
+	tun          *tunnel
+	setVarStmts  []string
+	prepareStmts []string
 }
 
 var _ ClientConn = (*mockClientConn)(nil)
@@ -139,8 +140,14 @@ func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 			return nil, err
 		}
 	}
+	for _, stmt := range c.prepareStmts {
+		if _, err := sc.ExecStmt(stmt, nil); err != nil {
+			return nil, err
+		}
+	}
 	return sc, nil
 }
+
 func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
 	switch ev := e.(type) {
 	case *killQueryEvent:
@@ -155,25 +162,9 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		c.setVarStmts = append(c.setVarStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
 		return nil
-	case *suspendAccountEvent:
-		cns, err := c.router.SelectByTenant(ev.account)
-		if err != nil {
-			sendResp([]byte(err.Error()), resp)
-			return err
-		}
-		for _, cn := range cns {
-			sendResp([]byte(cn.addr), resp)
-		}
-		return nil
-	case *dropAccountEvent:
-		cns, err := c.router.SelectByTenant(ev.account)
-		if err != nil {
-			sendResp([]byte(err.Error()), resp)
-			return err
-		}
-		for _, cn := range cns {
-			sendResp([]byte(cn.addr), resp)
-		}
+	case *prepareEvent:
+		c.prepareStmts = append(c.prepareStmts, ev.stmt)
+		sendResp([]byte("ok"), resp)
 		return nil
 	default:
 		sendResp([]byte("type not supported"), resp)
@@ -265,7 +256,7 @@ func TestAccountParser(t *testing.T) {
 			hasErr:   false,
 		},
 		{
-			str:      "t1:u1?a:1",
+			str:      "t1:u1?a=1",
 			tenant:   "t1",
 			username: "u1",
 			hasErr:   false,

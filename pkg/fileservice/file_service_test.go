@@ -646,13 +646,15 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToObjectBytes: func(r io.Reader, data []byte) ([]byte, int64, error) {
+					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						return bs, 1, nil
+						cacheData := allocator.Alloc(len(bs))
+						copy(cacheData.Bytes(), bs)
+						return cacheData, nil
 					},
 				},
 			},
@@ -660,11 +662,10 @@ func testFileService(
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
 
-		err = m.Unmarshal(vec.Entries[0].ObjectBytes)
+		err = m.Unmarshal(vec.Entries[0].CachedData.Bytes())
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(m.M))
 		assert.Equal(t, int64(42), m.M[42])
-		assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 
 	})
 

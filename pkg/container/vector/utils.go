@@ -54,7 +54,7 @@ func OrderedFindFirstIndexInSortedSlice[T types.OrderedT](v T, s []T) int {
 // If v is not found, return -1
 // compare is a function to compare two elements in s
 func FixedSizeFindFirstIndexInSortedSliceWithCompare[T types.FixedSizeTExceptStrType](
-	v T, s []T, compare func(T, T) int64,
+	v T, s []T, compare func(T, T) int,
 ) int {
 	if len(s) == 0 {
 		return -1

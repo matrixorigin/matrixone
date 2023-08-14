@@ -80,7 +80,14 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
 		retryDuration:         cfg.RetryTimeout,
 	}
-	pool, _ := ants.NewPool(10)
+
+	// the tasks submitted to LogServiceDriver.appendPool append entries to logservice,
+	// and we hope the task will crash all the dn service if append failed.
+	// so, set panic to pool.options.PanicHandler here, or it will only crash
+	// the goroutine the append task belongs to.
+	pool, _ := ants.NewPool(10, ants.WithPanicHandler(func(v interface{}) {
+		panic(v)
+	}))
 
 	d := &LogServiceDriver{
 		clientPool:      newClientPool(cfg.ClientPoolMaxSize, cfg.ClientPoolMaxSize, clientpoolConfig),

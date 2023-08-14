@@ -139,7 +139,8 @@ func (db *txnDB) AddBlksWithMetaLoc(
 // }
 
 func (db *txnDB) RangeDelete(
-	id *common.ID, start, end uint32, dt handle.DeleteType,
+	id *common.ID, start, end uint32,
+	pkVec containers.Vector, dt handle.DeleteType,
 ) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
@@ -148,7 +149,7 @@ func (db *txnDB) RangeDelete(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.RangeDelete(id, start, end, dt)
+	return table.RangeDelete(id, start, end, pkVec, dt)
 }
 
 func (db *txnDB) TryDeleteByDeltaloc(

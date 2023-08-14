@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrader"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -26,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -109,10 +109,26 @@ func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
 	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
 }
 
-func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
-	frontend.SetSpecialUser(proxy.SQLUserName, []byte(command.User.Password))
-}
+func (s *service) upgrade() {
+	pu := config.NewParameterUnit(
+		&s.cfg.Frontend,
+		nil,
+		nil,
+		nil)
+	pu.StorageEngine = s.storeEngine
+	pu.TxnClient = s._txnClient
+	s.cfg.Frontend.SetDefaultValues()
+	pu.FileService = s.fileService
+	pu.LockService = s.lockService
+	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 
+	ug := &upgrader.Upgrader{
+		IEFactory: func() ie.InternalExecutor {
+			return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
+		},
+	}
+	ug.Upgrade(moServerCtx)
+}
 func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
