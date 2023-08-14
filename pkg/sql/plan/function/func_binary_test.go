@@ -2148,6 +2148,41 @@ func TestPower(t *testing.T) {
 	}
 }
 
+// SQRT
+func initSqrtTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test sqrt regular",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{1, 4, 2, 10, 25, 10000, 0, 0, 1.41},
+					[]bool{false, false, false, false, false, false, true, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 2, 1.4142135623730951, 3.1622776601683795, 5, 100, 0, 0, 1.1874342087037917},
+				[]bool{false, false, false, false, false, false, true, false, false, true}),
+		},
+		{
+			info: "test sqrt error",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(), []float64{-2}, nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+		},
+	}
+}
+
+func TestSqrt(t *testing.T) {
+	testCases := initSqrtTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSqrt)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // Extract
 func initExtractTestCase() []tcTemp {
 	MakeDates := func(values ...string) []types.Date {

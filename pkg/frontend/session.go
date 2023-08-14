@@ -1149,9 +1149,7 @@ func (ses *Session) InitSetSessionVar(name string, value interface{}) error {
 	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
 		cv, err := def.GetType().Convert(value)
 		if err != nil {
-			errutil.ReportError(ses.GetRequestContext(), err)
-			errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "convert to the system variable type failed, bad value %s", value))
-			return err
+			errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert to the system variable type %s failed, bad value %v", name, def.GetType().String(), value))
 		}
 
 		if def.UpdateSessVar == nil {
@@ -1554,17 +1552,17 @@ func (ses *Session) InitGlobalSystemVariables() error {
 					}
 					val, err := sv.GetType().ConvertFromString(variable_value)
 					if err != nil {
-						errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "convert from string value to the system variable type failed, bad value %s", variable_value))
+						errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
 						return err
 					}
 					err = ses.InitSetSessionVar(variable_name, val)
 					if err != nil {
-						return err
+						errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
 					}
 				}
 			}
 		} else {
-			return moerr.NewInternalError(sysTenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", sysAccountName)
+			return moerr.NewInternalError(sysTenantCtx, "there is no data in mo_mysql_compatibility_mode table for account %s", sysAccountName)
 		}
 	} else {
 		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())

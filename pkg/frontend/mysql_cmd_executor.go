@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	gotrace "runtime/trace"
 	"sort"
 	"strconv"
 	"strings"
@@ -373,6 +374,8 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 access the shared data. Be careful when it writes the shared data.
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
+	_, task := gotrace.NewTask(context.TODO(), "frontend.WriteDataToClient")
+	defer task.End()
 	ses := obj.(*Session)
 	if openSaveQueryResult(ses) {
 		if bat == nil {
@@ -2314,6 +2317,8 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
 func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	_, task := gotrace.NewTask(context.TODO(), "frontend.authenticateCanExecuteStatementAndPlan")
+	defer task.End()
 	if ses.pu.SV.SkipCheckPrivilege {
 		return nil
 	}
@@ -2333,6 +2338,8 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
 func authenticateUserCanExecutePrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	_, task := gotrace.NewTask(context.TODO(), "frontend.authenticateUserCanExecutePrepareOrExecute")
+	defer task.End()
 	if ses.pu.SV.SkipCheckPrivilege {
 		return nil
 	}
@@ -3915,6 +3922,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_TS:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_Blockid:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_enum:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	default:
 		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)
