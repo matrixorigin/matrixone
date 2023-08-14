@@ -38,16 +38,26 @@ type safeQueue struct {
 	pending   atomic.Int64
 	batchSize int
 	onItemsCB OnItemsCB
+	// value is true by default
+	blocking bool
 }
 
+// NewSafeQueue is blocking queue by default
 func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
 	q := &safeQueue{
 		queue:     make(chan any, queueSize),
 		batchSize: batchSize,
 		onItemsCB: onItem,
 	}
+	q.blocking = true
 	q.state.Store(Created)
 	q.ctx, q.cancel = context.WithCancel(context.Background())
+	return q
+}
+
+func NewNonBlockingQueue(queueSize int, batchSize int, onItem OnItemsCB) *safeQueue {
+	q := NewSafeQueue(queueSize, batchSize, onItem)
+	q.blocking = false
 	return q
 }
 
@@ -118,11 +128,18 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 	if q.state.Load() != Running {
 		return item, ErrClose
 	}
-	q.pending.Add(1)
-	if q.state.Load() != Running {
-		q.pending.Add(-1)
-		return item, ErrClose
+
+	if q.blocking {
+		q.pending.Add(1)
+		q.queue <- item
+		return item, nil
+	} else {
+		select {
+		case q.queue <- item:
+			q.pending.Add(1)
+			return item, nil
+		default:
+			return item, ErrFull
+		}
 	}
-	q.queue <- item
-	return item, nil
 }

@@ -78,6 +78,7 @@ message Aggregate {
   int32 op = 1;
   bool dist = 2;
   plan.Expr expr = 3;
+  bytes config =4;
 }
 
 message Group {
@@ -88,6 +89,7 @@ message Group {
   repeated plan.Type  types = 5;
   repeated Aggregate  aggs = 6;
   repeated MultiArguemnt MultiAggs = 7;
+  bool isShuffle = 8;
 }
 
 message Insert{

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -245,14 +246,20 @@ func (bat *Batch) CleanOnlyData() {
 	bat.rowCount = 0
 }
 
-// XXX Useless function, cannot provide any information.
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
 
 	for i, vec := range bat.Vecs {
-		buf.WriteString(fmt.Sprintf("%d : %s\n", i, vec.GetType()))
+		buf.WriteString(fmt.Sprintf("%d : %s\n", i, vec.String()))
 	}
 	return buf.String()
+}
+
+func (bat *Batch) Log(tag string) {
+	if bat == nil || bat.rowCount < 1 {
+		return
+	}
+	logutil.Infof("\n" + tag + "\n" + bat.String())
 }
 
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {

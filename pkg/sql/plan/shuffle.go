@@ -136,8 +136,13 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
 			leftSorted = false
 		}
-		if !leftSorted {
-			if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > 1000*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
+		// if hashmap size too large, have to go shuffle whenever left is sorted
+		if !leftSorted && n.Stats.HashmapStats.HashmapSize < 100000000 {
+			var threshHold float64 = 32
+			if n.BuildOnLeft {
+				threshHold = 512
+			}
+			if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > threshHold*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
 				return
 			}
 		}
@@ -170,23 +175,6 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	// for now, if join children is agg, do not allow shuffle
 	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || builder.qry.Nodes[n.Children[1]].NodeType == plan.Node_AGG {
 		return
-	}
-
-	child0 := builder.qry.Nodes[n.Children[0]]
-	if child0.NodeType == plan.Node_JOIN && child0.Stats.HashmapStats.Shuffle {
-		if child0.Stats.HashmapStats.HashmapSize > n.Stats.HashmapStats.HashmapSize {
-			return
-		} else if child0.Stats.HashmapStats.HashmapSize == n.Stats.HashmapStats.HashmapSize && child0.Stats.Cost > n.Stats.Cost {
-			return
-		}
-	}
-	child1 := builder.qry.Nodes[n.Children[1]]
-	if child1.NodeType == plan.Node_JOIN && child1.Stats.HashmapStats.Shuffle {
-		if child1.Stats.HashmapStats.HashmapSize > n.Stats.HashmapStats.HashmapSize {
-			return
-		} else if child1.Stats.HashmapStats.HashmapSize == n.Stats.HashmapStats.HashmapSize && child1.Stats.Cost > n.Stats.Cost {
-			return
-		}
 	}
 
 	if n.Stats.HashmapStats.HashmapSize < HashMapSizeForShuffle {
@@ -239,15 +227,6 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.Shuffle = false
 	}
 
-	//todo fix this in the future
-	if n.Stats.HashmapStats.Shuffle {
-		if child0.NodeType == plan.Node_JOIN && child0.Stats.HashmapStats.Shuffle {
-			child0.Stats.HashmapStats.Shuffle = false
-		}
-		if child1.NodeType == plan.Node_JOIN && child1.Stats.HashmapStats.Shuffle {
-			child1.Stats.HashmapStats.Shuffle = false
-		}
-	}
 }
 
 // to determine if groupby need to go shuffle
@@ -311,6 +290,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 						joinHashCol, _ := GetHashColumn(arg)
 						if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
 							n.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+							return
 						}
 					}
 				}
