@@ -71,6 +71,7 @@ type container struct {
 
 type Argument struct {
 	ctr       *container
+	IsShuffle bool // is shuffle group
 	NeedEval  bool // need to projection the aggregate column
 	Ibucket   uint64
 	Nbucket   uint64

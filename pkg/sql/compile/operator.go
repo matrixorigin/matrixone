@@ -108,6 +108,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Group:
 		t := sourceIns.Arg.(*group.Argument)
 		res.Arg = &group.Argument{
+			IsShuffle: t.IsShuffle,
 			NeedEval:  t.NeedEval,
 			Ibucket:   t.Ibucket,
 			Nbucket:   t.Nbucket,
@@ -975,12 +976,13 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	}
 
 	return &group.Argument{
-		Aggs:     aggs,
-		Types:    typs,
-		NeedEval: needEval,
-		Exprs:    n.GroupBy,
-		Ibucket:  uint64(ibucket),
-		Nbucket:  uint64(nbucket),
+		Aggs:      aggs,
+		Types:     typs,
+		NeedEval:  needEval,
+		Exprs:     n.GroupBy,
+		Ibucket:   uint64(ibucket),
+		Nbucket:   uint64(nbucket),
+		IsShuffle: n.Stats != nil && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
