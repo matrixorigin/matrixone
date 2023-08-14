@@ -14,11 +14,17 @@
 
 package fileservice
 
-func (v *IOVector) allDone() bool {
-	for _, entry := range v.Entries {
+func (i *IOVector) allDone() bool {
+	for _, entry := range i.Entries {
 		if !entry.done {
 			return false
 		}
 	}
 	return true
+}
+
+func (i *IOVector) Release() {
+	for _, entry := range i.Entries {
+		entry.CachedData.Release()
+	}
 }
