@@ -141,7 +141,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		anal.Alloc(int64(bat.Size()))
 
 		rowCount += bat.RowCount()
-		if bat.RowCount() < 512 {
+
+		if float64(bat.RowCount())/float64(bat.Vecs[0].Capacity()) < 0.25 {
 			// reuse small batch
 			ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat)
 			proc.PutBatch(bat)
