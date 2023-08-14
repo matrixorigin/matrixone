@@ -327,15 +327,8 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType: func(parameters []types.Type) types.Type {
-					for _, p := range parameters {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_text.ToType()
-				},
-				specialId: agg.AggregateGroupConcat,
+				retType:    agg.GroupConcatReturnType,
+				specialId:  agg.AggregateGroupConcat,
 			},
 		},
 	},
