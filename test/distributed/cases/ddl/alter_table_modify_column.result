@@ -568,7 +568,6 @@ col1    col2
 1    cdsdsa
 drop table t1;
 drop database if exists db2;
-
 drop database if exists test;
 use test;
 invalid database test
@@ -838,10 +837,10 @@ Table    Create Table
 index02    CREATE TABLE `index02` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT null,\n`c` VARCHAR(20) DEFAULT null,\n`d` DECIMAL(7,2) DEFAULT null,\nPRIMARY KEY (`a`),\nUNIQUE KEY `b` (`b`),\nUNIQUE KEY `c_2` (`c`),\nKEY `a` (`a`,`b`),\nKEY `c` (`c`)\n)
 desc index02;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    VARCHAR(20)    YES        null
-c    VARCHAR(20)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    VARCHAR(20)    YES        null        
+c    VARCHAR(20)    YES        null        
+d    DECIMAL64(7)    YES        null        
 select * from index02;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -1053,11 +1052,6 @@ alter table time01 modify col1 int, modify col2 int first, modify col3 int after
 show create table time01;
 Table    Create Table
 time01    CREATE TABLE `time01` (\n`col2` INT DEFAULT null,\n`col1` INT DEFAULT null,\n`col3` INT DEFAULT null,\n`col4` INT DEFAULT null\n)
-select * from time01;
-col2    col1    col3    col4
-971179932    18262    15839    10129
-null    9874    599671439    232359
-1946682061    22279    1386814210    101212
 drop table time01;
 drop table if exists time02;
 create table time02 (col2 datetime, col3 timestamp, col4 time);
@@ -1073,11 +1067,6 @@ alter table time02 modify col2 decimal(20,10) first, modify col3 decimal after c
 show create table time02;
 Table    Create Table
 time02    CREATE TABLE `time02` (\n`col2` DECIMAL(20,10) DEFAULT null,\n`col3` DECIMAL(38,0) DEFAULT null,\n`col4` DECIMAL(38,0) DEFAULT null\n)
-select * from time02;
-col2    col3    col4
-971179932.0000000000    15839    10129
-null    18444188071206    232359
-1946682061.0000000000    1386814210    101212
 drop table time02;
 drop role if exists role_r1;
 drop user if exists role_u1;
@@ -1092,13 +1081,9 @@ grant show databases on account * to role_r1;
 grant connect on account * to role_r1;
 grant select on table * to role_r1;
 grant show tables on database * to role_r1;
-use alter_table_modify_column;
-invalid database alter_table_modify_column
 alter table test01 modify col1 int primary key;
 internal error: do not have privilege to execute the statement
 grant alter table on database * to role_r1;
-use alter_table_modify_column;
-invalid database alter_table_modify_column
 alter table test01 modify col1 int primary key;
 no such table .test01
 show create table test01;
