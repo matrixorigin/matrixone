@@ -257,6 +257,8 @@ func NewIOPipeline(
 		64,
 		p.onPrefetch)
 	p.prefetch.scheduler = tasks.NewParallelJobScheduler(p.options.prefetchParallism)
+	// the prefetch queue is supposed to be an unblocking queue
+	p.prefetch.queue.SetBlocking(false)
 
 	p.fetch.queue = sm.NewSafeQueue(
 		p.options.queueDepth,
@@ -383,10 +385,12 @@ func (p *IoPipeline) doFetch(
 }
 
 func (p *IoPipeline) doPrefetch(params prefetchParams) (err error) {
-	if _, err = p.prefetch.queue.Enqueue(params); err != nil {
-		return
+	item, err := p.prefetch.queue.Enqueue(params)
+	if item == nil || err != nil {
+		p.stats.prefetchDropStats.Add(1)
+		return err
 	}
-	return
+	return nil
 }
 
 func (p *IoPipeline) onFetch(jobs ...any) {
@@ -399,18 +403,15 @@ func (p *IoPipeline) onFetch(jobs ...any) {
 }
 
 func (p *IoPipeline) schedulerPrefetch(job *tasks.Job) {
-	p.sensors.prefetchDepth.Add(1)
 	if err := p.prefetch.scheduler.Schedule(job); err != nil {
 		job.DoneWithErr(err)
 		logutil.Debugf("err is %v", err.Error())
 		putJob(job)
-		p.sensors.prefetchDepth.Add(-1)
 	} else {
 		if _, err := p.waitQ.Enqueue(job); err != nil {
 			job.DoneWithErr(err)
 			logutil.Debugf("err is %v", err.Error())
 			putJob(job)
-			p.sensors.prefetchDepth.Add(-1)
 		}
 	}
 }
@@ -420,12 +421,6 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		return
 	}
 	if !p.active.Load() {
-		return
-	}
-
-	// if the prefetch queue is full, we will drop the prefetch request
-	if p.sensors.prefetchDepth.IsRed() {
-		p.stats.prefetchDropStats.Add(int64(len(items)))
 		return
 	}
 
@@ -464,7 +459,6 @@ func (p *IoPipeline) onWait(jobs ...any) {
 		}
 		putJob(job)
 	}
-	p.sensors.prefetchDepth.Add(-int64(len(jobs)))
 }
 
 func (p *IoPipeline) crontask(ctx context.Context) {

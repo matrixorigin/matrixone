@@ -49,6 +49,7 @@ type Queue interface {
 	Start()
 	Stop()
 	Enqueue(any) (any, error)
+	SetBlocking(bool)
 }
 
 type StateMachine interface {

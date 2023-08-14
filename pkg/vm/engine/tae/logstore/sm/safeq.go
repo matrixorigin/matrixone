@@ -38,6 +38,8 @@ type safeQueue struct {
 	pending   atomic.Int64
 	batchSize int
 	onItemsCB OnItemsCB
+	// value is true by default
+	blocking bool
 }
 
 func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
@@ -46,6 +48,7 @@ func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
 		batchSize: batchSize,
 		onItemsCB: onItem,
 	}
+	q.SetBlocking(true)
 	q.state.Store(Created)
 	q.ctx, q.cancel = context.WithCancel(context.Background())
 	return q
@@ -114,15 +117,30 @@ func (q *safeQueue) waitStop() {
 	q.wg.Wait()
 }
 
+// Enqueue puts an item into this queue
+// it will return directly when if it is an unblocking queue and there has no more free space,
+// and the item returned will be set as nil to notify producer.
 func (q *safeQueue) Enqueue(item any) (any, error) {
 	if q.state.Load() != Running {
 		return item, ErrClose
 	}
-	q.pending.Add(1)
-	if q.state.Load() != Running {
-		q.pending.Add(-1)
-		return item, ErrClose
+
+	if q.blocking {
+		q.pending.Add(1)
+		q.queue <- item
+		return item, nil
+	} else {
+		select {
+		case q.queue <- item:
+			q.pending.Add(1)
+			return item, nil
+		default:
+			return nil, nil
+		}
 	}
-	q.queue <- item
-	return item, nil
+}
+
+// SetBlocking specified whether producer will be blocked when queue use out of its capacity
+func (q *safeQueue) SetBlocking(blocking bool) {
+	q.blocking = blocking
 }
