@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"math"
 	"sort"
 
@@ -80,8 +81,6 @@ type ExpressionExecutor interface {
 	Free()
 
 	IsColumnExpr() bool
-
-	ifResultMemoryReuse() bool
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -130,6 +129,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 	case *plan.Expr_P:
 		return &ParamExpressionExecutor{
+			mp:  proc.Mp(),
 			vec: nil,
 			pos: int(t.P.Pos),
 			typ: types.T_text.ToType(),
@@ -138,6 +138,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	case *plan.Expr_V:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		return &VarExpressionExecutor{
+			mp:     proc.Mp(),
 			name:   t.V.Name,
 			system: t.V.System,
 			global: t.V.Global,
@@ -321,7 +322,16 @@ type ColumnExpressionExecutor struct {
 	nullVecCache *vector.Vector
 }
 
+func (expr *ColumnExpressionExecutor) GetRelIndex() int {
+	return expr.relIndex
+}
+
+func (expr *ColumnExpressionExecutor) GetColIndex() int {
+	return expr.colIndex
+}
+
 type ParamExpressionExecutor struct {
+	mp   *mpool.MPool
 	null *vector.Vector
 	vec  *vector.Vector
 	pos  int
@@ -353,14 +363,27 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
-	return expr.Eval(proc, batches)
+	vec, err := expr.Eval(proc, batches)
+	if err != nil {
+		return nil, err
+	}
+	if vec == expr.null {
+		expr.null = nil
+		return vec, nil
+	}
+	expr.vec = nil
+	return vec, nil
 }
 
 func (expr *ParamExpressionExecutor) Free() {
-}
-
-func (expr *ParamExpressionExecutor) ifResultMemoryReuse() bool {
-	return false
+	if expr.vec != nil {
+		expr.vec.Free(expr.mp)
+		expr.vec = nil
+	}
+	if expr.null != nil {
+		expr.null.Free(expr.mp)
+		expr.null = nil
+	}
 }
 
 func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
@@ -368,6 +391,10 @@ func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
 }
 
 type VarExpressionExecutor struct {
+	mp   *mpool.MPool
+	null *vector.Vector
+	vec  *vector.Vector
+
 	name   string
 	system bool
 	global bool
@@ -379,18 +406,51 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	if err != nil {
 		return nil, err
 	}
-	return util.GenVectorByVarValue(proc, expr.typ, val)
+
+	if val == nil {
+		if expr.null == nil {
+			expr.null, err = util.GenVectorByVarValue(proc, expr.typ, nil)
+		}
+		return expr.null, err
+	}
+
+	if expr.vec == nil {
+		expr.vec, err = util.GenVectorByVarValue(proc, expr.typ, val)
+	} else {
+		switch v := val.(type) {
+		case []byte:
+			err = vector.SetConstBytes(expr.vec, v, 1, proc.GetMPool())
+		case string:
+			err = vector.SetConstBytes(expr.vec, util2.UnsafeStringToBytes(v), 1, proc.GetMPool())
+		default:
+			err = vector.SetConstBytes(expr.vec, util2.UnsafeStringToBytes(fmt.Sprintf("%v", v)), 1, proc.GetMPool())
+		}
+	}
+	return expr.vec, err
 }
 
 func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
-	return expr.Eval(proc, batches)
+	vec, err := expr.Eval(proc, batches)
+	if err != nil {
+		return nil, err
+	}
+	if vec == expr.null {
+		expr.null = nil
+		return vec, nil
+	}
+	expr.vec = nil
+	return vec, nil
 }
 
 func (expr *VarExpressionExecutor) Free() {
-}
-
-func (expr *VarExpressionExecutor) ifResultMemoryReuse() bool {
-	return false
+	if expr.vec != nil {
+		expr.vec.Free(expr.mp)
+		expr.vec = nil
+	}
+	if expr.null != nil {
+		expr.null.Free(expr.mp)
+		expr.null = nil
+	}
 }
 
 func (expr *VarExpressionExecutor) IsColumnExpr() bool {
@@ -460,10 +520,6 @@ func (expr *FunctionExpressionExecutor) SetParameter(index int, executor Express
 	expr.parameterExecutor[index] = executor
 }
 
-func (expr *FunctionExpressionExecutor) ifResultMemoryReuse() bool {
-	return true
-}
-
 func (expr *FunctionExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
@@ -513,10 +569,6 @@ func (expr *ColumnExpressionExecutor) Free() {
 	}
 }
 
-func (expr *ColumnExpressionExecutor) ifResultMemoryReuse() bool {
-	return false
-}
-
 func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 	return true
 }
@@ -542,10 +594,6 @@ func (expr *FixedVectorExpressionExecutor) Free() {
 	}
 	expr.resultVector.Free(expr.m)
 	expr.resultVector = nil
-}
-
-func (expr *FixedVectorExpressionExecutor) ifResultMemoryReuse() bool {
-	return true
 }
 
 func (expr *FixedVectorExpressionExecutor) IsColumnExpr() bool {
@@ -778,30 +826,6 @@ func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 		rbat.Vecs[i] = finalVectors[idx]
 	}
 	return dupSize, nil
-}
-
-// I will remove this function later.
-// do not use this function.
-func SafeGetResult(proc *process.Process, vec *vector.Vector, executor ExpressionExecutor) (*vector.Vector, error) {
-	if executor.ifResultMemoryReuse() {
-		if e, ok := executor.(*FunctionExpressionExecutor); ok {
-			nv := e.resultVector.GetResultVector()
-			e.resultVector.SetResultVector(nil)
-			return nv, nil
-		}
-
-		nv, err := vec.Dup(proc.Mp())
-		if err != nil {
-			return nil, err
-		}
-		return nv, nil
-	} else {
-		if vec.IsConst() {
-			return vec.Dup(proc.Mp())
-		}
-		nv := proc.GetVector(*vec.GetType())
-		return nv, vector.GetUnionAllFunction(*vec.GetType(), proc.Mp())(nv, vec)
-	}
 }
 
 func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,
@@ -1263,6 +1287,12 @@ func SortInFilter(vec *vector.Vector) {
 
 	case types.T_timestamp:
 		col := vector.MustFixedCol[types.Timestamp](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_enum:
+		col := vector.MustFixedCol[types.Enum](vec)
 		sort.Slice(col, func(i, j int) bool {
 			return col[i] < col[j]
 		})

@@ -203,7 +203,7 @@ func parseLabel(labelStr string) map[string]string {
 	}
 	labelMap := make(map[string]string)
 	const delimiter1 = ","
-	const delimiter2 = ':'
+	const delimiter2 = '='
 	kvs := strings.Split(labelStr, delimiter1)
 	for _, label := range kvs {
 		pos := strings.IndexByte(label, delimiter2)

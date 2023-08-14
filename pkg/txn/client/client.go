@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"math"
+	gotrace "runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -152,6 +153,8 @@ type txnClient struct {
 		// cn-based commit ts when the session-level last commit ts have
 		// been processed.
 		latestCommitTS atomic.Pointer[timestamp.Timestamp]
+		// just for bvt testing
+		forceSyncCommitTimes atomic.Uint64
 	}
 
 	mu struct {
@@ -205,6 +208,8 @@ func (client *txnClient) New(
 	minTS timestamp.Timestamp,
 	options ...TxnOption) (TxnOperator, error) {
 	// we take a token from the limiter to control the number of transactions created per second.
+	_, task := gotrace.NewTask(context.TODO(), "transaction.New")
+	defer task.End()
 	client.limiter.Take()
 
 	ts, err := client.determineTxnSnapshot(ctx, minTS)
@@ -245,6 +250,8 @@ func (client *txnClient) New(
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.NewWithSnapshot")
+	defer task.End()
 	op, err := newTxnOperatorWithSnapshot(client.sender, snapshot)
 	if err != nil {
 		return nil, err
@@ -261,6 +268,8 @@ func (client *txnClient) Close() error {
 }
 
 func (client *txnClient) MinTimestamp() timestamp.Timestamp {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.MinTimestamp")
+	defer task.End()
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 
@@ -277,6 +286,8 @@ func (client *txnClient) MinTimestamp() timestamp.Timestamp {
 func (client *txnClient) WaitLogTailAppliedAt(
 	ctx context.Context,
 	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.WaitLogTailAppliedAt")
+	defer task.End()
 	if client.timestampWaiter == nil {
 		return timestamp.Timestamp{}, nil
 	}
@@ -355,7 +366,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 	return client.adjustTimestamp(timestamp.Timestamp{})
 }
 
-func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
+func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
 	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
@@ -365,6 +376,11 @@ func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
 			util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
 		}
 	}
+	client.atomic.forceSyncCommitTimes.Add(1)
+}
+
+func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
+	return client.atomic.forceSyncCommitTimes.Load()
 }
 
 func (client *txnClient) openTxn(op *txnOperator) error {

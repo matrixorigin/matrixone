@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	gotrace "runtime/trace"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,11 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
-)
-
-var (
-	_ EventableTxnOperator = (*txnOperator)(nil)
-	_ DebugableTxnOperator = (*txnOperator)(nil)
 )
 
 var (
@@ -294,6 +290,8 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 func (tc *txnOperator) UpdateSnapshot(
 	ctx context.Context,
 	ts timestamp.Timestamp) error {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.UpdateSnapshot")
+	defer task.End()
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if err := tc.checkStatus(true); err != nil {
@@ -318,6 +316,8 @@ func (tc *txnOperator) UpdateSnapshot(
 }
 
 func (tc *txnOperator) ApplySnapshot(data []byte) error {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.ApplySnapshot")
+	defer task.End()
 	if !tc.option.coordinator {
 		util.GetLogger().Fatal("apply snapshot on non-coordinator txn operator")
 	}
@@ -366,6 +366,8 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 }
 
 func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.Read")
+	defer task.End()
 	util.LogTxnRead(tc.getTxnMeta(false))
 
 	for idx := range requests {
@@ -381,16 +383,22 @@ func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rp
 }
 
 func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.Write")
+	defer task.End()
 	util.LogTxnWrite(tc.getTxnMeta(false))
 
 	return tc.doWrite(ctx, requests, false)
 }
 
 func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.WriteAndCommit")
+	defer task.End()
 	return tc.doWrite(ctx, requests, true)
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
+	defer task.End()
 	util.LogTxnCommit(tc.getTxnMeta(false))
 
 	if tc.option.readyOnly {
@@ -411,6 +419,8 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
+	_, task := gotrace.NewTask(context.TODO(), "transaction.Rollback")
+	defer task.End()
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(txnMeta)
 	if tc.workspace != nil {

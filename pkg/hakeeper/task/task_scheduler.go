@@ -68,6 +68,9 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		return
 	}
 	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, workingCN)
+	runtime.ProcessLevelRuntime().Logger().Info("task schedule query tasks",
+		zap.Int("created", len(createdTasks)),
+		zap.Int("expired", len(expiredTasks)))
 	s.allocateTasks(createdTasks, orderedCN)
 	s.allocateTasks(expiredTasks, orderedCN)
 }
@@ -132,12 +135,22 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 	orderedCN.inc(t.TaskRunner)
 }
 
-func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (orderedMap *cnMap, expired []task.Task) {
-	orderedMap = newOrderedMap(workingCN)
+func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (*cnMap, []task.Task) {
+	orderedMap := newOrderedMap(workingCN)
+	n := 0
 	for _, t := range tasks {
 		if contains(workingCN, t.TaskRunner) {
 			orderedMap.inc(t.TaskRunner)
 		} else {
+			n++
+		}
+	}
+	if n == 0 {
+		return orderedMap, nil
+	}
+	expired := make([]task.Task, 0, n)
+	for _, t := range tasks {
+		if !contains(workingCN, t.TaskRunner) {
 			expired = append(expired, t)
 		}
 	}
