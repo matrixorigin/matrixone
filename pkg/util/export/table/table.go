@@ -51,12 +51,6 @@ type ColType int
 const (
 	TSkip ColType = iota
 	TDatetime
-	TUint8
-	TInt8
-	TUint16
-	TInt16
-	TUint32
-	TInt32
 	TUint64
 	TInt64
 	TFloat64
@@ -292,8 +286,13 @@ type Table struct {
 	// accessIdx used in Row
 	accountIdx int
 
+	// The original create table sql of the system table. If the system table is created by ddl,
+	// If the system table was created by DDL, the original creation sql will be used when upgrading the new table
+	// Note: ToCreateSql() converts a table object as a table creation statement based on its known basic properties
 	CreateTableSql string
-	CreateViewSql  string
+
+	// The original create view sql of the system view
+	CreateViewSql string
 }
 
 func (tbl *Table) Clone() *Table {
