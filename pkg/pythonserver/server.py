@@ -13,13 +13,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
+import datetime
 from concurrent import futures
-from typing import Any, Callable
+from typing import Any, Callable, Optional
+import decimal
 
 import grpc
 
-import python_udf_pb2_grpc as pb2_grpc
 import python_udf_pb2 as pb2
+import python_udf_pb2_grpc as pb2_grpc
+
+DEFAULT_DECIMAL_SCALE = 16
+
+DATE_FORMAT = '%Y-%m-%d'
+DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+DATETIME_FORMAT_WITH_PRECISION = '%Y-%m-%d %H:%M:%S.%f'
 
 
 class Server(pb2_grpc.PythonUdfService):
@@ -35,28 +44,37 @@ class Server(pb2_grpc.PythonUdfService):
             wait_for_ready=None,
             timeout=None,
             metadata=None) -> pb2.PythonUdfResponse:
-        # 加载函数
+
+        # load function
         func = loadFunction(request.udf)
-        # 初始化返回值
+
+        # set precision
+        decimal.getcontext().prec = DEFAULT_DECIMAL_SCALE
+
+        # init result
         result = pb2.DataVector(
             const=False,
             data=[],
             length=request.length,
-            type=request.udf.retType
+            type=request.udf.retType,
+            scale=defaultScale(request.udf.retType)
         )
-        # 计算
+
+        # calculate
         for i in range(request.length):
             params = [None] * len(request.vectors)
             for j in range(len(request.vectors)):
                 params[j] = getValueFromDataVector(request.vectors[j], i)
-            result.data.append(value2Data(func(*params), result.type))
+            value = func(*params)
+            data = value2Data(value, result.type)
+            result.data.append(data)
         return pb2.PythonUdfResponse(vector=result)
 
 
 def loadFunction(udf: pb2.PythonUdf) -> Callable:
-    # 加载函数
+    # load function
     exec(udf.asFun, locals())
-    # 获取函数对象
+    # get function object
     return locals()[udf.handler]
 
 
@@ -88,38 +106,97 @@ def getValueFromDataVector(v: pb2.DataVector, i: int) -> Any:
         return data.floatVal
     if v.type == pb2.FLOAT64:
         return data.doubleVal
-    if v.type in [pb2.CHAR, pb2.VARCHAR, pb2.TEXT]:
+    if v.type in [pb2.CHAR, pb2.VARCHAR, pb2.TEXT, pb2.UUID]:
         return data.stringVal
+    if v.type == pb2.JSON:
+        return json.loads(data.stringVal)
+    if v.type == pb2.TIME:
+        sign = 1 if data.stringVal[0] == '-' else 0
+        h, m, s = data.stringVal[sign:].split(':')
+        if sign == 0:
+            return datetime.timedelta(hours=int(h), minutes=int(m), seconds=float(s))
+        return datetime.timedelta(hours=-int(h), minutes=-int(m), seconds=-float(s))
+    if v.type == pb2.DATE:
+        return datetime.datetime.strptime(data.stringVal, DATE_FORMAT).date()
+    if v.type in [pb2.DATETIME, pb2.TIMESTAMP]:
+        formatStr = DATETIME_FORMAT if v.scale == 0 else DATETIME_FORMAT_WITH_PRECISION
+        return datetime.datetime.strptime(data.stringVal, formatStr)
+    if v.type in [pb2.DECIMAL64, pb2.DECIMAL128]:
+        return decimal.Decimal(data.stringVal)
     if v.type in [pb2.BINARY, pb2.VARBINARY, pb2.BLOB]:
         return data.bytesVal
     else:
         raise Exception("vector type error")
 
 
-def value2Data(value: Any, typ: pb2.DataType):
+def defaultScale(typ: pb2.DataType, scale: Optional[int] = None) -> int:
+    if scale is not None:
+        return scale
+    if typ in [pb2.FLOAT32, pb2.FLOAT64]:
+        return -1
+    if typ in [pb2.DECIMAL64, pb2.DECIMAL128]:
+        return decimal.getcontext().prec
+    if typ in [pb2.TIME, pb2.DATETIME, pb2.TIMESTAMP]:
+        return 6
+    return 0
+
+
+def value2Data(value: Any, typ: pb2.DataType) -> pb2.Data:
     if value is None:
         return pb2.Data()
 
     if typ == pb2.BOOL:
+        assert type(value) is bool, f'return type error, required {bool}, received {type(value)}'
         return pb2.Data(boolVal=value)
     if typ in [pb2.INT8, pb2.INT16, pb2.INT32]:
+        assert type(value) is int, f'return type error, required {int}, received {type(value)}'
         return pb2.Data(intVal=value)
     if typ == pb2.INT64:
+        assert type(value) is int, f'return type error, required {int}, received {type(value)}'
         return pb2.Data(int64Val=value)
     if typ in [pb2.UINT8, pb2.INT16, pb2.INT32]:
+        assert type(value) is int, f'return type error, required {int}, received {type(value)}'
         return pb2.Data(uintVal=value)
     if typ == pb2.UINT64:
+        assert type(value) is int, f'return type error, required {int}, received {type(value)}'
         return pb2.Data(uint64Val=value)
     if typ == pb2.FLOAT32:
+        assert type(value) is float, f'return type error, required {float}, received {type(value)}'
         return pb2.Data(floatVal=value)
     if typ == pb2.FLOAT64:
+        assert type(value) is float, f'return type error, required {float}, received {type(value)}'
         return pb2.Data(doubleVal=value)
-    if typ in [pb2.CHAR, pb2.VARCHAR, pb2.TEXT]:
+    if typ in [pb2.CHAR, pb2.VARCHAR, pb2.TEXT, pb2.UUID]:
+        assert type(value) is str, f'return type error, required {str}, received {type(value)}'
         return pb2.Data(stringVal=value)
+    if typ == pb2.JSON:
+        return pb2.Data(stringVal=json.dumps(value, ensure_ascii=False))
+    if typ == pb2.TIME:
+        assert type(value) is datetime.timedelta, f'return type error, required {datetime.timedelta}, received {type(value)}'
+        r = ''
+        t: datetime.timedelta = value
+        if t.days < 0:
+            t = t * -1
+            r += '-'
+        h = t.days * 24 + t.seconds // 3600
+        m = t.seconds % 3600 // 60
+        s = t.seconds % 3600 % 60
+        r += f'{h:02d}:{m:02d}:{s:02d}.{t.microseconds:06d}'
+        return pb2.Data(stringVal=str(r))
+    if typ == pb2.DATE:
+        assert type(value) is datetime.date, f'return type error, required {datetime.date}, received {type(value)}'
+        return pb2.Data(stringVal=str(value))
+    if typ in [pb2.DATETIME, pb2.TIMESTAMP]:
+        assert type(value) is datetime.datetime, f'return type error, required {datetime.datetime}, received {type(value)}'
+        return pb2.Data(stringVal=str(value))
+    if typ in [pb2.DECIMAL64, pb2.DECIMAL128]:
+        assert type(value) is decimal.Decimal, f'return type error, required {decimal.Decimal}, received {type(value)}'
+        return pb2.Data(stringVal=str(value))
     if typ in [pb2.BINARY, pb2.VARBINARY, pb2.BLOB]:
+        assert type(value) is bytes, f'return type error, required {bytes}, received {type(value)}'
         return pb2.Data(bytesVal=value)
     else:
-        raise Exception("data type error")
+        raise Exception(f'unsupported return type: {type(value)}')
 
 
 def run():

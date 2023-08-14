@@ -18,10 +18,12 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -306,21 +308,69 @@ func vector2DataVector(v *vector.Vector) (*DataVector, error) {
 			}
 		}
 	case types.T_json:
-		return nil, moerr.NewNotSupportedNoCtx("python udf parameter type")
+		p := vector.GenerateFunctionStrParameter(v)
+		for i := 0; i < size; i++ {
+			val, isNull := p.GetStrValue(uint64(i))
+			if !isNull {
+				dv.Data[i] = &Data{Val: &Data_StringVal{StringVal: types.DecodeJson(val).String()}}
+			}
+		}
 	case types.T_uuid:
-		return nil, moerr.NewNotSupportedNoCtx("python udf parameter type")
+		p := vector.GenerateFunctionFixedTypeParameter[types.Uuid](v)
+		for i := 0; i < size; i++ {
+			val, isNull := p.GetValue(uint64(i))
+			if !isNull {
+				dv.Data[i] = &Data{Val: &Data_StringVal{StringVal: val.ToString()}}
+			}
+		}
 	case types.T_time:
-		return nil, moerr.NewNotSupportedNoCtx("python udf parameter type")
+		p := vector.GenerateFunctionFixedTypeParameter[types.Time](v)
+		for i := 0; i < size; i++ {
+			val, isNull := p.GetValue(uint64(i))
+			if !isNull {
+				dv.Data[i] = &Data{Val: &Data_StringVal{StringVal: val.String2(v.GetType().Scale)}}
+			}
+		}
 	case types.T_date:
-		return nil, moerr.NewNotSupportedNoCtx("python udf parameter type")
+		p := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+		for i := 0; i < size; i++ {
+			val, isNull := p.GetValue(uint64(i))
+			if !isNull {
+				dv.Data[i] = &Data{Val: &Data_StringVal{StringVal: val.String()}}
+			}
+		}
 	case types.T_datetime:
-		return nil, moerr.NewNotSupportedNoCtx("python udf parameter type")
+		p := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+		for i := 0; i < size; i++ {
+			val, isNull := p.GetValue(uint64(i))
+			if !isNull {
+				dv.Data[i] = &Data{Val: &Data_StringVal{StringVal: val.String2(v.GetType().Scale)}}
+			}
+		}
 	case types.T_timestamp:
-		return nil, moerr.NewNotSupportedNoCtx("python udf parameter type")
+		p := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](v)
+		for i := 0; i < size; i++ {
+			val, isNull := p.GetValue(uint64(i))
+			if !isNull {
+				dv.Data[i] = &Data{Val: &Data_StringVal{StringVal: val.String2(time.Local, v.GetType().Scale)}}
+			}
+		}
 	case types.T_decimal64:
-		return nil, moerr.NewNotSupportedNoCtx("python udf parameter type")
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](v)
+		for i := 0; i < size; i++ {
+			val, isNull := p.GetValue(uint64(i))
+			if !isNull {
+				dv.Data[i] = &Data{Val: &Data_StringVal{StringVal: val.Format(v.GetType().Scale)}}
+			}
+		}
 	case types.T_decimal128:
-		return nil, moerr.NewNotSupportedNoCtx("python udf parameter type")
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](v)
+		for i := 0; i < size; i++ {
+			val, isNull := p.GetValue(uint64(i))
+			if !isNull {
+				dv.Data[i] = &Data{Val: &Data_StringVal{StringVal: val.Format(v.GetType().Scale)}}
+			}
+		}
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		p := vector.GenerateFunctionStrParameter(v)
 		for i := 0; i < size; i++ {
@@ -330,7 +380,7 @@ func vector2DataVector(v *vector.Vector) (*DataVector, error) {
 			}
 		}
 	default:
-		return nil, moerr.NewInvalidArgNoCtx("python udf parameter type", v.GetType().String())
+		return nil, moerr.NewInvalidArgNoCtx("python udf arg type", v.GetType().String())
 	}
 	return dv, nil
 }
@@ -339,6 +389,10 @@ func writeResponse(response *PythonUdfResponse, result vector.FunctionResultWrap
 	var err error
 	retType := dataType2T[response.Vector.Type]
 	length := int(response.Vector.Length)
+	scale := response.Vector.Scale
+
+	result.GetResultVector().SetTypeScale(scale)
+
 	switch retType {
 	case types.T_bool:
 		res := vector.MustFunctionResult[bool](result)
@@ -497,21 +551,124 @@ func writeResponse(response *PythonUdfResponse, result vector.FunctionResultWrap
 			}
 		}
 	case types.T_json:
-		return moerr.NewNotSupportedNoCtx("python udf return type")
+		res := vector.MustFunctionResult[types.Varlena](result)
+		for i := 0; i < length; i++ {
+			data := getDataFromDataVector(response.Vector, i)
+			if data == nil || data.Val == nil {
+				err = res.AppendBytes(nil, true)
+			} else {
+				bytes, err2 := bytejson.ParseJsonByteFromString(data.GetStringVal())
+				if err2 != nil {
+					return err2
+				}
+				err = res.AppendBytes(bytes, false)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	case types.T_uuid:
-		return moerr.NewNotSupportedNoCtx("python udf return type")
+		res := vector.MustFunctionResult[types.Uuid](result)
+		for i := 0; i < length; i++ {
+			data := getDataFromDataVector(response.Vector, i)
+			if data == nil || data.Val == nil {
+				err = res.AppendBytes(nil, true)
+			} else {
+				uuid, err2 := types.ParseUuid(data.GetStringVal())
+				if err2 != nil {
+					return err2
+				}
+				err = res.Append(uuid, false)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	case types.T_time:
-		return moerr.NewNotSupportedNoCtx("python udf return type")
+		res := vector.MustFunctionResult[types.Time](result)
+		for i := 0; i < length; i++ {
+			data := getDataFromDataVector(response.Vector, i)
+			if data == nil || data.Val == nil {
+				err = res.AppendBytes(nil, true)
+			} else {
+				t, err2 := types.ParseTime(data.GetStringVal(), scale)
+				if err2 != nil {
+					return err2
+				}
+				err = res.Append(t, false)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	case types.T_date:
-		return moerr.NewNotSupportedNoCtx("python udf return type")
+		res := vector.MustFunctionResult[types.Date](result)
+		for i := 0; i < length; i++ {
+			data := getDataFromDataVector(response.Vector, i)
+			if data == nil || data.Val == nil {
+				err = res.AppendBytes(nil, true)
+			} else {
+				d, err2 := types.ParseDateCast(data.GetStringVal())
+				if err2 != nil {
+					return err2
+				}
+				err = res.Append(d, false)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	case types.T_datetime:
-		return moerr.NewNotSupportedNoCtx("python udf return type")
+		res := vector.MustFunctionResult[types.Datetime](result)
+		for i := 0; i < length; i++ {
+			data := getDataFromDataVector(response.Vector, i)
+			if data == nil || data.Val == nil {
+				err = res.AppendBytes(nil, true)
+			} else {
+				dt, err2 := types.ParseDatetime(data.GetStringVal(), scale)
+				if err2 != nil {
+					return err2
+				}
+				err = res.Append(dt, false)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	case types.T_timestamp:
-		return moerr.NewNotSupportedNoCtx("python udf return type")
-	case types.T_decimal64:
-		return moerr.NewNotSupportedNoCtx("python udf return type")
-	case types.T_decimal128:
-		return moerr.NewNotSupportedNoCtx("python udf return type")
+		res := vector.MustFunctionResult[types.Timestamp](result)
+		for i := 0; i < length; i++ {
+			data := getDataFromDataVector(response.Vector, i)
+			if data == nil || data.Val == nil {
+				err = res.AppendBytes(nil, true)
+			} else {
+				ts, err2 := types.ParseTimestamp(time.Local, data.GetStringVal(), scale)
+				if err2 != nil {
+					return err2
+				}
+				err = res.Append(ts, false)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	case types.T_decimal64, types.T_decimal128:
+		res := vector.MustFunctionResult[types.Decimal128](result)
+		for i := 0; i < length; i++ {
+			data := getDataFromDataVector(response.Vector, i)
+			if data == nil || data.Val == nil {
+				err = res.AppendBytes(nil, true)
+			} else {
+				decimal, err2 := types.ParseDecimal128(data.GetStringVal(), 38, scale)
+				if err2 != nil {
+					return err2
+				}
+				err = res.Append(decimal, false)
+			}
+			if err != nil {
+				return err
+			}
+		}
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		res := vector.MustFunctionResult[types.Varlena](result)
 		for i := 0; i < length; i++ {
@@ -526,7 +683,7 @@ func writeResponse(response *PythonUdfResponse, result vector.FunctionResultWrap
 			}
 		}
 	default:
-		return moerr.NewInvalidArgNoCtx("python udf return type", retType.String())
+		return moerr.NewNotSupportedNoCtx("python udf return type", retType.String())
 	}
 
 	return nil
