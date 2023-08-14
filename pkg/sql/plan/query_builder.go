@@ -552,6 +552,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
+		if node.WinSpecList != nil {
+			increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
+		}
+
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
@@ -560,6 +564,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))
+
+		if node.WinSpecList != nil {
+			groupSize = int32(len(builder.qry.Nodes[node.Children[0]].ProjectList))
+			increaseRefCntForExprList(node.WinSpecList, -1, colRefCnt)
+		}
 
 		for _, expr := range node.FilterList {
 			builder.remapHavingClause(expr, groupTag, aggregateTag, groupSize)
@@ -615,6 +624,18 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+
+		if node.WinSpecList != nil {
+
+			node.NodeType = plan.Node_WINDOW
+
+			for _, expr := range node.WinSpecList {
+				err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		if len(node.ProjectList) == 0 {
@@ -1610,6 +1631,41 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	return lastNodeID, nil
 }
 
+const NameGroupConcat = "group_concat"
+
+func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
+	windowsSpecList := make([]*plan.Expr, 0, len(bc.aggregates))
+	j := 0
+
+	if len(bc.windows) < 1 {
+		panic("no winspeclist to be used to force")
+	}
+
+	for i := range bc.aggregates {
+		windowExpr := DeepCopyExpr(bc.windows[j])
+		windowSpec := windowExpr.GetW()
+		if windowSpec == nil {
+			panic("no winspeclist to be used to force")
+		}
+		windowSpec.WindowFunc = DeepCopyExpr(bc.aggregates[i])
+		windowExpr.Typ = bc.aggregates[i].Typ
+
+		if windowSpec.Name == NameGroupConcat {
+			if j < len(bc.windows)-1 {
+				j++
+			}
+		} else {
+			windowSpec.OrderBy = nil
+		}
+		windowsSpecList = append(windowsSpecList, windowExpr)
+	}
+
+	//clean ctx.windows to avoid adding another windows node
+	bc.windows = nil
+
+	return windowsSpecList, nil
+}
+
 func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
 	// preprocess CTEs
 	if stmt.With != nil {
@@ -2215,14 +2271,31 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
 		}
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_AGG,
-			Children:    []int32{nodeID},
-			GroupBy:     ctx.groups,
-			AggList:     ctx.aggregates,
-			BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
-		}, ctx)
+		if ctx.forceWindows {
 
+			winSpecList, err := ctx.generateForceWinSpecList()
+			if err != nil {
+				return 0, err
+			}
+
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_AGG,
+				Children:    []int32{nodeID},
+				GroupBy:     ctx.groups,
+				AggList:     ctx.aggregates,
+				BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
+				WinSpecList: winSpecList,
+			}, ctx)
+
+		} else {
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_AGG,
+				Children:    []int32{nodeID},
+				GroupBy:     ctx.groups,
+				AggList:     ctx.aggregates,
+				BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
+			}, ctx)
+		}
 		if len(havingList) > 0 {
 			var newFilterList []*plan.Expr
 			var expr *plan.Expr
