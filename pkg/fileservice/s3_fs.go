@@ -36,6 +36,7 @@ type S3FS struct {
 
 	memCache              *MemCache
 	diskCache             *DiskCache
+	remoteCache           *RemoteCache
 	asyncUpdate           bool
 	writeDiskCacheOnWrite bool
 
@@ -93,6 +94,17 @@ func NewS3FSOnMinio(
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
+
+	// Init the remote cache first, because the callback needs to be set for mem and disk cache.
+	if config.RemoteCacheEnabled {
+		if config.CacheClient == nil {
+			return moerr.NewInternalError(ctx, "cache client is nil")
+		}
+		s.remoteCache = NewRemoteCache(config.CacheClient, config.KeyRouterFactory)
+		logutil.Info("fileservice: remote cache initialized",
+			zap.Any("fs-name", s.name),
+		)
+	}
 
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
@@ -306,8 +318,13 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
-	err = s.read(ctx, vector)
-	return err
+	if s.remoteCache != nil {
+		if err := s.remoteCache.Read(ctx, vector); err != nil {
+			return err
+		}
+	}
+
+	return s.read(ctx, vector)
 }
 
 func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {

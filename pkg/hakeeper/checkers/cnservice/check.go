@@ -39,6 +39,17 @@ func Check(cfg hakeeper.Config, infos pb.CNState, user pb.TaskTableUser, current
 			operators = append(operators, operator.CreateTaskServiceOp("",
 				store, pb.CNService, user))
 		}
+		// If this instance has not joined gossip cluster, we generate join command.
+		if !infos.Stores[store].GossipJoined {
+			addresses := getGossipAddresses(cfg, infos, currentTick, store)
+			if len(addresses) > 0 {
+				runtime.ProcessLevelRuntime().Logger().Info("join gossip cluster for CN",
+					zap.String("uuid", store),
+					zap.Any("addresses", addresses))
+				operators = append(operators, operator.JoinGossipClusterOp("",
+					store, addresses))
+			}
+		}
 	}
 	for _, store := range expired {
 		runtime.ProcessLevelRuntime().Logger().Warn("expired CN.",
@@ -61,4 +72,22 @@ func parseCNStores(cfg hakeeper.Config, infos pb.CNState, currentTick uint64) ([
 	}
 
 	return working, expired
+}
+
+// getGossipAddresses returns the gossip addresses of CN stores that are in working state.
+func getGossipAddresses(cfg hakeeper.Config, infos pb.CNState, currentTick uint64, self string) []string {
+	var addresses []string
+	var count int
+	for uuid, storeInfo := range infos.Stores {
+		if !cfg.CNStoreExpired(storeInfo.Tick, currentTick) && uuid != self {
+			if len(storeInfo.GossipAddress) > 0 {
+				addresses = append(addresses, storeInfo.GossipAddress)
+				count++
+				if count > 2 {
+					break
+				}
+			}
+		}
+	}
+	return addresses
 }
