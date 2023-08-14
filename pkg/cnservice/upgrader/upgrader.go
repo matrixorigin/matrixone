@@ -184,9 +184,9 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	}
 	fmt.Println(allTenants)
 
-	//if err = u.UpgradeNewTableColumn(ctx); err != nil {
-	//	return err
-	//}
+	if err = u.UpgradeNewTableColumn(ctx); err != nil {
+		return err
+	}
 
 	if err = u.UpgradeNewTable(ctx, allTenants); err != nil {
 		return err
@@ -198,6 +198,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	return nil
 }
 
+// Upgrade the newly added columns in the system table
 func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) error {
 	exec := u.IEFactory()
 	if exec == nil {
@@ -213,6 +214,8 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) error {
 		diff, err := u.GenerateDiff(currentSchema, tbl)
 		if err != nil {
 			return err
+		} else if len(diff.AddedColumns) == 0 {
+			continue
 		}
 
 		upgradeSQL, err := u.GenerateUpgradeSQL(diff)
@@ -228,6 +231,7 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) error {
 	return nil
 }
 
+// Upgrade system tables, add system tables
 func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.TenantInfo) error {
 	exec := u.IEFactory()
 	if exec == nil {
@@ -256,6 +260,7 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 	return nil
 }
 
+// Upgrade system tables, add system views
 func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.TenantInfo) error {
 	exec := u.IEFactory()
 	if exec == nil {
