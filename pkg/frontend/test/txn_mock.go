@@ -623,10 +623,10 @@ func (mr *MockWorkspaceMockRecorder) Adjust() *gomock.Call {
 }
 
 // Commit mocks base method.
-func (m *MockWorkspace) Commit(ctx context.Context) ([]*txn.TxnRequest, error) {
+func (m *MockWorkspace) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Commit", ctx)
-	ret0, _ := ret[0].([]*txn.TxnRequest)
+	ret0, _ := ret[0].([]txn.TxnRequest)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

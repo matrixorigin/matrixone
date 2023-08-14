@@ -89,7 +89,7 @@ func (w *Ws) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
 
-func (w *Ws) Commit(ctx context.Context) ([]*txn.TxnRequest, error) {
+func (w *Ws) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	return nil, nil
 }
 
