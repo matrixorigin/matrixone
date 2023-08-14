@@ -674,7 +674,14 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		Commands:    entries,
 	}, nil
 }
-
+func GetMetaIdxesByVersion(ver uint32) []uint16 {
+	meteIdxSchema:= checkpointDataReferVersions[ver][MetaIDX]
+	idxes := make([]uint16, len(meteIdxSchema.attrs))
+	for attr := range meteIdxSchema.attrs {
+		idxes[attr] = uint16(attr)
+	}
+	return idxes
+}
 func LoadCheckpointEntries(
 	ctx context.Context,
 	metLoc string,
@@ -729,7 +736,7 @@ func LoadCheckpointEntries(
 		for attr := range meteIdxSchema.attrs {
 			idxes[attr] = uint16(attr)
 		}
-		err := data.PrefetchMetaIdx(ctx, versions[i],idxes, objectLocations[i], fs)
+		err := data.PrefetchMetaIdx(ctx, versions[i], idxes, objectLocations[i], fs)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -737,7 +744,7 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range datas {
-		err := datas[i].InitMetaIdx(ctx,versions[i], readers[i],locations[i],mp)
+		err := datas[i].InitMetaIdx(ctx, versions[i], readers[i], locations[i], mp)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -751,7 +758,7 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range datas {
-		err := datas[i].PrefetchFrom(ctx, versions[i], fs, locations[i],tableID)
+		err := datas[i].PrefetchFrom(ctx, versions[i], fs, locations[i], tableID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -793,17 +800,6 @@ func LoadCheckpointEntries(
 			}
 			entries = append(entries, entry)
 		}
-		if del != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_Delete,
-				TableId:      tableID,
-				TableName:    tableName,
-				DatabaseId:   dbID,
-				DatabaseName: dbName,
-				Bat:          del,
-			}
-			entries = append(entries, entry)
-		}
 		if cnIns != nil {
 			entry := &api.Entry{
 				EntryType:    api.Entry_Insert,
@@ -812,6 +808,17 @@ func LoadCheckpointEntries(
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
 				Bat:          cnIns,
+			}
+			entries = append(entries, entry)
+		}
+		if del != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Delete,
+				TableId:      tableID,
+				TableName:    tableName,
+				DatabaseId:   dbID,
+				DatabaseName: dbName,
+				Bat:          del,
 			}
 			entries = append(entries, entry)
 		}
