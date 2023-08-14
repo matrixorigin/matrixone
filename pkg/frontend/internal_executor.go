@@ -45,6 +45,22 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	if opts.IsInternal != nil {
 		sess.isInternal = *opts.IsInternal
 	}
+
+	acc := sess.GetTenantInfo()
+	if acc != nil {
+		if opts.AccountId != nil {
+			acc.SetTenantID(*opts.AccountId)
+		}
+
+		if opts.UserId != nil {
+			acc.SetUserID(*opts.UserId)
+		}
+
+		if opts.DefaultRoleId != nil {
+			acc.SetDefaultRoleID(*opts.DefaultRoleId)
+		}
+	}
+
 }
 
 type internalMiniExec interface {
