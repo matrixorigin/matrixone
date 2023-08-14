@@ -675,7 +675,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}, nil
 }
 func GetMetaIdxesByVersion(ver uint32) []uint16 {
-	meteIdxSchema:= checkpointDataReferVersions[ver][MetaIDX]
+	meteIdxSchema := checkpointDataReferVersions[ver][MetaIDX]
 	idxes := make([]uint16, len(meteIdxSchema.attrs))
 	for attr := range meteIdxSchema.attrs {
 		idxes[attr] = uint16(attr)

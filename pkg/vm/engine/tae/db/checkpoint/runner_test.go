@@ -32,20 +32,20 @@ func TestCkpCheck(t *testing.T) {
 
 	for i := 0; i < 100; i += 10 {
 		r.storage.entries.Set(&CheckpointEntry{
-			start:    types.BuildTS(int64(i), 0),
-			end:      types.BuildTS(int64(i+9), 0),
-			state:    ST_Finished,
+			start:      types.BuildTS(int64(i), 0),
+			end:        types.BuildTS(int64(i+9), 0),
+			state:      ST_Finished,
 			cnLocation: objectio.Location(fmt.Sprintf("loc-%d", i)),
-			version:  1,
+			version:    1,
 		})
 	}
 
 	r.storage.entries.Set(&CheckpointEntry{
-		start:    types.BuildTS(int64(100), 0),
-		end:      types.BuildTS(int64(109), 0),
-		state:    ST_Running,
+		start:      types.BuildTS(int64(100), 0),
+		end:        types.BuildTS(int64(109), 0),
+		state:      ST_Running,
 		cnLocation: objectio.Location("loc-100"),
-		version:  1,
+		version:    1,
 	})
 
 	ctx := context.Background()
@@ -77,11 +77,11 @@ func TestGetCheckpoints1(t *testing.T) {
 	}
 	for i := 0; i < 5; i++ {
 		entry := &CheckpointEntry{
-			start:    timestamps[i].Next(),
-			end:      timestamps[i+1],
-			state:    ST_Finished,
+			start:      timestamps[i].Next(),
+			end:        timestamps[i+1],
+			state:      ST_Finished,
 			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
-			version:  1,
+			version:    1,
 		}
 		if i == 4 {
 			entry.state = ST_Pending
@@ -160,11 +160,11 @@ func TestGetCheckpoints2(t *testing.T) {
 		}
 		if addGlobal {
 			entry := &CheckpointEntry{
-				start:    types.TS{},
-				end:      timestamps[i].Next(),
-				state:    ST_Finished,
+				start:      types.TS{},
+				end:        timestamps[i].Next(),
+				state:      ST_Finished,
 				cnLocation: objectio.Location(fmt.Sprintf("global%d", i)),
-				version:  100,
+				version:    100,
 			}
 			r.storage.globals.Set(entry)
 		}
@@ -173,11 +173,11 @@ func TestGetCheckpoints2(t *testing.T) {
 			start = start.Next()
 		}
 		entry := &CheckpointEntry{
-			start:    start,
-			end:      timestamps[i+1],
-			state:    ST_Finished,
+			start:      start,
+			end:        timestamps[i+1],
+			state:      ST_Finished,
 			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
-			version:  uint32(i),
+			version:    uint32(i),
 		}
 		if i == 4 {
 			entry.state = ST_Pending
@@ -258,11 +258,11 @@ func TestICKPSeekLT(t *testing.T) {
 	}
 	for i := 0; i < 5; i++ {
 		entry := &CheckpointEntry{
-			start:    timestamps[i].Next(),
-			end:      timestamps[i+1],
-			state:    ST_Finished,
+			start:      timestamps[i].Next(),
+			end:        timestamps[i+1],
+			state:      ST_Finished,
 			cnLocation: objectio.Location(fmt.Sprintf("ckp%d", i)),
-			version:  uint32(i),
+			version:    uint32(i),
 		}
 		if i == 4 {
 			entry.state = ST_Pending

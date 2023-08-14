@@ -412,7 +412,7 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 		fs,
 	)
 	assert.NoError(t, err)
-	for i := len(entries)-1; i >= 0 ; i-- {
+	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
 		if e.TableName == fmt.Sprintf("_%d_seg", tid) {
 			segDel = e.Bat

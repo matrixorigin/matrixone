@@ -642,7 +642,7 @@ func (data *CNCheckpointData) PrefetchMetaFrom(
 	if meta == nil {
 		return
 	}
-	var locations map[string]objectio.Location
+	locations := make(map[string]objectio.Location)
 	for _, table := range meta.tables {
 		if table == nil {
 			continue
@@ -1678,6 +1678,9 @@ func (data *CheckpointData) PrefetchFrom(
 	}
 	for _, blockIdxes := range locations {
 		pref, err = blockio.BuildSubPrefetchParams(service, blockIdxes[0].location)
+		if err != nil {
+			return
+		}
 		for _, idx := range blockIdxes {
 			schema := checkpointDataReferVersions[version][idx.dataType]
 			idxes := make([]uint16, len(schema.attrs))

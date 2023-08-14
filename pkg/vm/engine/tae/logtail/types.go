@@ -445,7 +445,7 @@ func init() {
 			}
 		}
 	}
-	
+
 	DNMetaSchema = catalog.NewEmptySchema("meta")
 	for i, colname := range DNMetaSchemaAttr {
 		if i == 0 {
