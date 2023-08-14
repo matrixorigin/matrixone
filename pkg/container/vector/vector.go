@@ -2491,9 +2491,12 @@ func (v *Vector) String() string {
 				return types.ArrayToString[float32](col[0])
 			}
 		}
+
 		str := types.ArraysToString[float32](col)
-		//TODO: FIX ME
-		return fmt.Sprintf("%s-%s", str, v.nsp.GetBitmap().String())
+		if v.nsp.Any() {
+			return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+		}
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 	case types.T_array_float64:
 		col := MustArrayCol[float64](v)
 		if len(col) == 1 {
@@ -2504,8 +2507,10 @@ func (v *Vector) String() string {
 			}
 		}
 		str := types.ArraysToString[float64](col)
-		//TODO: FIX ME
-		return fmt.Sprintf("%s-%s", str, v.nsp.GetBitmap().String())
+		if v.nsp.Any() {
+			return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+		}
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 	default:
 		panic("vec to string unknown types.")
 	}
