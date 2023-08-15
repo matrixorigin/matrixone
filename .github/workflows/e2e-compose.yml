@@ -25,14 +25,14 @@ jobs:
       - name: Print run attempt
         run: echo "run attempt is ${{ github.run_attempt }}"
   
-      - name: docker compose launch-tae-multi-CN-tae-DN
+      - name: docker compose launch-multi-cn
         timeout-minutes: 10
         run: |
           cat ./etc/launch-tae-compose/config/cn-0.toml
           cat ./etc/launch-tae-compose/config/cn-1.toml
 
           mkdir -p ${{ github.workspace }}/docker-compose-log
-          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
           
           # wait for ready
           i=1
@@ -90,7 +90,7 @@ jobs:
       - name: shutdown containers
         if: ${{ always() }}
         run: |
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn down --remove-orphans
           docker volume rm launch-tae-compose_minio_storage
 
       - uses: actions/upload-artifact@v3
@@ -119,7 +119,7 @@ jobs:
       - name: Print run attempt
         run: echo "run attempt is ${{ github.run_attempt }}"
 
-      - name: docker compose launch-tae-multi-CN-tae-DN
+      - name: docker compose launch-multi-cn
         timeout-minutes: 10
         run: |
           echo ""  >> ./etc/launch-tae-compose/config/cn-0.toml
@@ -135,7 +135,7 @@ jobs:
           cat ./etc/launch-tae-compose/config/cn-1.toml
           cat ./etc/launch-tae-compose/config/dn.toml
           mkdir -p ${{ github.workspace }}/docker-compose-log
-          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
           
           # wait for ready
           i=1
@@ -188,7 +188,7 @@ jobs:
         if: ${{ always() }}
         run: |
           docker ps
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn down --remove-orphans
           docker volume rm launch-tae-compose_minio_storage
 
       - uses: actions/upload-artifact@v3
