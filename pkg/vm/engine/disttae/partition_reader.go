@@ -231,7 +231,7 @@ func (p *PartitionReader) Read(
 	}
 }
 
-func (r *PartitionReader) FusedAggRead(
+func (p *PartitionReader) FusedAggRead(
 	ctx context.Context,
 	aggs []*plan.Expr,
 	mp *mpool.MPool,

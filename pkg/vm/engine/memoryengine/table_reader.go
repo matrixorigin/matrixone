@@ -204,7 +204,7 @@ func (t *TableReader) Close() error {
 	return nil
 }
 
-func (r *TableReader) FusedAggRead(
+func (t *TableReader) FusedAggRead(
 	ctx context.Context,
 	aggs []*plan.Expr,
 	mp *mpool.MPool,
