@@ -94,7 +94,7 @@ func TestBatch1b(t *testing.T) {
 }
 func TestBatch2(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(22)
 	bat := MockBatch(vecTypes, 10, 3, nil)
 	assert.Equal(t, 10, bat.Length())
 
@@ -110,7 +110,7 @@ func TestBatch2(t *testing.T) {
 
 func TestBatch3(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(22)
 	bat := MockBatch(vecTypes, 101, 3, nil)
 	defer bat.Close()
 	bats := bat.Split(5)
@@ -129,7 +129,7 @@ func TestBatch3(t *testing.T) {
 
 func TestBatchWithPool(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	colTypes := types.MockColTypes(17)
+	colTypes := types.MockColTypes(22)
 	seedBat := MockBatch(colTypes, 10, 3, nil)
 	defer seedBat.Close()
 
@@ -163,7 +163,7 @@ func TestBatchWithPool(t *testing.T) {
 
 func TestBatchSpliter(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(22)
 	bat := MockBatch(vecTypes, 11, 3, nil)
 	defer bat.Close()
 	spliter := NewBatchSplitter(bat, 5)

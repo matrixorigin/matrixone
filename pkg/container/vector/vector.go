@@ -2633,12 +2633,13 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(types.Rowid), false, mp)
 	case types.T_Blockid:
 		return appendOneFixed(vec, val.(types.Blockid), false, mp)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		return appendOneBytes(vec, val.([]byte), false, mp)
-	case types.T_array_float32:
-		return appendOneArray[float32](vec, val.([]float32), false, mp)
-	case types.T_array_float64:
-		return appendOneArray[float64](vec, val.([]float64), false, mp)
+		//case types.T_array_float32:
+		//	return appendOneArray[float32](vec, val.([]float32), false, mp)
+		//case types.T_array_float64:
+		//	return appendOneArray[float64](vec, val.([]float64), false, mp)
 
 	}
 	return nil
