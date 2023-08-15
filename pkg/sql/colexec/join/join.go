@@ -80,7 +80,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				return process.ExecNext, nil
 			}
 			if bat.RowCount() == 0 {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {

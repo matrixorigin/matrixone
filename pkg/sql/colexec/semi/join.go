@@ -79,7 +79,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				continue
 			}
 			if bat.IsEmpty() {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.IsEmpty() {
