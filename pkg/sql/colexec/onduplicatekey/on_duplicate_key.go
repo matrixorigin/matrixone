@@ -323,7 +323,6 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 	}
 
 	newBatch.SetRowCount(1)
-	evalBatch.Clean(proc.Mp())
 	return newBatch, nil
 }
 
