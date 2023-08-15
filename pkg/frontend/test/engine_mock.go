@@ -578,6 +578,22 @@ func (mr *MockReaderMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockReader)(nil).Close))
 }
 
+// FusedAggRead mocks base method.
+func (m *MockReader) FusedAggRead(arg0 context.Context, arg1 []*plan.Expr, arg2 *mpool.MPool, arg3 engine.VectorPool) (*batch.Batch, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FusedAggRead", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(*batch.Batch)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// FusedAggRead indicates an expected call of FusedAggRead.
+func (mr *MockReaderMockRecorder) FusedAggRead(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FusedAggRead", reflect.TypeOf((*MockReader)(nil).FusedAggRead), arg0, arg1, arg2, arg3)
+}
+
 // Read mocks base method.
 func (m *MockReader) Read(arg0 context.Context, arg1 []string, arg2 *plan.Expr, arg3 *mpool.MPool, arg4 engine.VectorPool) (*batch.Batch, error) {
 	m.ctrl.T.Helper()

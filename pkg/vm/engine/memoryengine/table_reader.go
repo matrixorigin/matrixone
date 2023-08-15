@@ -142,7 +142,7 @@ func (t *Table) NewReader(
 	return
 }
 
-var _ engine.Reader = new(TableReader)
+var _ engine.Reader = (*TableReader)(nil)
 
 func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Expr, mp *mpool.MPool, _ engine.VectorPool) (*batch.Batch, error) {
 	if t == nil {
@@ -202,6 +202,15 @@ func (t *TableReader) Close() error {
 		_ = err // ignore error
 	}
 	return nil
+}
+
+func (r *TableReader) FusedAggRead(
+	ctx context.Context,
+	aggs []*plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (bat *batch.Batch, hitMeta bool, err error) {
+	return
 }
 
 func (t *Table) GetEngineType() engine.EngineType {

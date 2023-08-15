@@ -252,6 +252,15 @@ func (r *emptyReader) Read(_ context.Context, _ []string,
 	return nil, nil
 }
 
+func (r *emptyReader) FusedAggRead(
+	_ context.Context,
+	_ []*plan.Expr,
+	_ *mpool.MPool,
+	_ engine.VectorPool,
+) (_ *batch.Batch, _ bool, _ error) {
+	return
+}
+
 // -----------------------------------------------------------------
 // ------------------------ blockReader ----------------------------
 // -----------------------------------------------------------------
@@ -352,6 +361,15 @@ func (r *blockReader) Read(
 		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
 	}
 	return bat, nil
+}
+
+func (r *blockReader) FusedAggRead(
+	ctx context.Context,
+	aggs []*plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (bat *batch.Batch, hitMeta bool, err error) {
+	return
 }
 
 // -----------------------------------------------------------------
@@ -502,6 +520,15 @@ func (r *blockMergeReader) Read(
 	return r.blockReader.Read(ctx, cols, expr, mp, vp)
 }
 
+func (r *blockMergeReader) FusedAggRead(
+	ctx context.Context,
+	aggs []*plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (bat *batch.Batch, hitMeta bool, err error) {
+	return
+}
+
 // -----------------------------------------------------------------
 // ------------------------ mergeReader ----------------------------
 // -----------------------------------------------------------------
@@ -545,4 +572,13 @@ func (r *mergeReader) Read(
 		}
 	}
 	return nil, nil
+}
+
+func (r *mergeReader) FusedAggRead(
+	ctx context.Context,
+	aggs []*plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (bat *batch.Batch, hitMeta bool, err error) {
+	return
 }

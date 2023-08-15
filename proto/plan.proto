@@ -604,6 +604,7 @@ message Node {
 		FUNCTION_SCAN = 3;
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
+		FUSED_AGG_SCAN = 6;
 
 		// Proj, for convenience
 		PROJECT = 10;

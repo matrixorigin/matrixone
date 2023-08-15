@@ -43,7 +43,7 @@ type PartitionReader struct {
 	typsMap  map[string]types.Type
 }
 
-var _ engine.Reader = new(PartitionReader)
+var _ engine.Reader = (*PartitionReader)(nil)
 
 func (p *PartitionReader) Close() error {
 	//p.withFilterMixin.reset()
@@ -229,4 +229,13 @@ func (p *PartitionReader) Read(
 		}
 		return b, nil
 	}
+}
+
+func (r *PartitionReader) FusedAggRead(
+	ctx context.Context,
+	aggs []*plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (bat *batch.Batch, hitMeta bool, err error) {
+	return
 }

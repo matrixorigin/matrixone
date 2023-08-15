@@ -367,10 +367,11 @@ message Source {
   string    block = 4;
   uint64    pushdown_id = 5;
   string    pushdown_addr = 6;
-  plan.Expr  expr = 7;
-  plan.TableDef tableDef = 8;
-  timestamp.Timestamp timestamp = 9;
-  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 10;
+  plan.Expr  filter = 7;
+  repeated plan.Expr Aggregates = 8;
+  plan.TableDef tableDef = 9;
+  timestamp.Timestamp timestamp = 10;
+  repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
 }
 
 message NodeInfo {

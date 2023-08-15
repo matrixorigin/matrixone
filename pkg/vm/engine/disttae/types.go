@@ -586,3 +586,8 @@ type pkRange struct {
 	items   []int64
 	ranges  []int64
 }
+
+var _ engine.Reader = (*blockReader)(nil)
+var _ engine.Reader = (*blockMergeReader)(nil)
+var _ engine.Reader = (*mergeReader)(nil)
+var _ engine.Reader = (*emptyReader)(nil)

@@ -1606,7 +1606,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 			PartitionRelationNames: partitionRelNames,
 			SchemaName:             n.ObjRef.SchemaName,
 			AccountId:              n.ObjRef.GetPubInfo(),
-			Expr:                   plan2.DeepCopyExpr(filterExpr),
+			Filter:                 plan2.DeepCopyExpr(filterExpr),
 			RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
 		},
 	}

@@ -78,7 +78,8 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Bat                    *batch.Batch
-	Expr                   *plan.Expr
+	Filter                 *plan.Expr
+	Aggregates             []*plan.Expr
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
 	AccountId              *plan.PubInfo

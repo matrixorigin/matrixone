@@ -261,13 +261,13 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 						},
 					}
 
-					if s.DataSource.Expr == nil {
-						s.DataSource.Expr = inExpr
+					if s.DataSource.Filter == nil {
+						s.DataSource.Filter = inExpr
 					} else {
-						s.DataSource.Expr = &plan.Expr{
+						s.DataSource.Filter = &plan.Expr{
 							Typ: &plan.Type{
 								Id:          int32(types.T_bool),
-								NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
+								NotNullable: s.DataSource.Filter.Typ.NotNullable && inExpr.Typ.NotNullable,
 							},
 							Expr: &plan.Expr_F{
 								F: &plan.Function{
@@ -276,7 +276,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 										ObjName: function.AndFunctionName,
 									},
 									Args: []*plan.Expr{
-										s.DataSource.Expr,
+										s.DataSource.Filter,
 										inExpr,
 									},
 								},
@@ -309,7 +309,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if s.DataSource.AccountId != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
-		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
+		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Filter,
 			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return err
@@ -317,7 +317,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		s.NodeInfo.Data = nil
 
 	case s.NodeInfo.Rel != nil:
-		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Filter, s.NodeInfo.Data); err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
@@ -352,7 +352,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			mainRds, err := rel.NewReader(
 				ctx,
 				mcpu,
-				s.DataSource.Expr,
+				s.DataSource.Filter,
 				s.NodeInfo.Data)
 			if err != nil {
 				return err
@@ -383,7 +383,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				mainRds, err := rel.NewReader(
 					ctx,
 					mcpu,
-					s.DataSource.Expr,
+					s.DataSource.Filter,
 					cleanRanges)
 				if err != nil {
 					return err
@@ -397,7 +397,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, dirtyRanges[num])
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Filter, dirtyRanges[num])
 				if err != nil {
 					return err
 				}
