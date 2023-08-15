@@ -59,6 +59,13 @@ func (i *ClosedInterval) Contains(o ClosedInterval) bool {
 	return i.Start <= o.Start && i.End >= o.End
 }
 
+func (i *ClosedInterval) Uint64Contains(start, end uint64) bool {
+	if i == nil {
+		return false
+	}
+	return i.Start <= start && i.End >= end
+}
+
 func (i *ClosedInterval) TryMerge(o ClosedInterval) bool {
 	if o.Start > i.End+1 || i.Start > o.End+1 {
 		return false

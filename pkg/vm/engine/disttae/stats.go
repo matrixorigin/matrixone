@@ -86,7 +86,8 @@ func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDe
 	lenCols := len(tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 
-	var objectMeta objectio.ObjectMeta
+	var objMeta objectio.ObjectMeta
+	var objectMeta objectio.ObjectDataMeta
 	lenobjs := 0
 
 	var init bool
@@ -102,9 +103,10 @@ func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDe
 		}
 
 		if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
-			if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 				return nil, err
 			}
+			objectMeta = objMeta.MustDataMeta()
 			lenobjs++
 			tableCnt += float64(objectMeta.BlockHeader().Rows())
 			if !init {

@@ -31,6 +31,12 @@ func (r RCBytes) Slice(length int) CacheData {
 	return r
 }
 
+func (r RCBytes) Release() {
+	if r.RCPoolItem != nil {
+		r.RCPoolItem.Release()
+	}
+}
+
 func (r RCBytes) Copy() []byte {
 	ret := make([]byte, len(r.Value))
 	copy(ret, r.Value)

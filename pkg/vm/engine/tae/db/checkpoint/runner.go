@@ -15,14 +15,17 @@
 package checkpoint
 
 import (
+	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"fmt"
 	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -181,6 +184,8 @@ type runner struct {
 		dirtyEntryQueueSize int
 		waitQueueSize       int
 		checkpointQueueSize int
+
+		checkpointBlockRows int
 	}
 
 	ctx context.Context
@@ -259,6 +264,25 @@ func NewRunner(
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
 	return r
+}
+
+func (r *runner) String() string {
+	var buf bytes.Buffer
+	_, _ = fmt.Fprintf(&buf, "CheckpointRunner<")
+	_, _ = fmt.Fprintf(&buf, "collectInterval=%v, ", r.options.collectInterval)
+	_, _ = fmt.Fprintf(&buf, "maxFlushInterval=%v, ", r.options.maxFlushInterval)
+	_, _ = fmt.Fprintf(&buf, "minIncrementalInterval=%v, ", r.options.minIncrementalInterval)
+	_, _ = fmt.Fprintf(&buf, "globalMinCount=%v, ", r.options.globalMinCount)
+	_, _ = fmt.Fprintf(&buf, "globalVersionInterval=%v, ", r.options.globalVersionInterval)
+	_, _ = fmt.Fprintf(&buf, "minCount=%v, ", r.options.minCount)
+	_, _ = fmt.Fprintf(&buf, "forceFlushTimeout=%v, ", r.options.forceFlushTimeout)
+	_, _ = fmt.Fprintf(&buf, "forceFlushCheckInterval=%v, ", r.options.forceFlushCheckInterval)
+	_, _ = fmt.Fprintf(&buf, "dirtyEntryQueueSize=%v, ", r.options.dirtyEntryQueueSize)
+	_, _ = fmt.Fprintf(&buf, "waitQueueSize=%v, ", r.options.waitQueueSize)
+	_, _ = fmt.Fprintf(&buf, "checkpointQueueSize=%v, ", r.options.checkpointQueueSize)
+	_, _ = fmt.Fprintf(&buf, "checkpointBlockRows=%v, ", r.options.checkpointBlockRows)
+	_, _ = fmt.Fprintf(&buf, ">")
+	return buf.String()
 }
 
 // Only used in UT
@@ -474,19 +498,11 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 		return
 	}
 	defer data.Close()
-
-	segmentid := objectio.NewSegmentid()
-	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.rt.Fs.Service, name, 0, nil)
-	if err != nil {
-		return err
-	}
-	blks, err := data.WriteTo(writer)
+	cnLocation, dnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
 	if err != nil {
 		return
 	}
-	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
-	entry.SetLocation(location)
+	entry.SetLocation(cnLocation, dnLocation)
 
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
@@ -503,18 +519,11 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	}
 	defer data.Close()
 
-	segmentid := objectio.NewSegmentid()
-	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.rt.Fs.Service, name, 0, nil)
+	cnLocation, dnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
 	if err != nil {
 		return
 	}
-	blks, err := data.WriteTo(writer)
-	if err != nil {
-		return
-	}
-	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
-	entry.SetLocation(location)
+	entry.SetLocation(cnLocation, dnLocation)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
 
@@ -669,6 +678,9 @@ func (r *runner) fillDefaults() {
 	}
 	if r.options.minCount <= 0 {
 		r.options.minCount = 10000
+	}
+	if r.options.checkpointBlockRows <= 0 {
+		r.options.checkpointBlockRows = logtail.DefaultCheckpointBlockRows
 	}
 }
 

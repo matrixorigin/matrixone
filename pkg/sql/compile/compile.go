@@ -3095,6 +3095,7 @@ func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
 }
 
 func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
+	var objDataMeta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
 
 	for i, blk := range ranges {
@@ -3104,12 +3105,13 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		if err != nil {
 			return err
 		}
-		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
+		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
 			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, false, fs); err != nil {
 				return err
 			}
+			objDataMeta = objMeta.MustDataMeta()
 		}
-		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
 		index := plan2.GetRangeShuffleIndexForZM(n.Stats.HashmapStats.ShuffleColMin, n.Stats.HashmapStats.ShuffleColMax, zm, uint64(len(c.cnList)))
 		nodes[index].Data = append(nodes[index].Data, blk)
