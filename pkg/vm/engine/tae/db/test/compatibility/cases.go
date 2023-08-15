@@ -317,6 +317,7 @@ func test1(tc TestCase, t *testing.T) {
 	err = rel.Append(context.Background(), window)
 	assert.NoError(t, err)
 	_ = txn.Rollback(context.Background())
+	tae.CheckReadCNCheckpoint()
 }
 
 func testAppend(tc TestCase, t *testing.T) {
@@ -339,6 +340,7 @@ func testAppend(tc TestCase, t *testing.T) {
 
 	tae.CheckRowsByScan(bat.Length(), true)
 	tae.CheckRowsByScan(bat.Length(), false)
+	tae.CheckReadCNCheckpoint()
 }
 
 func testDDL(tc TestCase, t *testing.T) {
@@ -410,6 +412,7 @@ func testDDL(tc TestCase, t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit(context.Background()))
+	tae.CheckReadCNCheckpoint()
 }
 
 func testCompact(tc TestCase, t *testing.T) {
@@ -432,6 +435,7 @@ func testCompact(tc TestCase, t *testing.T) {
 
 	tae.CheckRowsByScan(bat.Length(), true)
 	tae.CheckRowsByScan(bat.Length(), false)
+	tae.CheckReadCNCheckpoint()
 }
 
 func testDelete(tc TestCase, t *testing.T) {
@@ -461,4 +465,5 @@ func testDelete(tc TestCase, t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.CheckRowsByScan(bat.Length(), true)
+	tae.CheckReadCNCheckpoint()
 }

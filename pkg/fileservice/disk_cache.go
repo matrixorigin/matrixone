@@ -96,7 +96,8 @@ func (d *DiskCache) Read(
 ) (
 	err error,
 ) {
-	if vector.NoCache {
+
+	if vector.CachePolicy.Any(SkipDiskReads) {
 		return nil
 	}
 
@@ -192,7 +193,8 @@ func (d *DiskCache) Update(
 ) (
 	err error,
 ) {
-	if vector.NoCache {
+
+	if vector.CachePolicy.Any(SkipDiskWrites) {
 		return nil
 	}
 

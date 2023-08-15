@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,29 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package objectio
+package fileservice
 
-import "github.com/matrixorigin/matrixone/pkg/fileservice"
-
-const Magic = 0xFFFFFFFF
-const Version = 1
-const FSName = "local"
-
-type Object struct {
-	// name is the object file's name
-	name string
-	// fs is an instance of fileservice
-	fs fileservice.FileService
-}
-
-func NewObject(name string, fs fileservice.FileService) *Object {
-	object := &Object{
-		name: name,
-		fs:   fs,
+func (i *IOVector) allDone() bool {
+	for _, entry := range i.Entries {
+		if !entry.done {
+			return false
+		}
 	}
-	return object
+	return true
 }
 
-func (o *Object) GetFs() fileservice.FileService {
-	return o.fs
+func (i *IOVector) Release() {
+	for _, entry := range i.Entries {
+		entry.CachedData.Release()
+	}
 }
