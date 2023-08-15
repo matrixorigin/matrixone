@@ -577,29 +577,52 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			}
 		}
 
-	//case types.T_array_float32:
-	//	r := vector.GenerateFunctionStrParameter(v)
-	//	s := vector.GenerateFunctionStrParameter(vExpected)
-	//	for i = 0; i < uint64(fc.fnLength); i++ {
-	//		want, null1 := s.GetStrValue(i)
-	//		get, null2 := r.GetStrValue(i)
-	//		if null1 {
-	//			if null2 {
-	//				continue
-	//			} else {
-	//				return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
-	//			}
-	//		}
-	//		if null2 {
-	//			return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
-	//		}
-	//		fmt.Println(types.BytesToArray[float32](want))
-	//		fmt.Println(types.BytesToArray[float32](get))
-	//		if types.CompareArray[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
-	//			return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-	//				i+1, types.BytesToArray[float32](want), types.BytesToArray[float32](get))
-	//		}
-	//	}
+	case types.T_array_float32:
+		r := vector.GenerateFunctionStrParameter(v)
+		s := vector.GenerateFunctionStrParameter(vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetStrValue(i)
+			get, null2 := r.GetStrValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
+			}
+			fmt.Println(types.BytesToArray[float32](want))
+			fmt.Println(types.BytesToArray[float32](get))
+			if types.CompareArray[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, types.BytesToArray[float32](want), types.BytesToArray[float32](get))
+			}
+		}
+	case types.T_array_float64:
+		r := vector.GenerateFunctionStrParameter(v)
+		s := vector.GenerateFunctionStrParameter(vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetStrValue(i)
+			get, null2 := r.GetStrValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
+			}
+			fmt.Println(types.BytesToArray[float64](want))
+			fmt.Println(types.BytesToArray[float64](get))
+			if types.CompareArray[float64](types.BytesToArray[float64](want), types.BytesToArray[float64](get)) != 0 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
+			}
+		}
 	case types.T_uuid:
 		r := vector.GenerateFunctionFixedTypeParameter[types.Uuid](v)
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](vExpected)

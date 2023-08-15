@@ -2183,33 +2183,52 @@ func TestSqrt(t *testing.T) {
 	}
 }
 
-//func initSqrtArrayTestCase() []tcTemp {
-//	return []tcTemp{
-//		{
-//			info: "test sqrt float64 array",
-//			inputs: []testutil.FunctionTestInput{
-//				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
-//					[][]float64{{4, 9, 16}, {0, 25, 49}},
-//					//[][]byte{types.ArrayToBytes[float64]([]float64{4, 9, 16}), types.ArrayToBytes[float64]([]float64{0, 25, 49})},
-//					[]bool{false, false}),
-//			},
-//			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
-//				[][]byte{types.ArrayToBytes[float64]([]float64{4, 9, 16}), types.ArrayToBytes[float64]([]float64{0, 25, 49})},
-//				[]bool{false, false}),
-//		},
-//	}
-//}
-//
-//func TestSqrtArray(t *testing.T) {
-//	testCases := initSqrtArrayTestCase()
-//
-//	proc := testutil.NewProcess()
-//	for _, tc := range testCases {
-//		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSqrtArray[float64])
-//		s, info := fcTC.Run()
-//		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-//	}
-//}
+func initSqrtArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test sqrt float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{4, 9, 16}, {0, 25, 49}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				//NOTE: SQRT(array_float32) --> array_float64
+				[][]float64{{2, 3, 4}, {0, 5, 7}},
+				[]bool{false, false}),
+		},
+		{
+			info: "test sqrt float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{4, 9, 16}, {0, 25, 49}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				[][]float64{{2, 3, 4}, {0, 5, 7}},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestSqrtArray(t *testing.T) {
+	testCases := initSqrtArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSqrtArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSqrtArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
 
 // Extract
 func initExtractTestCase() []tcTemp {
