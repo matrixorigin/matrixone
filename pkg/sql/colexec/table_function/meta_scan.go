@@ -74,7 +74,7 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 
 	rbat = batch.NewWithSize(len(bats[0].Vecs))
 	metaVecs := rbat.Vecs
-	for i, vec := range metaVecs {
+	for i, vec := range bats[0].Vecs {
 		if vec.NeedDup() {
 			metaVecs[i], err = vec.Dup(proc.Mp())
 			if err != nil {
