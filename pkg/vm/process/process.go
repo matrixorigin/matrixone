@@ -249,7 +249,10 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 		if bat.Vecs[i] != nil {
 			if !bat.Vecs[i].IsConst() && !bat.Vecs[i].NeedDup() {
 				vec := bat.Vecs[i]
-				if proc.vp.putVector(vec) {
+				if vec.Capacity() > 8192*64 {
+					// very large vectors should not put back into pool, which cause these memory can not release
+					vec.Free(proc.Mp())
+				} else if proc.vp.putVector(vec) {
 					bat.ReplaceVector(vec, nil)
 				}
 			} else {
