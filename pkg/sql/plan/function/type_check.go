@@ -294,6 +294,7 @@ func setMaxScaleFromSource(t *types.Type, source []types.Type) {
 }
 
 func setMaxWidthFromSource(t *types.Type, source []types.Type) {
+	//TODO: check if we need to modify width here for T_array?
 	t.Width = -1
 	for i := range source {
 		if source[i].Oid == t.Oid || source[i].Oid.IsMySQLString() {
@@ -884,8 +885,8 @@ func initFixed1() {
 		{types.T_text, types.T_binary, types.T_binary, types.T_binary},
 		{types.T_text, types.T_varbinary, types.T_varbinary, types.T_varbinary},
 		{types.T_text, types.T_blob, types.T_blob, types.T_blob},
-		//{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
-		//{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
+		{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
+		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
 	}
 
 	for _, r := range ru {
@@ -1269,8 +1270,8 @@ func initFixed2() {
 		{types.T_varchar, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_varchar, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_varchar, types.T_decimal128, types.T_float64, types.T_float64},
-		//{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
-		//{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
+		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_binary, types.T_any, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int16, types.T_float64, types.T_float64},
@@ -1336,6 +1337,8 @@ func initFixed2() {
 		{types.T_text, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_text, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_text, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
+		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
 	}
 
 	for _, r := range ru {
