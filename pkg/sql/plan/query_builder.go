@@ -191,7 +191,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					Col: &plan.ColRef{
 						RelPos: 0,
 						ColPos: int32(i),
-						Name:   builder.nameByColRef[internalRemapping.localToGlobal[i]],
+						Name:   col.Name,
 					},
 				},
 			})
@@ -208,7 +208,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						Col: &plan.ColRef{
 							RelPos: 0,
 							ColPos: 0,
-							Name:   builder.nameByColRef[globalRef],
+							Name:   node.TableDef.Cols[0].Name,
 						},
 					},
 				})
@@ -220,7 +220,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						Col: &plan.ColRef{
 							RelPos: 0,
 							ColPos: 0,
-							Name:   builder.nameByColRef[internalRemapping.localToGlobal[0]],
+							Name:   node.TableDef.Cols[0].Name,
 						},
 					},
 				})
@@ -552,6 +552,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
+		if node.WinSpecList != nil {
+			increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
+		}
+
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
@@ -560,6 +564,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))
+
+		if node.WinSpecList != nil {
+			groupSize = int32(len(builder.qry.Nodes[node.Children[0]].ProjectList))
+			increaseRefCntForExprList(node.WinSpecList, -1, colRefCnt)
+		}
 
 		for _, expr := range node.FilterList {
 			builder.remapHavingClause(expr, groupTag, aggregateTag, groupSize)
@@ -615,6 +624,18 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+
+		if node.WinSpecList != nil {
+
+			node.NodeType = plan.Node_WINDOW
+
+			for _, expr := range node.WinSpecList {
+				err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		if len(node.ProjectList) == 0 {
@@ -1114,6 +1135,83 @@ func (builder *QueryBuilder) remapSinkScanColRefs(nodeID int32, step int32, sink
 	}
 }
 
+func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+
+	switch node.NodeType {
+	case plan.Node_AGG:
+		if len(node.GroupBy) == 0 && len(node.AggList) == 1 {
+			agg, ok := node.AggList[0].Expr.(*plan.Expr_F)
+			if ok && agg.F.Func.ObjName == "approx_count" {
+				if len(node.Children) == 1 {
+					child := builder.qry.Nodes[node.Children[0]]
+					if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 {
+						agg.F.Func.ObjName = "sum"
+						fr, _ := function.GetFunctionByName(context.TODO(), "sum", []types.Type{types.T_int64.ToType()})
+						agg.F.Func.Obj = fr.GetEncodedOverloadID()
+						agg.F.Args[0] = &plan.Expr{
+							Typ: &Type{},
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: 0,
+									ColPos: Metadata_Rows_Cnt_Pos,
+								},
+							},
+						}
+
+						var exprs []*plan.Expr
+						str := child.ObjRef.SchemaName + "." + child.TableDef.Name
+						exprs = append(exprs, &plan.Expr{
+							Typ: &Type{
+								Id:          int32(types.T_varchar),
+								NotNullable: true,
+								Width:       int32(len(str)),
+							},
+							Expr: &plan.Expr_C{
+								C: &plan.Const{
+									Value: &plan.Const_Sval{
+										Sval: str,
+									},
+								},
+							},
+						})
+						str = child.TableDef.Cols[0].Name
+						exprs = append(exprs, &plan.Expr{
+							Typ: &Type{
+								Id:          int32(types.T_varchar),
+								NotNullable: true,
+								Width:       int32(len(str)),
+							},
+							Expr: &plan.Expr_C{
+								C: &plan.Const{
+									Value: &plan.Const_Sval{
+										Sval: str,
+									},
+								},
+							},
+						})
+						scanNode := &plan.Node{
+							NodeType: plan.Node_VALUE_SCAN,
+						}
+						childId := builder.appendNode(scanNode, nil)
+						node.Children[0] = builder.buildMetadataScan(nil, nil, exprs, childId)
+						child = builder.qry.Nodes[node.Children[0]]
+						switch expr := agg.F.Args[0].Expr.(type) {
+						case *plan.Expr_Col:
+							expr.Col.RelPos = child.BindingTags[0]
+							agg.F.Args[0].Typ = child.TableDef.Cols[expr.Col.ColPos].Typ
+						}
+					}
+				}
+			}
+		}
+	default:
+		for i := range node.Children {
+			builder.rewriteStarApproxCount(node.Children[i])
+		}
+	}
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
@@ -1152,6 +1250,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
 		builder.pushdownRuntimeFilters(rootID)
+
+		builder.rewriteStarApproxCount(rootID)
 
 		rootNode := builder.qry.Nodes[rootID]
 
@@ -1529,6 +1629,41 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	return lastNodeID, nil
+}
+
+const NameGroupConcat = "group_concat"
+
+func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
+	windowsSpecList := make([]*plan.Expr, 0, len(bc.aggregates))
+	j := 0
+
+	if len(bc.windows) < 1 {
+		panic("no winspeclist to be used to force")
+	}
+
+	for i := range bc.aggregates {
+		windowExpr := DeepCopyExpr(bc.windows[j])
+		windowSpec := windowExpr.GetW()
+		if windowSpec == nil {
+			panic("no winspeclist to be used to force")
+		}
+		windowSpec.WindowFunc = DeepCopyExpr(bc.aggregates[i])
+		windowExpr.Typ = bc.aggregates[i].Typ
+
+		if windowSpec.Name == NameGroupConcat {
+			if j < len(bc.windows)-1 {
+				j++
+			}
+		} else {
+			windowSpec.OrderBy = nil
+		}
+		windowsSpecList = append(windowsSpecList, windowExpr)
+	}
+
+	//clean ctx.windows to avoid adding another windows node
+	bc.windows = nil
+
+	return windowsSpecList, nil
 }
 
 func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
@@ -2136,14 +2271,31 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
 		}
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_AGG,
-			Children:    []int32{nodeID},
-			GroupBy:     ctx.groups,
-			AggList:     ctx.aggregates,
-			BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
-		}, ctx)
+		if ctx.forceWindows {
 
+			winSpecList, err := ctx.generateForceWinSpecList()
+			if err != nil {
+				return 0, err
+			}
+
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_AGG,
+				Children:    []int32{nodeID},
+				GroupBy:     ctx.groups,
+				AggList:     ctx.aggregates,
+				BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
+				WinSpecList: winSpecList,
+			}, ctx)
+
+		} else {
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_AGG,
+				Children:    []int32{nodeID},
+				GroupBy:     ctx.groups,
+				AggList:     ctx.aggregates,
+				BindingTags: []int32{ctx.groupTag, ctx.aggregateTag},
+			}, ctx)
+		}
 		if len(havingList) > 0 {
 			var newFilterList []*plan.Expr
 			var expr *plan.Expr

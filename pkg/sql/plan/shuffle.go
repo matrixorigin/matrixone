@@ -136,8 +136,13 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
 			leftSorted = false
 		}
-		if !leftSorted {
-			if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > 25*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
+		// if hashmap size too large, have to go shuffle whenever left is sorted
+		if !leftSorted && n.Stats.HashmapStats.HashmapSize < 100000000 {
+			var threshHold float64 = 32
+			if n.BuildOnLeft {
+				threshHold = 512
+			}
+			if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > threshHold*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
 				return
 			}
 		}
