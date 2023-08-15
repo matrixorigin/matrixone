@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -4480,29 +4479,6 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastValueToIndex
-				},
-			},
-		},
-	},
-
-	// function `cast_index_value_to_index`
-	{
-		functionId: CAST_INDEX_VALUE_TO_INDEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId:      0,
-				args:            []types.T{types.T_varchar, types.T_varchar, types.T_uint16},
-				volatile:        true,
-				realTimeRelated: true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint16.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return CastIndexValueToIndex
 				},
 			},
 		},
