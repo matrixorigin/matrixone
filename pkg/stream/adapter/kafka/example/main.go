@@ -37,7 +37,7 @@ func main() {
 		"broker.address.family": brokerAddressFamily,
 	}
 
-	// Initialize KafkaAdapter
+	// Initialize KafkaAdapterb
 	ka, err := mokafka.NewKafkaAdapter(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize KafkaAdapter: %s\n", err)
@@ -96,7 +96,9 @@ func main() {
 		fmt.Printf("message %v with offset %d\n", m, offset)
 	}
 
+	md, err := mokafka.ConvertProtobufSchemaToMD(schema, "test.v1.proto")
+
 	// dynamic parse the proto message  without  using generated protobuf code
-	res, err := mokafka.DeserializeProtobuf(schema, msgs[0].Value)
+	res, err := mokafka.DeserializeProtobuf(md, msgs[0].Value)
 	fmt.Printf("message %v with offset %d\n", res, offset)
 }

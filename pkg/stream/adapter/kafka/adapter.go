@@ -3,6 +3,7 @@ package mokafka
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -11,9 +12,14 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/confluentinc/confluent-kafka-go/schemaregistry"
 	"github.com/gogo/protobuf/proto"
+	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoparse"
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type AdminClientInterface interface {
@@ -155,6 +161,24 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 
 	var messages []*kafka.Message
 	for _, p := range topicMetadata.Partitions {
+		// Fetch the high watermark for the partition
+		_, highwatermarkHigh, err := ka.Consumer.QueryWatermarkOffsets(topic, p.ID, -1)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query watermark offsets: %w", err)
+		}
+
+		// Calculate the number of messages available to consume
+		availableMessages := int(highwatermarkHigh - offset)
+		if availableMessages <= 0 {
+			continue
+		}
+
+		// Determine the number of messages to consume from this partition
+		partitionLimit := limit - len(messages)
+		if partitionLimit > availableMessages {
+			partitionLimit = availableMessages
+		}
+
 		// Assign the specific partition with the desired offset
 		err = ka.Consumer.Assign([]kafka.TopicPartition{
 			{Topic: &topic, Partition: p.ID, Offset: kafka.Offset(offset)},
@@ -163,20 +187,13 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 			return nil, err
 		}
 
-		// Calculate the number of messages to read from this partition
-		partitionLimit := limit - len(messages)
-		if partitionLimit <= 0 {
-			break
-		}
-
 		for i := 0; i < partitionLimit; i++ {
 			msg, err := ka.Consumer.ReadMessage(-1) // Wait indefinitely until a message is available
 			if err != nil {
 				// Check for timeout
-				if kafkaErr, ok := err.(kafka.Error); ok && kafkaErr.Code() == kafka.ErrTimedOut {
+				var kafkaErr kafka.Error
+				if errors.As(err, &kafkaErr) && kafkaErr.Code() == kafka.ErrTimedOut {
 					break // Exit the loop if a timeout occurs
-				} else {
-					return nil, fmt.Errorf("failed to read message: %w", err)
 				}
 			}
 			messages = append(messages, msg)
@@ -284,7 +301,130 @@ func (ka *KafkaAdapter) ProduceMessage(topic string, key, value []byte) (int64, 
 	return int64(m.TopicPartition.Offset), nil
 }
 
-func DeserializeProtobuf(schema string, in []byte) (proto.Message, error) {
+func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch {
+	batch := batch.NewWithSize(len(typs))
+	for i, typ := range typs {
+		switch typ.Oid {
+		case types.T_datetime:
+			typ.Scale = 6
+		}
+		vec := vector.NewVec(typ)
+		vec.PreExtend(batchSize, pool)
+		vec.SetLength(batchSize)
+		batch.Vecs[i] = vec
+	}
+	return batch
+}
+
+func PopulateBatchFromMSG(typs []types.Type, attrKeys []string, pool *mpool.MPool, msgs []*kafka.Message, valueSchemaMeta *schemaregistry.SchemaMetadata) (*batch.Batch, error) {
+	b := newBatch(len(msgs), typs, pool)
+	// parse the msg and populate the batch
+	for i, msg := range msgs {
+		switch valueSchemaMeta.SchemaType {
+		case "JSON":
+		case "AVRO":
+		case "PROTOBUF":
+			md, _ := ConvertProtobufSchemaToMD(valueSchemaMeta.Schema, valueSchemaMeta.SchemaInfo.Schema)
+			msgValue, _ := DeserializeProtobuf(md, msg.Value)
+			getOneRowProtoData(context.Background(), b, attrKeys, msgValue, i, typs, pool)
+		default:
+			return nil, moerr.NewInternalError(context.Background(), fmt.Sprintf("unsupported schema type: %s", valueSchemaMeta.SchemaType))
+		}
+	}
+
+	return b, nil
+}
+func getOneRowProtoData(ctx context.Context, bat *batch.Batch, attrKeys []string, msg *dynamic.Message, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
+
+	for colIdx, typ := range typs {
+		fieldValue := msg.GetFieldByName(attrKeys[colIdx])
+		if fieldValue == nil {
+			return moerr.NewInternalError(ctx, "field not found: %s", attrKeys[colIdx])
+		}
+
+		id := typ.Oid
+		vec := bat.Vecs[colIdx]
+		switch id {
+		case types.T_int64:
+			val, ok := fieldValue.(int64)
+			if !ok {
+				return moerr.NewInternalError(ctx, "expected int64 type for column %d but got %T", colIdx, fieldValue)
+			}
+			cols := vector.MustFixedCol[int64](vec)
+			cols[rowIdx] = val
+
+		case types.T_uint64:
+			val, ok := fieldValue.(uint64)
+			if !ok {
+				return moerr.NewInternalError(ctx, "expected uint64 type for column %d but got %T", colIdx, fieldValue)
+			}
+			cols := vector.MustFixedCol[uint64](vec)
+			cols[rowIdx] = val
+
+		case types.T_float64:
+			val, ok := fieldValue.(float64)
+			if !ok {
+				return moerr.NewInternalError(ctx, "expected float64 type for column %d but got %T", colIdx, fieldValue)
+			}
+			cols := vector.MustFixedCol[float64](vec)
+			cols[rowIdx] = val
+
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			val, ok := fieldValue.(string)
+			if !ok {
+				return moerr.NewInternalError(ctx, "expected string type for column %d but got %T", colIdx, fieldValue)
+			}
+			err := vector.SetStringAt(vec, rowIdx, val, mp)
+			if err != nil {
+				return err
+			}
+
+		case types.T_bool:
+			val, ok := fieldValue.(bool)
+			if !ok {
+				return moerr.NewInternalError(ctx, "expected bool type for column %d but got %T", colIdx, fieldValue)
+			}
+			cols := vector.MustFixedCol[bool](vec)
+			cols[rowIdx] = val
+
+		case types.T_json:
+			val, ok := fieldValue.([]byte)
+			if !ok || len(val) == 0 {
+				strVal, strOk := fieldValue.(string)
+				if !strOk {
+					return moerr.NewInternalError(ctx, "expected bytes or string type for JSON column %d but got %T", colIdx, fieldValue)
+				}
+				val = []byte(strVal)
+			}
+			err := vector.SetBytesAt(vec, rowIdx, val, mp)
+			if err != nil {
+				return err
+			}
+
+		case types.T_datetime:
+			val, ok := fieldValue.(string)
+			if !ok {
+				return moerr.NewInternalError(ctx, "expected string type for Datetime column %d but got %T", colIdx, fieldValue)
+			}
+			cols := vector.MustFixedCol[types.Datetime](vec)
+			if len(val) == 0 {
+				cols[rowIdx] = types.Datetime(0)
+			} else {
+				d, err := types.ParseDatetime(val, vec.GetType().Scale)
+				if err != nil {
+					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, fieldValue)
+				}
+				cols[rowIdx] = d
+			}
+
+		default:
+			return moerr.NewInternalError(ctx, "the value type %s is not supported now", *vec.GetType())
+		}
+	}
+	return nil
+}
+
+func ConvertProtobufSchemaToMD(schema string, msgTypeName string) (*desc.MessageDescriptor, error) {
 	files := map[string]string{
 		"test.proto": schema,
 	}
@@ -298,7 +438,11 @@ func DeserializeProtobuf(schema string, in []byte) (proto.Message, error) {
 		log.Fatalf("Failed to parse proto content: %v", err)
 	}
 	fd := fds[0]
-	md := fd.FindMessage("test_v1.MOTestMessage")
+	md := fd.FindMessage(msgTypeName)
+	return md, nil
+}
+
+func DeserializeProtobuf(md *desc.MessageDescriptor, in []byte) (*dynamic.Message, error) {
 	dm := dynamic.NewMessage(md)
 	bytesRead, _, err := readMessageIndexes(in[5:])
 	err = proto.Unmarshal(in[5+bytesRead:], dm)
