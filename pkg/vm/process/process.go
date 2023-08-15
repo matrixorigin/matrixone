@@ -236,7 +236,7 @@ func (proc *Process) CopyVectorPool(src *Process) {
 }
 
 func (proc *Process) PutBatch(bat *batch.Batch) {
-	if bat == batch.EmptyBatch {
+	if bat == batch.EmptyBatch || bat.IsEmpty() {
 		return
 	}
 	if atomic.LoadInt64(&bat.Cnt) == 0 {
