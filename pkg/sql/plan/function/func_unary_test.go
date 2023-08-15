@@ -65,6 +65,52 @@ func TestAbs(t *testing.T) {
 	}
 }
 
+func initAbsArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test abs float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{-4, 9999999, -99999}, {0, -25, 49}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{4, 9999999, 99999}, {0, 25, 49}},
+				[]bool{false, false}),
+		},
+		{
+			info: "test abs float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{-4, 9999999, -99999}, {0, -25, 49}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				[][]float64{{4, 9999999, 99999}, {0, 25, 49}},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestAbsArray(t *testing.T) {
+	testCases := initAbsArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func BenchmarkAbsInt64(b *testing.B) {
 	testCases := initAbsTestCase()
 	proc := testutil.NewProcess()
