@@ -1,11 +1,15 @@
-# service node type, [DN|CN|LOG]
-service-type = "LOG"
+service-type = "CN"
 data-dir = "./mo-data"
 
 [log]
 level = "info"
 format = "console"
 max-size = 512
+
+[hakeeper-client]
+service-addresses = [
+  "127.0.0.1:32001",
+]
 
 [[fileservice]]
 name = "LOCAL"
@@ -26,4 +30,16 @@ name = "ETL"
 backend = "DISK-ETL"
 
 [observability]
-statusPort = 7001
+disableTrace = true
+disableMetric = true
+
+[cn]
+uuid = "dd1dccb5-4d3c-41f8-b482-5251dc7a41bf"
+port-base = 18200
+
+[cn.Engine]
+type = "distributed-tae"
+
+[cn.frontend]
+port = 16002
+unix-socket = "/tmp/mysql2.sock"

@@ -70,7 +70,7 @@ func (m *StrHashMap) Free() {
 }
 
 func (m *StrHashMap) PreAlloc(n uint64, mp *mpool.MPool) error {
-	return m.hashMap.PreAlloc(n, mp)
+	return m.hashMap.ResizeOnDemand(n, mp)
 }
 
 func (m *StrHashMap) GroupCount() uint64 {

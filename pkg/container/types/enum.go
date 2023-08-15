@@ -34,21 +34,28 @@ func ParseEnum(enumStr string, name string) (uint16, error) {
 		return 0, moerr.NewInternalErrorNoCtx("convert to MySQL enum failed: enum define is empty %v", enumStr)
 	}
 	elems := strings.Split(enumStr, ",")
-	enumName, err := ParseEnumName(elems, name)
+	enumName, err := parseEnumName(elems, name)
 	if err == nil {
 		return enumName, nil
 	}
 	// if name doesn't exist, it's maybe an integer
 	num, err := strconv.ParseUint(name, 0, 64)
 	if err == nil {
-		return ParseEnumValue(elems, uint16(num))
+		return parseEnumValue(elems, uint16(num))
 	}
 
 	return 0, moerr.NewInternalErrorNoCtx("convert to MySQL enum failed: item %s is not in enum %v", name, elems)
 }
 
 // ParseEnumName return item index with item name.
-func ParseEnumName(elems []string, name string) (uint16, error) {
+func ParseEnumName(enumStr string, name string) (uint16, error) {
+	if len(enumStr) == 0 {
+		return 0, moerr.NewInternalErrorNoCtx("convert to MySQL enum failed: enum define is empty %v", enumStr)
+	}
+	elems := strings.Split(enumStr, ",")
+	return parseEnumName(elems, name)
+}
+func parseEnumName(elems []string, name string) (uint16, error) {
 	for i, n := range elems {
 		if strings.EqualFold(n, name) {
 			return uint16(i) + 1, nil
@@ -58,7 +65,14 @@ func ParseEnumName(elems []string, name string) (uint16, error) {
 }
 
 // ParseEnumValue return item index with special number.
-func ParseEnumValue(elems []string, number uint16) (uint16, error) {
+func ParseEnumValue(enumStr string, number uint16) (uint16, error) {
+	if len(enumStr) == 0 {
+		return 0, moerr.NewInternalErrorNoCtx("convert to MySQL enum failed: enum define is empty %v", enumStr)
+	}
+	elems := strings.Split(enumStr, ",")
+	return parseEnumValue(elems, number)
+}
+func parseEnumValue(elems []string, number uint16) (uint16, error) {
 	if number == 0 || number > uint16(len(elems)) {
 		return 0, moerr.NewInternalErrorNoCtx("convert to MySQL enum failed: number %d overflow enum boundary [1, %d]", number, len(elems))
 	}

@@ -48,6 +48,7 @@ func ReadExtent(
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
+	//TODO when to call ioVec.Release?
 	v = ioVec.Entries[0].CachedData.Bytes()
 	return
 }
@@ -191,6 +192,7 @@ func ReadOneBlockWithMeta(
 		if err != nil {
 			return
 		}
+		//TODO when to call ioVec.Release?
 	}
 
 	// need to generate vector
@@ -256,6 +258,7 @@ func ReadMultiBlocksWithMeta(
 	}
 
 	err = fs.Read(ctx, ioVec)
+	//TODO when to call ioVec.Release?
 	return
 }
 
@@ -293,5 +296,6 @@ func ReadAllBlocksWithMeta(
 	}
 
 	err = fs.Read(ctx, ioVec)
+	//TODO when to call ioVec.Release?
 	return
 }

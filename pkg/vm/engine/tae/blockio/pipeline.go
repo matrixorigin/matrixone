@@ -158,14 +158,18 @@ func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 					res.Err = err
 					return
 				}
-				res.Res = ioVectors
+				// no further reads
+				res.Res = nil
+				ioVectors.Release()
 			} else if params.dataType == objectio.CkpAllData {
 				ioVectors, err := reader.ReadMultiAllSubBlocks(ctx, params.ids, nil)
 				if err != nil {
 					res.Err = err
 					return
 				}
-				res.Res = ioVectors
+				// no further reads
+				res.Res = nil
+				ioVectors.Release()
 			} else {
 				ioVectors, err := reader.ReadMultiBlocks(ctx,
 					params.ids, nil)
@@ -173,7 +177,9 @@ func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 					res.Err = err
 					return
 				}
-				res.Res = ioVectors
+				// no further reads
+				res.Res = nil
+				ioVectors.Release()
 			}
 			if params.reader == nil {
 				putReader(reader)
