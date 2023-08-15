@@ -294,7 +294,6 @@ func setMaxScaleFromSource(t *types.Type, source []types.Type) {
 }
 
 func setMaxWidthFromSource(t *types.Type, source []types.Type) {
-	//TODO: check if we need to modify width here for T_array?
 	t.Width = -1
 	for i := range source {
 		if source[i].Oid == t.Oid || source[i].Oid.IsMySQLString() {

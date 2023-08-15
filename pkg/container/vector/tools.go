@@ -73,6 +73,7 @@ func MustStrCol(v *Vector) []string {
 	}
 }
 
+// MustArrayCol  required func
 func MustArrayCol[T types.RealNumbers](v *Vector) [][]T {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
@@ -120,20 +121,21 @@ func ExpandStrCol(v *Vector) []string {
 	return MustStrCol(v)
 }
 
-func ExpandArrayCol[T types.RealNumbers](v *Vector) [][]T {
-	if v.IsConst() {
-		vs := make([][]T, v.Length())
-		if len(v.data) > 0 {
-			cols := v.col.([]types.Varlena)
-			ss := types.GetArray[T](&cols[0], v.area)
-			for i := range vs {
-				vs[i] = ss
-			}
-		}
-		return vs
-	}
-	return MustArrayCol[T](v)
-}
+// Not used anywhere.
+//func ExpandArrayCol[T types.RealNumbers](v *Vector) [][]T {
+//	if v.IsConst() {
+//		vs := make([][]T, v.Length())
+//		if len(v.data) > 0 {
+//			cols := v.col.([]types.Varlena)
+//			ss := types.GetArray[T](&cols[0], v.area)
+//			for i := range vs {
+//				vs[i] = ss
+//			}
+//		}
+//		return vs
+//	}
+//	return MustArrayCol[T](v)
+//}
 
 func ExpandBytesCol(v *Vector) [][]byte {
 	if v.IsConst() {
@@ -347,6 +349,7 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		})
 
 	case types.T_array_float32:
+		//TODO: would T_array be used in Zonemap?
 		return checkArrayIntersect[float32](v, vec, func(t1, t2 []float32) bool {
 			return types.CompareArray[float32](t1, t2) >= 0
 		}, func(t1, t2 []float32) bool {
@@ -359,7 +362,7 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 			return types.CompareArray[float64](t1, t2) <= 0
 		})
 	}
-	//TODO: would T_array be used in Zonemap?
+
 	return false, moerr.NewInternalErrorNoCtx("unsupport type to check intersect")
 }
 
@@ -577,6 +580,7 @@ func compareNumber[T types.OrderedT](ctx context.Context, v1, v2 *Vector, fnName
 	}
 }
 
+// compareArray required func
 func compareArray[T types.RealNumbers](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
 	switch fnName {
 	case ">":

@@ -221,8 +221,7 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(col, os, uuidGreater)
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary,
-		types.T_array_float32, types.T_array_float64:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		if strCol == nil {
 			strCol = vector.MustStrCol(vec)
 		}
@@ -231,7 +230,20 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(strCol, os, genericGreater[string])
 		}
-		//TODO: Add T_array here.
+	case types.T_array_float32:
+		col := vector.MustArrayCol[float32](vec)
+		if !desc {
+			genericSort(col, os, arrayLess[float32])
+		} else {
+			genericSort(col, os, arrayGreater[float32])
+		}
+	case types.T_array_float64:
+		col := vector.MustArrayCol[float64](vec)
+		if !desc {
+			genericSort(col, os, arrayLess[float64])
+		} else {
+			genericSort(col, os, arrayGreater[float64])
+		}
 	}
 }
 
@@ -263,8 +275,16 @@ func uuidLess(data []types.Uuid, i, j int64) bool {
 	return data[i].Compare(data[j]) < 0
 }
 
+func arrayLess[T types.RealNumbers](data [][]T, i, j int64) bool {
+	return types.CompareArray[T](data[i], data[j]) < 0
+}
+
 func uuidGreater(data []types.Uuid, i, j int64) bool {
 	return data[i].Compare(data[j]) > 0
+}
+
+func arrayGreater[T types.RealNumbers](data [][]T, i, j int64) bool {
+	return types.CompareArray[T](data[i], data[j]) > 0
 }
 
 func genericLess[T types.OrderedT](data []T, i, j int64) bool {

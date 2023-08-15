@@ -233,6 +233,16 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewStringVector(n, typ, m, random, vs)
 		}
 		return NewStringVector(n, typ, m, random, nil)
+	case types.T_array_float32:
+		if vs, ok := Values.([][]float32); ok {
+			return NewArrayVector[float32](n, typ, m, random, vs)
+		}
+		return NewArrayVector[float32](n, typ, m, random, nil)
+	case types.T_array_float64:
+		if vs, ok := Values.([][]float64); ok {
+			return NewArrayVector[float64](n, typ, m, random, vs)
+		}
+		return NewArrayVector[float64](n, typ, m, random, nil)
 	case types.T_json:
 		if vs, ok := Values.([]string); ok {
 			return NewJsonVector(n, typ, m, random, vs)
@@ -803,6 +813,30 @@ func NewStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []st
 			v = rand.Int()
 		}
 		if err := vector.AppendBytes(vec, []byte(strconv.Itoa(v)), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
+}
+
+func NewArrayVector[T types.RealNumbers](n int, typ types.Type, m *mpool.MPool, random bool, vs [][]T) *vector.Vector {
+	vec := vector.NewVec(typ)
+	if vs != nil {
+		for i := range vs {
+			if err := vector.AppendArray[T](vec, vs[i], false, m); err != nil {
+				vec.Free(m)
+				return nil
+			}
+		}
+		return vec
+	}
+	for i := 0; i < n; i++ {
+		v := i
+		if random {
+			v = rand.Int()
+		}
+		if err := vector.AppendArray[T](vec, types.BuildTestArray[T](T(v), T(v+1)), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

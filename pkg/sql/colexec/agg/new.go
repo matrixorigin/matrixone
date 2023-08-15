@@ -136,7 +136,7 @@ func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
 		return newGenericCount[float64](typ, dist, isStar)
 	case types.T_char:
 		return newGenericCount[[]byte](typ, dist, isStar)
-	case types.T_varchar, types.T_array_float32, types.T_array_float64:
+	case types.T_varchar:
 		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_blob:
 		return newGenericCount[[]byte](typ, dist, isStar)
@@ -194,7 +194,7 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 		return newGenericAnyValue[float64](typ, dist)
 	case types.T_char:
 		return newStrAnyValue(typ, dist)
-	case types.T_varchar, types.T_array_float32, types.T_array_float64: //TODO: Check
+	case types.T_varchar:
 		return newStrAnyValue(typ, dist)
 	case types.T_binary:
 		return newStrAnyValue(typ, dist)
@@ -346,7 +346,7 @@ func newMax(typ types.Type, dist bool) Agg[any] {
 			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
-	case types.T_varchar, types.T_array_float32, types.T_array_float64:
+	case types.T_varchar:
 		aggPriv := NewStrMax()
 		if dist {
 			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
@@ -442,7 +442,7 @@ func newMin(typ types.Type, dist bool) Agg[any] {
 			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
-	case types.T_varchar, types.T_array_float32, types.T_array_float64:
+	case types.T_varchar:
 		aggPriv := NewStrMin()
 		if dist {
 			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
@@ -518,7 +518,7 @@ func newApprox(typ types.Type, dist bool) Agg[any] {
 		return newGenericApproxcd[float64](typ, dist)
 	case types.T_char:
 		return newGenericApproxcd[[]byte](typ, dist)
-	case types.T_varchar, types.T_array_float32, types.T_array_float64:
+	case types.T_varchar:
 		return newGenericApproxcd[[]byte](typ, dist)
 	case types.T_blob:
 		return newGenericApproxcd[[]byte](typ, dist)
@@ -891,3 +891,5 @@ func NewGroupConcat(typ types.Type, dist bool, config any) Agg[any] {
 
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for group_concat", typ))
 }
+
+//TODO: Check if we ned
