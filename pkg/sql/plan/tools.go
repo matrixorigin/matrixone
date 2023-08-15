@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	moRecursiveLevelCol       = "__mo_recursive_level_col"
-	moDefaultRecursionMax     = 100
-	moCheckRecursionLevelFun  = "mo_check_level"
-	moEnumCastIndexToValueFun = "cast_index_to_value"
-	moEnumCastValueToIndexFun = "cast_value_to_index"
+	moRecursiveLevelCol            = "__mo_recursive_level_col"
+	moDefaultRecursionMax          = 100
+	moCheckRecursionLevelFun       = "mo_check_level"
+	moEnumCastIndexToValueFun      = "cast_index_to_value"
+	moEnumCastValueToIndexFun      = "cast_value_to_index"
+	moEnumCastIndexValueToIndexFun = "cast_index_value_to_index"
 )
 
 func makeZeroRecursiveLevel() tree.SelectExpr {
