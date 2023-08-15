@@ -17,8 +17,6 @@ package group
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -283,7 +281,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
 		}
 		if ap.PreAllocSize > 0 {
-			logutil.Infof("prealloc group batch to size %v", ap.PreAllocSize)
 			err = ctr.bat.PreExtend(proc.Mp(), int(ap.PreAllocSize))
 			if err != nil {
 				return process.ExecNext, err
@@ -302,7 +299,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				return process.ExecNext, err
 			}
 			if ap.PreAllocSize > 0 {
-				logutil.Infof("prealloc inthashmap to size %v", ap.PreAllocSize)
 				err = ctr.intHashMap.PreAlloc(ap.PreAllocSize, proc.Mp())
 				if err != nil {
 					return process.ExecNext, err
@@ -314,7 +310,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				return process.ExecNext, err
 			}
 			if ap.PreAllocSize > 0 {
-				logutil.Infof("prealloc strhashmap to size %v", ap.PreAllocSize)
 				err = ctr.strHashMap.PreAlloc(ap.PreAllocSize, proc.Mp())
 				if err != nil {
 					return process.ExecNext, err
