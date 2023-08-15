@@ -48,6 +48,7 @@ func ReadExtent(
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
+	//TODO when to call ioVec.Release?
 	v = ioVec.Entries[0].CachedData.Bytes()
 	return
 }
@@ -109,13 +110,13 @@ func ReadObjectMeta(
 		return
 	}
 
-	meta = ObjectMeta(obj.([]byte))
+	meta = obj.(ObjectMeta)
 	return
 }
 
 func ReadOneBlock(
 	ctx context.Context,
-	meta *ObjectMeta,
+	meta *ObjectDataMeta,
 	name string,
 	blk uint16,
 	seqnums []uint16,
@@ -128,7 +129,7 @@ func ReadOneBlock(
 
 func ReadOneBlockWithMeta(
 	ctx context.Context,
-	meta *ObjectMeta,
+	meta *ObjectDataMeta,
 	name string,
 	blk uint16,
 	seqnums []uint16,
@@ -191,6 +192,7 @@ func ReadOneBlockWithMeta(
 		if err != nil {
 			return
 		}
+		//TODO when to call ioVec.Release?
 	}
 
 	// need to generate vector
@@ -227,7 +229,7 @@ func ReadOneBlockWithMeta(
 func ReadMultiBlocksWithMeta(
 	ctx context.Context,
 	name string,
-	meta *ObjectMeta,
+	meta *ObjectDataMeta,
 	options map[uint16]*ReadBlockOptions,
 	noLRUCache bool,
 	m *mpool.MPool,
@@ -256,12 +258,13 @@ func ReadMultiBlocksWithMeta(
 	}
 
 	err = fs.Read(ctx, ioVec)
+	//TODO when to call ioVec.Release?
 	return
 }
 
 func ReadAllBlocksWithMeta(
 	ctx context.Context,
-	meta *ObjectMeta,
+	meta *ObjectDataMeta,
 	name string,
 	cols []uint16,
 	noLRUCache bool,
@@ -293,5 +296,6 @@ func ReadAllBlocksWithMeta(
 	}
 
 	err = fs.Read(ctx, ioVec)
+	//TODO when to call ioVec.Release?
 	return
 }

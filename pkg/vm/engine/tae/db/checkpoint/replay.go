@@ -31,6 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
+const (
+	PrefetchData uint16 = iota
+	PrefetchMetaIdx
+	ReadMetaIdx
+	ReadData
+)
+
 type metaFile struct {
 	index int
 	start types.TS
@@ -76,7 +83,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	t0 := time.Now()
 	var isCheckpointVersion1 bool
 	// in version 1, checkpoint metadata doesn't contain 'version'.
-	if len(bats[0].Vecs) < len(colNames) {
+	if len(bats[0].Vecs) < CheckpointSchemaColumnCountV1 {
 		isCheckpointVersion1 = true
 	}
 	for i := range bats[0].Vecs {
@@ -98,10 +105,10 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
 	closecbs := make([]func(), 0)
-	readfn := func(i int, prefetch bool) {
+	readfn := func(i int, readType uint16) {
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
-		metaloc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		cnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
 		isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
 		typ := ET_Global
 		if isIncremental {
@@ -113,21 +120,38 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		} else {
 			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
 		}
+		var dnLoc objectio.Location
+		if version <= logtail.CheckpointVersion4 {
+			dnLoc = cnLoc
+		} else {
+			dnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
+		}
 		checkpointEntry := &CheckpointEntry{
-			start:     start,
-			end:       end,
-			location:  metaloc,
-			state:     ST_Finished,
-			entryType: typ,
-			version:   version,
+			start:      start,
+			end:        end,
+			cnLocation: cnLoc,
+			dnLocation: dnLoc,
+			state:      ST_Finished,
+			entryType:  typ,
+			version:    version,
 		}
 		var err2 error
-		if prefetch {
-			if datas[i], err2 = checkpointEntry.Prefetch(ctx, r.rt.Fs); err2 != nil {
+		if readType == PrefetchData {
+			if err2 = checkpointEntry.Prefetch(ctx, r.rt.Fs, datas[i]); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 			}
+		} else if readType == PrefetchMetaIdx {
+			datas[i], err = checkpointEntry.PrefetchMetaIdx(ctx, r.rt.Fs)
+			if err != nil {
+				return
+			}
+		} else if readType == ReadMetaIdx {
+			err = checkpointEntry.ReadMetaIdx(ctx, r.rt.Fs, datas[i])
+			if err != nil {
+				return
+			}
 		} else {
-			if datas[i], err2 = checkpointEntry.Read(ctx, r.rt.Fs); err2 != nil {
+			if err2 = checkpointEntry.Read(ctx, r.rt.Fs, datas[i]); err2 != nil {
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 				emptyFileMu.Lock()
 				emptyFile = append(emptyFile, checkpointEntry)
@@ -152,12 +176,17 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 			return
 		}
 	}
-
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, true)
+		readfn(i, PrefetchMetaIdx)
 	}
 	for i := 0; i < bat.Length(); i++ {
-		readfn(i, false)
+		readfn(i, ReadMetaIdx)
+	}
+	for i := 0; i < bat.Length(); i++ {
+		readfn(i, PrefetchData)
+	}
+	for i := 0; i < bat.Length(); i++ {
+		readfn(i, ReadData)
 	}
 	readDuration += time.Since(t0)
 	if err != nil {
