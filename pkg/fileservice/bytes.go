@@ -31,6 +31,9 @@ func (b Bytes) Slice(length int) CacheData {
 func (b Bytes) Release() {
 }
 
+func (b Bytes) Retain() {
+}
+
 type bytesAllocator struct{}
 
 var _ CacheDataAllocator = new(bytesAllocator)

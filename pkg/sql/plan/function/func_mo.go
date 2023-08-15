@@ -558,3 +558,70 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}
 	return nil
 }
+
+// CastIndexValueToIndex returns enum type index according to the index value
+func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint16](result)
+	tbls := vector.GenerateFunctionStrParameter(ivecs[0])
+	colNames := vector.GenerateFunctionStrParameter(ivecs[1])
+	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[2])
+
+	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if proc.TxnOperator == nil {
+		return moerr.NewInternalError(proc.Ctx, "CastIndexValueToIndex: txn operator is nil")
+	}
+	txn := proc.TxnOperator
+
+	ses := proc.SessionInfo
+	dbStr := ses.Database
+
+	for i := uint64(0); i < uint64(length); i++ {
+		tbl, tblnull := tbls.GetStrValue(i)
+		colName, colnull := colNames.GetStrValue(i)
+		enumValueIndex, enumValNull := enumIndexValues.GetValue(i)
+		if tblnull || colnull || enumValNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			var rel engine.Relation
+			tblStr := functionUtil.QuickBytesToStr(tbl)
+			colStr := functionUtil.QuickBytesToStr(colName)
+
+			ctx := proc.Ctx
+			if isClusterTable(dbStr, tblStr) {
+				//if it is the cluster table in the general account, switch into the sys account
+				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+			}
+			dbo, err := e.Database(ctx, dbStr, txn)
+			if err != nil {
+				return err
+			}
+			rel, err = dbo.Relation(ctx, tblStr, nil)
+			if err != nil {
+				return err
+			}
+
+			// get the table cols
+			cols, err := rel.TableColumns(ctx)
+			if err != nil {
+				return err
+			}
+			var index uint16
+
+			for _, col := range cols {
+				if col.Name == colStr && col.Type.Oid == types.T_enum {
+					index, err = types.ParseEnumValue(col.EnumVlaues, enumValueIndex)
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+			if err = rs.Append(index, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
