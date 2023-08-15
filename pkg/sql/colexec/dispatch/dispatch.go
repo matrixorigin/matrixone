@@ -102,7 +102,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			ap.ctr.hasData = false
 		}
 	} else if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return process.ExecNext, nil
 	} else {
 		ap.ctr.hasData = true

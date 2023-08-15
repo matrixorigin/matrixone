@@ -36,7 +36,7 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 		return process.ExecStop, nil
 	}
 	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return process.ExecNext, nil
 	}
 	select {

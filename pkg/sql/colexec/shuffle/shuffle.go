@@ -48,7 +48,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		return sendOneBatch(ap, proc, true), nil
 	}
 	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return sendOneBatch(ap, proc, false), nil
 	}
 	if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
