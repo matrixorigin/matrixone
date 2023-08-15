@@ -60,7 +60,7 @@ func (ht *Int64HashMap) Free(m *mpool.MPool) {
 
 func (ht *Int64HashMap) Init(m *mpool.MPool) (err error) {
 	ht.blockCellCnt = kInitialCellCnt
-	ht.blockMaxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt)
 	ht.cellCntMask = kInitialCellCnt - 1
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
@@ -177,10 +177,10 @@ func (ht *Int64HashMap) ResizeOnDemand(n int, m *mpool.MPool) error {
 	}
 
 	newCellCnt := ht.cellCnt << 1
-	newMaxElemCnt := newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+	newMaxElemCnt := maxElemCnt(newCellCnt)
 	for newMaxElemCnt < targetCnt {
 		newCellCnt <<= 1
-		newMaxElemCnt = newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+		newMaxElemCnt = maxElemCnt(newCellCnt)
 	}
 
 	newAlloc := int(newCellCnt) * int(intCellSize)
@@ -250,7 +250,7 @@ func (ht *Int64HashMap) ResizeOnDemand(n int, m *mpool.MPool) error {
 			ht.cells[0] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockCellCnt)
 		} else {
 			ht.blockCellCnt = uint64(maxIntCellCntPerGB)
-			ht.blockMaxElemCnt = ht.blockCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt)
 
 			newBlockNum := newAlloc / mpool.GB
 			ht.rawData = make([][]byte, newBlockNum)
