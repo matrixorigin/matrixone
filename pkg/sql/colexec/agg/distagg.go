@@ -15,8 +15,6 @@
 package agg
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -41,10 +39,6 @@ func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, oty
 	}
 }
 
-func (a *UnaryDistAgg[T1, T2]) String() string {
-	return fmt.Sprintf("%v", a.vs)
-}
-
 func (a *UnaryDistAgg[T1, T2]) Free(m *mpool.MPool) {
 	if a.da != nil {
 		m.Free(a.da)
@@ -55,17 +49,6 @@ func (a *UnaryDistAgg[T1, T2]) Free(m *mpool.MPool) {
 		mp.Free()
 	}
 	a.maps = nil
-}
-
-func (a *UnaryDistAgg[T1, T2]) Dup() Agg[any] {
-	return &UnaryDistAgg[T1, T2]{
-		otyp:  a.otyp,
-		ityps: a.ityps,
-		fill:  a.fill,
-		merge: a.merge,
-		eval:  a.eval,
-		grows: a.grows,
-	}
 }
 
 func (a *UnaryDistAgg[T1, T2]) OutputType() types.Type {

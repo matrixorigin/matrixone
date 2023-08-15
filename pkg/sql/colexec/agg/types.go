@@ -83,10 +83,6 @@ type Aggregate struct {
 type Agg[T any] interface {
 	encoding.BinaryMarshaler
 	encoding.BinaryUnmarshaler
-	//UnmarshalBinary(data []byte, m *mpool.MPool) error
-
-	// Dup will duplicate a new agg with the same type.
-	Dup() Agg[any]
 
 	// Type return the type of the agg's result.
 	OutputType() types.Type
@@ -94,24 +90,20 @@ type Agg[T any] interface {
 	// InputType return the type of the agg's input.
 	InputTypes() []types.Type
 
-	// String return related information of the agg.
-	// used to show query plans.
-	String() string
-
 	// Free the agg.
-	Free(*mpool.MPool)
+	Free(pool *mpool.MPool)
 
 	// Grows allocates n groups for the agg.
-	Grows(n int, m *mpool.MPool) error
+	Grows(n int, pool *mpool.MPool) error
 
 	// Eval method calculates and returns the final result of the aggregate function.
-	Eval(_ *mpool.MPool) (*vector.Vector, error)
+	Eval(pool *mpool.MPool) (*vector.Vector, error)
 
 	// Fill use the one row of vector to update the data of groupIndex-group's agg.
-	Fill(groupIndex int64, rowIndex int64, vecs []*vector.Vector) error
+	Fill(groupIndex int64, rowIndex int64, vectors []*vector.Vector) error
 
 	// BulkFill use whole vector to update the data of groupIndex-group's agg.
-	BulkFill(groupIndex int64, rowCount int, vecs []*vector.Vector) error
+	BulkFill(groupIndex int64, rowCount int, vectors []*vector.Vector) error
 
 	// BatchFill use part of the vector to update the data of agg's group
 	//      os(origin-s) records information about which groups need to be updated

@@ -15,8 +15,6 @@
 package agg
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,26 +40,11 @@ func NewUnaryAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp ty
 	}
 }
 
-func (a *UnaryAgg[T1, T2]) String() string {
-	return fmt.Sprintf("%v", a.vs)
-}
-
 func (a *UnaryAgg[T1, T2]) Free(m *mpool.MPool) {
 	if a.da != nil {
 		m.Free(a.da)
 		a.da = nil
 		a.vs = nil
-	}
-}
-
-func (a *UnaryAgg[T1, T2]) Dup() Agg[any] {
-	return &UnaryAgg[T1, T2]{
-		otyp:  a.otyp,
-		ityps: a.ityps,
-		fill:  a.fill,
-		merge: a.merge,
-		grows: a.grows,
-		eval:  a.eval,
 	}
 }
 
@@ -258,9 +241,11 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, vecs
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) BulkFill(i int64, rowCount int, vecs []*vector.Vector) error {
+func (a *UnaryAgg[T1, T2]) BulkFill(i int64, _ int, vecs []*vector.Vector) error {
 	var err error
 	vec := vecs[0]
+
+	rowCount := vec.Length()
 	if vec.IsConst() {
 		if vec.IsConstNull() {
 			var v T1
