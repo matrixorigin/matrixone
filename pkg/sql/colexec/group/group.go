@@ -189,7 +189,7 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 	}
 
 	if bat.IsEmpty() {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return process.ExecNext, nil
 	}
 
@@ -255,7 +255,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 
 	if bat.IsEmpty() {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return process.ExecNext, nil
 	}
 
