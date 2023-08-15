@@ -1463,10 +1463,9 @@ func strTypeToOthers(proc *process.Process,
 		}
 		return strToTimestamp(source, rs, zone, length)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64:
+		types.T_binary, types.T_varbinary, types.T_blob:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(proc.Ctx, source, rs, length, toType)
-
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](proc.Ctx, source, rs, length, toType)
@@ -3874,12 +3873,36 @@ func strToStr(
 	return nil
 }
 
-//func strToArray[T types.RealNumbers](
-//	ctx context.Context,
-//	from vector.FunctionParameterWrapper[types.Varlena],
-//	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
-//
-//}
+func strToArray[T types.RealNumbers](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+
+	var i uint64
+	var l = uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetStrValue(i)
+		if null || len(v) == 0 {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			//TODO: Improve
+
+			// Convert "[1,2,3]" --> []float32{1.0, 2.0, 3.0}
+			a, err := types.StringToArray[T](convertByteSliceToString(v))
+			if err != nil {
+				return err
+			}
+			// Convert []float32{1.0, 2.0, 3.0} --> []byte{11, 33, 45, 56,.....}
+			b := types.ArrayToBytes[T](a)
+			if err := to.AppendBytes(b, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 func uuidToStr(
 	from vector.FunctionParameterWrapper[types.Uuid],
