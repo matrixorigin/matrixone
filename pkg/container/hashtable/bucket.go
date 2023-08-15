@@ -21,7 +21,7 @@ import (
 )
 
 func (ht *StringHashMap) InsertStringBatchInBucket(states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64, m *mpool.MPool) error {
-	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
+	if err := ht.ResizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
 
@@ -103,7 +103,7 @@ func (ht *StringHashMap) InsertString40BatchInBucket(states [][3]uint64, keys []
 */
 
 func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64, ibucket, nbucket uint64, m *mpool.MPool) error {
-	if err := ht.resizeOnDemand(uint64(len(keys)), m); err != nil {
+	if err := ht.ResizeOnDemand(uint64(len(keys)), m); err != nil {
 		return err
 	}
 
