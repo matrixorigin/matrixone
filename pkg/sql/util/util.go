@@ -183,54 +183,24 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	// left is: account_id = cur_accountId
 	left := makeAccountIdEqualAst(curAccountId)
 
-	att_relnameColName := &tree.UnresolvedName{
+	att_dblnameColName := &tree.UnresolvedName{
 		NumParts: 1,
-		Parts:    tree.NameParts{catalog.SystemColAttr_RelName},
+		Parts:    tree.NameParts{catalog.SystemColAttr_DBName},
 	}
 
-	mo_databaseConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_DATABASE), catalog.MO_DATABASE, false, tree.P_char)
-	mo_tablesConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_TABLES), catalog.MO_TABLES, false, tree.P_char)
-	mo_columnsConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_COLUMNS), catalog.MO_COLUMNS, false, tree.P_char)
-
-	inValues := tree.NewTuple(tree.Exprs{mo_databaseConst, mo_tablesConst, mo_columnsConst})
-	// att_relname in ('mo_database','mo_tables','mo_columns')
-	inExpr := tree.NewComparisonExpr(tree.IN, att_relnameColName, inValues)
-
-	mo_userConst := tree.NewNumValWithType(constant.MakeString("mo_user"), "mo_user", false, tree.P_char)
-	mo_roleConst := tree.NewNumValWithType(constant.MakeString("mo_role"), "mo_role", false, tree.P_char)
-	mo_user_grantConst := tree.NewNumValWithType(constant.MakeString("mo_user_grant"), "mo_user_grant", false, tree.P_char)
-	mo_role_grantConst := tree.NewNumValWithType(constant.MakeString("mo_role_grant"), "mo_role_grant", false, tree.P_char)
-	mo_role_privsConst := tree.NewNumValWithType(constant.MakeString("mo_role_privs"), "mo_role_privs", false, tree.P_char)
-	mo_user_defined_functionConst := tree.NewNumValWithType(constant.MakeString("mo_user_defined_function"), "mo_user_defined_function", false, tree.P_char)
-	mo_mysql_compatibility_modeConst := tree.NewNumValWithType(constant.MakeString("mo_mysql_compatibility_mode"), "mo_mysql_compatibility_mode", false, tree.P_char)
-	mo_indexes := tree.NewNumValWithType(constant.MakeString("mo_indexes"), "mo_indexes", false, tree.P_char)
-	mo_table_partitions := tree.NewNumValWithType(constant.MakeString("mo_table_partitions"), "mo_table_partitions", false, tree.P_char)
-	mo_pubs := tree.NewNumValWithType(constant.MakeString("mo_pubs"), "mo_pubs", false, tree.P_char)
-	mo_stored_procedure := tree.NewNumValWithType(constant.MakeString("mo_stored_procedure"), "mo_stored_procedure", false, tree.P_char)
-	mo_stages := tree.NewNumValWithType(constant.MakeString("mo_stages"), "mo_stages", false, tree.P_char)
-
-	notInValues := tree.NewTuple(tree.Exprs{mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst,
-		mo_user_defined_functionConst, mo_mysql_compatibility_modeConst, mo_indexes, mo_table_partitions, mo_pubs, mo_stored_procedure, mo_stages})
-
-	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
-
-	dbNameEqualAst := makeStringEqualAst(catalog.SystemColAttr_DBName, "mo_catalog")
-
-	// (relname in ('mo_tables','mo_database','mo_columns') or (att_database = 'mo_catalog' and att_relname != system table in mo_database))
-	innerAndExpr := tree.NewAndExpr(notInexpr, dbNameEqualAst)
-	innerParentExpr := tree.NewParenExpr(innerAndExpr)
-
-	tempExpr := tree.NewOrExpr(inExpr, innerParentExpr)
-	tempExpr2 := tree.NewParenExpr(tempExpr)
+	mo_catalogConst := tree.NewNumValWithType(constant.MakeString(catalog.MO_CATALOG), catalog.MO_CATALOG, false, tree.P_char)
+	inValues := tree.NewTuple(tree.Exprs{mo_catalogConst})
+	// datname in ('mo_catalog')
+	inExpr := tree.NewComparisonExpr(tree.IN, att_dblnameColName, inValues)
 
 	// account_id = 0
 	accountIdEqulZero := makeAccountIdEqualAst(0)
-	// andExpr is: account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns'))
-	andExpr := tree.NewAndExpr(accountIdEqulZero, tempExpr2)
+	// andExpr is:account_id = 0 and datname in ('mo_catalog')
+	andExpr := tree.NewAndExpr(accountIdEqulZero, inExpr)
 
-	// right is: (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
+	// right is:(account_id = 0 and datname in ('mo_catalog'))
 	right := tree.NewParenExpr(andExpr)
-	// return is: account_id = current_id or (account_id = 0 and (att_relname in ('mo_database','mo_tables','mo_columns')))
+	// return is: account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))
 	return tree.NewOrExpr(left, right)
 }
 
