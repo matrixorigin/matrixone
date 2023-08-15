@@ -36,7 +36,6 @@ type container struct {
 	state            int
 	checkConflictBat *batch.Batch //batch to check conflict
 	insertBat        *batch.Batch //the final batch
-	emptyBat         *batch.Batch //use pass this batch before compute finished
 }
 
 type Argument struct {

@@ -36,9 +36,7 @@ func String(_ any, buf *bytes.Buffer) {
 
 func Prepare(p *proc, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = &container{
-		emptyBat: batch.EmptyBatch,
-	}
+	ap.ctr = &container{}
 	ap.ctr.InitReceiver(p, true)
 	return nil
 }
