@@ -1003,18 +1003,10 @@ func buildValueScan(
 
 						args[len(args)-1] = defExpr
 
-						if defExpr.Typ.Id <= 29 && defExpr.Typ.Id >= 20 {
-							defExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), moEnumCastIndexValueToIndexFun, args)
-							if err != nil {
-								bat.Clean(proc.Mp())
-								return err
-							}
-						} else {
-							defExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), moEnumCastValueToIndexFun, args)
-							if err != nil {
-								bat.Clean(proc.Mp())
-								return err
-							}
+						defExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), moEnumCastValueToIndexFun, args)
+						if err != nil {
+							bat.Clean(proc.Mp())
+							return err
 						}
 					}
 				}
