@@ -892,4 +892,4 @@ func NewGroupConcat(typ types.Type, dist bool, config any) Agg[any] {
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for group_concat", typ))
 }
 
-//TODO: Check if we ned
+//TODO: Check if we need agg functions for vector

@@ -982,9 +982,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
 
-			if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ARRAY column '%s' cannot be in index", name))
-			}
+			//if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
+			//	return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ARRAY column '%s' cannot be in index", name))
+			//}
+			// TODO: Can vectors/arrays have UNIQUE KEY Constraint?
 
 			indexParts = append(indexParts, name)
 		}
@@ -1871,6 +1872,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					}
 					if colType.GetId() == int32(types.T_json) {
 						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", opt.Column.Name.Parts[0]))
+					}
+					if colType.GetId() == int32(types.T_array_float32) || colType.GetId() == int32(types.T_array_float64) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ARRAY column '%s' cannot be in primary key", opt.Column.Name.Parts[0]))
 					}
 					pks = append(pks, opt.Column.Name.Parts[0])
 				case *tree.AttributeComment:
