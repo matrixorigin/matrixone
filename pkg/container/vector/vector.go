@@ -1745,7 +1745,7 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return appendOneBytes(v, ws[sel].GetByteSlice(w.area), false, mp)
 			}
 		}
-
+	//TODO: May optimize
 	case types.T_array_float32:
 		return func(v, w *Vector, sel int64) error {
 			if w.IsConstNull() {
@@ -1753,7 +1753,7 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			ws := MustFixedCol[types.Varlena](w)
 			if w.IsConst() {
-				return appendOneFixed(v, types.GetArray[float32](&ws[0], w.area), false, mp)
+				return appendOneArray[float32](v, types.GetArray[float32](&ws[0], w.area), false, mp)
 			}
 			if nulls.Contains(&w.nsp, uint64(sel)) {
 				return appendOneArray[float32](v, []float32{}, true, mp)
@@ -1768,7 +1768,7 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			ws := MustFixedCol[types.Varlena](w)
 			if w.IsConst() {
-				return appendOneFixed(v, types.GetArray[float64](&ws[0], w.area), false, mp)
+				return appendOneArray[float64](v, types.GetArray[float64](&ws[0], w.area), false, mp)
 			}
 			if nulls.Contains(&w.nsp, uint64(sel)) {
 				return appendOneArray[float64](v, []float64{}, true, mp)

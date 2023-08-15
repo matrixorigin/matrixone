@@ -755,6 +755,8 @@ func initFixed1() {
 		{types.T_varchar, types.T_varbinary, types.T_varchar, types.T_varchar},
 		{types.T_varchar, types.T_blob, types.T_varchar, types.T_varchar},
 		{types.T_varchar, types.T_text, types.T_varchar, types.T_varchar},
+		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
+		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_json, types.T_any, types.T_json, types.T_json},
 		{types.T_json, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_json, types.T_int8, types.T_int8, types.T_int8},
@@ -882,6 +884,8 @@ func initFixed1() {
 		{types.T_text, types.T_binary, types.T_binary, types.T_binary},
 		{types.T_text, types.T_varbinary, types.T_varbinary, types.T_varbinary},
 		{types.T_text, types.T_blob, types.T_blob, types.T_blob},
+		//{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
+		//{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
 	}
 
 	for _, r := range ru {
@@ -1265,6 +1269,8 @@ func initFixed2() {
 		{types.T_varchar, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_varchar, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_varchar, types.T_decimal128, types.T_float64, types.T_float64},
+		//{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
+		//{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_binary, types.T_any, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int16, types.T_float64, types.T_float64},
@@ -1760,6 +1766,8 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
+				{toType: types.T_array_float32, preferLevel: 2},
+				{toType: types.T_array_float64, preferLevel: 2},
 			},
 		},
 
