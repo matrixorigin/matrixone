@@ -71,3 +71,9 @@ func WithGlobalVersionInterval(interval time.Duration) Option {
 		r.options.globalVersionInterval = interval
 	}
 }
+
+func WithCheckpointBlockRows(rows int) Option {
+	return func(r *runner) {
+		r.options.checkpointBlockRows = rows
+	}
+}

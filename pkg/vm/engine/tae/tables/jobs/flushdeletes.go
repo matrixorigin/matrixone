@@ -59,7 +59,7 @@ func (task *flushDeletesTask) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, err = writer.WriteBatchWithOutIndex(containers.ToCNBatch(task.delta))
+	_, err = writer.WriteTombstoneBatch(containers.ToCNBatch(task.delta))
 	if err != nil {
 		return err
 	}
