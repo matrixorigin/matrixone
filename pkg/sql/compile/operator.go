@@ -108,14 +108,15 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Group:
 		t := sourceIns.Arg.(*group.Argument)
 		res.Arg = &group.Argument{
-			IsShuffle: t.IsShuffle,
-			NeedEval:  t.NeedEval,
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
-			Exprs:     t.Exprs,
-			Types:     t.Types,
-			Aggs:      t.Aggs,
-			MultiAggs: t.MultiAggs,
+			IsShuffle:    t.IsShuffle,
+			PreAllocSize: t.PreAllocSize,
+			NeedEval:     t.NeedEval,
+			Ibucket:      t.Ibucket,
+			Nbucket:      t.Nbucket,
+			Exprs:        t.Exprs,
+			Types:        t.Types,
+			Aggs:         t.Aggs,
+			MultiAggs:    t.MultiAggs,
 		}
 	case vm.Join:
 		t := sourceIns.Arg.(*join.Argument)
@@ -935,7 +936,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, proc *process.Process) *group.Argument {
+func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
 	aggs := make([]agg.Aggregate, len(n.AggList))
 	var cfg []byte
 	for i, expr := range n.AggList {
@@ -975,14 +976,26 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 	}
 
+	shuffle := false
+	var preAllocSize uint64 = 0
+	if n.Stats != nil && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle {
+		shuffle = true
+		if cn.NodeType == plan.Node_TABLE_SCAN && len(cn.FilterList) == 0 {
+			// if group on scan without filter, stats for hashmap is accurate to do preAlloc
+			// tune it up a little bit in case it is not so average after shuffle
+			preAllocSize = uint64(n.Stats.HashmapStats.HashmapSize / float64(shuffleDop) * 1.05)
+		}
+	}
+
 	return &group.Argument{
-		Aggs:      aggs,
-		Types:     typs,
-		NeedEval:  needEval,
-		Exprs:     n.GroupBy,
-		Ibucket:   uint64(ibucket),
-		Nbucket:   uint64(nbucket),
-		IsShuffle: n.Stats != nil && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
+		Aggs:         aggs,
+		Types:        typs,
+		NeedEval:     needEval,
+		Exprs:        n.GroupBy,
+		Ibucket:      uint64(ibucket),
+		Nbucket:      uint64(nbucket),
+		IsShuffle:    shuffle,
+		PreAllocSize: preAllocSize,
 	}
 }
 

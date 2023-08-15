@@ -1664,7 +1664,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, c.proc),
+			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, 0, c.proc),
 		})
 		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
@@ -2182,7 +2182,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, c.proc),
+			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc),
 		})
 	}
 	c.anal.isFirst = false
@@ -2236,7 +2236,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: c.anal.isFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, len(ss), c.proc),
 			})
 		}
 		ss = c.compileProjection(n, c.compileRestrict(n, ss))
@@ -2260,7 +2260,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, len(children), c.proc),
 			})
 		}
 		children = c.compileProjection(n, c.compileRestrict(n, children))
@@ -2315,7 +2315,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, len(children), c.proc),
 			})
 		}
 		children = c.compileProjection(n, c.compileRestrict(n, children))

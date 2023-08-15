@@ -955,7 +955,7 @@ func (data *CNCheckpointData) ReadFromData(
 			}
 			if version == CheckpointVersion1 {
 				if tableID == pkgcatalog.MO_TABLES_ID {
-					bat := data.bats[BlockInsert]
+					bat := dataBats[BlockInsert]
 					if bat == nil {
 						return
 					}
@@ -974,7 +974,7 @@ func (data *CNCheckpointData) ReadFromData(
 			}
 			if version <= CheckpointVersion2 {
 				if tableID == pkgcatalog.MO_DATABASE_ID {
-					bat := data.bats[BlockDelete]
+					bat := dataBats[BlockDelete]
 					if bat == nil {
 						return
 					}
@@ -990,7 +990,7 @@ func (data *CNCheckpointData) ReadFromData(
 					bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
 					bat.Vecs = append(bat.Vecs, pkVec)
 				} else if tableID == pkgcatalog.MO_TABLES_ID {
-					bat := data.bats[BlockDelete]
+					bat := dataBats[BlockDelete]
 					if bat == nil {
 						return
 					}
@@ -1008,22 +1008,24 @@ func (data *CNCheckpointData) ReadFromData(
 				}
 
 			}
-			if version <= CheckpointVersion4 {
-				bat := data.bats[TBLColInsertIDX]
-				if bat == nil {
-					return
-				}
-				rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-				length := len(rowIDVec)
-				enumVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
-				for i := 0; i < length; i++ {
-					err = vector.AppendAny(enumVec, []byte(""), false, m)
-					if err != nil {
+			if version <= CheckpointVersion3 {
+				if tableID == pkgcatalog.MO_COLUMNS_ID {
+					bat := dataBats[BlockInsert]
+					if bat == nil {
 						return
 					}
+					rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+					length := len(rowIDVec)
+					enumVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+					for i := 0; i < length; i++ {
+						err = vector.AppendAny(enumVec, []byte(""), false, m)
+						if err != nil {
+							return
+						}
+					}
+					bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_EnumValues)
+					bat.Vecs = append(bat.Vecs, enumVec)
 				}
-				bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_EnumValues)
-				bat.Vecs = append(bat.Vecs, enumVec)
 			}
 			return
 		}
@@ -1740,61 +1742,6 @@ func (data *CheckpointData) ReadFrom(
 		return
 	}
 
-	if version == CheckpointVersion1 {
-		bat := data.bats[TBLInsertIDX]
-		if bat == nil {
-			return
-		}
-		length := bat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Length()
-		vec := containers.MakeVector(types.T_uint32.ToType())
-		for i := 0; i < length; i++ {
-			vec.Append(pkgcatalog.CatalogVersion_V1, false)
-		}
-		//Fixme: add vector to batch
-		//bat.AddVector(pkgcatalog.SystemRelAttr_CatalogVersion, vec)
-	}
-	if version <= CheckpointVersion2 {
-		bat := data.bats[DBDeleteIDX]
-		if bat == nil {
-			return
-		}
-		rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
-		length := rowIDVec.Length()
-		pkVec := containers.MakeVector(types.T_uint64.ToType())
-		for i := 0; i < length; i++ {
-			pkVec.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
-		}
-		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
-		bat.Vecs = append(bat.Vecs, pkVec)
-
-		bat = data.bats[TBLDeleteIDX]
-		if bat == nil {
-			return
-		}
-		rowIDVec = bat.GetVectorByName(catalog.AttrRowID)
-		length = rowIDVec.Length()
-		pkVec2 := containers.MakeVector(types.T_uint64.ToType())
-		for i := 0; i < length; i++ {
-			pkVec2.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
-			if err != nil {
-				return err
-			}
-		}
-		bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
-		bat.Vecs = append(bat.Vecs, pkVec2)
-	}
-	if version <= CheckpointVersion3 {
-		bat := data.bats[TBLColInsertIDX]
-		if bat == nil {
-			return
-		}
-		length := bat.GetVectorByName(catalog.AttrRowID).Length()
-		vec := containers.MakeVector(types.New(types.T_varchar, types.MaxVarcharLen, 0))
-		for i := 0; i < length; i++ {
-			vec.Append([]byte(""), false)
-		}
-		bat.AddVector(pkgcatalog.SystemColAttr_EnumValues, vec)
-	}
 	return
 }
 
@@ -1879,6 +1826,76 @@ func (data *CheckpointData) readAll(
 			bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, uint16(idx), reader)
 			if err != nil {
 				return
+			}
+			if version == CheckpointVersion1 {
+				if uint16(idx) == TBLInsertIDX {
+					for _, bat := range bats {
+						length := bat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Length()
+						vec := containers.MakeVector(types.T_uint32.ToType())
+						for i := 0; i < length; i++ {
+							vec.Append(pkgcatalog.CatalogVersion_V1, false)
+						}
+						//Fixme: add vector to batch
+						//bat.AddVector(pkgcatalog.SystemRelAttr_CatalogVersion, vec)
+					}
+				}
+			}
+			if version <= CheckpointVersion2 {
+				if uint16(idx) == DBDeleteIDX {
+					for _, bat := range bats {
+						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
+						length := rowIDVec.Length()
+						pkVec := containers.MakeVector(types.T_uint64.ToType())
+						for i := 0; i < length; i++ {
+							pkVec.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
+						}
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
+					}
+				}
+
+				if uint16(idx) == TBLDeleteIDX {
+					for _, bat := range bats {
+						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
+						length := rowIDVec.Length()
+						pkVec2 := containers.MakeVector(types.T_uint64.ToType())
+						for i := 0; i < length; i++ {
+							pkVec2.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
+							if err != nil {
+								return err
+							}
+						}
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
+						bat.Vecs = append(bat.Vecs, pkVec2)
+					}
+				}
+
+				if uint16(idx) == TBLColDeleteIDX {
+					for _, bat := range bats {
+						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
+						length := rowIDVec.Length()
+						pkVec2 := containers.MakeVector(types.T_uint64.ToType())
+						for i := 0; i < length; i++ {
+							pkVec2.Append(nil, true)
+							if err != nil {
+								return err
+							}
+						}
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_UniqName)
+						bat.Vecs = append(bat.Vecs, pkVec2)
+					}
+				}
+			}
+			if version <= CheckpointVersion3 {
+				if uint16(idx) == TBLColInsertIDX {
+					for _, bat := range bats {
+						length := bat.GetVectorByName(catalog.AttrRowID).Length()
+						vec := containers.MakeVector(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+						for i := 0; i < length; i++ {
+							vec.Append([]byte(""), false)
+						}
+						bat.AddVector(pkgcatalog.SystemColAttr_EnumValues, vec)
+					}
+				}
 			}
 			for i := range bats {
 				data.bats[idx].Append(bats[i])

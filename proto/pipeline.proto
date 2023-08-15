@@ -90,6 +90,7 @@ message Group {
   repeated Aggregate  aggs = 6;
   repeated MultiArguemnt MultiAggs = 7;
   bool isShuffle = 8;
+  uint64 preAllocSize = 9;
 }
 
 message Insert{
