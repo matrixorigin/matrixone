@@ -24,8 +24,8 @@ services:
     <<: *mo-common
     entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/cn-0.toml | tee /log/cn-0.log"]
     profiles:
-      - launch-tae-CN-tae-DN
-      - launch-tae-multi-CN-tae-DN
+      - launch
+      - launch-multi-cn
     depends_on:
       - dn
     ports:
@@ -51,7 +51,8 @@ services:
       - "6002"
       - "22345:12345"
     profiles:
-      - launch-tae-multi-CN-tae-DN
+      - launch
+      - launch-multi-cn
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
@@ -65,8 +66,8 @@ services:
     <<: *mo-common
     entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/dn.toml | tee /log/dn.log"]
     profiles:
-      - launch-tae-CN-tae-DN
-      - launch-tae-multi-CN-tae-DN
+      - launch
+      - launch-multi-cn
     depends_on:
       - logservice
     ports:
@@ -84,8 +85,8 @@ services:
     container_name: logservice
     <<: *mo-common
     profiles:
-      - launch-tae-CN-tae-DN
-      - launch-tae-multi-CN-tae-DN
+      - launch
+      - launch-multi-cn
     entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/log.toml | tee /log/logservice.log"]
     depends_on:
       - createbuckets
@@ -114,8 +115,8 @@ services:
       MINIO_ROOT_PASSWORD: minio123
     command: server --console-address ":9001" /data
     profiles:
-      - launch-tae-CN-tae-DN
-      - launch-tae-multi-CN-tae-DN
+      - launch
+      - launch-multi-cn
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 1s
@@ -134,8 +135,8 @@ services:
       minio:
         condition: service_healthy
     profiles:
-      - launch-tae-CN-tae-DN
-      - launch-tae-multi-CN-tae-DN
+      - launch
+      - launch-multi-cn
     entrypoint: >
       /bin/sh -c "
       /usr/bin/mc alias set myminio http://minio:9000 minio minio123;
