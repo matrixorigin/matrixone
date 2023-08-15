@@ -66,7 +66,7 @@ func (arg *Argument) Free(proc *process.Process, _ bool) {
 
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
 	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
