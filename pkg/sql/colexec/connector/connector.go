@@ -35,10 +35,11 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 	if bat == nil {
 		return process.ExecStop, nil
 	}
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
 		return process.ExecNext, nil
 	}
+
 	select {
 	case <-proc.Ctx.Done():
 		proc.PutBatch(bat)

@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -101,8 +102,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		} else {
 			ap.ctr.hasData = false
 		}
-	} else if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	} else if bat.IsEmpty() {
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	} else {
 		ap.ctr.hasData = true

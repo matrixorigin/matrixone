@@ -130,8 +130,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if bat == nil {
 			break
 		}
-		if bat.RowCount() == 0 {
-			bat.Clean(proc.Mp())
+		if bat.IsEmpty() {
+			proc.PutBatch(bat)
 			continue
 		}
 		anal.Input(bat, isFirst)

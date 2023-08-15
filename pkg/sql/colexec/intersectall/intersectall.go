@@ -16,8 +16,6 @@ package intersectall
 
 import (
 	"bytes"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,7 +62,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 		switch arg.ctr.state {
 		case Build:
 			if err = arg.ctr.build(proc, analyzer, isFirst); err != nil {
-				arg.Free(proc, true)
 				return process.ExecNext, err
 			}
 			if arg.ctr.hashTable != nil {
@@ -76,7 +73,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			last := false
 			last, err = arg.ctr.probe(proc, analyzer, isFirst, isLast)
 			if err != nil {
-				arg.Free(proc, true)
 				return process.ExecNext, err
 			}
 			if last {
@@ -86,7 +82,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			return process.ExecNext, nil
 
 		case End:
-			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return process.ExecStop, nil
 		}
@@ -96,15 +91,16 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 // build use all batches from proc.Reg.MergeReceiver[1](right relation) to build the hash map.
 func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isFirst bool) error {
 	for {
-		start := time.Now()
-		bat := <-proc.Reg.MergeReceivers[1].Ch
-		analyzer.WaitStop(start)
+		bat, _, err := ctr.ReceiveFromSingleReg(1, analyzer)
+		if err != nil {
+			return err
+		}
 
 		if bat == nil {
 			break
 		}
 		if bat.IsEmpty() {
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 			continue
 		}
 
@@ -135,7 +131,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 					ctr.counter[v-1]++
 				}
 			}
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 		}
 
 	}
@@ -149,10 +145,10 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 // if batch is the last one, return true, else return false.
 func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	for {
-		start := time.Now()
-		bat := <-proc.Reg.MergeReceivers[0].Ch
-		analyzer.WaitStop(start)
-
+		bat, _, err := ctr.ReceiveFromSingleReg(0, analyzer)
+		if err != nil {
+			return false, err
+		}
 		if bat == nil {
 			return true, nil
 		}
@@ -161,7 +157,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			return false, nil
 		}
 		if bat.IsEmpty() {
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 			continue
 		}
 
@@ -233,7 +229,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		analyzer.Output(outputBat, isLast)
 
 		proc.SetInputBatch(outputBat)
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return false, nil
 	}
 }

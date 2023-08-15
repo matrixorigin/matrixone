@@ -207,7 +207,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					return err
 				}
 			}
-			tmpBatch.Clean(proc.GetMPool())
+			proc.PutBatch(tmpBatch)
 		} else {
 			// row id is null: means no uniqueness conflict found in origin rows
 			if len(oldRowIdVec) == 0 || originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
@@ -238,7 +238,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				tmpBatch.Clean(proc.GetMPool())
 			}
 		}
-		newBatch.Clean(proc.GetMPool())
+		proc.PutBatch(newBatch)
 	}
 
 	return nil
