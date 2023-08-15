@@ -72,7 +72,7 @@ func (ht *Int64HashMap) Init(m *mpool.MPool) (err error) {
 }
 
 func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, m *mpool.MPool) error {
-	if err := ht.resizeOnDemand(n, m); err != nil {
+	if err := ht.ResizeOnDemand(n, m); err != nil {
 		return err
 	}
 
@@ -93,7 +93,7 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 }
 
 func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, m *mpool.MPool) error {
-	if err := ht.resizeOnDemand(n, m); err != nil {
+	if err := ht.ResizeOnDemand(n, m); err != nil {
 		return err
 	}
 
@@ -166,7 +166,7 @@ func (ht *Int64HashMap) findEmptyCell(hash uint64) *Int64HashMapCell {
 	return nil
 }
 
-func (ht *Int64HashMap) resizeOnDemand(n int, m *mpool.MPool) error {
+func (ht *Int64HashMap) ResizeOnDemand(n int, m *mpool.MPool) error {
 	targetCnt := ht.elemCnt + uint64(n)
 	if targetCnt <= uint64(len(ht.rawData))*ht.blockMaxElemCnt {
 		return nil

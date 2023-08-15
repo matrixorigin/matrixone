@@ -231,7 +231,7 @@ func (ht *StringHashMap) FindStringBatchWithRingInBucket(states [][3]uint64, zVa
 }
 
 func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64, m *mpool.MPool) error {
-	if err := ht.resizeOnDemand(n, m); err != nil {
+	if err := ht.ResizeOnDemand(n, m); err != nil {
 		return err
 	}
 
@@ -256,7 +256,7 @@ func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsa
 }
 
 func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, ibucket, nbucket uint64, m *mpool.MPool) error {
-	if err := ht.resizeOnDemand(n, m); err != nil {
+	if err := ht.ResizeOnDemand(n, m); err != nil {
 		return err
 	}
 
