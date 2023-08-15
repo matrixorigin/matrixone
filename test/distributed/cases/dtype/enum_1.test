@@ -1,0 +1,29 @@
+create table typec(a int,b enum('4','3','2','1'));
+insert into typec values(1,1);
+insert into typec values(2,'1');
+select * from typec;
+drop table typec;
+
+CREATE TABLE orders (
+  id INT PRIMARY KEY,
+  order_number VARCHAR(20),
+  status ENUM('Pending', 'Processing', 'Completed', 'Cancelled')
+);
+insert into orders values(1,'111',1),(2,'222',2),(3,'333',3),(4,'444','Cancelled');
+select * from orders;
+update orders set status= 1 where status= 'Processing';
+select * from orders;
+delete from orders where status= 'Completed';
+select * from orders;
+update orders set status='Pending' where status = 'Processing';
+select * from orders;
+select * from orders where status='Cancelled';
+select * from orders where status in ('Pending','Cancelled');
+insert into orders values(3,'333',null);
+insert into orders(id,order_number) values(5,'555');
+select * from orders;
+insert into orders values(6,'666','New');
+select count(*),status from orders group by status;
+select substring(status,2,3) from orders;
+select length(status) from orders;
+drop table orders;
