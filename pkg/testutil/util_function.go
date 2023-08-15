@@ -593,8 +593,8 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
 			}
-			fmt.Println(types.BytesToArray[float32](want))
-			fmt.Println(types.BytesToArray[float32](get))
+			//fmt.Println(types.BytesToArray[float32](want))
+			//fmt.Println(types.BytesToArray[float32](get))
 			if types.CompareArray[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float32](want), types.BytesToArray[float32](get))
@@ -616,8 +616,8 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
 			}
-			fmt.Println(types.BytesToArray[float64](want))
-			fmt.Println(types.BytesToArray[float64](get))
+			//fmt.Println(types.BytesToArray[float64](want))
+			//fmt.Println(types.BytesToArray[float64](get))
 			if types.CompareArray[float64](types.BytesToArray[float64](want), types.BytesToArray[float64](get)) != 0 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))

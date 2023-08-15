@@ -111,6 +111,52 @@ func TestAbsArray(t *testing.T) {
 	}
 }
 
+func initSummationArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test summation float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{1, 2, 3}, {4, 5, 6}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{6, 15},
+				[]bool{false, false}),
+		},
+		{
+			info: "test summation float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{1, 2, 3}, {4, 5, 6}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{6, 15},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestSummationArray(t *testing.T) {
+	testCases := initSummationArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float32, float64])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float64, float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func BenchmarkAbsInt64(b *testing.B) {
 	testCases := initAbsTestCase()
 	proc := testutil.NewProcess()
