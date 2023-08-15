@@ -655,6 +655,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, true); err != nil {
 				return err
 			}
+			//TODO: Check if we need T_array here?
 		case defines.MYSQL_TYPE_DATE:
 			value, err := oq.mrs.GetValue(oq.ctx, 0, i)
 			if err != nil {

@@ -284,6 +284,7 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 				}
 			}
 		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			//TODO: Is T_array required here?
 			vs := vector.MustStrCol(v)
 			for i := range vs {
 				if nulls.Contains(v.GetNulls(), uint64(i)) {
