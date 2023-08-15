@@ -405,10 +405,15 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
 		err = timestampToOthers(proc, s, *toType, result, length)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length)
+	case types.T_array_float32, types.T_array_float64:
+		s := vector.GenerateFunctionStrParameter(from)
+		//NOTE: Don't mix T_array and T_varchar.
+		// T_varchar will have "[1,2,3]" string
+		// T_array will have "@@@#@!#@!@#!" binary.
+		err = arrayTypeToOthers(proc, s, *toType, result, length)
 	case types.T_uuid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](from)
 		err = uuidToOthers(proc.Ctx, s, *toType, result, length)
@@ -1479,6 +1484,21 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_array_float64:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float64](proc.Ctx, source, rs, length, toType)
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
+}
+
+func arrayTypeToOthers(proc *process.Process,
+	source vector.FunctionParameterWrapper[types.Varlena],
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	ctx := proc.Ctx
+	switch toType.Oid {
+	case types.T_array_float32:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return ArrayToArray[float32](proc.Ctx, source, rs, length, toType)
+	case types.T_array_float64:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return ArrayToArray[float64](proc.Ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -3881,9 +3901,9 @@ func strToStr(
 }
 
 func strToArray[T types.RealNumbers](
-	ctx context.Context,
+	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
 
 	var i uint64
 	var l = uint64(length)
@@ -3906,6 +3926,28 @@ func strToArray[T types.RealNumbers](
 			if err := to.AppendBytes(b, false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func ArrayToArray[T types.RealNumbers](
+	_ context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
+
+	var i uint64
+	var l = uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetStrValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := to.AppendBytes(v, false); err != nil {
+			return err
 		}
 	}
 	return nil

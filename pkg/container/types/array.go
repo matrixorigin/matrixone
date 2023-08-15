@@ -72,7 +72,7 @@ func StringToArray[T RealNumbers](input string) ([]T, error) {
 		case float32:
 			num, err := strconv.ParseFloat(numStr, 32)
 			if err != nil {
-				return nil, moerr.NewInternalErrorNoCtx("Error while parsing array : %v", err)
+				return nil, moerr.NewInternalErrorNoCtx("Error while parsing %s array : %v for %s", "float32", err, input)
 			}
 			// FIX: https://stackoverflow.com/a/36391858/1609570
 			numf32 := float32(num)
@@ -80,7 +80,7 @@ func StringToArray[T RealNumbers](input string) ([]T, error) {
 		case float64:
 			num, err := strconv.ParseFloat(numStr, 64)
 			if err != nil {
-				return nil, moerr.NewInternalErrorNoCtx("Error while parsing array : %v", err)
+				return nil, moerr.NewInternalErrorNoCtx("Error while parsing %s array : %v for %s", "float64", err, input)
 			}
 			result[i] = *(*T)(unsafe.Pointer(&num))
 		default:

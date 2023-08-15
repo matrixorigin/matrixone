@@ -1270,6 +1270,7 @@ func initFixed2() {
 		{types.T_varchar, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_varchar, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_varchar, types.T_decimal128, types.T_float64, types.T_float64},
+		//A
 		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_binary, types.T_any, types.T_float64, types.T_float64},
@@ -1337,6 +1338,7 @@ func initFixed2() {
 		{types.T_text, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_text, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_text, types.T_decimal128, types.T_float64, types.T_float64},
+		//B
 		{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
 		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
 	}
@@ -1769,6 +1771,7 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
+				//C
 				{toType: types.T_array_float32, preferLevel: 2},
 				{toType: types.T_array_float64, preferLevel: 2},
 			},
