@@ -95,8 +95,7 @@ func StringToArray[T RealNumbers](input string) ([]T, error) {
 func CompareArray[T RealNumbers](left, right []T) int {
 
 	if len(left) != len(right) {
-		//TODO: check this with Min.
-		panic(moerr.NewInternalErrorNoCtx("Dimensions should be same"))
+		panic(moerr.NewInternalErrorNoCtx("Vector dimensions should be same"))
 	}
 
 	for i := 0; i < len(left); i++ {
