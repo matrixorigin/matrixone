@@ -50,19 +50,20 @@ func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
 	_x := c.vs[veci].GetBytesAt(int(vi))
 	_y := c.vs[vecj].GetBytesAt(int(vj))
 
+	//TODO: Taking Oid from only one item. Is this OK?
 	switch c.vs[veci].GetType().Oid {
 	case types.T_array_float32:
-		return ArrayFromBytesComparison[float32](_x, _y, c.desc)
+		return CompareArrayFromBytes[float32](_x, _y, c.desc)
 	case types.T_array_float64:
-		return ArrayFromBytesComparison[float64](_x, _y, c.desc)
+		return CompareArrayFromBytes[float64](_x, _y, c.desc)
 	default:
 		panic("Compare Not supported")
 	}
 }
 
-func ArrayFromBytesComparison[T types.RealNumbers](_x, _y []byte, desc bool) int {
+func CompareArrayFromBytes[T types.RealNumbers](_x, _y []byte, desc bool) int {
 	x := types.BytesToArray[T](_x)
-	y := types.BytesToArray[T](_x)
+	y := types.BytesToArray[T](_y)
 
 	if desc {
 		return types.CompareArray[T](y, x)
