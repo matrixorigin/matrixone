@@ -28,7 +28,8 @@ type LRU[K comparable, V BytesLike] struct {
 	size      int64
 	evicts    *list.List
 	kv        map[K]*list.Element
-	postSet   func(key K, value V, isNewEntry bool)
+	postSet   func(key K, value V)
+	postGet   func(key K, value V)
 	postEvict func(key K, value V)
 }
 
@@ -59,7 +60,8 @@ type lruItem[K comparable, V BytesLike] struct {
 
 func New[K comparable, V BytesLike](
 	capacity int64,
-	postSet func(keySet K, valSet V, isNewEntry bool),
+	postSet func(keySet K, valSet V),
+	postGet func(key K, value V),
 	postEvict func(keyEvicted K, valEvicted V),
 ) *LRU[K, V] {
 	return &LRU[K, V]{
@@ -67,6 +69,7 @@ func New[K comparable, V BytesLike](
 		evicts:    list.New(),
 		kv:        make(map[K]*list.Element),
 		postSet:   postSet,
+		postGet:   postGet,
 		postEvict: postEvict,
 	}
 }
@@ -75,10 +78,8 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 	l.Lock()
 	defer l.Unlock()
 
-	var isNewEntry bool
 	if elem, ok := l.kv[key]; ok {
 		// replace
-		isNewEntry = false
 		item := elem.Value.(*lruItem[K, V])
 		l.size -= item.Size
 		size := int64(len(value.Bytes()))
@@ -88,11 +89,13 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 		}
 		item.Size = size
 		item.Key = key
+		if l.postEvict != nil {
+			l.postEvict(item.Key, item.Value)
+		}
 		item.Value = value
 
 	} else {
 		// insert
-		isNewEntry = true
 		size := int64(len(value.Bytes()))
 		item := &lruItem[K, V]{
 			Key:   key,
@@ -110,7 +113,7 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 	}
 
 	if l.postSet != nil {
-		l.postSet(key, value, isNewEntry)
+		l.postSet(key, value)
 	}
 
 	l.evict(ctx)
@@ -166,6 +169,9 @@ func (l *LRU[K, V]) Get(ctx context.Context, key K, preloading bool) (value V, o
 		}
 		item := elem.Value.(*lruItem[K, V])
 		item.NumRead++
+		if l.postGet != nil {
+			l.postGet(key, item.Value)
+		}
 		return item.Value, true
 	}
 	return

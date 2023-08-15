@@ -110,8 +110,9 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.NoError(t, err)
 	nb0 := pool.CurrNB()
 	objectReader.CacheMetaExtent(&extents[0])
-	meta, err := objectReader.ReadMeta(context.Background(), pool)
+	metaHeader, err := objectReader.ReadMeta(context.Background(), pool)
 	assert.Nil(t, err)
+	meta, _ := metaHeader.DataMeta()
 	assert.Equal(t, uint32(3), meta.BlockCount())
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
@@ -148,8 +149,9 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReaderWithStr(name, service)
 	assert.Nil(t, err)
-	meta, err = objectReader.ReadAllMeta(context.Background(), pool)
+	metaHeader, err = objectReader.ReadAllMeta(context.Background(), pool)
 	assert.Nil(t, err)
+	meta, _ = metaHeader.DataMeta()
 	assert.Equal(t, uint32(3), meta.BlockCount())
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(3), meta.BlockCount())
@@ -187,7 +189,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0xa), buf[63])
 }
 
-func getObjectMeta(ctx context.Context, t *testing.B) ObjectMeta {
+func getObjectMeta(ctx context.Context, t *testing.B) ObjectDataMeta {
 	dir := InitTestEnv(ModuleName, t.Name())
 	dir = path.Join(dir, "/local")
 	id := 1
@@ -227,8 +229,9 @@ func getObjectMeta(ctx context.Context, t *testing.B) ObjectMeta {
 	objectReader, _ := NewObjectReaderWithStr(name, service)
 	ext := blocks[0].BlockHeader().MetaLocation()
 	objectReader.CacheMetaExtent(&ext)
-	meta, err := objectReader.ReadMeta(context.Background(), nil)
+	metaHeader, err := objectReader.ReadMeta(context.Background(), nil)
 	assert.Nil(t, err)
+	meta, _ := metaHeader.DataMeta()
 	return meta
 }
 
@@ -258,7 +261,6 @@ func BenchmarkMetadata(b *testing.B) {
 }
 
 func TestNewObjectReader(t *testing.T) {
-	t.Skip("use debug")
 	ctx := context.Background()
 
 	dir := InitTestEnv(ModuleName, t.Name())
@@ -288,6 +290,12 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
+	_, err = objectWriter.WriteTombstone(bat)
+	assert.Nil(t, err)
+	_, err = objectWriter.WriteSubBlock(bat, 2)
+	assert.Nil(t, err)
+	_, err = objectWriter.WriteSubBlock(bat, 26)
+	assert.Nil(t, err)
 	ts := time.Now()
 	option := WriteOptions{
 		Type: WriteTS,
@@ -295,8 +303,21 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	blocks, err := objectWriter.WriteEnd(context.Background(), option)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(blocks))
+	assert.Equal(t, 5, len(blocks))
 	assert.Nil(t, objectWriter.buffer)
+	objectReader, _ := NewObjectReaderWithStr(name, service)
+	ext := blocks[0].BlockHeader().MetaLocation()
+	objectReader.CacheMetaExtent(&ext)
+	metaHeader, err := objectReader.ReadMeta(context.Background(), nil)
+	assert.Nil(t, err)
+	meta, _ := metaHeader.DataMeta()
+	assert.Equal(t, uint32(2), meta.BlockCount())
+	meta, _ = metaHeader.TombstoneMeta()
+	assert.Equal(t, uint32(1), meta.BlockCount())
+	meta, _ = metaHeader.SubMeta(0)
+	assert.Equal(t, uint32(1), meta.BlockCount())
+	meta, _ = metaHeader.SubMeta(24)
+	assert.Equal(t, uint32(1), meta.BlockCount())
 }
 
 func newBatch(mp *mpool.MPool) *batch.Batch {

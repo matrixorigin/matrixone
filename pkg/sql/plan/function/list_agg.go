@@ -142,6 +142,30 @@ var supportedAggregateFunctions = []FuncNew{
 	},
 
 	{
+		functionId: APPROX_COUNT,
+		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				if inputs[0].Oid == types.T_any {
+					return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
+				}
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    agg.CountReturnType,
+				specialId:  agg.AggregateStarCount,
+			},
+		},
+	},
+
+	{
 		functionId: BIT_AND,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
@@ -303,15 +327,8 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType: func(parameters []types.Type) types.Type {
-					for _, p := range parameters {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_text.ToType()
-				},
-				specialId: agg.AggregateGroupConcat,
+				retType:    agg.GroupConcatReturnType,
+				specialId:  agg.AggregateGroupConcat,
 			},
 		},
 	},
