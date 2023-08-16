@@ -299,7 +299,7 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr
 
 func funcCastForEnumType(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
 	var err error
-	if targetType != nil && targetType.GetId() != int32(types.T_enum) {
+	if targetType != nil || targetType.GetId() != int32(types.T_enum) {
 		return expr, nil
 	}
 
