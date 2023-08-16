@@ -155,6 +155,8 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 
 func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
+	atomic.AddInt64(&bat.Cnt, 1)
+	defer atomic.AddInt64(&bat.Cnt, -1)
 	for i, reg := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
