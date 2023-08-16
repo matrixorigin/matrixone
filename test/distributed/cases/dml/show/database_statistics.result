@@ -12,92 +12,92 @@ Number of tables in mo_catalog
 16
 show table_number from system_metrics;
 Number of tables in system_metrics
-19
+20
 show table_number from system;
 Number of tables in system
 5
 use mo_task;
 show column_number from sys_async_task;
 Number of columns in sys_async_task
-15
+14
 show column_number from sys_cron_task;
 Number of columns in sys_cron_task
-11
+10
 use information_schema;
 show column_number from key_column_usage;
 Number of columns in key_column_usage
-14
+12
 show column_number from columns;
 Number of columns in columns
-23
+22
 show column_number from profiling;
 Number of columns in profiling
-20
+18
 show column_number from processlist;
 Number of columns in processlist
-17
+16
 show column_number from schemata;
 Number of columns in schemata
-7
+6
 show column_number from character_sets;
 Number of columns in character_sets
-6
+4
 show column_number from triggers;
 Number of columns in triggers
-24
+22
 show column_number from tables;
 Number of columns in tables
-22
+21
 show column_number from engines;
 Number of columns in engines
-8
+6
 show column_number from routines;
 Number of columns in routines
-33
+31
 show column_number from parameters;
 Number of columns in parameters
-18
+16
 show column_number from keywords;
 Number of columns in keywords
-4
+2
 use mysql;
 show column_number from user;
 Number of columns in user
-53
+51
 show column_number from db;
 Number of columns in db
-24
+22
 show column_number from procs_priv;
 Number of columns in procs_priv
-10
+8
 show column_number from columns_priv;
 Number of columns in columns_priv
-9
+7
 show column_number from tables_priv;
 Number of columns in tables_priv
-10
+8
 use mo_catalog;
 show column_number from mo_user;
 Number of columns in mo_user
-12
+11
 show column_number from mo_account;
 Number of columns in mo_account
-8
+7
 show column_number from mo_role;
 Number of columns in mo_role
-7
+6
 show column_number from mo_user_grant;
 Number of columns in mo_user_grant
-6
+4
 show column_number from mo_role_grant;
 Number of columns in mo_role_grant
-8
+6
 show column_number from mo_role_privs;
 Number of columns in mo_role_privs
-12
+10
 show column_number from mo_user_defined_function;
 Number of columns in mo_user_defined_function
-18
+17
 show column_number from mo_tables;
 Number of columns in mo_tables
 18
@@ -109,78 +109,78 @@ Number of columns in mo_columns
 24
 show column_number from mo_indexes;
 Number of columns in mo_indexes
-14
+12
 show column_number from mo_table_partitions;
 Number of columns in mo_table_partitions
-12
+10
 use system_metrics;
 show column_number from metric;
 Number of columns in metric
-10
+7
 show column_number from sql_statement_total;
 Number of columns in sql_statement_total
-7
+6
 show column_number from sql_statement_errors;
 Number of columns in sql_statement_errors
-7
+6
 show column_number from sql_transaction_total;
 Number of columns in sql_transaction_total
-6
+5
 show column_number from sql_transaction_errors;
 Number of columns in sql_transaction_errors
-7
+6
 show column_number from server_connections;
 Number of columns in server_connections
-6
+5
 show column_number from process_cpu_percent;
 Number of columns in process_cpu_percent
-6
+5
 show column_number from process_resident_memory_bytes;
 Number of columns in process_resident_memory_bytes
-6
+5
 show column_number from process_open_fds;
 Number of columns in process_open_fds
-6
+5
 show column_number from sys_cpu_seconds_total;
 Number of columns in sys_cpu_seconds_total
-6
+5
 show column_number from sys_cpu_combined_percent;
 Number of columns in sys_cpu_combined_percent
-6
+5
 show column_number from sys_memory_used;
 Number of columns in sys_memory_used
-6
+5
 show column_number from sys_memory_available;
 Number of columns in sys_memory_available
-6
+5
 show column_number from sys_disk_read_bytes;
 Number of columns in sys_disk_read_bytes
-6
+5
 show column_number from sys_disk_write_bytes;
 Number of columns in sys_disk_write_bytes
-6
+5
 show column_number from sys_net_recv_bytes;
 Number of columns in sys_net_recv_bytes
-6
+5
 show column_number from sys_net_sent_bytes;
 Number of columns in sys_net_sent_bytes
-6
+5
 use system;
 show column_number from statement_info;
 Number of columns in statement_info
-31
+28
 show column_number from rawlog;
 Number of columns in rawlog
-26
+23
 show column_number from log_info;
 Number of columns in log_info
-13
+12
 show column_number from error_info;
 Number of columns in error_info
-10
+9
 show column_number from span_info;
 Number of columns in span_info
-13
+12
 drop database if exists test_db;
 create database test_db;
 show table_number from test_db;
@@ -356,78 +356,78 @@ Number of tables in system
 use information_schema;
 show column_number from key_column_usage;
 Number of columns in key_column_usage
-14
+12
 show column_number from columns;
 Number of columns in columns
-23
+22
 show column_number from profiling;
 Number of columns in profiling
-20
+18
 show column_number from processlist;
 Number of columns in processlist
-17
+16
 show column_number from schemata;
 Number of columns in schemata
-7
+6
 show column_number from character_sets;
 Number of columns in character_sets
-6
+4
 show column_number from triggers;
 Number of columns in triggers
-24
+22
 show column_number from tables;
 Number of columns in tables
-22
+21
 show column_number from engines;
 Number of columns in engines
-8
+6
 show column_number from routines;
 Number of columns in routines
-33
+31
 show column_number from parameters;
 Number of columns in parameters
-18
+16
 show column_number from keywords;
 Number of columns in keywords
-4
+2
 show column_number from partitions;
 Number of columns in partitions
-26
+25
 use mysql;
 show column_number from user;
 Number of columns in user
-53
+51
 show column_number from db;
 Number of columns in db
-24
+22
 show column_number from procs_priv;
 Number of columns in procs_priv
-10
+8
 show column_number from columns_priv;
 Number of columns in columns_priv
-9
+7
 show column_number from tables_priv;
 Number of columns in tables_priv
-10
+8
 use mo_catalog;
 show column_number from mo_user;
 Number of columns in mo_user
-12
+11
 show column_number from mo_role;
 Number of columns in mo_role
-7
+6
 show column_number from mo_user_grant;
 Number of columns in mo_user_grant
-6
+4
 show column_number from mo_role_grant;
 Number of columns in mo_role_grant
-8
+6
 show column_number from mo_role_privs;
 Number of columns in mo_role_privs
-12
+10
 show column_number from mo_user_defined_function;
 Number of columns in mo_user_defined_function
-18
+17
 show column_number from mo_tables;
 Number of columns in mo_tables
 18
@@ -440,7 +440,7 @@ Number of columns in mo_columns
 use system;
 show column_number from statement_info;
 Number of columns in statement_info
-31
+28
 drop database if exists test_db;
 create database test_db;
 show table_number from test_db;

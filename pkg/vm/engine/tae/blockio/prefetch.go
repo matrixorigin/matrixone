@@ -42,6 +42,12 @@ func BuildSubPrefetchParams(service fileservice.FileService, key objectio.Locati
 	return pp, nil
 }
 
+func BuildTombstonePrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
+	pp := buildPrefetchParams(service, key)
+	pp.dataType = objectio.SchemaTombstone
+	return pp, nil
+}
+
 func buildPrefetchParams(service fileservice.FileService, key objectio.Location) PrefetchParams {
 	ids := make(map[uint16]*objectio.ReadBlockOptions)
 	return PrefetchParams{
