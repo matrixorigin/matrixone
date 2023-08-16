@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type CacheConfig struct {
@@ -124,8 +123,14 @@ func FastLoadBF(
 		bloomFilterCacheStats.Record(1, 1)
 		return v.Bytes(), nil
 	}
-	r, _ := blockio.NewObjectReader(fs, loc)
-	v, _, err := r.LoadAllBF(ctx)
+
+	name := loc.Name()
+	metaExt := loc.Extent()
+	r, err := NewObjectReader(&name, &metaExt, fs)
+	if err != nil {
+		return nil, err
+	}
+	v, _, err = r.ReadAllBF(ctx)
 	if err != nil {
 		return nil, err
 	}
