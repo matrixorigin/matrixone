@@ -104,6 +104,16 @@ func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, respo
 		return nil
 	}
 	r.waitStarted()
+	if request.CommitRequest != nil {
+		for _, req := range request.CommitRequest.Payload {
+			//response is shared by all requests
+			prepareResponse(req, response)
+			err := s.handleWrite(ctx, req, response)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	prepareResponse(request, response)
 	return r.service.Commit(ctx, request, response)
 }
