@@ -32,9 +32,12 @@ const (
 	ProtobufSchemaKey   = "protobuf.schema"
 	ProtobufMessagekey  = "protobuf.message"
 
-	JSON     ValueType = "json"
-	AVRO     ValueType = "avro"
-	PROTOBUF ValueType = "protobuf"
+	SchemaRegistryKey = "schema.registry"
+
+	JSON       ValueType = "json"
+	AVRO       ValueType = "avro"
+	PROTOBUF   ValueType = "protobuf"
+	PROTOBUFSR ValueType = "protobuf_sr"
 )
 
 const ()
@@ -346,22 +349,35 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 	return batch
 }
 
-func PopulateBatchFromMSG(typs []types.Type, attrKeys []string, pool *mpool.MPool, msgs []*kafka.Message, valueSchemaMeta *schemaregistry.SchemaMetadata) (*batch.Batch, error) {
+func populateBatchFromMSG(ctx context.Context, ka *KafkaAdapter, typs []types.Type, attrKeys []string, msgs []*kafka.Message, configs map[string]interface{}, pool *mpool.MPool) (*batch.Batch, error) {
 	b := newBatch(len(msgs), typs, pool)
-	// parse the msg and populate the batch
-	for i, msg := range msgs {
-		switch valueSchemaMeta.SchemaType {
-		case "JSON":
-		case "AVRO":
-		case "PROTOBUF":
-			md, _ := ConvertProtobufSchemaToMD(valueSchemaMeta.Schema, valueSchemaMeta.SchemaInfo.Schema)
-			msgValue, _ := DeserializeProtobuf(md, msg.Value)
-			getOneRowProtoData(context.Background(), b, attrKeys, msgValue, i, typs, pool)
-		default:
-			return nil, moerr.NewInternalError(context.Background(), fmt.Sprintf("unsupported schema type: %s", valueSchemaMeta.SchemaType))
-		}
-	}
 
+	value, ok := configs[ValueKey].(string)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx, "expected string value for key: %s", ValueKey)
+	}
+	switch ValueType(value) {
+	case JSON:
+
+	case PROTOBUFSR:
+		schema, err := ka.GetSchemaForTopic(configs["topic"].(string), false)
+		if err != nil {
+			return nil, err
+		}
+		md, err := convertProtobufSchemaToMD(schema.Schema, schema.SchemaInfo.Schema)
+		if err != nil {
+			return nil, err
+		}
+		for i, msg := range msgs {
+			msgValue, _ := deserializeProtobuf(md, msg.Value)
+			err := getOneRowProtoData(context.Background(), b, attrKeys, msgValue, i, typs, pool)
+			if err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, moerr.NewInternalError(ctx, "Unsupported value for key: %s", ValueKey)
+	}
 	return b, nil
 }
 func getOneRowProtoData(ctx context.Context, bat *batch.Batch, attrKeys []string, msg *dynamic.Message, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
@@ -454,7 +470,7 @@ func getOneRowProtoData(ctx context.Context, bat *batch.Batch, attrKeys []string
 	return nil
 }
 
-func ConvertProtobufSchemaToMD(schema string, msgTypeName string) (*desc.MessageDescriptor, error) {
+func convertProtobufSchemaToMD(schema string, msgTypeName string) (*desc.MessageDescriptor, error) {
 	files := map[string]string{
 		"test.proto": schema,
 	}
@@ -472,7 +488,7 @@ func ConvertProtobufSchemaToMD(schema string, msgTypeName string) (*desc.Message
 	return md, nil
 }
 
-func DeserializeProtobuf(md *desc.MessageDescriptor, in []byte) (*dynamic.Message, error) {
+func deserializeProtobuf(md *desc.MessageDescriptor, in []byte) (*dynamic.Message, error) {
 	dm := dynamic.NewMessage(md)
 	bytesRead, _, err := readMessageIndexes(in[5:])
 	err = proto.Unmarshal(in[5+bytesRead:], dm)
@@ -521,7 +537,7 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
 
 	switch ValueType(value) {
 	case JSON:
-		break
+		// no additional checks required
 	case PROTOBUF:
 		// check the schema and message name has been set or not
 		if _, ok := configs[ProtobufSchemaKey]; !ok {
@@ -529,6 +545,13 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
 		}
 		if _, ok := configs[ProtobufMessagekey]; !ok {
 			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufMessagekey)
+		}
+	case PROTOBUFSR:
+		if _, ok := configs[ProtobufMessagekey]; !ok {
+			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufMessagekey)
+		}
+		if _, ok := configs[SchemaRegistryKey]; !ok {
+			return moerr.NewInternalError(ctx, "missing required key: %s", SchemaRegistryKey)
 		}
 	default:
 		return moerr.NewInternalError(ctx, "Unsupported value for key: %s", ValueKey)
@@ -574,17 +597,20 @@ func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []s
 	}
 	defer ka.Close()
 
-	messages, err := ka.ReadMessagesFromTopic(configs["topic"].(string), int64(offset), limit)
+	// init schema registry client if schema registry url is set
+	if sr, ok := configs[SchemaRegistryKey]; ok {
+		err = ka.InitSchemaRegistry(sr.(string))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	messages, err := ka.ReadMessagesFromTopic(configs["topic"].(string), offset, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	schema, err := ka.GetSchemaForTopic(configs["topic"].(string), false)
-	if err != nil {
-		return nil, err
-	}
-
-	b, err := PopulateBatchFromMSG(types, attrs, mp, messages, &schema)
+	b, err := populateBatchFromMSG(ctx, ka, types, attrs, messages, configs, mp)
 	if err != nil {
 		return nil, err
 	}
