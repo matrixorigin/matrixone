@@ -13,6 +13,7 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/confluentinc/confluent-kafka-go/schemaregistry"
 	"github.com/gogo/protobuf/proto"
+	"github.com/google/uuid"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoparse"
 	"github.com/jhump/protoreflect/dynamic"
@@ -554,6 +555,28 @@ func readMessageIndexes(payload []byte) (int, []int, error) {
 	return bytesRead, msgIndexes, nil
 }
 
+func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
+	kafkaConfigs := &kafka.ConfigMap{}
+	allowedKeys := map[string]struct{}{
+		"bootstrap.servers": {},
+		"security.protocol": {},
+		"sasl.mechanisms":   {},
+		"sasl.username":     {},
+		"sasl.password":     {},
+		// Add other Kafka-specific properties here...
+	}
+
+	for key, value := range configs {
+		if _, ok := allowedKeys[key]; ok {
+			kafkaConfigs.SetKey(key, value)
+		}
+	}
+	groupId := uuid.New().String()
+	kafkaConfigs.SetKey("group.id", groupId)
+
+	return kafkaConfigs
+}
+
 func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
 	var requiredKeys = []string{
 		TypeKey,
@@ -595,10 +618,7 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
 		return moerr.NewInternalError(ctx, "Unsupported value for key: %s", ValueKey)
 	}
 	// Convert the configuration to map[string]string for Kafka
-	kafkaConfigs := &kafka.ConfigMap{}
-	for key, value := range configs {
-		kafkaConfigs.SetKey(key, value)
-	}
+	kafkaConfigs := convertToKafkaConfig(configs)
 
 	// Create the Kafka adapter
 	ka, err := NewKafkaAdapter(kafkaConfigs)

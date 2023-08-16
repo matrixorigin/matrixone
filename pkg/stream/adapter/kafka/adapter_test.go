@@ -4,44 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
-
-func TestKafkaAdapter_CreateTopic(t *testing.T) {
-
-	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": "localhost:51058"})
-
-	if err != nil {
-		fmt.Printf("Failed to create producer: %s\n", err)
-		os.Exit(1)
-	}
-
-	a, err := kafka.NewAdminClientFromProducer(p)
-	// create topic
-	topic := "myTopic"
-	numPartitions := 1
-	replicationFactor := 1
-
-	results, err := a.CreateTopics(
-		context.Background(),
-		[]kafka.TopicSpecification{{
-			Topic:             topic,
-			NumPartitions:     numPartitions,
-			ReplicationFactor: replicationFactor,
-		}},
-	)
-	if err != nil {
-		t.Fatalf("Failed to create topic: %v", err)
-	}
-
-	for _, result := range results {
-		if result.Error.Code() != kafka.ErrNoError {
-			t.Errorf("Failed to create topic %s: %s", result.Topic, result.Error.String())
-		}
-	}
-}
 
 func TestNewKafkaAdapter(t *testing.T) {
 
@@ -113,4 +80,51 @@ func TestNewKafkaAdapter(t *testing.T) {
 
 	fmt.Println("received message: ", string(msg.Value))
 
+}
+
+func TestValidateConfig_MissingRequiredKeys(t *testing.T) {
+	ctx := context.Background()
+	configs := map[string]interface{}{
+		// Intentionally leaving out some keys to simulate missing keys
+		TypeKey:             "someType",
+		BootstrapServersKey: "localhost:9092",
+	}
+
+	err := ValidateConfig(ctx, configs)
+	if err == nil || !strings.Contains(err.Error(), "missing required key") {
+		t.Errorf("Expected an error about missing keys, got: %v", err)
+	}
+}
+
+func TestValidateConfig_UnsupportedValueKey(t *testing.T) {
+	ctx := context.Background()
+	configs := map[string]interface{}{
+		TypeKey:             "someType",
+		TopicKey:            "someTopic",
+		ValueKey:            "UNSUPPORTED_VALUE",
+		BootstrapServersKey: "localhost:9092",
+	}
+
+	err := ValidateConfig(ctx, configs)
+	if err == nil || !strings.Contains(err.Error(), "Unsupported value for key") {
+		t.Errorf("Expected an error about unsupported value, got: %v", err)
+	}
+}
+
+func TestValidateConfig_ValidConfigurations(t *testing.T) {
+	ctx := context.Background()
+	configs := map[string]interface{}{
+		TypeKey:             "someType",
+		TopicKey:            "someTopic",
+		ValueKey:            "json", // or PROTOBUF or PROTOBUFSR with their required configs
+		BootstrapServersKey: "localhost:9092",
+		// Add additional required fields based on ValueKey type if needed
+	}
+
+	// Assuming you have a way to stub out or mock NewKafkaAdapter and DescribeTopicDetails here
+
+	err := ValidateConfig(ctx, configs)
+	if err != nil {
+		t.Errorf("Did not expect an error, got: %v", err)
+	}
 }
