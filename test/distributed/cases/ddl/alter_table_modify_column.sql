@@ -953,6 +953,10 @@ insert into time01 (col1, col2, col3, col4) values ('2030-12-31', '2031-09-09 01
 select * from time01;
 alter table time01 modify col1 int, modify col2 int first, modify col3 int after col1, modify col4 int;
 show create table time01;
+select * from time01;
+-- @bvt:issue#11249
+select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
+-- @bvt:issue
 drop table time01;
 
 
@@ -965,6 +969,10 @@ insert into time02 (col2, col3, col4) values ('2031-09-09 01:01:01', '2013-12-12
 select * from time02;
 alter table time02 modify col2 decimal(20,10) first, modify col3 decimal after col2, modify col4 decimal(38,0);
 show create table time02;
+select * from time02;
+-- @bvt:issue#11249
+select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
+-- @bvt:issue
 drop table time02;
 
 
@@ -997,11 +1005,13 @@ grant select on table * to role_r1;
 grant show tables on database * to role_r1;
 
 -- @session:id=2&user=sys:role_u1:role_r1&password=111
+use alter_table_modify_column;
 alter table test01 modify col1 int primary key;
 -- @session
 grant alter table on database * to role_r1;
 
 -- @session:id=2&user=sys:role_u1:role_r1&password=111
+use alter_table_modify_column;
 alter table test01 modify col1 int primary key;
 show create table test01;
 -- @session
@@ -1009,3 +1019,31 @@ show create table test01;
 drop table test01;
 drop role role_r1;
 drop user role_u1;
+
+
+--mixed situation :add/drop column and modify column
+drop table if exists mix01;
+create table mix01 (col1 int not null , col2 decimal, col3 date, col4 varchar(100));
+insert into mix01 values (1, 23849234.324, '2100-01-01', 'qy83uhfbh234y78y&*%^&%$$$E%^&Y*UIJNHBGVFTY^&Y*UJHBGVTF^&*U(OK');
+insert into mix01 values (2, 773892.32748000000000, '1997-01-13', '38782yhbf3uhy4iendb32gefdc7y834uh2neujdr2h4f3v43');
+insert into mix01 values (3, -82913942.3434, null, null);
+select * from mix01;
+alter table mix01 add column col1_2 binary after col1;
+show create table mix01;
+-- @bvt:issue#11249
+select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
+-- @bvt:issue
+alter table mix01 modify column col1_2 varbinary(10) first;
+show create table mix01;
+-- @bvt:issue#11249
+select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
+-- @bvt:issue
+truncate table mix01;
+alter table mix01 add column col5 int;
+show create table mix01;
+-- @bvt:issue#11249
+select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
+-- @bvt:issue
+drop table mix01;
+
+drop database test;
