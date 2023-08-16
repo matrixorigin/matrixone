@@ -559,10 +559,10 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 				//Fixme:PrefetchTombstone still has bugs, block it first
 				continue
 				// Need to read all delete
-				err = PrefetchTombstone([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
+				/*err = PrefetchTombstone([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
 				if err != nil {
 					return err
-				}
+				}*/
 			}
 		}
 		err = pipeline.Prefetch(pref)
