@@ -834,10 +834,10 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 						"database name = %s, table name = %s", e.databaseName, e.tableName))
 				}
 				ebat.Vecs = e.bat.Vecs[:2]
-				//ebat.Attrs = e.bat.Attrs[:2]
+				ebat.Attrs = e.bat.Attrs[:2]
 			} else {
 				ebat.Vecs = e.bat.Vecs[:1]
-				//ebat.Attrs = e.bat.Attrs[:1]
+				ebat.Attrs = e.bat.Attrs[:1]
 			}
 
 		}

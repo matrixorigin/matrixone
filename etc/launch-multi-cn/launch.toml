@@ -1,0 +1,12 @@
+logservices = [
+    "./etc/launch-multi-cn/log.toml",
+]
+
+dnservices = [
+    "./etc/launch-multi-cn/dn.toml"
+]
+
+cnservices = [
+    "./etc/launch-multi-cn/cn1.toml",
+    "./etc/launch-multi-cn/cn2.toml"
+]

@@ -214,6 +214,16 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 			}
 		}
 	}
+
+	if alterPlan.CopyTableDef.Pkey != nil {
+		for _, partCol := range alterPlan.CopyTableDef.Pkey.Names {
+			if partCol == newCol.Name {
+				newCol.Default.NullAbility = false
+				newCol.NotNull = true
+				break
+			}
+		}
+	}
 	return newCol, nil
 }
 

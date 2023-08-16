@@ -17,7 +17,6 @@ package group
 import (
 	"bytes"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -281,6 +280,12 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
 		}
+		if ap.PreAllocSize > 0 {
+			err = ctr.bat.PreExtend(proc.Mp(), int(ap.PreAllocSize))
+			if err != nil {
+				return process.ExecNext, err
+			}
+		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
 		if err = ctr.generateAggStructures(ap); err != nil {
 			return process.ExecNext, err
@@ -293,10 +298,22 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 				return process.ExecNext, err
 			}
+			if ap.PreAllocSize > 0 {
+				err = ctr.intHashMap.PreAlloc(ap.PreAllocSize, proc.Mp())
+				if err != nil {
+					return process.ExecNext, err
+				}
+			}
 		default:
 			ctr.typ = HStr
 			if ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 				return process.ExecNext, err
+			}
+			if ap.PreAllocSize > 0 {
+				err = ctr.strHashMap.PreAlloc(ap.PreAllocSize, proc.Mp())
+				if err != nil {
+					return process.ExecNext, err
+				}
 			}
 		}
 	}
