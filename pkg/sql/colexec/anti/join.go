@@ -75,7 +75,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				return process.ExecNext, nil
 			}
 			if bat.IsEmpty() {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 
@@ -129,7 +129,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 				}
 			}
 		}
-		rbat.SetRowCount(rbat.RowCount() + n)
+		rbat.AddRowCount(n)
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)

@@ -195,7 +195,6 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 }
 
 func (bat *Batch) Clean(m *mpool.MPool) {
-	// xxx todo maybe some bug here
 	if bat == EmptyBatch {
 		return
 	}
