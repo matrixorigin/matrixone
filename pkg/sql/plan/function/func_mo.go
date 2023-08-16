@@ -424,7 +424,7 @@ var (
 func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[2])
+	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
@@ -454,7 +454,7 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint16](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	enumValues := vector.GenerateFunctionStrParameter(ivecs[2])
+	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
@@ -485,7 +485,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint16](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[2])
+	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
