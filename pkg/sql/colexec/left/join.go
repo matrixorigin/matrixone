@@ -74,8 +74,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = End
 				continue
 			}
-			if bat.RowCount() == 0 {
-				bat.Clean(proc.Mp())
+			if bat.IsEmpty() {
+				proc.PutBatch(bat)
 				continue
 			}
 			if ctr.bat.RowCount() == 0 {
@@ -128,7 +128,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = vector.NewConstNull(*ctr.bat.Vecs[rp.Pos].GetType(), bat.RowCount(), proc.Mp())
 		}
 	}
-	rbat.SetRowCount(rbat.RowCount() + bat.RowCount())
+	rbat.AddRowCount(bat.RowCount())
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
