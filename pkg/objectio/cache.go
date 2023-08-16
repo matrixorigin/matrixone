@@ -100,6 +100,7 @@ func LoadObjectMetaByExtent(
 func FastLoadBF(
 	ctx context.Context,
 	loc Location,
+	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
 	meta, err := FastLoadObjectMeta(ctx, &loc, false, fs)
@@ -107,7 +108,7 @@ func FastLoadBF(
 		return nil, err
 	}
 	extent := meta.MustDataMeta().BlockHeader().BFExtent()
-	return ReadBloomFilter(ctx, loc.Name().String(), &extent, fileservice.SkipAll, fs)
+	return ReadBloomFilter(ctx, loc.Name().String(), &extent, cachePolicy, fs)
 }
 
 func FastLoadObjectMeta(
