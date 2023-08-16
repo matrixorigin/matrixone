@@ -1023,35 +1023,3 @@ show create table test01;
 drop table test01;
 drop role role_r1;
 drop user role_u1;
-
-<<<<<<< HEAD
-
---mixed situation :add/drop column and modify column
-drop table if exists mix01;
-create table mix01 (col1 int not null , col2 decimal, col3 date, col4 varchar(100));
-insert into mix01 values (1, 23849234.324, '2100-01-01', 'qy83uhfbh234y78y&*%^&%$$$E%^&Y*UIJNHBGVFTY^&Y*UJHBGVTF^&*U(OK');
-insert into mix01 values (2, 773892.32748000000000, '1997-01-13', '38782yhbf3uhy4iendb32gefdc7y834uh2neujdr2h4f3v43');
-insert into mix01 values (3, -82913942.3434, null, null);
-select * from mix01;
-alter table mix01 add column col1_2 binary after col1;
-show create table mix01;
--- @bvt:issue#11249
-select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
-alter table mix01 modify column col1_2 varbinary(10) first;
-show create table mix01;
--- @bvt:issue#11249
-select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
-truncate table mix01;
-alter table mix01 add column col5 int;
-show create table mix01;
--- @bvt:issue#11249
-select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
-drop table mix01;
-
-drop database test;
-=======
-drop database test;
->>>>>>> 7ac20054b0f9ffc51baf9846590c491fb28f48c7
