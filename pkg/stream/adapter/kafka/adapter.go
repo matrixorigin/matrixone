@@ -635,21 +635,17 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
 	return nil
 }
 
-func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []string, types []types.Type, offset int64, limit int64, mp *mpool.MPool) (*batch.Batch, error) {
+type KafkaAdapterFactory func(configMap *kafka.ConfigMap) (*KafkaAdapter, error)
+
+func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []string, types []types.Type, offset int64, limit int64, mp *mpool.MPool, factory KafkaAdapterFactory) (*batch.Batch, error) {
 	err := ValidateConfig(ctx, configs)
 	if err != nil {
 		return nil, err
 	}
 
-	configMap := &kafka.ConfigMap{}
-	for key, value := range configs {
-		err := configMap.SetKey(key, value)
-		if err != nil {
-			return nil, err
-		}
-	}
+	configMap := convertToKafkaConfig(configs)
 
-	ka, err := NewKafkaAdapter(configMap)
+	ka, err := factory(configMap)
 	if err != nil {
 		return nil, err
 	}

@@ -2,12 +2,16 @@ package mokafka
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewKafkaAdapter(t *testing.T) {
@@ -127,4 +131,63 @@ func TestValidateConfig_ValidConfigurations(t *testing.T) {
 	if err != nil {
 		t.Errorf("Did not expect an error, got: %v", err)
 	}
+}
+
+func TestRetrieveData(t *testing.T) {
+	// Setup
+	mockCluster, err := kafka.NewMockCluster(1)
+	if err != nil {
+		t.Fatalf("Failed to create MockCluster: %s", err)
+	}
+	defer mockCluster.Close()
+
+	broker := mockCluster.BootstrapServers()
+	topic := "TestTopic"
+
+	// Produce mock data
+	// (You can add more messages or customize this part as necessary)
+	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": broker})
+	if err != nil {
+		t.Fatalf("Failed to create producer: %s", err)
+	}
+	type MessagePayload struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+	payload := MessagePayload{
+		Name: "test_name",
+		Age:  100,
+	}
+	value, err := json.Marshal(payload)
+	p.Produce(&kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+		Value:          []byte(value),
+	}, nil)
+
+	// Setup configs for RetrieveData
+	configs := map[string]interface{}{
+		"type":              "kafka",
+		"bootstrap.servers": broker,
+		"topic":             topic,
+		"value":             "json",
+	}
+	attrs := []string{
+		"name", "age",
+	}
+	types := []types.Type{
+		types.New(types.T_char, 30, 0),
+		types.New(types.T_int32, 10, 0),
+	}
+	offset := int64(0)
+	limit := int64(100)
+
+	// Call RetrieveData
+	batch, err := RetrieveData(context.Background(), configs, attrs, types, offset, limit, mpool.MustNewZero(), NewKafkaAdapter)
+	if err != nil {
+		t.Fatalf("RetrieveData failed: %s", err)
+	}
+
+	// Assertions
+	assert.NotNil(t, batch, "Returned batch should not be nil")
+	// Add more assertions as necessary
 }
