@@ -23,9 +23,12 @@ The Impl of InternalExecutor is in frontend package
 */
 
 type SessionOverrideOptions struct {
-	Database   *string
-	Username   *string
-	IsInternal *bool
+	Database      *string
+	Username      *string
+	IsInternal    *bool
+	AccountId     *uint32
+	UserId        *uint32
+	DefaultRoleId *uint32
 }
 
 type OptsBuilder struct {
@@ -50,6 +53,21 @@ func (s *OptsBuilder) Username(name string) *OptsBuilder {
 
 func (s *OptsBuilder) Internal(b bool) *OptsBuilder {
 	s.opts.IsInternal = &b
+	return s
+}
+
+func (s *OptsBuilder) AccountId(id uint32) *OptsBuilder {
+	s.opts.AccountId = &id
+	return s
+}
+
+func (s *OptsBuilder) UserId(id uint32) *OptsBuilder {
+	s.opts.UserId = &id
+	return s
+}
+
+func (s *OptsBuilder) DefaultRoleId(id uint32) *OptsBuilder {
+	s.opts.DefaultRoleId = &id
 	return s
 }
 

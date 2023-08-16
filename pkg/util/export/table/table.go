@@ -285,6 +285,14 @@ type Table struct {
 	name2ColumnIdx map[string]int
 	// accessIdx used in Row
 	accountIdx int
+
+	// The original create table sql of the system table. If the system table is created by ddl,
+	// If the system table was created by DDL, the original creation sql will be used when upgrading the new table
+	// Note: ToCreateSql() converts a table object as a table creation statement based on its known basic properties
+	CreateTableSql string
+
+	// The original create view sql of the system view
+	CreateViewSql string
 }
 
 func (tbl *Table) Clone() *Table {

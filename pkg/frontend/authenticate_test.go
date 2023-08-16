@@ -228,40 +228,6 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 	})
 }
 
-func Test_createTablesInMoCatalog(t *testing.T) {
-	convey.Convey("createTablesInMoCatalog", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-		defer bhStub.Reset()
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-
-		err := createTablesInMoCatalog(ctx, bh, tenant, pu)
-		convey.So(err, convey.ShouldBeNil)
-
-		err = createTablesInInformationSchema(ctx, bh, tenant, pu)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
 func Test_checkTenantExistsOrNot(t *testing.T) {
 	convey.Convey("check tenant exists or not", t, func() {
 		ctrl := gomock.NewController(t)

@@ -181,8 +181,36 @@ func GetDefaultTenant() string {
 	return sysAccountName
 }
 
+func GetSysTenantId() uint32 {
+	return sysAccountID
+}
+
+func GetUserRoot() string {
+	return rootName
+}
+
+func GetUserRootId() uint32 {
+	return rootID
+}
+
 func GetDefaultRole() string {
 	return moAdminRoleName
+}
+
+func GetDefaultRoleId() uint32 {
+	return moAdminRoleID
+}
+
+func GetAccountAdminRole() string {
+	return accountAdminRoleName
+}
+
+func GetAccountAdminRoleId() uint32 {
+	return accountAdminRoleID
+}
+
+func GetAdminUserId() uint32 {
+	return dumpID + 1
 }
 
 func isCaseInsensitiveEqual(n string, role string) bool {
@@ -7471,15 +7499,6 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	return err
 }
 
-// createTablesInInformationSchema creates the database information_schema and the views or tables.
-func createTablesInInformationSchema(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit) error {
-	err := bh.Exec(ctx, "create database if not exists information_schema;")
-	if err != nil {
-		return err
-	}
-	return err
-}
-
 func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName string) (bool, error) {
 	var sqlForCheckTenant string
 	var erArray []ExecResult
@@ -7735,7 +7754,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		return nil, nil, moerr.NewInternalError(ctx, "get the id of tenant %s failed", ca.Name)
 	}
 
-	newUserId = dumpID + 1
+	newUserId = int64(GetAdminUserId())
 
 	newTenant = &TenantInfo{
 		Tenant:        ca.Name,
