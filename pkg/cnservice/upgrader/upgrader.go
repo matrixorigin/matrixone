@@ -17,12 +17,15 @@ package upgrader
 import (
 	"context"
 	"fmt"
-	"strings"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"strconv"
+	"strings"
 )
 
 var registeredTable = []*table.Table{motrace.SingleRowLogTable}
@@ -67,6 +70,11 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 	// Check for errors
 	if err := result.Error(); err != nil {
 		return nil, err
+	}
+
+	cnt := result.RowCount()
+	if cnt == 0 {
+		return nil, nil
 	}
 
 	// Build a list of table.Columns based on the query result
@@ -171,6 +179,27 @@ func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 }
 
 func (u *Upgrader) Upgrade(ctx context.Context) error {
+	allTenants, err := u.GetAllTenantInfo(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err = u.UpgradeNewTableColumn(ctx); err != nil {
+		return err
+	}
+
+	if err = u.UpgradeNewTable(ctx, allTenants); err != nil {
+		return err
+	}
+
+	if err = u.UpgradeNewView(ctx, allTenants); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Upgrade the newly added columns in the system table
+func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
@@ -185,6 +214,8 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		diff, err := u.GenerateDiff(currentSchema, tbl)
 		if err != nil {
 			return err
+		} else if len(diff.AddedColumns) == 0 {
+			continue
 		}
 
 		upgradeSQL, err := u.GenerateUpgradeSQL(diff)
@@ -193,10 +224,196 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		}
 
 		// Execute upgrade SQL
-		if err := exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
+		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
 			return err
 		}
 	}
-
 	return nil
+}
+
+// Upgrade system tables, add system tables
+func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.TenantInfo) error {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil
+	}
+
+	for _, tbl := range needUpgradNewTable {
+		if tbl.Account == table.AccountAll {
+			for _, tenant := range tenants {
+				if err := u.upgradeFunc(ctx, tbl, false, tenant, exec); err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := u.upgradeFunc(ctx, tbl, false, &frontend.TenantInfo{
+				Tenant:        frontend.GetDefaultTenant(),
+				TenantID:      catalog.System_Account,
+				User:          "internal",
+				UserID:        frontend.GetUserRootId(),
+				DefaultRoleID: frontend.GetDefaultRoleId(),
+				DefaultRole:   frontend.GetDefaultRole(),
+			}, exec); err != nil {
+				return err
+			}
+		}
+
+	}
+	return nil
+}
+
+// Upgrade system tables, add system views
+func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.TenantInfo) error {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil
+	}
+
+	for _, tbl := range needUpgradNewView {
+		if tbl.Account == table.AccountAll {
+			for _, tenant := range tenants {
+				if err := u.upgradeFunc(ctx, tbl, true, tenant, exec); err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := u.upgradeFunc(ctx, tbl, true, &frontend.TenantInfo{
+				Tenant:        frontend.GetDefaultTenant(),
+				TenantID:      catalog.System_Account,
+				User:          frontend.GetUserRoot(),
+				UserID:        frontend.GetUserRootId(),
+				DefaultRoleID: frontend.GetDefaultRoleId(),
+				DefaultRole:   frontend.GetDefaultRole(),
+			}, exec); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Check if the table exists
+func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecutor, opts *ie.OptsBuilder, database, tbl string) (bool, error) {
+	// Query mo_catalog.mo_tables to get table info
+	query := fmt.Sprintf("select rel_id, relname from `mo_catalog`.`mo_tables` where reldatabase = '%s' and relname = '%s'", database, tbl)
+
+	// Execute the query
+	result := exec.Query(ctx, query, opts.Finish())
+
+	// Check for errors
+	if err := result.Error(); err != nil {
+		return false, err
+	}
+
+	cnt := result.RowCount()
+	if cnt == 0 {
+		return false, nil
+	} else {
+		return true, nil
+	}
+}
+
+// GetAllTenantInfo Obtain all tenant information in the system
+func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo, error) {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil, moerr.NewInternalError(ctx, "can not get the Internal Executor")
+	}
+
+	tenantInfos := make([]*frontend.TenantInfo, 0)
+
+	// Query information_schema.columns to get column info
+	query := "SELECT ACCOUNT_ID, ACCOUNT_NAME, VERSION FROM `mo_catalog`.`mo_account`"
+	// Execute the query
+	sysAcc := &frontend.TenantInfo{
+		Tenant:        frontend.GetUserRoot(),
+		TenantID:      frontend.GetSysTenantId(),
+		User:          frontend.GetUserRoot(),
+		UserID:        frontend.GetUserRootId(),
+		DefaultRoleID: frontend.GetDefaultRoleId(),
+		DefaultRole:   frontend.GetDefaultRole(),
+	}
+	ctx = attachAccount(ctx, sysAcc)
+	result := exec.Query(ctx, query, makeOptions(sysAcc).Finish())
+
+	errors := []error{}
+	for i := uint64(0); i < result.RowCount(); i++ {
+		tenantName, err := result.StringValueByName(ctx, i, "account_name")
+		if err != nil {
+			errors = append(errors, err)
+			continue
+		}
+
+		accountIdStr, err := result.StringValueByName(ctx, i, "account_id")
+		if err != nil {
+			errors = append(errors, err)
+			continue
+		}
+
+		accountId, err := strconv.Atoi(accountIdStr)
+		if err != nil {
+			errors = append(errors, err)
+			continue
+		}
+
+		if uint32(accountId) == catalog.System_Account {
+			tenantInfos = append(tenantInfos, &frontend.TenantInfo{
+				Tenant:        tenantName,
+				TenantID:      uint32(accountId),
+				User:          frontend.GetUserRoot(),
+				UserID:        frontend.GetUserRootId(),
+				DefaultRoleID: frontend.GetDefaultRoleId(),
+				DefaultRole:   frontend.GetDefaultRole(),
+			})
+		} else {
+			tenantInfos = append(tenantInfos, &frontend.TenantInfo{
+				Tenant:        tenantName,
+				TenantID:      uint32(accountId),
+				User:          "internal",
+				UserID:        frontend.GetAdminUserId(),
+				DefaultRoleID: frontend.GetAccountAdminRoleId(),
+				DefaultRole:   frontend.GetAccountAdminRole(),
+			})
+		}
+
+	}
+
+	// If errors occurred, return them
+	if len(errors) > 0 {
+		return nil, moerr.NewInternalError(ctx, "can not get the schema")
+	}
+	return tenantInfos, nil
+}
+
+func (u *Upgrader) upgradeFunc(ctx context.Context, tbl *table.Table, isView bool, tenant *frontend.TenantInfo, exec ie.InternalExecutor) error {
+	// Switch Tenants
+	ctx = attachAccount(ctx, tenant)
+	opts := makeOptions(tenant)
+	isExist, err := u.CheckSchemaIsExist(ctx, exec, opts, tbl.Database, tbl.Table)
+	if err != nil {
+		return err
+	}
+	if isExist {
+		return nil
+	}
+	sql := tbl.CreateTableSql
+	if isView {
+		sql = tbl.CreateViewSql
+	}
+	// Execute upgrade SQL
+	if err = exec.Exec(ctx, sql, opts.Finish()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func attachAccount(ctx context.Context, tenant *frontend.TenantInfo) context.Context {
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, tenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
+	return ctx
+}
+
+func makeOptions(tenant *frontend.TenantInfo) *ie.OptsBuilder {
+	return ie.NewOptsBuilder().AccountId(tenant.GetTenantID()).UserId(tenant.GetUserID()).DefaultRoleId(tenant.GetDefaultRoleID())
 }
