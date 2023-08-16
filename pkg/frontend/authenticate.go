@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2951,7 +2950,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(true)
 				}
 			}
-			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusRestricted.String(), ses.GetParameterUnit().QueryService)
+			err = alterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusRestricted.String())
 			if err != nil {
 				logutil.Errorf("post alter account restricted error: %s", err.Error())
 			}
@@ -2964,7 +2963,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(false)
 				}
 			}
-			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusOpen.String(), ses.GetParameterUnit().QueryService)
+			err = alterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusOpen.String())
 			if err != nil {
 				logutil.Errorf("post alter account not restricted error: %s", err.Error())
 			}
@@ -9019,13 +9018,24 @@ func addInitSystemVariablesSql(accountId int, accountName, variable_name string,
 }
 
 // alterSessionStatus alter all nodes session status which the tenant has been alter restricted or open.
-func alterSessionStatus(ctx context.Context, curtenant, tenant string, user string, status string, qs queryservice.QueryService) error {
+func alterSessionStatus(
+	ctx context.Context,
+	ses *Session,
+	accountName string,
+	tenantId int64,
+	status string) error {
+	qs := ses.GetParameterUnit().QueryService
+	if qs == nil {
+		return moerr.NewInternalError(ctx, "query service is not initialized")
+	}
+	currTenant := ses.GetTenantInfo().Tenant
+	currUser := ses.GetTenantInfo().User
 	var nodes []string
 	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": tenant}, clusterservice.EQ)
-	sysTenant := isSysTenant(curtenant)
+		map[string]string{"account": accountName}, clusterservice.EQ)
+	sysTenant := isSysTenant(currTenant)
 	if sysTenant {
-		disttae.SelectForSuperTenant(clusterservice.NewSelector(), user, nil,
+		disttae.SelectForSuperTenant(clusterservice.NewSelector(), currUser, nil,
 			func(s *metadata.CNService) {
 				nodes = append(nodes, s.QueryAddress)
 			})
@@ -9056,9 +9066,8 @@ func alterSessionStatus(ctx context.Context, curtenant, tenant string, user stri
 		go func(addr string) {
 			req := qs.NewRequest(query.CmdMethod_AlterAccount)
 			req.AlterAccountRequest = &query.AlterAccountRequest{
-				Tenant:    tenant,
-				SysTenant: isSysTenant(tenant),
-				Status:    status,
+				TenantId: tenantId,
+				Status:   status,
 			}
 			resp, err := qs.SendMessage(ctx, addr, req)
 			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
@@ -9077,7 +9086,7 @@ func alterSessionStatus(ctx context.Context, curtenant, tenant string, user stri
 				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
 					retErr = moerr.NewInternalError(ctx,
 						fmt.Sprintf("alter account status for account %s failed on node %s",
-							tenant, res.nodeAddr))
+							accountName, res.nodeAddr))
 				}
 			}
 		case <-ctx.Done():

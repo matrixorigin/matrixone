@@ -39,23 +39,6 @@ func (s *queryService) handleShowProcessList(ctx context.Context, req *pb.Reques
 	return nil
 }
 
-// handleRequest handles the alter account request.
-func (s *queryService) handleAlterAccount(ctx context.Context, req *pb.Request, resp *pb.Response) error {
-	if req.AlterAccountRequest == nil {
-		return moerr.NewInternalError(ctx, "bad request")
-	}
-	err := s.alterSessionsStatus(req.AlterAccountRequest.Tenant, req.AlterAccountRequest.SysTenant, req.AlterAccountRequest.Status)
-	if err != nil {
-		resp.WrapError(err)
-		return nil
-	}
-	resp.AlterAccountResponse = &pb.AlterAccountResponse{
-		AlterSuccess: true,
-	}
-
-	return nil
-}
-
 // processList returns all the sessions. For sys tenant, return all sessions; but for common
 // tenant, just return the sessions belong to the tenant.
 // It is called "processList" is because it is used in "SHOW PROCESSLIST" statement.
