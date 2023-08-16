@@ -1673,7 +1673,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(0, rs, c.addr, n),
+		Arg: constructDispatch(0, rs, c.addr, n, false),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
@@ -2213,7 +2213,7 @@ func (c *Compile) constructShuffleAndDispatch(ss, children []*Scope, n *plan.Nod
 
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructDispatch(j, children, ss[i].NodeInfo.Addr, n),
+				Arg: constructDispatch(j, children, ss[i].NodeInfo.Addr, n, false),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -2283,7 +2283,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 			Op:      vm.Dispatch,
 			Idx:     c.anal.curr,
 			IsFirst: currentIsFirst,
-			Arg:     constructDispatch(0, children, c.addr, n),
+			Arg:     constructDispatch(0, children, c.addr, n, false),
 		})
 
 		appendIdx := 0
@@ -2531,7 +2531,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 	leftMerge := c.newMergeScope(ss)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(0, rs, c.addr, n),
+		Arg: constructDispatch(0, rs, c.addr, n, false),
 	})
 	leftMerge.IsEnd = true
 
@@ -2540,7 +2540,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.
 	rightMerge := c.newMergeScope(children)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(1, rs, c.addr, n),
+		Arg: constructDispatch(1, rs, c.addr, n, false),
 	})
 	rightMerge.IsEnd = true
 
@@ -2589,7 +2589,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatch(1, rs, c.addr, n),
+		Arg: constructDispatch(1, rs, c.addr, n, false),
 	})
 	mergeChildren.IsEnd = true
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
@@ -2599,6 +2599,10 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *p
 
 func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([]*Scope, []*Scope) {
 	single := len(c.cnList) <= 1
+	if single {
+		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
+	}
+
 	var parent []*Scope
 	children := make([]*Scope, 0, len(c.cnList))
 	lnum := len(left)
@@ -2633,7 +2637,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 		})
 		scp.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatch(i, children, scp.NodeInfo.Addr, n),
+			Arg: constructDispatch(i, children, scp.NodeInfo.Addr, n, true),
 		})
 		scp.IsEnd = true
 
@@ -2660,7 +2664,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 		})
 		scp.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatch(i+lnum, children, scp.NodeInfo.Addr, n),
+			Arg: constructDispatch(i+lnum, children, scp.NodeInfo.Addr, n, false),
 		})
 		scp.IsEnd = true
 
