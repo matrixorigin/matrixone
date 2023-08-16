@@ -25,15 +25,28 @@ jobs:
       - name: Print run attempt
         run: echo "run attempt is ${{ github.run_attempt }}"
   
-      - name: docker compose launch-tae-multi-CN-tae-DN
+      - name: docker compose launch-multi-cn
+        timeout-minutes: 10
         run: |
           cat ./etc/launch-tae-compose/config/cn-0.toml
           cat ./etc/launch-tae-compose/config/cn-1.toml
 
           mkdir -p ${{ github.workspace }}/docker-compose-log
-          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
+          
           # wait for ready
-          sleep 10
+          i=1
+          while [ $(mysql -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'create database if not exists compose_test;use compose_test; create table if not exists compose_test_table(col1 int auto_increment primary key);show tables;' 2>&1 | tee /dev/stderr | grep 'compose_test_table' | wc -l) -lt 1 ]; do
+             echo "wait mo init finished...$i"
+             if [ $i -ge 300 ]; then
+               echo "wait for $i seconds, mo init not finish, so exit 1"
+               docker ps
+               exit 1;
+             fi
+             i=$(($i+1))
+             sleep 1
+          done
+          docker ps
 
       - name: Clone test-tool repository
         # Node.js 12 actions are deprecated.
@@ -64,7 +77,8 @@ jobs:
       - name: export log
         if: ${{ failure() }}
         run: |
-          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
+          mkdir -p ${{ github.workspace }}/mo-tester/report
+          mv ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
 
@@ -76,7 +90,7 @@ jobs:
       - name: shutdown containers
         if: ${{ always() }}
         run: |
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn down --remove-orphans
           docker volume rm launch-tae-compose_minio_storage
 
       - uses: actions/upload-artifact@v3
@@ -105,7 +119,8 @@ jobs:
       - name: Print run attempt
         run: echo "run attempt is ${{ github.run_attempt }}"
 
-      - name: docker compose launch-tae-multi-CN-tae-DN
+      - name: docker compose launch-multi-cn
+        timeout-minutes: 10
         run: |
           echo ""  >> ./etc/launch-tae-compose/config/cn-0.toml
           echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-0.toml
@@ -120,15 +135,22 @@ jobs:
           cat ./etc/launch-tae-compose/config/cn-1.toml
           cat ./etc/launch-tae-compose/config/dn.toml
           mkdir -p ${{ github.workspace }}/docker-compose-log
-          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
+          
           # wait for ready
-          sleep 10
+          i=1
+          while [ $(mysql -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'create database if not exists compose_test;use compose_test; create table if not exists compose_test_table(col1 int auto_increment primary key);show tables;' 2>&1 | tee /dev/stderr | grep 'compose_test_table' | wc -l) -lt 1 ]; do
+             echo "wait mo init finished...$i"
+             if [ $i -ge 300 ]; then
+               echo "wait for $i seconds, mo init not finish, so exit 1"
+               docker ps
+               exit 1;
+             fi
+             i=$(($i+1))
+             sleep 1
+          done
           docker ps
       - name: Clone test-tool repository
-        # Node.js 12 actions are deprecated.
-        # For more information see:
-        #     - https://github.blog/changelog/2022-09-22-github-actions-all-actions-will-begin-running-on-node16-instead-of-node12/.
-        # Please update the following actions to use Node.js 16: actions/checkout@v3
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tester
@@ -145,7 +167,6 @@ jobs:
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
-          sleep 60s
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
@@ -153,7 +174,8 @@ jobs:
       - name: export log
         if: ${{ failure() }}
         run: |
-          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
+          mkdir -p ${{ github.workspace }}/mo-tester/report
+          mv ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
 
@@ -166,14 +188,14 @@ jobs:
         if: ${{ always() }}
         run: |
           docker ps
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn down --remove-orphans
           docker volume rm launch-tae-compose_minio_storage
 
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: multi-cn-e2e-push-docker-compose-log
+          name: multi-cn-e2e-push-docker-compose-log-pessimistic
           path: |
             ${{ github.workspace }}/docker-compose-log
           retention-days: 7

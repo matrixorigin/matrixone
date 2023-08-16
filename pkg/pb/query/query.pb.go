@@ -31,16 +31,24 @@ const (
 	CmdMethod_Query CmdMethod = 0
 	// ShowProcessList represents the show process list query.
 	CmdMethod_ShowProcessList CmdMethod = 1
+	// AlterAccount represent set account status as restricted
+	CmdMethod_AlterAccount CmdMethod = 2
+	// KillConn represents the kill connection request.
+	CmdMethod_KillConn CmdMethod = 3
 )
 
 var CmdMethod_name = map[int32]string{
 	0: "Query",
 	1: "ShowProcessList",
+	2: "AlterAccount",
+	3: "KillConn",
 }
 
 var CmdMethod_value = map[string]int32{
 	"Query":           0,
 	"ShowProcessList": 1,
+	"AlterAccount":    2,
+	"KillConn":        3,
 }
 
 func (x CmdMethod) String() string {
@@ -169,9 +177,13 @@ type Request struct {
 	QueryRequest *QueryRequest `protobuf:"bytes,3,opt,name=QueryRequest,proto3" json:"QueryRequest,omitempty"`
 	// ShowProcessListRequest is the request for show process list.
 	ShowProcessListRequest *ShowProcessListRequest `protobuf:"bytes,4,opt,name=ShowProcessListRequest,proto3" json:"ShowProcessListRequest,omitempty"`
-	XXX_NoUnkeyedLiteral   struct{}                `json:"-"`
-	XXX_unrecognized       []byte                  `json:"-"`
-	XXX_sizecache          int32                   `json:"-"`
+	// AlterAccountRequest is the request for alter account restricted
+	AlterAccountRequest *AlterAccountRequest `protobuf:"bytes,5,opt,name=AlterAccountRequest,proto3" json:"AlterAccountRequest,omitempty"`
+	// KillConnRequest is the request which kills the connections.
+	KillConnRequest      *KillConnRequest `protobuf:"bytes,6,opt,name=KillConnRequest,proto3" json:"KillConnRequest,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
+	XXX_unrecognized     []byte           `json:"-"`
+	XXX_sizecache        int32            `json:"-"`
 }
 
 func (m *Request) Reset()         { *m = Request{} }
@@ -235,6 +247,20 @@ func (m *Request) GetShowProcessListRequest() *ShowProcessListRequest {
 	return nil
 }
 
+func (m *Request) GetAlterAccountRequest() *AlterAccountRequest {
+	if m != nil {
+		return m.AlterAccountRequest
+	}
+	return nil
+}
+
+func (m *Request) GetKillConnRequest() *KillConnRequest {
+	if m != nil {
+		return m.KillConnRequest
+	}
+	return nil
+}
+
 // ShowProcessListResponse is the response of command ShowProcessList.
 type ShowProcessListResponse struct {
 	Sessions             []*status.Session `protobuf:"bytes,1,rep,name=Sessions,proto3" json:"Sessions,omitempty"`
@@ -293,9 +319,13 @@ type Response struct {
 	Error []byte `protobuf:"bytes,3,opt,name=Error,proto3" json:"Error,omitempty"`
 	// ShowProcessListResponse is the response of ShowProcessListRequest.
 	ShowProcessListResponse *ShowProcessListResponse `protobuf:"bytes,4,opt,name=ShowProcessListResponse,proto3" json:"ShowProcessListResponse,omitempty"`
-	XXX_NoUnkeyedLiteral    struct{}                 `json:"-"`
-	XXX_unrecognized        []byte                   `json:"-"`
-	XXX_sizecache           int32                    `json:"-"`
+	// AlterAccountResponse is the response of AlterAccount.
+	AlterAccountResponse *AlterAccountResponse `protobuf:"bytes,5,opt,name=AlterAccountResponse,proto3" json:"AlterAccountResponse,omitempty"`
+	// KillConnResponse is the response of KillConnRequest.
+	KillConnResponse     *KillConnResponse `protobuf:"bytes,6,opt,name=KillConnResponse,proto3" json:"KillConnResponse,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
+	XXX_unrecognized     []byte            `json:"-"`
+	XXX_sizecache        int32             `json:"-"`
 }
 
 func (m *Response) Reset()         { *m = Response{} }
@@ -359,6 +389,240 @@ func (m *Response) GetShowProcessListResponse() *ShowProcessListResponse {
 	return nil
 }
 
+func (m *Response) GetAlterAccountResponse() *AlterAccountResponse {
+	if m != nil {
+		return m.AlterAccountResponse
+	}
+	return nil
+}
+
+func (m *Response) GetKillConnResponse() *KillConnResponse {
+	if m != nil {
+		return m.KillConnResponse
+	}
+	return nil
+}
+
+// AlterAccountRequest is the "alter account restricted" query request.
+type AlterAccountRequest struct {
+	// Tenant is the tenant which to alter.
+	Tenant string `protobuf:"bytes,1,opt,name=Tenant,proto3" json:"Tenant,omitempty"`
+	// SysTenet is true if the tenant is a system tenant.
+	SysTenant bool `protobuf:"varint,2,opt,name=SysTenant,proto3" json:"SysTenant,omitempty"`
+	// Status is the tenant which will be alter to.
+	Status               string   `protobuf:"bytes,3,opt,name=Status,proto3" json:"Status,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *AlterAccountRequest) Reset()         { *m = AlterAccountRequest{} }
+func (m *AlterAccountRequest) String() string { return proto.CompactTextString(m) }
+func (*AlterAccountRequest) ProtoMessage()    {}
+func (*AlterAccountRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{5}
+}
+func (m *AlterAccountRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AlterAccountRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AlterAccountRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AlterAccountRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AlterAccountRequest.Merge(m, src)
+}
+func (m *AlterAccountRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *AlterAccountRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_AlterAccountRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AlterAccountRequest proto.InternalMessageInfo
+
+func (m *AlterAccountRequest) GetTenant() string {
+	if m != nil {
+		return m.Tenant
+	}
+	return ""
+}
+
+func (m *AlterAccountRequest) GetSysTenant() bool {
+	if m != nil {
+		return m.SysTenant
+	}
+	return false
+}
+
+func (m *AlterAccountRequest) GetStatus() string {
+	if m != nil {
+		return m.Status
+	}
+	return ""
+}
+
+// AlterAccountResponse is the response of command AlterAccount.
+type AlterAccountResponse struct {
+	AlterSuccess         bool     `protobuf:"varint,1,opt,name=alterSuccess,proto3" json:"alterSuccess,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *AlterAccountResponse) Reset()         { *m = AlterAccountResponse{} }
+func (m *AlterAccountResponse) String() string { return proto.CompactTextString(m) }
+func (*AlterAccountResponse) ProtoMessage()    {}
+func (*AlterAccountResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{6}
+}
+func (m *AlterAccountResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AlterAccountResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AlterAccountResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AlterAccountResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AlterAccountResponse.Merge(m, src)
+}
+func (m *AlterAccountResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *AlterAccountResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_AlterAccountResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AlterAccountResponse proto.InternalMessageInfo
+
+func (m *AlterAccountResponse) GetAlterSuccess() bool {
+	if m != nil {
+		return m.AlterSuccess
+	}
+	return false
+}
+
+// KillConnRequest is the request that kill the connections belongs
+// to the account.
+type KillConnRequest struct {
+	AccountID            int64    `protobuf:"varint,1,opt,name=AccountID,proto3" json:"AccountID,omitempty"`
+	Version              uint64   `protobuf:"varint,2,opt,name=Version,proto3" json:"Version,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *KillConnRequest) Reset()         { *m = KillConnRequest{} }
+func (m *KillConnRequest) String() string { return proto.CompactTextString(m) }
+func (*KillConnRequest) ProtoMessage()    {}
+func (*KillConnRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{7}
+}
+func (m *KillConnRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *KillConnRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_KillConnRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *KillConnRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_KillConnRequest.Merge(m, src)
+}
+func (m *KillConnRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *KillConnRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_KillConnRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_KillConnRequest proto.InternalMessageInfo
+
+func (m *KillConnRequest) GetAccountID() int64 {
+	if m != nil {
+		return m.AccountID
+	}
+	return 0
+}
+
+func (m *KillConnRequest) GetVersion() uint64 {
+	if m != nil {
+		return m.Version
+	}
+	return 0
+}
+
+// KillConnResponse is the response to the kill connection request.
+type KillConnResponse struct {
+	Success              bool     `protobuf:"varint,1,opt,name=Success,proto3" json:"Success,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *KillConnResponse) Reset()         { *m = KillConnResponse{} }
+func (m *KillConnResponse) String() string { return proto.CompactTextString(m) }
+func (*KillConnResponse) ProtoMessage()    {}
+func (*KillConnResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{8}
+}
+func (m *KillConnResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *KillConnResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_KillConnResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *KillConnResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_KillConnResponse.Merge(m, src)
+}
+func (m *KillConnResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *KillConnResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_KillConnResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_KillConnResponse proto.InternalMessageInfo
+
+func (m *KillConnResponse) GetSuccess() bool {
+	if m != nil {
+		return m.Success
+	}
+	return false
+}
+
 func init() {
 	proto.RegisterEnum("query.CmdMethod", CmdMethod_name, CmdMethod_value)
 	proto.RegisterType((*QueryRequest)(nil), "query.QueryRequest")
@@ -366,35 +630,50 @@ func init() {
 	proto.RegisterType((*Request)(nil), "query.Request")
 	proto.RegisterType((*ShowProcessListResponse)(nil), "query.ShowProcessListResponse")
 	proto.RegisterType((*Response)(nil), "query.Response")
+	proto.RegisterType((*AlterAccountRequest)(nil), "query.AlterAccountRequest")
+	proto.RegisterType((*AlterAccountResponse)(nil), "query.AlterAccountResponse")
+	proto.RegisterType((*KillConnRequest)(nil), "query.KillConnRequest")
+	proto.RegisterType((*KillConnResponse)(nil), "query.KillConnResponse")
 }
 
 func init() { proto.RegisterFile("query.proto", fileDescriptor_5c6ac9b241082464) }
 
 var fileDescriptor_5c6ac9b241082464 = []byte{
-	// 363 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x52, 0xcd, 0x4a, 0xf3, 0x40,
-	0x14, 0xfd, 0xe6, 0xeb, 0x8f, 0xcd, 0x6d, 0xb1, 0x65, 0x5a, 0x6a, 0x90, 0x1a, 0x42, 0x70, 0x11,
-	0x2c, 0x24, 0x50, 0x17, 0x6e, 0x5c, 0xf9, 0x07, 0x82, 0x8a, 0x4e, 0x15, 0xc4, 0x5d, 0x7f, 0x86,
-	0x36, 0x48, 0x33, 0xe9, 0xcc, 0x04, 0xed, 0x1b, 0x76, 0xe9, 0x23, 0x48, 0x37, 0xbe, 0x86, 0x38,
-	0x99, 0x36, 0xad, 0x9a, 0x9d, 0xbb, 0x9c, 0x73, 0xcf, 0x39, 0xdc, 0x7b, 0x32, 0x50, 0x9e, 0xc6,
-	0x94, 0xcf, 0xbc, 0x88, 0x33, 0xc9, 0x70, 0x41, 0x81, 0xdd, 0x8a, 0x90, 0x3d, 0x19, 0x8b, 0x84,
-	0x74, 0xf6, 0xa1, 0x72, 0xf7, 0x45, 0x13, 0x3a, 0x8d, 0xa9, 0x90, 0xb8, 0x01, 0x05, 0x85, 0x4d,
-	0x64, 0x23, 0xd7, 0x20, 0x09, 0x70, 0x6e, 0xa0, 0xd9, 0x1d, 0xb3, 0x97, 0x5b, 0xce, 0x06, 0x54,
-	0x88, 0xab, 0x40, 0xc8, 0xa5, 0xbe, 0x09, 0xc5, 0x7b, 0x1a, 0xf6, 0x42, 0xa9, 0x0d, 0x1a, 0xe1,
-	0x16, 0x18, 0xdd, 0x99, 0xd0, 0xa3, 0xff, 0x36, 0x72, 0x4b, 0x24, 0x25, 0x9c, 0x0f, 0x04, 0x5b,
-	0xcb, 0x84, 0x16, 0x18, 0xfa, 0xf3, 0xf2, 0x4c, 0x85, 0xe4, 0x49, 0x4a, 0x60, 0x0f, 0x8c, 0xd3,
-	0xc9, 0xf0, 0x9a, 0xca, 0x31, 0x1b, 0xaa, 0x9c, 0xed, 0x4e, 0xcd, 0x4b, 0xae, 0x5a, 0xf1, 0x24,
-	0x95, 0xe0, 0xa3, 0xcd, 0x7b, 0xcc, 0x9c, 0x8d, 0xdc, 0x72, 0xa7, 0xae, 0x2d, 0xeb, 0x23, 0xb2,
-	0x79, 0xf8, 0x43, 0xd6, 0x89, 0x66, 0x5e, 0x45, 0xec, 0xe9, 0x88, 0xdf, 0x45, 0x24, 0xc3, 0xec,
-	0x5c, 0xc0, 0xce, 0x8f, 0x89, 0x88, 0x58, 0x28, 0x28, 0x6e, 0x43, 0xa9, 0x4b, 0x85, 0x08, 0x58,
-	0x28, 0x4c, 0x64, 0xe7, 0xdc, 0x72, 0xa7, 0xea, 0xe9, 0x7f, 0xa3, 0x79, 0xb2, 0x12, 0x38, 0x73,
-	0x04, 0xa5, 0x95, 0xf3, 0x6f, 0x2b, 0x6b, 0x40, 0xe1, 0x9c, 0x73, 0xc6, 0x55, 0x57, 0x15, 0x92,
-	0x00, 0xfc, 0x98, 0xb9, 0xb8, 0x2e, 0xc4, 0xca, 0x2a, 0x24, 0x51, 0x91, 0x2c, 0xfb, 0x41, 0x7b,
-	0x6d, 0x3f, 0x6c, 0xe8, 0xf7, 0x56, 0xfb, 0x87, 0xeb, 0x50, 0xfd, 0x66, 0xa9, 0xa1, 0x93, 0xe3,
-	0xf9, 0xc2, 0x42, 0x6f, 0x0b, 0x0b, 0xbd, 0x2f, 0x2c, 0xf4, 0xe4, 0x8d, 0x02, 0x39, 0x8e, 0xfb,
-	0xde, 0x80, 0x4d, 0xfc, 0x49, 0x4f, 0xf2, 0xe0, 0x95, 0xf1, 0x60, 0x14, 0x84, 0x4b, 0x10, 0x52,
-	0x3f, 0x7a, 0x1e, 0xf9, 0x51, 0xdf, 0x57, 0xbb, 0xf5, 0x8b, 0xea, 0x91, 0x1f, 0x7e, 0x06, 0x00,
-	0x00, 0xff, 0xff, 0xbc, 0xa4, 0x17, 0x41, 0x08, 0x03, 0x00, 0x00,
+	// 533 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x54, 0x5d, 0x8f, 0xd2, 0x40,
+	0x14, 0xb5, 0x7c, 0x2d, 0xbd, 0x34, 0xd2, 0x0c, 0x84, 0x25, 0xeb, 0x4a, 0xc8, 0xc4, 0x07, 0xa2,
+	0xa6, 0x24, 0xf8, 0x60, 0x62, 0x7c, 0x70, 0x45, 0x4d, 0x36, 0xbb, 0x7e, 0x4d, 0xd5, 0x18, 0xdf,
+	0xa0, 0x3b, 0x81, 0x46, 0xe8, 0xb0, 0x33, 0xd3, 0xe8, 0xfe, 0x43, 0x1f, 0xfd, 0x05, 0xc6, 0xf0,
+	0x27, 0x7c, 0x35, 0x9d, 0x4e, 0x29, 0xa5, 0xed, 0x8b, 0xf1, 0x8d, 0x73, 0xe6, 0xdc, 0x33, 0x73,
+	0xef, 0xb9, 0x14, 0x5a, 0xd7, 0x21, 0xe5, 0x37, 0xce, 0x86, 0x33, 0xc9, 0x50, 0x5d, 0x81, 0x13,
+	0x4b, 0xc8, 0x99, 0x0c, 0x45, 0x4c, 0xe2, 0x7b, 0x60, 0xbd, 0x8f, 0x68, 0x42, 0xaf, 0x43, 0x2a,
+	0x24, 0xea, 0x42, 0x5d, 0xe1, 0xbe, 0x31, 0x34, 0x46, 0x26, 0x89, 0x01, 0x7e, 0x03, 0x3d, 0x77,
+	0xc9, 0xbe, 0xbd, 0xe3, 0xcc, 0xa3, 0x42, 0x5c, 0xfa, 0x42, 0x26, 0xfa, 0x1e, 0x34, 0x3e, 0xd0,
+	0x60, 0x16, 0x48, 0x5d, 0xa0, 0x11, 0x3a, 0x05, 0xd3, 0xbd, 0x11, 0xfa, 0xa8, 0x32, 0x34, 0x46,
+	0x4d, 0x92, 0x12, 0xf8, 0x4f, 0x05, 0x8e, 0x12, 0x87, 0x53, 0x30, 0xf5, 0xcf, 0xf3, 0x17, 0xca,
+	0xa4, 0x46, 0x52, 0x02, 0x39, 0x60, 0x4e, 0xd7, 0x57, 0xaf, 0xa9, 0x5c, 0xb2, 0x2b, 0xe5, 0x73,
+	0x7b, 0x62, 0x3b, 0x71, 0x57, 0x3b, 0x9e, 0xa4, 0x12, 0xf4, 0x38, 0xdb, 0x4f, 0xbf, 0x3a, 0x34,
+	0x46, 0xad, 0x49, 0x47, 0x97, 0xec, 0x1f, 0x91, 0x6c, 0xe3, 0x1f, 0xcb, 0x5a, 0xec, 0xd7, 0x94,
+	0xc5, 0x5d, 0x6d, 0x51, 0x2c, 0x22, 0x65, 0xf3, 0xb9, 0x84, 0xce, 0xd9, 0x4a, 0x52, 0x7e, 0xe6,
+	0x79, 0x2c, 0x0c, 0x76, 0x9e, 0x75, 0xe5, 0x79, 0xa2, 0x3d, 0x0b, 0x14, 0xa4, 0xa8, 0x0c, 0x3d,
+	0x83, 0xf6, 0x85, 0xbf, 0x5a, 0x4d, 0x59, 0x10, 0x24, 0x4e, 0x0d, 0xe5, 0xd4, 0xd3, 0x4e, 0x07,
+	0xa7, 0xe4, 0x50, 0x8e, 0x5f, 0xc1, 0x71, 0xee, 0xa5, 0x62, 0xc3, 0x02, 0x41, 0xd1, 0x03, 0x68,
+	0xba, 0x54, 0x08, 0x9f, 0x05, 0xa2, 0x6f, 0x0c, 0xab, 0xa3, 0xd6, 0xa4, 0xed, 0xe8, 0x5d, 0xd1,
+	0x3c, 0xd9, 0x09, 0xf0, 0xaf, 0x0a, 0x34, 0x77, 0x95, 0xff, 0x37, 0xc2, 0x2e, 0xd4, 0x5f, 0x72,
+	0xce, 0xb8, 0xca, 0xce, 0x22, 0x31, 0x40, 0x9f, 0x4b, 0x1f, 0xae, 0x03, 0x1a, 0x94, 0x05, 0x14,
+	0xab, 0x48, 0x69, 0xdf, 0x6f, 0xa1, 0x9b, 0x9d, 0xb5, 0xb6, 0x8d, 0x33, 0xba, 0x53, 0x98, 0x91,
+	0xf6, 0x2c, 0x2c, 0x44, 0x53, 0xb0, 0xd3, 0xb1, 0x6b, 0xb3, 0x38, 0xa6, 0xe3, 0x5c, 0x4c, 0xda,
+	0x28, 0x57, 0x80, 0xbd, 0xc2, 0xc5, 0xf9, 0xb7, 0xff, 0x5b, 0x54, 0xe5, 0xaa, 0x24, 0xd5, 0x4c,
+	0x4d, 0xa2, 0x11, 0x7e, 0x52, 0xdc, 0x3a, 0xc2, 0x60, 0xcd, 0x22, 0xde, 0x0d, 0xbd, 0x68, 0x5c,
+	0xea, 0xae, 0x26, 0xc9, 0x70, 0xf8, 0x3c, 0xb7, 0x8b, 0xd1, 0x23, 0xb4, 0x93, 0xde, 0x83, 0x2a,
+	0x49, 0x09, 0xd4, 0x87, 0xa3, 0x4f, 0x94, 0x47, 0xeb, 0xa3, 0x1e, 0x58, 0x23, 0x09, 0xc4, 0x0f,
+	0xf3, 0x03, 0x8b, 0xd4, 0xd9, 0xdb, 0x13, 0x78, 0xff, 0x62, 0x6f, 0x9f, 0x90, 0xa9, 0xbf, 0x57,
+	0xf6, 0x2d, 0xd4, 0x81, 0xf6, 0x41, 0xc4, 0xb6, 0x81, 0x6c, 0xb0, 0xf6, 0x3b, 0xb4, 0x2b, 0xc8,
+	0x82, 0x66, 0x72, 0x99, 0x5d, 0x7d, 0xfe, 0xf4, 0xc7, 0x76, 0x60, 0xfc, 0xdc, 0x0e, 0x8c, 0xdf,
+	0xdb, 0x81, 0xf1, 0xc5, 0x59, 0xf8, 0x72, 0x19, 0xce, 0x1d, 0x8f, 0xad, 0xc7, 0xeb, 0x99, 0xe4,
+	0xfe, 0x77, 0xc6, 0xfd, 0x85, 0x1f, 0x24, 0x20, 0xa0, 0xe3, 0xcd, 0xd7, 0xc5, 0x78, 0x33, 0x1f,
+	0xab, 0x1c, 0xe7, 0x0d, 0xf5, 0x11, 0x7d, 0xf4, 0x37, 0x00, 0x00, 0xff, 0xff, 0xe5, 0xbe, 0x03,
+	0x15, 0x68, 0x05, 0x00, 0x00,
 }
 
 func (m *QueryRequest) Marshal() (dAtA []byte, err error) {
@@ -499,6 +778,30 @@ func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.KillConnRequest != nil {
+		{
+			size, err := m.KillConnRequest.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x32
+	}
+	if m.AlterAccountRequest != nil {
+		{
+			size, err := m.AlterAccountRequest.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x2a
+	}
 	if m.ShowProcessListRequest != nil {
 		{
 			size, err := m.ShowProcessListRequest.MarshalToSizedBuffer(dAtA[:i])
@@ -601,6 +904,30 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.KillConnResponse != nil {
+		{
+			size, err := m.KillConnResponse.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x32
+	}
+	if m.AlterAccountResponse != nil {
+		{
+			size, err := m.AlterAccountResponse.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x2a
+	}
 	if m.ShowProcessListResponse != nil {
 		{
 			size, err := m.ShowProcessListResponse.MarshalToSizedBuffer(dAtA[:i])
@@ -627,6 +954,168 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	}
 	if m.RequestID != 0 {
 		i = encodeVarintQuery(dAtA, i, uint64(m.RequestID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AlterAccountRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AlterAccountRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterAccountRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Status) > 0 {
+		i -= len(m.Status)
+		copy(dAtA[i:], m.Status)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.Status)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.SysTenant {
+		i--
+		if m.SysTenant {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x10
+	}
+	if len(m.Tenant) > 0 {
+		i -= len(m.Tenant)
+		copy(dAtA[i:], m.Tenant)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.Tenant)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AlterAccountResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AlterAccountResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AlterAccountResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.AlterSuccess {
+		i--
+		if m.AlterSuccess {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *KillConnRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *KillConnRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *KillConnRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Version != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.Version))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.AccountID != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.AccountID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *KillConnResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *KillConnResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *KillConnResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Success {
+		i--
+		if m.Success {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
 		i--
 		dAtA[i] = 0x8
 	}
@@ -699,6 +1188,14 @@ func (m *Request) Size() (n int) {
 		l = m.ShowProcessListRequest.Size()
 		n += 1 + l + sovQuery(uint64(l))
 	}
+	if m.AlterAccountRequest != nil {
+		l = m.AlterAccountRequest.Size()
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.KillConnRequest != nil {
+		l = m.KillConnRequest.Size()
+		n += 1 + l + sovQuery(uint64(l))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -742,6 +1239,85 @@ func (m *Response) Size() (n int) {
 	if m.ShowProcessListResponse != nil {
 		l = m.ShowProcessListResponse.Size()
 		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.AlterAccountResponse != nil {
+		l = m.AlterAccountResponse.Size()
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.KillConnResponse != nil {
+		l = m.KillConnResponse.Size()
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterAccountRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Tenant)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.SysTenant {
+		n += 2
+	}
+	l = len(m.Status)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *AlterAccountResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.AlterSuccess {
+		n += 2
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *KillConnRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.AccountID != 0 {
+		n += 1 + sovQuery(uint64(m.AccountID))
+	}
+	if m.Version != 0 {
+		n += 1 + sovQuery(uint64(m.Version))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *KillConnResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Success {
+		n += 2
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -1080,6 +1656,78 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AlterAccountRequest", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.AlterAccountRequest == nil {
+				m.AlterAccountRequest = &AlterAccountRequest{}
+			}
+			if err := m.AlterAccountRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field KillConnRequest", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.KillConnRequest == nil {
+				m.KillConnRequest = &KillConnRequest{}
+			}
+			if err := m.KillConnRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipQuery(dAtA[iNdEx:])
@@ -1324,6 +1972,444 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AlterAccountResponse", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.AlterAccountResponse == nil {
+				m.AlterAccountResponse = &AlterAccountResponse{}
+			}
+			if err := m.AlterAccountResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field KillConnResponse", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.KillConnResponse == nil {
+				m.KillConnResponse = &KillConnResponse{}
+			}
+			if err := m.KillConnResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AlterAccountRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AlterAccountRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AlterAccountRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Tenant", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Tenant = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SysTenant", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.SysTenant = bool(v != 0)
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Status", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Status = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AlterAccountResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AlterAccountResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AlterAccountResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AlterSuccess", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.AlterSuccess = bool(v != 0)
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *KillConnRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: KillConnRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: KillConnRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AccountID", wireType)
+			}
+			m.AccountID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AccountID |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Version", wireType)
+			}
+			m.Version = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Version |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *KillConnResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: KillConnResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: KillConnResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Success", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Success = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipQuery(dAtA[iNdEx:])

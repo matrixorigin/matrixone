@@ -61,6 +61,7 @@ type ColDef struct {
 	FakePK        bool // TODO: use column.flag instead of column.fakepk
 	Default       []byte
 	OnUpdate      []byte
+	EnumValues    string
 }
 
 func (def *ColDef) GetName() string     { return def.Name }
@@ -305,10 +306,10 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 		return
 	}
 	n += int64(sn2)
-	switch ver {
-	case IOET_WALTxnCommand_Table_V1:
+
+	if ver <= IOET_WALTxnCommand_Table_V1 {
 		s.CatalogVersion = pkgcatalog.CatalogVersion_V1
-	case IOET_WALTxnCommand_Table_V2:
+	} else {
 		if sn2, err = r.Read(types.EncodeUint32(&s.CatalogVersion)); err != nil {
 			return
 		}
@@ -424,6 +425,14 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			return
 		}
 		n += sn
+		if ver <= IOET_WALTxnCommand_Table_V2 {
+			def.EnumValues = ""
+		} else {
+			if def.EnumValues, sn, err = objectio.ReadString(r); err != nil {
+				return
+			}
+			n += sn
+		}
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -523,6 +532,10 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if _, err = objectio.WriteBytes(def.OnUpdate, &w); err != nil {
 			return
 		}
+
+		if _, err = objectio.WriteString(def.EnumValues, &w); err != nil {
+			return
+		}
 	}
 	buf = w.Bytes()
 	return
@@ -547,7 +560,7 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
 		types.Decode(data, &def.Type)
 		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
-		def.NullAbility = i82bool(nullable)
+		def.NullAbility = !i82bool(nullable)
 		isHidden := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsHidden)).Get(offset).(int8)
 		def.Hidden = i82bool(isHidden)
 		isClusterBy := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsClusterBy)).Get(offset).(int8)
@@ -559,6 +572,7 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
 		def.Idx = int(bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)) - 1
 		def.SeqNum = bat.GetVectorByName(pkgcatalog.SystemColAttr_Seqnum).Get(offset).(uint16)
+		def.EnumValues = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).Get(offset).([]byte))
 		s.NameMap[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
 		if def.Name == PhyAddrColumnName {
@@ -691,6 +705,7 @@ func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
 		ClusterBy:     attr.ClusterBy,
 		Default:       []byte(""),
 		OnUpdate:      []byte(""),
+		EnumValues:    attr.EnumVlaues,
 	}
 	if attr.Default != nil {
 		def.NullAbility = attr.Default.NullAbility

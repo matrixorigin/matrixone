@@ -16,7 +16,6 @@ package containers
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -104,6 +103,8 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 		return movec.GetFixedAt[types.Datetime](col, int(row))
 	case types.T_timestamp:
 		return movec.GetFixedAt[types.Timestamp](col, int(row))
+	case types.T_enum:
+		return movec.GetFixedAt[types.Enum](col, int(row))
 	case types.T_TS:
 		return movec.GetFixedAt[types.TS](col, int(row))
 	case types.T_Rowid:
@@ -186,6 +187,8 @@ func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool) {
 		GenericUpdateFixedValue[types.Datetime](col, row, val, isNull)
 	case types.T_timestamp:
 		GenericUpdateFixedValue[types.Timestamp](col, row, val, isNull)
+	case types.T_enum:
+		GenericUpdateFixedValue[types.Enum](col, row, val, isNull)
 	case types.T_uuid:
 		GenericUpdateFixedValue[types.Uuid](col, row, val, isNull)
 	case types.T_TS:
@@ -496,6 +499,18 @@ func ForeachVectorWindow(
 		var op func(types.Datetime, bool, int) error
 		if op1 != nil {
 			op = op1.(func(types.Datetime, bool, int) error)
+		}
+		return ForeachWindowFixed(
+			col,
+			start,
+			length,
+			op,
+			op2,
+			sel)
+	case types.T_enum:
+		var op func(types.Enum, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Enum, bool, int) error)
 		}
 		return ForeachWindowFixed(
 			col,
@@ -817,6 +832,9 @@ func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any 
 		return overload(args...)
 	case types.T_datetime:
 		overload := overloads[t].(func(...any) func(types.Datetime, bool, int) error)
+		return overload(args...)
+	case types.T_enum:
+		overload := overloads[t].(func(...any) func(types.Enum, bool, int) error)
 		return overload(args...)
 	case types.T_TS:
 		overload := overloads[t].(func(...any) func(types.TS, bool, int) error)

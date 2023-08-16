@@ -15,11 +15,14 @@
 package function
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1508,6 +1511,27 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return AbsDecimal128
+				},
+			},
+		},
+	},
+
+	// function `sqrt`
+	{
+		functionId: SQRT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqrt
 				},
 			},
 		},
@@ -4415,6 +4439,75 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `cast_index_to_value`
+	{
+		functionId: CAST_INDEX_TO_VALUE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_uint16},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastIndexToValue
+				},
+			},
+		},
+	},
+
+	// function `cast_value_to_index`
+	{
+		functionId: CAST_VALUE_TO_INDEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastValueToIndex
+				},
+			},
+		},
+	},
+
+	// function `cast_index_value_to_index`
+	{
+		functionId: CAST_INDEX_VALUE_TO_INDEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_uint16},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastIndexValueToIndex
+				},
+			},
+		},
+	},
+
 	// function `mo_table_rows`
 	{
 		functionId: MO_TABLE_ROWS,
@@ -4787,18 +4880,19 @@ var supportedOthersBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 3 {
+				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() || !inputs[2].Oid.IsMySQLString() {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
 				return newCheckResultWithSuccess(1)
 			}
-			if len(inputs) != 2 {
-				return newCheckResultWithFailure(failedAggParametersWrong)
+
+			if len(inputs) == 2 {
+				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				return newCheckResultWithSuccess(0)
 			}
-			if inputs[0].Oid != types.T_bool {
-				return newCheckResultWithFailure(failedAggParametersWrong)
-			}
-			if inputs[1].Oid != types.T_varchar {
-				return newCheckResultWithFailure(failedAggParametersWrong)
-			}
-			return newCheckResultWithSuccess(0)
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
 
 		Overloads: []overload{
@@ -4810,7 +4904,13 @@ var supportedOthersBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-						errMsg := parameters[1].GetStringAt(0)
+						errMsgs := vector.GenerateFunctionStrParameter(parameters[1])
+						value2, null := errMsgs.GetStrValue(0)
+						if null {
+							return moerr.NewInternalError(proc.Ctx, "the second parameter of assert() should not be null")
+						}
+						errMsg := functionUtil.QuickBytesToStr(value2)
+
 						res := vector.MustFunctionResult[bool](result)
 						for i := uint64(0); i < uint64(length); i++ {
 							flag, isNull := checkFlags.GetValue(i)
@@ -4824,28 +4924,54 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 0,
+				overloadId: 1,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+						sourceValues := vector.GenerateFunctionStrParameter(parameters[1])
+						columnNames := vector.GenerateFunctionStrParameter(parameters[2])
+						// do a safe check
+						if columnNames.WithAnyNullValue() {
+							return moerr.NewInternalError(proc.Ctx, "the third parameter of assert() should not be null")
+						}
 						res := vector.MustFunctionResult[bool](result)
-						for i := uint64(0); i < uint64(length); i++ {
-							flag, isNull := checkFlags.GetValue(i)
-							if isNull || !flag {
-								if parameters[1].GetType().Oid == types.T_varchar && parameters[1].GetType().Width == types.MaxVarcharLen {
-									bytes := parameters[1].GetBytesAt(int(i))
-									tuples, _, err := types.DecodeTuple(bytes)
-									if err == nil {
-										errMsg := tuples.ErrString()
-										return moerr.NewDuplicateEntry(proc.Ctx, errMsg, parameters[2].GetStringAt(int(i)))
+						loopLength := uint64(length)
+
+						// bad design.
+						castFlag := parameters[1].GetType().Width == types.MaxVarcharLen
+						if castFlag {
+							for i := uint64(0); i < loopLength; i++ {
+								flag, null1 := checkFlags.GetValue(i)
+								if null1 || !flag {
+									value, null2 := sourceValues.GetStrValue(i)
+									col, _ := columnNames.GetStrValue(i)
+									if !null2 {
+										tuples, _, err := types.DecodeTuple(value)
+										if err == nil { // complex key
+											return moerr.NewDuplicateEntry(proc.Ctx, tuples.ErrString(), string(col))
+										}
+										return moerr.NewDuplicateEntry(proc.Ctx, string(value), string(col))
 									}
+									return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("column '%s' cannot be null", string(col)))
 								}
-								return moerr.NewDuplicateEntry(proc.Ctx, parameters[1].GetStringAt(int(i)), parameters[2].GetStringAt(int(i)))
+								res.AppendMustValue(true)
 							}
-							res.AppendMustValue(true)
+						} else {
+							for i := uint64(0); i < loopLength; i++ {
+								flag, null1 := checkFlags.GetValue(i)
+								if null1 || !flag {
+									value, null2 := sourceValues.GetStrValue(i)
+									col, _ := columnNames.GetStrValue(i)
+									if !null2 {
+										return moerr.NewDuplicateEntry(proc.Ctx, string(value), string(col))
+									}
+									return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("column '%s' cannot be null", string(col)))
+								}
+								res.AppendMustValue(true)
+							}
 						}
 						return nil
 					}
@@ -4861,7 +4987,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) != 1 {
-				return newCheckResultWithFailure(failedAggParametersWrong)
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 			return newCheckResultWithSuccess(0)
 		},
@@ -4893,10 +5019,10 @@ var supportedOthersBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) != 2 {
-				return newCheckResultWithFailure(failedAggParametersWrong)
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 			if inputs[0].Oid != types.T_Rowid || inputs[1].Oid != types.T_Rowid {
-				return newCheckResultWithFailure(failedAggParametersWrong)
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 			return newCheckResultWithSuccess(0)
 		},
@@ -4912,15 +5038,24 @@ var supportedOthersBuiltIns = []FuncNew{
 						leftRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[0])
 						rightRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[1])
 						res := vector.MustFunctionResult[bool](result)
-						rightRowIdMap := make(map[types.Rowid]struct{})
-						for i := uint64(0); i < uint64(length); i++ {
+
+						var rightRowIdMap map[types.Rowid]struct{}
+						if rightRow.WithAnyNullValue() {
+							rightRowIdMap = make(map[types.Rowid]struct{})
+						} else {
+							// XXX not sure, but row_id may not be duplicated I think.
+							rightRowIdMap = make(map[types.Rowid]struct{}, length)
+						}
+
+						loopLength := uint64(length)
+						for i := uint64(0); i < loopLength; i++ {
 							rightRowId, isNull := rightRow.GetValue(i)
 							if !isNull {
 								rightRowIdMap[rightRowId] = struct{}{}
 							}
 						}
 
-						for i := uint64(0); i < uint64(length); i++ {
+						for i := uint64(0); i < loopLength; i++ {
 							leftRowId, isNull := leftRow.GetValue(i)
 							notInRows := false
 							if !isNull {

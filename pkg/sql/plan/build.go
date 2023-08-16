@@ -15,6 +15,9 @@
 package plan
 
 import (
+	"context"
+	gotrace "runtime/trace"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -54,6 +57,8 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepa
 }
 
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+	_, task := gotrace.NewTask(context.TODO(), "plan.BuildPlan")
+	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt, isPrepareStmt)

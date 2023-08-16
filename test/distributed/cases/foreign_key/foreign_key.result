@@ -482,7 +482,7 @@ create table fk_an_03(col1 int,col2 char(25),constraint ck foreign key(col1) REF
 no such table foreign_key.fk_an_05
 create table fk_an_04(col1 bigint,col2 varchar(25),col3 tinyint);
 create table fk_an_05(col1 bigint,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1) REFERENCES fk_an_04(col1) on delete CASCADE on update CASCADE);
-internal error: reference column 'col1' is not unique constraint(Unique index or Primary Key)
+internal error: failed to add the foreign key constraint
 create table f1 (fa int primary key);
 CREATE TABLE c1 (ca INT, cb INT);
 ALTER TABLE c1 ADD CONSTRAINT ffa FOREIGN KEY (ca) REFERENCES f1(fa);
@@ -490,3 +490,23 @@ desc c1;
 Field    Type    Null    Key    Default    Extra    Comment
 ca    INT(32)    YES        null
 cb    INT(32)    YES    MUL    null
+drop table if exists c1;
+drop table if exists f1;
+create table f1 (a int, b int, c int, d int, e int, primary key(a,b), unique key(c,d));
+insert into f1 values (1,1,1,1,1),(2,2,2,2,2),(3,3,3,3,3),(2,1,2,1,1),(3,1,3,1,1),(4,1,4,1,1),(1,2,1,2,1);
+create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_a) REFERENCES f1(a));
+insert into c1 values (1,1,1,1,1);
+insert into c1 values (2,5,1,1,1);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+drop table c1;
+create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_a) REFERENCES f1(a) on delete CASCADE on update CASCADE);
+insert into c1 values (1,1,1,1,1);
+delete from f1 where a=1 and b=2;
+select * from c1;
+a    f_a    f_b    f_c    f_d
+drop table c1;
+create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_a,f_b) REFERENCES f1(a,b));
+drop table c1;
+create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_a,f_c) REFERENCES f1(a,c)); 
+internal error: failed to add the foreign key constraint
+create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_c,f_d) REFERENCES f1(c,d));

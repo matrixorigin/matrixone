@@ -70,6 +70,7 @@ Main workflow:
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sort"
 	"strconv"
 	"strings"
@@ -673,7 +674,14 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		Commands:    entries,
 	}, nil
 }
-
+func GetMetaIdxesByVersion(ver uint32) []uint16 {
+	meteIdxSchema := checkpointDataReferVersions[ver][MetaIDX]
+	idxes := make([]uint16, len(meteIdxSchema.attrs))
+	for attr := range meteIdxSchema.attrs {
+		idxes[attr] = uint16(attr)
+	}
+	return idxes
+}
 func LoadCheckpointEntries(
 	ctx context.Context,
 	metLoc string,
@@ -696,6 +704,7 @@ func LoadCheckpointEntries(
 	readers := make([]*blockio.BlockReader, len(locationsAndVersions)/2)
 	objectLocations := make([]objectio.Location, len(locationsAndVersions)/2)
 	versions := make([]uint32, len(locationsAndVersions)/2)
+	locations := make([]objectio.Location, len(locationsAndVersions)/2)
 	for i := 0; i < len(locationsAndVersions); i += 2 {
 		key := locationsAndVersions[i]
 		version, err := strconv.ParseUint(locationsAndVersions[i+1], 10, 32)
@@ -706,6 +715,7 @@ func LoadCheckpointEntries(
 		if err != nil {
 			return nil, nil, err
 		}
+		locations[i/2] = location
 		reader, err := blockio.NewObjectReader(fs, location)
 		if err != nil {
 			return nil, nil, err
@@ -721,26 +731,56 @@ func LoadCheckpointEntries(
 
 	for i := range objectLocations {
 		data := NewCNCheckpointData()
-		err := data.PrefetchFrom(ctx, versions[i], fs, objectLocations[i])
+		meteIdxSchema := checkpointDataReferVersions[versions[i]][MetaIDX]
+		idxes := make([]uint16, len(meteIdxSchema.attrs))
+		for attr := range meteIdxSchema.attrs {
+			idxes[attr] = uint16(attr)
+		}
+		err := data.PrefetchMetaIdx(ctx, versions[i], idxes, objectLocations[i], fs)
 		if err != nil {
 			return nil, nil, err
 		}
 		datas[i] = data
 	}
 
+	for i := range datas {
+		err := datas[i].InitMetaIdx(ctx, versions[i], readers[i], locations[i], mp)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	for i := range datas {
+		err := datas[i].PrefetchMetaFrom(ctx, versions[i], locations[i], fs, tableID)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	for i := range datas {
+		err := datas[i].PrefetchFrom(ctx, versions[i], fs, locations[i], tableID)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	closeCBs := make([]func(), 0)
+	bats := make([][]*batch.Batch, len(locationsAndVersions)/2)
+	var err error
 	for i, data := range datas {
-		err := data.ReadFrom(ctx, readers[i], versions[i], mp)
+		var bat []*batch.Batch
+		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
 			return nil, closeCBs, err
 		}
+		bats[i] = bat
 	}
 
 	entries := make([]*api.Entry, 0)
 	for i := range objectLocations {
 		data := datas[i]
-		ins, del, cnIns, segDel, err := data.GetTableData(tableID)
+		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
 			return nil, closeCBs, err
 		}

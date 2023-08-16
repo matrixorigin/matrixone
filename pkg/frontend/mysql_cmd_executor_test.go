@@ -234,6 +234,7 @@ func Test_mce(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		ses := NewSession(proto, nil, pu, &gSys, true, nil, nil)
+		proto.SetSession(ses)
 		ses.txnHandler = &TxnHandler{
 			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
 			txnClient: pu.TxnClient,
@@ -950,6 +951,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
+		proto.SetSession(ses)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}

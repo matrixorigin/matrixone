@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "alter table t1 add column x varchar(20) primary key after b",
-		output: "alter table t1 add column x varchar(20) primary key after b",
+		input:  "CREATE STREAM enriched WITH (\n    VALUE_SCHEMA_ID = 1\n  ) AS\n  SELECT\n     cs.*,\n     u.name,\n     u.classification,\n     u.level\n  FROM clickstream cs\n    JOIN users u ON u.id = cs.userId",
+		output: "create stream enriched with (value_schema_id = 1) as select cs.*, u.name, u.classification, u.level from clickstream as cs inner join users as u on u.id = cs.userid",
 	}
 )
 
@@ -78,6 +78,21 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "CREATE STREAM enriched WITH (\n    VALUE_SCHEMA_ID = 1\n  ) AS\n  SELECT\n     cs.*,\n     u.name,\n     u.classification,\n     u.level\n  FROM clickstream cs\n    JOIN users u ON u.id = cs.userId",
+		output: "create stream enriched with (value_schema_id = 1) as select cs.*, u.name, u.classification, u.level from clickstream as cs inner join users as u on u.id = cs.userid",
+	}, {
+		input:  "CREATE STREAM filtered AS\n   SELECT \n     a, \n     few,\n     columns \n   FROM source_stream",
+		output: "create stream filtered as select a, few, columns from source_stream",
+	}, {
+		input:  "CREATE STREAM pageviews (\n    page_id BIGINT KEY\n  ) WITH (\n    KAFKA_TOPIC = 'keyed-pageviews-topic',\n    VALUE_FORMAT = 'JSON_SR',\n    VALUE_SCHEMA_ID = 2\n  );",
+		output: "create stream pageviews (page_id bigint key) with (kafka_topic = keyed-pageviews-topic, value_format = JSON_SR, value_schema_id = 2)",
+	}, {
+		input:  "CREATE STREAM pageviews (\n    viewtime BIGINT,\n    user_id VARCHAR\n  ) WITH (\n    KAFKA_TOPIC = 'keyless-pageviews-topic',\n    KEY_FORMAT = 'AVRO',\n    KEY_SCHEMA_ID = 1,\n    VALUE_FORMAT = 'JSON_SR'\n  );",
+		output: "create stream pageviews (viewtime bigint, user_id varchar) with (kafka_topic = keyless-pageviews-topic, key_format = AVRO, key_schema_id = 1, value_format = JSON_SR)",
+	}, {
+		input:  "CREATE STREAM pageviews (page_id BIGINT, viewtime BIGINT, user_id VARCHAR) WITH (\n    KAFKA_TOPIC = 'keyless-pageviews-topic',\n    VALUE_FORMAT = 'JSON'\n  )",
+		output: "create stream pageviews (page_id bigint, viewtime bigint, user_id varchar) with (kafka_topic = keyless-pageviews-topic, value_format = JSON)",
+	}, {
 		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 	}, {
@@ -156,8 +171,8 @@ var (
 	}, {
 		input: "select a from t1 use index(b)",
 	}, {
-		input:  "SELECT   id,cid,status,ip,stream   FROM camera     WHERE (cid_type = ?)",
-		output: "select id, cid, status, ip, stream from camera where (cid_type = ?)",
+		input:  "SELECT   id,cid,status,ip,streams   FROM camera     WHERE (cid_type = ?)",
+		output: "select id, cid, status, ip, streams from camera where (cid_type = ?)",
 	}, {
 		input:  "CREATE  \nVIEW `xab0100` AS (\n  select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` \n  from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) \n  order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) ;\n",
 		output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
@@ -472,7 +487,7 @@ var (
 		output: "select group_concat(distinct 2, ,) from t1",
 	}, {
 		input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
-		output: "select group_concat(distinct a, ,) from t1",
+		output: "select group_concat(distinct a, ,order by a) from t1",
 	}, {
 		input: "select variance(2) from t1",
 	}, {
@@ -888,6 +903,8 @@ var (
 			input: "select avg(u.a), count(u.b), cast(u.c as varchar) from u",
 		}, {
 			input: "select avg(u.a), count(*) from u",
+		}, {
+			input: "select approx_count(*) from u",
 		}, {
 			input: "select avg(u.a), count(u.b) from u",
 		}, {

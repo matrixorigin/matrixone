@@ -63,8 +63,6 @@ type container struct {
 	multiVecs [][]evalVector
 
 	vecs []*vector.Vector
-	// we use this to distinct bat.Aggs[i] is UnaryAgg or MultiAgg
-	mapAggType map[int32]int
 
 	bat *batch.Batch
 
@@ -72,14 +70,16 @@ type container struct {
 }
 
 type Argument struct {
-	ctr       *container
-	NeedEval  bool // need to projection the aggregate column
-	Ibucket   uint64
-	Nbucket   uint64
-	Exprs     []*plan.Expr // group Expressions
-	Types     []types.Type
-	Aggs      []agg.Aggregate         // aggregations
-	MultiAggs []group_concat.Argument // multiAggs, for now it's group_concat
+	ctr          *container
+	IsShuffle    bool // is shuffle group
+	PreAllocSize uint64
+	NeedEval     bool // need to projection the aggregate column
+	Ibucket      uint64
+	Nbucket      uint64
+	Exprs        []*plan.Expr // group Expressions
+	Types        []types.Type
+	Aggs         []agg.Aggregate         // aggregations
+	MultiAggs    []group_concat.Argument // multiAggs, for now it's group_concat
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

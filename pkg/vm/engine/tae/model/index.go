@@ -33,7 +33,7 @@ type simpleLRU struct {
 
 func NewSimpleLRU(capacity int64) LRUCache {
 	return &simpleLRU{
-		impl: *lrucache.New[any, fileservice.Bytes](capacity, nil, nil),
+		impl: *lrucache.New[any, fileservice.Bytes](capacity, nil, nil, nil),
 	}
 }
 

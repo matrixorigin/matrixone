@@ -166,6 +166,7 @@ import (
     zeroFillOpt bool
     ifNotExists bool
     defaultOptional bool
+    streamOptional bool
     fullOpt bool
     boolVal bool
     int64Val int64
@@ -245,7 +246,7 @@ import (
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
-%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
+%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
@@ -393,11 +394,14 @@ import (
 // With
 %token <str> RECURSIVE CONFIG DRAINER
 
+// Stream
+%token <str> SOURCE STREAM HEADERS
+
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
 // Built-in function
-%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
+%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
@@ -440,6 +444,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
+%type <statement> create_stream_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -529,7 +534,7 @@ import (
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list
+%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -544,7 +549,7 @@ import (
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
 
-%type <tableOption> table_option
+%type <tableOption> table_option stream_option
 %type <from> from_clause from_opt
 %type <where> where_expression_opt having_opt
 %type <groupBy> group_by_opt
@@ -590,6 +595,7 @@ import (
 %type <createOptions> create_option_list_opt create_option_list
 %type <ifNotExists> not_exists_opt
 %type <defaultOptional> default_opt
+%type <streamOptional> replace_opt
 %type <str> database_or_schema
 %type <indexType> using_opt
 %type <indexCategory> index_prefix
@@ -5059,6 +5065,7 @@ create_ddl_stmt:
 |   create_extension_stmt
 |   create_sequence_stmt
 |   create_procedure_stmt
+|	create_stream_stmt
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -6072,6 +6079,49 @@ default_opt:
         $$ = true
     }
 
+create_stream_stmt:
+    CREATE replace_opt STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
+    {
+        $$ = &tree.CreateStream {
+            Replace: $2,
+            Source: false,
+            IfNotExists: $4,
+            StreamName: *$5,
+            Defs: $7,
+            Options: $9,
+        }
+    }
+|   CREATE replace_opt SOURCE STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
+    {
+        $$ = &tree.CreateStream {
+            Replace: $2,
+            Source: true,
+            IfNotExists: $5,
+            StreamName: *$6,
+            Defs: $8,
+            Options: $10,
+        }
+    }
+|	CREATE replace_opt STREAM not_exists_opt table_name stream_option_list_opt AS select_stmt
+    {
+        $$ = &tree.CreateStream {
+            Replace: $2,
+            IfNotExists: $4,
+            StreamName: *$5,
+            AsSource: $8,
+            Options: $6,
+        }
+    }
+
+replace_opt:
+    {
+        $$ = false
+    }
+|   OR REPLACE
+    {
+        $$ = true
+    }
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -6595,6 +6645,31 @@ linear_opt:
 |   LINEAR
     {
         $$ = true
+    }
+
+stream_option_list_opt:
+    {
+        $$ = nil
+    }
+|	WITH '(' stream_option_list ')'
+	{
+		$$ = $3
+	}
+
+stream_option_list:
+	stream_option
+	{
+		$$ = []tree.TableOption{$1}
+	}
+|	stream_option_list ',' stream_option
+	{
+		$$ = append($1, $3)
+	}
+
+stream_option:
+	ident equal_opt literal
+    {
+        $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1.Compare()) , Val: $3}
     }
 
 table_option_list_opt:
@@ -7251,6 +7326,14 @@ column_attribute_elem:
     {
         $$ = nil
     }
+|	HEADER '(' STRING ')'
+	{
+		$$ = tree.NewAttributeHeader($3)
+	}
+|	HEADERS
+	{
+		$$ = tree.NewAttributeHeaders()
+	}
 
 enforce:
     ENFORCED
@@ -7934,14 +8017,14 @@ window_spec:
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
-            Type: $3,
-            WindowSpec: $8,
-            AggType: 2,
-        }
+	    name := tree.SetUnresolvedName(strings.ToLower($1))
+	        $$ = &tree.FuncExpr{
+	        Func: tree.FuncName2ResolvableFunctionReference(name),
+	        Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
+	        Type: $3,
+	        WindowSpec: $8,
+            OrderBy:$5,
+	    }
     }
 |   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
@@ -7951,6 +8034,26 @@ function_call_aggregate:
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
+        }
+    }
+|   APPROX_COUNT '(' func_type_opt expression_list ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $4,
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
+|   APPROX_COUNT '(' '*' ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{es},
+            WindowSpec: $5,
         }
     }
 |   APPROX_COUNT_DISTINCT '(' expression_list ')' window_spec_opt
@@ -8099,8 +8202,10 @@ function_call_aggregate:
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
 	    WindowSpec: $6,
-	}
+	    }
     }
+
+
 
 std_dev_pop:
     STD
@@ -10049,10 +10154,10 @@ non_reserved_keyword:
 |   START
 |   STATUS
 |   STORAGE
-|	STREAM
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
 |   STATS_SAMPLE_PAGES
+|	SOURCE
 |   SUBPARTITIONS
 |   SUBPARTITION
 |   SIMPLE
@@ -10091,7 +10196,6 @@ non_reserved_keyword:
 |   DATE %prec LOWER_THAN_STRING
 |   TABLES
 |   SEQUENCES
-|   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ
 |   HASH
@@ -10138,6 +10242,7 @@ not_keyword:
 |   BIT_XOR
 |   CAST
 |   COUNT
+|   APPROX_COUNT
 |   APPROX_COUNT_DISTINCT
 |   APPROX_PERCENTILE
 |   CURDATE
@@ -10173,6 +10278,7 @@ not_keyword:
 |   SETVAL
 |   CURRVAL
 |   LASTVAL
+|	HEADERS
 
 //mo_keywords:
 //    PROPERTIES

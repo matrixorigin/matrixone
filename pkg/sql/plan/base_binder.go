@@ -309,6 +309,42 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	}
 
+	if typ != nil && typ.Id == int32(types.T_enum) && len(typ.GetEnumvalues()) != 0 {
+		if err != nil {
+			errutil.ReportError(b.GetContext(), err)
+			return
+		}
+		astArgs := []tree.Expr{
+			tree.NewNumValWithType(constant.MakeString(table), table, false, tree.P_char),
+			tree.NewNumValWithType(constant.MakeString(col), col, false, tree.P_char),
+		}
+
+		// bind ast function's args
+		args := make([]*Expr, len(astArgs)+1)
+		for idx, arg := range astArgs {
+			if idx == len(args)-1 {
+				continue
+			}
+			expr, err := b.impl.BindExpr(arg, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			args[idx] = expr
+		}
+		args[len(args)-1] = &Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: relPos,
+					ColPos: colPos,
+					Name:   col,
+				},
+			},
+		}
+
+		return bindFuncExprImplByPlanExpr(b.GetContext(), moEnumCastIndexToValueFun, args)
+	}
+
 	if colPos != NotFound {
 		b.boundCols = append(b.boundCols, table+"."+col)
 
@@ -937,6 +973,24 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 		}
+	case "approx_count":
+		if b.ctx == nil {
+			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid field reference to COUNT")
+		}
+		switch nval := astArgs[0].(type) {
+		case *tree.NumVal:
+			if nval.String() == "*" {
+				if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
+					name = "count"
+				} else {
+					astArgs = []tree.Expr{tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)}
+				}
+			} else {
+				name = "count"
+			}
+		default:
+			name = "count"
+		}
 	case "trim":
 		astArgs = astArgs[1:]
 	}
@@ -1435,6 +1489,16 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		}
+	}
+
+	if name == NameGroupConcat {
+		expressionList := args[:len(args)-1]
+		separator := args[len(args)-1]
+		compactCol, e := bindFuncExprImplByPlanExpr(ctx, "serial", expressionList)
+		if e != nil {
+			return nil, e
+		}
+		args = []*plan.Expr{compactCol, separator}
 	}
 
 	// return new expr

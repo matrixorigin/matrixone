@@ -133,7 +133,7 @@ func jobFactory(
 	)
 }
 
-func fetchReader(params prefetchParams) (reader *objectio.ObjectReader) {
+func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
 	if params.reader != nil {
 		reader = params.reader
 	} else {
@@ -143,7 +143,7 @@ func fetchReader(params prefetchParams) (reader *objectio.ObjectReader) {
 }
 
 // prefetch data job
-func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
+func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
 	return getJob(
 		ctx,
@@ -152,13 +152,35 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := reader.ReadMultiBlocks(ctx,
-				params.ids, nil)
-			if err != nil {
-				res.Err = err
-				return
+			if params.dataType == objectio.CkpMetaStart {
+				ioVectors, err := reader.ReadMultiSubBlocks(ctx, params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				// no further reads
+				res.Res = nil
+				ioVectors.Release()
+			} else if params.dataType == objectio.CkpAllData {
+				ioVectors, err := reader.ReadMultiAllSubBlocks(ctx, params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				// no further reads
+				res.Res = nil
+				ioVectors.Release()
+			} else {
+				ioVectors, err := reader.ReadMultiBlocks(ctx,
+					params.ids, nil)
+				if err != nil {
+					res.Err = err
+					return
+				}
+				// no further reads
+				res.Res = nil
+				ioVectors.Release()
 			}
-			res.Res = ioVectors
 			if params.reader == nil {
 				putReader(reader)
 			}
@@ -168,37 +190,33 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 }
 
 // prefetch metadata job
-func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
-	reader := fetchReader(params)
+func prefetchMetaJob(ctx context.Context, params PrefetchParams) *tasks.Job {
+	name := params.key.Name().String()
 	return getJob(
 		ctx,
-		makeName(reader.GetName()),
+		makeName(name),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
-			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := reader.ReadMeta(ctx, nil)
+			objectMeta, err := objectio.FastLoadObjectMeta(ctx, &params.key, true, params.fs)
 			if err != nil {
 				res.Err = err
 				return
 			}
-			res.Res = ioVectors
-			if params.reader == nil {
-				putReader(reader)
-			}
+			res.Res = objectMeta
 			return
 		},
 	)
 }
 
 type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
-type PrefetchFunc = func(params prefetchParams) error
+type PrefetchFunc = func(params PrefetchParams) error
 
 func readColumns(ctx context.Context, params fetchParams) (any, error) {
 	return params.reader.ReadOneBlock(ctx, params.idxes, params.typs, params.blk, nil)
 }
 
-func noopPrefetch(params prefetchParams) error {
+func noopPrefetch(params PrefetchParams) error {
 	// Synchronous prefetch does not need to do anything
 	return nil
 }
@@ -256,10 +274,8 @@ func NewIOPipeline(
 		100,
 		p.onWait)
 
-	p.prefetch.queue = sm.NewSafeQueue(
-		p.options.queueDepth,
-		64,
-		p.onPrefetch)
+	// the prefetch queue is supposed to be an unblocking queue
+	p.prefetch.queue = sm.NewNonBlockingQueue(p.options.queueDepth, 64, p.onPrefetch)
 	p.prefetch.scheduler = tasks.NewParallelJobScheduler(p.options.prefetchParallism)
 
 	p.fetch.queue = sm.NewSafeQueue(
@@ -368,7 +384,7 @@ func (p *IoPipeline) doAsyncFetch(
 	return
 }
 
-func (p *IoPipeline) Prefetch(params prefetchParams) (err error) {
+func (p *IoPipeline) Prefetch(params PrefetchParams) (err error) {
 	return p.prefetchFunc(params)
 }
 
@@ -386,11 +402,12 @@ func (p *IoPipeline) doFetch(
 	return
 }
 
-func (p *IoPipeline) doPrefetch(params prefetchParams) (err error) {
-	if _, err = p.prefetch.queue.Enqueue(params); err != nil {
-		return
+func (p *IoPipeline) doPrefetch(params PrefetchParams) (err error) {
+	if _, err = p.prefetch.queue.Enqueue(params); err == sm.ErrFull {
+		p.stats.prefetchDropStats.Add(1)
 	}
-	return
+	// prefetch doesn't care about what type of err has occurred
+	return nil
 }
 
 func (p *IoPipeline) onFetch(jobs ...any) {
@@ -403,18 +420,15 @@ func (p *IoPipeline) onFetch(jobs ...any) {
 }
 
 func (p *IoPipeline) schedulerPrefetch(job *tasks.Job) {
-	p.sensors.prefetchDepth.Add(1)
 	if err := p.prefetch.scheduler.Schedule(job); err != nil {
 		job.DoneWithErr(err)
 		logutil.Debugf("err is %v", err.Error())
 		putJob(job)
-		p.sensors.prefetchDepth.Add(-1)
 	} else {
 		if _, err := p.waitQ.Enqueue(job); err != nil {
 			job.DoneWithErr(err)
 			logutil.Debugf("err is %v", err.Error())
 			putJob(job)
-			p.sensors.prefetchDepth.Add(-1)
 		}
 	}
 }
@@ -427,19 +441,13 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		return
 	}
 
-	// if the prefetch queue is full, we will drop the prefetch request
-	if p.sensors.prefetchDepth.IsRed() {
-		p.stats.prefetchDropStats.Add(int64(len(items)))
-		return
-	}
-
-	processes := make([]prefetchParams, 0)
+	processes := make([]PrefetchParams, 0)
 	for _, item := range items {
-		option := item.(prefetchParams)
+		option := item.(PrefetchParams)
 		if len(option.ids) == 0 {
 			job := prefetchMetaJob(
 				context.Background(),
-				item.(prefetchParams),
+				item.(PrefetchParams),
 			)
 			p.schedulerPrefetch(job)
 			continue
@@ -463,12 +471,16 @@ func (p *IoPipeline) onWait(jobs ...any) {
 	for _, j := range jobs {
 		job := j.(*tasks.Job)
 		res := job.WaitDone()
+		if res == nil {
+			logutil.Infof("job is %v", job.String())
+			putJob(job)
+			return
+		}
 		if res.Err != nil {
 			logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)
 		}
 		putJob(job)
 	}
-	p.sensors.prefetchDepth.Add(-int64(len(jobs)))
 }
 
 func (p *IoPipeline) crontask(ctx context.Context) {
@@ -479,6 +491,7 @@ func (p *IoPipeline) crontask(ctx context.Context) {
 		if wdrops > 0 {
 			logutil.Infof("PrefetchDropStats: %d", wdrops)
 		}
+		logutil.Info(objectio.ExportMetaCacheStats())
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

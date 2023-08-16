@@ -939,6 +939,8 @@ type FuncExpr struct {
 	AggType AggType
 
 	WindowSpec *WindowSpec
+
+	OrderBy OrderBy
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
@@ -954,6 +956,11 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	} else {
 		node.Exprs.Format(ctx)
 	}
+
+	if node.OrderBy != nil {
+		node.OrderBy.Format(ctx)
+	}
+
 	ctx.WriteByte(')')
 
 	if node.WindowSpec != nil {

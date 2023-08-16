@@ -75,11 +75,13 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 		storeInfo = CNStoreInfo{}
 		storeInfo.Labels = make(map[string]metadata.LabelList)
 	}
-	v, ok := metadata.WorkState_value[metadata.ToTitle(hb.InitWorkState)]
-	if !ok {
-		storeInfo.WorkState = metadata.WorkState_Working
-	} else {
-		storeInfo.WorkState = metadata.WorkState(v)
+	if storeInfo.WorkState == metadata.WorkState_Unknown { // set init value
+		v, ok := metadata.WorkState_value[metadata.ToTitle(hb.InitWorkState)]
+		if !ok || v == int32(metadata.WorkState_Unknown) {
+			storeInfo.WorkState = metadata.WorkState_Working
+		} else {
+			storeInfo.WorkState = metadata.WorkState(v)
+		}
 	}
 	storeInfo.Tick = tick
 	storeInfo.ServiceAddress = hb.ServiceAddress

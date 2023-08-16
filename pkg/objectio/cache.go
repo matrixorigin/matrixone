@@ -15,11 +15,14 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"sync"
 )
 
 type CacheConfig struct {
@@ -28,37 +31,79 @@ type CacheConfig struct {
 
 var metaCache *lrucache.LRU[ObjectNameShort, fileservice.Bytes]
 var onceInit sync.Once
+var metaCacheStats hitStats
+var metaCacheHitStats hitStats
 
 func init() {
-	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil)
+	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil)
+		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil, nil)
 	})
+}
+
+func ExportMetaCacheStats() string {
+	var buf bytes.Buffer
+	hw, hwt := metaCacheHitStats.ExportW()
+	ht, htt := metaCacheHitStats.Export()
+	w, wt := metaCacheStats.ExportW()
+	t, tt := metaCacheStats.Export()
+	fmt.Fprintf(
+		&buf,
+		"MetaCacheWindow: %d/%d | %d/%d, MetaCacheTotal: %d/%d | %d/%d",
+		hw, hwt, w, wt, ht, htt, t, tt,
+	)
+	return buf.String()
 }
 
 func LoadObjectMetaByExtent(
 	ctx context.Context,
 	name *ObjectName,
 	extent *Extent,
+	prefetch bool,
 	noLRUCache bool,
-	fs fileservice.FileService) (meta ObjectMeta, err error) {
+	fs fileservice.FileService,
+) (meta ObjectMeta, err error) {
 	v, ok := metaCache.Get(ctx, *name.Short(), false)
 	if ok {
-		meta = ObjectMeta(v)
+		var obj any
+		obj, err = Decode(v)
+		if err != nil {
+			return
+		}
+		meta = obj.(ObjectMeta)
+		metaCacheStats.Record(1, 1)
+		if !prefetch {
+			metaCacheHitStats.Record(1, 1)
+		}
 		return
 	}
-	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
+	if v, err = ReadExtent(ctx, name.String(), extent, noLRUCache, fs, constructorFactory); err != nil {
 		return
 	}
-	metaCache.Set(ctx, *name.Short(), fileservice.Bytes(meta), false)
+	var obj any
+	obj, err = Decode(v)
+	if err != nil {
+		return
+	}
+	meta = obj.(ObjectMeta)
+	metaCache.Set(ctx, *name.Short(), v[:], false)
+	metaCacheStats.Record(0, 1)
+	if !prefetch {
+		metaCacheHitStats.Record(0, 1)
+	}
 	return
 }
 
-func FastLoadObjectMeta(ctx context.Context, location *Location, fs fileservice.FileService) (ObjectMeta, error) {
+func FastLoadObjectMeta(
+	ctx context.Context,
+	location *Location,
+	prefetch bool,
+	fs fileservice.FileService,
+) (ObjectMeta, error) {
 	extent := location.Extent()
 	name := location.Name()
-	return LoadObjectMetaByExtent(ctx, &name, &extent, true, fs)
+	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, true, fs)
 }

@@ -80,7 +80,7 @@ type Block interface {
 	GetMeta() any
 
 	MakeAppender() (BlockAppender, error)
-	RangeDelete(txn txnif.AsyncTxn, start, end uint32, dt handle.DeleteType) (txnif.DeleteNode, error)
+	RangeDelete(txn txnif.AsyncTxn, start, end uint32, pk containers.Vector, dt handle.DeleteType) (txnif.DeleteNode, error)
 	TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location) (node txnif.DeleteNode, ok bool, err error)
 
 	GetTotalChanges() int

@@ -34,11 +34,10 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("processing on duplicate key before insert")
 }
 
-func Prepare(_ *proc, arg any) error {
+func Prepare(p *proc, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = &container{
-		emptyBat: batch.EmptyBatch,
-	}
+	ap.ctr = &container{}
+	ap.ctr.InitReceiver(p, true)
 	return nil
 }
 
@@ -47,37 +46,46 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus,
 	anal.Start()
 	defer anal.Stop()
 
-	var err error
 	arg := x.(*Argument)
-	bat := proc.Reg.InputBatch
-	anal.Input(bat, isFirst)
-	if bat == nil {
-		if arg.ctr.insertBat != nil {
-			newBat, err := arg.ctr.insertBat.Dup(proc.Mp())
-			if err != nil {
-				return process.ExecNext, err
+	ctr := arg.ctr
+
+	for {
+		switch ctr.state {
+		case Build:
+			for {
+				bat, end, err := ctr.ReceiveFromAllRegs(anal)
+				if err != nil {
+					return process.ExecStop, nil
+				}
+
+				if end {
+					break
+				}
+				anal.Input(bat, isFirst)
+				err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
+				if err != nil {
+					bat.Clean(proc.Mp())
+					return process.ExecNext, err
+				}
+
 			}
-			anal.Output(newBat, isLast)
-			proc.SetInputBatch(newBat)
+			ctr.state = Eval
+
+		case Eval:
+			if ctr.insertBat != nil {
+				anal.Output(ctr.insertBat, isLast)
+				proc.SetInputBatch(ctr.insertBat)
+				ctr.insertBat = nil
+				ctr.state = End
+				return process.ExecNext, nil
+			}
+			ctr.state = End
+
+		case End:
+			proc.SetInputBatch(nil)
+			return process.ExecStop, nil
 		}
-		return process.ExecStop, nil
 	}
-
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
-		proc.SetInputBatch(arg.ctr.emptyBat)
-		return process.ExecNext, nil
-	}
-
-	defer proc.PutBatch(bat)
-	err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
-	if err != nil {
-		return process.ExecNext, err
-	}
-
-	anal.Output(arg.ctr.emptyBat, isLast)
-	proc.SetInputBatch(arg.ctr.emptyBat)
-	return process.ExecNext, nil
 }
 
 func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *Argument) error {
@@ -152,6 +160,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		// check if uniqueness conflict found in checkConflictBatch
 		oldConflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, insertColCount)
 		if err != nil {
+			newBatch.Clean(proc.GetMPool())
 			return err
 		}
 		if oldConflictIdx > -1 {
@@ -170,54 +179,66 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				toVec := newBatch.Vecs[j+insertColCount]
 				err := toVec.Copy(fromVec, 0, int64(oldConflictIdx), proc.Mp())
 				if err != nil {
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
 			}
-			newBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
+			tmpBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 			if err != nil {
+				newBatch.Clean(proc.GetMPool())
 				return err
 			}
 			// update the oldConflictIdx of insertBatch by newBatch
 			for j := 0; j < insertColCount; j++ {
-				fromVec := newBatch.Vecs[j]
+				fromVec := tmpBatch.Vecs[j]
 				toVec := insertBatch.Vecs[j]
 				err := toVec.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
 				if err != nil {
+					tmpBatch.Clean(proc.GetMPool())
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
 
 				toVec2 := checkConflictBatch.Vecs[j]
 				err = toVec2.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
 				if err != nil {
+					tmpBatch.Clean(proc.GetMPool())
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
 			}
-			newBatch.Clean(proc.GetMPool())
+			tmpBatch.Clean(proc.GetMPool())
 		} else {
 			// row id is null: means no uniqueness conflict found in origin rows
 			if len(oldRowIdVec) == 0 || originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
 				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 				checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
-				newBatch.Clean(proc.GetMPool())
+
 			} else {
-				newBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
+				tmpBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 				if err != nil {
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
-				conflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, insertColCount)
+				conflictIdx, conflictMsg, err := checkConflict(proc, tmpBatch, checkConflictBatch, checkExpr, uniqueCols, insertColCount)
 				if err != nil {
+					tmpBatch.Clean(proc.GetMPool())
+					newBatch.Clean(proc.GetMPool())
 					return err
 				}
 				if conflictIdx > -1 {
+					tmpBatch.Clean(proc.GetMPool())
+					newBatch.Clean(proc.GetMPool())
 					return moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
 				} else {
 					// append batch to insertBatch
-					insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
-					checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
+					insertBatch.Append(proc.Ctx, proc.Mp(), tmpBatch)
+					checkConflictBatch.Append(proc.Ctx, proc.Mp(), tmpBatch)
 				}
-				newBatch.Clean(proc.GetMPool())
+				tmpBatch.Clean(proc.GetMPool())
 			}
 		}
+		newBatch.Clean(proc.GetMPool())
 	}
 
 	return nil

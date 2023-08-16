@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,30 @@
 
 package fileservice
 
-func (v *IOVector) allDone() bool {
-	for _, entry := range v.Entries {
-		if !entry.done {
-			return false
+import "sync"
+
+type IOLockKey struct {
+	File string
+}
+
+type IOLocks struct {
+	locks sync.Map
+}
+
+func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
+	ch := make(chan struct{})
+	v, loaded := i.locks.LoadOrStore(key, ch)
+	if loaded {
+		// not locked
+		wait = func() {
+			<-v.(chan struct{})
 		}
+		return
 	}
-	return true
+	// locked
+	unlock = func() {
+		i.locks.Delete(key)
+		close(ch)
+	}
+	return
 }
