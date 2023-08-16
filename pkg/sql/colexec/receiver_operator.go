@@ -127,7 +127,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 		}
 
 		if bat.IsEmpty() {
-			bat.Clean(r.proc.Mp())
+			r.proc.PutBatch(bat)
 			continue
 		}
 
