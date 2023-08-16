@@ -2940,7 +2940,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
 
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
-				logutil.Errorf("post drop account error: %s", err.Error())
+				logutil.Errorf("post alter account suspend error: %s", err.Error())
 			}
 		}
 
@@ -2953,7 +2953,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 			}
 			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusRestricted.String(), ses.GetParameterUnit().QueryService)
 			if err != nil {
-				return err
+				logutil.Errorf("post alter account restricted error: %s", err.Error())
 			}
 		}
 
@@ -2966,7 +2966,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 			}
 			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusOpen.String(), ses.GetParameterUnit().QueryService)
 			if err != nil {
-				return err
+				logutil.Errorf("post alter account not restricted error: %s", err.Error())
 			}
 		}
 	}
@@ -9075,7 +9075,9 @@ func alterSessionStatus(ctx context.Context, curtenant, tenant string, user stri
 				queryResp, ok := res.response.(*query.Response)
 
 				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
-					retErr = moerr.NewInternalError(ctx, "alter account failed")
+					retErr = moerr.NewInternalError(ctx,
+						fmt.Sprintf("alter account status for account %s failed on node %s",
+							tenant, res.nodeAddr))
 				}
 			}
 		case <-ctx.Done():
