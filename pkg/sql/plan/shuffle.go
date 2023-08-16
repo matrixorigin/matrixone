@@ -26,7 +26,8 @@ const (
 	MAXShuffleDOP                     = 64
 	ShuffleThreshHold                 = 50000
 	ShuffleTypeThreshHold             = 32
-	ShuffleTypeThreshHoldForRightJoin = 512
+	ShuffleTypeThreshHoldForRightJoin = 256
+	ShuffleTypeThreshHoldUpplerLimit  = 16
 )
 
 const (
@@ -146,13 +147,21 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 			leftSorted = false
 		}
 		if !leftSorted {
+			leftCost := builder.qry.Nodes[n.Children[0]].Stats.Outcnt
+			rightCost := builder.qry.Nodes[n.Children[1]].Stats.Outcnt
 			if n.BuildOnLeft {
-				if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > ShuffleTypeThreshHoldForRightJoin*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
+				// its better for right join to go shuffle
+				if leftCost > ShuffleTypeThreshHoldUpplerLimit*ShuffleTypeThreshHoldForRightJoin*rightCost {
+					return
+				} else if leftCost > ShuffleTypeThreshHoldForRightJoin*rightCost {
 					n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Complex
 				}
-			}
-			if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > ShuffleTypeThreshHold*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
-				n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Complex
+			} else {
+				if leftCost > ShuffleTypeThreshHoldUpplerLimit*ShuffleTypeThreshHold*rightCost {
+					return
+				} else if leftCost > ShuffleTypeThreshHold*rightCost {
+					n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Complex
+				}
 			}
 		}
 	}
