@@ -172,6 +172,7 @@ c1    c2
 3    d
 4    e
 5    f
+8    h
 commit;
 show create table atomic_table_13;
 Table    Create Table
@@ -193,6 +194,7 @@ c1    c2
 3    d
 4    e
 5    f
+8    h
 rollback ;
 show create table atomic_table_13;
 Table    Create Table
