@@ -45,6 +45,7 @@ func getDmlPlanCtx() *dmlPlanCtx {
 	ctx.beginIdx = 0
 	ctx.sourceStep = 0
 	ctx.isMulti = false
+	ctx.needAggFilter = false
 	ctx.updateColLength = 0
 	ctx.rowIdPos = 0
 	ctx.insertColPos = ctx.insertColPos[:0]
@@ -53,8 +54,8 @@ func getDmlPlanCtx() *dmlPlanCtx {
 	ctx.isFkRecursionCall = false
 	ctx.lockTable = false
 	ctx.checkInsertPkDup = false
-	ctx.pkFilterExprs = ctx.pkFilterExprs[:0]
 	ctx.updatePkCol = true
+	ctx.pkFilterExprs = ctx.pkFilterExprs[:0]
 	return ctx
 }
 

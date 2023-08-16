@@ -157,7 +157,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 		}
 	}
 	defer bat.Clean(proc.Mp())
-	proc.Reg.InputBatch = batch.EmptyBatch
+	proc.SetInputBatch(batch.EmptyBatch)
 	return ctr.processBatch(ap.Limit, bat, proc)
 }
 
