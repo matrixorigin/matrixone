@@ -126,7 +126,7 @@ Number of tables in sub1
 1
 show column_number from sys_tbl_1;
 Number of columns in sys_tbl_1
-2
+1
 show table_values from sys_tbl_1;
 max(a)    min(a)
 3    1

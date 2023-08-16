@@ -121,6 +121,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(nil)
 	} else {
+		if bat.IsEmpty() {
+			// reuse this batch and send an empty batch to next operator
+			proc.PutBatch(bat)
+			bat = batch.EmptyBatch
+		}
 		anal.Output(bat, isLast)
 		proc.SetInputBatch(bat)
 	}

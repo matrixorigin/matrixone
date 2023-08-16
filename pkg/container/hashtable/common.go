@@ -19,14 +19,15 @@ import "unsafe"
 const (
 	kInitialCellCntBits = 10
 	kInitialCellCnt     = 1 << kInitialCellCntBits
-
-	kLoadFactorNumerator   = 1
-	kLoadFactorDenominator = 2
-
-	//kTwoLevelBucketCntBits = 8
-	//kTwoLevelBucketCnt     = 1 << kTwoLevelBucketCntBits
-	//kMaxTwoLevelBucketCnt  = kTwoLevelBucketCnt - 1
 )
+
+func maxElemCnt(cellCnt uint64) uint64 {
+	if cellCnt < 16*1024*1024 {
+		return cellCnt / 2
+	} else {
+		return cellCnt * 3 / 4
+	}
+}
 
 type Aggregator interface {
 	StateSize() uint8

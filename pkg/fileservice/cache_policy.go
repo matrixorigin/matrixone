@@ -14,11 +14,28 @@
 
 package fileservice
 
-func (v *IOVector) allDone() bool {
-	for _, entry := range v.Entries {
-		if !entry.done {
-			return false
+type CachePolicy uint32
+
+const (
+	SkipMemoryReads = 1 << iota
+	SkipMemoryWrites
+	SkipDiskReads
+	SkipDiskWrites
+)
+
+const (
+	SkipReads  = SkipMemoryReads | SkipDiskReads
+	SkipWrites = SkipMemoryWrites | SkipDiskWrites
+	SkipDisk   = SkipDiskReads | SkipDiskWrites
+	SkipMemory = SkipMemoryReads | SkipMemoryWrites
+	SkipAll    = SkipDisk | SkipMemory
+)
+
+func (c CachePolicy) Any(policies ...CachePolicy) bool {
+	for _, policy := range policies {
+		if policy&c > 0 {
+			return true
 		}
 	}
-	return true
+	return false
 }
