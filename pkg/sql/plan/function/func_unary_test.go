@@ -148,9 +148,9 @@ func TestSummationArray(t *testing.T) {
 		var fcTC testutil.FunctionTestCase
 		switch tc.typ {
 		case types.T_array_float32:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float32, float64])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float32])
 		case types.T_array_float64:
-			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float64, float64])
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float64])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))

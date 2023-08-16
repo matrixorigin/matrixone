@@ -195,7 +195,6 @@ const (
 	STDDEV_SAMPLE // STDDEV_SAMPLE
 	SUBSTR        // SUBSTR
 	SUM           // SUM
-	SUMMATION     // SUMMATION
 	GROUP_CONCAT
 	TAN // TAN
 	TO_DATE
@@ -325,6 +324,14 @@ const (
 	CURRVAL
 	LASTVAL
 
+	// Array Function
+	SUMMATION
+	L1_NORM // L1_NORMALIZATION
+	L2_NORM // L2 NORMALIZATION
+	INNER_PRODUCT
+	COSINE_SIMILARITY
+	ARRAY_DIM //ARRAY DIMENSION
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -386,7 +393,6 @@ var functionIdRegister = map[string]int32{
 	"max":                   MAX,
 	"min":                   MIN,
 	"sum":                   SUM,
-	"summation":             SUMMATION,
 	"group_concat":          GROUP_CONCAT,
 	"avg":                   AVG,
 	"count":                 COUNT,
@@ -572,4 +578,11 @@ var functionIdRegister = map[string]int32{
 	"lastval":                        LASTVAL,
 	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
+
+	"summation":         SUMMATION,
+	"l1_norm":           L1_NORM,
+	"l2_norm":           L2_NORM,
+	"inner_product":     INNER_PRODUCT,
+	"cosine_similarity": COSINE_SIMILARITY,
+	"array_dim":         ARRAY_DIM,
 }

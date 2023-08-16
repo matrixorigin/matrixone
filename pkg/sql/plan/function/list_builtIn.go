@@ -1463,6 +1463,134 @@ var supportedStringBuiltIns = []FuncNew{
 	},
 }
 
+var supportedArrayOperations = []FuncNew{
+
+	// function `summation`
+	{
+		functionId: SUMMATION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					// NOTE summation(array_float32) --> float64
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SummationArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SummationArray[float64]
+				},
+			},
+		},
+	},
+
+	// function `l1_norm`
+	{
+		functionId: L1_NORM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L1Norm[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L1Norm[float64]
+				},
+			},
+		},
+	},
+
+	// function `l2_norm`
+	{
+		functionId: L2_NORM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2Norm[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2Norm[float64]
+				},
+			},
+		},
+	},
+
+	// function `array_dim`
+	{
+		functionId: ARRAY_DIM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ArrayDimension[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ArrayDimension[float64]
+				},
+			},
+		},
+	},
+}
+
 var supportedMathBuiltIns = []FuncNew{
 	// function `abs`
 	{
@@ -1534,34 +1662,6 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 		},
 	},
-
-	// function `summation`
-	{
-		functionId: SUMMATION,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{types.T_array_float32},
-				retType:    SummationReturnType,
-				newOp: func() executeLogicOfOverload {
-					return SummationArray[float32, float64]
-				},
-			},
-			{
-				overloadId: 1,
-				args:       []types.T{types.T_array_float64},
-				retType:    SummationReturnType,
-				newOp: func() executeLogicOfOverload {
-					return SummationArray[float64, float64]
-				},
-			},
-		},
-	},
-
 	// function `sqrt`
 	{
 		functionId: SQRT,
