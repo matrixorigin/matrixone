@@ -306,6 +306,27 @@ func (r *objectReaderV1) ReadMultiBlocks(
 		constructorFactory)
 }
 
+func (r *objectReaderV1) ReadTombstoneMultiBlocks(
+	ctx context.Context,
+	opts map[uint16]*ReadBlockOptions,
+	m *mpool.MPool,
+) (ioVec *fileservice.IOVector, err error) {
+	var metaHeader ObjectMeta
+	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
+		return
+	}
+	meta := metaHeader.MustTombstoneMeta()
+	return ReadMultiBlocksWithMeta(
+		ctx,
+		r.name,
+		&meta,
+		opts,
+		false,
+		m,
+		r.fs,
+		constructorFactory)
+}
+
 func (r *objectReaderV1) ReadMultiSubBlocks(
 	ctx context.Context,
 	opts map[uint16]*ReadBlockOptions,
