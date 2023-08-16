@@ -52,7 +52,17 @@ func NewObjectReader(
 ) (*BlockReader, error) {
 	name := key.Name()
 	metaExt := key.Extent()
-	reader, err := objectio.NewObjectReader(&name, &metaExt, service, opts...)
+	var reader *objectio.ObjectReader
+	var err error
+	if opts == nil {
+		reader, err = objectio.NewObjectReader(
+			&name,
+			&metaExt,
+			service,
+			objectio.WithNoMetaCacheOption(fileservice.CachePolicy(fileservice.SkipMemoryReads)))
+	} else {
+		reader, err = objectio.NewObjectReader(&name, &metaExt, service, opts...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +73,10 @@ func NewObjectReader(
 }
 
 func NewFileReader(service fileservice.FileService, name string) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReaderWithStr(name, service)
+	reader, err := objectio.NewObjectReaderWithStr(
+		name,
+		service,
+		objectio.WithNoMetaCacheOption(fileservice.CachePolicy(fileservice.SkipMemoryReads)))
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +87,10 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 }
 
 func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReaderWithStr(name, service, objectio.WithNoLRUCacheOption(true))
+	reader, err := objectio.NewObjectReaderWithStr(
+		name,
+		service,
+		objectio.WithNoCacheOption(fileservice.CachePolicy(fileservice.SkipAll)))
 	if err != nil {
 		return nil, err
 	}
