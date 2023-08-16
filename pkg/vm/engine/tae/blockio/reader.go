@@ -52,7 +52,17 @@ func NewObjectReader(
 ) (*BlockReader, error) {
 	name := key.Name()
 	metaExt := key.Extent()
-	reader, err := objectio.NewObjectReader(&name, &metaExt, service, opts...)
+	var reader *objectio.ObjectReader
+	var err error
+	if opts == nil {
+		reader, err = objectio.NewObjectReader(
+			&name,
+			&metaExt,
+			service,
+			objectio.WithMetaCachePolicyOption(fileservice.SkipMemory))
+	} else {
+		reader, err = objectio.NewObjectReader(&name, &metaExt, service, opts...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +73,10 @@ func NewObjectReader(
 }
 
 func NewFileReader(service fileservice.FileService, name string) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReaderWithStr(name, service)
+	reader, err := objectio.NewObjectReaderWithStr(
+		name,
+		service,
+		objectio.WithMetaCachePolicyOption(fileservice.SkipMemory))
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +87,11 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 }
 
 func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReaderWithStr(name, service, objectio.WithNoLRUCacheOption(true))
+	reader, err := objectio.NewObjectReaderWithStr(
+		name,
+		service,
+		objectio.WithDataCachePolicyOption(fileservice.SkipAll),
+		objectio.WithMetaCachePolicyOption(fileservice.SkipAll))
 	if err != nil {
 		return nil, err
 	}
@@ -305,8 +322,16 @@ func PrefetchWithMerged(params PrefetchParams) error {
 }
 
 func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
-
 	params, err := BuildPrefetchParams(service, key)
+	if err != nil {
+		return err
+	}
+	params.AddBlock(idxes, ids)
+	return pipeline.Prefetch(params)
+}
+
+func PrefetchTombstone(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
+	params, err := BuildTombstonePrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
