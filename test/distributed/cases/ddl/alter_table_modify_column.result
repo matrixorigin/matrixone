@@ -5,8 +5,8 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
 insert into t1 values(1, 'ab');
 insert into t1 values(2, 'ac');
 insert into t1 values(3, 'ad');
@@ -18,8 +18,8 @@ a    b
 alter table t1 modify a VARCHAR(20);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    VARCHAR(20)    NO    PRI    null
-b    CHAR(10)    YES        null
+a    VARCHAR(20)    NO    PRI    null        
+b    CHAR(10)    YES        null        
 select * from t1;
 a    b
 1    ab
@@ -29,9 +29,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -43,9 +43,9 @@ a    b    c
 alter table t1 modify a VARCHAR(20) after b;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    CHAR(10)    YES        null
-a    VARCHAR(20)    NO    PRI    null
-c    DATE(0)    YES        null
+b    CHAR(10)    YES        null        
+a    VARCHAR(20)    NO    PRI    null        
+c    DATE(0)    YES        null        
 select * from t1;
 b    a    c
 ab    1    1980-12-17
@@ -55,9 +55,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -69,9 +69,9 @@ a    b    c
 alter table t1 modify a VARCHAR(20) after c;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
-a    VARCHAR(20)    NO    PRI    null
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+a    VARCHAR(20)    NO    PRI    null        
 select * from t1;
 b    c    a
 ab    1980-12-17    1
@@ -81,9 +81,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER, b CHAR(10), c date, PRIMARY KEY(a));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -95,9 +95,9 @@ a    b    c
 alter table t1 modify b VARCHAR(20) first;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    VARCHAR(20)    YES        null
-a    INT(32)    NO    PRI    null
-c    DATE(0)    YES        null
+b    VARCHAR(20)    YES        null        
+a    INT(32)    NO    PRI    null        
+c    DATE(0)    YES        null        
 select * from t1;
 b    a    c
 ab    1    1980-12-17
@@ -107,10 +107,10 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -122,10 +122,10 @@ a    b    c    d
 alter table t1 modify b VARCHAR(20), modify d int unsigned;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    VARCHAR(20)    YES        null
-c    DATE(0)    YES        null
-d    INT UNSIGNED(32)    YES        null
+a    INT(32)    NO    PRI    null        
+b    VARCHAR(20)    YES        null        
+c    DATE(0)    YES        null        
+d    INT UNSIGNED(32)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800
@@ -135,10 +135,10 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -154,10 +154,10 @@ Multiple primary key defined
 alter table t1 modify b VARCHAR(20) first, modify d int unsigned after b;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    VARCHAR(20)    YES        null
-d    INT UNSIGNED(32)    YES        null
-a    INT(32)    NO    PRI    null
-c    DATE(0)    YES        null
+b    VARCHAR(20)    YES        null        
+d    INT UNSIGNED(32)    YES        null        
+a    INT(32)    NO    PRI    null        
+c    DATE(0)    YES        null        
 select * from t1;
 b    d    a    c
 ab    800    1    1980-12-17
@@ -167,10 +167,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER, b CHAR(10), c datetime, d decimal(7,2), PRIMARY KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    NO    PRI    null
-c    DATETIME(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    NO    PRI    null        
+c    DATETIME(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17 11:34:45', 800);
 insert into t1 values(2, 'ac', '1981-02-20 10:34:45', 1600);
 insert into t1 values(3, 'ad', '1981-02-22 09:34:45', 500);
@@ -182,10 +182,10 @@ a    b    c    d
 alter table t1 modify c datetime default '2023-06-21 12:34:45' on update CURRENT_TIMESTAMP;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    NO    PRI    null
-c    DATETIME(0)    YES        '2023-06-21 12:34:45'
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    NO    PRI    null        
+c    DATETIME(0)    YES        '2023-06-21 12:34:45'        
+d    DECIMAL64(7)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17 11:34:45    800.00
@@ -194,10 +194,10 @@ a    b    c    d
 alter table t1 modify c date;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    NO    PRI    null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    NO    PRI    null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -207,9 +207,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER, b CHAR(10), c datetime PRIMARY KEY default '2023-06-21' on update CURRENT_TIMESTAMP);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null
-b    CHAR(10)    YES        null
-c    DATETIME(0)    NO    PRI    '2023-06-21'
+a    INT(32)    YES        null        
+b    CHAR(10)    YES        null        
+c    DATETIME(0)    NO    PRI    '2023-06-21'        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -221,9 +221,9 @@ a    b    c
 alter table t1 modify c date first;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-c    DATE(0)    NO    PRI    null
-a    INT(32)    YES        null
-b    CHAR(10)    YES        null
+c    DATE(0)    NO    PRI    null        
+a    INT(32)    YES        null        
+b    CHAR(10)    YES        null        
 select * from t1;
 c    a    b
 1980-12-17    1    ab
@@ -232,9 +232,9 @@ c    a    b
 alter table t1 modify c datetime default '2023-06-21';
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-c    DATETIME(0)    NO    PRI    '2023-06-21'
-a    INT(32)    YES        null
-b    CHAR(10)    YES        null
+c    DATETIME(0)    NO    PRI    '2023-06-21'        
+a    INT(32)    YES        null        
+b    CHAR(10)    YES        null        
 select * from t1;
 c    a    b
 1980-12-17 00:00:00    1    ab
@@ -244,10 +244,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -279,10 +279,10 @@ t1    0    b_2    1    b    A    0    NULL    NULL    YES                YES    
 t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    VARCHAR(20)    YES        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    VARCHAR(20)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -292,10 +292,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), INDEX(a, b), KEY(c));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -324,18 +324,18 @@ t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES   
 alter table t1 modify c VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t1    0    b    1    b    A    0    NULL    NULL    YES                YES    NULL
-t1    0    c_2    1    c    A    0    NULL    NULL    YES                YES    NULL
-t1    1    a    1    a    A    0    NULL    NULL                    YES    NULL
 t1    1    a    2    b    A    0    NULL    NULL    YES                YES    NULL
 t1    1    c    1    c    A    0    NULL    NULL    YES                YES    NULL
 t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+t1    0    b    1    b    A    0    NULL    NULL    YES                YES    NULL
+t1    0    c_2    1    c    A    0    NULL    NULL    YES                YES    NULL
+t1    1    a    1    a    A    0    NULL    NULL                    YES    NULL
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    VARCHAR(20)    YES        null
-c    VARCHAR(20)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    VARCHAR(20)    YES        null        
+c    VARCHAR(20)    YES        null        
+d    DECIMAL64(7)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -355,14 +355,14 @@ primary key(empno, ename)
 );
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null
-ename    VARCHAR(15)    NO    PRI    null
-job    VARCHAR(10)    YES        null
-mgr    INT UNSIGNED(32)    YES        null
-hiredate    DATE(0)    YES        null
-sal    DECIMAL64(7)    YES        null
-comm    DECIMAL64(7)    YES        null
-deptno    INT UNSIGNED(32)    YES        null
+empno    INT UNSIGNED(32)    NO    PRI    null        
+ename    VARCHAR(15)    NO    PRI    null        
+job    VARCHAR(10)    YES        null        
+mgr    INT UNSIGNED(32)    YES        null        
+hiredate    DATE(0)    YES        null        
+sal    DECIMAL64(7)    YES        null        
+comm    DECIMAL64(7)    YES        null        
+deptno    INT UNSIGNED(32)    YES        null        
 INSERT INTO t1 VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 INSERT INTO t1 VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
 INSERT INTO t1 VALUES (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
@@ -396,14 +396,14 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 alter table t1 modify empno varchar(20) after sal;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-ename    VARCHAR(15)    NO    PRI    null
-job    VARCHAR(10)    YES        null
-mgr    INT UNSIGNED(32)    YES        null
-hiredate    DATE(0)    YES        null
-sal    DECIMAL64(7)    YES        null
-empno    VARCHAR(20)    NO    PRI    null
-comm    DECIMAL64(7)    YES        null
-deptno    INT UNSIGNED(32)    YES        null
+ename    VARCHAR(15)    NO    PRI    null        
+job    VARCHAR(10)    YES        null        
+mgr    INT UNSIGNED(32)    YES        null        
+hiredate    DATE(0)    YES        null        
+sal    DECIMAL64(7)    YES        null        
+empno    VARCHAR(20)    NO    PRI    null        
+comm    DECIMAL64(7)    YES        null        
+deptno    INT UNSIGNED(32)    YES        null        
 select * from t1;
 ename    job    mgr    hiredate    sal    empno    comm    deptno
 SMITH    CLERK    7902    1980-12-17    800.00    7369    null    20
@@ -424,10 +424,10 @@ drop table if exists t1;
 create table t1(a int unsigned, b varchar(15) NOT NULL, c date, d decimal(7,2), primary key(a));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT UNSIGNED(32)    NO    PRI    null
-b    VARCHAR(15)    NO        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT UNSIGNED(32)    NO    PRI    null        
+b    VARCHAR(15)    NO        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 insert into t1 values (7369,'SMITH','1980-12-17',800);
 insert into t1 values  (7499,'ALLEN','1981-02-20',1600);
 insert into t1 values (7521,'WARD','1981-02-22',1250);
@@ -443,10 +443,10 @@ a    b    c    d
 alter table t1 modify a int auto_increment;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    VARCHAR(15)    NO        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    VARCHAR(15)    NO        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 select * from t1;
 a    b    c    d
 7369    SMITH    1980-12-17    800.00
@@ -457,10 +457,10 @@ a    b    c    d
 alter table t1 modify d decimal(6,2);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    VARCHAR(15)    NO        null
-c    DATE(0)    YES        null
-d    DECIMAL64(6)    YES        null
+a    INT(32)    NO    PRI    null        
+b    VARCHAR(15)    NO        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(6)    YES        null        
 select * from t1;
 a    b    c    d
 7369    SMITH    1980-12-17    800.00
@@ -515,14 +515,14 @@ Cannot change column 'deptno': used in a foreign key constraint ''
 alter table emp modify deptno varchar(25);
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null
-ename    VARCHAR(15)    YES        null
-job    VARCHAR(10)    YES        null
-mgr    INT UNSIGNED(32)    YES        null
-hiredate    DATE(0)    YES        null
-sal    DECIMAL64(7)    YES        null
-comm    DECIMAL64(7)    YES        null
-deptno    VARCHAR(25)    YES        null
+empno    INT UNSIGNED(32)    NO    PRI    null        
+ename    VARCHAR(15)    YES        null        
+job    VARCHAR(10)    YES        null        
+mgr    INT UNSIGNED(32)    YES        null        
+hiredate    DATE(0)    YES        null        
+sal    DECIMAL64(7)    YES        null        
+comm    DECIMAL64(7)    YES        null        
+deptno    VARCHAR(25)    YES        null        
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -553,13 +553,13 @@ alter table t1 modify col1 int primary key;
 Duplicate entry '1' for key 'col1'
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO        null
-col2    VARCHAR(10)    YES        null
+col1    INT(32)    NO        null        
+col2    VARCHAR(10)    YES        null        
 alter table t1 modify col2 varchar(10) primary key;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO        null
-col2    VARCHAR(10)    NO    PRI    null
+col1    INT(32)    NO        null        
+col2    VARCHAR(10)    NO    PRI    null        
 insert into t1 values (1, 'cdsdsa');
 select * from t1;
 col1    col2
@@ -988,19 +988,12 @@ Table    Create Table
 index02    CREATE TABLE `index02` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT null,\n`c` VARCHAR(20) DEFAULT null,\n`d` DECIMAL(7,2) DEFAULT null,\nPRIMARY KEY (`a`),\nUNIQUE KEY `b` (`b`),\nUNIQUE KEY `c_2` (`c`),\nKEY `a` (`a`,`b`),\nKEY `c` (`c`)\n)
 desc index02;
 Field    Type    Null    Key    Default    Extra    Comment
-<<<<<<< HEAD
-a    INT(32)    NO    PRI    null
-b    VARCHAR(20)    YES        null
-c    VARCHAR(20)    YES        null
-d    DECIMAL64(7)    YES        null
-select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
-=======
 a    INT(32)    NO    PRI    null        
 b    VARCHAR(20)    YES        null        
 c    VARCHAR(20)    YES        null        
 d    DECIMAL64(7)    YES        null        
->>>>>>> 7ac20054b0f9ffc51baf9846590c491fb28f48c7
+select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
+[unknown result because it is related to issue#11249]
 select * from index02;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -1517,16 +1510,6 @@ alter table time01 modify col1 int, modify col2 int first, modify col3 int after
 show create table time01;
 Table    Create Table
 time01    CREATE TABLE `time01` (\n`col2` INT DEFAULT null,\n`col1` INT DEFAULT null,\n`col3` INT DEFAULT null,\n`col4` INT DEFAULT null\n)
-<<<<<<< HEAD
-select * from time01;
-col2    col1    col3    col4
-971179932    18262    15839    10129
-null    9874    599671439    232359
-1946682061    22279    1386814210    101212
-select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
-=======
->>>>>>> 7ac20054b0f9ffc51baf9846590c491fb28f48c7
 drop table time01;
 drop table if exists time02;
 create table time02 (col2 datetime, col3 timestamp, col4 time);
@@ -1542,16 +1525,6 @@ alter table time02 modify col2 decimal(20,10) first, modify col3 decimal after c
 show create table time02;
 Table    Create Table
 time02    CREATE TABLE `time02` (\n`col2` DECIMAL(20,10) DEFAULT null,\n`col3` DECIMAL(38,0) DEFAULT null,\n`col4` DECIMAL(38,0) DEFAULT null\n)
-<<<<<<< HEAD
-select * from time02;
-col2    col3    col4
-971179932.0000000000    15839    10129
-null    18444188071206    232359
-1946682061.0000000000    1386814210    101212
-select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
-=======
->>>>>>> 7ac20054b0f9ffc51baf9846590c491fb28f48c7
 drop table time02;
 drop table if exists prepare01;
 create table prepare01(col1 int, col2 char);
@@ -1580,21 +1553,13 @@ grant show databases on account * to role_r1;
 grant connect on account * to role_r1;
 grant select on table * to role_r1;
 grant show tables on database * to role_r1;
-<<<<<<< HEAD
-use alter_table_modify_column;
 alter table test01 modify col1 int primary key;
 internal error: do not have privilege to execute the statement
 grant alter table on database * to role_r1;
-use alter_table_modify_column;
-=======
 alter table test01 modify col1 int primary key;
-internal error: do not have privilege to execute the statement
-grant alter table on database * to role_r1;
->>>>>>> 7ac20054b0f9ffc51baf9846590c491fb28f48c7
-alter table test01 modify col1 int primary key;
-no such table alter_table_modify_column.test01
+no such table .test01
 show create table test01;
-no such table alter_table_modify_column.test01
+no such table .test01
 show create table test01;
 Table    Create Table
 test01    CREATE TABLE `test01` (\n`col1` INT DEFAULT NULL\n)
