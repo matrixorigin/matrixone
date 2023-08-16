@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/google/shlex"
@@ -932,8 +933,10 @@ func (h *Handle) HandleWrite(
 			}
 			var ok bool
 			var bat *batch.Batch
-			bat, err = blockio.LoadColumns(
+			var datas []fileservice.CacheData
+			bat, datas, err = blockio.LoadColumns(
 				ctx,
+				false,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
 				h.db.Runtime.Fs.Service,
@@ -943,6 +946,11 @@ func (h *Handle) HandleWrite(
 			if err != nil {
 				return
 			}
+			defer func() {
+				for i := range datas {
+					datas[i].Release()
+				}
+			}()
 			blkids := getBlkIDsFromRowids(bat.Vecs[0])
 			id := tb.GetMeta().(*catalog2.TableEntry).AsCommonID()
 			if len(blkids) == 1 {

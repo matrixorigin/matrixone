@@ -22,10 +22,10 @@ import (
 )
 
 type CacheConstructor = func(r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fileservice.CacheData, error)
-type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
+type CacheConstructorFactory = func(size int64, algo uint8, prefetch bool) CacheConstructor
 
 // use this to replace all other constructors
-func constructorFactory(size int64, algo uint8) CacheConstructor {
+func constructorFactory(size int64, algo uint8, prefetch bool) CacheConstructor {
 	return func(reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fileservice.CacheData, err error) {
 		if len(data) == 0 {
 			data, err = io.ReadAll(reader)
@@ -34,8 +34,8 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 			}
 		}
 
-		// no compress
-		if algo == compress.None {
+		// no compress or prefetch
+		if algo == compress.None || prefetch {
 			cacheData = allocator.Alloc(len(data))
 			copy(cacheData.Bytes(), data)
 			return cacheData, nil

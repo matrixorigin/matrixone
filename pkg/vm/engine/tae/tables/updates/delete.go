@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -254,8 +255,9 @@ func (node *DeleteNode) setPersistedRows() {
 	if node.nt != NT_Persisted {
 		panic("unsupport")
 	}
-	bat, err := blockio.LoadColumns(
+	bat, datas, err := blockio.LoadColumns(
 		node.Txn.GetContext(),
+		false,
 		[]uint16{0},
 		nil,
 		node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
@@ -265,8 +267,9 @@ func (node *DeleteNode) setPersistedRows() {
 	if err != nil {
 		for {
 			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
-			bat, err = blockio.LoadColumns(
+			bat, datas, err = blockio.LoadColumns(
 				node.Txn.GetContext(),
+				false,
 				[]uint16{0},
 				nil,
 				node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
@@ -278,6 +281,11 @@ func (node *DeleteNode) setPersistedRows() {
 			}
 		}
 	}
+	defer func() {
+		for i := range datas {
+			datas[i].Release()
+		}
+	}()
 	node.mask = roaring.NewBitmap()
 	rowids := containers.ToDNVector(bat.Vecs[0])
 	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
@@ -294,8 +302,8 @@ func LoadPersistedDeletes(
 	ctx context.Context,
 	pkName string,
 	fs *objectio.ObjectFS,
-	location objectio.Location) (bat *containers.Batch, err error) {
-	movbat, err := blockio.LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
+	location objectio.Location) (bat *containers.Batch, datas []fileservice.CacheData, err error) {
+	movbat, datas, err := blockio.LoadColumns(ctx, false, []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
 	if err != nil {
 		return
 	}

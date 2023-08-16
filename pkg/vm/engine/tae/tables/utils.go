@@ -16,7 +16,9 @@ package tables
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -38,8 +40,8 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 	}
-	bat, err := blockio.LoadColumns(
-		ctx, []uint16{uint16(def.SeqNum)},
+	bat, datas, err := blockio.LoadColumns(
+		ctx, false, []uint16{uint16(def.SeqNum)},
 		[]types.Type{def.Type},
 		rt.Fs.Service,
 		location,
@@ -47,7 +49,16 @@ func LoadPersistedColumnData(
 	if err != nil {
 		return
 	}
-	return containers.ToDNVector(bat.Vecs[0]), nil
+	defer func() {
+		for i := range datas {
+			datas[i].Release()
+		}
+	}()
+	w, err := bat.Vecs[0].Dup(rt.VectorPool.Transient.GetVector(bat.Vecs[0].GetType()).GetAllocator())
+	if err != nil {
+		return
+	}
+	return containers.ToDNVector(w), nil
 }
 
 func LoadPersistedColumnDatas(
@@ -79,12 +90,12 @@ func LoadPersistedColumnDatas(
 	if len(cols) == 0 {
 		return vectors, nil
 	}
-	bat, err := blockio.LoadColumns(
-		ctx, cols,
+	bat, _, err := blockio.LoadColumns(
+		ctx, true, cols,
 		typs,
 		rt.Fs.Service,
 		location,
-		nil)
+		rt.VectorPool.Transient.GetVector(&objectio.RowidType).GetAllocator())
 	if err != nil {
 		return nil, err
 	}
@@ -108,8 +119,8 @@ func LoadPersistedDeletes(
 	fs *objectio.ObjectFS,
 	//location objectio.Location) (bat *containers.Batch, err error) {
 	//movbat, err := blockio.LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
-	location objectio.Location) (bat *containers.Batch, isPersistedByCN bool, err error) {
-	movbat, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service)
+	location objectio.Location) (bat *containers.Batch, datas []fileservice.CacheData, isPersistedByCN bool, err error) {
+	movbat, datas, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service)
 	if err != nil {
 		return
 	}

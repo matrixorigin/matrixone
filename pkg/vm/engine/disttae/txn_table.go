@@ -463,8 +463,9 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			rowIdBat, err := blockio.LoadTombstoneColumns(
+			rowIdBat, datas, err := blockio.LoadTombstoneColumns(
 				tbl.db.txn.proc.Ctx,
+				false,
 				[]uint16{0},
 				nil,
 				tbl.db.txn.engine.fs,
@@ -473,6 +474,11 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
+			defer func() {
+				for i := range datas {
+					datas[i].Release()
+				}
+			}()
 			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 			for _, rowId := range rowIds {
 				_, offset := rowId.Decode()
@@ -501,8 +507,9 @@ func (tbl *txnTable) LoadDeletesForVolatileBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, err := blockio.LoadColumns(
+				rowIdBat, datas, err := blockio.LoadColumns(
 					tbl.db.txn.proc.Ctx,
+					false,
 					[]uint16{0},
 					nil,
 					tbl.db.txn.engine.fs,
@@ -511,6 +518,11 @@ func (tbl *txnTable) LoadDeletesForVolatileBlocksIn(
 				if err != nil {
 					return err
 				}
+				defer func() {
+					for i := range datas {
+						datas[i].Release()
+					}
+				}()
 				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 				for _, rowId := range rowIds {
 					if deletesRowId != nil {
@@ -1089,7 +1101,7 @@ func (tbl *txnTable) mergeCompaction(
 
 	for blk, deletes := range compactedBlks {
 		//blk.MetaLocation()
-		bat, e := blockio.BlockCompactionRead(
+		bat, datas, e := blockio.BlockCompactionRead(
 			tbl.db.txn.proc.Ctx,
 			blk.MetaLocation(),
 			deletes,
@@ -1101,11 +1113,16 @@ func (tbl *txnTable) mergeCompaction(
 			return nil, e
 		}
 		if bat.RowCount() == 0 {
+			for i := range datas {
+				datas[i].Release()
+			}
 			continue
 		}
 		s3writer.WriteBlock(bat)
 		bat.Clean(tbl.db.txn.proc.GetMPool())
-
+		for i := range datas {
+			datas[i].Release()
+		}
 	}
 	createdBlks, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
 	if err != nil {

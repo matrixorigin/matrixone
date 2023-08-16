@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,13 +28,14 @@ import (
 
 func LoadColumnsData(
 	ctx context.Context,
+	needCopy bool,
 	metaType objectio.DataMetaType,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool,
-) (bat *batch.Batch, err error) {
+) (bat *batch.Batch, datas []fileservice.CacheData, err error) {
 	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors *fileservice.IOVector
@@ -43,6 +45,10 @@ func LoadColumnsData(
 	dataMeta := meta.MustGetMeta(metaType)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, m, fs); err != nil {
 		return
+	}
+	datas = make([]fileservice.CacheData, len(ioVectors.Entries))
+	for i := range ioVectors.Entries {
+		datas[i] = ioVectors.Entries[i].CachedData
 	}
 	bat = batch.NewWithSize(len(cols))
 	var obj any
@@ -54,30 +60,44 @@ func LoadColumnsData(
 		bat.Vecs[i] = obj.(*vector.Vector)
 		bat.SetRowCount(bat.Vecs[i].Length())
 	}
+	if needCopy {
+		for i := range bat.Vecs {
+			vec, err := bat.Vecs[i].Dup(m)
+			if err != nil {
+				return nil, datas, err
+			}
+			bat.Vecs[i] = vec
+		}
+		for i := range datas {
+			datas[i].Release()
+		}
+	}
 	//TODO call CachedData.Release
 	return
 }
 
 func LoadColumns(
 	ctx context.Context,
+	needCopy bool,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool,
-) (bat *batch.Batch, err error) {
-	return LoadColumnsData(ctx, objectio.SchemaData, cols, typs, fs, location, m)
+) (bat *batch.Batch, datas []fileservice.CacheData, err error) {
+	return LoadColumnsData(ctx, needCopy, objectio.SchemaData, cols, typs, fs, location, m)
 }
 
 func LoadTombstoneColumns(
 	ctx context.Context,
+	needCopy bool,
 	cols []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
 	m *mpool.MPool,
-) (bat *batch.Batch, err error) {
-	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m)
+) (bat *batch.Batch, datas []fileservice.CacheData, err error) {
+	return LoadColumnsData(ctx, needCopy, objectio.SchemaTombstone, cols, typs, fs, location, m)
 }
 
 func LoadBF(

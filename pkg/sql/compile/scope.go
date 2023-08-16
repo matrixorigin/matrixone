@@ -91,6 +91,7 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 		return
 	}
 	newCtx := s.Proc.ResetContextFromParent(ctx)
+
 	for _, scope := range s.PreScopes {
 		scope.SetContextRecursively(newCtx)
 	}
@@ -317,7 +318,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		s.NodeInfo.Data = nil
 
 	case s.NodeInfo.Rel != nil:
-		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		if rds, err = s.NodeInfo.Rel.NewReader(c.proc.Ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
@@ -327,7 +328,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		var db engine.Database
 		var rel engine.Relation
 
-		ctx := c.ctx
+		ctx := c.proc.Ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
@@ -397,7 +398,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, dirtyRanges[num])
+				memRds, err := subrel.NewReader(c.proc.Ctx, mcpu, s.DataSource.Expr, dirtyRanges[num])
 				if err != nil {
 					return err
 				}

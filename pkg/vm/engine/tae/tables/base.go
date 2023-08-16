@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -154,7 +155,7 @@ func (blk *baseBlock) FillInMemoryDeletesLocked(
 	return
 }
 
-func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error) {
+func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, datas []fileservice.CacheData, err error) {
 	if !blk.meta.IsAppendable() {
 		return
 	}
@@ -162,8 +163,9 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location.IsEmpty() {
 		return
 	}
-	bat, err := blockio.LoadColumns(
+	bat, datas, err := blockio.LoadColumns(
 		context.Background(),
+		false,
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
 		blk.rt.Fs.Service,
@@ -211,13 +213,13 @@ func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catal
 		location)
 }
 
-func (blk *baseBlock) loadPersistedDeletes(ctx context.Context) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, err error) {
+func (blk *baseBlock) loadPersistedDeletes(ctx context.Context) (bat *containers.Batch, datas []fileservice.CacheData, persistedByCN bool, deltalocCommitTS types.TS, err error) {
 	location, deltalocCommitTS := blk.meta.GetDeltaLocAndCommitTS()
 	if location.IsEmpty() {
 		return
 	}
 	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
-	bat, persistedByCN, err = LoadPersistedDeletes(
+	bat, datas, persistedByCN, err = LoadPersistedDeletes(
 		ctx,
 		pkName,
 		blk.rt.Fs,
@@ -288,10 +290,15 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	postOp func(*containers.Batch),
 ) (err error) {
 	// commitTS of deltalocation is the commitTS of deletes persisted by CN batches
-	deletes, persistedByCN, deltalocCommitTS, err := blk.loadPersistedDeletes(ctx)
+	deletes, datas, persistedByCN, deltalocCommitTS, err := blk.loadPersistedDeletes(ctx)
 	if deletes == nil || err != nil {
 		return
 	}
+	defer func() {
+		for i := range datas {
+			datas[i].Release()
+		}
+	}()
 	if persistedByCN {
 		if deltalocCommitTS.Equal(txnif.UncommitTS) {
 			return

@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -319,6 +320,11 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
+	// ap query not need memory cache
+	if ctx.Value(defines.QueryTypeKey{}) == nil {
+		ioVec.CachePolicy = fileservice.SkipMemory
+	}
+	prefetch := ctx.Value(defines.PrefetchKey{}) != nil
 	for _, opt := range opts {
 		meta, _ := metaHeader.SubMeta(opt.DataType)
 		for seqnum := range opt.Idxes {
@@ -332,7 +338,7 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
 
-				ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
+				ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg(), prefetch),
 			})
 		}
 	}
@@ -354,6 +360,11 @@ func (r *objectReaderV1) ReadMultiAllSubBlocks(
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
+	// ap query not need memory cache
+	if ctx.Value(defines.QueryTypeKey{}) == nil {
+		ioVec.CachePolicy = fileservice.SkipMemory
+	}
+	prefetch := ctx.Value(defines.PrefetchKey{}) != nil
 	for _, opt := range opts {
 		meta, _ := metaHeader.SubMeta(uint16(ConvertToSchemaType(opt.Id)))
 		for seqnum := range opt.Idxes {
@@ -368,7 +379,7 @@ func (r *objectReaderV1) ReadMultiAllSubBlocks(
 					Offset: int64(col.Location().Offset()),
 					Size:   int64(col.Location().Length()),
 
-					ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
+					ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg(), prefetch),
 				})
 			}
 		}

@@ -641,8 +641,9 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 		if dedupType == txnif.FullDedup {
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
-				bat, err := blockio.LoadColumns(
+				bat, datas, err := blockio.LoadColumns(
 					ctx,
+					false,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.rt.Fs.Service,
@@ -652,6 +653,11 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 				if err != nil {
 					return err
 				}
+				defer func() {
+					for i := range datas {
+						datas[i].Release()
+					}
+				}()
 				vec := containers.ToDNVector(bat.Vecs[0])
 				pkVecs = append(pkVecs, vec)
 			}
@@ -1157,8 +1163,9 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			//TODO::laod zm index first, then load pk column if necessary.
 			_, ok := loaded[i]
 			if !ok {
-				bat, err := blockio.LoadColumns(
+				bat, datas, err := blockio.LoadColumns(
 					ctx,
+					false,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.rt.Fs.Service,
@@ -1168,6 +1175,11 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				if err != nil {
 					return err
 				}
+				defer func() {
+					for i := range datas {
+						datas[i].Release()
+					}
+				}()
 				vec := containers.ToDNVector(bat.Vecs[0])
 				loaded[i] = vec
 			}
