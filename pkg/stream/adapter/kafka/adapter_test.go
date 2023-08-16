@@ -188,6 +188,7 @@ func TestRetrieveData(t *testing.T) {
 	}
 
 	// Assertions
-	assert.NotNil(t, batch, "Returned batch should not be nil")
-	// Add more assertions as necessary
+	assert.Equal(t, batch.VectorCount(), 2, "Expected 2 vectors in the batch")
+	assert.Equal(t, batch.Vecs[0].Length(), 1, "Expected 1 row in the batch")
+	assert.Equal(t, batch.Vecs[1].String(), "100", "Expected 1 row in the batch")
 }

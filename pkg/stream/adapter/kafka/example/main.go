@@ -3,102 +3,49 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 
-	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/confluentinc/confluent-kafka-go/schemaregistry/serde"
-	"github.com/confluentinc/confluent-kafka-go/schemaregistry/serde/protobuf"
-	"github.com/google/uuid"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
-	"github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka/example/proto/test_v1"
-)
-
-const (
-	topicName           = "test_topic17"
-	partitions          = 1
-	replicationFactor   = 1
-	bootstrapServers    = "127.0.0.1:62610"
-	groupID             = "myGroup"
-	autoOffsetReset     = "earliest"
-	enableAutoCommit    = false
-	sessionTimeoutMs    = 6000
-	brokerAddressFamily = "v4"
-	schemaRegistryURL   = "http://localhost:8081"
 )
 
 func main() {
-	// Define your Kafka configuratio
-	config := &kafka.ConfigMap{
-		"bootstrap.servers":     bootstrapServers,
-		"group.id":              groupID,
-		"auto.offset.reset":     autoOffsetReset,
-		"enable.auto.commit":    enableAutoCommit,
-		"session.timeout.ms":    sessionTimeoutMs,
-		"broker.address.family": brokerAddressFamily,
+	// Sample configuration
+	configs := map[string]interface{}{
+		"type":              "kafka",
+		"topic":             "user",
+		"partition":         "1",
+		"value":             "protobuf_sr",
+		"bootstrap.servers": "127.0.0.1:62610",
+		"sasl.username":     "",
+		"sasl.password":     "",
+		"sasl.mechanisms":   "",
+		"security.protocol": "",
 	}
 
-	// Initialize KafkaAdapterb
-	ka, err := mokafka.NewKafkaAdapter(config)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize KafkaAdapter: %s\n", err)
-		os.Exit(1)
-	}
+	// Sample attributes and types
+	//attrs := []string{"Id", "Name", "Email", "Phone"}
+	//types := []types.Type{
+	//	{Oid: types.T_varchar},
+	//	{Oid: types.T_varchar},
+	//	{Oid: types.T_varchar},
+	//	{Oid: types.T_varchar},
+	//}
 
-	// Initialize Schema Registry
-	err = ka.InitSchemaRegistry(schemaRegistryURL)
+	// Validate and prepare the configuration
+	err := mokafka.ValidateConfig(context.Background(), configs)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize schema registry: %s\n", err)
-		os.Exit(1)
-	}
-
-	// Create the topic using KafkaAdapter
-	err = ka.CreateTopic(context.Background(), topicName, partitions, replicationFactor)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create topic: %s\n", err)
-	}
-
-	// Serialize the message
-	s, err := protobuf.NewSerializer(ka.SchemaRegistry, serde.ValueSerde, protobuf.NewSerializerConfig())
-
-	testMSG := test_v1.MOTestMessage{Value: 42}
-	testKey := uuid.New()
-	serialized, err := s.Serialize(topicName, &testMSG)
-	if err != nil {
+		fmt.Printf("Error in ValidateAndPrepareConfig: %s\n", err)
 		return
 	}
 
-	// send msg with schema test.v1.proto
-	offset, err := ka.ProduceMessage(topicName, testKey[:], serialized)
+	//// Retrieve data using the configuration
+	//ctx := context.Background()
+	//mp := mpool.New(8192)
+	//b, err := RetrieveData(ctx, configs, attrs, types, 0, 10, mp)
+	//if err != nil {
+	//	fmt.Printf("Error in RetrieveData: %s\n", err)
+	//	return
+	//}
 
-	// Fetch schema for a topic
-	schema, err := ka.GetSchemaForTopic(topicName, false)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to fetch schema: %s\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Schema for topic %s: %s\n", topicName, schema)
-
-	// Read message from topic
-	msgs, err := ka.ReadMessagesFromTopic(topicName, 0, 1)
-	// Deserialize the message
-
-	d, err := protobuf.NewDeserializer(ka.SchemaRegistry, serde.ValueSerde, protobuf.NewDeserializerConfig())
-	// Register the message type
-	err = d.ProtoRegistry.RegisterMessage((&test_v1.MOTestMessage{}).ProtoReflect().Type())
-	if err != nil {
-		return
-	}
-	for _, msg := range msgs {
-		m, err := d.Deserialize(topicName, msg.Value)
-		if err != nil {
-			return
-		}
-		fmt.Printf("message %v with offset %d\n", m, offset)
-	}
-
-	md, err := mokafka.ConvertProtobufSchemaToMD(schema, "test.v1.proto")
-
-	// dynamic parse the proto message  without  using generated protobuf code
-	res, err := mokafka.DeserializeProtobuf(md, msgs[0].Value)
-	fmt.Printf("message %v with offset %d\n", res, offset)
+	//// Print the retrieved batch (for demonstration purposes)
+	//fmt.Println(b)
 }

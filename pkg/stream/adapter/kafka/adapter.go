@@ -430,6 +430,13 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 		id := typ.Oid
 		vec := bat.Vecs[colIdx]
 		switch id {
+		case types.T_int32:
+			val := int32(fieldValue.(float64))
+			if !ok {
+				return moerr.NewInternalError(ctx, "expected int32 type for column %d but got %T", colIdx, fieldValue)
+			}
+			cols := vector.MustFixedCol[int32](vec)
+			cols[rowIdx] = val
 		case types.T_int64:
 			val, ok := fieldValue.(int64)
 			if !ok {
