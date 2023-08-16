@@ -828,10 +828,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 
 		if !table.Stats.Inited {
 			table.Stats.Lock()
-			table.Stats.FlushGapDuration = r.options.maxFlushInterval * 6
-			table.Stats.FlushMemCapacity = 20 * 1024 * 1024
-			table.Stats.FlushTableTailEnabled = true
-			table.Stats.Inited = true
+			table.Stats.InitWithLock(r.options.maxFlushInterval)
 			table.Stats.Unlock()
 		}
 
@@ -859,7 +856,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		if force {
 			logutil.Infof("[flushtabletail] force flush %s", table.GetLastestSchema().Name)
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
-				stats.ResetDeadline()
+				stats.ResetDeadlineWithLock()
 			}
 			return moerr.GetOkStopCurrRecur()
 		}
@@ -867,13 +864,13 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		if stats.LastFlush.IsEmpty() {
 			// first boot, just bail out, and never enter this branch again
 			stats.LastFlush = stats.LastFlush.Next()
-			stats.ResetDeadline()
+			stats.ResetDeadlineWithLock()
 			return moerr.GetOkStopCurrRecur()
 		}
 
 		if stats.FlushDeadline.Before(time.Now()) || size > stats.FlushMemCapacity {
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
-				stats.ResetDeadline()
+				stats.ResetDeadlineWithLock()
 			}
 		}
 
@@ -916,7 +913,7 @@ func (r *runner) crontask(ctx context.Context) {
 		r.source.Run()
 		entry := r.source.GetAndRefreshMerged()
 		if entry.IsEmpty() {
-			logutil.Infof("[flushtabletail]No dirty block found")
+			logutil.Debugf("[flushtabletail]No dirty block found")
 		} else {
 			e := new(DirtyCtx)
 			e.tree = entry

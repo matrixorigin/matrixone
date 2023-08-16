@@ -46,8 +46,15 @@ type TableCompactStat struct {
 	FlushDeadline time.Time
 }
 
-func (s *TableCompactStat) ResetDeadline() {
+func (s *TableCompactStat) ResetDeadlineWithLock() {
 	// add random +/- 10%
 	factor := 1.0 + float64(rand.Intn(21)-10)/100.0
 	s.FlushDeadline = time.Now().Add(time.Duration(factor * float64(s.FlushGapDuration)))
+}
+
+func (s *TableCompactStat) InitWithLock(durationHint time.Duration) {
+	s.FlushGapDuration = durationHint * 5
+	s.FlushMemCapacity = 20 * 1024 * 1024
+	s.FlushTableTailEnabled = true
+	s.Inited = true
 }
