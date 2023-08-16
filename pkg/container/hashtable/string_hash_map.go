@@ -46,13 +46,13 @@ type StringHashMap struct {
 }
 
 var (
-	strCellSize        int64
-	maxStrCellCntPerGB int64
+	strCellSize           uint64
+	maxStrCellCntPerBlock uint64
 )
 
 func init() {
-	strCellSize = int64(unsafe.Sizeof(StringHashMapCell{}))
-	maxStrCellCntPerGB = mpool.GB / strCellSize
+	strCellSize = uint64(unsafe.Sizeof(StringHashMapCell{}))
+	maxStrCellCntPerBlock = maxBlockSize / strCellSize
 }
 
 func (ht *StringHashMap) Free(m *mpool.MPool) {
@@ -67,14 +67,14 @@ func (ht *StringHashMap) Free(m *mpool.MPool) {
 
 func (ht *StringHashMap) Init(m *mpool.MPool) (err error) {
 	ht.blockCellCnt = kInitialCellCnt
-	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt)
+	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, strCellSize)
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
 	ht.cellCntMask = kInitialCellCnt - 1
 
 	ht.rawData = make([][]byte, 1)
 	ht.cells = make([][]StringHashMapCell, 1)
-	if ht.rawData[0], err = m.Alloc(int(ht.blockCellCnt) * int(strCellSize)); err == nil {
+	if ht.rawData[0], err = m.Alloc(int(ht.blockCellCnt * strCellSize)); err == nil {
 		ht.cells[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockCellCnt)
 	}
 	return
@@ -202,17 +202,17 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
 	}
 
 	newCellCnt := ht.cellCnt << 1
-	newMaxElemCnt := maxElemCnt(newCellCnt)
+	newMaxElemCnt := maxElemCnt(newCellCnt, strCellSize)
 	for newMaxElemCnt < targetCnt {
 		newCellCnt <<= 1
-		newMaxElemCnt = maxElemCnt(newCellCnt)
+		newMaxElemCnt = maxElemCnt(newCellCnt, strCellSize)
 	}
 
-	newAlloc := int(newCellCnt) * int(strCellSize)
-	if ht.blockCellCnt == uint64(maxStrCellCntPerGB) {
+	newAlloc := int(newCellCnt * strCellSize)
+	if ht.blockCellCnt == maxStrCellCntPerBlock {
 		// double the blocks
 		oldBlockNum := len(ht.rawData)
-		newBlockNum := newAlloc / mpool.GB
+		newBlockNum := newAlloc / maxBlockSize
 
 		ht.rawData = append(ht.rawData, make([][]byte, newBlockNum-oldBlockNum)...)
 		ht.cells = append(ht.cells, make([][]StringHashMapCell, newBlockNum-oldBlockNum)...)
@@ -220,7 +220,7 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
 		ht.cellCntMask = ht.cellCnt - 1
 
 		for i := oldBlockNum; i < newBlockNum; i++ {
-			ht.rawData[i], err = m.Alloc(int(ht.blockCellCnt) * int(strCellSize))
+			ht.rawData[i], err = m.Alloc(int(ht.blockCellCnt * strCellSize))
 			if err != nil {
 				return err
 			}
@@ -264,7 +264,7 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
 		ht.cellCnt = newCellCnt
 		ht.cellCntMask = ht.cellCnt - 1
 
-		if newAlloc <= mpool.GB {
+		if newAlloc <= maxBlockSize {
 			ht.blockCellCnt = newCellCnt
 			ht.blockMaxElemCnt = newMaxElemCnt
 
@@ -274,17 +274,17 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64, m *mpool.MPool) error {
 			}
 			ht.cells[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockCellCnt)
 		} else {
-			ht.blockCellCnt = uint64(maxStrCellCntPerGB)
-			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt)
+			ht.blockCellCnt = maxStrCellCntPerBlock
+			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, strCellSize)
 
-			newBlockNum := newAlloc / mpool.GB
+			newBlockNum := newAlloc / maxBlockSize
 			ht.rawData = make([][]byte, newBlockNum)
 			ht.cells = make([][]StringHashMapCell, newBlockNum)
 			ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
 			ht.cellCntMask = ht.cellCnt - 1
 
 			for i := 0; i < newBlockNum; i++ {
-				ht.rawData[i], err = m.Alloc(int(ht.blockCellCnt) * int(strCellSize))
+				ht.rawData[i], err = m.Alloc(int(ht.blockCellCnt * strCellSize))
 				if err != nil {
 					return err
 				}
