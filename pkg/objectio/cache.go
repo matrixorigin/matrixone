@@ -20,28 +20,48 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+)
+
+const (
+	cacheKeyTypeLen = 2
+	cacheKeyLen     = ObjectNameShortLen + cacheKeyTypeLen
+)
+
+const (
+	cacheKeyTypeMeta uint16 = iota
+	cacheKeyTypeBloomFilter
 )
 
 type CacheConfig struct {
 	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
 }
 
-var metaCache *lrucache.LRU[ObjectNameShort, fileservice.Bytes]
+type mataCacheKey [cacheKeyLen]byte
+
+var metaCache *lrucache.LRU[mataCacheKey, fileservice.Bytes]
 var onceInit sync.Once
 var metaCacheStats hitStats
 var metaCacheHitStats hitStats
 
 func init() {
-	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil, nil)
+	metaCache = lrucache.New[mataCacheKey, fileservice.Bytes](512*1024*1024, nil, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil, nil)
+		metaCache = lrucache.New[mataCacheKey, fileservice.Bytes](size, nil, nil, nil)
 	})
+}
+
+func encodeCacheKey(name ObjectNameShort, cacheKeyType uint16) mataCacheKey {
+	var key mataCacheKey
+	copy(key[:], name[:])
+	copy(key[ObjectNameShortLen:], types.EncodeUint16(&cacheKeyType))
+	return key
 }
 
 func ExportMetaCacheStats() string {
@@ -66,7 +86,8 @@ func LoadObjectMetaByExtent(
 	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
-	v, ok := metaCache.Get(ctx, *name.Short(), false)
+	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
+	v, ok := metaCache.Get(ctx, key, false)
 	if ok {
 		var obj any
 		obj, err = Decode(v)
@@ -89,7 +110,7 @@ func LoadObjectMetaByExtent(
 		return
 	}
 	meta = obj.(ObjectMeta)
-	metaCache.Set(ctx, *name.Short(), v[:], false)
+	metaCache.Set(ctx, key, v[:], false)
 	metaCacheStats.Record(0, 1)
 	if !prefetch {
 		metaCacheHitStats.Record(0, 1)
@@ -99,16 +120,39 @@ func LoadObjectMetaByExtent(
 
 func FastLoadBF(
 	ctx context.Context,
-	loc Location,
+	location Location,
 	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
-	meta, err := FastLoadObjectMeta(ctx, &loc, false, fs)
+	name := location.Name()
+	key := encodeCacheKey(*name.Short(), cacheKeyTypeBloomFilter)
+
+	v, ok := metaCache.Get(ctx, key, false)
+	if ok {
+		obj, err := Decode(v)
+		if err != nil {
+			return nil, err
+		}
+		metaCacheStats.Record(1, 1)
+		return obj.(BloomFilter), nil
+	}
+
+	meta, err := FastLoadObjectMeta(ctx, &location, false, fs)
 	if err != nil {
 		return nil, err
 	}
 	extent := meta.MustDataMeta().BlockHeader().BFExtent()
-	return ReadBloomFilter(ctx, loc.Name().String(), &extent, cachePolicy, fs)
+	v, err = ReadExtent(ctx, name.String(), &extent, cachePolicy, fs, constructorFactory)
+	if err != nil {
+		return nil, err
+	}
+	obj, err := Decode(v)
+	if err != nil {
+		return nil, err
+	}
+	metaCache.Set(ctx, key, v[:], false)
+	metaCacheStats.Record(0, 1)
+	return obj.(BloomFilter), nil
 }
 
 func FastLoadObjectMeta(

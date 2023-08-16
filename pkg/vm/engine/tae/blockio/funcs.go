@@ -89,7 +89,7 @@ func LoadBF(
 ) (bf objectio.BloomFilter, err error) {
 	v, ok := cache.Get(ctx, *loc.ShortName())
 	if ok {
-		bf = v
+		bf = objectio.BloomFilter(v)
 		return
 	}
 	if noLoad {
@@ -101,6 +101,6 @@ func LoadBF(
 		return
 	}
 	cache.Set(ctx, *loc.ShortName(), v)
-	bf = v
+	bf = objectio.BloomFilter(v)
 	return
 }
