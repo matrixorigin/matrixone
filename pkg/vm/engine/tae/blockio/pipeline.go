@@ -492,6 +492,7 @@ func (p *IoPipeline) crontask(ctx context.Context) {
 			logutil.Infof("PrefetchDropStats: %d", wdrops)
 		}
 		logutil.Info(objectio.ExportMetaCacheStats())
+		logutil.Info(objectio.ExportBloomFilterCacheStats())
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

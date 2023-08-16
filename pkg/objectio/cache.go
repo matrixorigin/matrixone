@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type CacheConfig struct {
@@ -30,17 +31,21 @@ type CacheConfig struct {
 }
 
 var metaCache *lrucache.LRU[ObjectNameShort, fileservice.Bytes]
+var bloomFilterCache *lrucache.LRU[ObjectNameShort, BloomFilter]
 var onceInit sync.Once
 var metaCacheStats hitStats
 var metaCacheHitStats hitStats
+var bloomFilterCacheStats hitStats
 
 func init() {
 	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil, nil)
+	bloomFilterCache = lrucache.New[ObjectNameShort, BloomFilter](512*1024*1024, nil, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
 		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil, nil)
+		bloomFilterCache = lrucache.New[ObjectNameShort, BloomFilter](size, nil, nil, nil)
 	})
 }
 
@@ -54,6 +59,18 @@ func ExportMetaCacheStats() string {
 		&buf,
 		"MetaCacheWindow: %d/%d | %d/%d, MetaCacheTotal: %d/%d | %d/%d",
 		hw, hwt, w, wt, ht, htt, t, tt,
+	)
+	return buf.String()
+}
+
+func ExportBloomFilterCacheStats() string {
+	var buf bytes.Buffer
+	hw, hwt := bloomFilterCacheStats.ExportW()
+	ht, htt := bloomFilterCacheStats.Export()
+	fmt.Fprintf(
+		&buf,
+		"BloomFilterCacheWindow: %d/%d, BloomFilterCacheTotal: %d/%d",
+		hw, hwt, ht, htt,
 	)
 	return buf.String()
 }
@@ -95,6 +112,26 @@ func LoadObjectMetaByExtent(
 		metaCacheHitStats.Record(0, 1)
 	}
 	return
+}
+
+func FastLoadBF(
+	ctx context.Context,
+	loc Location,
+	fs fileservice.FileService,
+) (BloomFilter, error) {
+	v, ok := bloomFilterCache.Get(ctx, *loc.Name().Short(), false)
+	if ok {
+		bloomFilterCacheStats.Record(1, 1)
+		return v.Bytes(), nil
+	}
+	r, _ := blockio.NewObjectReader(fs, loc)
+	v, _, err := r.LoadAllBF(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bloomFilterCache.Set(ctx, *loc.ShortName(), v, false)
+	bloomFilterCacheStats.Record(0, 1)
+	return v, nil
 }
 
 func FastLoadObjectMeta(
