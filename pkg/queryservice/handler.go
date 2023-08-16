@@ -55,21 +55,3 @@ func (s *queryService) processList(tenant string, sysTenant bool) ([]*status.Ses
 	}
 	return sessions, nil
 }
-
-// alterSessionStatus alter session routine accoring to the input status
-func (s *queryService) alterSessionsStatus(tenant string, sysTenant bool, status string) error {
-	var ss []Session
-	if sysTenant {
-		ss = s.sessionMgr.GetAllSessions()
-	} else {
-		ss = s.sessionMgr.GetSessionsByTenant(tenant)
-	}
-	for _, ses := range ss {
-		if ses.GetTenantName() == tenant {
-			if err := ses.SetSessionRoutineStatus(status); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}

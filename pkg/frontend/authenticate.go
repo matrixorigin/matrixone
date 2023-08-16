@@ -2978,7 +2978,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(true)
 				}
 			}
-			err = alterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusRestricted.String())
+			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusRestricted.String())
 			if err != nil {
 				logutil.Errorf("post alter account restricted error: %s", err.Error())
 			}
@@ -2991,7 +2991,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(false)
 				}
 			}
-			err = alterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusOpen.String())
+			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusOpen.String())
 			if err != nil {
 				logutil.Errorf("post alter account not restricted error: %s", err.Error())
 			}
@@ -9045,8 +9045,8 @@ func addInitSystemVariablesSql(accountId int, accountName, variable_name string,
 	return initMoMysqlCompatibilityMode
 }
 
-// alterSessionStatus alter all nodes session status which the tenant has been alter restricted or open.
-func alterSessionStatus(
+// postAlterSessionStatus post alter all nodes session status which the tenant has been alter restricted or open.
+func postAlterSessionStatus(
 	ctx context.Context,
 	ses *Session,
 	accountName string,
