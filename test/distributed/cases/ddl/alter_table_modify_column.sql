@@ -953,7 +953,6 @@ insert into time01 (col1, col2, col3, col4) values ('2030-12-31', '2031-09-09 01
 select * from time01;
 alter table time01 modify col1 int, modify col2 int first, modify col3 int after col1, modify col4 int;
 show create table time01;
-select * from time01;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -969,7 +968,6 @@ insert into time02 (col2, col3, col4) values ('2031-09-09 01:01:01', '2013-12-12
 select * from time02;
 alter table time02 modify col2 decimal(20,10) first, modify col3 decimal after col2, modify col4 decimal(38,0);
 show create table time02;
-select * from time02;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue

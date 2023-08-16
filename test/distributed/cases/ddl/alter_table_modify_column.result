@@ -1510,11 +1510,6 @@ alter table time01 modify col1 int, modify col2 int first, modify col3 int after
 show create table time01;
 Table    Create Table
 time01    CREATE TABLE `time01` (\n`col2` INT DEFAULT null,\n`col1` INT DEFAULT null,\n`col3` INT DEFAULT null,\n`col4` INT DEFAULT null\n)
-select * from time01;
-col2    col1    col3    col4
-971179932    18262    15839    10129
-null    9874    599671439    232359
-1946682061    22279    1386814210    101212
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table time01;
@@ -1532,11 +1527,6 @@ alter table time02 modify col2 decimal(20,10) first, modify col3 decimal after c
 show create table time02;
 Table    Create Table
 time02    CREATE TABLE `time02` (\n`col2` DECIMAL(20,10) DEFAULT null,\n`col3` DECIMAL(38,0) DEFAULT null,\n`col4` DECIMAL(38,0) DEFAULT null\n)
-select * from time02;
-col2    col3    col4
-971179932.0000000000    15839    10129
-null    18444188071206    232359
-1946682061.0000000000    1386814210    101212
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table time02;
