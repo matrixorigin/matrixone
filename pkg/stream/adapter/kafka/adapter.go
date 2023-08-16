@@ -22,9 +22,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-type AdminClientInterface interface {
-	CreateTopics(ctx context.Context, topics []kafka.TopicSpecification) ([]kafka.TopicResult, error)
-}
+type ValueType string
+
+const (
+	TypeKey             = "type"
+	TopicKey            = "topic"
+	ValueKey            = "value"
+	BootstrapServersKey = "bootstrap.servers"
+	ProtobufSchemaKey   = "protobuf.schema"
+	ProtobufMessagekey  = "protobuf.message"
+
+	JSON     ValueType = "json"
+	AVRO     ValueType = "avro"
+	PROTOBUF ValueType = "protobuf"
+)
+
+const ()
 
 type KafkaAdapter struct {
 	Producer       *kafka.Producer
@@ -71,6 +84,27 @@ func NewKafkaAdapter(configMap *kafka.ConfigMap) (*KafkaAdapter, error) {
 		ConfigMap:   configMap,
 		Connected:   true,
 	}, nil
+}
+
+func (ka *KafkaAdapter) Close() {
+
+	// Close the Producer if it's initialized
+	if ka.Producer != nil {
+		ka.Producer.Close()
+	}
+
+	// Close the Consumer if it's initialized
+	if ka.Consumer != nil {
+		ka.Consumer.Close()
+	}
+
+	// Close the AdminClient if it's initialized
+	if ka.AdminClient != nil {
+		ka.AdminClient.Close()
+	}
+
+	// Update the Connected status
+	ka.Connected = false
 }
 
 func (ka *KafkaAdapter) CreateTopic(ctx context.Context, topicName string, partitions int, replicationFactor int) error {
@@ -143,7 +177,7 @@ func (ka *KafkaAdapter) ReadMessagesFromPartition(topic string, partition int32,
 	return messages, nil
 }
 
-func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int) ([]*kafka.Message, error) {
+func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int64) ([]*kafka.Message, error) {
 	if ka.Consumer == nil {
 		return nil, moerr.NewInternalError(context.Background(), "consumer not initialized")
 	}
@@ -168,13 +202,13 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 		}
 
 		// Calculate the number of messages available to consume
-		availableMessages := int(highwatermarkHigh - offset)
+		availableMessages := int64(highwatermarkHigh - offset)
 		if availableMessages <= 0 {
 			continue
 		}
 
 		// Determine the number of messages to consume from this partition
-		partitionLimit := limit - len(messages)
+		partitionLimit := limit - int64(len(messages))
 		if partitionLimit > availableMessages {
 			partitionLimit = availableMessages
 		}
@@ -187,7 +221,7 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 			return nil, err
 		}
 
-		for i := 0; i < partitionLimit; i++ {
+		for i := int64(0); i < partitionLimit; i++ {
 			msg, err := ka.Consumer.ReadMessage(-1) // Wait indefinitely until a message is available
 			if err != nil {
 				// Check for timeout
@@ -257,9 +291,9 @@ func (ka *KafkaAdapter) BatchRead(topic string, startOffset int64, limit int, ba
 	return allMessages, nil
 }
 
-func (ka *KafkaAdapter) GetSchemaForTopic(topic string, isKey bool) (string, error) {
+func (ka *KafkaAdapter) GetSchemaForTopic(topic string, isKey bool) (schemaregistry.SchemaMetadata, error) {
 	if ka.SchemaRegistry == nil {
-		return "", fmt.Errorf("schema registry not initialized")
+		return schemaregistry.SchemaMetadata{}, moerr.NewInternalError(context.Background(), "schema registry not initialized")
 	}
 
 	subjectSuffix := "value"
@@ -269,11 +303,7 @@ func (ka *KafkaAdapter) GetSchemaForTopic(topic string, isKey bool) (string, err
 	subject := fmt.Sprintf("%s-%s", topic, subjectSuffix)
 
 	// Fetch the schema for the subject
-	schema, err := ka.SchemaRegistry.GetLatestSchemaMetadata(subject)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch schema for topic %s: %w", topic, err)
-	}
-	return schema.Schema, nil
+	return ka.SchemaRegistry.GetLatestSchemaMetadata(subject)
 }
 
 func (ka *KafkaAdapter) ProduceMessage(topic string, key, value []byte) (int64, error) {
@@ -468,4 +498,96 @@ func readMessageIndexes(payload []byte) (int, []int, error) {
 		msgIndexes[i] = int(idx)
 	}
 	return bytesRead, msgIndexes, nil
+}
+
+func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
+	var requiredKeys = []string{
+		TypeKey,
+		TopicKey,
+		ValueKey,
+		BootstrapServersKey,
+	}
+
+	for _, key := range requiredKeys {
+		if _, exists := configs[key]; !exists {
+			return moerr.NewInternalError(ctx, "missing required key: %s", key)
+		}
+	}
+
+	value, ok := configs[ValueKey].(string)
+	if !ok {
+		return moerr.NewInternalError(ctx, "expected string value for key: %s", ValueKey)
+	}
+
+	switch ValueType(value) {
+	case JSON:
+		break
+	case PROTOBUF:
+		// check the schema and message name has been set or not
+		if _, ok := configs[ProtobufSchemaKey]; !ok {
+			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufSchemaKey)
+		}
+		if _, ok := configs[ProtobufMessagekey]; !ok {
+			return moerr.NewInternalError(ctx, "missing required key: %s", ProtobufMessagekey)
+		}
+	default:
+		return moerr.NewInternalError(ctx, "Unsupported value for key: %s", ValueKey)
+	}
+	// Convert the configuration to map[string]string for Kafka
+	kafkaConfigs := &kafka.ConfigMap{}
+	for key, value := range configs {
+		kafkaConfigs.SetKey(key, value)
+	}
+
+	// Create the Kafka adapter
+	ka, err := NewKafkaAdapter(kafkaConfigs)
+	if err != nil {
+		return err
+	}
+	defer ka.Close()
+
+	// Check if Topic exists
+	_, err = ka.DescribeTopicDetails(ctx, configs[TopicKey].(string))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []string, types []types.Type, offset int64, limit int64, mp *mpool.MPool) (*batch.Batch, error) {
+	err := ValidateConfig(ctx, configs)
+	if err != nil {
+		return nil, err
+	}
+
+	configMap := &kafka.ConfigMap{}
+	for key, value := range configs {
+		err := configMap.SetKey(key, value)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	ka, err := NewKafkaAdapter(configMap)
+	if err != nil {
+		return nil, err
+	}
+	defer ka.Close()
+
+	messages, err := ka.ReadMessagesFromTopic(configs["topic"].(string), int64(offset), limit)
+	if err != nil {
+		return nil, err
+	}
+
+	schema, err := ka.GetSchemaForTopic(configs["topic"].(string), false)
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := PopulateBatchFromMSG(types, attrs, mp, messages, &schema)
+	if err != nil {
+		return nil, err
+	}
+
+	return b, nil
 }
