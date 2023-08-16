@@ -59,7 +59,7 @@ func NewObjectReader(
 			&name,
 			&metaExt,
 			service,
-			objectio.WithNoMetaCacheOption(fileservice.CachePolicy(fileservice.SkipMemoryReads)))
+			objectio.WithMetaCachePolicyOption(fileservice.SkipMemory))
 	} else {
 		reader, err = objectio.NewObjectReader(&name, &metaExt, service, opts...)
 	}
@@ -76,7 +76,7 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 	reader, err := objectio.NewObjectReaderWithStr(
 		name,
 		service,
-		objectio.WithNoMetaCacheOption(fileservice.CachePolicy(fileservice.SkipMemoryReads)))
+		objectio.WithMetaCachePolicyOption(fileservice.SkipMemory))
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,8 @@ func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockR
 	reader, err := objectio.NewObjectReaderWithStr(
 		name,
 		service,
-		objectio.WithNoCacheOption(fileservice.CachePolicy(fileservice.SkipAll)))
+		objectio.WithDataCachePolicyOption(fileservice.SkipAll),
+		objectio.WithMetaCachePolicyOption(fileservice.SkipAll))
 	if err != nil {
 		return nil, err
 	}

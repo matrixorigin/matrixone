@@ -63,7 +63,7 @@ func newObjectReaderV1(
 		metaExt: metaExt,
 	}
 	if len(opts) == 0 {
-		reader.ReaderOptions.metaCachePolicy = fileservice.SkipMemoryReads
+		reader.ReaderOptions.metaCachePolicy = fileservice.SkipMemory
 	} else {
 		for _, f := range opts {
 			f(&reader.ReaderOptions)
@@ -418,21 +418,14 @@ type ReaderOptions struct {
 
 type ReaderOptionFunc func(opt *ReaderOptions)
 
-func WithNoCacheOption(noLRUCache fileservice.CachePolicy) ReaderOptionFunc {
+func WithDataCachePolicyOption(noLRUCache fileservice.CachePolicy) ReaderOptionFunc {
 	return ReaderOptionFunc(func(opt *ReaderOptions) {
-		opt.metaCachePolicy = noLRUCache
 		opt.dataCachePolicy = noLRUCache
 	})
 }
 
-func WithNoMetaCacheOption(noLRUCache fileservice.CachePolicy) ReaderOptionFunc {
+func WithMetaCachePolicyOption(noLRUCache fileservice.CachePolicy) ReaderOptionFunc {
 	return ReaderOptionFunc(func(opt *ReaderOptions) {
 		opt.metaCachePolicy = noLRUCache
-	})
-}
-
-func WithLocalMetaCacheOption(withMetaCache bool) ReaderOptionFunc {
-	return ReaderOptionFunc(func(opt *ReaderOptions) {
-		opt.withMetaCache = withMetaCache
 	})
 }

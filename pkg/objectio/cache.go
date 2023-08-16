@@ -105,5 +105,5 @@ func FastLoadObjectMeta(
 ) (ObjectMeta, error) {
 	extent := location.Extent()
 	name := location.Name()
-	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, fileservice.SkipMemoryReads, fs)
+	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, fileservice.SkipMemory, fs)
 }
