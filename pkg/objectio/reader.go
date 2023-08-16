@@ -62,8 +62,12 @@ func newObjectReaderV1(
 		oname:   oname,
 		metaExt: metaExt,
 	}
-	for _, f := range opts {
-		f(&reader.ReaderOptions)
+	if len(opts) == 0 {
+		reader.ReaderOptions.metaCachePolicy = fileservice.SkipMemory
+	} else {
+		for _, f := range opts {
+			f(&reader.ReaderOptions)
+		}
 	}
 	return reader, nil
 }
@@ -133,12 +137,12 @@ func (r *objectReaderV1) ReadMeta(
 	}
 	if r.oname != nil {
 		// read table data block
-		if meta, err = LoadObjectMetaByExtent(ctx, r.oname, r.metaExt, false, r.noLRUCache, r.fs); err != nil {
+		if meta, err = LoadObjectMetaByExtent(ctx, r.oname, r.metaExt, false, r.metaCachePolicy, r.fs); err != nil {
 			return
 		}
 	} else {
 		// read gc/ckp/etl ... data
-		if meta, err = ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs); err != nil {
+		if meta, err = ReadObjectMeta(ctx, r.name, r.metaExt, r.metaCachePolicy, r.fs); err != nil {
 			return
 		}
 	}
@@ -217,7 +221,7 @@ func (r *objectReaderV1) ReadAll(
 		return
 	}
 	meta, _ := metaHeader.DataMeta()
-	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noLRUCache, m, r.fs, constructorFactory)
+	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.dataCachePolicy, m, r.fs, constructorFactory)
 }
 
 // ReadOneBF read one bloom filter
@@ -231,7 +235,7 @@ func (r *objectReaderV1) ReadOneBF(
 	}
 	meta, _ := metaHeader.DataMeta()
 	extent := meta.BlockHeader().BFExtent()
-	bfs, err := ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs)
+	bfs, err := ReadBloomFilter(ctx, r.name, &extent, r.dataCachePolicy, r.fs)
 	if err != nil {
 		return
 	}
@@ -255,7 +259,7 @@ func (r *objectReaderV1) ReadAllBF(
 	}
 	meta, _ := metaHeader.DataMeta()
 	extent := meta.BlockHeader().BFExtent()
-	if buf, err = ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs); err != nil {
+	if buf, err = ReadBloomFilter(ctx, r.name, &extent, r.dataCachePolicy, r.fs); err != nil {
 		return
 	}
 	return buf, extent.OriginSize(), nil
@@ -269,7 +273,7 @@ func (r *objectReaderV1) ReadExtent(
 		ctx,
 		r.name,
 		&extent,
-		r.noLRUCache,
+		r.metaCachePolicy,
 		r.fs,
 		constructorFactory)
 	if err != nil {
@@ -395,7 +399,7 @@ func (r *objectReaderV1) ReadAllMeta(
 
 func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header, err error) {
 	ext := NewExtent(0, 0, HeaderSize, HeaderSize)
-	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, r.fs, constructorFactory)
+	v, err := ReadExtent(ctx, r.name, &ext, r.metaCachePolicy, r.fs, constructorFactory)
 	if err != nil {
 		return
 	}
@@ -404,8 +408,9 @@ func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Head
 }
 
 type ReaderOptions struct {
-	// noLRUCache true means NOT cache IOVector in FileService's cache
-	noLRUCache bool
+	// metaCachePolicy true means NOT cache IOVector in FileService's cache
+	metaCachePolicy fileservice.CachePolicy
+	dataCachePolicy fileservice.CachePolicy
 	// withMetaCache true means cache objectDataMetaV1 in the Reader
 	// Note: if withMetaCache is true, cleanup is needed
 	withMetaCache bool
@@ -413,14 +418,14 @@ type ReaderOptions struct {
 
 type ReaderOptionFunc func(opt *ReaderOptions)
 
-func WithNoLRUCacheOption(noLRUCache bool) ReaderOptionFunc {
+func WithDataCachePolicyOption(noLRUCache fileservice.CachePolicy) ReaderOptionFunc {
 	return ReaderOptionFunc(func(opt *ReaderOptions) {
-		opt.noLRUCache = noLRUCache
+		opt.dataCachePolicy = noLRUCache
 	})
 }
 
-func WithLocalMetaCacheOption(withMetaCache bool) ReaderOptionFunc {
+func WithMetaCachePolicyOption(noLRUCache fileservice.CachePolicy) ReaderOptionFunc {
 	return ReaderOptionFunc(func(opt *ReaderOptions) {
-		opt.withMetaCache = withMetaCache
+		opt.metaCachePolicy = noLRUCache
 	})
 }
