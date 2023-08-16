@@ -97,6 +97,7 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 		if bat != nil {
 			cnt := bat.GetCnt()
 			for cnt > 0 {
+				cnt--
 				bat.Clean(proc.Mp())
 			}
 		}
