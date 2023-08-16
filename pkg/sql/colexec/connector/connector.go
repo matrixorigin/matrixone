@@ -16,6 +16,7 @@ package connector
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -37,6 +38,7 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 	}
 	if bat.IsEmpty() {
 		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
 

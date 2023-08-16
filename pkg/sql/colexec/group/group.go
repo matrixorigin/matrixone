@@ -256,7 +256,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 
 	if bat.IsEmpty() {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
 

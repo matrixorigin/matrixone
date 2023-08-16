@@ -95,7 +95,10 @@ func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
 	if pipelineFailed {
 		bat := proc.InputBatch()
 		if bat != nil {
-			bat.Clean(proc.Mp())
+			cnt := bat.GetCnt()
+			for cnt > 0 {
+				bat.Clean(proc.Mp())
+			}
 		}
 		proc.SetInputBatch(nil)
 	}
