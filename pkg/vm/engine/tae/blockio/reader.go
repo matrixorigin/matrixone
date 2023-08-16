@@ -322,8 +322,16 @@ func PrefetchWithMerged(params PrefetchParams) error {
 }
 
 func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
-
 	params, err := BuildPrefetchParams(service, key)
+	if err != nil {
+		return err
+	}
+	params.AddBlock(idxes, ids)
+	return pipeline.Prefetch(params)
+}
+
+func PrefetchTombstone(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
+	params, err := BuildTombstonePrefetchParams(service, key)
 	if err != nil {
 		return err
 	}

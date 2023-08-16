@@ -471,7 +471,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
+	pref, err := blockio.BuildTombstonePrefetchParams(h.db.Runtime.Fs.Service, loc)
 	if err != nil {
 		return err
 	}
