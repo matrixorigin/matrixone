@@ -320,6 +320,10 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	if b == nil {
 		return nil
 	}
+
+	// There is still a memory problem here. If row count is very small, but the cap of batch's vectors is very large,
+	// to encode will allocate a large memory.
+	// but I'm not sure how string type store data in vector, so I can't do a simple optimization like vec.col = vec.col[:len].
 	data, err := types.Encode(b)
 	if err != nil {
 		return err
