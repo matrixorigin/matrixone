@@ -220,7 +220,7 @@ func (r *objectReaderV1) ReadAll(
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
-	meta, _ := metaHeader.DataMeta()
+	meta := metaHeader.MustDataMeta()
 	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.dataCachePolicy, m, r.fs, constructorFactory)
 }
 
@@ -233,7 +233,7 @@ func (r *objectReaderV1) ReadOneBF(
 	if metaHeader, err = r.ReadMeta(ctx, nil); err != nil {
 		return
 	}
-	meta, _ := metaHeader.DataMeta()
+	meta := metaHeader.MustDataMeta()
 	extent := meta.BlockHeader().BFExtent()
 	bfs, err := ReadBloomFilter(ctx, r.name, &extent, r.dataCachePolicy, r.fs)
 	if err != nil {
@@ -257,7 +257,7 @@ func (r *objectReaderV1) ReadAllBF(
 	if metaHeader, err = r.ReadMeta(ctx, nil); err != nil {
 		return
 	}
-	meta, _ := metaHeader.DataMeta()
+	meta := metaHeader.MustDataMeta()
 	extent := meta.BlockHeader().BFExtent()
 	if buf, err = ReadBloomFilter(ctx, r.name, &extent, r.dataCachePolicy, r.fs); err != nil {
 		return
@@ -298,7 +298,28 @@ func (r *objectReaderV1) ReadMultiBlocks(
 	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
-	meta, _ := metaHeader.DataMeta()
+	meta := metaHeader.MustDataMeta()
+	return ReadMultiBlocksWithMeta(
+		ctx,
+		r.name,
+		&meta,
+		opts,
+		false,
+		m,
+		r.fs,
+		constructorFactory)
+}
+
+func (r *objectReaderV1) ReadTombstoneMultiBlocks(
+	ctx context.Context,
+	opts map[uint16]*ReadBlockOptions,
+	m *mpool.MPool,
+) (ioVec *fileservice.IOVector, err error) {
+	var metaHeader ObjectMeta
+	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
+		return
+	}
+	meta := metaHeader.MustTombstoneMeta()
 	return ReadMultiBlocksWithMeta(
 		ctx,
 		r.name,
