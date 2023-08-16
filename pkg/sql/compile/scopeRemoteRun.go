@@ -778,14 +778,15 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *group.Argument:
 		in.Agg = &pipeline.Group{
-			IsShuffle: t.IsShuffle,
-			NeedEval:  t.NeedEval,
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
-			Exprs:     t.Exprs,
-			Types:     convertToPlanTypes(t.Types),
-			Aggs:      convertToPipelineAggregates(t.Aggs),
-			MultiAggs: convertPipelineMultiAggs(t.MultiAggs),
+			IsShuffle:    t.IsShuffle,
+			PreAllocSize: t.PreAllocSize,
+			NeedEval:     t.NeedEval,
+			Ibucket:      t.Ibucket,
+			Nbucket:      t.Nbucket,
+			Exprs:        t.Exprs,
+			Types:        convertToPlanTypes(t.Types),
+			Aggs:         convertToPipelineAggregates(t.Aggs),
+			MultiAggs:    convertPipelineMultiAggs(t.MultiAggs),
 		}
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -1166,14 +1167,15 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Group:
 		t := opr.GetAgg()
 		v.Arg = &group.Argument{
-			IsShuffle: t.IsShuffle,
-			NeedEval:  t.NeedEval,
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
-			Exprs:     t.Exprs,
-			Types:     convertToTypes(t.Types),
-			Aggs:      convertToAggregates(t.Aggs),
-			MultiAggs: convertToMultiAggs(t.MultiAggs),
+			IsShuffle:    t.IsShuffle,
+			PreAllocSize: t.PreAllocSize,
+			NeedEval:     t.NeedEval,
+			Ibucket:      t.Ibucket,
+			Nbucket:      t.Nbucket,
+			Exprs:        t.Exprs,
+			Types:        convertToTypes(t.Types),
+			Aggs:         convertToAggregates(t.Aggs),
+			MultiAggs:    convertToMultiAggs(t.MultiAggs),
 		}
 	case vm.Join:
 		t := opr.GetJoin()
