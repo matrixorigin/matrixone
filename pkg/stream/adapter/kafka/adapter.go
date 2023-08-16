@@ -3,6 +3,7 @@ package mokafka
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -40,7 +41,38 @@ const (
 	PROTOBUFSR ValueType = "protobuf_sr"
 )
 
-const ()
+type DataGetter interface {
+	GetFieldValue(name string) (interface{}, bool)
+}
+
+type JsonDataGetter struct {
+	Key   []byte
+	Value []byte
+	Data  map[string]interface{} // Cache the parsed JSON for efficiency
+}
+
+func (j *JsonDataGetter) GetFieldValue(name string) (interface{}, bool) {
+	// If the JSON data hasn't been parsed, do it now
+	if j.Data == nil {
+		err := json.Unmarshal(j.Value, &j.Data)
+		if err != nil {
+			return nil, false
+		}
+	}
+
+	val, ok := j.Data[name]
+	return val, ok
+}
+
+type ProtoDataGetter struct {
+	Value *dynamic.Message
+	Key   any
+}
+
+func (p *ProtoDataGetter) GetFieldValue(name string) (interface{}, bool) {
+	val := p.Value.GetFieldByName(name)
+	return val, val != nil
+}
 
 type KafkaAdapter struct {
 	Producer       *kafka.Producer
@@ -349,8 +381,8 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 	return batch
 }
 
-func populateBatchFromMSG(ctx context.Context, ka *KafkaAdapter, typs []types.Type, attrKeys []string, msgs []*kafka.Message, configs map[string]interface{}, pool *mpool.MPool) (*batch.Batch, error) {
-	b := newBatch(len(msgs), typs, pool)
+func populateBatchFromMSG(ctx context.Context, ka *KafkaAdapter, typs []types.Type, attrKeys []string, msgs []*kafka.Message, configs map[string]interface{}, mp *mpool.MPool) (*batch.Batch, error) {
+	b := newBatch(len(msgs), typs, mp)
 
 	value, ok := configs[ValueKey].(string)
 	if !ok {
@@ -358,6 +390,12 @@ func populateBatchFromMSG(ctx context.Context, ka *KafkaAdapter, typs []types.Ty
 	}
 	switch ValueType(value) {
 	case JSON:
+		for i, msg := range msgs {
+			err := populateOneRowData(ctx, b, attrKeys, &JsonDataGetter{Key: msg.Key, Value: msg.Value}, i, typs, mp)
+			if err != nil {
+				return nil, err
+			}
+		}
 
 	case PROTOBUFSR:
 		schema, err := ka.GetSchemaForTopic(configs["topic"].(string), false)
@@ -370,7 +408,7 @@ func populateBatchFromMSG(ctx context.Context, ka *KafkaAdapter, typs []types.Ty
 		}
 		for i, msg := range msgs {
 			msgValue, _ := deserializeProtobuf(md, msg.Value)
-			err := getOneRowProtoData(context.Background(), b, attrKeys, msgValue, i, typs, pool)
+			err := populateOneRowData(ctx, b, attrKeys, &ProtoDataGetter{Value: msgValue, Key: msg.Key}, i, typs, mp)
 			if err != nil {
 				return nil, err
 			}
@@ -380,11 +418,11 @@ func populateBatchFromMSG(ctx context.Context, ka *KafkaAdapter, typs []types.Ty
 	}
 	return b, nil
 }
-func getOneRowProtoData(ctx context.Context, bat *batch.Batch, attrKeys []string, msg *dynamic.Message, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
+func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string, getter DataGetter, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
 
 	for colIdx, typ := range typs {
-		fieldValue := msg.GetFieldByName(attrKeys[colIdx])
-		if fieldValue == nil {
+		fieldValue, ok := getter.GetFieldValue(attrKeys[colIdx])
+		if !ok {
 			return moerr.NewInternalError(ctx, "field not found: %s", attrKeys[colIdx])
 		}
 
