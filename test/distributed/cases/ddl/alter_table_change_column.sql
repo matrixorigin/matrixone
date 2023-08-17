@@ -605,6 +605,12 @@ insert into primary01 values (1, '432r2f234day89ujfw42342');
 insert into primary01 values (2378.32423, '234242))())_');
 select * from primary01;
 show columns from primary01;
+update primary01 set col2 = 'whuihedjwqncew' where col1 = 1;
+update primary01 set col2 = 'whuihedjwqncew' where col1New = 1;
+select * from primary01;
+delete from primary01 where col1 = 1;
+delete from primary01 where col1New = 1;
+select * from primary01;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -615,11 +621,16 @@ drop table primary01;
 drop table if exists primary02;
 create table primary02(col1 int, col2 binary(10));
 insert into primary02 values (1, '32143');
-insert into primary02 values (1, '3e');
+insert into primary02 values (2, '3e');
 select * from primary02;
 alter table primary02 change col1 col1New int primary key;
 show create table primary02;
 show columns from primary02;
+insert into primary02 (col1, col2) VALUES (3, 'ehuwu32');
+delete from primary02 where col1 = 1;
+delete from primary02 where col1New = 1;
+update primary02 set col1New = 100 where col1New = 1;
+select * from primary02;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary02' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -635,6 +646,7 @@ alter table primary03 change col1 col1New int primary key;
 show create table primary03;
 insert into primary03 (col1New, col2) values (3, '*');
 insert into primary03 values (3, 'assad');
+update from primary03 set col2 = 'database' where col1New = 3;
 select * from primary03;
 show columns from primary03;
 -- @bvt:issue#11249
@@ -649,9 +661,13 @@ create table primary04(col1 int primary key ,col2 varbinary(20));
 insert into primary04 values (1, 'qfreqvreq');
 insert into primary04 values (2, '324543##');
 alter table primary04 change col1 col1New float;
+alter table primary04 change col2 col2New varbinary(50);
 show create table primary04;
 insert into primary04 values (1, '324342__');
 insert into primary04 values (3, 'qw');
+delete from primary04 where col2 = 'qfreqvreq';
+delete from primary04 where col2New = 'qfreqvreq';
+update primary04 set col2New = 'ewhueifjnweknd3242e' where col1New = 1;
 select * from primary04;
 show columns from primary04;
 -- @bvt:issue#11249
@@ -679,7 +695,6 @@ create table primary06(col1 int primary key ,col2 varbinary(20));
 insert into primary06 values (1, 'qfreqvreq');
 insert into primary06 values (2, '324543##');
 alter table primary06 change col1 col1New int unsigned primary key;
-alter table primary06 change col2 col2New binary(30) primary key;
 show create table primary06;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary06' and COLUMN_NAME not like '__mo%';
@@ -687,7 +702,7 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 drop table primary06;
 
 
--- abnormal test :joint primary key, change one of the primary column null
+-- abnormal test:joint primary key, change one of the primary column null
 -- @bvt:issue#11247
 drop table if exists primary07;
 create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
@@ -710,9 +725,13 @@ insert into primary08 values (1, 213412.32143, 3214312.34243214242);
 insert into primary08 values (2, -324.2342432423, -1243.42334234242);
 alter table primary08 change col1 col1New double not null;
 alter table primary08 change col2 col2New decimal(28,10);
+show create table primary08;
+insert into primary08 values (3, 73829.273897298374823, 38298390.3242223);
 update primary08 set col2 = 32432.3242424242 where col1 = 1;
 update primary08 set col2New = 32432.3242424242 where col1New = 1;
-show create table primary08;
+delete from primary08 where col1 = 1;
+delete from primary08 where col1New = 2;
+select * from primary08;
 drop table primary08;
 
 
@@ -742,6 +761,13 @@ show index from index01;
 alter table index01 change bNew bNewNew VARCHAR(20) UNIQUE KEY;
 show index from index01;
 show create table index01;
+insert into index01 (a, b, c, d) values (5, 'bh', '1999-01-01', 3000);
+insert into index01 (a, bnewNEW, c, d) values (5, 'bh', '1999-01-01', 3000);
+select * from index01;
+delete from index01 where b = 'ab';
+delete from index01 where bnewNew = 'ab';
+select * from index01;
+update index01 set c = '2022-12-12' where bNewNeW = 'ac';
 select * from index01;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
@@ -761,6 +787,10 @@ show create table index02;
 alter table index02 change b bnewNew VARCHAR(20) UNIQUE KEY;
 show index from index02;
 show create table index02;
+insert into index02 values (4, 'ab', '2000-10-10', 10000);
+insert into index02 values (5, 'gh', '1999-12-31', 20000);
+delete from index02 where bnewnew = 'ab';
+update index02 set bnewnew = 'database' where bnewnEW = 'ad';
 -- @bvt:issue#11270
 desc index02;
 -- @bvt:issue
@@ -795,6 +825,14 @@ show create table foreign01;
 show create table foreign02;
 alter table foreign01 change col2 col2New varchar(100);
 alter table foreign02 change col2 col2new double after col3;
+insert into foreign01 values(3,'bcguwgheinwqneku678',2,2);
+insert into foreign02 values(6,6,6);
+delete from foreign01 where col2New = 'sfhuwe';
+delete from foreign02 where col2New = 2;
+update foreign01 set col2 = 'database ewueh ' where col1 = 1;
+update foreign01 set col2New = 'database ewueh ' where col1 = 1;
+select * from foreign01;
+select * from foreign02;
 show create table foreign01;
 show create table foreign02;
 -- @bvt:issue#11249
