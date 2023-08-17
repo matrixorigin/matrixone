@@ -3090,6 +3090,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("sql_log_off"),
 		Default:           int64(0),
 	},
+	"sql_log_bin": {
+		Name:              "sql_log_bin",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("sql_log_bin"),
+		Default:           int64(0),
+	},
 	"sql_notes": {
 		Name:              "sql_notes",
 		Scope:             ScopeBoth,
