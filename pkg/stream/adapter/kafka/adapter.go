@@ -644,6 +644,36 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
 
 type KafkaAdapterFactory func(configMap *kafka.ConfigMap) (*KafkaAdapter, error)
 
+func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, factory KafkaAdapterFactory) (int64, error) {
+	err := ValidateConfig(ctx, configs)
+	if err != nil {
+		return 0, err
+	}
+
+	configMap := convertToKafkaConfig(configs)
+
+	ka, err := factory(configMap)
+	if err != nil {
+		return 0, err
+	}
+	defer ka.Close()
+
+	meta, err := ka.DescribeTopicDetails(ctx, configs["topic"].(string))
+	if err != nil {
+		return 0, err
+	}
+
+	var totalSize int64
+	for _, p := range meta.Partitions {
+		// Fetch the high watermark for the partition
+		_, highwatermarkHigh, err := ka.Consumer.QueryWatermarkOffsets(configs["topic"].(string), p.ID, -1)
+		if err != nil {
+			return 0, moerr.NewInternalError(ctx, "failed to query watermark offsets: %w", err)
+		}
+		totalSize += int64(highwatermarkHigh)
+	}
+	return totalSize, nil
+}
 func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []string, types []types.Type, offset int64, limit int64, mp *mpool.MPool, factory KafkaAdapterFactory) (*batch.Batch, error) {
 	err := ValidateConfig(ctx, configs)
 	if err != nil {
