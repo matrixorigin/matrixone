@@ -79,6 +79,17 @@ func Compare[T types.RealNumbers](v1, v2 []T) int {
 	return 0
 }
 
+func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O) {
+	n := len(in)
+
+	out = make([]O, n)
+	for i := 0; i < n; i++ {
+		out[i] = O(in[i])
+	}
+
+	return out
+}
+
 func Abs[T types.RealNumbers](v []T) (res []T, err error) {
 	n := len(v)
 	res = make([]T, n)

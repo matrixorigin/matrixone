@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
 	"strconv"
 	"strings"
@@ -326,10 +327,10 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_array_float32: {
-		types.T_array_float32,
+		types.T_array_float32, types.T_array_float64,
 	},
 	types.T_array_float64: {
-		types.T_array_float64,
+		types.T_array_float32, types.T_array_float64,
 	},
 }
 
@@ -461,7 +462,8 @@ func scalarNullToOthers(ctx context.Context,
 	case types.T_uint64:
 		return appendNulls[uint64](result, length)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_json:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
+		types.T_array_float32, types.T_array_float64:
 		return appendNulls[types.Varlena](result, length)
 	case types.T_float32:
 		return appendNulls[float32](result, length)
@@ -1492,15 +1494,27 @@ func arrayTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	ctx := proc.Ctx
-	switch toType.Oid {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	fromType := source.GetType()
+
+	switch fromType.Oid {
 	case types.T_array_float32:
-		rs := vector.MustFunctionResult[types.Varlena](result)
-		return ArrayToArray[float32](proc.Ctx, source, rs, length, toType)
+		switch toType.Oid {
+		case types.T_array_float32:
+			return ArrayToArray[float32, float32](proc.Ctx, source, rs, length, toType)
+		case types.T_array_float64:
+			return ArrayToArray[float32, float64](proc.Ctx, source, rs, length, toType)
+		}
 	case types.T_array_float64:
-		rs := vector.MustFunctionResult[types.Varlena](result)
-		return ArrayToArray[float64](proc.Ctx, source, rs, length, toType)
+		switch toType.Oid {
+		case types.T_array_float32:
+			return ArrayToArray[float64, float32](proc.Ctx, source, rs, length, toType)
+		case types.T_array_float64:
+			return ArrayToArray[float64, float64](proc.Ctx, source, rs, length, toType)
+		}
 	}
-	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
+
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", fromType, toType))
 }
 
 func uuidToOthers(ctx context.Context,
@@ -3931,7 +3945,7 @@ func strToArray[T types.RealNumbers](
 	return nil
 }
 
-func ArrayToArray[T types.RealNumbers](
+func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
@@ -3946,9 +3960,21 @@ func ArrayToArray[T types.RealNumbers](
 			}
 			continue
 		}
-		if err := to.AppendBytes(v, false); err != nil {
-			return err
+
+		if from.GetType().Oid == to.GetType().Oid {
+			// If Array types are same, then we don't need casting.
+			if err := to.AppendBytes(v, false); err != nil {
+				return err
+			}
+		} else {
+			_v := types.BytesToArray[I](v)
+			cast := moarray.Cast[I, O](_v)
+			bytes := types.ArrayToBytes[O](cast)
+			if err := to.AppendBytes(bytes, false); err != nil {
+				return err
+			}
 		}
+
 	}
 	return nil
 }

@@ -885,7 +885,9 @@ func initFixed1() {
 		{types.T_text, types.T_varbinary, types.T_varbinary, types.T_varbinary},
 		{types.T_text, types.T_blob, types.T_blob, types.T_blob},
 		{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
+		{types.T_array_float32, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
+		{types.T_array_float64, types.T_array_float32, types.T_array_float64, types.T_array_float64},
 	}
 
 	for _, r := range ru {
@@ -1339,7 +1341,9 @@ func initFixed2() {
 		{types.T_text, types.T_decimal128, types.T_float64, types.T_float64},
 		//B
 		{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
+		{types.T_array_float32, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
+		{types.T_array_float64, types.T_array_float32, types.T_array_float64, types.T_array_float64},
 	}
 
 	for _, r := range ru {
@@ -1905,6 +1909,18 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
+			},
+		},
+		{
+			from: types.T_array_float32,
+			toList: []toRule{
+				{toType: types.T_array_float64, preferLevel: 2},
+			},
+		},
+		{
+			from: types.T_array_float64,
+			toList: []toRule{
+				{toType: types.T_array_float32, preferLevel: 1},
 			},
 		},
 	}
