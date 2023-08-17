@@ -192,8 +192,24 @@ insert into alter01 values(1, 3412.324);
 insert into alter01 values (-10, 323943.2343);
 
 begin;
-alter table alter01 modify col1 float;
+alter table alter01 change col1 col1New float;
 rollback;
 show create table alter01;
 select * from alter01;
 drop table alter01;
+
+
+-- @bvt:issue#11264
+drop table if exists alter01;
+create table alter01 (col1 int primary key, col2 decimal);
+show create table alter01;
+insert into alter01 values(1, 3412.324);
+insert into alter01 values (-10, 323943.2343);
+
+begin;
+alter table alter01 change col1 col1New float not null;
+rollback;
+show create table alter01;
+select * from alter01;
+drop table alter01;
+-- @bvt:issue
