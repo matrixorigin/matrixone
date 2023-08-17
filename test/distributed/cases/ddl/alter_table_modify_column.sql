@@ -1165,13 +1165,13 @@ grant select on table * to role_r1;
 grant show tables on database * to role_r1;
 
 -- @session:id=2&user=sys:role_u1:role_r1&password=111
-use alter_table_change_column;
+use alter_table_modify_column;
 alter table test01 change col1 col1New int primary key;
 -- @session
 grant alter table on database * to role_r1;
 
 -- @session:id=2&user=sys:role_u1:role_r1&password=111
-use alter_table_change_column;
+use alter_table_modify_column;
 alter table test01 change col1 int primary key;
 show create table test01;
 -- @session

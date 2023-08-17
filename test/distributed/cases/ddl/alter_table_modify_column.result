@@ -1921,11 +1921,11 @@ grant show databases on account * to role_r1;
 grant connect on account * to role_r1;
 grant select on table * to role_r1;
 grant show tables on database * to role_r1;
-use alter_table_change_column;
+use alter_table_modify_column;
 alter table test01 change col1 col1New int primary key;
 internal error: do not have privilege to execute the statement
 grant alter table on database * to role_r1;
-use alter_table_change_column;
+use alter_table_modify_column;
 alter table test01 change col1 int primary key;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 42 near " primary key;";
 show create table test01;
