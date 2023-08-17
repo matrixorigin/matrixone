@@ -107,7 +107,7 @@ func (a *UnaryAgg[T1, T2]) Fill(groupIdx int64, rowIndex int64, vectors []*vecto
 				false)
 		}
 	}
-	return nil
+	return err
 }
 
 func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfRows []uint64, vectors []*vector.Vector) (err error) {
@@ -298,6 +298,7 @@ func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err erro
 	} else {
 		if err = vector.AppendFixedList[T2](vec, a.vs, a.es, pool); err != nil {
 			vec.Free(pool)
+			return nil, err
 		}
 	}
 
