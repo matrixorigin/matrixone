@@ -84,8 +84,10 @@ const (
 	T_tuple T = 201
 
 	// Array family
-	T_array_float32 T = 224
-	T_array_float64 T = 225 //note: max value of uint8 is 255
+	T_array_float32 T = 224 // In SQL , it is vecf32
+	T_array_float64 T = 225 // In SQL , it is vecf64
+
+	//note: max value of uint8 is 255
 )
 
 const (
@@ -669,9 +671,9 @@ func (t T) String() string {
 	case T_interval:
 		return "INTERVAL"
 	case T_array_float32:
-		return "ARRAY FLOAT"
+		return "VECTOR FLOAT"
 	case T_array_float64:
-		return "ARRAY DOUBLE"
+		return "VECTOR DOUBLE"
 	case T_enum:
 		return "ENUM"
 	}

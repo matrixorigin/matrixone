@@ -587,7 +587,7 @@ func init() {
 		"stage":                      STAGE,
 		"stages":                     STAGES,
 		"credentials":                CREDENTIALS,
-		"array_float32":              ARRAY_FLOAT32,
-		"array_float64":              ARRAY_FLOAT64,
+		"vecf32":                     VECF32,
+		"vecf64":                     VECF64,
 	}
 }

@@ -168,7 +168,7 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
 			ctx.WriteByte(')')
 		}
-	case "array_float32", "array_float64":
+	case "vecf32", "vecf64":
 		if node.DisplayWith >= 0 {
 			ctx.WriteByte('(') //TODO: What is this?
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))

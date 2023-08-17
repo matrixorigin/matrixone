@@ -6,7 +6,7 @@ DROP DATABASE IF EXISTS a;
 create database a;
 use a;
 
-create table t1(a int, b array_float32(3), c array_float64(3));
+create table t1(a int, b vecf32(3), c vecf64(3));
 
 insert into t1 values(1, "[1,2,3]", "[4,5,6]");
 
@@ -19,13 +19,13 @@ select b/b from t1;
 select abs(b) from t1;
 select sqrt(b) from t1;
 select summation(b) from t1;
-select cast("[1,2,3]" as array_float32(3));
+select cast("[1,2,3]" as vecf32(3));
 select b + "[1,2,3]" from t1;
 
 # vector ops
 select l1_norm(b) from t1;
 select l2_norm(b) from t1;
-select array_dim(b) from t1;
+select vector_dim(b) from t1;
 select inner_product(b,"[1,2,3]") from t1;
 select cosine_similarity(b,"[1,2,3]") from t1;
 
@@ -40,7 +40,7 @@ select * from t1 where b< "[1,2,3]";
 select * from t1 where b>= "[1,2,3]";
 select * from t1 where b<= "[1,2,3]";
 select * from t1 where b!= "[1,2,3]";
-select * from t1 where b= cast("[1,2,3]" as array_float32);
+select * from t1 where b= cast("[1,2,3]" as vecf32);
  
 exit;
 ```

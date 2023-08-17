@@ -1477,7 +1477,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					// NOTE summation(array_float32) --> float64
+					// NOTE summation(vecf32) --> vecf64
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
@@ -1559,9 +1559,9 @@ var supportedArrayOperations = []FuncNew{
 		},
 	},
 
-	// function `array_dim`
+	// function `vector_dim`
 	{
-		functionId: ARRAY_DIM,
+		functionId: VECTOR_DIM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,

@@ -299,7 +299,7 @@ import (
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
-%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID ARRAY_FLOAT32 ARRAY_FLOAT64
+%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION
 
@@ -9613,7 +9613,7 @@ char_type:
             },
         }
     }
-|   ARRAY_FLOAT32 length_option_opt
+|   VECF32 length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -9626,7 +9626,7 @@ char_type:
             },
         }
     }
-|   ARRAY_FLOAT64 length_option_opt
+|   VECF64 length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -10111,8 +10111,8 @@ non_reserved_keyword:
 |   INDEXES
 |   ISOLATION
 |   JSON
-|   ARRAY_FLOAT32
-|   ARRAY_FLOAT64
+|   VECF32
+|   VECF64
 |   KEY_BLOCK_SIZE
 |   KEYS
 |   LANGUAGE

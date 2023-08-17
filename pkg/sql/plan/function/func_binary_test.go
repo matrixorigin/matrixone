@@ -2194,7 +2194,7 @@ func initSqrtArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				//NOTE: SQRT(array_float32) --> array_float64
+				//NOTE: SQRT(vecf32) --> vecf64
 				[][]float64{{2, 3, 4}, {0, 5, 7}},
 				[]bool{false, false}),
 		},

@@ -330,7 +330,7 @@ const (
 	L2_NORM // L2 NORMALIZATION
 	INNER_PRODUCT
 	COSINE_SIMILARITY
-	ARRAY_DIM //ARRAY DIMENSION
+	VECTOR_DIM //VECTOR DIMENSION
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -584,5 +584,5 @@ var functionIdRegister = map[string]int32{
 	"l2_norm":           L2_NORM,
 	"inner_product":     INNER_PRODUCT,
 	"cosine_similarity": COSINE_SIMILARITY,
-	"array_dim":         ARRAY_DIM,
+	"vector_dim":        VECTOR_DIM,
 }

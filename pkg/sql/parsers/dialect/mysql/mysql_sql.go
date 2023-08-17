@@ -204,8 +204,8 @@ const LONGBLOB = 57526
 const JSON = 57527
 const ENUM = 57528
 const UUID = 57529
-const ARRAY_FLOAT32 = 57530
-const ARRAY_FLOAT64 = 57531
+const VECF32 = 57530
+const VECF64 = 57531
 const GEOMETRY = 57532
 const POINT = 57533
 const LINESTRING = 57534
@@ -799,8 +799,8 @@ var yyToknames = [...]string{
 	"JSON",
 	"ENUM",
 	"UUID",
-	"ARRAY_FLOAT32",
-	"ARRAY_FLOAT64",
+	"VECF32",
+	"VECF64",
 	"GEOMETRY",
 	"POINT",
 	"LINESTRING",
