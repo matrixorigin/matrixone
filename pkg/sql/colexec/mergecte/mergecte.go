@@ -56,7 +56,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ap.ctr.curNodeCnt = ap.ctr.nodeCnt
 				break
 			} else {
-				sb.Clean(proc.Mp())
+				proc.PutBatch(sb)
 			}
 		} else {
 			break
