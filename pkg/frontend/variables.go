@@ -3458,6 +3458,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("version"),
 		Default:           "8.0.30-MatrixOne-v1.0.0",
 	},
+	"gtid_purged": {
+		Name:              "gtid_purged",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("gtid_purged"),
+		Default:           "",
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
