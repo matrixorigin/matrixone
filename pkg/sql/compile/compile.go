@@ -207,6 +207,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	// generate logic pipeline for query.
 	c.scope, err = c.compileScope(ctx, pn)
+
 	if err != nil {
 		return err
 	}
@@ -819,6 +820,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+	case plan.Node_STREAM_SCAN:
+		ss, err := c.compileStreamScan(ctx, n)
+		if err != nil {
+			return nil, err
+		}
+
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER, plan.Node_PROJECT, plan.Node_PRE_DELETE:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -1297,6 +1305,54 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 		Arg:     &merge.Argument{},
 	})
 	return ds
+}
+
+func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	_, span := trace.Start(ctx, "compileStreamScan")
+	defer span.End()
+
+	// TODO:
+	// end, err := GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, factory KafkaAdapterFactory) (int64, error)
+	end := int64(0)
+	ps := calculatePartitions(0, end, int64(ncpu))
+
+	ss := make([]*Scope, len(ps))
+	for i := range ss {
+		ss[i] = &Scope{
+			Magic:    Normal,
+			NodeInfo: engine.Node{Addr: c.addr, Mcpu: ncpu},
+			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
+		}
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.Stream,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructStream(n, ps[i]),
+		})
+	}
+	return ss, nil
+}
+
+const StreamMaxInterval = 8192
+
+func calculatePartitions(start, end, n int64) [][2]int64 {
+	var ps [][2]int64
+	interval := (end - start) / n
+	if interval < StreamMaxInterval {
+		interval = StreamMaxInterval
+	}
+	var r int64
+	l := start
+	for i := int64(0); i < n; i++ {
+		r = l + interval
+		if r >= end {
+			ps = append(ps, [2]int64{l, end})
+			break
+		}
+		ps = append(ps, [2]int64{l, r})
+		l = r
+	}
+	return ps
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
