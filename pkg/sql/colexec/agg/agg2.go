@@ -37,7 +37,7 @@ func (a *UnaryAgg[T1, T2]) Grows(count int, pool *mpool.MPool) error {
 	if a.otyp.IsVarlen() {
 		// first time.
 		if len(a.es) == 0 {
-			a.vs = make([]T2, 0, count)
+			a.vs = make([]T2, count)
 			a.es = make([]bool, count)
 			for i := range a.es {
 				a.es[i] = true

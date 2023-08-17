@@ -26,35 +26,39 @@ type Variance[T1 types.Floats | types.Ints | types.UInts] struct {
 }
 
 type EncodeVariance struct {
-	Sum    []float64
-	Counts []float64
+	Sum                     []float64
+	Counts                  []float64
+	OutOfRangeButOnlyOneRow error
 }
 
 // VD64 Variance for decimal64
 type VD64 struct {
-	Sum         []types.Decimal128
-	Counts      []int64
-	Typ         types.Type
-	ScaleMul    int32
-	ScaleDiv    int32
-	ScaleMulDiv int32
-	ScaleDivMul int32
+	Sum                     []types.Decimal128
+	Counts                  []int64
+	Typ                     types.Type
+	ScaleMul                int32
+	ScaleDiv                int32
+	ScaleMulDiv             int32
+	ScaleDivMul             int32
+	OutOfRangeButOnlyOneRow error
 }
 
 // VD128 Variance for decimal128
 type VD128 struct {
-	Sum         []types.Decimal128
-	Counts      []int64
-	Typ         types.Type
-	ScaleMul    int32
-	ScaleDiv    int32
-	ScaleMulDiv int32
-	ScaleDivMul int32
+	Sum                     []types.Decimal128
+	Counts                  []int64
+	Typ                     types.Type
+	ScaleMul                int32
+	ScaleDiv                int32
+	ScaleMulDiv             int32
+	ScaleDivMul             int32
+	OutOfRangeButOnlyOneRow error
 }
 
 type EncodeDecimalV struct {
-	Sum    []types.Decimal128
-	Counts []int64
+	Sum                     []types.Decimal128
+	Counts                  []int64
+	OutOfRangeButOnlyOneRow error
 }
 
 var VarianceSupported = []types.T{
@@ -216,6 +220,17 @@ func (v *VD64) Merge(xIndex, yIndex int64, x types.Decimal128, y types.Decimal12
 		vd := agg.(*VD64)
 		v.Counts[xIndex] += vd.Counts[yIndex]
 		v.Sum[xIndex], _ = v.Sum[xIndex].Add128(vd.Sum[yIndex])
+
+		if v.Counts[xIndex] > 1 {
+			if v.OutOfRangeButOnlyOneRow != nil {
+				return x, false, v.OutOfRangeButOnlyOneRow
+			}
+			if vd.OutOfRangeButOnlyOneRow != nil {
+				return x, false, vd.OutOfRangeButOnlyOneRow
+			}
+		}
+		v.OutOfRangeButOnlyOneRow = vd.OutOfRangeButOnlyOneRow
+
 		if !xEmpty {
 			var err error
 			x, err = x.Add128(y)
@@ -230,36 +245,46 @@ func (v *VD64) Fill(i int64, v1 types.Decimal64, v2 types.Decimal128, z int64, i
 	if isNull {
 		return v2, isEmpty, nil
 	}
+
+	var err error
 	x := types.Decimal128{B0_63: uint64(v1), B64_127: 0}
 	if v1>>63 != 0 {
 		x.B64_127 = ^x.B64_127
 	}
 	v.Counts[i] += z
 	if isEmpty {
-		var err error
 		v.Sum[i], _, err = x.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
 		if err == nil {
 			x, _, err = v.Sum[i].Mul(x, v.Typ.Scale, v.Typ.Scale)
 		}
 		return x, false, err
+	} else {
+		var y types.Decimal128
+		y, _, err = x.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
+		if err == nil {
+			v.Sum[i], err = v.Sum[i].Add128(y)
+		}
+		if err == nil {
+			y, _, err = y.Mul(x, v.Typ.Scale, v.Typ.Scale)
+		}
+		if err == nil {
+			v2, err = v2.Add128(y)
+		}
+		x = v2
 	}
-	y, _, err := x.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
-	if err == nil {
-		v.Sum[i], err = v.Sum[i].Add128(y)
+
+	if err != nil && v.Counts[i] == 1 {
+		v.OutOfRangeButOnlyOneRow = err
+		return x, false, nil
 	}
-	if err == nil {
-		y, _, err = y.Mul(x, v.Typ.Scale, v.Typ.Scale)
-	}
-	if err == nil {
-		v2, err = v2.Add128(y)
-	}
-	return v2, false, err
+	return x, false, err
 }
 
 func (v *VD64) MarshalBinary() ([]byte, error) {
 	ed := &EncodeDecimalV{
-		Sum:    v.Sum,
-		Counts: v.Counts,
+		Sum:                     v.Sum,
+		Counts:                  v.Counts,
+		OutOfRangeButOnlyOneRow: v.OutOfRangeButOnlyOneRow,
 	}
 	return ed.Marshal()
 }
@@ -271,6 +296,7 @@ func (v *VD64) UnmarshalBinary(data []byte) error {
 	}
 	v.Sum = ed.Sum
 	v.Counts = ed.Counts
+	v.OutOfRangeButOnlyOneRow = ed.OutOfRangeButOnlyOneRow
 	return nil
 }
 
@@ -337,6 +363,17 @@ func (v *VD128) Merge(xIndex, yIndex int64, x types.Decimal128, y types.Decimal1
 		vd := agg.(*VD128)
 		v.Counts[xIndex] += vd.Counts[yIndex]
 		v.Sum[xIndex], _ = v.Sum[xIndex].Add128(vd.Sum[yIndex])
+
+		if v.Counts[xIndex] > 1 {
+			if v.OutOfRangeButOnlyOneRow != nil {
+				return x, false, v.OutOfRangeButOnlyOneRow
+			}
+			if vd.OutOfRangeButOnlyOneRow != nil {
+				return x, false, vd.OutOfRangeButOnlyOneRow
+			}
+		}
+		v.OutOfRangeButOnlyOneRow = vd.OutOfRangeButOnlyOneRow
+
 		if !xEmpty {
 			var err error
 			x, err = x.Add128(y)
@@ -352,31 +389,41 @@ func (v *VD128) Fill(i int64, v1 types.Decimal128, v2 types.Decimal128, z int64,
 		return v2, isEmpty, nil
 	}
 	v.Counts[i] += z
+
+	var err error
+	var y types.Decimal128
 	if isEmpty {
-		var err error
 		v.Sum[i], _, err = v1.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
 		if err == nil {
 			v1, _, err = v.Sum[i].Mul(v1, v.Typ.Scale, v.Typ.Scale)
 		}
-		return v1, false, err
+		y = v1
+	} else {
+		y, _, err = v1.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
+		if err == nil {
+			v.Sum[i], err = v.Sum[i].Add128(y)
+		}
+		if err == nil {
+			y, _, err = y.Mul(v1, v.Typ.Scale, v.Typ.Scale)
+		}
+		if err == nil {
+			v2, err = v2.Add128(y)
+		}
+		y = v2
 	}
-	y, _, err := v1.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, v.Typ.Scale, 0)
-	if err == nil {
-		v.Sum[i], err = v.Sum[i].Add128(y)
+
+	if err != nil && v.Counts[i] == 1 {
+		v.OutOfRangeButOnlyOneRow = err
+		return y, false, nil
 	}
-	if err == nil {
-		y, _, err = y.Mul(v1, v.Typ.Scale, v.Typ.Scale)
-	}
-	if err == nil {
-		v2, err = v2.Add128(y)
-	}
-	return v2, false, err
+	return y, false, err
 }
 
 func (v *VD128) MarshalBinary() ([]byte, error) {
 	ed := &EncodeDecimalV{
-		Sum:    v.Sum,
-		Counts: v.Counts,
+		Sum:                     v.Sum,
+		Counts:                  v.Counts,
+		OutOfRangeButOnlyOneRow: v.OutOfRangeButOnlyOneRow,
 	}
 	return ed.Marshal()
 }
@@ -388,5 +435,6 @@ func (v *VD128) UnmarshalBinary(data []byte) error {
 	}
 	v.Sum = ed.Sum
 	v.Counts = ed.Counts
+	v.OutOfRangeButOnlyOneRow = ed.OutOfRangeButOnlyOneRow
 	return nil
 }
