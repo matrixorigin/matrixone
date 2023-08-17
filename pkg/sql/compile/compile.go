@@ -961,20 +961,15 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		rs := c.newMergeScope(ss)
-		rs.Magic = Merge
-		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		onDuplicateKeyArg, err := constructOnduplicateKey(n, c.e)
-		if err != nil {
-			return nil, err
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.OnDuplicateKey,
-			Arg: onDuplicateKeyArg,
-		})
-		ss = []*Scope{rs}
 		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
+
+		rs := c.newMergeScope(ss)
+		rs.Instructions[0] = vm.Instruction{
+			Op:  vm.OnDuplicateKey,
+			Idx: c.anal.curr,
+			Arg: constructOnduplicateKey(n, c.e),
+		}
+		return []*Scope{rs}, nil
 	case plan.Node_PRE_INSERT_UK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -1669,7 +1664,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
-			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, c.proc),
+			Arg: constructGroup(c.ctx, gn, n, i, len(rs), true, 0, c.proc),
 		})
 		if isSameCN(rs[i].NodeInfo.Addr, c.addr) {
 			idx = i
@@ -2187,7 +2182,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, c.proc),
+			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc),
 		})
 	}
 	c.anal.isFirst = false
@@ -2241,7 +2236,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: c.anal.isFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, len(ss), c.proc),
 			})
 		}
 		ss = c.compileProjection(n, c.compileRestrict(n, ss))
@@ -2265,7 +2260,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, len(children), c.proc),
 			})
 		}
 		children = c.compileProjection(n, c.compileRestrict(n, children))
@@ -2320,7 +2315,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, ss []*Scope, ns []*plan.Node
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, len(children), c.proc),
 			})
 		}
 		children = c.compileProjection(n, c.compileRestrict(n, children))
