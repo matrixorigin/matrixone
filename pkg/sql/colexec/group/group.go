@@ -188,7 +188,8 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 	}
 
 	if bat.IsEmpty() {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
 
@@ -254,7 +255,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 
 	if bat.IsEmpty() {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
 
@@ -456,7 +458,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 		}
 		valCnt++
 	}
-	ctr.bat.SetRowCount(ctr.bat.RowCount() + cnt)
+	ctr.bat.AddRowCount(cnt)
 
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {

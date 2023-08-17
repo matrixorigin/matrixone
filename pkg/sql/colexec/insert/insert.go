@@ -98,8 +98,8 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 		}
 		return process.ExecStop, nil
 	}
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}

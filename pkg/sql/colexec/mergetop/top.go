@@ -175,7 +175,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 			ctr.sels = append(ctr.sels, n)
 			n++
 		}
-		ctr.bat.SetRowCount(ctr.bat.RowCount() + bat.RowCount())
+		ctr.bat.AddRowCount(bat.RowCount())
 		if n == limit {
 			ctr.sort()
 		}
