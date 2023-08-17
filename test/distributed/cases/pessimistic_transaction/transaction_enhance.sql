@@ -137,6 +137,7 @@ insert into atomic_table_13 values (6,"h");
 commit;
 show create table atomic_table_13;
 
+-- @bvt:issue#11213
 drop table if exists atomic_table_12_3;
 drop table if exists atomic_table_13;
 create table atomic_table_12_3(c1 int primary key,c2 varchar(25));
@@ -172,6 +173,7 @@ select * from atomic_table_13;
 -- @session}
 rollback ;
 show create table atomic_table_13;
+-- @bvt:issue
 
 drop table if exists atomic_table_12_5;
 drop table if exists atomic_table_13;
@@ -320,31 +322,13 @@ drop account if exists trans_acc1;
 -- @bvt:issue#9852
 
 
--- @bvt:issue#11213
-drop table if exists atomic_table_12_5;
-create table atomic_table_12_5(c1 int,c2 varchar(25));
-insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
-alter table atomic_table_12_5 add index key1(c1);
-begin;
-alter table atomic_table_12_5 change c1 clNew double;
--- @session:id=1{
--- @wait:0:commit
-use transaction_enhance;
-insert into alter01 values (8,"h");
-show create table atomic_table_12_5;
-select * from atomic_table_12_5;
--- @session}
-show create table atomic_table_12_5;
--- @bvt:issue
-
-
--- alter table change primary key column
--- @bvt:issue#11268
+-- alter table modify column primary key
 drop table if exists alter01;
+drop table if exists alter02;
 create table alter01(col1 int primary key,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
-alter table alter01 change col1 col1New float;
+alter table alter01 modify col1 float;
 -- @session:id=1{
 -- @wait:0:commit
 use transaction_enhance;
@@ -352,5 +336,25 @@ insert into alter01 values (8,"h");
 select * from alter01;
 -- @session
 insert into alter01 values (6,"h");
+commit;
+select * from alter01;
+
+
+-- alter table modify column
+-- @bvt:issue#11213
+drop table if exists alter01;
+drop table if exists alter02;
+create table alter01(col1 int not null ,col2 varchar(25));
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+begin;
+alter table alter01 modify col1 float;
+-- @session:id=1{
+-- @wait:0:commit
+use transaction_enhance;
+insert into alter01 values (8,"h");
+select * from alter01;
+-- @session
+insert into alter01 values (6,"h");
+commit;
 select * from alter01;
 -- @bvt:issue
