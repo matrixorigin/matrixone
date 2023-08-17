@@ -199,9 +199,6 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	if pn.IsPrepare {
 		c.info.Typ = plan2.ExecTypeTP
 	}
-	if c.info.Typ == plan2.ExecTypeTP {
-		c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.QueryTypeKey{}, c.info.Typ)
-	}
 	c.ctx = c.proc.Ctx
 
 	// Compile may exec some function that need engine.Engine.

@@ -49,6 +49,10 @@ func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
 	}, nil
 }
 
+func (l *LocalETLFS) Alloc(size int) CacheData {
+	return make(Bytes, size)
+}
+
 func (l *LocalETLFS) Name() string {
 	return l.name
 }
@@ -223,7 +227,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				cr := &countingReader{
 					R: r,
 				}
-				cacheData, err := entry.ToCacheData(cr, nil, DefaultCacheDataAllocator)
+				cacheData, err := entry.ToCacheData(cr, nil)
 				if err != nil {
 					return err
 				}
@@ -273,7 +277,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer f.Close()
-						cacheData, err := entry.ToCacheData(buf, buf.Bytes(), DefaultCacheDataAllocator)
+						cacheData, err := entry.ToCacheData(buf, buf.Bytes())
 						if err != nil {
 							return err
 						}

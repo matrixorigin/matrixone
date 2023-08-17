@@ -57,6 +57,10 @@ func NewMemoryFS(
 	return fs, nil
 }
 
+func (m *MemoryFS) Alloc(size int) CacheData {
+	return make(Bytes, size)
+}
+
 func (m *MemoryFS) Name() string {
 	return m.name
 }

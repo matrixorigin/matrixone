@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
@@ -146,7 +145,6 @@ func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
 // prefetch data job
 func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
-	ctx = context.WithValue(ctx, defines.PrefetchKey{}, 0)
 	return getJob(
 		ctx,
 		makeName(reader.GetName()),

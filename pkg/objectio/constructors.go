@@ -21,12 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
-type CacheConstructor = func(r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fileservice.CacheData, error)
-type CacheConstructorFactory = func(size int64, algo uint8, prefetch bool) CacheConstructor
+type CacheConstructor = func(r io.Reader, buf []byte) (fileservice.CacheData, error)
+type CacheConstructorFactory = func(size int64, algo uint8, allocator fileservice.CacheDataAllocator) CacheConstructor
 
 // use this to replace all other constructors
-func constructorFactory(size int64, algo uint8, prefetch bool) CacheConstructor {
-	return func(reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fileservice.CacheData, err error) {
+func constructorFactory(size int64, algo uint8, allocator fileservice.CacheDataAllocator) CacheConstructor {
+	return func(reader io.Reader, data []byte) (cacheData fileservice.CacheData, err error) {
 		if len(data) == 0 {
 			data, err = io.ReadAll(reader)
 			if err != nil {
@@ -34,8 +34,8 @@ func constructorFactory(size int64, algo uint8, prefetch bool) CacheConstructor 
 			}
 		}
 
-		// no compress or prefetch
-		if algo == compress.None || prefetch {
+		// no compress
+		if algo == compress.None {
 			cacheData = allocator.Alloc(len(data))
 			copy(cacheData.Bytes(), data)
 			return cacheData, nil

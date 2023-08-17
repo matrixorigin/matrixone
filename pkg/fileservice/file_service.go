@@ -53,6 +53,9 @@ type FileService interface {
 
 	// Preload indicates the service to preload a file
 	Preload(ctx context.Context, filePath string) error
+
+	// Alloc used to allocate a block of memory of size from the fs private pool
+	Alloc(size int) CacheData
 }
 
 type IOVector struct {
@@ -123,7 +126,7 @@ type IOEntry struct {
 	// reader always contains entry contents
 	// data may contains entry contents if available
 	// if data is empty, the io.Reader must be fully read before returning nil error
-	ToCacheData func(reader io.Reader, data []byte, allocator CacheDataAllocator) (cacheData CacheData, err error)
+	ToCacheData func(reader io.Reader, data []byte) (cacheData CacheData, err error)
 
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache

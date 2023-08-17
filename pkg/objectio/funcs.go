@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -36,15 +35,14 @@ func ReadExtent(
 	factory CacheConstructorFactory,
 ) (v []byte, err error) {
 	ioVec := &fileservice.IOVector{
-		FilePath:    name,
-		Entries:     make([]fileservice.IOEntry, 1),
-		CachePolicy: fileservice.SkipAll,
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 1),
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{
 		Offset:      int64(extent.Offset()),
 		Size:        int64(extent.Length()),
-		ToCacheData: factory(int64(extent.OriginSize()), extent.Alg(), false),
+		ToCacheData: factory(int64(extent.OriginSize()), extent.Alg(), fs),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
@@ -148,9 +146,6 @@ func ReadOneBlockWithMeta(
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
 	// ap query not need memory cache
-	if ctx.Value(defines.QueryTypeKey{}) == nil {
-		ioVec.CachePolicy = fileservice.SkipMemory
-	}
 	var filledEntries []fileservice.IOEntry
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
@@ -171,7 +166,7 @@ func ReadOneBlockWithMeta(
 			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 				Offset:      int64(ext.Offset()),
 				Size:        int64(ext.Length()),
-				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg(), false),
+				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg(), fs),
 			})
 			continue
 		}
@@ -193,7 +188,7 @@ func ReadOneBlockWithMeta(
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 			Offset:      int64(ext.Offset()),
 			Size:        int64(ext.Length()),
-			ToCacheData: factory(int64(ext.OriginSize()), ext.Alg(), false),
+			ToCacheData: factory(int64(ext.OriginSize()), ext.Alg(), fs),
 		})
 	}
 	if len(ioVec.Entries) > 0 {
@@ -250,9 +245,6 @@ func ReadMultiBlocksWithMeta(
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
 	// ap query not need memory cache
-	if ctx.Value(defines.QueryTypeKey{}) == nil {
-		ioVec.CachePolicy = fileservice.SkipMemory
-	}
 	for _, opt := range options {
 		for seqnum := range opt.Idxes {
 			blkmeta := meta.GetBlockMeta(uint32(opt.Id))
@@ -265,7 +257,7 @@ func ReadMultiBlocksWithMeta(
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
 
-				ToCacheData: factory(int64(col.Location().OriginSize()), col.Location().Alg(), true),
+				ToCacheData: factory(int64(col.Location().OriginSize()), col.Location().Alg(), fs),
 			})
 		}
 	}
@@ -290,11 +282,6 @@ func ReadAllBlocksWithMeta(
 		Entries:     make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
 		CachePolicy: fileservice.SkipAll,
 	}
-	// ap query not need memory cache
-	if ctx.Value(defines.QueryTypeKey{}) == nil {
-		ioVec.CachePolicy = fileservice.SkipMemory
-	}
-	prefetch := ctx.Value(defines.PrefetchKey{}) != nil
 	for blk := uint32(0); blk < meta.BlockCount(); blk++ {
 		for _, seqnum := range cols {
 			blkmeta := meta.GetBlockMeta(blk)
@@ -308,7 +295,7 @@ func ReadAllBlocksWithMeta(
 				Offset: int64(ext.Offset()),
 				Size:   int64(ext.Length()),
 
-				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg(), prefetch),
+				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg(), fs),
 			})
 		}
 	}

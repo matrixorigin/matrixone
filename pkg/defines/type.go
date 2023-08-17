@@ -172,12 +172,6 @@ func GetAccountId(ctx context.Context) uint32 {
 	return 0
 }
 
-// QueryTypeKey use QueryTypeKey{} to get query type from context
-type QueryTypeKey struct{}
-
-// PrefetchKey use PrefetchKey{} to check if it's a prefetch
-type PrefetchKey struct{}
-
 // EngineKey use EngineKey{} to get engine from Context
 type EngineKey struct{}
 

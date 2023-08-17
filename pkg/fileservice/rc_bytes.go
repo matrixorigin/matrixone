@@ -14,92 +14,96 @@
 
 package fileservice
 
+// #include <stdlib.h>
+import "C"
+import (
+	"sync/atomic"
+	"unsafe"
+)
+
+const (
+	// MaxArrayLen is a safe maximum length for slices on this architecture.
+	MaxArrayLen = 1<<50 - 1
+)
+
 // RCBytes represents a reference counting []byte from a pool
 // newly created RCBytes' ref count is 1
 // owner should call Release to give it back to the pool
 // new sharing owner should call Retain to increase ref count
 type RCBytes struct {
-	*RCPoolItem[[]byte]
+	data  []byte
+	count atomic.Int32
+	pool  *rcBytesPool
 }
 
-func (r RCBytes) Bytes() []byte {
-	return r.Value
+func (r *RCBytes) Bytes() []byte {
+	return r.data
 }
 
-func (r RCBytes) Slice(length int) CacheData {
-	r.Value = r.Value[:length]
+func (r *RCBytes) Slice(length int) CacheData {
+	r.data = r.data[:length]
 	return r
 }
 
-func (r RCBytes) Release() {
-	if r.RCPoolItem != nil {
-		r.RCPoolItem.Release()
+func (r *RCBytes) Retain() {
+	r.count.Add(1)
+}
+
+func (r *RCBytes) Release() {
+	if c := r.count.Add(-1); c == 0 {
+		free(r.data)
+		r.pool.size.Add(int64(cap(r.data)) * -1)
+	} else if c < 0 {
+		panic("bad release")
 	}
 }
 
-func (r RCBytes) Copy() []byte {
-	ret := make([]byte, len(r.Value))
-	copy(ret, r.Value)
+func (r *RCBytes) Copy() []byte {
+	ret := make([]byte, len(r.data))
+	copy(ret, r.data)
 	return ret
 }
 
 type rcBytesPool struct {
-	sizes []int
-	pools []*RCPool[[]byte]
+	limit int64
+	size  atomic.Int64
 }
 
-const (
-	rcBytesPoolMinCap = 1 * 1024
-	rcBytesPoolMaxCap = 1 * 1024 * 1024
-)
-
-// RCBytesPool is the global RCBytes pool
-var RCBytesPool = func() *rcBytesPool {
-	ret := &rcBytesPool{}
-	for size := rcBytesPoolMinCap; size <= rcBytesPoolMaxCap; size *= 2 {
-		size := size
-		ret.sizes = append(ret.sizes, size)
-		ret.pools = append(ret.pools, NewRCPool(func() []byte {
-			return make([]byte, size)
-		}))
-	}
-	return ret
-}()
-
-// Get returns an RCBytes
-func (r *rcBytesPool) Get(size int) RCBytes {
-	if size > rcBytesPoolMaxCap {
-		item := RCBytes{
-			RCPoolItem: &RCPoolItem[[]byte]{
-				Value: make([]byte, size),
-			},
-		}
-		item.Retain()
-		return item
-	}
-
-	for i, poolSize := range r.sizes {
-		if poolSize >= size {
-			item := r.pools[i].Get()
-			item.Value = item.Value[:size]
-			return RCBytes{
-				RCPoolItem: item,
-			}
-		}
-	}
-
-	panic("impossible")
-}
-
-// GetAndCopy gets an RCBytes and copy data to it
-func (r *rcBytesPool) GetAndCopy(from []byte) RCBytes {
-	bs := r.Get(len(from))
-	copy(bs.Value, from)
-	return bs
+func newRCBytesPool(limit int64) *rcBytesPool {
+	return &rcBytesPool{limit: limit}
 }
 
 var _ CacheDataAllocator = new(rcBytesPool)
 
 func (r *rcBytesPool) Alloc(size int) CacheData {
-	return r.Get(size)
+	item := &RCBytes{
+		pool: r,
+		data: alloc(size),
+	}
+	r.size.Add(int64(size))
+	item.Retain()
+	return item
+}
+
+func alloc(size int) []byte {
+	ptr := C.calloc(C.size_t(size), 1)
+	if ptr == nil {
+		// NB: throw is like panic, except it guarantees the process will be
+		// terminated. The call below is exactly what the Go runtime invokes when
+		// it cannot allocate memory.
+		panic("out of memory")
+	}
+	// Interpret the C pointer as a pointer to a Go array, then slice.
+	return (*[MaxArrayLen]byte)(unsafe.Pointer(ptr))[:size:size]
+}
+
+// free frees the specified slice.
+func free(b []byte) {
+	if cap(b) != 0 {
+		if len(b) == 0 {
+			b = b[:cap(b)]
+		}
+		ptr := unsafe.Pointer(&b[0])
+		C.free(ptr)
+	}
 }

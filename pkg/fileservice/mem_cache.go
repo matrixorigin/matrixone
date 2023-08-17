@@ -28,6 +28,7 @@ type MemCache struct {
 	counterSets          []*perfcounter.CounterSet
 	overlapChecker       *interval.OverlapChecker
 	enableOverlapChecker bool
+	memoryPool           *rcBytesPool
 }
 
 func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
@@ -41,6 +42,7 @@ func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
 		enableOverlapChecker: initOpts.enableOverlapChecker,
 		cache:                initOpts.cache,
 		counterSets:          initOpts.counterSets,
+		memoryPool:           initOpts.memoryPool,
 	}
 }
 
@@ -74,6 +76,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 		}
 
 		o.cache = lrucache.New[CacheKey, CacheData](capacity, postSetFn, postGetFn, postEvictFn)
+		o.memoryPool = newRCBytesPool(capacity)
 	}
 }
 
@@ -90,6 +93,7 @@ type memCacheOptions struct {
 	overlapChecker       *interval.OverlapChecker
 	counterSets          []*perfcounter.CounterSet
 	enableOverlapChecker bool
+	memoryPool           *rcBytesPool
 }
 
 func defaultMemCacheOptions() memCacheOptions {
@@ -97,6 +101,10 @@ func defaultMemCacheOptions() memCacheOptions {
 }
 
 var _ IOVectorCache = new(MemCache)
+
+func (m *MemCache) Alloc(size int) CacheData {
+	return m.memoryPool.Alloc(size)
+}
 
 func (m *MemCache) Read(
 	ctx context.Context,

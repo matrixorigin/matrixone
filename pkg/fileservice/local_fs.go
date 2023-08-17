@@ -136,6 +136,13 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	return nil
 }
 
+func (l *LocalFS) Alloc(size int) CacheData {
+	if l.memCache == nil {
+		return make(Bytes, size)
+	}
+	return l.memCache.Alloc(size)
+}
+
 func (l *LocalFS) Name() string {
 	return l.name
 }
@@ -375,7 +382,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				cr := &countingReader{
 					R: r,
 				}
-				bs, err := entry.ToCacheData(cr, nil, DefaultCacheDataAllocator)
+				bs, err := entry.ToCacheData(cr, nil)
 				if err != nil {
 					return err
 				}
@@ -430,7 +437,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer file.Close()
-						bs, err := entry.ToCacheData(buf, buf.Bytes(), DefaultCacheDataAllocator)
+						bs, err := entry.ToCacheData(buf, buf.Bytes())
 						if err != nil {
 							return err
 						}

@@ -43,6 +43,10 @@ func NewFileServices(defaultName string, fss ...FileService) (*FileServices, err
 
 var _ FileService = &FileServices{}
 
+func (f *FileServices) Alloc(size int) CacheData {
+	return make(Bytes, size)
+}
+
 func (f *FileServices) Delete(ctx context.Context, filePaths ...string) error {
 	for _, filePath := range filePaths {
 		if err := f.deleteSingle(ctx, filePath); err != nil {

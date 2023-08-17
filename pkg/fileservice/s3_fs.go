@@ -176,6 +176,13 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	return nil
 }
 
+func (s *S3FS) Alloc(size int) CacheData {
+	if s.memCache == nil {
+		return make(Bytes, size)
+	}
+	return s.memCache.Alloc(size)
+}
+
 func (s *S3FS) Name() string {
 	return s.name
 }

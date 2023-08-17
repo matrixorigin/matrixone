@@ -27,7 +27,7 @@ func (e *IOEntry) setCachedData() error {
 	if len(e.Data) == 0 {
 		return nil
 	}
-	bs, err := e.ToCacheData(bytes.NewReader(e.Data), e.Data, DefaultCacheDataAllocator)
+	bs, err := e.ToCacheData(bytes.NewReader(e.Data), e.Data)
 	if err != nil {
 		return err
 	}

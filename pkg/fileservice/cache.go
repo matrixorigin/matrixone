@@ -59,9 +59,9 @@ var DisabledCacheConfig = CacheConfig{
 
 const DisableCacheCapacity = 1
 
-var DefaultCacheDataAllocator = RCBytesPool
+// var DefaultCacheDataAllocator = RCBytesPool
 
-// var DefaultCacheDataAllocator = new(bytesAllocator)
+var DefaultCacheDataAllocator = new(bytesAllocator)
 
 // VectorCache caches IOVector
 type IOVectorCache interface {

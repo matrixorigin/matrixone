@@ -41,6 +41,10 @@ func SubPath(upstream FileService, path string) FileService {
 
 var _ FileService = new(subPathFS)
 
+func (s *subPathFS) Alloc(size int) CacheData {
+	return make(Bytes, size)
+}
+
 func (s *subPathFS) Name() string {
 	return s.name
 }

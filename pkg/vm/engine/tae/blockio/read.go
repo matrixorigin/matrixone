@@ -233,6 +233,12 @@ func BlockReadInner(
 		return
 	}
 
+	defer func() {
+		for i := range datas {
+			datas[i].Release()
+		}
+	}()
+
 	// assemble result batch for return
 	result = batch.NewWithSize(len(loaded.Vecs))
 
