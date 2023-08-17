@@ -241,3 +241,21 @@ num_col1    num_col2
 -128    -32768
 127    32767
 null    null
+drop table if exists alter01;
+create table alter01 (col1 int, col2 decimal);
+show create table alter01;
+Table    Create Table
+alter01    CREATE TABLE `alter01` (\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n)
+insert into alter01 values(1, 3412.324);
+insert into alter01 values (-10, 323943.2343);
+begin;
+alter table alter01 modify col1 float;
+rollback;
+show create table alter01;
+Table    Create Table
+alter01    CREATE TABLE `alter01` (\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n)
+select * from alter01;
+col1    col2
+1    3412
+-10    323943
+drop table alter01;
