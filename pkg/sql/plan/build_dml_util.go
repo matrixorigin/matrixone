@@ -40,45 +40,24 @@ var deleteNodeInfoPool = sync.Pool{
 
 func getDmlPlanCtx() *dmlPlanCtx {
 	ctx := dmlPlanCtxPool.Get().(*dmlPlanCtx)
-	ctx.objRef = nil
-	ctx.tableDef = nil
-	ctx.beginIdx = 0
-	ctx.sourceStep = 0
-	ctx.isMulti = false
-	ctx.updateColLength = 0
-	ctx.rowIdPos = 0
-	ctx.insertColPos = ctx.insertColPos[:0]
-	ctx.updateColPosMap = nil
-	ctx.allDelTableIDs = nil
-	ctx.isFkRecursionCall = false
-	ctx.lockTable = false
-	ctx.checkInsertPkDup = false
-	ctx.pkFilterExprs = ctx.pkFilterExprs[:0]
 	ctx.updatePkCol = true
 	return ctx
 }
 
 func putDmlPlanCtx(ctx *dmlPlanCtx) {
+	var x dmlPlanCtx
+	*ctx = x
 	dmlPlanCtxPool.Put(ctx)
 }
 
 func getDeleteNodeInfo() *deleteNodeInfo {
 	info := deleteNodeInfoPool.Get().(*deleteNodeInfo)
-	info.objRef = nil
-	info.tableDef = nil
-	info.IsClusterTable = false
-	info.deleteIndex = 0
-	info.partTableIDs = info.partTableIDs[:0]
-	info.partTableNames = info.partTableNames[:0]
-	info.partitionIdx = 0
-	info.addAffectedRows = false
-	info.pkPos = 0
-	info.pkTyp = nil
-	info.lockTable = false
 	return info
 }
 
 func putDeleteNodeInfo(info *deleteNodeInfo) {
+	var x deleteNodeInfo
+	*info = x
 	deleteNodeInfoPool.Put(info)
 }
 

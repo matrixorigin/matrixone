@@ -103,6 +103,25 @@ func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions,
 	return expdata
 }
 
+func DebugPlan(pl *plan.Plan) string {
+	if qry, ok := pl.Plan.(*plan.Plan_Query); ok {
+		impl := NewExplainQueryImpl(qry.Query)
+		buffer := NewExplainDataBuffer()
+		opt := &ExplainOptions{
+			Verbose: false,
+			Analyze: false,
+			Format:  EXPLAIN_FORMAT_TEXT,
+		}
+		err := impl.ExplainPlan(context.TODO(), buffer, opt)
+		if err != nil {
+			return fmt.Sprintf("debug plan error %s", err.Error())
+		}
+		return buffer.ToString()
+	} else {
+		return "only support to debug query plan"
+	}
+}
+
 func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
