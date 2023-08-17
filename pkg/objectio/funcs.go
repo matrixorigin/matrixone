@@ -229,7 +229,6 @@ func ReadMultiBlocksWithMeta(
 	}
 	var dataMeta ObjectDataMeta
 	for _, opt := range options {
-		logutil.Infof("read block %d seqnums %v", opt.Id, opt.Idxes)
 		for seqnum := range opt.Idxes {
 			if DataMetaType(opt.DataType) == SchemaData {
 				dataMeta = meta.MustDataMeta()
