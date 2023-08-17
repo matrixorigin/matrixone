@@ -75,7 +75,7 @@ func TestCheckRowExists(t *testing.T) {
 
 func TestAppendNull(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	colTypes := types.MockColTypes(22)
+	colTypes := types.MockColTypes(23)
 	check := func(typ types.Type) {
 		vec := containers.MockVector2(typ, 10, 0)
 		defer vec.Close()
