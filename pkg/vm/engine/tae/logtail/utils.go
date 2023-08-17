@@ -627,7 +627,7 @@ func (data *CNCheckpointData) PrefetchMetaIdx(
 	if err != nil {
 		return
 	}
-	pref.AddBlockWithType(idxes, []uint16{0}, MetaIDX)
+	pref.AddBlockWithType(idxes, []uint16{0}, uint16(objectio.ConvertToSchemaType(MetaIDX)))
 
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -706,7 +706,7 @@ func (data *CNCheckpointData) PrefetchFrom(
 					return
 				}
 			}
-			pref.AddBlockWithType(idxes, []uint16{block.GetID()}, idx)
+			pref.AddBlockWithType(idxes, []uint16{block.GetID()}, uint16(objectio.ConvertToSchemaType(idx)))
 			empty = false
 		}
 	}
@@ -1645,8 +1645,8 @@ func (data *CheckpointData) PrefetchMeta(
 	for attr := range dnMeteIdxSchema.attrs {
 		dnIdxes = append(dnIdxes, uint16(attr))
 	}
-	pref.AddBlockWithType(idxes, []uint16{0}, MetaIDX)
-	pref.AddBlockWithType(dnIdxes, []uint16{1}, DNMetaIDX)
+	pref.AddBlockWithType(idxes, []uint16{0}, uint16(objectio.ConvertToSchemaType(MetaIDX)))
+	pref.AddBlockWithType(dnIdxes, []uint16{1}, uint16(objectio.ConvertToSchemaType(DNMetaIDX)))
 	return blockio.PrefetchWithMerged(pref)
 }
 
@@ -1689,7 +1689,7 @@ func (data *CheckpointData) PrefetchFrom(
 			for attr := range schema.attrs {
 				idxes[attr] = uint16(attr)
 			}
-			pref.AddBlockWithType(idxes, []uint16{idx.location.ID()}, idx.dataType)
+			pref.AddBlockWithType(idxes, []uint16{idx.location.ID()}, uint16(objectio.ConvertToSchemaType(idx.dataType)))
 		}
 		err = blockio.PrefetchWithMerged(pref)
 		if err != nil {

@@ -43,6 +43,10 @@ func ConvertToSchemaType(ckpIdx uint16) DataMetaType {
 	return CkpMetaStart + DataMetaType(ckpIdx)
 }
 
+func ConvertToCkpIdx(dataType uint16) uint16 {
+	return dataType - uint16(CkpMetaStart)
+}
+
 type objectMetaV2 []byte
 
 func (mh objectMetaV2) MustGetMeta(metaType DataMetaType) objectDataMetaV1 {

@@ -220,8 +220,6 @@ func ReadMultiBlocksWithMeta(
 	name string,
 	meta ObjectMeta,
 	options map[uint16]*ReadBlockOptions,
-	noLRUCache bool,
-	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
@@ -231,13 +229,14 @@ func ReadMultiBlocksWithMeta(
 	}
 	var dataMeta ObjectDataMeta
 	for _, opt := range options {
+		logutil.Infof("read block %d seqnums %v", opt.Id, opt.Idxes)
 		for seqnum := range opt.Idxes {
 			if DataMetaType(opt.DataType) == SchemaData {
 				dataMeta = meta.MustDataMeta()
 			} else if DataMetaType(opt.DataType) == SchemaTombstone {
 				dataMeta = meta.MustTombstoneMeta()
 			} else {
-				dataMeta, _ = meta.SubMeta(opt.DataType)
+				dataMeta, _ = meta.SubMeta(ConvertToCkpIdx(opt.DataType))
 			}
 			blkmeta := dataMeta.GetBlockMeta(uint32(opt.Id))
 			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {

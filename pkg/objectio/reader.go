@@ -303,8 +303,6 @@ func (r *objectReaderV1) ReadMultiBlocks(
 		r.name,
 		objectMeta,
 		opts,
-		false,
-		m,
 		r.fs,
 		constructorFactory)
 }
