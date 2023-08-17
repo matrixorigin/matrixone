@@ -218,7 +218,7 @@ func ReadOneBlockWithMeta(
 func ReadMultiBlocksWithMeta(
 	ctx context.Context,
 	name string,
-	meta *ObjectDataMeta,
+	meta ObjectMeta,
 	options map[uint16]*ReadBlockOptions,
 	noLRUCache bool,
 	m *mpool.MPool,
@@ -229,9 +229,15 @@ func ReadMultiBlocksWithMeta(
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
+	var dataMeta ObjectDataMeta
 	for _, opt := range options {
 		for seqnum := range opt.Idxes {
-			blkmeta := meta.GetBlockMeta(uint32(opt.Id))
+			if DataMetaType(opt.DataType) == SchemaData {
+				dataMeta = meta.MustDataMeta()
+			} else {
+				dataMeta = meta.MustTombstoneMeta()
+			}
+			blkmeta := dataMeta.GetBlockMeta(uint32(opt.Id))
 			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
 				// prefetch, do not generate
 				continue
