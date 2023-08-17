@@ -30,7 +30,7 @@ func ReadExtent(
 	ctx context.Context,
 	name string,
 	extent *Extent,
-	noLRUCache bool,
+	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 ) (v []byte, err error) {
@@ -57,7 +57,7 @@ func ReadBloomFilter(
 	ctx context.Context,
 	name string,
 	extent *Extent,
-	noLRUCache bool,
+	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (filters BloomFilter, err error) {
 	var v []byte
@@ -65,7 +65,7 @@ func ReadBloomFilter(
 		ctx,
 		name,
 		extent,
-		noLRUCache,
+		cachePolicy,
 		fs,
 		constructorFactory); err != nil {
 		return
@@ -81,26 +81,15 @@ func ReadBloomFilter(
 	return
 }
 
-func ReadObjectMetaWithLocation(
-	ctx context.Context,
-	location *Location,
-	noLRUCache bool,
-	fs fileservice.FileService,
-) (meta ObjectMeta, err error) {
-	name := location.Name().String()
-	extent := location.Extent()
-	return ReadObjectMeta(ctx, name, &extent, noLRUCache, fs)
-}
-
 func ReadObjectMeta(
 	ctx context.Context,
 	name string,
 	extent *Extent,
-	noLRUCache bool,
+	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	var v []byte
-	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, constructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name, extent, cachePolicy, fs, constructorFactory); err != nil {
 		return
 	}
 
@@ -269,7 +258,7 @@ func ReadAllBlocksWithMeta(
 	meta *ObjectDataMeta,
 	name string,
 	cols []uint16,
-	noLRUCache bool,
+	cachePolicy fileservice.CachePolicy,
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
@@ -277,7 +266,7 @@ func ReadAllBlocksWithMeta(
 	ioVec = &fileservice.IOVector{
 		FilePath:    name,
 		Entries:     make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
-		CachePolicy: fileservice.SkipAll,
+		CachePolicy: cachePolicy,
 	}
 	for blk := uint32(0); blk < meta.BlockCount(); blk++ {
 		for _, seqnum := range cols {
