@@ -237,6 +237,43 @@ func TestAppendBytes(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestAppendArray(t *testing.T) {
+	{
+		// Array
+		mp := mpool.MustNewZero()
+		vec := NewVec(types.T_array_float32.ToType())
+		err := AppendArray[float32](vec, []float32{1, 1, 1}, false, mp)
+		require.NoError(t, err)
+		err = AppendArray[float32](vec, nil, true, mp)
+		require.NoError(t, err)
+		err = AppendArrayList[float32](vec, [][]float32{{2, 2, 2}, {3, 3, 3}}, nil, mp)
+		require.NoError(t, err)
+		vs, data := MustVarlenaRawData(vec)
+		for _, v := range vs {
+			types.GetArray[float32](&v, data)
+		}
+		vec.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{
+		// Array
+		mp := mpool.MustNewZero()
+		vec := NewVec(types.T_array_float64.ToType())
+		err := AppendArray[float64](vec, []float64{1, 1, 1}, false, mp)
+		require.NoError(t, err)
+		err = AppendArray[float64](vec, nil, true, mp)
+		require.NoError(t, err)
+		err = AppendArrayList[float64](vec, [][]float64{{2, 2, 2}, {3, 3, 3}}, nil, mp)
+		require.NoError(t, err)
+		vs, data := MustVarlenaRawData(vec)
+		for _, v := range vs {
+			types.GetArray[float64](&v, data)
+		}
+		vec.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
+
 func TestDup(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.T_int8.ToType())
