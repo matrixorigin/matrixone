@@ -260,24 +260,51 @@ col1    col2
 -10    323943
 drop table alter01;
 drop table if exists alter01;
-[unknown result because it is related to issue#11264]
 create table alter01 (col1 int primary key, col2 decimal);
-[unknown result because it is related to issue#11264]
 show create table alter01;
-[unknown result because it is related to issue#11264]
+Table    Create Table
+alter01    CREATE TABLE `alter01` (\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 insert into alter01 values(1, 3412.324);
-[unknown result because it is related to issue#11264]
 insert into alter01 values (-10, 323943.2343);
-[unknown result because it is related to issue#11264]
 begin;
-[unknown result because it is related to issue#11264]
-alter table alter01 change col1 col1New float not null;
-[unknown result because it is related to issue#11264]
+alter table alter01 modify col1 float not null;
 rollback;
-[unknown result because it is related to issue#11264]
 show create table alter01;
-[unknown result because it is related to issue#11264]
+Table    Create Table
+alter01    CREATE TABLE `alter01` (\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 select * from alter01;
-[unknown result because it is related to issue#11264]
+col1    col2
+1    3412
+-10    323943
 drop table alter01;
-[unknown result because it is related to issue#11264]
+drop table if exists alter01;
+create table alter01 (col1 int primary key, col2 decimal);
+show create table alter01;
+Table    Create Table
+alter01    CREATE TABLE `alter01` (\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
+insert into alter01 values(1, 3412.324);
+insert into alter01 values (-10, 323943.2343);
+begin;
+alter table alter01 change col1 col1New float not null;
+rollback;
+show create table alter01;
+Table    Create Table
+alter01    CREATE TABLE `alter01` (\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
+select * from alter01;
+col1    col2
+1    3412
+-10    323943
+drop table alter01;
+drop table if exists rename01;
+create table rename01(c int primary key,d int);
+begin;
+insert into rename01 values(1,1);
+insert into rename01 values(2,2);
+alter table rename01 rename column c to `euwhbnfew`;
+rollback;
+select * from rename01;
+c    d
+show create table rename01;
+Table    Create Table
+rename01    CREATE TABLE `rename01` (\n`c` INT NOT NULL,\n`d` INT DEFAULT NULL,\nPRIMARY KEY (`c`)\n)
+drop table rename01;
