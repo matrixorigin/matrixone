@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -595,7 +596,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			}
 			//fmt.Println(types.BytesToArray[float32](want))
 			//fmt.Println(types.BytesToArray[float32](get))
-			if types.CompareArray[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
+			if moarray.Compare[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float32](want), types.BytesToArray[float32](get))
 			}
@@ -618,7 +619,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			}
 			//fmt.Println(types.BytesToArray[float64](want))
 			//fmt.Println(types.BytesToArray[float64](get))
-			if types.CompareArray[float64](types.BytesToArray[float64](want), types.BytesToArray[float64](get)) != 0 {
+			if moarray.Compare[float64](types.BytesToArray[float64](want), types.BytesToArray[float64](get)) != 0 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
 			}

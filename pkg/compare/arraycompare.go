@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -66,7 +67,7 @@ func CompareArrayFromBytes[T types.RealNumbers](_x, _y []byte, desc bool) int {
 	y := types.BytesToArray[T](_y)
 
 	if desc {
-		return types.CompareArray[T](y, x)
+		return moarray.Compare[T](y, x)
 	}
-	return types.CompareArray[T](x, y)
+	return moarray.Compare[T](x, y)
 }

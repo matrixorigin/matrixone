@@ -62,6 +62,23 @@ func Divide[T types.RealNumbers](v1, v2 []T) []T {
 	return r
 }
 
+func Compare[T types.RealNumbers](v1, v2 []T) int {
+	if len(v1) != len(v2) {
+		// NOTE: We will not compare Arrays with different dimension.
+		panic(moerr.NewInvalidArgNoCtx("dimension mismatch", fmt.Sprintf("%d != %d", len(v1), len(v2))))
+	}
+	for i := 0; i < len(v1); i++ {
+		if v1[i] == v2[i] {
+			continue
+		} else if v1[i] > v2[i] {
+			return +1
+		} else {
+			return -1
+		}
+	}
+	return 0
+}
+
 func Abs[T types.RealNumbers](v []T) (res []T, err error) {
 	n := len(v)
 	res = make([]T, n)

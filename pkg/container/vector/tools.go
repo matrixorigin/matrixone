@@ -17,6 +17,7 @@ package vector
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"strings"
 	"unsafe"
 
@@ -351,15 +352,15 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 	case types.T_array_float32:
 		//TODO: would T_array be used in Zonemap?
 		return checkArrayIntersect[float32](v, vec, func(t1, t2 []float32) bool {
-			return types.CompareArray[float32](t1, t2) >= 0
+			return moarray.Compare[float32](t1, t2) >= 0
 		}, func(t1, t2 []float32) bool {
-			return types.CompareArray[float32](t1, t2) <= 0
+			return moarray.Compare[float32](t1, t2) <= 0
 		})
 	case types.T_array_float64:
 		return checkArrayIntersect[float64](v, vec, func(t1, t2 []float64) bool {
-			return types.CompareArray[float64](t1, t2) >= 0
+			return moarray.Compare[float64](t1, t2) >= 0
 		}, func(t1, t2 []float64) bool {
-			return types.CompareArray[float64](t1, t2) <= 0
+			return moarray.Compare[float64](t1, t2) <= 0
 		})
 	}
 
@@ -585,19 +586,19 @@ func compareArray[T types.RealNumbers](ctx context.Context, v1, v2 *Vector, fnNa
 	switch fnName {
 	case ">":
 		return runArrayCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 []T) bool {
-			return types.CompareArray[T](t1, t2) == 1
+			return moarray.Compare[T](t1, t2) == 1
 		}), nil
 	case "<":
 		return runArrayCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 []T) bool {
-			return types.CompareArray[T](t1, t2) == -1
+			return moarray.Compare[T](t1, t2) == -1
 		}), nil
 	case ">=":
 		return runArrayCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 []T) bool {
-			return types.CompareArray[T](t1, t2) >= 0
+			return moarray.Compare[T](t1, t2) >= 0
 		}), nil
 	case "<=":
 		return runArrayCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 []T) bool {
-			return types.CompareArray[T](t1, t2) <= 0
+			return moarray.Compare[T](t1, t2) <= 0
 		}), nil
 	default:
 		return false, moerr.NewInternalErrorNoCtx("unsupport compare function")

@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -65,6 +66,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_json:
 	case types.T_uuid:
 	case types.T_Rowid:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -130,6 +132,26 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
 			return v1 == v2
+		})
+	case types.T_array_float32:
+		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
+			return compareVarlenaEqual(parameters, rs, proc, length)
+		}
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float32](v1)
+			_v2 := types.BytesToArray[float32](v2)
+
+			return moarray.Compare[float32](_v1, _v2) == 0
+		})
+	case types.T_array_float64:
+		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
+			return compareVarlenaEqual(parameters, rs, proc, length)
+		}
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float64](v1)
+			_v2 := types.BytesToArray[float64](v2)
+
+			return moarray.Compare[float64](_v1, _v2) == 0
 		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {

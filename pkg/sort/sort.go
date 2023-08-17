@@ -15,6 +15,7 @@
 package sort
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -276,7 +277,7 @@ func uuidLess(data []types.Uuid, i, j int64) bool {
 }
 
 func arrayLess[T types.RealNumbers](data [][]T, i, j int64) bool {
-	return types.CompareArray[T](data[i], data[j]) < 0
+	return moarray.Compare[T](data[i], data[j]) < 0
 }
 
 func uuidGreater(data []types.Uuid, i, j int64) bool {
@@ -284,7 +285,7 @@ func uuidGreater(data []types.Uuid, i, j int64) bool {
 }
 
 func arrayGreater[T types.RealNumbers](data [][]T, i, j int64) bool {
-	return types.CompareArray[T](data[i], data[j]) > 0
+	return moarray.Compare[T](data[i], data[j]) > 0
 }
 
 func genericLess[T types.OrderedT](data []T, i, j int64) bool {

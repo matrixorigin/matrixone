@@ -74,7 +74,6 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(in []byte) ([]byte, error) {
 		_in := types.BytesToArray[T](in)
-
 		_out, err := moarray.Abs(_in)
 		if err != nil {
 			return nil, err

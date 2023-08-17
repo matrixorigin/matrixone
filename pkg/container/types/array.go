@@ -92,22 +92,6 @@ func StringToArray[T RealNumbers](input string) ([]T, error) {
 	return result, nil
 }
 
-func CompareArray[T RealNumbers](left, right []T) int {
-	if len(left) != len(right) {
-		panic(moerr.NewInternalErrorNoCtx("Vector dimensions should be same"))
-	}
-	for i := 0; i < len(left); i++ {
-		if left[i] == right[i] {
-			continue
-		} else if left[i] > right[i] {
-			return +1
-		} else {
-			return -1
-		}
-	}
-	return 0
-}
-
 // BuildTestArray used only in unit test to create vector of dim = 2
 func BuildTestArray[T RealNumbers](a, b T) (ret []T) {
 	ret = make([]T, 2)
