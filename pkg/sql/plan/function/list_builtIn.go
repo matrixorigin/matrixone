@@ -1559,9 +1559,9 @@ var supportedArrayOperations = []FuncNew{
 		},
 	},
 
-	// function `vector_dim`
+	// function `vector_dims`
 	{
-		functionId: VECTOR_DIM,
+		functionId: VECTOR_DIMS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -1574,7 +1574,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return DimensionArray[float32]
+					return VectorDimsArray[float32]
 				},
 			},
 			{
@@ -1584,7 +1584,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return DimensionArray[float64]
+					return VectorDimsArray[float64]
 				},
 			},
 		},

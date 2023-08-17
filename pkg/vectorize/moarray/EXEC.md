@@ -25,7 +25,7 @@ select b + "[1,2,3]" from t1;
 # vector ops
 select l1_norm(b) from t1;
 select l2_norm(b) from t1;
-select vector_dim(b) from t1;
+select vector_dims(b) from t1;
 select inner_product(b,"[1,2,3]") from t1;
 select cosine_similarity(b,"[1,2,3]") from t1;
 

@@ -96,7 +96,7 @@ func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Func
 	})
 }
 
-func DimensionArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func VectorDimsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(in []byte) (out int64) {
 		_in := types.BytesToArray[T](in)
 		return int64(len(_in))

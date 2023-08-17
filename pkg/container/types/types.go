@@ -83,7 +83,7 @@ const (
 	// system family
 	T_tuple T = 201
 
-	// Array family
+	// Array/Vector family
 	T_array_float32 T = 224 // In SQL , it is vecf32
 	T_array_float64 T = 225 // In SQL , it is vecf64
 
