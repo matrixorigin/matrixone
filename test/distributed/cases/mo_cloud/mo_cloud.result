@@ -580,7 +580,6 @@ SELECT `value` FROM `system_metrics`.`server_storage_usage` WHERE account = '863
 value
 SELECT collecttime FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' ORDER BY collecttime asc LIMIT 1;
 collecttime
-2023-08-07 11:54:13.368103000
 SELECT count(*) FROM `mo_mo`.`moins` WHERE id = '2ef38bf3-b821-4cab-879e-3b788f1e922f';
 SQL parser error: table "moins" does not exist
 SELECT count(*) FROM `mo_mo`.`wb_version` WHERE wb_id = 'd457fd59-a865-4a5b-80b0-6e19a6059f1f';
