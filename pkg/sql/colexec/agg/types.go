@@ -50,6 +50,10 @@ const (
 	WinDenseRank
 )
 
+const (
+	groupNotMatch = 0
+)
+
 var Names = [...]string{
 	AggregateSum:                 "sum",
 	AggregateAvg:                 "avg",
