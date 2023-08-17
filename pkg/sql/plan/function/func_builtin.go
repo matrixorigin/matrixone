@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
 	"math/rand"
 	"strings"
@@ -1470,13 +1471,9 @@ func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result v
 	return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length, func(in []byte) (out []byte, err error) {
 		_in := types.BytesToArray[T](in)
 
-		n := len(_in)
-		_out := make([]float64, n)
-		for i := 0; i < n; i++ {
-			_out[i], err = momath.Sqrt(float64(_in[i])) //TODO: Check about this casting.
-			if err != nil {
-				return nil, err
-			}
+		_out, err := moarray.Sqrt(_in)
+		if err != nil {
+			return nil, err
 		}
 		return types.ArrayToBytes[float64](_out), nil
 

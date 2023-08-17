@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"io"
 	"math"
@@ -45,25 +46,15 @@ func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	})
 }
 
-func absSigned[T constraints.Signed | constraints.Float](v T) (T, error) {
-	if v < 0 {
-		v = -v
-	}
-	if v < 0 {
-		return 0, moerr.NewOutOfRangeNoCtx("int", "'%v'", v)
-	}
-	return v, nil
-}
-
 func AbsInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryFixedToFixedWithErrorCheck[int64, int64](ivecs, result, proc, length, func(v int64) (int64, error) {
-		return absSigned[int64](v)
+		return momath.AbsSigned[int64](v)
 	})
 }
 
 func AbsFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryFixedToFixedWithErrorCheck[float64, float64](ivecs, result, proc, length, func(v float64) (float64, error) {
-		return absSigned[float64](v)
+		return momath.AbsSigned[float64](v)
 	})
 }
 
@@ -81,77 +72,43 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 }
 
 func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(in []byte) (out []byte, err error) {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(in []byte) ([]byte, error) {
 		_in := types.BytesToArray[T](in)
 
-		n := len(_in)
-		_out := make([]T, n)
-		for i := 0; i < n; i++ {
-			_out[i], err = absSigned[T](_in[i])
-			if err != nil {
-				return nil, err
-			}
+		_out, err := moarray.Abs(_in)
+		if err != nil {
+			return nil, err
 		}
 		return types.ArrayToBytes[T](_out), nil
 	})
 }
 
-func L1Norm[I types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (out float64, err error) {
-		_in := types.BytesToArray[I](in)
-
-		n := len(_in)
-
-		var absVal I
-		var sum float64 = 0
-
-		for i := 0; i < n; i++ {
-			absVal, err = absSigned[I](_in[i])
-			if err != nil {
-				return
-			}
-
-			sum = sum + float64(absVal)
-		}
-		return sum, nil
+func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		_in := types.BytesToArray[T](in)
+		return moarray.L1Norm(_in)
 	})
 }
 
-func L2Norm[I types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (out float64, err error) {
-		_in := types.BytesToArray[I](in)
-
-		n := len(_in)
-
-		var pow2Val I
-		var sum float64 = 0
-
-		for i := 0; i < n; i++ {
-			pow2Val = _in[i] * _in[i]
-			sum = sum + float64(pow2Val)
-		}
-
-		return momath.Sqrt(sum)
+		_in := types.BytesToArray[T](in)
+		return moarray.L2Norm(_in)
 	})
 }
 
-func ArrayDimension[I types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func DimensionArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(in []byte) (out int64) {
-		_in := types.BytesToArray[I](in)
+		_in := types.BytesToArray[T](in)
 		return int64(len(_in))
 	})
 }
 
-func SummationArray[I types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToFixed[float64](ivecs, result, proc, length, func(in []byte) (out float64) {
-		_in := types.BytesToArray[I](in)
+		_in := types.BytesToArray[T](in)
 
-		n := len(_in)
-		var sum float64 = 0
-		for i := 0; i < n; i++ {
-			sum = sum + float64(_in[i])
-		}
-		return sum
+		return moarray.Summation[T](_in)
 	})
 }
 

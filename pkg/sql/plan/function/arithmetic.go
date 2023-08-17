@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 )
@@ -416,11 +417,7 @@ func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	n := len(_v1)
-	r := make([]T, n)
-	for i := 0; i < n; i++ {
-		r[i] = _v1[i] + _v2[i]
-	}
+	r := moarray.Add(_v1, _v2)
 
 	return types.ArrayToBytes[T](r), nil
 }
@@ -433,11 +430,7 @@ func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	n := len(_v1)
-	r := make([]T, n)
-	for i := 0; i < n; i++ {
-		r[i] = _v1[i] - _v2[i]
-	}
+	r := moarray.Subtract(_v1, _v2)
 
 	return types.ArrayToBytes[T](r), nil
 }
@@ -450,11 +443,7 @@ func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	n := len(_v1)
-	r := make([]T, n)
-	for i := 0; i < n; i++ {
-		r[i] = _v1[i] * _v2[i]
-	}
+	r := moarray.Multiply(_v1, _v2)
 
 	return types.ArrayToBytes[T](r), nil
 }
@@ -467,11 +456,7 @@ func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	n := len(_v1)
-	r := make([]T, n)
-	for i := 0; i < n; i++ {
-		r[i] = _v1[i] / _v2[i]
-	}
+	r := moarray.Divide(_v1, _v2)
 
 	return types.ArrayToBytes[T](r), nil
 }

@@ -1512,7 +1512,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return L1Norm[float32]
+					return L1NormArray[float32]
 				},
 			},
 			{
@@ -1522,7 +1522,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return L1Norm[float64]
+					return L1NormArray[float64]
 				},
 			},
 		},
@@ -1543,7 +1543,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return L2Norm[float32]
+					return L2NormArray[float32]
 				},
 			},
 			{
@@ -1553,7 +1553,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return L2Norm[float64]
+					return L2NormArray[float64]
 				},
 			},
 		},
@@ -1574,7 +1574,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return ArrayDimension[float32]
+					return DimensionArray[float32]
 				},
 			},
 			{
@@ -1584,7 +1584,71 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return ArrayDimension[float64]
+					return DimensionArray[float64]
+				},
+			},
+		},
+	},
+
+	// function `inner_product`
+	{
+		functionId: INNER_PRODUCT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return InnerProductArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return InnerProductArray[float64]
+				},
+			},
+		},
+	},
+
+	// function `cosine_similarity`
+	{
+		functionId: COSINE_SIMILARITY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					// COSINE similarity value 0 <= x <= 1
+					// TODO: Is float32 ok?
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CosineSimilarity[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CosineSimilarity[float64]
 				},
 			},
 		},
