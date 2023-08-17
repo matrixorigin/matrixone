@@ -592,12 +592,12 @@ count(*)
 0
 SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id;
 name    tables    owner
-mo_mo    0    accountadmin
-mo_catalog    15    -
 system    1    accountadmin
 system_metrics    7    accountadmin
 information_schema    15    accountadmin
 mysql    5    accountadmin
+mo_mo    0    accountadmin
+mo_catalog    15    -
 SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id ORDER BY reldatabase, relname;
 datname    relname    relkind    owner
 mo_mo    null    null    -
@@ -693,9 +693,8 @@ statement_info    0    0    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='system_metrics';
 name    rows    size    owner
 metric    0    0    accountadmin
-SELECT response_at FROM `system`.`statement_info` WHERE status != 'Running' and account != 'sys' and account != 'ob' ORDER BY response_at asc LIMIT 1;
-response_at
-2023-08-07 11:39:45
+SELECT count(*) FROM `system`.`statement_info` WHERE status != 'Running' and account != 'sys' and account != 'ob' ORDER BY response_at asc LIMIT 1;
+SQL syntax error: column "statement_info.response_at" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x WHERE datname='information_schema';
 owner
 accountadmin
