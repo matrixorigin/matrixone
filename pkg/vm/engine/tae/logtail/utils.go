@@ -623,7 +623,7 @@ func (data *CNCheckpointData) PrefetchMetaIdx(
 	service fileservice.FileService,
 ) (err error) {
 	var pref blockio.PrefetchParams
-	pref, err = blockio.BuildSubPrefetchParams(service, key)
+	pref, err = blockio.BuildPrefetchParams(service, key)
 	if err != nil {
 		return
 	}
@@ -701,7 +701,7 @@ func (data *CNCheckpointData) PrefetchFrom(
 			block := it.Next()
 			if location.IsEmpty() {
 				location = block.GetLocation()
-				pref, err = blockio.BuildSubPrefetchParams(service, location)
+				pref, err = blockio.BuildPrefetchParams(service, location)
 				if err != nil {
 					return
 				}
@@ -1631,7 +1631,7 @@ func (data *CheckpointData) PrefetchMeta(
 		return
 	}
 	var pref blockio.PrefetchParams
-	pref, err = blockio.BuildSubPrefetchParams(service, key)
+	pref, err = blockio.BuildPrefetchParams(service, key)
 	if err != nil {
 		return
 	}
@@ -1679,7 +1679,7 @@ func (data *CheckpointData) PrefetchFrom(
 		locations[name.String()] = append(locations[name.String()], blockIdx{location: location, dataType: dataType[i]})
 	}
 	for _, blockIdxes := range locations {
-		pref, err = blockio.BuildSubPrefetchParams(service, blockIdxes[0].location)
+		pref, err = blockio.BuildPrefetchParams(service, blockIdxes[0].location)
 		if err != nil {
 			return
 		}

@@ -234,8 +234,10 @@ func ReadMultiBlocksWithMeta(
 		for seqnum := range opt.Idxes {
 			if DataMetaType(opt.DataType) == SchemaData {
 				dataMeta = meta.MustDataMeta()
-			} else {
+			} else if DataMetaType(opt.DataType) == SchemaTombstone {
 				dataMeta = meta.MustTombstoneMeta()
+			} else {
+				dataMeta, _ = meta.SubMeta(opt.DataType)
 			}
 			blkmeta := dataMeta.GetBlockMeta(uint32(opt.Id))
 			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
