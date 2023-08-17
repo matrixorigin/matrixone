@@ -77,9 +77,9 @@ func (a *idAllocator) Capacity() uint64 {
 }
 
 func (l *store) setInitialClusterInfo(numOfLogShards uint64,
-	numOfDNShards uint64, numOfLogReplicas uint64) error {
+	numOfDNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) error {
 	cmd := hakeeper.GetInitialClusterRequestCmd(numOfLogShards,
-		numOfDNShards, numOfLogReplicas)
+		numOfDNShards, numOfLogReplicas, nextID, nextIDByKey)
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
