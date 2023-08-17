@@ -115,7 +115,6 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 	if l.postSet != nil {
 		l.postSet(key, value)
 	}
-
 	l.evict(ctx)
 }
 

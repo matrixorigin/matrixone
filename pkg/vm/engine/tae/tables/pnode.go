@@ -182,15 +182,10 @@ func (node *persistedNode) GetRowByFilter(
 	}
 
 	// Load persisted commit ts
-	commitTSVec, datas, err := node.block.LoadPersistedCommitTS()
+	commitTSVec, err := node.block.LoadPersistedCommitTS()
 	if err != nil {
 		return
 	}
-	defer func() {
-		for i := range datas {
-			datas[i].Release()
-		}
-	}()
 	defer commitTSVec.Close()
 
 	// Load persisted deletes

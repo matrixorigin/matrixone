@@ -15,6 +15,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.19.0
 	github.com/aws/smithy-go v1.13.5
 	github.com/axiomhq/hyperloglog v0.0.0-20230201085229-3ddf4bad03dc
+	github.com/cespare/xxhash v1.1.0
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/docker/go-units v0.5.0

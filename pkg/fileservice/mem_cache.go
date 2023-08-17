@@ -75,7 +75,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 			}
 		}
 
-		o.cache = lrucache.New[CacheKey, CacheData](capacity, postSetFn, postGetFn, postEvictFn)
+		o.cache = lrucache.New(capacity, postSetFn, postGetFn, postEvictFn)
 		o.memoryPool = newRCBytesPool(capacity)
 	}
 }

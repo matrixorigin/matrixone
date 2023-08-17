@@ -62,13 +62,14 @@ func ReadByFilter(
 	if !info.DeltaLocation().IsEmpty() {
 		var persistedDeletes *batch.Batch
 		var persistedByCN bool
+		var persistedDatas []fileservice.CacheData
 		// load from storage
-		if persistedDeletes, datas, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+		if persistedDeletes, persistedDatas, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
 			return
 		}
 		defer func() {
-			for i := range datas {
-				datas[i].Release()
+			for i := range persistedDatas {
+				persistedDatas[i].Release()
 			}
 		}()
 		var rows *nulls.Nulls

@@ -19,6 +19,8 @@ import "C"
 import (
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/cespare/xxhash"
 )
 
 const (
@@ -31,6 +33,7 @@ const (
 // owner should call Release to give it back to the pool
 // new sharing owner should call Retain to increase ref count
 type RCBytes struct {
+	h     uint64
 	data  []byte
 	count atomic.Int32
 	pool  *rcBytesPool
@@ -42,6 +45,9 @@ func (r *RCBytes) Bytes() []byte {
 
 func (r *RCBytes) Slice(length int) CacheData {
 	r.data = r.data[:length]
+	if r.h == 0 {
+		r.h = xxhash.Sum64(r.data)
+	}
 	return r
 }
 
@@ -51,17 +57,14 @@ func (r *RCBytes) Retain() {
 
 func (r *RCBytes) Release() {
 	if c := r.count.Add(-1); c == 0 {
+		if xxhash.Sum64(r.data) != r.h {
+			panic("bad data")
+		}
 		free(r.data)
 		r.pool.size.Add(int64(cap(r.data)) * -1)
 	} else if c < 0 {
 		panic("bad release")
 	}
-}
-
-func (r *RCBytes) Copy() []byte {
-	ret := make([]byte, len(r.data))
-	copy(ret, r.data)
-	return ret
 }
 
 type rcBytesPool struct {

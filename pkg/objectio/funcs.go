@@ -35,24 +35,21 @@ func ReadExtent(
 	factory CacheConstructorFactory,
 ) (v []byte, err error) {
 	ioVec := &fileservice.IOVector{
-		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 1),
+		FilePath:    name,
+		Entries:     make([]fileservice.IOEntry, 1),
+		CachePolicy: fileservice.SkipMemory,
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{
 		Offset:      int64(extent.Offset()),
 		Size:        int64(extent.Length()),
-		ToCacheData: factory(int64(extent.OriginSize()), extent.Alg(), fs),
+		ToCacheData: factory(int64(extent.OriginSize()), extent.Alg(), fileservice.DefaultCacheDataAllocator),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
-	// XXX may be right?
-	defer ioVec.Release()
-	v = make([]byte, len(ioVec.Entries[0].CachedData.Bytes()))
-	copy(v, ioVec.Entries[0].CachedData.Bytes())
 	//TODO when to call ioVec.Release?
-	// v = ioVec.Entries[0].CachedData.Bytes()
+	v = ioVec.Entries[0].CachedData.Bytes()
 	return
 }
 

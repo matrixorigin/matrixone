@@ -38,6 +38,7 @@ func constructorFactory(size int64, algo uint8, allocator fileservice.CacheDataA
 		if algo == compress.None {
 			cacheData = allocator.Alloc(len(data))
 			copy(cacheData.Bytes(), data)
+			cacheData.Slice(len(data))
 			return cacheData, nil
 		}
 

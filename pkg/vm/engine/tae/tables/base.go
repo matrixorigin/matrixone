@@ -155,7 +155,7 @@ func (blk *baseBlock) FillInMemoryDeletesLocked(
 	return
 }
 
-func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, datas []fileservice.CacheData, err error) {
+func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error) {
 	if !blk.meta.IsAppendable() {
 		return
 	}
@@ -175,10 +175,19 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, datas []fi
 	if err != nil {
 		return
 	}
+	defer func() {
+		for i := range datas {
+			datas[i].Release()
+		}
+	}()
 	if bat.Vecs[0].GetType().Oid != types.T_TS {
 		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.ID.String()))
 	}
-	vec = containers.ToDNVector(bat.Vecs[0])
+	v, err := bat.Vecs[0].Dup(common.DefaultAllocator)
+	if err != nil {
+		panic(err)
+	}
+	vec = containers.ToDNVector(v)
 	return
 }
 
