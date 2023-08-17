@@ -1497,6 +1497,28 @@ func initCastTestCase() []tcTemp {
 		},
 	}
 
+	castArrayFloat32ToOthers := []tcTemp{
+		{
+			info: "array_float32 type to array_float64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, nil),
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false, [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+		},
+	}
+
+	castArrayFloat64ToOthers := []tcTemp{
+		{
+			info: "array_float64 type to array_float32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, nil),
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+		},
+	}
+
 	// init the testCases
 	testCases = append(testCases, castToSameTypeCases...)
 	testCases = append(testCases, castInt8ToOthers...)
@@ -1512,6 +1534,8 @@ func initCastTestCase() []tcTemp {
 	testCases = append(testCases, castStrToOthers...)
 	testCases = append(testCases, castDecToOthers...)
 	testCases = append(testCases, castTimestampToOthers...)
+	testCases = append(testCases, castArrayFloat32ToOthers...)
+	testCases = append(testCases, castArrayFloat64ToOthers...)
 
 	return testCases
 }
