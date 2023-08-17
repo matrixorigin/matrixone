@@ -395,45 +395,40 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	begin := time.Now()
 	proto := ses.GetMysqlProtocol()
 
+	ec := ses.GetExportConfig()
 	oq := NewOutputQueue(ses.GetRequestContext(), ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
 	procBatchBegin := time.Now()
 	n := bat.Vecs[0].Length()
 	requestCtx := ses.GetRequestContext()
 
-	if oq.ep.Outfile {
-		initExportFirst(oq)
-	}
-
-	for j := 0; j < n; j++ { //row index
-		if oq.ep.Outfile {
+	if ec.needExportToFile() {
+		initAsyncExport(requestCtx, ses, ec)
+		bat2 := copyBatch(ses, bat)
+		ec.sendBatch(bat2)
+	} else {
+		for j := 0; j < n; j++ { //row index
 			select {
 			case <-requestCtx.Done():
 				return nil
 			default:
 			}
-			continue
+
+			row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
+			if err != nil {
+				return err
+			}
+			if oq.showStmtType == ShowTableStatus {
+				row2 := make([]interface{}, len(row))
+				copy(row2, row)
+				ses.AppendData(row2)
+			}
 		}
 
-		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
+		err := oq.flush()
 		if err != nil {
 			return err
 		}
-		if oq.showStmtType == ShowTableStatus {
-			row2 := make([]interface{}, len(row))
-			copy(row2, row)
-			ses.AppendData(row2)
-		}
-	}
-
-	if oq.ep.Outfile {
-		oq.rowIdx = uint64(n)
-		bat2 := preCopyBat(obj, bat)
-		go constructByte(obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
-	}
-	err := oq.flush()
-	if err != nil {
-		return err
 	}
 
 	procBatchTime := time.Since(procBatchBegin)
@@ -2751,14 +2746,18 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	}
 
+	// select into
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			err = doCheckFilePath(requestCtx, ses, st)
+			err = doCheckFilePath(requestCtx, ses, st.Ep)
 			if err != nil {
 				return err
 			}
-			ses.SetExportParam(st.Ep)
+			ses.InitExportConfig(st.Ep)
+			defer func() {
+				ses.ClearExportParam()
+			}()
 		}
 	}
 
@@ -3174,11 +3173,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			Step 2: Start pipeline
 			Producing the data row and sending the data row
 		*/
-		ep := ses.GetExportParam()
-		if ep.Outfile {
-			ep.DefaultBufSize = pu.SV.ExportDataDefaultFlushSize
-			initExportFileParam(ep, mrs)
-			if err = openNewFile(requestCtx, ep, mrs); err != nil {
+		//prepare export param
+		ec := ses.GetExportConfig()
+		if ec.needExportToFile() {
+			if err = initExportConfig(requestCtx, ec, mrs, pu.SV.ExportDataDefaultFlushSize); err != nil {
 				return err
 			}
 		}
@@ -3194,15 +3192,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 
-		if ep.Outfile {
-			oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
-			if err = exportAllData(oq); err != nil {
-				return err
-			}
-			if err = ep.Writer.Flush(); err != nil {
-				return err
-			}
-			if err = ep.File.Close(); err != nil {
+		if ec.needExportToFile() {
+			if err = finishExport(requestCtx, ses, ec); err != nil {
 				return err
 			}
 		}
@@ -3404,7 +3395,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(input.getSql())
-	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
@@ -3584,7 +3574,6 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(input.getSql())
-	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	proc := process.New(
 		requestCtx,
