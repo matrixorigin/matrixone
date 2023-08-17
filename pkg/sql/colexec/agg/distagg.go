@@ -212,7 +212,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, rowCount int, vecs []*vector.Vector) error {
+func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, vecs []*vector.Vector) error {
 	var ok bool
 	var err error
 

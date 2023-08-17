@@ -107,7 +107,7 @@ type Agg[T any] interface {
 	Fill(groupIndex int64, rowIndex int64, vectors []*vector.Vector) error
 
 	// BulkFill use whole vector to update the data of groupIndex-group's agg.
-	BulkFill(groupIndex int64, rowCount int, vectors []*vector.Vector) error
+	BulkFill(groupIndex int64, vectors []*vector.Vector) error
 
 	// BatchFill use part of the vector to update the data of agg's group
 	//      os(origin-s) records information about which groups need to be updated

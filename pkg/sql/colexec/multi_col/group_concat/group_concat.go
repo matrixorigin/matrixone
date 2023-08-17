@@ -242,7 +242,7 @@ func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, vecs []*vector.Vec
 	return nil
 }
 
-func (gc *GroupConcat) BulkFill(groupIndex int64, rowCount int, vecs []*vector.Vector) error {
+func (gc *GroupConcat) BulkFill(groupIndex int64, vecs []*vector.Vector) error {
 	length := vecs[0].Length()
 	for i := 0; i < length; i++ {
 		if err := gc.Fill(groupIndex, int64(i), vecs); err != nil {

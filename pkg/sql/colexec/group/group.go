@@ -319,7 +319,7 @@ func (ctr *container) processH0(bat *batch.Batch) error {
 	ctr.bat.SetRowCount(1)
 
 	for i, ag := range ctr.bat.Aggs {
-		err := ag.BulkFill(0, bat.RowCount(), []*vector.Vector{ctr.aggVecs[i].vec})
+		err := ag.BulkFill(0, []*vector.Vector{ctr.aggVecs[i].vec})
 		if err != nil {
 			return err
 		}

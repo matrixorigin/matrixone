@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func (a *UnaryAgg[T1, T2]) Free2(pool *mpool.MPool) {
+func (a *UnaryAgg[T1, T2]) Free(pool *mpool.MPool) {
 	if a.otyp.IsVarlen() {
 		return
 	}
@@ -29,7 +29,7 @@ func (a *UnaryAgg[T1, T2]) Free2(pool *mpool.MPool) {
 	}
 }
 
-func (a *UnaryAgg[T1, T2]) Grows2(count int, pool *mpool.MPool) error {
+func (a *UnaryAgg[T1, T2]) Grows(count int, pool *mpool.MPool) error {
 	a.grows(count)
 
 	finalCount := len(a.es) + count
@@ -79,7 +79,7 @@ func (a *UnaryAgg[T1, T2]) Grows2(count int, pool *mpool.MPool) error {
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) Fill2(groupIdx int64, rowIndex int64, vectors []*vector.Vector) (err error) {
+func (a *UnaryAgg[T1, T2]) Fill(groupIdx int64, rowIndex int64, vectors []*vector.Vector) (err error) {
 	var value T1
 	inputVector := vectors[0]
 
@@ -92,7 +92,7 @@ func (a *UnaryAgg[T1, T2]) Fill2(groupIdx int64, rowIndex int64, vectors []*vect
 		if inputVector.GetType().IsVarlen() {
 			a.vs[groupIdx], a.es[groupIdx], err = a.fill(
 				groupIdx,
-				any(inputVector.GetBytesAt(int(rowIndex))),
+				any(inputVector.GetBytesAt(int(rowIndex))).(T1),
 				a.vs[groupIdx],
 				1,
 				a.es[groupIdx],
@@ -110,7 +110,7 @@ func (a *UnaryAgg[T1, T2]) Fill2(groupIdx int64, rowIndex int64, vectors []*vect
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) BatchFill2(offset int64, groupStatus []uint8, groupOfRows []uint64, vectors []*vector.Vector) (err error) {
+func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfRows []uint64, vectors []*vector.Vector) (err error) {
 	// TODO: batch fill method of aggregation should be redesigned and optimized.
 	// if a.batchFill != nil
 
@@ -201,7 +201,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill2(offset int64, groupStatus []uint8, groupOf
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) BulkFill2(groupIdx int64, vectors []*vector.Vector) (err error) {
+func (a *UnaryAgg[T1, T2]) BulkFill(groupIdx int64, vectors []*vector.Vector) (err error) {
 	var value T1
 	inputVector := vectors[0]
 
@@ -258,14 +258,14 @@ func (a *UnaryAgg[T1, T2]) BulkFill2(groupIdx int64, vectors []*vector.Vector) (
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) Merge2(b Agg[any], groupIdx1, groupIdx2 int64) (err error) {
+func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], groupIdx1, groupIdx2 int64) (err error) {
 	a2 := b.(*UnaryAgg[T1, T2])
 	a.vs[groupIdx1], a.es[groupIdx1], err = a.merge(
 		groupIdx1, groupIdx2, a.vs[groupIdx1], a2.vs[groupIdx2], a.es[groupIdx1], a2.es[groupIdx2], a2.priv)
 	return err
 }
 
-func (a *UnaryAgg[T1, T2]) BatchMerge2(b Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) (err error) {
+func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) (err error) {
 	a2 := b.(*UnaryAgg[T1, T2])
 	for i := range groupStatus {
 		if groupIdxes[i] == groupNotMatch {
@@ -282,7 +282,7 @@ func (a *UnaryAgg[T1, T2]) BatchMerge2(b Agg[any], offset int64, groupStatus []u
 	return nil
 }
 
-func (a *UnaryAgg[T1, T2]) Eval2(pool *mpool.MPool) (vec *vector.Vector, err error) {
+func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err error) {
 	a.vs, err = a.eval(a.vs, nil)
 	if err != nil {
 		return nil, err
