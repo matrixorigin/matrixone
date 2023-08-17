@@ -421,7 +421,7 @@ func (r *blockMergeReader) prefetchDeletes() error {
 
 	//prefetch the deletes
 	for name, locs := range r.deletaLocs {
-		pref, err := blockio.BuildTombstonePrefetchParams(r.fs, locs[0])
+		pref, err := blockio.BuildPrefetchParams(r.fs, locs[0])
 		if err != nil {
 			return err
 		}

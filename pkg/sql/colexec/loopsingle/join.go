@@ -70,8 +70,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = End
 				continue
 			}
-			if bat.RowCount() == 0 {
-				bat.Clean(proc.Mp())
+			if bat.IsEmpty() {
+				proc.PutBatch(bat)
 				continue
 			}
 			if ctr.bat.RowCount() == 0 {
@@ -79,7 +79,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			}
-			bat.Clean(proc.Mp())
+			if err != nil {
+				bat.Clean(proc.Mp())
+			} else {
+				proc.PutBatch(bat)
+			}
+
 			return process.ExecNext, err
 
 		default:

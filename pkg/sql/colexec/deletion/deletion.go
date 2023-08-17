@@ -123,8 +123,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (pro
 	}
 
 	// empty batch
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
