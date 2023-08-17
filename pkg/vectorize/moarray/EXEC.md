@@ -22,14 +22,25 @@ select summation(b) from t1;
 select cast("[1,2,3]" as array_float32(3));
 select b + "[1,2,3]" from t1;
 
+# vector ops
 select l1_norm(b) from t1;
 select l2_norm(b) from t1;
 select array_dim(b) from t1;
-
 select inner_product(b,"[1,2,3]") from t1;
 select cosine_similarity(b,"[1,2,3]") from t1;
 
+# top K
 select * FROM t1 ORDER BY cosine_similarity(b, '[3,1,2]') LIMIT 5;
 
+# cast
+select b + sqrt(b) from t1;
+select * from t1 where b= "[1,2,3]";
+select * from t1 where b> "[1,2,3]";
+select * from t1 where b< "[1,2,3]";
+select * from t1 where b>= "[1,2,3]";
+select * from t1 where b<= "[1,2,3]";
+select * from t1 where b!= "[1,2,3]";
+select * from t1 where b= cast("[1,2,3]" as array_float32);
+ 
 exit;
 ```
