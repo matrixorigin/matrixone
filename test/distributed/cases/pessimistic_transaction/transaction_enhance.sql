@@ -318,3 +318,39 @@ select * from atomic_table_18;
 set autocommit=1;
 drop account if exists trans_acc1;
 -- @bvt:issue#9852
+
+
+-- @bvt:issue#11213
+drop table if exists atomic_table_12_5;
+create table atomic_table_12_5(c1 int,c2 varchar(25));
+insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
+alter table atomic_table_12_5 add index key1(c1);
+begin;
+alter table atomic_table_12_5 change c1 clNew double;
+-- @session:id=1{
+-- @wait:0:commit
+use transaction_enhance;
+insert into alter01 values (8,"h");
+show create table atomic_table_12_5;
+select * from atomic_table_12_5;
+-- @session}
+show create table atomic_table_12_5;
+-- @bvt:issue
+
+
+-- alter table change primary key column
+-- @bvt:issue#11268
+drop table if exists alter01;
+create table alter01(col1 int primary key,col2 varchar(25));
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+begin;
+alter table alter01 change col1 col1New float;
+-- @session:id=1{
+-- @wait:0:commit
+use transaction_enhance;
+insert into alter01 values (8,"h");
+select * from alter01;
+-- @session
+insert into alter01 values (6,"h");
+select * from alter01;
+-- @bvt:issue
