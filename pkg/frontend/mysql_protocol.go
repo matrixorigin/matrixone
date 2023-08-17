@@ -231,7 +231,7 @@ func (ds *debugStats) String() string {
 	}
 	return fmt.Sprintf(
 		"writeCount %v \n"+
-			"writeBytes %v %v MB\n",
+			"writeFile %v %v MB\n",
 		ds.writeCount,
 		ds.writeBytes, ds.writeBytes/(1024*1024.0),
 	)

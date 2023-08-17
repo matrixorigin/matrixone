@@ -404,7 +404,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	if ec.needExportToFile() {
 		initAsyncExport(requestCtx, ses, ec)
-		bat2 := copyBatch(ses, bat)
+		bat2, err := copyBatch(ses, bat)
+		if err != nil {
+			return err
+		}
 		ec.sendBatch(bat2)
 	} else {
 		for j := 0; j < n; j++ { //row index
