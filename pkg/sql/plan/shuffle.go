@@ -22,12 +22,11 @@ import (
 )
 
 const (
-	HashMapSizeForShuffle             = 250000
-	MAXShuffleDOP                     = 64
-	ShuffleThreshHold                 = 50000
-	ShuffleTypeThreshHold             = 32
-	ShuffleTypeThreshHoldForRightJoin = 256
-	ShuffleTypeThreshHoldUpplerLimit  = 16
+	HashMapSizeForShuffle           = 250000
+	MAXShuffleDOP                   = 64
+	ShuffleThreshHold               = 50000
+	ShuffleTypeThreshHoldLowerLimit = 32
+	ShuffleTypeThreshHoldUpperLimit = 512
 )
 
 const (
@@ -150,16 +149,14 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 			leftCost := builder.qry.Nodes[n.Children[0]].Stats.Outcnt
 			rightCost := builder.qry.Nodes[n.Children[1]].Stats.Outcnt
 			if n.BuildOnLeft {
-				// its better for right join to go shuffle
-				if leftCost > ShuffleTypeThreshHoldUpplerLimit*ShuffleTypeThreshHoldForRightJoin*rightCost {
+				// its better for right join to go shuffle, but can not go complex shuffle
+				if leftCost > ShuffleTypeThreshHoldUpperLimit*rightCost {
 					return
-				} else if leftCost > ShuffleTypeThreshHoldForRightJoin*rightCost {
-					n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Complex
 				}
 			} else {
-				if leftCost > ShuffleTypeThreshHoldUpplerLimit*ShuffleTypeThreshHold*rightCost {
+				if leftCost > ShuffleTypeThreshHoldUpperLimit*rightCost {
 					return
-				} else if leftCost > ShuffleTypeThreshHold*rightCost {
+				} else if leftCost > ShuffleTypeThreshHoldLowerLimit*rightCost {
 					n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Complex
 				}
 			}
