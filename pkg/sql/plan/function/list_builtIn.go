@@ -1638,7 +1638,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return CosineSimilarity[float32]
+					return CosineSimilarityArray[float32]
 				},
 			},
 			{
@@ -1648,7 +1648,7 @@ var supportedArrayOperations = []FuncNew{
 					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return CosineSimilarity[float64]
+					return CosineSimilarityArray[float64]
 				},
 			},
 		},
