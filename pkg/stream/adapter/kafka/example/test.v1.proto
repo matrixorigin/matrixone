@@ -5,5 +5,5 @@ package test_v1;
 message UserMessage {
   string Name = 1;
   string Email = 2;
-  string Phone = 3;
+  int32 Age = 4;
 }

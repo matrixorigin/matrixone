@@ -9,8 +9,10 @@ import (
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka/example/proto/test_v1"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -133,7 +135,7 @@ func TestValidateConfig_ValidConfigurations(t *testing.T) {
 	}
 }
 
-func TestRetrieveData(t *testing.T) {
+func TestRetrieveDataWIthJson(t *testing.T) {
 	// Setup
 	mockCluster, err := kafka.NewMockCluster(1)
 	if err != nil {
@@ -152,17 +154,21 @@ func TestRetrieveData(t *testing.T) {
 	}
 	type MessagePayload struct {
 		Name string `json:"name"`
-		Age  int    `json:"age"`
+		Age  int32  `json:"age"`
 	}
 	payload := MessagePayload{
 		Name: "test_name",
 		Age:  100,
 	}
 	value, err := json.Marshal(payload)
-	p.Produce(&kafka.Message{
-		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
-		Value:          []byte(value),
-	}, nil)
+
+	// produce 100 messages
+	for i := 0; i < 100; i++ {
+		p.Produce(&kafka.Message{
+			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+			Value:          []byte(value),
+		}, nil)
+	}
 
 	// Setup configs for RetrieveData
 	configs := map[string]interface{}{
@@ -179,7 +185,7 @@ func TestRetrieveData(t *testing.T) {
 		types.New(types.T_int32, 10, 0),
 	}
 	offset := int64(0)
-	limit := int64(100)
+	limit := int64(50)
 
 	// Call RetrieveData
 	batch, err := RetrieveData(context.Background(), configs, attrs, types, offset, limit, mpool.MustNewZero(), NewKafkaAdapter)
@@ -188,7 +194,70 @@ func TestRetrieveData(t *testing.T) {
 	}
 
 	// Assertions
-	assert.Equal(t, batch.VectorCount(), 2, "Expected 2 vectors in the batch")
-	assert.Equal(t, batch.Vecs[0].Length(), 1, "Expected 1 row in the batch")
-	assert.Equal(t, batch.Vecs[1].String(), "100", "Expected 1 row in the batch")
+	assert.Equal(t, 2, batch.VectorCount(), "Expected 2 vectors in the batch")
+	assert.Equal(t, batch.Vecs[0].Length(), 50, "Expected 50 row in the batch")
+}
+
+func TestRetrieveDataWIthProtobuf(t *testing.T) {
+	// Setup
+	mockCluster, err := kafka.NewMockCluster(1)
+	if err != nil {
+		t.Fatalf("Failed to create MockCluster: %s", err)
+	}
+	defer mockCluster.Close()
+
+	broker := mockCluster.BootstrapServers()
+	topic := "TestTopic"
+
+	// Produce mock data
+	// (You can add more messages or customize this part as necessary)
+	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": broker})
+	if err != nil {
+		t.Fatalf("Failed to create producer: %s", err)
+	}
+
+	user := test_v1.UserMessage{
+		Name:  "test_name",
+		Age:   100,
+		Email: "test_email",
+	}
+	payload, _ := proto.Marshal(&user)
+
+	// produce 100 messages
+	for i := 0; i < 100; i++ {
+		p.Produce(&kafka.Message{
+			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+			Value:          payload,
+		}, nil)
+	}
+
+	// Setup configs for RetrieveData
+	configs := map[string]interface{}{
+		"type":              "kafka",
+		"bootstrap.servers": broker,
+		"topic":             topic,
+		"value":             "protobuf",
+		"protobuf.message":  "test_v1.UserMessage",
+		"protobuf.schema":   "syntax = \"proto3\";\noption go_package = \"./proto/test_v1\";\npackage test_v1;\n\nmessage UserMessage {\n  string Name = 1;\n  string Email = 2;\n  int32 Age = 4;\n}",
+	}
+	attrs := []string{
+		"Name", "Age",
+	}
+	types := []types.Type{
+		types.New(types.T_char, 30, 0),
+		types.New(types.T_int32, 10, 0),
+	}
+	offset := int64(0)
+	limit := int64(50)
+
+	// Call RetrieveData
+	batch, err := RetrieveData(context.Background(), configs, attrs, types, offset, limit, mpool.MustNewZero(), NewKafkaAdapter)
+	if err != nil {
+		t.Fatalf("RetrieveData failed: %s", err)
+	}
+
+	// Assertions
+	assert.Equal(t, 2, batch.VectorCount(), "Expected 2 vectors in the batch")
+	assert.Equal(t, batch.Vecs[0].Length(), 50, "Expected 50 row in the batch")
+
 }

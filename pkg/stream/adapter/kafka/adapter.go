@@ -397,6 +397,21 @@ func populateBatchFromMSG(ctx context.Context, ka *KafkaAdapter, typs []types.Ty
 				return nil, err
 			}
 		}
+	case PROTOBUF:
+		md, err := convertProtobufSchemaToMD(configs["protobuf.schema"].(string), configs["protobuf.message"].(string))
+		if err != nil {
+			return nil, err
+		}
+		for i, msg := range msgs {
+			msgValue, err := deserializeProtobuf(md, msg.Value, false)
+			if err != nil {
+				return nil, err
+			}
+			err = populateOneRowData(ctx, b, attrKeys, &ProtoDataGetter{Value: msgValue, Key: msg.Key}, i, typs, mp)
+			if err != nil {
+				return nil, err
+			}
+		}
 
 	case PROTOBUFSR:
 		schema, err := ka.GetSchemaForTopic(configs["topic"].(string), false)
@@ -408,7 +423,7 @@ func populateBatchFromMSG(ctx context.Context, ka *KafkaAdapter, typs []types.Ty
 			return nil, err
 		}
 		for i, msg := range msgs {
-			msgValue, _ := deserializeProtobuf(md, msg.Value)
+			msgValue, _ := deserializeProtobuf(md, msg.Value, true)
 			err := populateOneRowData(ctx, b, attrKeys, &ProtoDataGetter{Value: msgValue, Key: msg.Key}, i, typs, mp)
 			if err != nil {
 				return nil, err
@@ -431,16 +446,28 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 		vec := bat.Vecs[colIdx]
 		switch id {
 		case types.T_int32:
-			val := int32(fieldValue.(float64))
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected int32 type for column %d but got %T", colIdx, fieldValue)
+			var val int32
+			switch v := fieldValue.(type) {
+			case int32:
+				val = v
+			case float64:
+				val = int32(v)
+			// You can add more type cases if necessary
+			default:
+				return moerr.NewInternalError(ctx, "expected int32 compatible type for column %d but got %T", colIdx, fieldValue)
 			}
 			cols := vector.MustFixedCol[int32](vec)
 			cols[rowIdx] = val
 		case types.T_int64:
-			val, ok := fieldValue.(int64)
-			if !ok {
-				return moerr.NewInternalError(ctx, "expected int64 type for column %d but got %T", colIdx, fieldValue)
+			var val int64
+			switch v := fieldValue.(type) {
+			case int64:
+				val = v
+			case float64:
+				val = int64(v)
+			// Add more type cases if necessary
+			default:
+				return moerr.NewInternalError(ctx, "expected int64 compatible type for column %d but got %T", colIdx, fieldValue)
 			}
 			cols := vector.MustFixedCol[int64](vec)
 			cols[rowIdx] = val
@@ -534,10 +561,14 @@ func convertProtobufSchemaToMD(schema string, msgTypeName string) (*desc.Message
 	return md, nil
 }
 
-func deserializeProtobuf(md *desc.MessageDescriptor, in []byte) (*dynamic.Message, error) {
+func deserializeProtobuf(md *desc.MessageDescriptor, in []byte, isKafkSR bool) (*dynamic.Message, error) {
 	dm := dynamic.NewMessage(md)
 	bytesRead, _, err := readMessageIndexes(in[5:])
-	err = proto.Unmarshal(in[5+bytesRead:], dm)
+	if isKafkSR {
+		err = proto.Unmarshal(in[5+bytesRead:], dm)
+	} else {
+		err = dm.Unmarshal(in)
+	}
 	return dm, err
 }
 
@@ -668,7 +699,7 @@ func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, f
 		// Fetch the high watermark for the partition
 		_, highwatermarkHigh, err := ka.Consumer.QueryWatermarkOffsets(configs["topic"].(string), p.ID, -1)
 		if err != nil {
-			return 0, moerr.NewInternalError(ctx, "failed to query watermark offsets: %w", err)
+			return 0, err
 		}
 		totalSize += int64(highwatermarkHigh)
 	}

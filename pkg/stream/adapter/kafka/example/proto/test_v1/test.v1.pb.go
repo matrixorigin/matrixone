@@ -20,16 +20,18 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type MOTestMessage struct {
+type UserMessage struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Value int32 `protobuf:"varint,1,opt,name=Value,proto3" json:"Value,omitempty"`
+	Name  string `protobuf:"bytes,1,opt,name=Name,proto3" json:"Name,omitempty"`
+	Email string `protobuf:"bytes,2,opt,name=Email,proto3" json:"Email,omitempty"`
+	Age   int32  `protobuf:"varint,4,opt,name=Age,proto3" json:"Age,omitempty"`
 }
 
-func (x *MOTestMessage) Reset() {
-	*x = MOTestMessage{}
+func (x *UserMessage) Reset() {
+	*x = UserMessage{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_test_v1_proto_msgTypes[0]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -37,13 +39,13 @@ func (x *MOTestMessage) Reset() {
 	}
 }
 
-func (x *MOTestMessage) String() string {
+func (x *UserMessage) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MOTestMessage) ProtoMessage() {}
+func (*UserMessage) ProtoMessage() {}
 
-func (x *MOTestMessage) ProtoReflect() protoreflect.Message {
+func (x *UserMessage) ProtoReflect() protoreflect.Message {
 	mi := &file_test_v1_proto_msgTypes[0]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -55,14 +57,28 @@ func (x *MOTestMessage) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MOTestMessage.ProtoReflect.Descriptor instead.
-func (*MOTestMessage) Descriptor() ([]byte, []int) {
+// Deprecated: Use UserMessage.ProtoReflect.Descriptor instead.
+func (*UserMessage) Descriptor() ([]byte, []int) {
 	return file_test_v1_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *MOTestMessage) GetValue() int32 {
+func (x *UserMessage) GetName() string {
 	if x != nil {
-		return x.Value
+		return x.Name
+	}
+	return ""
+}
+
+func (x *UserMessage) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *UserMessage) GetAge() int32 {
+	if x != nil {
+		return x.Age
 	}
 	return 0
 }
@@ -71,11 +87,13 @@ var File_test_v1_proto protoreflect.FileDescriptor
 
 var file_test_v1_proto_rawDesc = []byte{
 	0x0a, 0x0d, 0x74, 0x65, 0x73, 0x74, 0x2e, 0x76, 0x31, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x12,
-	0x07, 0x74, 0x65, 0x73, 0x74, 0x5f, 0x76, 0x31, 0x22, 0x25, 0x0a, 0x0d, 0x4d, 0x4f, 0x54, 0x65,
-	0x73, 0x74, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x12, 0x14, 0x0a, 0x05, 0x56, 0x61, 0x6c,
-	0x75, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x05, 0x52, 0x05, 0x56, 0x61, 0x6c, 0x75, 0x65, 0x42,
-	0x11, 0x5a, 0x0f, 0x2e, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x74, 0x65, 0x73, 0x74, 0x5f,
-	0x76, 0x31, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x07, 0x74, 0x65, 0x73, 0x74, 0x5f, 0x76, 0x31, 0x22, 0x49, 0x0a, 0x0b, 0x55, 0x73, 0x65, 0x72,
+	0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x12, 0x12, 0x0a, 0x04, 0x4e, 0x61, 0x6d, 0x65, 0x18,
+	0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x14, 0x0a, 0x05, 0x45,
+	0x6d, 0x61, 0x69, 0x6c, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x45, 0x6d, 0x61, 0x69,
+	0x6c, 0x12, 0x10, 0x0a, 0x03, 0x41, 0x67, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x05, 0x52, 0x03,
+	0x41, 0x67, 0x65, 0x42, 0x11, 0x5a, 0x0f, 0x2e, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x74,
+	0x65, 0x73, 0x74, 0x5f, 0x76, 0x31, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -92,7 +110,7 @@ func file_test_v1_proto_rawDescGZIP() []byte {
 
 var file_test_v1_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_test_v1_proto_goTypes = []interface{}{
-	(*MOTestMessage)(nil), // 0: test_v1.MOTestMessage
+	(*UserMessage)(nil), // 0: test_v1.UserMessage
 }
 var file_test_v1_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -109,7 +127,7 @@ func file_test_v1_proto_init() {
 	}
 	if !protoimpl.UnsafeEnabled {
 		file_test_v1_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*MOTestMessage); i {
+			switch v := v.(*UserMessage); i {
 			case 0:
 				return &v.state
 			case 1:
