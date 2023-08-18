@@ -2744,9 +2744,10 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 			},
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
-		// this is for shuffle join
+		// this is for shuffle join. set this to 1 temporarily.
+		// after runtime on shuffle join finished, increase this
 		for _, mr := range rs.Proc.Reg.MergeReceivers {
-			mr.Ch = make(chan *batch.Batch, 2)
+			mr.Ch = make(chan *batch.Batch, 1)
 		}
 	} else {
 		rs.appendInstruction(vm.Instruction{
