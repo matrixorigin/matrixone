@@ -51,6 +51,10 @@ select * from t1 where b>= "[1,2,3]";
 select * from t1 where b<= "[1,2,3]";
 select * from t1 where b!= "[1,2,3]";
 select * from t1 where b= cast("[1,2,3]" as vecf32);
- 
+
+# Throw errors
+select b + "[1,2,3" from t1;
+create table t2(a int, b vecf32(3) primary key);
+
 exit;
 ```
