@@ -199,7 +199,7 @@ type Compile struct {
 	// ast
 	stmt tree.Statement
 
-	s3CounterSet perfcounter.CounterSet
+	counterSet perfcounter.CounterSet
 
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
