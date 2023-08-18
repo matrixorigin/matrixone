@@ -14,19 +14,25 @@
 
 package hashtable
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+)
 
 const (
 	kInitialCellCntBits = 10
 	kInitialCellCnt     = 1 << kInitialCellCntBits
-
-	kLoadFactorNumerator   = 1
-	kLoadFactorDenominator = 2
-
-	//kTwoLevelBucketCntBits = 8
-	//kTwoLevelBucketCnt     = 1 << kTwoLevelBucketCntBits
-	//kMaxTwoLevelBucketCnt  = kTwoLevelBucketCnt - 1
+	maxBlockSize        = mpool.GB / 4
 )
+
+func maxElemCnt(cellCnt, cellSize uint64) uint64 {
+	if cellCnt*cellSize < maxBlockSize {
+		return cellCnt / 2
+	} else {
+		return cellCnt * 3 / 4
+	}
+}
 
 type Aggregator interface {
 	StateSize() uint8

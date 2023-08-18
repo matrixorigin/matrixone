@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"go/constant"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
@@ -981,29 +980,7 @@ func buildValueScan(
 						return err
 					}
 					if col.Typ != nil && col.Typ.Id == int32(types.T_enum) {
-						tblName := info.tblInfo.tableDefs[0].Name
-						astArgs := []tree.Expr{
-							tree.NewNumValWithType(constant.MakeString(tblName), tblName, false, tree.P_char),
-							tree.NewNumValWithType(constant.MakeString(colName), colName, false, tree.P_char),
-						}
-
-						// bind ast function's args
-						args := make([]*Expr, len(astArgs)+1)
-						for idx, arg := range astArgs {
-							if idx == len(args)-1 {
-								continue
-							}
-							expr, err := binder.BindExpr(arg, 0, false)
-							if err != nil {
-								bat.Clean(proc.Mp())
-								return err
-							}
-							args[idx] = expr
-						}
-
-						args[len(args)-1] = defExpr
-
-						defExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), moEnumCastValueToIndexFun, args)
+						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.GetTyp())
 						if err != nil {
 							bat.Clean(proc.Mp())
 							return err

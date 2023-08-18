@@ -35,12 +35,12 @@ var metaCacheStats hitStats
 var metaCacheHitStats hitStats
 
 func init() {
-	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil)
+	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil)
+		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil, nil)
 	})
 }
 
@@ -63,7 +63,7 @@ func LoadObjectMetaByExtent(
 	name *ObjectName,
 	extent *Extent,
 	prefetch bool,
-	noLRUCache bool,
+	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	v, ok := metaCache.Get(ctx, *name.Short(), false)
@@ -80,7 +80,7 @@ func LoadObjectMetaByExtent(
 		}
 		return
 	}
-	if v, err = ReadExtent(ctx, name.String(), extent, noLRUCache, fs, constructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name.String(), extent, cachePolicy, fs, constructorFactory); err != nil {
 		return
 	}
 	var obj any
@@ -105,5 +105,5 @@ func FastLoadObjectMeta(
 ) (ObjectMeta, error) {
 	extent := location.Extent()
 	name := location.Name()
-	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, true, fs)
+	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, fileservice.SkipMemory, fs)
 }

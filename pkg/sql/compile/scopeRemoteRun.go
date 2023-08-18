@@ -778,14 +778,15 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *group.Argument:
 		in.Agg = &pipeline.Group{
-			IsShuffle: t.IsShuffle,
-			NeedEval:  t.NeedEval,
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
-			Exprs:     t.Exprs,
-			Types:     convertToPlanTypes(t.Types),
-			Aggs:      convertToPipelineAggregates(t.Aggs),
-			MultiAggs: convertPipelineMultiAggs(t.MultiAggs),
+			IsShuffle:    t.IsShuffle,
+			PreAllocSize: t.PreAllocSize,
+			NeedEval:     t.NeedEval,
+			Ibucket:      t.Ibucket,
+			Nbucket:      t.Nbucket,
+			Exprs:        t.Exprs,
+			Types:        convertToPlanTypes(t.Types),
+			Aggs:         convertToPipelineAggregates(t.Aggs),
+			MultiAggs:    convertPipelineMultiAggs(t.MultiAggs),
 		}
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -1166,14 +1167,15 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Group:
 		t := opr.GetAgg()
 		v.Arg = &group.Argument{
-			IsShuffle: t.IsShuffle,
-			NeedEval:  t.NeedEval,
-			Ibucket:   t.Ibucket,
-			Nbucket:   t.Nbucket,
-			Exprs:     t.Exprs,
-			Types:     convertToTypes(t.Types),
-			Aggs:      convertToAggregates(t.Aggs),
-			MultiAggs: convertToMultiAggs(t.MultiAggs),
+			IsShuffle:    t.IsShuffle,
+			PreAllocSize: t.PreAllocSize,
+			NeedEval:     t.NeedEval,
+			Ibucket:      t.Ibucket,
+			Nbucket:      t.Nbucket,
+			Exprs:        t.Exprs,
+			Types:        convertToTypes(t.Types),
+			Aggs:         convertToAggregates(t.Aggs),
+			MultiAggs:    convertToMultiAggs(t.MultiAggs),
 		}
 	case vm.Join:
 		t := opr.GetJoin()
@@ -1616,6 +1618,10 @@ func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Bat
 	if err != nil {
 		return nil, err
 	}
+	if bat.IsEmpty() {
+		return batch.EmptyBatch, nil
+	}
+
 	// allocated memory of vec from mPool.
 	for i, vec := range bat.Vecs {
 		typ := *vec.GetType()
@@ -1629,7 +1635,7 @@ func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Bat
 		}
 		bat.Vecs[i] = rvec
 	}
-	bat.Cnt = 1
+	bat.SetCnt(1)
 	// allocated memory of aggVec from mPool.
 	for i, ag := range bat.Aggs {
 		err = ag.WildAggReAlloc(mp)
