@@ -432,11 +432,11 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	isFirst := true
 	for key, value := range alterCtx.alterColMap {
 		if isFirst {
-			insertBuffer.WriteString(key)
+			insertBuffer.WriteString("`" + key + "`")
 			selectBuffer.WriteString(value)
 			isFirst = false
 		} else {
-			insertBuffer.WriteString(", " + key)
+			insertBuffer.WriteString(", " + "`" + key + "`")
 			selectBuffer.WriteString(", " + value)
 		}
 	}
