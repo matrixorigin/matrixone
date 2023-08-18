@@ -183,8 +183,8 @@ func TestCancelRunningTask(t *testing.T) {
 		mustUpdateTestTask(t, store, 1, []task.Task{v})
 		<-cancelC
 		for i := 0; i < 100; i++ {
-			if v := mustGetTestTask(t, store, 1)[0]; v.Status == task.TaskStatus_Running {
-				continue
+			if v := mustGetTestTask(t, store, 1)[0]; v.Status == task.TaskStatus_Completed {
+				break
 			}
 		}
 		r.mu.RLock()
