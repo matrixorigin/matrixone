@@ -623,11 +623,11 @@ func (data *CNCheckpointData) PrefetchMetaIdx(
 	service fileservice.FileService,
 ) (err error) {
 	var pref blockio.PrefetchParams
-	pref, err = blockio.BuildSubPrefetchParams(service, key)
+	pref, err = blockio.BuildPrefetchParams(service, key)
 	if err != nil {
 		return
 	}
-	pref.AddBlockWithType(idxes, []uint16{0}, MetaIDX)
+	pref.AddBlockWithType(idxes, []uint16{0}, uint16(objectio.ConvertToSchemaType(MetaIDX)))
 
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -701,12 +701,12 @@ func (data *CNCheckpointData) PrefetchFrom(
 			block := it.Next()
 			if location.IsEmpty() {
 				location = block.GetLocation()
-				pref, err = blockio.BuildSubPrefetchParams(service, location)
+				pref, err = blockio.BuildPrefetchParams(service, location)
 				if err != nil {
 					return
 				}
 			}
-			pref.AddBlockWithType(idxes, []uint16{block.GetID()}, idx)
+			pref.AddBlockWithType(idxes, []uint16{block.GetID()}, uint16(objectio.ConvertToSchemaType(idx)))
 			empty = false
 		}
 	}
@@ -1631,7 +1631,7 @@ func (data *CheckpointData) PrefetchMeta(
 		return
 	}
 	var pref blockio.PrefetchParams
-	pref, err = blockio.BuildSubPrefetchParams(service, key)
+	pref, err = blockio.BuildPrefetchParams(service, key)
 	if err != nil {
 		return
 	}
@@ -1645,8 +1645,8 @@ func (data *CheckpointData) PrefetchMeta(
 	for attr := range dnMeteIdxSchema.attrs {
 		dnIdxes = append(dnIdxes, uint16(attr))
 	}
-	pref.AddBlockWithType(idxes, []uint16{0}, MetaIDX)
-	pref.AddBlockWithType(dnIdxes, []uint16{1}, DNMetaIDX)
+	pref.AddBlockWithType(idxes, []uint16{0}, uint16(objectio.ConvertToSchemaType(MetaIDX)))
+	pref.AddBlockWithType(dnIdxes, []uint16{1}, uint16(objectio.ConvertToSchemaType(DNMetaIDX)))
 	return blockio.PrefetchWithMerged(pref)
 }
 
@@ -1679,7 +1679,7 @@ func (data *CheckpointData) PrefetchFrom(
 		locations[name.String()] = append(locations[name.String()], blockIdx{location: location, dataType: dataType[i]})
 	}
 	for _, blockIdxes := range locations {
-		pref, err = blockio.BuildSubPrefetchParams(service, blockIdxes[0].location)
+		pref, err = blockio.BuildPrefetchParams(service, blockIdxes[0].location)
 		if err != nil {
 			return
 		}
@@ -1689,7 +1689,7 @@ func (data *CheckpointData) PrefetchFrom(
 			for attr := range schema.attrs {
 				idxes[attr] = uint16(attr)
 			}
-			pref.AddBlockWithType(idxes, []uint16{idx.location.ID()}, idx.dataType)
+			pref.AddBlockWithType(idxes, []uint16{idx.location.ID()}, uint16(objectio.ConvertToSchemaType(idx.dataType)))
 		}
 		err = blockio.PrefetchWithMerged(pref)
 		if err != nil {
