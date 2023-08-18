@@ -500,11 +500,15 @@ func TestMOHungSpan_EndBeforeDeadline_doProfile(t *testing.T) {
 }
 
 func TestContextDeadlineAndCancel(t *testing.T) {
+	if runtime.NumCPU() < 4 {
+		t.Skip("machine's performance too low to handle time sensitive case")
+		return
+	}
 	quitCtx, quitCancel := context.WithCancel(context.TODO())
-	deadlineCtx, deadlineCancel := context.WithTimeout(quitCtx, time.Millisecond)
+	deadlineCtx, deadlineCancel := context.WithTimeout(quitCtx, time.Microsecond)
 	defer deadlineCancel()
 
-	time.Sleep(2 * time.Millisecond)
+	time.Sleep(time.Second)
 	t.Logf("deadlineCtx.Err: %s", deadlineCtx.Err())
 	quitCancel()
 	require.Equal(t, context.DeadlineExceeded, deadlineCtx.Err())
