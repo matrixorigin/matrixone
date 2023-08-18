@@ -327,8 +327,6 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 			r, _, err := v1.Div(v2, scale1, scale2)
 			return r, err
 		})
-	//TODO: Check if int8 would be casted to float32 or float64.
-	// My understanding: https://stackoverflow.com/a/34504552/1609570
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32])
 	case types.T_array_float64:

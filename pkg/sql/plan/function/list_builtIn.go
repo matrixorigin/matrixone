@@ -1731,7 +1731,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SQRT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO: need to check about the cast logic.
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{

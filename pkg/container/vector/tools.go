@@ -350,7 +350,6 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		})
 
 	case types.T_array_float32:
-		//TODO: would T_array be used in Zonemap?
 		return checkArrayIntersect[float32](v, vec, func(t1, t2 []float32) bool {
 			return moarray.Compare[float32](t1, t2) >= 0
 		}, func(t1, t2 []float32) bool {
