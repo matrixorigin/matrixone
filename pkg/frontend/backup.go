@@ -25,6 +25,7 @@ func doBackup(ctx context.Context, ses *Session, bs *tree.BackupStart) error {
     //dnTs := types.BuildTS(ts, 0)
     conf := &backup.Config{
         //Timestamp: dnTs,
+        HAkeeper: ses.GetParameterUnit().HAKeeperClient,
     }
     return backup.Backup(ctx, bs, conf)
 }

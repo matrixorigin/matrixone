@@ -183,7 +183,7 @@ type Config struct {
     // For General usage
     GeneralDir fileservice.FileService
 
-    // For tae
+    // For tae and hakeeper
     TaeDir fileservice.FileService
 
     // hakeeper client

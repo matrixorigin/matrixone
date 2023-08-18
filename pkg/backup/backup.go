@@ -4,6 +4,7 @@ import (
     "context"
     "encoding/csv"
     "github.com/google/uuid"
+    "github.com/matrixorigin/matrixone/pkg/common/moerr"
     "github.com/matrixorigin/matrixone/pkg/fileservice"
     "github.com/matrixorigin/matrixone/pkg/logutil"
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -32,7 +33,6 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
         if err != nil {
             return err
         }
-        cfg.TaeDir = fileservice.SubPath(cfg.TaeDir, taeDir)
     } else {
         s3Conf, err = getS3Config(ctx, bs.Option)
         if err != nil {
@@ -46,7 +46,6 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
         if err != nil {
             return err
         }
-        cfg.TaeDir = fileservice.SubPath(cfg.TaeDir, taeDir)
     }
     
     // step 2 : backup mo
@@ -97,12 +96,25 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 }
 
 func backupTae(ctx context.Context, config *Config) error {
-    return saveDumpFiles(ctx, config.TaeDir,1,1)
+    fs := fileservice.SubPath(config.TaeDir, taeDir)
+    return saveDumpFiles(ctx, fs, 1, 1)
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {
-    fs := fileservice.SubPath(config.GeneralDir, hakeeperDir)
-    return saveDumpHakeeper(ctx,fs,1)
+    var (
+        err    error
+        haData []byte
+    )
+    if config.HAkeeper == nil {
+        return moerr.NewInternalError(ctx, "hakeeper client is nil")
+    }
+    fs := fileservice.SubPath(config.TaeDir, hakeeperDir)
+    // get hakeeper data
+    haData, err = config.HAkeeper.GetBackupData(ctx)
+    if err != nil {
+        return err
+    }
+    return writeFile(ctx, fs, HakeeperFile, haData)
 }
 
 func saveDumpFiles(ctx context.Context, fs fileservice.FileService,size, count int) error{
