@@ -256,10 +256,6 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		return c.handleKillQuery(ev, resp)
 	case *setVarEvent:
 		return c.handleSetVar(ev)
-	case *suspendAccountEvent:
-		return c.handleSuspendAccount(ev)
-	case *dropAccountEvent:
-		return c.handleDropAccount(ev)
 	case *prepareEvent:
 		return c.handlePrepare(ev)
 	default:
@@ -345,50 +341,6 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
 	c.setVarStmts = append(c.setVarStmts, e.stmt)
 	return nil
-}
-
-// handleSuspendAccountEvent handles the suspend account event.
-func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent) error {
-	// Ignore the sys tenant.
-	if strings.ToLower(string(e.account)) == frontend.GetDefaultTenant() {
-		return nil
-	}
-	// handle kill connection.
-	cns, err := c.router.SelectByTenant(e.account)
-	if err != nil {
-		return err
-	}
-	if len(cns) == 0 {
-		return nil
-	}
-	for _, cn := range cns {
-		// Before connect to backend server, update the salt.
-		cn.salt = c.mysqlProto.GetSalt()
-
-		go func(s *CNServer) {
-			query := fmt.Sprintf("kill connection %d", s.backendConnID)
-			// No client to receive the result, so pass nil as the third
-			// parameter to ignore the result.
-			if err := c.connAndExec(s, query, nil); err != nil {
-				c.log.Error("failed to send query to server",
-					zap.String("query", query), zap.Error(err))
-				return
-			}
-			c.log.Info("kill connection on server succeeded",
-				zap.String("query", query), zap.String("server", s.addr))
-		}(cn)
-	}
-	return nil
-}
-
-// handleDropAccountEvent handles the drop account event.
-func (c *clientConn) handleDropAccount(e *dropAccountEvent) error {
-	se := &suspendAccountEvent{
-		baseEvent: e.baseEvent,
-		stmt:      e.stmt,
-		account:   e.account,
-	}
-	return c.handleSuspendAccount(se)
 }
 
 // handleSetVar handles the prepare event.

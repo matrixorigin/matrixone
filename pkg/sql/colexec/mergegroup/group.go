@@ -80,12 +80,15 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 					ctr.bat.Aggs = nil
 				}
 				anal.Output(ctr.bat, isLast)
+				proc.SetInputBatch(ctr.bat)
+				ctr.bat = nil
+				ctr.state = End
+				return process.ExecNext, nil
 			}
 			ctr.state = End
 
 		case End:
-			proc.SetInputBatch(ctr.bat)
-			ctr.bat = nil
+			proc.SetInputBatch(nil)
 			return process.ExecStop, nil
 		}
 	}

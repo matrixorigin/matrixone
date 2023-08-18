@@ -45,6 +45,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
 		bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
 		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
+		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.dnLocation), false)
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
@@ -56,6 +57,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
 		bat.GetVectorByName(CheckpointAttr_EntryType).Append(false, false)
 		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
+		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.dnLocation), false)
 	}
 	return bat
 }

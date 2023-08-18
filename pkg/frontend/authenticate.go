@@ -181,8 +181,36 @@ func GetDefaultTenant() string {
 	return sysAccountName
 }
 
+func GetSysTenantId() uint32 {
+	return sysAccountID
+}
+
+func GetUserRoot() string {
+	return rootName
+}
+
+func GetUserRootId() uint32 {
+	return rootID
+}
+
 func GetDefaultRole() string {
 	return moAdminRoleName
+}
+
+func GetDefaultRoleId() uint32 {
+	return moAdminRoleID
+}
+
+func GetAccountAdminRole() string {
+	return accountAdminRoleName
+}
+
+func GetAccountAdminRoleId() uint32 {
+	return accountAdminRoleID
+}
+
+func GetAdminUserId() uint32 {
+	return dumpID + 1
 }
 
 func isCaseInsensitiveEqual(n string, role string) bool {
@@ -2937,7 +2965,11 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 	//if alter account suspend, add the account to kill queue
 	if accountExist {
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
-			ses.getRoutineManager().accountRoutine.enKillQueue(int64(targetAccountId), version)
+			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
+
+			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
+				logutil.Errorf("post drop account error: %s", err.Error())
+			}
 		}
 
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusRestricted {
@@ -4170,9 +4202,90 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 	}
 
 	//if drop the account, add the account to kill queue
-	ses.getRoutineManager().accountRoutine.enKillQueue(accountId, version)
+	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
+
+	if err := postDropSuspendAccount(ctx, ses, da.Name, accountId, version); err != nil {
+		logutil.Errorf("post drop account error: %s", err.Error())
+	}
 
 	return err
+}
+
+func postDropSuspendAccount(
+	ctx context.Context, ses *Session, accountName string, accountID int64, version uint64,
+) (err error) {
+	qs := ses.GetParameterUnit().QueryService
+	if qs == nil {
+		return moerr.NewInternalError(ctx, "query service is not initialized")
+	}
+	var nodes []string
+	currTenant := ses.GetTenantInfo().Tenant
+	currUser := ses.GetTenantInfo().User
+	labels := clusterservice.NewSelector().SelectByLabel(
+		map[string]string{"account": accountName}, clusterservice.EQ)
+	sysTenant := isSysTenant(currTenant)
+	if sysTenant {
+		disttae.SelectForSuperTenant(clusterservice.NewSelector(), currUser, nil,
+			func(s *metadata.CNService) {
+				nodes = append(nodes, s.QueryAddress)
+			})
+	} else {
+		disttae.SelectForCommonTenant(labels, nil, func(s *metadata.CNService) {
+			nodes = append(nodes, s.QueryAddress)
+		})
+	}
+	nodesLeft := len(nodes)
+
+	type nodeResponse struct {
+		nodeAddr string
+		response interface{}
+		err      error
+	}
+	responseChan := make(chan nodeResponse, nodesLeft)
+
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var retErr error
+	for _, node := range nodes {
+		// Invalid node address, ignore it.
+		if len(node) == 0 {
+			nodesLeft--
+			continue
+		}
+
+		go func(addr string) {
+			req := qs.NewRequest(query.CmdMethod_KillConn)
+			req.KillConnRequest = &query.KillConnRequest{
+				AccountID: accountID,
+				Version:   version,
+			}
+			resp, err := qs.SendMessage(ctx, addr, req)
+			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
+		}(node)
+	}
+
+	// Wait for all responses.
+	for nodesLeft > 0 {
+		select {
+		case res := <-responseChan:
+			if res.err != nil && retErr != nil {
+				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+			} else {
+				queryResp, ok := res.response.(*query.Response)
+
+				if !ok || (queryResp.KillConnResponse != nil && !queryResp.KillConnResponse.Success) {
+					retErr = moerr.NewInternalError(ctx,
+						fmt.Sprintf("kill connection for account %s failed on node %s",
+							accountName, res.nodeAddr))
+				}
+			}
+		case <-ctx.Done():
+			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+		}
+		nodesLeft--
+	}
+
+	return retErr
 }
 
 // doDropUser accomplishes the DropUser statement
@@ -7386,15 +7499,6 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	return err
 }
 
-// createTablesInInformationSchema creates the database information_schema and the views or tables.
-func createTablesInInformationSchema(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit) error {
-	err := bh.Exec(ctx, "create database if not exists information_schema;")
-	if err != nil {
-		return err
-	}
-	return err
-}
-
 func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName string) (bool, error) {
 	var sqlForCheckTenant string
 	var erArray []ExecResult
@@ -7650,7 +7754,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		return nil, nil, moerr.NewInternalError(ctx, "get the id of tenant %s failed", ca.Name)
 	}
 
-	newUserId = dumpID + 1
+	newUserId = int64(GetAdminUserId())
 
 	newTenant = &TenantInfo{
 		Tenant:        ca.Name,

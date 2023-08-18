@@ -110,6 +110,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 	}
 
 	hasDefaultValue := false
+	hasNullFlag := false
 	auto_incr := false
 	for _, attr := range specNewColumn.Attributes {
 		switch attribute := attr.(type) {
@@ -167,13 +168,20 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 				return nil, err
 			}
 			alterPlan.CopyTableDef.Indexes = append(alterPlan.CopyTableDef.Indexes, indexDef)
-		case *tree.AttributeDefault, *tree.AttributeNull:
+		case *tree.AttributeDefault:
 			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
+		case *tree.AttributeNull:
+			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			newCol.Default = defaultValue
+			hasNullFlag = true
 		case *tree.AttributeOnUpdate:
 			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
@@ -214,6 +222,21 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 			}
 		}
 	}
+
+	if alterPlan.CopyTableDef.Pkey != nil {
+		for _, partCol := range alterPlan.CopyTableDef.Pkey.Names {
+			if partCol == newCol.Name {
+				newCol.Default.NullAbility = false
+				newCol.NotNull = true
+				break
+			}
+		}
+	}
+
+	if err = checkPriKeyConstraint(ctx.GetContext(), newCol, hasDefaultValue, hasNullFlag, alterPlan.CopyTableDef.Pkey); err != nil {
+		return nil, err
+	}
+
 	return newCol, nil
 }
 

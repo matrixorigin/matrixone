@@ -472,20 +472,19 @@ func readBlockData(
 
 	return
 }
-
 func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, err error) {
 	isPersistedByCN, err = persistedByCN(ctx, deltaloc, fs)
 	if err != nil {
 		return
 	}
 	if isPersistedByCN {
-		bat, err = LoadColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
+		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
 		return
 	} else {
-		bat, err = LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
+		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
@@ -494,9 +493,13 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 }
 
 func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bool, error) {
-	meta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, fs)
+	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, false, fs)
 	if err != nil {
 		return false, err
+	}
+	meta, ok := objectMeta.TombstoneMeta()
+	if !ok {
+		meta = objectMeta.MustDataMeta()
 	}
 	blkmeta := meta.GetBlockMeta(uint32(deltaloc.ID()))
 	columnCount := blkmeta.GetColumnCount()
@@ -511,10 +514,11 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows *nulls.B
 	rows = nulls.NewWithSize(0)
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
-	aborts := vector.MustFixedCol[bool](deletes.Vecs[3])
+	aborts := deletes.Vecs[3]
 
 	for i, rowid := range rowids {
-		if aborts[i] || tss[i].Greater(ts) {
+		abort := vector.GetFixedAt[bool](aborts, i)
+		if abort || tss[i].Greater(ts) {
 			continue
 		}
 		row := rowid.GetRowOffset()
@@ -554,7 +558,7 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 			pref.AddBlock(idxes, []uint16{info.MetaLocation().ID()})
 			if !info.DeltaLocation().IsEmpty() {
 				// Need to read all delete
-				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
+				err = PrefetchTombstone([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
 				if err != nil {
 					return err
 				}

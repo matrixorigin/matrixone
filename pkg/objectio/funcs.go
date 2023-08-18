@@ -30,14 +30,14 @@ func ReadExtent(
 	ctx context.Context,
 	name string,
 	extent *Extent,
-	noLRUCache bool,
+	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 ) (v []byte, err error) {
 	ioVec := &fileservice.IOVector{
-		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 1),
-		NoCache:  noLRUCache,
+		FilePath:    name,
+		Entries:     make([]fileservice.IOEntry, 1),
+		CachePolicy: cachePolicy,
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{
@@ -48,6 +48,7 @@ func ReadExtent(
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
+	//TODO when to call ioVec.Release?
 	v = ioVec.Entries[0].CachedData.Bytes()
 	return
 }
@@ -56,7 +57,7 @@ func ReadBloomFilter(
 	ctx context.Context,
 	name string,
 	extent *Extent,
-	noLRUCache bool,
+	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (filters BloomFilter, err error) {
 	var v []byte
@@ -64,7 +65,7 @@ func ReadBloomFilter(
 		ctx,
 		name,
 		extent,
-		noLRUCache,
+		cachePolicy,
 		fs,
 		constructorFactory); err != nil {
 		return
@@ -80,26 +81,15 @@ func ReadBloomFilter(
 	return
 }
 
-func ReadObjectMetaWithLocation(
-	ctx context.Context,
-	location *Location,
-	noLRUCache bool,
-	fs fileservice.FileService,
-) (meta ObjectMeta, err error) {
-	name := location.Name().String()
-	extent := location.Extent()
-	return ReadObjectMeta(ctx, name, &extent, noLRUCache, fs)
-}
-
 func ReadObjectMeta(
 	ctx context.Context,
 	name string,
 	extent *Extent,
-	noLRUCache bool,
+	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	var v []byte
-	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, constructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name, extent, cachePolicy, fs, constructorFactory); err != nil {
 		return
 	}
 
@@ -109,13 +99,13 @@ func ReadObjectMeta(
 		return
 	}
 
-	meta = ObjectMeta(obj.([]byte))
+	meta = obj.(ObjectMeta)
 	return
 }
 
 func ReadOneBlock(
 	ctx context.Context,
-	meta *ObjectMeta,
+	meta *ObjectDataMeta,
 	name string,
 	blk uint16,
 	seqnums []uint16,
@@ -128,7 +118,7 @@ func ReadOneBlock(
 
 func ReadOneBlockWithMeta(
 	ctx context.Context,
-	meta *ObjectMeta,
+	meta *ObjectDataMeta,
 	name string,
 	blk uint16,
 	seqnums []uint16,
@@ -191,6 +181,7 @@ func ReadOneBlockWithMeta(
 		if err != nil {
 			return
 		}
+		//TODO when to call ioVec.Release?
 	}
 
 	// need to generate vector
@@ -227,10 +218,8 @@ func ReadOneBlockWithMeta(
 func ReadMultiBlocksWithMeta(
 	ctx context.Context,
 	name string,
-	meta *ObjectMeta,
+	meta ObjectMeta,
 	options map[uint16]*ReadBlockOptions,
-	noLRUCache bool,
-	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
@@ -238,9 +227,17 @@ func ReadMultiBlocksWithMeta(
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
+	var dataMeta ObjectDataMeta
 	for _, opt := range options {
 		for seqnum := range opt.Idxes {
-			blkmeta := meta.GetBlockMeta(uint32(opt.Id))
+			if DataMetaType(opt.DataType) == SchemaData {
+				dataMeta = meta.MustDataMeta()
+			} else if DataMetaType(opt.DataType) == SchemaTombstone {
+				dataMeta = meta.MustTombstoneMeta()
+			} else {
+				dataMeta, _ = meta.SubMeta(ConvertToCkpIdx(opt.DataType))
+			}
+			blkmeta := dataMeta.GetBlockMeta(uint32(opt.Id))
 			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
 				// prefetch, do not generate
 				continue
@@ -256,23 +253,24 @@ func ReadMultiBlocksWithMeta(
 	}
 
 	err = fs.Read(ctx, ioVec)
+	//TODO when to call ioVec.Release?
 	return
 }
 
 func ReadAllBlocksWithMeta(
 	ctx context.Context,
-	meta *ObjectMeta,
+	meta *ObjectDataMeta,
 	name string,
 	cols []uint16,
-	noLRUCache bool,
+	cachePolicy fileservice.CachePolicy,
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 ) (ioVec *fileservice.IOVector, err error) {
 	ioVec = &fileservice.IOVector{
-		FilePath: name,
-		Entries:  make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
-		NoCache:  noLRUCache,
+		FilePath:    name,
+		Entries:     make([]fileservice.IOEntry, 0, len(cols)*int(meta.BlockCount())),
+		CachePolicy: cachePolicy,
 	}
 	for blk := uint32(0); blk < meta.BlockCount(); blk++ {
 		for _, seqnum := range cols {
@@ -293,5 +291,6 @@ func ReadAllBlocksWithMeta(
 	}
 
 	err = fs.Read(ctx, ioVec)
+	//TODO when to call ioVec.Release?
 	return
 }

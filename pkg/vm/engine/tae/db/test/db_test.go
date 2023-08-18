@@ -68,7 +68,8 @@ import (
 )
 
 const (
-	ModuleName = "TAEDB"
+	ModuleName               = "TAEDB"
+	smallCheckpointBlockRows = 10
 )
 
 func TestAppend(t *testing.T) {
@@ -4254,7 +4255,7 @@ func TestCollectDelete(t *testing.T) {
 	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
 	assert.NoError(t, err)
 	writer.SetPrimaryKey(3)
-	writer.WriteBatch(containers.ToCNBatch(batch))
+	writer.WriteTombstoneBatch(containers.ToCNBatch(batch))
 	blocks, _, err := writer.Sync(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(blocks))
@@ -4797,6 +4798,7 @@ func TestReadCheckpoint(t *testing.T) {
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			if ins != nil {
+				logutil.Infof("ins is %v", ins.Vecs[0].String())
 				t.Log(common.ApiBatchToString(ins, 3))
 			}
 			if del != nil {
@@ -7576,7 +7578,7 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 				writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
 				assert.NoError(t, err)
 				writer.SetPrimaryKey(3)
-				writer.WriteBatch(containers.ToCNBatch(batch))
+				writer.WriteTombstoneBatch(containers.ToCNBatch(batch))
 				blocks, _, err := writer.Sync(context.TODO())
 				assert.NoError(t, err)
 				assert.Equal(t, 1, len(blocks))
@@ -7962,4 +7964,92 @@ func TestReplayPersistedDelete(t *testing.T) {
 	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
+}
+
+func TestCheckpointReadWrite(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "create database db", "1")
+	assert.NoError(t, err)
+	schema1 := catalog.MockSchemaAll(2, 1)
+	_, err = db.CreateRelation(schema1)
+	assert.NoError(t, err)
+	schema2 := catalog.MockSchemaAll(3, -1)
+	_, err = db.CreateRelation(schema2)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	t1 := tae.TxnMgr.StatMaxCommitTS()
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema1.Name)
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema2.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	t2 := tae.TxnMgr.StatMaxCommitTS()
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t2, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t1, t2, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+	t3 := tae.TxnMgr.StatMaxCommitTS()
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t3, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t2, t3, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 1
+	schema.SegmentMaxBlocks = 1
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+
+	tae.CreateRelAndAppend(bat, true)
+	t4 := tae.TxnMgr.StatMaxCommitTS()
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t4, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t3, t4, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
+
+	tae.CompactBlocks(false)
+	t5 := tae.TxnMgr.StatMaxCommitTS()
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t5, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
+	testutil.CheckCheckpointReadWrite(t, t4, t5, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
+}
+
+func TestCheckpointReadWrite2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	for i := 0; i < 10; i++ {
+		schema := catalog.MockSchemaAll(i+1, i)
+		schema.BlockMaxRows = 2
+		bat := catalog.MockBatch(schema, rand.Intn(30))
+		tae.BindSchema(schema)
+		createDB := false
+		if i == 0 {
+			createDB = true
+		}
+		tae.CreateRelAndAppend(bat, createDB)
+		tae.CompactBlocks(false)
+	}
+
+	t1 := tae.TxnMgr.StatMaxCommitTS()
+	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, smallCheckpointBlockRows, tae.Opts.Fs)
 }

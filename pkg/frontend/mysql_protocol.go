@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 	"math"
 	"math/rand"
 	"net"
@@ -247,7 +248,7 @@ type rowHandler struct {
 	//the begin position of writing.
 	//the range [beginWriteIndex,beginWriteIndex+3]
 	//for the length and sequenceId of the mysql protocol packet
-	beginWriteIndex int
+	beginOffset int
 	//the bytes in the outbuffer
 	bytesInOutBuffer int
 	//when the number of bytes in the outbuffer exceeds the it,
@@ -263,14 +264,14 @@ type rowHandler struct {
 isInPacket means it is compositing a packet now
 */
 func (rh *rowHandler) isInPacket() bool {
-	return rh.beginWriteIndex >= 0
+	return rh.beginOffset >= 0
 }
 
 /*
 resetPacket reset the beginWriteIndex
 */
 func (rh *rowHandler) resetPacket() {
-	rh.beginWriteIndex = -1
+	rh.beginOffset = -1
 }
 
 /*
@@ -2366,12 +2367,24 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 	outbuf := mp.tcpConn.OutBuf()
 	n := 4
 	outbuf.Grow(n)
-	writeIdx := outbuf.GetWriteIndex()
-	mp.beginWriteIndex = writeIdx
+	/*
+		offset = writerIndex - readerIndex
+		writerIndex = GetReaderIndex() + offset
+	*/
+	offset := outbuf.GetWriteIndex() - outbuf.GetReadIndex()
+	writeIdx := beginWriteIndex(outbuf, offset)
+	mp.beginOffset = offset
 	writeIdx += n
 	mp.bytesInOutBuffer += n
 	outbuf.SetWriteIndex(writeIdx)
 	return nil
+}
+
+func beginWriteIndex(outbuf *goetty_buf.ByteBuf, offset int) int {
+	if offset < 0 {
+		panic("invalid offset")
+	}
+	return outbuf.GetReadIndex() + offset
 }
 
 // fill the packet with data
@@ -2392,7 +2405,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 			}
 		}
 		//length of data in the packet
-		hasDataLen = outbuf.GetWriteIndex() - mp.beginWriteIndex - HeaderLengthOfTheProtocol
+		hasDataLen = outbuf.GetWriteIndex() - beginWriteIndex(outbuf, mp.beginOffset) - HeaderLengthOfTheProtocol
 		curLen = int(MaxPayloadSize) - hasDataLen
 		curLen = Min(curLen, n-i)
 		if curLen < 0 {
@@ -2407,7 +2420,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 		outbuf.SetWriteIndex(writeIdx)
 
 		//> 16MB, split it
-		curDataLen = outbuf.GetWriteIndex() - mp.beginWriteIndex - HeaderLengthOfTheProtocol
+		curDataLen = outbuf.GetWriteIndex() - beginWriteIndex(outbuf, mp.beginOffset) - HeaderLengthOfTheProtocol
 		if curDataLen == int(MaxPayloadSize) {
 			err = mp.closePacket(i+curLen == n)
 			if err != nil {
@@ -2430,15 +2443,15 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 		return nil
 	}
 	outbuf := mp.tcpConn.OutBuf()
-	payLoadLen := outbuf.GetWriteIndex() - mp.beginWriteIndex - 4
+	payLoadLen := outbuf.GetWriteIndex() - beginWriteIndex(outbuf, mp.beginOffset) - 4
 	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
 		return moerr.NewInternalError(mp.ses.requestCtx, "invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
-			payLoadLen, outbuf.GetWriteIndex(), mp.beginWriteIndex)
+			payLoadLen, outbuf.GetWriteIndex(), beginWriteIndex(outbuf, mp.beginOffset))
 	}
 
 	buf := outbuf.RawBuf()
-	binary.LittleEndian.PutUint32(buf[mp.beginWriteIndex:], uint32(payLoadLen))
-	buf[mp.beginWriteIndex+3] = mp.GetSequenceId()
+	binary.LittleEndian.PutUint32(buf[beginWriteIndex(outbuf, mp.beginOffset):], uint32(payLoadLen))
+	buf[beginWriteIndex(outbuf, mp.beginOffset)+3] = mp.GetSequenceId()
 
 	mp.AddSequenceId(1)
 
@@ -2449,8 +2462,8 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 			return err
 		}
 		buf = outbuf.RawBuf()
-		binary.LittleEndian.PutUint32(buf[mp.beginWriteIndex:], uint32(0))
-		buf[mp.beginWriteIndex+3] = mp.GetSequenceId()
+		binary.LittleEndian.PutUint32(buf[beginWriteIndex(outbuf, mp.beginOffset):], uint32(0))
+		buf[beginWriteIndex(outbuf, mp.beginOffset)+3] = mp.GetSequenceId()
 		mp.AddSequenceId(1)
 	}
 
@@ -2820,7 +2833,7 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 		lenEncBuffer:     make([]byte, 0, 10),
 		binaryNullBuffer: make([]byte, 0, 512),
 		rowHandler: rowHandler{
-			beginWriteIndex:           0,
+			beginOffset:               -1,
 			bytesInOutBuffer:          0,
 			untilBytesInOutbufToFlush: maxBytesToFlush * 1024,
 		},

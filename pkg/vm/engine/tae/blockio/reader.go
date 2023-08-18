@@ -16,14 +16,13 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
@@ -53,7 +52,17 @@ func NewObjectReader(
 ) (*BlockReader, error) {
 	name := key.Name()
 	metaExt := key.Extent()
-	reader, err := objectio.NewObjectReader(&name, &metaExt, service, opts...)
+	var reader *objectio.ObjectReader
+	var err error
+	if opts == nil {
+		reader, err = objectio.NewObjectReader(
+			&name,
+			&metaExt,
+			service,
+			objectio.WithMetaCachePolicyOption(fileservice.SkipMemory))
+	} else {
+		reader, err = objectio.NewObjectReader(&name, &metaExt, service, opts...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +73,10 @@ func NewObjectReader(
 }
 
 func NewFileReader(service fileservice.FileService, name string) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReaderWithStr(name, service)
+	reader, err := objectio.NewObjectReaderWithStr(
+		name,
+		service,
+		objectio.WithMetaCachePolicyOption(fileservice.SkipMemory))
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +87,11 @@ func NewFileReader(service fileservice.FileService, name string) (*BlockReader, 
 }
 
 func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockReader, error) {
-	reader, err := objectio.NewObjectReaderWithStr(name, service, objectio.WithNoLRUCacheOption(true))
+	reader, err := objectio.NewObjectReaderWithStr(
+		name,
+		service,
+		objectio.WithDataCachePolicyOption(fileservice.SkipAll),
+		objectio.WithMetaCachePolicyOption(fileservice.SkipAll))
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +145,71 @@ func (r *BlockReader) LoadColumns(
 	return
 }
 
+// LoadColumns needs typs to generate columns, if the target table has no schema change, nil can be passed.
+func (r *BlockReader) LoadSubColumns(
+	ctx context.Context,
+	cols []uint16,
+	typs []types.Type,
+	blk uint16,
+	m *mpool.MPool,
+) (bats []*batch.Batch, err error) {
+	metaExt := r.reader.GetMetaExtent()
+	if metaExt == nil || metaExt.End() == 0 {
+		return
+	}
+	var ioVectors []*fileservice.IOVector
+	ioVectors, err = r.reader.ReadSubBlock(ctx, cols, typs, blk, m)
+	if err != nil {
+		return
+	}
+	bats = make([]*batch.Batch, 0)
+	for idx := range ioVectors {
+		bat := batch.NewWithSize(len(cols))
+		var obj any
+		for i := range cols {
+			obj, err = objectio.Decode(ioVectors[idx].Entries[i].CachedData.Bytes())
+			if err != nil {
+				return
+			}
+			bat.Vecs[i] = obj.(*vector.Vector)
+			bat.SetRowCount(bat.Vecs[i].Length())
+		}
+		bats = append(bats, bat)
+	}
+	return
+}
+
+// LoadColumns needs typs to generate columns, if the target table has no schema change, nil can be passed.
+func (r *BlockReader) LoadOneSubColumns(
+	ctx context.Context,
+	cols []uint16,
+	typs []types.Type,
+	dataType uint16,
+	blk uint16,
+	m *mpool.MPool,
+) (bat *batch.Batch, err error) {
+	metaExt := r.reader.GetMetaExtent()
+	if metaExt == nil || metaExt.End() == 0 {
+		return
+	}
+	var ioVector *fileservice.IOVector
+	ioVector, err = r.reader.ReadOneSubBlock(ctx, cols, typs, dataType, blk, m)
+	if err != nil {
+		return
+	}
+	bat = batch.NewWithSize(len(cols))
+	var obj any
+	for i := range cols {
+		obj, err = objectio.Decode(ioVector.Entries[i].CachedData.Bytes())
+		if err != nil {
+			return
+		}
+		bat.Vecs[i] = obj.(*vector.Vector)
+		bat.SetRowCount(bat.Vecs[i].Length())
+	}
+	return
+}
+
 func (r *BlockReader) LoadAllColumns(
 	ctx context.Context,
 	idxs []uint16,
@@ -138,10 +219,11 @@ func (r *BlockReader) LoadAllColumns(
 	if err != nil {
 		return nil, err
 	}
-	if meta.BlockHeader().MetaLocation().End() == 0 {
+	dataMeta := meta.MustDataMeta()
+	if dataMeta.BlockHeader().MetaLocation().End() == 0 {
 		return nil, nil
 	}
-	block := meta.GetBlockMeta(0)
+	block := dataMeta.GetBlockMeta(0)
 	if len(idxs) == 0 {
 		idxs = make([]uint16, block.GetColumnCount())
 		for i := range idxs {
@@ -155,7 +237,7 @@ func (r *BlockReader) LoadAllColumns(
 	if err != nil {
 		return nil, err
 	}
-	for y := 0; y < int(meta.BlockCount()); y++ {
+	for y := 0; y < int(dataMeta.BlockCount()); y++ {
 		bat := batch.NewWithSize(len(idxs))
 		var obj any
 		for i := range idxs {
@@ -180,8 +262,12 @@ func (r *BlockReader) LoadZoneMaps(
 	return r.reader.ReadZM(ctx, id, seqnums, m)
 }
 
-func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
-	return r.reader.ReadMeta(ctx, m)
+func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectDataMeta, error) {
+	meta, err := r.reader.ReadMeta(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	return meta.MustDataMeta(), nil
 }
 
 func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]objectio.BlockObject, error) {
@@ -189,9 +275,10 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]obje
 	if err != nil {
 		return nil, err
 	}
-	blocks := make([]objectio.BlockObject, meta.BlockCount())
-	for i := 0; i < int(meta.BlockCount()); i++ {
-		blocks[i] = meta.GetBlockMeta(uint32(i))
+	dataMeta := meta.MustDataMeta()
+	blocks := make([]objectio.BlockObject, dataMeta.BlockCount())
+	for i := 0; i < int(dataMeta.BlockCount()); i++ {
+		blocks[i] = dataMeta.GetBlockMeta(uint32(i))
 	}
 	return blocks, nil
 }
@@ -230,17 +317,25 @@ func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
 }
 
 // The caller has merged the block information that needs to be prefetched
-func PrefetchWithMerged(params prefetchParams) error {
+func PrefetchWithMerged(params PrefetchParams) error {
 	return pipeline.Prefetch(params)
 }
 
 func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
-
 	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
 	params.AddBlock(idxes, ids)
+	return pipeline.Prefetch(params)
+}
+
+func PrefetchTombstone(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
+	params, err := BuildPrefetchParams(service, key)
+	if err != nil {
+		return err
+	}
+	params.AddBlockWithType(idxes, ids, uint16(objectio.SchemaTombstone))
 	return pipeline.Prefetch(params)
 }
 

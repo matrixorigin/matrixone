@@ -16,7 +16,6 @@ package tables
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
@@ -107,6 +106,8 @@ func LoadPersistedDeletes(
 	ctx context.Context,
 	pkName string,
 	fs *objectio.ObjectFS,
+	//location objectio.Location) (bat *containers.Batch, err error) {
+	//movbat, err := blockio.LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
 	location objectio.Location) (bat *containers.Batch, isPersistedByCN bool, err error) {
 	movbat, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service)
 	if err != nil {

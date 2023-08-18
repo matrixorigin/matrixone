@@ -15,7 +15,10 @@
 package plan
 
 import (
+	"go/constant"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -177,6 +180,32 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		}
 
 		for colName, updateKey := range updateKeys {
+			for _, coldef := range tableDef.Cols {
+				if coldef.Name == colName && coldef.Typ.Id == int32(types.T_enum) {
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, coldef.Typ, nil)
+					updateKeyExpr, err := binder.BindExpr(updateKey, 0, false)
+					if err != nil {
+						return 0, nil, err
+					}
+					exprs := []tree.Expr{
+						tree.NewNumValWithType(constant.MakeString(coldef.Typ.Enumvalues), coldef.Typ.Enumvalues, false, tree.P_char),
+						updateKey,
+					}
+					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
+						updateKey = &tree.FuncExpr{
+							Func:  tree.FuncName2ResolvableFunctionReference(tree.SetUnresolvedName(moEnumCastIndexValueToIndexFun)),
+							Type:  tree.FUNC_TYPE_DEFAULT,
+							Exprs: exprs,
+						}
+					} else {
+						updateKey = &tree.FuncExpr{
+							Func:  tree.FuncName2ResolvableFunctionReference(tree.SetUnresolvedName(moEnumCastValueToIndexFun)),
+							Type:  tree.FUNC_TYPE_DEFAULT,
+							Exprs: exprs,
+						}
+					}
+				}
+			}
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateKey,
 			})

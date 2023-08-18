@@ -454,7 +454,7 @@ func (s *Scope) PushdownRun() error {
 	for {
 		bat := <-reg.Ch
 		if bat == nil {
-			s.Proc.Reg.InputBatch = bat
+			s.Proc.SetInputBatch(bat)
 			_, err = vm.Run(s.Instructions, s.Proc)
 			s.Proc.Cancel()
 			return err
@@ -462,7 +462,7 @@ func (s *Scope) PushdownRun() error {
 		if bat.RowCount() == 0 {
 			continue
 		}
-		s.Proc.Reg.InputBatch = bat
+		s.Proc.SetInputBatch(bat)
 		if end, err = vm.Run(s.Instructions, s.Proc); err != nil || end {
 			return err
 		}
@@ -538,6 +538,14 @@ func (s *Scope) JoinRun(c *Compile) error {
 	s.PreScopes = append(s.PreScopes, probe_scope)
 
 	return s.MergeRun(c)
+}
+
+func (s *Scope) isShuffle() bool {
+	if s != nil && (s.Instructions[0].Op == vm.Group) {
+		arg := s.Instructions[0].Arg.(*group.Argument)
+		return arg.IsShuffle
+	}
+	return false
 }
 
 func (s *Scope) isRight() bool {

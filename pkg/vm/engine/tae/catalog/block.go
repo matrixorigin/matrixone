@@ -465,17 +465,18 @@ func (entry *BlockEntry) GetPKZoneMap(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) (zm *index.ZM, err error) {
+
 	zm = entry.pkZM.Load()
 	if zm != nil {
 		return
 	}
 	location := entry.GetMetaLoc()
 	var meta objectio.ObjectMeta
-	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
 	seqnum := entry.GetSchema().GetSingleSortKeyIdx()
-	cloned := meta.GetBlockMeta(uint32(location.ID())).MustGetColumn(uint16(seqnum)).ZoneMap().Clone()
+	cloned := meta.MustDataMeta().GetBlockMeta(uint32(location.ID())).MustGetColumn(uint16(seqnum)).ZoneMap().Clone()
 	zm = &cloned
 	entry.pkZM.Store(zm)
 	return

@@ -487,7 +487,7 @@ var (
 		output: "select group_concat(distinct 2, ,) from t1",
 	}, {
 		input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
-		output: "select group_concat(distinct a, ,) from t1",
+		output: "select group_concat(distinct a, ,order by a) from t1",
 	}, {
 		input: "select variance(2) from t1",
 	}, {
@@ -903,6 +903,8 @@ var (
 			input: "select avg(u.a), count(u.b), cast(u.c as varchar) from u",
 		}, {
 			input: "select avg(u.a), count(*) from u",
+		}, {
+			input: "select approx_count(*) from u",
 		}, {
 			input: "select avg(u.a), count(u.b) from u",
 		}, {
@@ -2445,6 +2447,9 @@ var (
 		}, {
 			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
 			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
+		}, {
+			input:  "SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '65c4c218-d343-11eb-8106-525400f4f901:1-769275'",
+			output: "set global GTID_PURGED = 65c4c218-d343-11eb-8106-525400f4f901:1-769275",
 		}, {
 			input:  "alter table t1 algorithm = DEFAULT",
 			output: "alter table t1 alter algorithm not enforce",

@@ -1,0 +1,1115 @@
+create table su_01(c1 int not null,c2 varchar(25),c3 int,primary key(c1),unique index u1(c2));
+insert into su_01 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_01 where c1=1 for update;
+c1    c2    c3
+1    results    20
+use select_for_update;
+select * from su_01 where c1=1;
+c1    c2    c3
+1    results    20
+update su_01 set c2='loo' where c1=2;
+select * from su_01;
+c1    c2    c3
+1    results    20
+2    loo    50
+3    kelly    60
+4    yellow    70
+commit;
+truncate table su_01;
+insert into su_01 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_01 where c1=1 for update;
+c1    c2    c3
+1    results    20
+use select_for_update;
+select * from su_01 where c1=1;
+c1    c2    c3
+1    results    20
+insert into su_01 values(6,'polly',70);
+select * from su_01;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+6    polly    70
+commit;
+truncate table su_01;
+insert into su_01 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_01 where c1=1 for update;
+c1    c2    c3
+1    results    20
+use select_for_update;
+select * from su_01 where c1=1;
+c1    c2    c3
+1    results    20
+delete from su_01 where c1=1;
+select * from su_01;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    70
+commit;
+insert into su_01 values(1,'results',20);
+begin;
+select * from su_01 where c1=1 for update;
+c1    c2    c3
+1    results    20
+use select_for_update;
+truncate table su_01 ;
+select * from su_01;
+c1    c2    c3
+commit;
+insert into su_01 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_01 where c1=1 for update;
+c1    c2    c3
+1    results    20
+use select_for_update;
+alter table su_01 drop index u1;
+select * from su_01;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+show create table su_01;
+Table    Create Table
+su_01    CREATE TABLE `su_01` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\n`c3` INT DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
+commit;
+begin;
+select * from su_01 where c1=1 for update;
+c1    c2    c3
+1    results    20
+update su_01 set c2='desc' where c1=1;
+update su_01 set c3=c3-1 where c1=1;
+select * from su_01 where c1=1;
+c1    c2    c3
+1    desc    19
+insert into su_01 values(5,'polly',80);
+commit;
+select * from su_01;
+c1    c2    c3
+1    desc    19
+2    plo    50
+3    kelly    60
+4    yellow    70
+5    polly    80
+truncate table su_01;
+insert into su_01 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_01 where c1=1 for update;
+c1    c2    c3
+1    results    20
+use select_for_update;
+drop table su_01;
+select * from su_01;
+SQL parser error: table "su_01" does not exist
+commit;
+create table su_01(c1 int not null,c2 varchar(25),c3 int,primary key(c1),unique index u1(c2));
+insert into su_01 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_01 where c1=7 for update;
+c1    c2    c3
+use select_for_update;
+select * from su_01;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+delete from su_01 where c1=7;
+commit;
+begin;
+select * from su_01 where c1=7 for update;
+c1    c2    c3
+use select_for_update;
+select * from su_01;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+update su_01 set c3=c3*10 where c1=1;
+commit;
+drop table su_01;
+create table su_01_1(c1 int not null,c2 varchar(25),c3 int,primary key(c1));
+insert into su_01_1 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+start transaction ;
+select * from su_01_1 where c1>1 and c3<70 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+use select_for_update;
+update su_01_1 set c3=c3+10 where c3=70;
+select * from su_01_1;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    yellow    80
+commit;
+select * from su_01_1;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    yellow    80
+start transaction;
+select * from su_01_1 where c1>1 and c3<70 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+use select_for_update;
+update su_01_1 set c3=c3-1 where c1=4;
+select * from su_01_1;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    yellow    79
+rollback;
+start transaction;
+select * from su_01_1 where c1>1 and c3<70 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+begin;
+use select_for_update;
+update su_01_1 set c3=101 where c1=3;
+select * from su_01_1;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    101
+4    yellow    79
+rollback ;
+rollback;
+start transaction ;
+select * from su_01_1 where c1>1 and c3<70 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+begin;
+use select_for_update;
+delete from su_01_1 where c1=1;
+select * from su_01_1;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    79
+rollback ;
+commit;
+start transaction ;
+select * from su_01_1 where c1>1 and c3<70 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+use select_for_update;
+delete from su_01_1 where c2="plo";
+select * from su_01_1;
+c1    c2    c3
+1    results    20
+3    kelly    60
+4    yellow    79
+rollback;
+start transaction;
+select * from su_01_1 where c1>1 and c3<70 for update;
+c1    c2    c3
+3    kelly    60
+use select_for_update;
+insert into su_01_1 values (10,'full',100);
+select * from su_01_1;
+c1    c2    c3
+1    results    20
+3    kelly    60
+4    yellow    79
+10    full    100
+rollback;
+start transaction;
+select * from su_01_1 where c1>1 and c3<70 for update;
+c1    c2    c3
+3    kelly    60
+use select_for_update;
+truncate table su_01_1;
+select * from su_01_1;
+c1    c2    c3
+rollback;
+insert into su_01_1 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+start transaction;
+select * from su_01_1 where c1>1 and c3<70 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+use select_for_update;
+drop table su_01_1;
+select * from su_01_1;
+SQL parser error: table "su_01_1" does not exist
+rollback;
+create table su_02(c1 int not null,c2 varchar(25),c3 int,unique index u1(c3));
+insert into su_02 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_02 where c3>35 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    70
+use select_for_update;
+select * from su_02 where c3>35;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    70
+insert into su_02 values (8,'results',100);
+select * from su_02;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+8    results    100
+commit;
+begin;
+select * from su_02 where c3>35 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    70
+8    results    100
+use select_for_update;
+select * from su_02 where c3>35;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    70
+8    results    100
+delete from su_02 where c3<60;
+select * from su_02;
+c1    c2    c3
+3    kelly    60
+4    yellow    70
+8    results    100
+commit;
+begin;
+select * from su_02 where c3>35 for update;
+c1    c2    c3
+3    kelly    60
+4    yellow    70
+8    results    100
+use select_for_update;
+select * from su_02 where c3>35;
+c1    c2    c3
+3    kelly    60
+4    yellow    70
+8    results    100
+update su_02 set c2='kitty' where c3=70;
+select * from su_02;
+c1    c2    c3
+3    kelly    60
+4    kitty    70
+8    results    100
+commit;
+begin;
+select * from su_02 where c3>35 for update;
+c1    c2    c3
+3    kelly    60
+4    kitty    70
+8    results    100
+use select_for_update;
+alter table su_02 drop index u1;
+show create table su_02;
+Table    Create Table
+su_02    CREATE TABLE `su_02` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\n`c3` INT DEFAULT NULL\n)
+commit;
+begin;
+select * from su_02 where c3>35 for update;
+c1    c2    c3
+3    kelly    60
+4    kitty    70
+8    results    100
+update su_02 set c3=c3-1 where c3=60;
+insert into su_02 values(5,'polly',80);
+select * from su_02;
+c1    c2    c3
+3    kelly    59
+4    kitty    70
+8    results    100
+5    polly    80
+commit;
+select * from su_02;
+c1    c2    c3
+3    kelly    59
+4    kitty    70
+8    results    100
+5    polly    80
+truncate table su_02;
+select * from su_02;
+c1    c2    c3
+insert into su_02 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_02 where c3>35 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    70
+use select_for_update;
+drop table su_02;
+commit;
+drop table if exists su_02;
+create table su_02_1(c1 int not null,c2 varchar(25),c3 int,unique index u1(c3));
+insert into su_02_1 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+start transaction;
+select * from su_02_1 where c3 between 25 and 85 and c2 !='kelly' for update;
+c1    c2    c3
+2    plo    50
+4    yellow    70
+use select_for_update;
+update su_02_1 set c2='non' where c3=60;
+select * from su_02_1;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    non    60
+4    yellow    70
+commit;
+start transaction;
+select * from su_02_1 where c3 between 25 and 85 and c2 !='kelly' for update;
+c1    c2    c3
+2    plo    50
+3    non    60
+4    yellow    70
+use select_for_update;
+update su_02_1 set c3=c3+100 where c2='results';
+select * from su_02_1;
+c1    c2    c3
+1    results    120
+2    plo    50
+3    non    60
+4    yellow    70
+commit;
+start transaction;
+select * from su_02_1 where c3 between 25 and 85 and c2 !='kelly' for update;
+c1    c2    c3
+2    plo    50
+3    non    60
+4    yellow    70
+use select_for_update;
+delete from su_02_1 where c3=50;
+select * from su_02_1;
+c1    c2    c3
+1    results    120
+3    non    60
+4    yellow    70
+commit;
+start transaction;
+select * from su_02_1 where c3 between 25 and 85 and c2 !='kelly' for update;
+c1    c2    c3
+3    non    60
+4    yellow    70
+use select_for_update;
+alter table su_02_1 drop index u1;
+show create table su_02_1;
+Table    Create Table
+su_02_1    CREATE TABLE `su_02_1` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\n`c3` INT DEFAULT NULL\n)
+commit;
+start transaction;
+select * from su_02_1 where c3 between 25 and 85 and c2 !='kelly' for update;
+c1    c2    c3
+3    non    60
+4    yellow    70
+use select_for_update;
+truncate table su_02_1;
+select * from su_02_1;
+c1    c2    c3
+commit;
+insert into su_02_1 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+start transaction;
+select * from su_02_1 where c3 between 25 and 85 and c2 !='kelly' for update;
+c1    c2    c3
+2    plo    50
+4    yellow    70
+use select_for_update;
+drop table su_02_1;
+select * from su_02_1;
+SQL parser error: table "su_02_1" does not exist
+commit;
+create table su_02_2(c1 int not null,c2 varchar(25),c3 int,unique index u1(c3));
+insert into su_02_2 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_02_2 where c3>55 and c3<65 for update;
+c1    c2    c3
+3    kelly    60
+use select_for_update;
+update su_02_2 set c1=c1+500 where c3=60;
+select * from su_02_2;
+c1    c2    c3
+1    results    20
+2    plo    50
+503    kelly    60
+4    yellow    70
+commit;
+begin;
+select * from su_02_2 where c3>55 and c3<65 for update;
+c1    c2    c3
+503    kelly    60
+use select_for_update;
+update su_02_2 set c1=30 where c2 like 'yell%';
+select * from su_02_2;
+c1    c2    c3
+1    results    20
+2    plo    50
+503    kelly    60
+30    yellow    70
+commit;
+create table su_03(c1 int not null,c2 varchar(25),c3 int,primary key(c1),key u1(c3));
+insert into su_03 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_03 where c3 in(50,70) for update;
+c1    c2    c3
+2    plo    50
+4    yellow    70
+use select_for_update;
+select * from su_03 where c3>35;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    70
+insert into su_03 values (8,'results',100);
+select * from su_03 ;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+8    results    100
+commit;
+begin;
+select * from su_03 where c3 in(50,70) for update;
+c1    c2    c3
+2    plo    50
+4    yellow    70
+use select_for_update;
+select * from su_03 where c3>35;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    70
+8    results    100
+update su_03 set c2='kitty' where c3=70;
+select * from su_03;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    60
+4    kitty    70
+8    results    100
+commit;
+begin;
+select * from su_03 where c3 in(50,70) for update;
+c1    c2    c3
+2    plo    50
+4    kitty    70
+use select_for_update;
+alter table su_03 drop index u1;
+show create table su_03;
+Table    Create Table
+su_03    CREATE TABLE `su_03` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\n`c3` INT DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
+commit;
+begin;
+select * from su_03 where c3 in(50,70) for update;
+c1    c2    c3
+2    plo    50
+4    kitty    70
+use select_for_update;
+select * from su_03 where c3>35;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    kitty    70
+8    results    100
+delete from su_03 where c3 between 10 and 70;
+select * from su_03;
+c1    c2    c3
+8    results    100
+commit;
+truncate table su_03;
+insert into su_03 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_03 where c3 in(50,70) for update;
+c1    c2    c3
+2    plo    50
+4    yellow    70
+update su_03 set c3=c3-1 where c3=70;
+insert into su_03 values(5,'polly',80);
+delete from su_03 where c3=50;
+select * from su_03;
+c1    c2    c3
+1    results    20
+3    kelly    60
+4    yellow    69
+5    polly    80
+commit;
+update su_03 set c3=c3-1 where c3=70;
+select * from su_03;
+c1    c2    c3
+1    results    20
+3    kelly    60
+4    yellow    69
+5    polly    80
+truncate table su_03;
+insert into su_03 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_03 where c3 in(50,70) for update;
+c1    c2    c3
+2    plo    50
+4    yellow    70
+use select_for_update;
+drop table su_03;
+commit;
+drop table if exists su_03;
+create table su_03(c1 int not null,c2 varchar(25),c3 int,primary key(c1),key u1(c3));
+insert into su_03 values(1,'results',20);
+begin;
+select * from su_03 where c3 in(50,70) for update;
+c1    c2    c3
+use select_for_update;
+alter table su_03 drop index u1;
+show create table su_03;
+Table    Create Table
+su_03    CREATE TABLE `su_03` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\n`c3` INT DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
+commit;
+drop table if exists su_03;
+create table su_03_1(c1 int not null,c2 varchar(25),c3 int,primary key(c1),key u1(c3));
+insert into su_03_1 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+start transaction ;
+select c1 from su_03_1 where c3 between 10 and 30 for update;
+c1
+1
+use select_for_update;
+update su_03_1 set c2='high' where c2 like "res%";
+select * from su_03_1;
+c1    c2    c3
+1    high    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+rollback;
+start transaction ;
+select c1 from su_03_1 where c3 between 10 and 30 for update;
+c1
+1
+use select_for_update;
+insert into su_03_1 values(10,'boo',120);
+select * from su_03_1;
+c1    c2    c3
+1    high    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+10    boo    120
+rollback;
+start transaction ;
+select c1 from su_03_1 where c3 between 10 and 30 for update;
+c1
+1
+begin;
+use select_for_update;
+update su_03_1 set c2='high' where c3>=120;
+select * from su_03_1;
+c1    c2    c3
+1    high    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+10    high    120
+rollback;
+select * from su_03_1;
+c1    c2    c3
+1    high    20
+2    plo    50
+3    kelly    60
+4    yellow    70
+10    boo    120
+commit;
+drop table  su_03_1;
+create table su_04(c1 int not null,c2 varchar(25),c3 int);
+insert into su_04 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_04 where c2='kelly' for update;
+c1    c2    c3
+3    kelly    60
+use select_for_update;
+update su_04 set c3=c3-1 where c2='kelly';
+select * from su_04;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    59
+4    yellow    70
+update su_04 set c3=c3-1 where c2='kelly';
+insert into su_04 values (10,'mini',90);
+select * from su_04;
+c1    c2    c3
+1    results    20
+2    plo    50
+3    kelly    58
+4    yellow    70
+10    mini    90
+commit;
+begin;
+select * from su_04 where c2 in ('kelly') for update;
+c1    c2    c3
+3    kelly    58
+start transaction;
+use select_for_update;
+select * from su_04 where c2='kelly';
+c1    c2    c3
+3    kelly    58
+delete from su_04 where c2='kelly';
+select * from su_04;
+c1    c2    c3
+1    results    20
+2    plo    50
+4    yellow    70
+10    mini    90
+commit;
+select * from su_04;
+c1    c2    c3
+1    results    20
+2    plo    50
+4    yellow    70
+10    mini    90
+commit;
+begin;
+select * from su_04 where c2='kelly' for update;
+c1    c2    c3
+use select_for_update;
+delete from su_04 where c1=4;
+select * from su_04;
+c1    c2    c3
+1    results    20
+2    plo    50
+10    mini    90
+update su_04 set c3=c3-1 where c2='kelly';
+select * from su_04;
+c1    c2    c3
+1    results    20
+2    plo    50
+10    mini    90
+commit;
+begin;
+select * from su_04 where c2='kelly' for update;
+c1    c2    c3
+use select_for_update;
+alter table su_04 add unique index a1(c1);
+show create table su_04;
+Table    Create Table
+su_04    CREATE TABLE `su_04` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\n`c3` INT DEFAULT NULL,\nUNIQUE KEY `a1` (`c1`)\n)
+commit;
+begin;
+select * from su_04 where c2='kelly' for update;
+c1    c2    c3
+insert into su_04 values(10,'tell',96);
+Duplicate entry '10' for key '__mo_index_idx_col'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+update su_04 set c2='wed';
+delete from su_04 where c1=2;
+commit;
+truncate table su_04;
+insert into su_04 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_04 where c2='kelly' for update;
+c1    c2    c3
+3    kelly    60
+use select_for_update;
+drop table su_04;
+commit;
+select * from su_04;
+SQL parser error: table "su_04" does not exist
+drop table if exists su_04;
+create table su_05(c1 int not null primary key,c2 varchar(25),c3 decimal(6,2))partition by key(c1)partitions 4;;
+insert into  su_05 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
+select * from `%!%p0%!%su_05`;
+c1    c2    c3
+select * from `%!%p1%!%su_05`;
+c1    c2    c3
+4    mode    9.00
+5    make    662.90
+select * from `%!%p2%!%su_05`;
+c1    c2    c3
+3    mod    6.50
+6    io    88.92
+select * from `%!%p3%!%su_05`;
+c1    c2    c3
+1    mod    78.90
+2    proto    0.34
+begin;
+select * from su_05 where c1>3 for update;
+c1    c2    c3
+5    make    662.90
+4    mode    9.00
+6    io    88.92
+use select_for_update;
+select * from su_05;
+c1    c2    c3
+1    mod    78.90
+5    make    662.90
+4    mode    9.00
+3    mod    6.50
+2    proto    0.34
+6    io    88.92
+update su_05 set c3=c3-1 where c1>2;
+select * from su_05;
+c1    c2    c3
+1    mod    78.90
+5    make    661.90
+4    mode    8.00
+3    mod    5.50
+2    proto    0.34
+6    io    87.92
+commit;
+update su_05 set c3=c3-1 where c1>2;
+select * from su_05;
+c1    c2    c3
+1    mod    78.90
+5    make    660.90
+4    mode    7.00
+3    mod    4.50
+2    proto    0.34
+6    io    86.92
+begin;
+select * from su_05 where c1 in(1,3,6) and c2 !='io' for update;
+c1    c2    c3
+1    mod    78.90
+3    mod    4.50
+use select_for_update;
+select * from su_05;
+c1    c2    c3
+1    mod    78.90
+5    make    660.90
+4    mode    7.00
+3    mod    4.50
+2    proto    0.34
+6    io    86.92
+delete from su_05 where c1=1;
+select * from su_05;
+c1    c2    c3
+5    make    660.90
+4    mode    7.00
+3    mod    4.50
+2    proto    0.34
+6    io    86.92
+commit;
+begin;
+select * from su_05 where c1 in(1,3,6) and c2 !='io' for update;
+c1    c2    c3
+3    mod    4.50
+use select_for_update;
+select * from su_05;
+c1    c2    c3
+5    make    660.90
+4    mode    7.00
+3    mod    4.50
+2    proto    0.34
+6    io    86.92
+truncate table su_05;
+select * from su_05;
+c1    c2    c3
+commit;
+insert into  su_05 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
+begin;
+select * from su_05 where c1 in(1,3,6) and c2 !='io' for update;
+c1    c2    c3
+1    mod    78.90
+3    mod    6.50
+use select_for_update;
+select * from su_05;
+c1    c2    c3
+1    mod    78.90
+5    make    662.90
+4    mode    9.00
+3    mod    6.50
+2    proto    0.34
+6    io    88.92
+insert into su_05 values(9,'kol',89.01);
+select * from su_05;
+c1    c2    c3
+1    mod    78.90
+5    make    662.90
+9    kol    89.01
+4    mode    9.00
+3    mod    6.50
+2    proto    0.34
+6    io    88.92
+commit;
+begin;
+select * from su_05 where c1 in(1,3,6) and c2 !='io' for update;
+c1    c2    c3
+1    mod    78.90
+3    mod    6.50
+use select_for_update;
+select * from su_05;
+c1    c2    c3
+1    mod    78.90
+5    make    662.90
+9    kol    89.01
+4    mode    9.00
+3    mod    6.50
+2    proto    0.34
+6    io    88.92
+update su_05 set c2='polly' where c1=9;
+select * from su_05;
+c1    c2    c3
+1    mod    78.90
+5    make    662.90
+9    polly    89.01
+4    mode    9.00
+3    mod    6.50
+2    proto    0.34
+6    io    88.92
+commit;
+drop table su_05;
+create table su_05_1(c1 int auto_increment primary key,c2 varchar(25),c3 decimal(6,2))partition by key(c1)partitions 4;;
+insert into  su_05_1(c2,c3) values ('mod',78.9),('proto',0.34),('mod',6.5),('mode',9.0),('make',662.9),('io',88.92);
+select * from `%!%p0%!%su_05_1`;
+Table 'select_for_update.%!%p0%!%su_05_1' doesn't exist
+select * from `%!%p1%!%su_05_1`;
+c1    c2    c3
+4    mode    9.00
+5    make    662.90
+select * from `%!%p2%!%su_05_1`;
+c1    c2    c3
+3    mod    6.50
+6    io    88.92
+select * from `%!%p3%!%su_05_1`;
+c1    c2    c3
+1    mod    78.90
+2    proto    0.34
+set autocommit=0;
+select * from su_05_1 where c1=4 for update;
+c1    c2    c3
+4    mode    9.00
+use select_for_update;
+update su_05_1 set c2='polly' where c3=9.0;
+Lock wait timeout exceeded; try restarting transaction
+select * from su_05_1;
+c1    c2    c3
+1    mod    78.90
+5    make    662.90
+4    mode    9.00
+3    mod    6.50
+2    proto    0.34
+6    io    88.92
+commit;
+select * from su_05_1 where c1=4 for update;
+c1    c2    c3
+4    mode    9.00
+use select_for_update;
+update su_05_1 set c3=c3-0.09 where c1=4;
+Lock wait timeout exceeded; try restarting transaction
+select * from su_05_1;
+c1    c2    c3
+1    mod    78.90
+5    make    662.90
+4    mode    9.00
+3    mod    6.50
+2    proto    0.34
+6    io    88.92
+commit;
+select * from su_05_1 where c1=4 for update;
+c1    c2    c3
+4    mode    9.00
+use select_for_update;
+insert into su_05_1(c2,c3) values('xin',8.90);
+select * from su_05_1;
+c1    c2    c3
+1    mod    78.90
+5    make    662.90
+4    mode    9.00
+3    mod    6.50
+7    xin    8.90
+2    proto    0.34
+6    io    88.92
+commit;
+select * from su_05_1 where c1=3 for update;
+c1    c2    c3
+3    mod    6.50
+use select_for_update;
+alter table su_05_1 add unique index s1(c3);
+invalid input: can't add/drop column for partition table now
+show create table su_05_1;
+Table    Create Table
+su_05_1    CREATE TABLE `su_05_1` (\n`c1` INT NOT NULL AUTO_INCREMENT,\n`c2` VARCHAR(25) DEFAULT NULL,\n`c3` DECIMAL(6,2) DEFAULT NULL,\nPRIMARY KEY (`c1`)\n) partition by key algorithm = 2 (c1) partitions 4
+commit;
+select * from su_05_1 where c1=3 for update;
+c1    c2    c3
+3    mod    6.50
+use select_for_update;
+truncate table su_05_1;
+select * from su_05_1;
+c1    c2    c3
+commit;
+insert into  su_05_1(c2,c3) values ('mod',78.9),('proto',0.34),('mod',6.5),('mode',9.0),('make',662.9),('io',88.92);
+select * from su_05_1 where c1=3 for update;
+c1    c2    c3
+3    mod    6.50
+use select_for_update;
+drop table su_05_1;
+select * from su_05_1;
+SQL parser error: table "su_05_1" does not exist
+commit;
+set autocommit=1;
+create table su_06(c1 int not null,c2 varchar(25),c3 int,primary key(c1),key u1(c3));
+insert into su_06 values(1,'results',20),(2,'plo',50),(3,'kelly',60),(4,'yellow',70);
+start transaction;
+select * from su_06 where c1>=2 for update;
+c1    c2    c3
+2    plo    50
+3    kelly    60
+4    yellow    70
+use select_for_update;
+prepare stmt1 from 'update su_06 set c3=c3+1.09 where c1=?';
+set @var = 2;
+execute stmt1 using @var;
+select * from su_06;
+c1    c2    c3
+1    results    20
+2    plo    51
+3    kelly    60
+4    yellow    70
+commit;
+start transaction;
+select * from su_06 where c1>=2 for update;
+c1    c2    c3
+2    plo    51
+3    kelly    60
+4    yellow    70
+use select_for_update;
+prepare stmt1 from 'update su_06 set c3=c3+1.09 where c1=?';
+set @var = 1;
+execute stmt1 using @var;
+select * from su_06;
+c1    c2    c3
+1    results    21
+2    plo    51
+3    kelly    60
+4    yellow    70
+commit;
+start transaction;
+select * from su_06 where c1>=2 for update;
+c1    c2    c3
+2    plo    51
+3    kelly    60
+4    yellow    70
+use select_for_update;
+prepare stmt1 from 'delete from su_06 where c3 in (?)';
+set @var = 3;
+execute stmt1 using @var;
+select * from su_06;
+c1    c2    c3
+1    results    21
+2    plo    51
+3    kelly    60
+4    yellow    70
+commit;
+create table su_07(c1 int not null,c2 varchar(25),c3 int,primary key(c1),unique index u1(c2));
+insert into su_07 values(7,'results',20),(1,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_07 where c1+2>=5 for update;
+c1    c2    c3
+3    kelly    60
+4    yellow    70
+7    results    20
+use select_for_update;
+select * from su_07 where c1=1;
+c1    c2    c3
+1    plo    50
+update su_07 set c2='loo' where c1=4;
+select * from su_07;
+c1    c2    c3
+1    plo    50
+3    kelly    60
+4    loo    70
+7    results    20
+commit;
+begin;
+select * from su_07 where c1+2>=5 for update;
+c1    c2    c3
+3    kelly    60
+4    loo    70
+7    results    20
+use select_for_update;
+select * from su_07 where c1=1;
+c1    c2    c3
+1    plo    50
+update su_07 set c2='cool' where c1=1;
+select * from su_07;
+c1    c2    c3
+7    results    20
+3    kelly    60
+4    loo    70
+1    cool    50
+commit;
+begin;
+select * from su_07 where c3-c1>20 for update;
+c1    c2    c3
+3    kelly    60
+4    loo    70
+1    cool    50
+use select_for_update;
+delete from su_07 where c1=1;
+select * from su_07;
+c1    c2    c3
+3    kelly    60
+4    loo    70
+7    results    20
+commit;
+truncate table su_07;
+insert into su_07 values(7,'results',20),(1,'plo',50),(3,'kelly',60),(4,'yellow',70);
+begin;
+select * from su_07 where c3/c1=20 for update;
+c1    c2    c3
+3    kelly    60
+use select_for_update;
+update su_07 set c3=c3/10 where c1=3;
+select * from su_07;
+c1    c2    c3
+1    plo    50
+3    kelly    6
+4    yellow    70
+7    results    20
+commit;
+begin;
+select * from su_07 where c3<c1*10 for update;
+c1    c2    c3
+3    kelly    6
+7    results    20
+use select_for_update;
+alter table su_07 drop index u1;
+select * from su_07;
+c1    c2    c3
+1    plo    50
+3    kelly    6
+4    yellow    70
+7    results    20
+commit;
+begin;
+select * from su_07 where c3<c1*10 for update;
+c1    c2    c3
+3    kelly    6
+7    results    20
+use select_for_update;
+truncate table su_07;
+select * from su_07;
+c1    c2    c3
+commit;
+begin;
+select * from su_07 where c3>c1 for update;
+c1    c2    c3
+use select_for_update;
+drop table su_07;
+select * from su_07;
+SQL parser error: table "su_07" does not exist
+commit;

@@ -183,6 +183,12 @@ type Config struct {
 		// replica ID value will be used to launch a HAKeeper replica on the Log
 		// Service instance.
 		InitHAKeeperMembers []string `toml:"init-hakeeper-members"`
+		// Restore structure is used when the cluster needs to restore data.
+		Restore struct {
+			// FilePath is the path of the file, which contains the backup data.
+			// If is not set, nothing will be done for restore.
+			FilePath string `toml:"file-path"`
+		} `toml:"restore"`
 	}
 
 	HAKeeperConfig struct {
@@ -397,18 +403,26 @@ func DefaultConfig() Config {
 			NumOfDNShards         uint64   `toml:"num-of-dn-shards"`
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
 			InitHAKeeperMembers   []string `toml:"init-hakeeper-members"`
+			Restore               struct {
+				FilePath string `toml:"file-path"`
+			} `toml:"restore"`
 		}(struct {
 			BootstrapCluster      bool
 			NumOfLogShards        uint64
 			NumOfDNShards         uint64
 			NumOfLogShardReplicas uint64
 			InitHAKeeperMembers   []string
+			Restore               struct {
+				FilePath string
+			}
 		}{
 			BootstrapCluster:      true,
 			NumOfLogShards:        1,
 			NumOfDNShards:         1,
 			NumOfLogShardReplicas: 1,
-			InitHAKeeperMembers:   []string{"131072:" + uid}}),
+			InitHAKeeperMembers:   []string{"131072:" + uid},
+			Restore:               struct{ FilePath string }{FilePath: ""},
+		}),
 		HAKeeperConfig: struct {
 			TickPerSecond   int           `toml:"tick-per-second"`
 			LogStoreTimeout toml.Duration `toml:"log-store-timeout"`

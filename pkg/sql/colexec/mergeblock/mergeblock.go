@@ -35,13 +35,14 @@ func Prepare(proc *process.Process, arg any) error {
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
 	ap := arg.(*Argument)
-	bat := proc.Reg.InputBatch
+	bat := proc.InputBatch()
 	if bat == nil {
 		return process.ExecStop, nil
 	}
 
 	if bat.IsEmpty() {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
 	defer proc.PutBatch(bat)
@@ -53,7 +54,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if !ap.notFreeBatch {
 		defer func() {
 			for k := range ap.container.mp {
-				ap.container.mp[k].Clean(proc.GetMPool())
+				proc.PutBatch(ap.container.mp[k])
 			}
 		}()
 	}

@@ -24,68 +24,75 @@ import (
 )
 
 type MemCache struct {
-	cache                DataCache
-	counterSets          []*perfcounter.CounterSet
-	overlapChecker       *interval.OverlapChecker
-	enableOverlapChecker bool
+	cache       DataCache
+	counterSets []*perfcounter.CounterSet
 }
 
-func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
-	initOpts := defaultMemCacheOptions()
-	for _, optFunc := range opts {
-		optFunc(&initOpts)
+func NewMemCache(
+	dataCache DataCache,
+	counterSets []*perfcounter.CounterSet,
+) *MemCache {
+	ret := &MemCache{
+		cache:       dataCache,
+		counterSets: counterSets,
 	}
-
-	return &MemCache{
-		overlapChecker:       initOpts.overlapChecker,
-		enableOverlapChecker: initOpts.enableOverlapChecker,
-		cache:                initOpts.cache,
-		counterSets:          initOpts.counterSets,
-	}
+	return ret
 }
 
-func WithLRU(capacity int64) MemCacheOptionFunc {
-	return func(o *memCacheOptions) {
-		o.overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
-		o.enableOverlapChecker = true
+func NewLRUCache(
+	capacity int64,
+	checkOverlaps bool,
+	callbacks *CacheCallbacks,
+) *lrucache.LRU[CacheKey, CacheData] {
 
-		postSetFn := func(key CacheKey, valSet CacheData, isNewEntry bool) {
-			if o.enableOverlapChecker && isNewEntry {
-				if err := o.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
-					panic(err)
-				}
+	var overlapChecker *interval.OverlapChecker
+	if checkOverlaps {
+		overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
+	}
+
+	postSetFn := func(key CacheKey, value CacheData) {
+		value.Retain()
+
+		if overlapChecker != nil {
+			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
+				panic(err)
 			}
 		}
 
-		postEvictFn := func(key CacheKey, valEvicted CacheData) {
-			if o.enableOverlapChecker {
-				if err := o.overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Size); err != nil {
-					panic(err)
-				}
+		if callbacks != nil {
+			for _, fn := range callbacks.PostSet {
+				fn(key, value)
+			}
+		}
+	}
+
+	postGetFn := func(key CacheKey, value CacheData) {
+		value.Retain()
+
+		if callbacks != nil {
+			for _, fn := range callbacks.PostGet {
+				fn(key, value)
+			}
+		}
+	}
+
+	postEvictFn := func(key CacheKey, value CacheData) {
+		value.Release()
+
+		if overlapChecker != nil {
+			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Size); err != nil {
+				panic(err)
 			}
 		}
 
-		o.cache = lrucache.New[CacheKey, CacheData](capacity, postSetFn, postEvictFn)
+		if callbacks != nil {
+			for _, fn := range callbacks.PostEvict {
+				fn(key, value)
+			}
+		}
 	}
-}
 
-func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) MemCacheOptionFunc {
-	return func(o *memCacheOptions) {
-		o.counterSets = append(o.counterSets, counterSets...)
-	}
-}
-
-type MemCacheOptionFunc func(*memCacheOptions)
-
-type memCacheOptions struct {
-	cache                DataCache
-	overlapChecker       *interval.OverlapChecker
-	counterSets          []*perfcounter.CounterSet
-	enableOverlapChecker bool
-}
-
-func defaultMemCacheOptions() memCacheOptions {
-	return memCacheOptions{}
+	return lrucache.New[CacheKey, CacheData](capacity, postSetFn, postGetFn, postEvictFn)
 }
 
 var _ IOVectorCache = new(MemCache)
@@ -96,7 +103,8 @@ func (m *MemCache) Read(
 ) (
 	err error,
 ) {
-	if vector.NoCache {
+
+	if vector.CachePolicy.Any(SkipMemoryReads) {
 		return nil
 	}
 
@@ -153,7 +161,8 @@ func (m *MemCache) Update(
 	vector *IOVector,
 	async bool,
 ) error {
-	if vector.NoCache {
+
+	if vector.CachePolicy.Any(SkipMemoryWrites) {
 		return nil
 	}
 
