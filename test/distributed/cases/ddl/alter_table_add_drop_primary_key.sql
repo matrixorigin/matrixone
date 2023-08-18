@@ -312,3 +312,23 @@ show columns from test01;
 drop table test01;
 drop role role_r1;
 drop user role_u1;
+
+
+-- mixed situation
+-- modify change rename column, add/drop primary key
+drop table if exists mix01;
+create table mix01 (col1 int, col2 decimal, col3 char, col4 varchar(100));
+insert into mix01 (col1, col2, col3, col4) values (1, 2, 'a', 'w3uir34jn2k48ujf4');
+insert into mix01 (col1, col2, col3, col4) values (2, 3, 'd', '3289u3ji2dff43');
+alter table mix01 modify col1 float after col3, change column col2 col2New double, rename column col3 to newCol3, add constraint primary key(col1);
+insert into mix01 (col1, col2, col3, col4) values (3, 'w', 37283.323, 'dswhjkfrewr');
+alter table mix01 add column col5 int after col1, rename column col2new to newnewCol2;
+select * from mix01;
+alter table mix01 rename column col2new to newnewCol2, drop primary key;
+show create table mix01;
+delete from mix01 where newnewcol2 = 2;
+update mix01 set newnewcol2 = 8290432.324 where newcol3 = 'd';
+select * from mix01;
+show create table mix01;
+show columns from mix01;
+drop table mix01;
