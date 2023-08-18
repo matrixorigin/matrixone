@@ -305,7 +305,6 @@ func TestAbs(t *testing.T) {
 
 		wantF32 []float32
 		wantF64 []float64
-		wantErr bool // For Float32 and Float64, we won't get err. Err is mostly thrown by int8 etc.
 	}
 	tests := []testCase{
 		{

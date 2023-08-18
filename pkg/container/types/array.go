@@ -86,7 +86,6 @@ func StringToArray[T RealNumbers](str string) ([]T, error) {
 		case float32:
 			num, err := strconv.ParseFloat(numStr, 32)
 			if err != nil {
-				//TODO: Check if I should print user input via log? Can this be any sort of vulnerability?
 				return nil, moerr.NewInternalErrorNoCtx("error while casting %s to %s", numStr, T_float32.String())
 			}
 			// FIX: https://stackoverflow.com/a/36391858/1609570
