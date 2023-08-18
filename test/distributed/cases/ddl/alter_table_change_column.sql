@@ -383,7 +383,6 @@ drop table t1;
 -- @desc: alter table change column
 -- @label:bvt
 
--- @bvt:issue#11269
 -- column name test: Chinese character
 drop table if exists name01;
 create table name01 (col1 int, col2 decimal);
@@ -410,7 +409,6 @@ insert into name03 values (2, 3289.111111);
 alter table name03 change column col1 `RAVHJBWUIHNJCDW****&&*((()(*&^&^%^^&^*&` int;
 show create table name03;
 drop table name03;
--- @bvt:issue
 
 
 -- empty table modify column

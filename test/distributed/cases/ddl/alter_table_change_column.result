@@ -832,30 +832,27 @@ create table name01 (col1 int, col2 decimal);
 insert into name01 values (1, 378292);
 insert into name01 values (2, 3289.111111);
 alter table name01 change column col1 `数据库管理系统数据库操作系统数据库系统数据库` int;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 71 near "数据库管理系统数据库操作系统数据库系统数据库, col2) SELECT col1, col2 FROM `db2`.`name01`";
 show create table name01;
 Table    Create Table
-name01    CREATE TABLE `name01` (\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n)
+name01    CREATE TABLE `name01` (\n`数据库管理系统数据库操作系统数据库系统数据库` INT DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null\n)
 drop table name01;
 drop table if exists name02;
 create table name02 (col1 int, col2 decimal);
 insert into name02 values (1, 378292);
 insert into name02 values (2, 3289.111111);
 alter table name02 change column col1  `cwhueh   3u2j4kfker` int;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 89 near "   3u2j4kfker, col2) SELECT col1, col2 FROM `db2`.`name02`";
 show create table name02;
 Table    Create Table
-name02    CREATE TABLE `name02` (\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n)
+name02    CREATE TABLE `name02` (\n`cwhueh   3u2j4kfker` INT DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null\n)
 drop table name02;
 drop table if exists name03;
 create table name03 (col1 int, col2 decimal);
 insert into name03 values (1, 378292);
 insert into name03 values (2, 3289.111111);
 alter table name03 change column col1 `RAVHJBWUIHNJCDW****&&*((()(*&^&^%^^&^*&` int;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 86 near "****&&*((()(*&^&^%^^&^*&, col2) SELECT col1, col2 FROM `db2`.`name03`";
 show create table name03;
 Table    Create Table
-name03    CREATE TABLE `name03` (\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n)
+name03    CREATE TABLE `name03` (\n`ravhjbwuihnjcdw****&&*((()(*&^&^%^^&^*&` INT DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null\n)
 drop table name03;
 drop table if exists name04;
 create table name04 (col1 int, col2 varchar(10));
@@ -1720,9 +1717,9 @@ null    93024232    -32    324242132321
 234    32718    100    32894323237289
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
+cast02    col4cdhewjruekhwjf    SMALLINT    NO
 cast02    col1new    INT UNSIGNED    NO
 cast02    col3vhejwh4i3uh4r    BIGINT UNSIGNED    NO
-cast02    col4cdhewjruekhwjf    SMALLINT    NO
 cast02    col22361738278472874382    BIGINT    NO
 drop table cast02;
 drop table if exists cast03;
@@ -1772,9 +1769,9 @@ null    null    null    null
 null    null    null    null
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast04' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
+cast04    col237289738yiuhckehvjnkehifewjdhwenbvrferf    DECIMAL128    NO
 cast04    col3    TEXT    NO
 cast04    col4    BLOB    NO
-cast04    col237289738yiuhckehvjnkehifewjdhwenbvrferf    DECIMAL128    NO
 cast04    col1hwejnejfwdewfr    INT UNSIGNED    NO
 drop table cast04;
 drop table if exists cast05;
@@ -1986,8 +1983,8 @@ col1    col2worejnfenrororiri
 2    -2893428.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
-cluster01    col1    INT    NO
 cluster01    col2worejnfenrororiri    FLOAT    NO
+cluster01    col1    INT    NO
 drop table cluster01;
 drop table if exists time01;
 create table time01 (col1 date, col2 datetime, col3 timestamp, col4 time);
