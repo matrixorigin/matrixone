@@ -79,3 +79,8 @@ select b + "1,2,3" from vec_table;
 internal error: malformed vector input: 1,2,3
 create table t2(a int, b vecf32(3) primary key);
 not supported: VECTOR column 'b' cannot be in primary key
+create unique index t3 on vec_table(b);
+not supported: VECTOR column 'b' cannot be in index
+select count(b) from vec_table;
+count(b)
+1

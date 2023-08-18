@@ -170,7 +170,7 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 		}
 	case "vecf32", "vecf64":
 		if node.DisplayWith >= 0 {
-			// Prints something like 'vecf32(4)'
+			// Prints 'vecf32(4)'
 			ctx.WriteByte('(')
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
 			ctx.WriteByte(')')

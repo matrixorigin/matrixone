@@ -40,3 +40,7 @@ select * FROM vec_table ORDER BY cosine_similarity(b, '[3,1,2]') LIMIT 5;
 select b + "[1,2,3" from vec_table;
 select b + "1,2,3" from vec_table;
 create table t2(a int, b vecf32(3) primary key);
+create unique index t3 on vec_table(b);
+
+-- agg
+select count(b) from vec_table;

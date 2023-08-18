@@ -48,7 +48,6 @@ var MaxSupported = []types.T{
 	types.T_varchar, types.T_char, types.T_blob, types.T_text,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
-	//TODO: Check if we should support MAX and MIN for T_array?
 }
 
 func MaxReturnType(typs []types.Type) types.Type {

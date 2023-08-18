@@ -60,7 +60,7 @@ func ArraysToString[T RealNumbers](input [][]T) string {
 	return strings.Join(strValues, " ")
 }
 
-func StringToArray[T RealNumbers](str string, dims int32) ([]T, error) {
+func StringToArray[T RealNumbers](str string) ([]T, error) {
 	input := strings.TrimSpace(str)
 
 	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
@@ -78,16 +78,6 @@ func StringToArray[T RealNumbers](str string, dims int32) ([]T, error) {
 	if len(numStrs) > MaxArrayDimension {
 		return nil, moerr.NewInternalErrorNoCtx("typeLen is over the maximum vector dimensions: %v", MaxArrayDimension)
 	}
-
-	//TODO:
-	// Dimension check int StringToArray has a weird corner case.
-	// select vector_dims("[1,2,3]") from t1;
-	// Here the dimension of the vector is MAX_LEN, but the "[1,2,3]" will give dimension = 3.
-	// There is a mismatch and it will fail. Need to check if StrToArray should have dimension check just like the code from PgVector?
-	// https://github.com/pgvector/pgvector/blob/a03f6ae4bc5cbcc1a0c332f67df3b8235641be69/src/vector.c#L251
-	// UPDATE:
-	// pg-vector doesn't allow auto casting, ie doesn't allow select vector_dims("[1,2,3]") nor select b+"[1,2,3] from t1;
-
 	result := make([]T, len(numStrs))
 
 	var t T

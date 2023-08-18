@@ -655,13 +655,13 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
 				vec = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float32 {
-				array, err := types.StringToArray[float32](sval, typ.Width)
+				array, err := types.StringToArray[float32](sval)
 				if err != nil {
 					return nil, err
 				}
 				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float64 {
-				array, err := types.StringToArray[float64](sval, typ.Width)
+				array, err := types.StringToArray[float64](sval)
 				if err != nil {
 					return nil, err
 				}

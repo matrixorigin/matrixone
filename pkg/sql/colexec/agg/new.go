@@ -138,6 +138,8 @@ func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
 		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_varchar:
 		return newGenericCount[[]byte](typ, dist, isStar)
+	case types.T_array_float32, types.T_array_float64:
+		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_blob:
 		return newGenericCount[[]byte](typ, dist, isStar)
 	case types.T_json:
@@ -891,5 +893,3 @@ func NewGroupConcat(typ types.Type, dist bool, config any) Agg[any] {
 
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for group_concat", typ))
 }
-
-//TODO: Check if we need agg functions for vector
