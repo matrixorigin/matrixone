@@ -200,7 +200,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 			}
 			return !before
 		})
-	abortVec = containers.NewConstNullVector(types.T_bool.ToType(), rowIDVec.Length())
+	abortVec = containers.NewConstFixed[bool](types.T_bool.ToType(), false, rowIDVec.Length())
 	return
 }
 
