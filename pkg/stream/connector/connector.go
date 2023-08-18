@@ -64,8 +64,9 @@ type Connector interface {
 
 type KafkaMoConnector struct {
 	kafkaAdapter *mokafka.KafkaAdapter
-	options      map[string]any
-	ie           executor.SQLExecutor
+	//
+	options map[string]any
+	ie      executor.SQLExecutor
 }
 
 func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
