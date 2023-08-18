@@ -1,0 +1,81 @@
+drop table if exists vec_table;
+create table vec_table(a int, b vecf32(3), c vecf64(3));
+insert into vec_table values(1, "[1,2,3]", "[4,5,6]");
+select * from vec_table;
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+select b+b from vec_table;
+b + b
+[2, 4, 6]
+select b-b from vec_table;
+b - b
+[0, 0, 0]
+select b*b from vec_table;
+b * b
+[1, 4, 9]
+select b/b from vec_table;
+b / b
+[1, 1, 1]
+select * from vec_table where b> "[1,2,3]";
+a    b    c
+select * from vec_table where b< "[1,2,3]";
+a    b    c
+select * from vec_table where b>= "[1,2,3]";
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+select * from vec_table where b<= "[1,2,3]";
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+select * from vec_table where b!= "[1,2,3]";
+a    b    c
+select * from vec_table where b= "[1,2,3]";
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+select * from vec_table where b= cast("[1,2,3]" as vecf32);
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+select cast("[1,2,3]" as vecf32(3));
+cast([1,2,3] as vecf32(3))
+[1, 2, 3]
+select b + "[1,2,3]" from vec_table;
+b + [1,2,3]
+[2, 4, 6]
+select b + sqrt(b) from vec_table;
+b + sqrt(b)
+[2, 3.414213562373095, 4.732050807568877]
+select abs(b) from vec_table;
+abs(b)
+[1, 2, 3]
+select abs(cast("[-1,-2,3]" as vecf32));
+abs(cast([-1,-2,3] as vecf32))
+[1, 2, 3]
+select sqrt(b) from vec_table;
+sqrt(b)
+[1, 1.4142135623730951, 1.7320508075688772]
+select summation(b) from vec_table;
+summation(b)
+6.0
+select l1_norm(b) from vec_table;
+l1_norm(b)
+6.0
+select l2_norm(b) from vec_table;
+l2_norm(b)
+3.7416573867739413
+select vector_dims(b) from vec_table;
+vector_dims(b)
+3
+select inner_product(b,"[1,2,3]") from vec_table;
+inner_product(b, [1,2,3])
+14.0
+select cosine_similarity(b,"[1,2,3]") from vec_table;
+cosine_similarity(b, [1,2,3])
+1.0
+select * FROM vec_table ORDER BY cosine_similarity(b, '[3,1,2]') LIMIT 5;
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+select b + "[1,2,3" from vec_table;
+internal error: malformed vector input: [1,2,3
+select b + "1,2,3" from vec_table;
+internal error: malformed vector input: 1,2,3
+create table t2(a int, b vecf32(3) primary key);
+not supported: VECTOR column 'b' cannot be in primary key
