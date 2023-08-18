@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -159,7 +160,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			if ctr.blockId_type[blkid] != 0 {
 				continue
 			}
-			err = s3writer.WriteBlock(bat)
+			err = s3writer.WriteBlock(bat, objectio.SchemaTombstone)
 			if err != nil {
 				return 0, err
 			}

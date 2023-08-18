@@ -478,7 +478,7 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 		return
 	}
 	if isPersistedByCN {
-		bat, err = LoadColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
+		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
