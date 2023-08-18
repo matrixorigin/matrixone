@@ -35,9 +35,8 @@ func ReadExtent(
 	factory CacheConstructorFactory,
 ) (v []byte, err error) {
 	ioVec := &fileservice.IOVector{
-		FilePath:    name,
-		Entries:     make([]fileservice.IOEntry, 1),
-		CachePolicy: fileservice.SkipMemory,
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 1),
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{

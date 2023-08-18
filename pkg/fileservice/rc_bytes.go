@@ -15,15 +15,7 @@
 package fileservice
 
 import (
-	"runtime"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-)
-
-const (
-	// MaxArrayLen is a safe maximum length for slices on this architecture.
-	MaxArrayLen = 1<<50 - 1
 )
 
 // RCBytes represents a reference counting []byte from a pool
@@ -74,11 +66,6 @@ func (r *rcBytesPool) Size() int64 {
 }
 
 func (r *rcBytesPool) Alloc(size int) CacheData {
-	for r.size.Load() > r.limit {
-		runtime.Gosched()
-		logutil.Errorf("rcBytesPool out of capacity(size: %vGB, capacity: %vGB)",
-			float64(r.size.Load())/(1<<30), float64(r.limit)/(1<<30))
-	}
 	item := &RCBytes{
 		pool: r,
 		data: alloc(size),
@@ -93,5 +80,5 @@ func alloc(size int) []byte {
 }
 
 // free frees the specified slice.
-func free(_ []byte) {
+func free(b []byte) {
 }

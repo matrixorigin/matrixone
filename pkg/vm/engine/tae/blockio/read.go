@@ -286,14 +286,15 @@ func BlockReadInner(
 	if !info.DeltaLocation().IsEmpty() {
 		var deletes *batch.Batch
 		var persistedByCN bool
+		var persistedDatas []fileservice.CacheData
 		// load from storage
-		if deletes, datas, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+		if deletes, persistedDatas, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
 			return
 		}
 
 		defer func() {
-			for i := range datas {
-				datas[i].Release()
+			for i := range persistedDatas {
+				persistedDatas[i].Release()
 			}
 		}()
 
