@@ -15,6 +15,7 @@
 package types
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"reflect"
 	"testing"
 )
@@ -36,7 +37,7 @@ func TestBytesToArray(t *testing.T) {
 			wantResF32: []float32{1, 2, 3},
 		},
 		{
-			name:       "Test1 - float64",
+			name:       "Test2 - float64",
 			args:       args{input: []byte{0, 0, 0, 0, 0, 0, 240, 63, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 8, 64}},
 			wantResF64: []float64{1, 2, 3},
 		},
@@ -72,7 +73,7 @@ func TestArrayToBytes(t *testing.T) {
 			want:    []byte{0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64},
 		},
 		{
-			name:    "Test1 - Float64",
+			name:    "Test2 - Float64",
 			argsF64: []float64{1, 2, 3},
 			want:    []byte{0, 0, 0, 0, 0, 0, 240, 63, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 8, 64},
 		},
@@ -109,7 +110,7 @@ func TestArrayToString(t *testing.T) {
 			want:    "[1, 2, 3, 4]",
 		},
 		{
-			name:    "Test1 - Float64",
+			name:    "Test2 - Float64",
 			argsF64: []float64{1, 2, 3},
 			want:    "[1, 2, 3]",
 		},
@@ -146,7 +147,7 @@ func TestArraysToString(t *testing.T) {
 			want:    "[1, 2, 3, 4] [0, 0, 0, 0]",
 		},
 		{
-			name:    "Test1 - Float64",
+			name:    "Test2 - Float64",
 			argsF64: [][]float64{{1, -2, 3, 4}, {0, 0, 0, 0}},
 			want:    "[1, -2, 3, 4] [0, 0, 0, 0]",
 		},
@@ -171,36 +172,66 @@ func TestArraysToString(t *testing.T) {
 func TestStringToArray(t *testing.T) {
 	type args struct {
 		input string
+		dim   int32
 	}
 	type testCase struct {
 		name       string
 		args       args
 		wantResF32 []float32
 		wantResF64 []float64
+		wantErr    error
 	}
 	tests := []testCase{
 		{
 			name:       "Test1 - float32",
-			args:       args{input: "[1,2,3,-2]"},
+			args:       args{input: "[1,2,3,-2]", dim: 4},
 			wantResF32: []float32{1, 2, 3, -2},
 		},
 		{
-			name:       "Test1 - float64",
-			args:       args{input: "[1,2,3,30]"},
+			name:       "Test2 - float64",
+			args:       args{input: "[1,2,3,30]", dim: 4},
 			wantResF64: []float64{1, 2, 3, 30},
+		},
+		{
+			name:    "Test3 - float64",
+			args:    args{input: "[1,2,3,", dim: 3},
+			wantErr: moerr.NewInternalErrorNoCtx("malformed vector input: [1,2,3,"),
+		},
+		{
+			name:    "Test4 - float64",
+			args:    args{input: "[]", dim: 0},
+			wantErr: moerr.NewInternalErrorNoCtx("vector must not be of zero size."),
+		},
+		{
+			name:    "Test4 - float64",
+			args:    args{input: "[1,2]", dim: 3},
+			wantErr: moerr.NewInternalErrorNoCtx("input vector dimension 2 doesn't match expected dimension 3"),
+		},
+		{
+			name:    "Test4 - float64",
+			args:    args{input: "[1,a]", dim: 2},
+			wantErr: moerr.NewInternalErrorNoCtx("error while casting a to DOUBLE"),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.wantResF32 != nil {
-				if gotRes, err := StringToArray[float32](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF32) {
+				if gotRes, err := StringToArray[float32](tt.args.input, tt.args.dim); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF32) {
 					t.Errorf("StringToArray() = %v, want %v", gotRes, tt.wantResF32)
 				}
 			}
 			if tt.wantResF64 != nil {
-				if gotRes, err := StringToArray[float64](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF64) {
+				if gotRes, err := StringToArray[float64](tt.args.input, tt.args.dim); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF64) {
 					t.Errorf("StringToArray() = %v, want %v", gotRes, tt.wantResF64)
+				}
+			}
+
+			if tt.wantErr != nil {
+				if _, gotErr := StringToArray[float64](tt.args.input, tt.args.dim); gotErr != nil {
+					if !reflect.DeepEqual(gotErr, tt.wantErr) {
+						t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
+					}
 				}
 			}
 		})

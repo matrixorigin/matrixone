@@ -107,6 +107,8 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if fstr == "char" || fstr == "binary" {
 					width = 1
+				} else if fstr == "vecf32" || fstr == "vecf64" {
+					width = types.MaxArrayDimension
 				} else {
 					width = types.MaxVarcharLen
 				}
@@ -120,8 +122,13 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
-			} else if (fstr == "vecf32" || fstr == "vecf64") && width > types.MaxArrayDimension {
-				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxArrayDimension: %v", types.MaxVarcharLen)
+			} else if fstr == "vecf32" || fstr == "vecf64" {
+				if width > types.MaxArrayDimension {
+					return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxArrayDimension: %v", types.MaxArrayDimension)
+				}
+				if width < 1 {
+					return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen cannot be less than 1")
+				}
 			}
 			switch fstr {
 			case "char":

@@ -58,12 +58,29 @@ func ArraysToString[T RealNumbers](input [][]T) string {
 	return strings.Join(strValues, " ")
 }
 
-func StringToArray[T RealNumbers](input string) ([]T, error) {
+func StringToArray[T RealNumbers](str string, dims int32) ([]T, error) {
+	input := strings.TrimSpace(str)
+
+	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
+		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
+	}
+
 	input = strings.ReplaceAll(input, "[", "")
 	input = strings.ReplaceAll(input, "]", "")
-	input = strings.ReplaceAll(input, " ", "")
+
+	if input == "" {
+		return nil, moerr.NewInternalErrorNoCtx("vector must not be of zero size.")
+	}
 
 	numStrs := strings.Split(input, ",")
+	if len(numStrs) > MaxArrayDimension {
+		return nil, moerr.NewInternalErrorNoCtx("typeLen is over the maximum vector dimensions: %v", MaxArrayDimension)
+	}
+
+	if int32(len(numStrs)) != dims {
+		return nil, moerr.NewInternalErrorNoCtx("input vector dimension %v doesn't match expected dimension %v", len(numStrs), dims)
+	}
+
 	result := make([]T, len(numStrs))
 
 	var t T
@@ -72,7 +89,8 @@ func StringToArray[T RealNumbers](input string) ([]T, error) {
 		case float32:
 			num, err := strconv.ParseFloat(numStr, 32)
 			if err != nil {
-				return nil, moerr.NewInternalErrorNoCtx("Error while parsing %s array : %v for %s", "float32", err, input)
+				//TODO: Check if I should print user input via log? Can this be any sort of vulnerability?
+				return nil, moerr.NewInternalErrorNoCtx("error while casting %s to %s", numStr, T_float32.String())
 			}
 			// FIX: https://stackoverflow.com/a/36391858/1609570
 			numf32 := float32(num)
@@ -80,7 +98,7 @@ func StringToArray[T RealNumbers](input string) ([]T, error) {
 		case float64:
 			num, err := strconv.ParseFloat(numStr, 64)
 			if err != nil {
-				return nil, moerr.NewInternalErrorNoCtx("Error while parsing %s array : %v for %s", "float64", err, input)
+				return nil, moerr.NewInternalErrorNoCtx("error while casting %s to %s", numStr, T_float64.String())
 			}
 			result[i] = *(*T)(unsafe.Pointer(&num))
 		default:
