@@ -372,7 +372,7 @@ CREATE TABLE `t2` (
 `a` INT DEFAULT NULL
 ) COMMENT='New table comment';
 alter table t2 drop primary key;
-internal error: Can't DROP Primary Key; check that column/key exists
+Can't DROP 'PRIMARY'; check that column/key exists
 alter table t2 AUTO_INCREMENT=10;
 invalid input: Can't set AutoIncr column value.
 CREATE TABLE `t3` (
@@ -380,5 +380,4 @@ CREATE TABLE `t3` (
 PRIMARY KEY (`a`)
 );
 alter table t3 drop primary key;
-internal error: Can't DROP exists Primary Key
 drop database test;

@@ -181,7 +181,8 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	tableTypes := make([]uint8, dataLength)
 	zms := make([]objectio.ZoneMap, dataLength)
 
-	var meta objectio.ObjectMeta
+	var meta objectio.ObjectDataMeta
+	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, nil, err
@@ -192,9 +193,10 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		if objectio.IsSameObjectLocVsMeta(location, meta) {
 			return nil
 		}
-		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
+		meta = objMeta.MustDataMeta()
 		if inited {
 			for idx := range zms {
 				zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
@@ -291,7 +293,8 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	// to record the batch which we have already handled to avoid
 	// repetitive computation
 	handled := make(map[*batch.Batch]struct{})
-	var meta objectio.ObjectMeta
+	var meta objectio.ObjectDataMeta
+	var objMeta objectio.ObjectMeta
 	// Calculate the in mem size
 	// TODO: It might includ some deleted row size
 	iter := part.NewRowsIter(ts, nil, false)
@@ -326,12 +329,11 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		if objectio.IsSameObjectLocVsMeta(location, meta) {
 			continue
 		}
-
-		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			biter.Close()
 			return 0, err
 		}
-
+		meta = objMeta.MustDataMeta()
 		for _, col := range neededCols {
 			colmata := meta.MustGetColumn(uint16(col.Seqnum))
 			ret += int64(colmata.Location().Length())
@@ -370,17 +372,18 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	if err != nil {
 		return nil, err
 	}
-	var meta objectio.ObjectMeta
+	var meta objectio.ObjectDataMeta
+	var objMeta objectio.ObjectMeta
 	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.blockInfos))
 	eachBlkFn := func(blk logtailreplay.BlockEntry) error {
 		var err error
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
-			if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 				return err
 			}
 		}
-
+		meta = objMeta.MustDataMeta()
 		blkmeta := meta.GetBlockMeta(uint32(location.ID()))
 		maxSeq := uint32(blkmeta.GetMaxSeqnum())
 		for _, col := range needCols {
@@ -408,6 +411,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 			zm := colmeta.ZoneMap()
 			newInfo.Max = zm.GetMaxBuf()
 			newInfo.Min = zm.GetMinBuf()
+			newInfo.Sum = zm.GetSumBuf()
 
 			infoList = append(infoList, newInfo)
 		}
@@ -459,7 +463,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			rowIdBat, err := blockio.LoadColumns(
+			rowIdBat, err := blockio.LoadTombstoneColumns(
 				tbl.db.txn.proc.Ctx,
 				[]uint16{0},
 				nil,
@@ -670,33 +674,6 @@ func (tbl *txnTable) rangesOnePart(
 	//txn := tbl.db.txn
 	for _, entry := range tbl.writes {
 		if entry.typ == INSERT {
-			//if entry.bat == nil || entry.bat.IsEmpty() {
-			//	continue
-			//}
-			//if entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
-			//	continue
-			//}
-			////load uncommitted blocks from txn's workspace.
-			//metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
-			//for _, metaLoc := range metaLocs {
-			//	location, err := blockio.EncodeLocationFromString(metaLoc)
-			//	if err != nil {
-			//		return err
-			//	}
-			//	sid := location.Name().SegmentId()
-			//	blkid := objectio.NewBlockid(
-			//		&sid,
-			//		location.Name().Num(),
-			//		location.ID())
-			//	pos, ok := txn.cnBlkId_Pos[*blkid]
-			//	if !ok {
-			//		panic(fmt.Sprintf("blkid %s not found", blkid.String()))
-			//	}
-			//	blks = append(blks, pos.blkInfo)
-			//	if txn.deletedBlocks.isDeleted(blkid) {
-			//		dirtyBlks[*blkid] = struct{}{}
-			//	}
-			//}
 			continue
 		}
 		// entry.typ == DELETE
@@ -714,11 +691,12 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		objMeta  objectio.ObjectMeta
-		zms      []objectio.ZoneMap
-		vecs     []*vector.Vector
-		skipObj  bool
-		auxIdCnt int32
+		objDataMeta objectio.ObjectDataMeta
+		objMeta     objectio.ObjectMeta
+		zms         []objectio.ZoneMap
+		vecs        []*vector.Vector
+		skipObj     bool
+		auxIdCnt    int32
 	)
 
 	defer func() {
@@ -762,16 +740,16 @@ func (tbl *txnTable) rangesOnePart(
 			//     1. check whether the object is skipped
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
-			if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
-				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 					return
 				}
-
+				objDataMeta = objMeta.MustDataMeta()
 				skipObj = false
 				// here we only eval expr on the object meta if it has more than 2 blocks
-				if objMeta.BlockCount() > 2 {
+				if objDataMeta.BlockCount() > 2 {
 					for _, expr := range exprs {
-						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objMeta, columnMap, zms, vecs) {
+						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
 							skipObj = true
 							break
 						}
@@ -786,7 +764,7 @@ func (tbl *txnTable) rangesOnePart(
 			var skipBlk bool
 
 			// eval filter expr on the block
-			blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+			blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 			for _, expr := range exprs {
 				if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 					skipBlk = true
@@ -830,10 +808,11 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 					Name:  attr.Attr.Name,
 					ColId: attr.Attr.ID,
 					Typ: &plan.Type{
-						Id:       int32(attr.Attr.Type.Oid),
-						Width:    attr.Attr.Type.Width,
-						Scale:    attr.Attr.Type.Scale,
-						AutoIncr: attr.Attr.AutoIncrement,
+						Id:         int32(attr.Attr.Type.Oid),
+						Width:      attr.Attr.Type.Width,
+						Scale:      attr.Attr.Type.Scale,
+						AutoIncr:   attr.Attr.AutoIncrement,
+						Enumvalues: attr.Attr.EnumVlaues,
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,
@@ -1001,11 +980,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.db.txn.hasS3Op.Store(true)
 		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
 		fileName := catalog.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
-		//fileName := blkInfo.MetaLocation().Name().String()
-		//ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
-		//if err != nil {
-		//	return err
-		//}
 		return tbl.db.txn.WriteFile(
 			INSERT,
 			tbl.db.databaseId,
@@ -1013,7 +987,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.db.databaseName,
 			tbl.tableName,
 			fileName,
-			//ibat,
 			bat,
 			tbl.db.txn.dnStores[0])
 	}
@@ -1090,158 +1063,62 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	return nil
 }
 
-// CN Block Compaction
-func (tbl *txnTable) compaction() error {
-	mp := make(map[int][]int64)
+// TODO:: do prefetch read and parallel compaction
+func (tbl *txnTable) mergeCompaction(
+	compactedBlks map[catalog.BlockInfo][]int64) ([]catalog.BlockInfo, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
 	s3writer.SetSchemaVer(tbl.version)
-	batchNums := 0
-	name, err := s3writer.GenerateWriter(tbl.db.txn.proc)
+	_, err := s3writer.GenerateWriter(tbl.db.txn.proc)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var deletedIDs []*types.Blockid
-	defer func() {
-		tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
-	}()
-	tbl.db.txn.deletedBlocks.iter(func(id *types.Blockid, deleteOffsets []int64) bool {
-		pos := tbl.db.txn.cnBlkId_Pos[*id]
-		// just do compaction for current txnTable
-		entry := tbl.db.txn.writes[pos.idx]
-		if !(entry.databaseId == tbl.db.databaseId && entry.tableId == tbl.tableId) {
-			return true
+	if tbl.seqnums == nil {
+		n := len(tbl.tableDef.Cols) - 1
+		idxs := make([]uint16, 0, n)
+		typs := make([]types.Type, 0, n)
+		for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
+			col := tbl.tableDef.Cols[i]
+			idxs = append(idxs, uint16(col.Seqnum))
+			typs = append(typs, vector.ProtoTypeToType(col.Typ))
 		}
-		delete(tbl.db.txn.cnBlkId_Pos, *id)
-		deletedIDs = append(deletedIDs, id)
-		if len(deleteOffsets) == 0 {
-			return true
-		}
-		mp[pos.idx] = append(mp[pos.idx], pos.offset)
-		// start compaction
-		metaLoc := tbl.db.txn.writes[pos.idx].bat.GetVector(0).GetStringAt(int(pos.offset))
-		location, e := blockio.EncodeLocationFromString(metaLoc)
-		if e != nil {
-			err = e
-			return false
-		}
-		if tbl.seqnums == nil {
-			n := len(tbl.tableDef.Cols) - 1
-			idxs := make([]uint16, 0, n)
-			typs := make([]types.Type, 0, n)
-			for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
-				col := tbl.tableDef.Cols[i]
-				idxs = append(idxs, uint16(col.Seqnum))
-				typs = append(typs, vector.ProtoTypeToType(col.Typ))
-			}
-			tbl.seqnums = idxs
-			tbl.typs = typs
-		}
-		s3writer.SetSeqnums(tbl.seqnums)
+		tbl.seqnums = idxs
+		tbl.typs = typs
+	}
+	s3writer.SetSeqnums(tbl.seqnums)
+
+	for blk, deletes := range compactedBlks {
+		//blk.MetaLocation()
 		bat, e := blockio.BlockCompactionRead(
 			tbl.db.txn.proc.Ctx,
-			location,
-			deleteOffsets,
+			blk.MetaLocation(),
+			deletes,
 			tbl.seqnums,
 			tbl.typs,
 			tbl.db.txn.engine.fs,
 			tbl.db.txn.proc.GetMPool())
 		if e != nil {
-			err = e
-			return false
+			return nil, e
 		}
 		if bat.RowCount() == 0 {
-			return true
+			continue
 		}
-		// ToDo: Optimize this logic, we need to control blocks num in one file
-		// and make sure one block has as close as possible to 8192 rows
-		// if the batch is little we should not flush, improve this in next pr.
 		s3writer.WriteBlock(bat)
-		batchNums++
-		if len(deleteOffsets) > 0 {
-			bat.Clean(tbl.db.txn.proc.GetMPool())
-		}
-		return true
-	})
-	if err != nil {
-		return err
-	}
+		bat.Clean(tbl.db.txn.proc.GetMPool())
 
-	if batchNums > 0 {
-		blkInfos, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
-		if err != nil {
-			return err
-		}
-		newBat := batch.NewWithSize(1)
-		newBat.Attrs = []string{catalog.BlockMeta_BlockInfo}
-		newBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-		for _, blkInfo := range blkInfos {
-			vector.AppendBytes(
-				newBat.GetVector(0),
-				catalog.EncodeBlockInfo(blkInfo),
-				false,
-				tbl.db.txn.proc.GetMPool())
-		}
-		newBat.SetRowCount(len(blkInfos))
-		err = tbl.db.txn.WriteFile(
-			INSERT,
-			tbl.db.databaseId,
-			tbl.tableId,
-			tbl.db.databaseName,
-			tbl.tableName,
-			name.String(),
-			newBat,
-			tbl.db.txn.dnStores[0])
-		if err != nil {
-			return err
-		}
 	}
-	removeBatch := make(map[*batch.Batch]bool)
-	// delete old block info
-	for idx, offsets := range mp {
-		bat := tbl.db.txn.writes[idx].bat
-		tbl.db.txn.delPosForCNBlock(bat.GetVector(0), offsets)
-		bat.AntiShrink(offsets)
-		// update txn.cnBlkId_Pos
-		tbl.db.txn.updatePosForCNBlock(bat.GetVector(0), idx)
-		if bat.RowCount() == 0 {
-			removeBatch[bat] = true
-		}
+	createdBlks, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
+	if err != nil {
+		return nil, err
 	}
-	tbl.db.txn.Lock()
-	for i := 0; i < len(tbl.db.txn.writes); i++ {
-		if removeBatch[tbl.db.txn.writes[i].bat] {
-			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
-			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-			// maybe this will cause that the log imcrements unlimitly.
-			// tbl.db.txn.writes = append(tbl.db.txn.writes[:i], tbl.db.txn.writes[i+1:]...)
-			// i--
-			tbl.db.txn.writes[i].bat.Clean(tbl.db.txn.proc.GetMPool())
-			tbl.db.txn.writes[i].bat = nil
-		}
-	}
-	tbl.db.txn.Unlock()
-	return nil
+	return createdBlks, nil
 }
 
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
-	if bat == nil {
-		// ToDo:
-		// start to do compaction for cn blocks
-		// there are three strageties:
-		// 1.do compaction at deletion operator
-		// 2.do compaction here
-		// 3.do compaction when read
-		// choose which one at last depends on next pr
-		// we use 2 now.
-		return tbl.compaction()
-	}
 	//for S3 delete
 	if name != catalog.Row_ID {
 		return tbl.EnhanceDelete(bat, name)
 	}
-	bat.SetAttributes([]string{catalog.Row_ID})
-
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.RowCount() == 0 {
 		return nil
@@ -1659,7 +1536,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	if err = tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 		return
 	}
-	if err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
+	if _, err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
 		return
 	}
 
@@ -1668,25 +1545,25 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keysVector *vector.Vector) (bool, error) {
-
 	switch tbl.tableId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return true, nil
 	}
 
-	part, err := tbl.getPartitionState(ctx)
+	part, err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
 
+	snap := part.Snapshot()
 	var packer *types.Packer
 	put := tbl.db.txn.engine.packerPool.Get(&packer)
 	defer put.Put()
 	packer.Reset()
-	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
 
+	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
 	for _, key := range keys {
-		if part.PrimaryKeyMayBeModified(from, to, key) {
+		if snap.PrimaryKeyMayBeModified(from, to, key) {
 			return true, nil
 		}
 	}
@@ -1769,12 +1646,13 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	for _, blk := range blks {
 		location := blk.MetaLocation()
 		if hit, ok := objFilterMap[*location.ShortName()]; !ok {
-			if objMeta, err = objectio.FastLoadObjectMeta(tbl.proc.Ctx, &location,
-				tbl.db.txn.engine.fs); err != nil {
+			if objMeta, err = objectio.FastLoadObjectMeta(
+				tbl.proc.Ctx, &location, false, tbl.db.txn.engine.fs,
+			); err != nil {
 				return rowid, false, err
 			}
 			hit = colexec.EvaluateFilterByZoneMap(tbl.proc.Ctx, tbl.proc, filter,
-				objMeta, columnMap, zms, vecs)
+				objMeta.MustDataMeta(), columnMap, zms, vecs)
 			objFilterMap[*location.ShortName()] = hit
 			if !hit {
 				continue
@@ -1783,7 +1661,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 			continue
 		}
 		// eval filter expr on the block
-		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+		blkMeta := objMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
 		if !colexec.EvaluateFilterByZoneMap(tbl.proc.Ctx, tbl.proc, filter,
 			blkMeta, columnMap, zms, vecs) {
 			continue

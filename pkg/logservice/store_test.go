@@ -54,7 +54,6 @@ var (
 
 func TestNodeHostConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Fill()
 	cfg.DeploymentID = 1234
 	cfg.DataDir = "lalala"
 	nhConfig := getNodeHostConfig(cfg)
@@ -73,14 +72,11 @@ func getStoreTestConfig() Config {
 	cfg := DefaultConfig()
 	cfg.UUID = uuid.New().String()
 	cfg.RTTMillisecond = 10
-	cfg.GossipAddress = testGossipAddress
-	cfg.GossipAddressV2 = testGossipAddress
-	cfg.GossipListenAddress = testGossipAddress
+	cfg.GossipPort = testGossipPort
 	cfg.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
 	cfg.DeploymentID = 1
 	cfg.FS = vfs.NewStrictMem()
 	cfg.UseTeeLogDB = true
-	cfg.Fill()
 	return cfg
 }
 
@@ -304,7 +300,8 @@ func proceedHAKeeperToRunning(t *testing.T, store *store) {
 	assert.NoError(t, err)
 	assert.Equal(t, pb.HAKeeperCreated, state.State)
 
-	err = store.setInitialClusterInfo(1, 1, 1)
+	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+	err = store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey)
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -317,6 +314,8 @@ func proceedHAKeeperToRunning(t *testing.T, store *store) {
 	state, err = store.getCheckerState()
 	assert.NoError(t, err)
 	assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+	assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+	assert.Equal(t, nextIDByKey, state.NextIDByKey)
 
 	_, term, err := store.isLeaderHAKeeper()
 	assert.NoError(t, err)
@@ -530,11 +529,10 @@ func getTestStores() (*store, *store, error) {
 	cfg1.DeploymentID = 1
 	cfg1.RTTMillisecond = 5
 	cfg1.DataDir = "data-1"
-	cfg1.ServiceAddress = "127.0.0.1:9001"
-	cfg1.RaftAddress = "127.0.0.1:9002"
-	cfg1.GossipAddress = "127.0.0.1:9011"
+	cfg1.LogServicePort = 9001
+	cfg1.RaftPort = 9002
+	cfg1.GossipPort = 9011
 	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
-	cfg1.Fill()
 	store1, err := newLogStore(cfg1, nil, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, nil, err
@@ -545,11 +543,10 @@ func getTestStores() (*store, *store, error) {
 	cfg2.DeploymentID = 1
 	cfg2.RTTMillisecond = 5
 	cfg2.DataDir = "data-1"
-	cfg2.ServiceAddress = "127.0.0.1:9006"
-	cfg2.RaftAddress = "127.0.0.1:9007"
-	cfg2.GossipAddress = "127.0.0.1:9012"
+	cfg2.LogServicePort = 9006
+	cfg2.RaftPort = 9007
+	cfg2.GossipPort = 9012
 	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9012"}
-	cfg2.Fill()
 	store2, err := newLogStore(cfg2, nil, runtime.DefaultRuntime())
 	if err != nil {
 		return nil, nil, err
@@ -789,7 +786,7 @@ func TestUpdateCNWorkState(t *testing.T) {
 		assert.NotEmpty(t, state)
 		info, ok1 = state.CNState.Stores[uuid]
 		assert.True(t, ok1)
-		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
 	}
 	runStoreTest(t, fn)
 }
@@ -872,7 +869,7 @@ func TestPatchCNStore(t *testing.T) {
 		assert.NotEmpty(t, state)
 		info, ok1 = state.CNState.Stores[uuid]
 		assert.True(t, ok1)
-		assert.Equal(t, metadata.WorkState_Draining, info.WorkState)
+		assert.Equal(t, metadata.WorkState_Working, info.WorkState)
 		labels1, ok2 = info.Labels["account"]
 		assert.True(t, ok2)
 		assert.Equal(t, labels1.Labels, []string{"a", "b"})

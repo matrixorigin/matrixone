@@ -164,64 +164,60 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg1.DeploymentID = 1
 	cfg1.RTTMillisecond = 5
 	cfg1.DataDir = "data-1"
-	cfg1.ServiceAddress = "127.0.0.1:9002"
-	cfg1.RaftAddress = "127.0.0.1:9000"
-	cfg1.GossipAddress = "127.0.0.1:9001"
+	cfg1.LogServicePort = 9002
+	cfg1.RaftPort = 9000
+	cfg1.GossipPort = 9001
 	cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011", "127.0.0.1:9021", "127.0.0.1:9031"}
 	cfg1.DisableWorkers = true
 	cfg1.HAKeeperConfig.TickPerSecond = 10
 	cfg1.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
 	cfg1.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
 	cfg1.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-	cfg1.Fill()
 	cfg2 := DefaultConfig()
 	cfg2.UUID = uuid.New().String()
 	cfg2.FS = vfs.NewStrictMem()
 	cfg2.DeploymentID = 1
 	cfg2.RTTMillisecond = 5
 	cfg2.DataDir = "data-2"
-	cfg2.ServiceAddress = "127.0.0.1:9012"
-	cfg2.RaftAddress = "127.0.0.1:9010"
-	cfg2.GossipAddress = "127.0.0.1:9011"
+	cfg2.LogServicePort = 9012
+	cfg2.RaftPort = 9010
+	cfg2.GossipPort = 9011
 	cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001", "127.0.0.1:9021", "127.0.0.1:9031"}
 	cfg2.DisableWorkers = true
 	cfg2.HAKeeperConfig.TickPerSecond = 10
 	cfg2.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
 	cfg2.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
 	cfg2.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-	cfg2.Fill()
 	cfg3 := DefaultConfig()
 	cfg3.UUID = uuid.New().String()
 	cfg3.FS = vfs.NewStrictMem()
 	cfg3.DeploymentID = 1
 	cfg3.RTTMillisecond = 5
 	cfg3.DataDir = "data-3"
-	cfg3.ServiceAddress = "127.0.0.1:9022"
-	cfg3.RaftAddress = "127.0.0.1:9020"
-	cfg3.GossipAddress = "127.0.0.1:9021"
+	cfg3.LogServicePort = 9022
+	cfg3.RaftPort = 9020
+	cfg3.GossipPort = 9021
 	cfg3.GossipSeedAddresses = []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9031"}
 	cfg3.DisableWorkers = true
 	cfg3.HAKeeperConfig.TickPerSecond = 10
 	cfg3.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
 	cfg3.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
 	cfg3.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-	cfg3.Fill()
 	cfg4 := DefaultConfig()
 	cfg4.UUID = uuid.New().String()
 	cfg4.FS = vfs.NewStrictMem()
 	cfg4.DeploymentID = 1
 	cfg4.RTTMillisecond = 5
 	cfg4.DataDir = "data-4"
-	cfg4.ServiceAddress = "127.0.0.1:9032"
-	cfg4.RaftAddress = "127.0.0.1:9030"
-	cfg4.GossipAddress = "127.0.0.1:9031"
+	cfg4.LogServicePort = 9032
+	cfg4.RaftPort = 9030
+	cfg4.GossipPort = 9031
 	cfg4.GossipSeedAddresses = []string{"127.0.0.1:9001", "127.0.0.1:9011", "127.0.0.1:9021"}
 	cfg4.DisableWorkers = true
 	cfg4.HAKeeperConfig.TickPerSecond = 10
 	cfg4.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
 	cfg4.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
 	cfg4.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-	cfg4.Fill()
 	service1, err := NewService(cfg1,
 		newFS(),
 		nil,
@@ -285,10 +281,13 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		state, err := store1.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store1.setInitialClusterInfo(1, 1, 3))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store1.setInitialClusterInfo(1, 1, 3, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store1.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 
 		sendHeartbeat := func(ss []*Service) {
 			for _, s := range ss {
@@ -539,10 +538,13 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 	}
 	runHAKeeperStoreTest(t, false, fn)
 }
@@ -560,10 +562,13 @@ func testBootstrap(t *testing.T, fail bool) {
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -647,10 +652,13 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -745,10 +753,13 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

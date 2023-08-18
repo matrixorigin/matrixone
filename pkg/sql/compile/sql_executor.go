@@ -116,7 +116,7 @@ func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
 	}
 	ts := opts.Txn().Txn().CommitTS
 	if !ts.IsEmpty() {
-		s.txnClient.(client.TxnClientWithCtl).SetLatestCommitTS(ts)
+		s.txnClient.SyncLatestCommitTS(ts)
 	}
 }
 
@@ -205,6 +205,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.s.qs,
 		exec.s.aicm,
 	)
+	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -175,10 +176,10 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			vector.AppendFixed(opBat.Vecs[i], info.IsHidden, false, mp)
 
 		case plan.MetadataScanInfo_META_LOC:
-			vector.AppendBytes(opBat.Vecs[i], info.MetaLoc, false, mp)
+			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.MetaLoc).String()), false, mp)
 
 		case plan.MetadataScanInfo_DELTA_LOC:
-			vector.AppendBytes(opBat.Vecs[i], info.DelLoc, false, mp)
+			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.DelLoc).String()), false, mp)
 
 		case plan.MetadataScanInfo_COMMIT_TS:
 			var ts types.TS
@@ -225,6 +226,10 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 
 		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
 			vector.AppendBytes(opBat.Vecs[i], info.Max, false, mp)
+
+		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
+			vector.AppendBytes(opBat.Vecs[i], info.Sum, false, mp)
+
 		default:
 		}
 	}

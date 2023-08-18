@@ -585,6 +585,16 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt: 12,
 	}
 
+	constraintTestSchema["t1"] = &Schema{
+		cols: []col{
+			{"a", types.T_int64, false, 0, 0},
+			{"b", types.T_varchar, false, 1, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)

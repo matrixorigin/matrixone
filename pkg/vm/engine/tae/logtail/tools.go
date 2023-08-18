@@ -17,7 +17,6 @@ package logtail
 import (
 	"bytes"
 	"fmt"
-	"hash/fnv"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -78,41 +77,6 @@ func BatchToString(name string, bat *containers.Batch, isSpecialRowID bool) stri
 	return w.String()
 }
 
-func u64ToRowID(v uint64) types.Rowid {
-	var rowid types.Rowid
-	bs := types.EncodeUint64(&v)
-	copy(rowid[0:], bs)
-	return rowid
-}
-
-func rowIDToU64(v types.Rowid) uint64 {
-	return types.DecodeUint64(v[:])
-}
-
-func blockid2rowid(bid *types.Blockid) types.Rowid {
-	var rowid types.Rowid
-	copy(rowid[:], bid[:])
-	return rowid
-}
-
-func segid2rowid(sid *types.Uuid) types.Rowid {
-	var rowid types.Rowid
-	copy(rowid[:], sid[:])
-	return rowid
-}
-
-func bytesToRowID(bs []byte) types.Rowid {
-	var rowid types.Rowid
-	if size := len(bs); size <= types.RowidSize {
-		copy(rowid[:size], bs[:size])
-	} else {
-		hasher := fnv.New128()
-		hasher.Write(bs)
-		hasher.Sum(rowid[:0])
-	}
-	return rowid
-}
-
 // make batch, append necessary field like commit ts
 func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	bat := containers.NewBatch()
@@ -130,33 +94,6 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	}
 	return bat
 }
-
-// func makeDataInsertRespBatch(schema *catalog.Schema) *containers.Batch {
-// 	capactity := int(schema.NextColSeqnum) + 2
-// 	bat := containers.NewBatch()
-// 	bat.Attrs = make([]string, capactity, capactity)
-// 	bat.Vecs = make([]containers.Vector, capactity, capactity)
-// 	bat.Attrs[0] = catalog.AttrRowID
-// 	bat.Attrs[1] = catalog.AttrCommitTs
-// 	bat.Vecs[0] = containers.MakeVector(types.T_Rowid.ToType())
-// 	bat.Vecs[1] = containers.MakeVector(types.T_TS.ToType())
-
-// 	for _, col := range schema.ColDefs {
-// 		if col.IsPhyAddr() {
-// 			continue
-// 		}
-// 		bat.Vecs[2+col.SeqNum] = containers.MakeVector(col.Type)
-// 		bat.Attrs[2+col.SeqNum] = col.Name
-// 	}
-// 	for i := range bat.Attrs {
-// 		if bat.Vecs[i] != nil {
-// 			bat.Nameidx[bat.Attrs[i]] = i
-// 		} else {
-// 			bat.Vecs[i] = containers.EMPTY_VECTOR
-// 		}
-// 	}
-// 	return bat
-// }
 
 // GetDataWindowForLogtail returns the batch according to the writeSchema.
 // columns are sorted by seqnum and vacancy is filled with zero value

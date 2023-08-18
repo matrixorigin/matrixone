@@ -15,6 +15,8 @@
 package service
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
@@ -422,4 +424,16 @@ func (p NetworkPartition) ListCNServiceIndex() []uint32 {
 		indexes = append(indexes, iter.Next())
 	}
 	return indexes
+}
+
+func getPort(addr string) int {
+	ss := strings.Split(addr, ":")
+	if len(ss) != 2 {
+		panic("bad address: " + addr)
+	}
+	p, err := strconv.Atoi(ss[1])
+	if err != nil {
+		panic("bad address: " + addr)
+	}
+	return p
 }

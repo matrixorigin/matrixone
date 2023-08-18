@@ -472,20 +472,19 @@ func readBlockData(
 
 	return
 }
-
 func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, err error) {
 	isPersistedByCN, err = persistedByCN(ctx, deltaloc, fs)
 	if err != nil {
 		return
 	}
 	if isPersistedByCN {
-		bat, err = LoadColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
+		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
 		return
 	} else {
-		bat, err = LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
+		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
@@ -494,9 +493,13 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 }
 
 func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bool, error) {
-	meta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, fs)
+	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &deltaloc, false, fs)
 	if err != nil {
 		return false, err
+	}
+	meta, ok := objectMeta.TombstoneMeta()
+	if !ok {
+		meta = objectMeta.MustDataMeta()
 	}
 	blkmeta := meta.GetBlockMeta(uint32(deltaloc.ID()))
 	columnCount := blkmeta.GetColumnCount()
@@ -554,7 +557,7 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 			pref.AddBlock(idxes, []uint16{info.MetaLocation().ID()})
 			if !info.DeltaLocation().IsEmpty() {
 				// Need to read all delete
-				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
+				err = PrefetchTombstone([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
 				if err != nil {
 					return err
 				}
@@ -569,17 +572,17 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 }
 
 func RecordReadFilterSelectivity(hit, total int) {
-	pipeline.stats.RecordReadFilterSelectivity(hit, total)
+	pipeline.stats.selectivityStats.RecordReadFilterSelectivity(hit, total)
 }
 
 func RecordBlockSelectivity(hit, total int) {
-	pipeline.stats.RecordBlockSelectivity(hit, total)
+	pipeline.stats.selectivityStats.RecordBlockSelectivity(hit, total)
 }
 
 func RecordColumnSelectivity(hit, total int) {
-	pipeline.stats.RecordColumnSelectivity(hit, total)
+	pipeline.stats.selectivityStats.RecordColumnSelectivity(hit, total)
 }
 
 func ExportSelectivityString() string {
-	return pipeline.stats.ExportString()
+	return pipeline.stats.selectivityStats.ExportString()
 }

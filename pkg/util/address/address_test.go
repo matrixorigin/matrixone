@@ -15,6 +15,7 @@
 package address
 
 import (
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,4 +80,25 @@ func TestAdjust(t *testing.T) {
 		c.address.Adjust(c.machineHost, defaultListenAddress)
 		assert.Equal(t, c.exceptAddress, c.address)
 	}
+}
+
+func TestAddressManager(t *testing.T) {
+	serviceAddr := "127.0.0.1"
+	portBase := 39000
+	m := NewAddressManager(serviceAddr, portBase)
+	assert.NotNil(t, m)
+	m.Register(2)
+	m.Register(1)
+	assert.Equal(t, "0.0.0.0:39000", m.ListenAddress(2))
+	assert.Equal(t, "127.0.0.1:39000", m.ServiceAddress(2))
+	assert.Equal(t, "0.0.0.0:39001", m.ListenAddress(1))
+	assert.Equal(t, "127.0.0.1:39001", m.ServiceAddress(1))
+
+	l, err := net.Listen("tcp4", ":39002")
+	assert.NoError(t, err)
+	m.Register(3)
+	assert.Equal(t, "0.0.0.0:39003", m.ListenAddress(3))
+	assert.Equal(t, "127.0.0.1:39003", m.ServiceAddress(3))
+	err = l.Close()
+	assert.NoError(t, err)
 }

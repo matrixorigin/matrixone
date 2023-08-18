@@ -39,7 +39,9 @@ import (
     alterTable tree.AlterTable
     alterTableOptions tree.AlterTableOptions
     alterTableOption tree.AlterTableOption
-    alterColpos *tree.AlterColPos
+    alterColPosition *tree.ColumnPosition
+    alterColumnOrderBy []*tree.AlterColumnOrder
+    alterColumnOrder *tree.AlterColumnOrder
 
     tableDef tree.TableDef
     tableDefs tree.TableDefs
@@ -164,6 +166,7 @@ import (
     zeroFillOpt bool
     ifNotExists bool
     defaultOptional bool
+    streamOptional bool
     fullOpt bool
     boolVal bool
     int64Val int64
@@ -221,8 +224,8 @@ import (
     cstr *tree.CStr
     incrementByOption *tree.IncrementByOption
     minValueOption  *tree.MinValueOption
-    maxValueOption  *tree.MaxValueOption 
-    startWithOption *tree.StartWithOption 
+    maxValueOption  *tree.MaxValueOption
+    startWithOption *tree.StartWithOption
 
     whenClause2 *tree.WhenStmt
     whenClauseList2 []*tree.WhenStmt
@@ -241,10 +244,12 @@ import (
 %token LEX_ERROR
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
-%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
+%nonassoc LOWER_THAN_ORDER
+%nonassoc ORDER
+%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER 
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
 %token <str> INSTANT INPLACE COPY DISABLE ENABLE UNDEFINED MERGE TEMPTABLE DEFINER INVOKER SQL SECURITY CASCADED
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
@@ -332,6 +337,7 @@ import (
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
+%token <str> MODIFY CHANGE
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -388,11 +394,14 @@ import (
 // With
 %token <str> RECURSIVE CONFIG DRAINER
 
+// Stream
+%token <str> SOURCE STREAM HEADERS
+
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
 // Built-in function
-%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
+%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
@@ -435,6 +444,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
+%type <statement> create_stream_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -525,7 +535,7 @@ import (
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list
+%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -535,10 +545,12 @@ import (
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
-%type <alterColpos> pos_info
+%type <alterColPosition> column_position
+%type <alterColumnOrder> alter_column_order
+%type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
 
-%type <tableOption> table_option
+%type <tableOption> table_option stream_option
 %type <from> from_clause from_opt
 %type <where> where_expression_opt having_opt
 %type <groupBy> group_by_opt
@@ -558,7 +570,7 @@ import (
 %type <str> charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
-%type <str> equal_opt
+%type <str> equal_opt column_keyword_opt
 %type <str> as_opt_id name_string
 %type <cstr> ident as_name_opt
 %type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
@@ -584,6 +596,7 @@ import (
 %type <createOptions> create_option_list_opt create_option_list
 %type <ifNotExists> not_exists_opt
 %type <defaultOptional> default_opt
+%type <streamOptional> replace_opt
 %type <str> database_or_schema
 %type <indexType> using_opt
 %type <indexCategory> index_prefix
@@ -1033,7 +1046,7 @@ case_stmt:
     {
         $$ = &tree.CaseStmt{
             Expr: $2,
-            Whens: $3,  
+            Whens: $3,
             Else: $4,
         }
     }
@@ -2391,7 +2404,7 @@ table_lock_elem:
         $$ = tree.TableLock{Table: *$1, LockType: $2}
     }
 
-table_lock_type:  
+table_lock_type:
     READ
     {
         $$ = tree.TableLockRead
@@ -2639,6 +2652,71 @@ alter_option:
         }
         $$ = tree.AlterTableOption(opt)
     }
+|    MODIFY column_keyword_opt column_def column_position
+    {
+	opt := &tree.AlterTableModifyColumnClause{
+             Typ:           tree.AlterTableModifyColumn,
+             NewColumn:    $3,
+             Position:      $4,
+	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|   CHANGE column_keyword_opt column_name column_def column_position
+    {
+	opt := &tree.AlterTableChangeColumnClause{
+		Typ:          tree.AlterTableChangeColumn,
+		OldColumnName: $3,
+		NewColumn:    $4,
+		Position:      $5,
+	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|  RENAME COLUMN column_name TO column_name
+    {
+    	opt := &tree.AlterTableRenameColumnClause{
+    		Typ:            tree.AlterTableRenameColumn,
+		OldColumnName: $3,
+		NewColumnName: $5,
+    	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|  ALTER column_keyword_opt column_name SET DEFAULT bit_expr
+    {
+	opt := &tree.AlterTableAlterColumnClause{
+		Typ:            tree.AlterTableAlterColumn,
+		ColumnName:    $3,
+		DefalutExpr:   tree.NewAttributeDefault($6),
+		OptionType:    tree.AlterColumnOptionSetDefault,
+	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|  ALTER column_keyword_opt column_name SET visibility
+    {
+	opt := &tree.AlterTableAlterColumnClause{
+		Typ:         tree.AlterTableAlterColumn,
+		ColumnName:  $3,
+		Visibility:  $5,
+		OptionType: tree.AlterColumnOptionSetVisibility,
+	}
+	$$ = tree.AlterTableOption(opt)
+    }
+|  ALTER column_keyword_opt column_name DROP DEFAULT
+    {
+	opt := &tree.AlterTableAlterColumnClause{
+		Typ:         	tree.AlterTableAlterColumn,
+		ColumnName:     $3,
+		OptionType:     tree.AlterColumnOptionDropDefault,
+        }
+	$$ = tree.AlterTableOption(opt)
+    }
+|  ORDER BY alter_column_order_list %prec LOWER_THAN_ORDER
+    {
+    	opt := &tree.AlterTableOrderByColumnClause{
+                Typ:         	  tree.AlterTableOrderByColumn,
+        	AlterOrderByList: $3,
+        }
+	$$ = tree.AlterTableOption(opt)
+    }
 |   DROP alter_table_drop
     {
         $$ = tree.AlterTableOption($2)
@@ -2655,21 +2733,12 @@ alter_option:
     {
         $$ = tree.AlterTableOption($3)
     }
-|   ADD column_def pos_info
-    {
-        $$ = tree.AlterTableOption(
-            &tree.AlterAddCol{
-                Column: $2,
-                Pos: $3,
-            },
-        )
-    }
-|   ADD COLUMN column_def pos_info
+|   ADD column_keyword_opt column_def column_position
     {
         $$ = tree.AlterTableOption(
             &tree.AlterAddCol{
                 Column: $3,
-                Pos: $4,
+                Position: $4,
             },
         )
     }
@@ -2741,26 +2810,51 @@ lock_type:
 
 with_type:
     WITHOUT
-|   WITH   
+|   WITH
 
-pos_info:
+column_keyword_opt:
     {
-        $$ = &tree.AlterColPos{
-            Pos: -1,
-        }
+	$$ = ""
+    }
+|   COLUMN
+    {
+        $$ = string("COLUMN")
+    }
+
+column_position:
+    {
+	$$ = &tree.ColumnPosition{
+	    Typ: tree.ColumnPositionNone,
+	}
     }
 |   FIRST
     {
-         $$ = &tree.AlterColPos{
-            Pos: 0,
-        }
+	$$ = &tree.ColumnPosition{
+	    Typ: tree.ColumnPositionFirst,
+	}
     }
 |   AFTER column_name
     {
-         $$ = &tree.AlterColPos{
-            PreColName: $2,
-            Pos: -2,
-        }
+	$$ = &tree.ColumnPosition{
+            Typ:            tree.ColumnPositionAfter,
+            RelativeColumn: $2,
+	}
+    }
+
+alter_column_order_list:
+     alter_column_order
+     {
+	 $$ = []*tree.AlterColumnOrder{$1}
+     }
+|   alter_column_order_list ',' alter_column_order
+    {
+	 $$ = append($1, $3)
+    }
+
+alter_column_order:
+    column_name asc_desc_opt
+    {
+	$$ = &tree.AlterColumnOrder{Column: $1, Direction: $2}
     }
 
 
@@ -2773,7 +2867,7 @@ alter_table_rename:
     }
 
 alter_table_drop:
-    INDEX ident 
+    INDEX ident
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropIndex,
@@ -2787,28 +2881,28 @@ alter_table_drop:
             Name: tree.Identifier($2.Compare()),
         }
     }
-|   ident 
+|   ident
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropColumn,
             Name: tree.Identifier($1.Compare()),
         }
     }
-|   COLUMN ident 
+|   COLUMN ident
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropColumn,
             Name: tree.Identifier($2.Compare()),
         }
     }
-|   FOREIGN KEY ident 
+|   FOREIGN KEY ident
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropForeignKey,
             Name: tree.Identifier($3.Compare()),
         }
     }
-|   PRIMARY KEY 
+|   PRIMARY KEY
     {
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropPrimaryKey,
@@ -2888,9 +2982,9 @@ alter_database_config_stmt:
                 Value: $8,
             },
         }
-        $$ = &tree.SetVar{Assignments: assignments} 
+        $$ = &tree.SetVar{Assignments: assignments}
     }
-    
+
 alter_account_auth_option:
 {
     $$ = tree.AlterAccountAuthOption{
@@ -3312,7 +3406,7 @@ show_sequences_stmt:
     SHOW SEQUENCES database_name_opt where_expression_opt
     {
         $$ = &tree.ShowSequences{
-           DBName: $3, 
+           DBName: $3,
            Where: $4,
         }
     }
@@ -4992,6 +5086,7 @@ create_ddl_stmt:
 |   create_extension_stmt
 |   create_sequence_stmt
 |   create_procedure_stmt
+|	create_stream_stmt
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -5084,7 +5179,7 @@ proc_arg_in_out_type:
 
 
 create_function_stmt:
-    CREATE FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING 
+    CREATE FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING
     {
         $$ = &tree.CreateFunction{
             Name: $3,
@@ -5470,7 +5565,7 @@ alter_stage_stmt:
     {
         $$ = &tree.AlterStage{
             	IfNotExists: $3,
-	            Name: tree.Identifier($4.Compare()),           
+	            Name: tree.Identifier($4.Compare()),
 	            UrlOption: $6,
 	            CredentialsOption: $7,
 	            StatusOption: $8,
@@ -6005,6 +6100,49 @@ default_opt:
         $$ = true
     }
 
+create_stream_stmt:
+    CREATE replace_opt STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
+    {
+        $$ = &tree.CreateStream {
+            Replace: $2,
+            Source: false,
+            IfNotExists: $4,
+            StreamName: *$5,
+            Defs: $7,
+            Options: $9,
+        }
+    }
+|   CREATE replace_opt SOURCE STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
+    {
+        $$ = &tree.CreateStream {
+            Replace: $2,
+            Source: true,
+            IfNotExists: $5,
+            StreamName: *$6,
+            Defs: $8,
+            Options: $10,
+        }
+    }
+|	CREATE replace_opt STREAM not_exists_opt table_name stream_option_list_opt AS select_stmt
+    {
+        $$ = &tree.CreateStream {
+            Replace: $2,
+            IfNotExists: $4,
+            StreamName: *$5,
+            AsSource: $8,
+            Options: $6,
+        }
+    }
+
+replace_opt:
+    {
+        $$ = false
+    }
+|   OR REPLACE
+    {
+        $$ = true
+    }
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -6015,7 +6153,7 @@ create_table_stmt:
             Defs: $7,
             Options: $9,
             PartitionOption: $10,
-            ClusterByOption: $11, 
+            ClusterByOption: $11,
         }
     }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt_2
@@ -6117,7 +6255,7 @@ create_sequence_stmt:
             MinValue: $7,
             MaxValue: $8,
             StartWith: $9,
-            Cycle: $10, 
+            Cycle: $10,
         }
     }
 as_datatype_opt:
@@ -6142,7 +6280,7 @@ increment_by_opt:
     {
         $$ = nil
     }
-|   INCREMENT BY INTEGRAL 
+|   INCREMENT BY INTEGRAL
     {
         $$ = &tree.IncrementByOption{
             Minus: false,
@@ -6186,7 +6324,7 @@ min_value_opt:
     {
         $$ = nil
     }
-|   MINVALUE INTEGRAL 
+|   MINVALUE INTEGRAL
     {
         $$ = &tree.MinValueOption{
             Minus: false,
@@ -6528,6 +6666,31 @@ linear_opt:
 |   LINEAR
     {
         $$ = true
+    }
+
+stream_option_list_opt:
+    {
+        $$ = nil
+    }
+|	WITH '(' stream_option_list ')'
+	{
+		$$ = $3
+	}
+
+stream_option_list:
+	stream_option
+	{
+		$$ = []tree.TableOption{$1}
+	}
+|	stream_option_list ',' stream_option
+	{
+		$$ = append($1, $3)
+	}
+
+stream_option:
+	ident equal_opt literal
+    {
+        $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1.Compare()) , Val: $3}
     }
 
 table_option_list_opt:
@@ -7184,6 +7347,14 @@ column_attribute_elem:
     {
         $$ = nil
     }
+|	HEADER '(' STRING ')'
+	{
+		$$ = tree.NewAttributeHeader($3)
+	}
+|	HEADERS
+	{
+		$$ = tree.NewAttributeHeaders()
+	}
 
 enforce:
     ENFORCED
@@ -7867,14 +8038,14 @@ window_spec:
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
-            Type: $3,
-            WindowSpec: $8,
-            AggType: 2,
-        }
+	    name := tree.SetUnresolvedName(strings.ToLower($1))
+	        $$ = &tree.FuncExpr{
+	        Func: tree.FuncName2ResolvableFunctionReference(name),
+	        Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
+	        Type: $3,
+	        WindowSpec: $8,
+            OrderBy:$5,
+	    }
     }
 |   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
@@ -7884,6 +8055,26 @@ function_call_aggregate:
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
+        }
+    }
+|   APPROX_COUNT '(' func_type_opt expression_list ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $4,
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
+|   APPROX_COUNT '(' '*' ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{es},
+            WindowSpec: $5,
         }
     }
 |   APPROX_COUNT_DISTINCT '(' expression_list ')' window_spec_opt
@@ -8032,8 +8223,10 @@ function_call_aggregate:
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
 	    WindowSpec: $6,
-	}
+	    }
     }
+
+
 
 std_dev_pop:
     STD
@@ -8317,8 +8510,8 @@ function_call_keyword:
         exprs := make([]tree.Expr, 1)
         exprs[0] = $2
         $$ = &tree.FuncExpr{
-           Func: tree.FuncName2ResolvableFunctionReference(name), 
-           Exprs: exprs, 
+           Func: tree.FuncName2ResolvableFunctionReference(name),
+           Exprs: exprs,
         }
     }
 |   BINARY column_name
@@ -8327,7 +8520,7 @@ function_call_keyword:
         exprs := make([]tree.Expr, 1)
         exprs[0] = $2
         $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name), 
+            Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: exprs,
         }
     }
@@ -9982,10 +10175,10 @@ non_reserved_keyword:
 |   START
 |   STATUS
 |   STORAGE
-|	STREAM
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
 |   STATS_SAMPLE_PAGES
+|	SOURCE
 |   SUBPARTITIONS
 |   SUBPARTITION
 |   SIMPLE
@@ -10024,7 +10217,6 @@ non_reserved_keyword:
 |   DATE %prec LOWER_THAN_STRING
 |   TABLES
 |   SEQUENCES
-|   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ
 |   HASH
@@ -10073,6 +10265,7 @@ not_keyword:
 |   BIT_XOR
 |   CAST
 |   COUNT
+|   APPROX_COUNT
 |   APPROX_COUNT_DISTINCT
 |   APPROX_PERCENTILE
 |   CURDATE
@@ -10108,6 +10301,7 @@ not_keyword:
 |   SETVAL
 |   CURRVAL
 |   LASTVAL
+|	HEADERS
 
 //mo_keywords:
 //    PROPERTIES

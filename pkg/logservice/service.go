@@ -143,7 +143,7 @@ func NewService(
 
 	// TODO: check and fix all these magic numbers
 	codec := morpc.NewMessageCodec(mf, codecOpts...)
-	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
+	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.LogServiceListenAddr(), codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			msg := i.(morpc.RPCMessage)
 			if !msg.InternalMessage() {

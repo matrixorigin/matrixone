@@ -82,7 +82,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				continue
 			}
 			if bat.IsEmpty() {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 
@@ -226,8 +226,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					if err != nil {
 						return err
 					}
-					bs := vector.MustFixedCol[bool](vec)
-					if !bs[0] {
+
+					result := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+					b, null := result.GetValue(0)
+					if null || !b {
 						continue
 					}
 				}

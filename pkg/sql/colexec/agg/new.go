@@ -62,6 +62,10 @@ func ReturnType(op int, typ types.Type) (types.Type, error) {
 }
 
 func New(op int, dist bool, typ types.Type) (Agg[any], error) {
+	return NewWithConfig(op, dist, typ, nil)
+}
+
+func NewWithConfig(op int, dist bool, typ types.Type, config any) (Agg[any], error) {
 	switch op {
 	case AggregateSum:
 		return newSum(typ, dist), nil
@@ -91,6 +95,8 @@ func New(op int, dist bool, typ types.Type) (Agg[any], error) {
 		return newAnyValue(typ, dist), nil
 	case AggregateMedian:
 		return newMedian(typ, dist), nil
+	case AggregateGroupConcat:
+		return NewGroupConcat(typ, dist, config), nil
 	case WinRank:
 		r := NewRank()
 		return NewUnaryAgg(WinRank, r, false, typ, RankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
@@ -150,6 +156,8 @@ func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
 		return newGenericCount[types.Time](typ, dist, isStar)
 	case types.T_timestamp:
 		return newGenericCount[types.Timestamp](typ, dist, isStar)
+	case types.T_enum:
+		return newGenericCount[types.Enum](typ, dist, isStar)
 	case types.T_decimal64:
 		return newGenericCount[types.Decimal64](typ, dist, isStar)
 	case types.T_decimal128:
@@ -204,6 +212,8 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 		return newGenericAnyValue[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericAnyValue[types.Timestamp](typ, dist)
+	case types.T_enum:
+		return newGenericAnyValue[types.Enum](typ, dist)
 	case types.T_decimal64:
 		return newGenericAnyValue[types.Decimal64](typ, dist)
 	case types.T_decimal128:
@@ -241,13 +251,13 @@ func newAvg(typ types.Type, dist bool) Agg[any] {
 		if dist {
 			return NewUnaryDistAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewD128Avg(typ)
 		if dist {
 			return NewUnaryDistAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for avg", typ))
 }
@@ -279,13 +289,13 @@ func newSum(typ types.Type, dist bool) Agg[any] {
 		if dist {
 			return NewUnaryDistAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewD128Sum()
 		if dist {
 			return NewUnaryDistAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for sum", typ))
 }
@@ -362,6 +372,8 @@ func newMax(typ types.Type, dist bool) Agg[any] {
 		return newGenericMax[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericMax[types.Timestamp](typ, dist)
+	case types.T_enum:
+		return newGenericMax[types.Enum](typ, dist)
 	case types.T_decimal64:
 		aggPriv := NewD64Max()
 		if dist {
@@ -456,6 +468,8 @@ func newMin(typ types.Type, dist bool) Agg[any] {
 		return newGenericMin[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericMin[types.Timestamp](typ, dist)
+	case types.T_enum:
+		return newGenericMin[types.Enum](typ, dist)
 	case types.T_decimal64:
 		aggPriv := NewD64Min()
 		if dist {
@@ -522,6 +536,8 @@ func newApprox(typ types.Type, dist bool) Agg[any] {
 		return newGenericApproxcd[types.Time](typ, dist)
 	case types.T_timestamp:
 		return newGenericApproxcd[types.Timestamp](typ, dist)
+	case types.T_enum:
+		return newGenericApproxcd[types.Enum](typ, dist)
 	case types.T_decimal64:
 		return newGenericApproxcd[types.Decimal64](typ, dist)
 	case types.T_decimal128:
@@ -798,7 +814,7 @@ func newGenericCount[T types.OrderedT | Decimal128AndString](typ types.Type, dis
 	if dist {
 		return NewUnaryDistAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+	return NewUnaryAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
 func newGenericApproxcd[T any](typ types.Type, dist bool) Agg[any] {
@@ -854,4 +870,24 @@ func newGenericMedian[T Numeric](typ types.Type, dist bool) Agg[any] {
 		panic(moerr.NewNotSupportedNoCtx("median in distinct mode"))
 	}
 	return NewUnaryAgg(AggregateMedian, aggPriv, false, typ, MedianReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+}
+
+func NewGroupConcat(typ types.Type, dist bool, config any) Agg[any] {
+
+	separator := ","
+	bytes, ok := config.([]byte)
+	if bytes != nil && ok {
+		separator = string(bytes)
+	}
+
+	switch typ.Oid {
+	case types.T_varchar:
+		aggPriv := newGroupConcat(separator)
+		if dist {
+			return NewUnaryDistAgg(AggregateGroupConcat, aggPriv, false, typ, GroupConcatReturnType(nil), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return NewUnaryAgg(AggregateGroupConcat, aggPriv, false, typ, GroupConcatReturnType(nil), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	}
+
+	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for group_concat", typ))
 }

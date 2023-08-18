@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
+	"runtime/debug"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -48,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -182,9 +185,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 	err := s.remoteRun(c)
-	// tell connect operator that it's over
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
-	arg.Free(s.Proc, err != nil)
 	return err
 }
 
@@ -228,8 +228,63 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 					s.NodeInfo.Data = s.NodeInfo.Data[:0]
 					break
 				}
-				if filter.Typ == pbpipeline.RuntimeFilter_NO_FILTER {
+				switch filter.Typ {
+				case pbpipeline.RuntimeFilter_NO_FILTER:
 					continue
+
+				case pbpipeline.RuntimeFilter_IN:
+					inExpr := &plan.Expr{
+						Typ: &plan.Type{
+							Id:          int32(types.T_bool),
+							NotNullable: spec.Expr.Typ.NotNullable,
+						},
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									Obj:     function.InFunctionEncodedID,
+									ObjName: function.InFunctionName,
+								},
+								Args: []*plan.Expr{
+									spec.Expr,
+									{
+										Typ: &plan.Type{
+											Id: int32(types.T_tuple),
+										},
+										Expr: &plan.Expr_Bin{
+											Bin: &plan.BinaryData{
+												Data: filter.Data,
+											},
+										},
+									},
+								},
+							},
+						},
+					}
+
+					if s.DataSource.Expr == nil {
+						s.DataSource.Expr = inExpr
+					} else {
+						s.DataSource.Expr = &plan.Expr{
+							Typ: &plan.Type{
+								Id:          int32(types.T_bool),
+								NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
+							},
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{
+										Obj:     function.AndFunctionEncodedID,
+										ObjName: function.AndFunctionName,
+									},
+									Args: []*plan.Expr{
+										s.DataSource.Expr,
+										inExpr,
+									},
+								},
+							},
+						}
+					}
+
+					// TODO: implement BETWEEN expression
 				}
 
 				exprs = append(exprs, spec.Expr)
@@ -383,7 +438,10 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope := newParallelScope(s, ss)
+	newScope, err := newParallelScope(s, ss)
+	if err != nil {
+		return err
+	}
 	newScope.SetContextRecursively(s.Proc.Ctx)
 	return newScope.MergeRun(c)
 }
@@ -396,7 +454,7 @@ func (s *Scope) PushdownRun() error {
 	for {
 		bat := <-reg.Ch
 		if bat == nil {
-			s.Proc.Reg.InputBatch = bat
+			s.Proc.SetInputBatch(bat)
 			_, err = vm.Run(s.Instructions, s.Proc)
 			s.Proc.Cancel()
 			return err
@@ -404,7 +462,7 @@ func (s *Scope) PushdownRun() error {
 		if bat.RowCount() == 0 {
 			continue
 		}
-		s.Proc.Reg.InputBatch = bat
+		s.Proc.SetInputBatch(bat)
 		if end, err = vm.Run(s.Instructions, s.Proc); err != nil || end {
 			return err
 		}
@@ -416,6 +474,10 @@ func (s *Scope) JoinRun(c *Compile) error {
 	if mcpu <= 1 { // no need to parallel
 		buildScope := c.newJoinBuildScope(s, nil)
 		s.PreScopes = append(s.PreScopes, buildScope)
+		if s.BuildIdx > 1 {
+			probeScope := c.newJoinProbeScope(s, nil)
+			s.PreScopes = append(s.PreScopes, probeScope)
+		}
 		return s.MergeRun(c)
 	}
 
@@ -436,7 +498,11 @@ func (s *Scope) JoinRun(c *Compile) error {
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
 	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
-	s = newParallelScope(s, ss)
+	var err error
+	s, err = newParallelScope(s, ss)
+	if err != nil {
+		return err
+	}
 
 	if isRight {
 		channel := make(chan *bitmap.Bitmap, mcpu)
@@ -472,6 +538,14 @@ func (s *Scope) JoinRun(c *Compile) error {
 	return s.MergeRun(c)
 }
 
+func (s *Scope) isShuffle() bool {
+	if s != nil && (s.Instructions[0].Op == vm.Group) {
+		arg := s.Instructions[0].Arg.(*group.Argument)
+		return arg.IsShuffle
+	}
+	return false
+}
+
 func (s *Scope) isRight() bool {
 	return s != nil && (s.Instructions[0].Op == vm.Right || s.Instructions[0].Op == vm.RightSemi || s.Instructions[0].Op == vm.RightAnti)
 }
@@ -494,12 +568,15 @@ func (s *Scope) LoadRun(c *Compile) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope := newParallelScope(s, ss)
+	newScope, err := newParallelScope(s, ss)
+	if err != nil {
+		return err
+	}
 
 	return newScope.MergeRun(c)
 }
 
-func newParallelScope(s *Scope, ss []*Scope) *Scope {
+func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 
 	for i, in := range s.Instructions {
@@ -633,6 +710,14 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: &merge.Argument{},
 		}
+		//Add log for cn panic which reported on issue 10656
+		//If you find this log is printed, please report the repro details
+		if len(s.Instructions) < 2 {
+			logutil.Error("the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
+				zap.String("stack", string(debug.Stack())),
+			)
+			return nil, moerr.NewInternalErrorNoCtx("the length of s.Instructions is too short !")
+		}
 		s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
 		s.Instructions = s.Instructions[:2]
 	}
@@ -666,7 +751,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 			j++
 		}
 	}
-	return s
+	return s, nil
 }
 
 func (s *Scope) appendInstruction(in vm.Instruction) {
@@ -781,4 +866,24 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			dataBuffer = nil
 		}
 	}
+}
+
+func (s *Scope) replace(c *Compile) error {
+	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
+	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
+
+	delAffectedRows := uint64(0)
+	if deleteCond != "" {
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond))
+		if err != nil {
+			return err
+		}
+		delAffectedRows = result.AffectedRows
+	}
+	result, err := c.runSqlWithResult("insert " + c.sql[7:])
+	if err != nil {
+		return err
+	}
+	c.addAffectedRows(result.AffectedRows + delAffectedRows)
+	return nil
 }

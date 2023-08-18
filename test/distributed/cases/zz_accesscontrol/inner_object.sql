@@ -48,6 +48,7 @@ delete from mo_catalog.mo_role_privs;
 delete from mo_catalog.mo_database;
 delete from mo_catalog.mo_columns;
 delete from mo_catalog.mo_indexes;
+delete from mo_catalog.mo_table_partitions;
 
 --内置数据库不能删除
 drop database information_schema;
@@ -74,13 +75,33 @@ select role_name from mo_catalog.mo_role where role_name in('accountadmin');
 -- @session
 
 create table tb1(
-deptno int unsigned,
-dname varchar(15),
-loc varchar(50),
-unique key(deptno)
+                    deptno int unsigned,
+                    dname varchar(15),
+                    loc varchar(50),
+                    unique key(deptno)
 );
 select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
 desc mo_catalog.mo_indexes;
+
+CREATE TABLE trp (
+                     id INT NOT NULL,
+                     fname VARCHAR(30),
+                     lname VARCHAR(30),
+                     hired DATE NOT NULL DEFAULT '1970-01-01',
+                     separated DATE NOT NULL DEFAULT '9999-12-31',
+                     job_code INT,
+                     store_id INT
+)
+    PARTITION BY RANGE ( YEAR(separated) ) (
+	PARTITION p0 VALUES LESS THAN (1991),
+	PARTITION p1 VALUES LESS THAN (1996),
+	PARTITION p2 VALUES LESS THAN (2001),
+	PARTITION p3 VALUES LESS THAN MAXVALUE
+);
+select tbl.relname, part.number, part.name, part.description_utf8, part.comment, part.options, part.partition_table_name
+from mo_catalog.mo_tables tbl left join mo_catalog.mo_table_partitions part on tbl.rel_id = part.table_id
+where tbl.relname = 'trp';
+desc mo_catalog.mo_table_partitions;
 
 --accountadmin删除/回收,切换到普通account验证
 create account accx11 ADMIN_NAME 'admin' IDENTIFIED BY '111';

@@ -17,14 +17,17 @@ package blockio
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -130,7 +133,7 @@ func jobFactory(
 	)
 }
 
-func fetchReader(params prefetchParams) (reader *objectio.ObjectReader) {
+func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
 	if params.reader != nil {
 		reader = params.reader
 	} else {
@@ -140,7 +143,7 @@ func fetchReader(params prefetchParams) (reader *objectio.ObjectReader) {
 }
 
 // prefetch data job
-func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
+func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
 	return getJob(
 		ctx,
@@ -155,7 +158,9 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 				res.Err = err
 				return
 			}
-			res.Res = ioVectors
+			// no further reads
+			res.Res = nil
+			ioVectors.Release()
 			if params.reader == nil {
 				putReader(reader)
 			}
@@ -165,37 +170,33 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 }
 
 // prefetch metadata job
-func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
-	reader := fetchReader(params)
+func prefetchMetaJob(ctx context.Context, params PrefetchParams) *tasks.Job {
+	name := params.key.Name().String()
 	return getJob(
 		ctx,
-		makeName(reader.GetName()),
+		makeName(name),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
-			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := reader.ReadMeta(ctx, nil)
+			objectMeta, err := objectio.FastLoadObjectMeta(ctx, &params.key, true, params.fs)
 			if err != nil {
 				res.Err = err
 				return
 			}
-			res.Res = ioVectors
-			if params.reader == nil {
-				putReader(reader)
-			}
+			res.Res = objectMeta
 			return
 		},
 	)
 }
 
 type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
-type PrefetchFunc = func(params prefetchParams) error
+type PrefetchFunc = func(params PrefetchParams) error
 
 func readColumns(ctx context.Context, params fetchParams) (any, error) {
 	return params.reader.ReadOneBlock(ctx, params.idxes, params.typs, params.blk, nil)
 }
 
-func noopPrefetch(params prefetchParams) error {
+func noopPrefetch(params PrefetchParams) error {
 	// Synchronous prefetch does not need to do anything
 	return nil
 }
@@ -204,6 +205,7 @@ type IoPipeline struct {
 	options struct {
 		fetchParallism    int
 		prefetchParallism int
+		queueDepth        int
 	}
 	// load queue
 	fetch struct {
@@ -227,8 +229,15 @@ type IoPipeline struct {
 	fetchFun     FetchFunc
 	prefetchFunc PrefetchFunc
 
-	stats        *objectio.Stats
-	statsManager *stopper.Stopper
+	sensors struct {
+		prefetchDepth *utils.NumericSensor[int64]
+	}
+
+	stats struct {
+		selectivityStats  *objectio.Stats
+		prefetchDropStats stats.Counter
+	}
+	printer *stopper.Stopper
 }
 
 func NewIOPipeline(
@@ -241,18 +250,16 @@ func NewIOPipeline(
 	p.fillDefaults()
 
 	p.waitQ = sm.NewSafeQueue(
-		100000,
+		p.options.queueDepth,
 		100,
 		p.onWait)
 
-	p.prefetch.queue = sm.NewSafeQueue(
-		100000,
-		64,
-		p.onPrefetch)
+	// the prefetch queue is supposed to be an unblocking queue
+	p.prefetch.queue = sm.NewNonBlockingQueue(p.options.queueDepth, 64, p.onPrefetch)
 	p.prefetch.scheduler = tasks.NewParallelJobScheduler(p.options.prefetchParallism)
 
 	p.fetch.queue = sm.NewSafeQueue(
-		100000,
+		p.options.queueDepth,
 		64,
 		p.onFetch)
 	p.fetch.scheduler = tasks.NewParallelJobScheduler(p.options.fetchParallism)
@@ -260,7 +267,7 @@ func NewIOPipeline(
 	p.fetchFun = readColumns
 	p.prefetchFunc = noopPrefetch
 
-	p.statsManager = stopper.NewStopper("PrintStatsRunner")
+	p.printer = stopper.NewStopper("IOPrinter")
 	return p
 }
 
@@ -271,12 +278,35 @@ func (p *IoPipeline) fillDefaults() {
 	if p.options.prefetchParallism <= 0 {
 		p.options.prefetchParallism = runtime.NumCPU() * 4
 	}
+	if p.options.queueDepth <= 0 {
+		p.options.queueDepth = 100000
+	}
 	if p.jobFactory == nil {
 		p.jobFactory = jobFactory
 	}
 
-	if p.stats == nil {
-		p.stats = objectio.NewStats()
+	if p.stats.selectivityStats == nil {
+		p.stats.selectivityStats = objectio.NewStats()
+	}
+
+	if p.sensors.prefetchDepth == nil {
+		name := utils.MakeSensorName("IO", "PrefetchDepth")
+		sensor := utils.NewNumericSensor[int64](
+			name,
+			utils.WithGetStateSensorOption(
+				func(v int64) utils.SensorState {
+					if float64(v) < 0.6*float64(p.options.queueDepth) {
+						return utils.SensorStateGreen
+					} else if float64(v) < 0.8*float64(p.options.queueDepth) {
+						return utils.SensorStateYellow
+					} else {
+						return utils.SensorStateRed
+					}
+				},
+			),
+		)
+		utils.RegisterSensor(sensor)
+		p.sensors.prefetchDepth = sensor
 	}
 }
 
@@ -286,7 +316,7 @@ func (p *IoPipeline) Start() {
 		p.waitQ.Start()
 		p.fetch.queue.Start()
 		p.prefetch.queue.Start()
-		if err := p.statsManager.RunNamedTask("print-stats-job", p.crontask); err != nil {
+		if err := p.printer.RunNamedTask("io-printer-job", p.crontask); err != nil {
 			panic(err)
 		}
 	})
@@ -294,7 +324,7 @@ func (p *IoPipeline) Start() {
 
 func (p *IoPipeline) Stop() {
 	p.onceStop.Do(func() {
-		p.statsManager.Stop()
+		p.printer.Stop()
 		p.active.Store(false)
 
 		p.prefetch.queue.Stop()
@@ -304,6 +334,10 @@ func (p *IoPipeline) Stop() {
 		p.fetch.scheduler.Stop()
 
 		p.waitQ.Stop()
+		if p.sensors.prefetchDepth != nil {
+			utils.UnregisterSensor(p.sensors.prefetchDepth)
+			p.sensors.prefetchDepth = nil
+		}
 	})
 }
 
@@ -330,7 +364,7 @@ func (p *IoPipeline) doAsyncFetch(
 	return
 }
 
-func (p *IoPipeline) Prefetch(params prefetchParams) (err error) {
+func (p *IoPipeline) Prefetch(params PrefetchParams) (err error) {
 	return p.prefetchFunc(params)
 }
 
@@ -348,11 +382,12 @@ func (p *IoPipeline) doFetch(
 	return
 }
 
-func (p *IoPipeline) doPrefetch(params prefetchParams) (err error) {
-	if _, err = p.prefetch.queue.Enqueue(params); err != nil {
-		return
+func (p *IoPipeline) doPrefetch(params PrefetchParams) (err error) {
+	if _, err = p.prefetch.queue.Enqueue(params); err == sm.ErrFull {
+		p.stats.prefetchDropStats.Add(1)
 	}
-	return
+	// prefetch doesn't care about what type of err has occurred
+	return nil
 }
 
 func (p *IoPipeline) onFetch(jobs ...any) {
@@ -385,13 +420,14 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 	if !p.active.Load() {
 		return
 	}
-	processes := make([]prefetchParams, 0)
+
+	processes := make([]PrefetchParams, 0)
 	for _, item := range items {
-		option := item.(prefetchParams)
+		option := item.(PrefetchParams)
 		if len(option.ids) == 0 {
 			job := prefetchMetaJob(
 				context.Background(),
-				item.(prefetchParams),
+				item.(PrefetchParams),
 			)
 			p.schedulerPrefetch(job)
 			continue
@@ -415,6 +451,11 @@ func (p *IoPipeline) onWait(jobs ...any) {
 	for _, j := range jobs {
 		job := j.(*tasks.Job)
 		res := job.WaitDone()
+		if res == nil {
+			logutil.Infof("job is %v", job.String())
+			putJob(job)
+			return
+		}
 		if res.Err != nil {
 			logutil.Warnf("Prefetch %s err: %s", job.ID(), res.Err)
 		}
@@ -424,7 +465,13 @@ func (p *IoPipeline) onWait(jobs ...any) {
 
 func (p *IoPipeline) crontask(ctx context.Context) {
 	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
-		logutil.Info(p.stats.ExportString())
+		logutil.Info(p.stats.selectivityStats.ExportString())
+		logutil.Info(p.sensors.prefetchDepth.String())
+		wdrops := p.stats.prefetchDropStats.SwapW(0)
+		if wdrops > 0 {
+			logutil.Infof("PrefetchDropStats: %d", wdrops)
+		}
+		logutil.Info(objectio.ExportMetaCacheStats())
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

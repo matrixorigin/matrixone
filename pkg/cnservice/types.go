@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -54,6 +55,9 @@ var (
 	// defaultTxnIsolation     = txn.TxnIsolation_SI
 	defaultTxnMode             = txn.TxnMode_Optimistic
 	maxForMaxPreparedStmtCount = 1000000
+
+	// Service ports related.
+	defaultServiceHost = "127.0.0.1"
 )
 
 type Service interface {
@@ -93,16 +97,22 @@ type Config struct {
 	// SQLAddress service address for receiving external sql client
 	SQLAddress string `toml:"sql-address"`
 
+	// PortBase is the base port for the service. We reserve reservedPorts for
+	// the service to start internal server inside it.
+	//
+	// TODO(volgariver6): The value of this field is also used to determine the version
+	// of MO. If it is not set, we use the old listen-address/service-address fields, and
+	// if it is set, we use the new policy to distribute the ports to all services.
+	PortBase int `toml:"port-base"`
+	// ServiceHost is the host name/IP for the service address of RPC request. There is
+	// no port value in it.
+	ServiceHost string `toml:"service-host"`
+
 	// FileService file service configuration
 
 	Engine struct {
-		Type                EngineType           `toml:"type"`
-		Logstore            options.LogstoreType `toml:"logstore"`
-		FlushInterval       toml.Duration        `toml:"flush-interval"`
-		MinCount            int64                `toml:"min-count"`
-		ScanInterval        toml.Duration        `toml:"scan-interval"`
-		IncrementalInterval toml.Duration        `toml:"incremental-interval"`
-		GlobalMinCount      int64                `toml:"global-min-count"`
+		Type     EngineType           `toml:"type"`
+		Logstore options.LogstoreType `toml:"logstore"`
 	}
 
 	// parameters for cn-server related buffer.
@@ -115,8 +125,6 @@ type Config struct {
 		HostSize int64 `toml:"host-size"`
 		// GuestSize is the memory limit for one query
 		GuestSize int64 `toml:"guest-size"`
-		// OperatorSize is the memory limit for one operator
-		OperatorSize int64 `toml:"operator-size"`
 		// BatchRows is the batch rows limit for one batch
 		BatchRows int64 `toml:"batch-rows"`
 		// BatchSize is the memory limit for one batch
@@ -202,6 +210,12 @@ type Config struct {
 		// EnableCheckRCInvalidError this config is used to check and find RC bugs in pessimistic mode.
 		// Will remove it later version.
 		EnableCheckRCInvalidError bool `toml:"enable-check-rc-invalid-error"`
+		// Limit flow control of transaction creation, maximum number of transactions per second. Default
+		// is unlimited.
+		Limit int `toml:"limit-per-second"`
+		// MaxActive is the count of max active txn in current cn.  If reached max value, the txn
+		// is added to a FIFO queue. Default is unlimited.
+		MaxActive int `toml:"max-active"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
@@ -218,6 +232,10 @@ type Config struct {
 
 	// MaxPreparedStmtCount
 	MaxPreparedStmtCount int `toml:"max_prepared_stmt_count"`
+
+	// InitWorkState is the initial work state for CN. Valid values are:
+	// "working", "draining" and "drained".
+	InitWorkState string `toml:"init-work-state"`
 }
 
 func (c *Config) Validate() error {
@@ -312,10 +330,10 @@ func (c *Config) Validate() error {
 		}
 	} else {
 		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = -1
+			c.Txn.EnableSacrificingFreshness = 1
 		}
 		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
+			c.Txn.EnableCNBasedConsistency = 1
 		}
 		// We don't support the following now, so always disable
 		c.Txn.EnableRefreshExpression = -1
@@ -349,16 +367,27 @@ func (c *Config) Validate() error {
 	}
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
+	if c.PortBase != 0 {
+		if c.ServiceHost == "" {
+			c.ServiceHost = defaultServiceHost
+		}
+	}
+
+	if !metadata.ValidStateString(c.InitWorkState) {
+		c.InitWorkState = metadata.WorkState_Working.String()
+	}
+
 	// TODO: remove this if rc is stable
 	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
 		c.Txn.EnableCheckRCInvalidError)
 	return nil
 }
 
-func (c *Config) getLockServiceConfig() lockservice.Config {
-	c.LockService.ServiceID = c.UUID
-	c.LockService.RPC = c.RPC
-	return c.LockService
+func (s *service) getLockServiceConfig() lockservice.Config {
+	s.cfg.LockService.ServiceID = s.cfg.UUID
+	s.cfg.LockService.RPC = s.cfg.RPC
+	s.cfg.LockService.ListenAddress = s.lockServiceListenAddr()
+	return s.cfg.LockService
 }
 
 type service struct {
@@ -408,4 +437,6 @@ type service struct {
 		runner         taskservice.TaskRunner
 		storageFactory taskservice.TaskStorageFactory
 	}
+
+	addressMgr address.AddressManager
 }

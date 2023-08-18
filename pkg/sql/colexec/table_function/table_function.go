@@ -17,6 +17,7 @@ package table_function
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,6 +60,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		return process.ExecStop, e
 	}
 	if bat.IsEmpty() {
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, e
 	}
 
@@ -83,6 +86,7 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) error {
 	tblArg := arg.(*Argument)
+	tblArg.ctr = new(container)
 
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {

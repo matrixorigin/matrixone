@@ -89,8 +89,8 @@ func (w *Ws) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
 
-func (w *Ws) Commit(ctx context.Context) error {
-	return nil
+func (w *Ws) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
+	return nil, nil
 }
 
 func (w *Ws) Rollback(ctx context.Context) error {
@@ -101,8 +101,10 @@ func (w *Ws) Adjust() error {
 	return nil
 }
 
-func (w *Ws) StartStatement() {}
-func (w *Ws) EndStatement()   {}
+func (w *Ws) StartStatement()     {}
+func (w *Ws) EndStatement()       {}
+func (w *Ws) IncrSQLCount()       {}
+func (w *Ws) GetSQLCount() uint64 { return 0 }
 
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
@@ -115,7 +117,7 @@ func TestCompile(t *testing.T) {
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 
-	txnClient := mock_frontend.NewMockTxnClientWithFeature(ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient

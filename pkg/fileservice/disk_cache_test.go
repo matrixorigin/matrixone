@@ -31,6 +31,12 @@ func TestDiskCache(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 
+	// counter
+	numWritten := 0
+	ctx = OnDiskCacheWritten(ctx, func(path string, entry IOEntry) {
+		numWritten++
+	})
+
 	// new
 	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
@@ -63,8 +69,12 @@ func TestDiskCache(t *testing.T) {
 	}
 	testUpdate(cache)
 
+	assert.Equal(t, 1, numWritten)
+
 	// update again
 	testUpdate(cache)
+
+	assert.Equal(t, 1, numWritten)
 
 	// read
 	testRead := func(cache *DiskCache) {
@@ -114,11 +124,14 @@ func TestDiskCache(t *testing.T) {
 	assert.Nil(t, err)
 	testRead(cache)
 
+	assert.Equal(t, 1, numWritten)
+
 	// new cache instance and update
 	cache, err = NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 	testUpdate(cache)
 
+	assert.Equal(t, 1, numWritten)
 }
 
 func TestDiskCachePreload(t *testing.T) {
@@ -243,6 +256,16 @@ func TestDiskCacheEviction(t *testing.T) {
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
+	// counter
+	numWritten := 0
+	numEvict := 0
+	ctx = OnDiskCacheWritten(ctx, func(path string, entry IOEntry) {
+		numWritten++
+	})
+	ctx = OnDiskCacheEvict(ctx, func(path string) {
+		numEvict++
+	})
+
 	// new
 	cache, err := NewDiskCache(ctx, dir, 3, time.Second, 1, nil)
 	assert.Nil(t, err)
@@ -270,6 +293,8 @@ func TestDiskCacheEviction(t *testing.T) {
 
 	cache.evict(ctx)
 	assert.True(t, counterSet.FileService.Cache.Disk.Evict.Load() > 0)
+
+	assert.True(t, numEvict > 0)
 }
 
 func TestImmediatelyEviction(t *testing.T) {

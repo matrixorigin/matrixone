@@ -102,7 +102,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (proces
 
 	ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 	for i, ag := range ap.Aggs {
-		if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, ap.Types[i]); err != nil {
+		if ctr.bat.Aggs[i], err = agg.NewWithConfig(ag.Op, ag.Dist, ap.Types[i], ag.Config); err != nil {
 			return process.ExecNext, err
 		}
 		if err = ctr.bat.Aggs[i].Grows(n, proc.Mp()); err != nil {
@@ -374,7 +374,7 @@ func makeArgFs(ap *Argument) {
 
 func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	w := expr.Expr.(*plan.Expr_W).W
-	if w.PartitionBy == nil && w.OrderBy == nil {
+	if len(w.PartitionBy) == 0 && len(w.OrderBy) == 0 {
 		return nil
 	}
 	orderBy := make([]*plan.OrderBySpec, 0, len(w.PartitionBy)+len(w.OrderBy))
@@ -486,9 +486,11 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	}
 
 	// shuffle agg vector
-	if ctr.aggVecs[idx].vec != nil && !ctr.aggVecs[idx].executor.IsColumnExpr() {
-		if err := ctr.aggVecs[idx].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
-			panic(err)
+	for k := idx; k < len(ctr.aggVecs); k++ {
+		if ctr.aggVecs[k].vec != nil && !ctr.aggVecs[k].executor.IsColumnExpr() {
+			if err := ctr.aggVecs[k].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
+				panic(err)
+			}
 		}
 	}
 

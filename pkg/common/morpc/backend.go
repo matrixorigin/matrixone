@@ -613,6 +613,8 @@ func (rb *remoteBackend) doClose() {
 	rb.closeOnce.Do(func() {
 		close(rb.resetConnC)
 		rb.closeConn(false)
+		// TODO: re create when reconnect
+		rb.conn = nil
 	})
 }
 

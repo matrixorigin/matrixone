@@ -16,6 +16,7 @@ package executor
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -48,6 +49,7 @@ type Options struct {
 	minCommittedTS          timestamp.Timestamp
 	innerTxn                bool
 	waitCommittedLogApplied bool
+	timeZone                *time.Location
 }
 
 // Result exec sql result

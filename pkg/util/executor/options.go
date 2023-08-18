@@ -17,6 +17,7 @@ package executor
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"time"
 )
 
 // WithDisableIncrStatement disable incr statement
@@ -40,6 +41,11 @@ func (opts Options) WithDatabase(database string) Options {
 // WithAccountID execute sql in account
 func (opts Options) WithAccountID(accountID uint32) Options {
 	opts.accountID = accountID
+	return opts
+}
+
+func (opts Options) WithTimeZone(timeZone *time.Location) Options {
+	opts.timeZone = timeZone
 	return opts
 }
 
@@ -108,4 +114,9 @@ func (opts Options) Txn() client.TxnOperator {
 // DisableIncrStatement returns the txn operator need incr a new input statement
 func (opts Options) DisableIncrStatement() bool {
 	return opts.disableIncrStatement
+}
+
+// GetTimeZone return the time zone of original session
+func (opts Options) GetTimeZone() *time.Location {
+	return opts.timeZone
 }

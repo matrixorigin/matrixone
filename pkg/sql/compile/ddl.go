@@ -175,9 +175,13 @@ func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int
 	return nil, 0, moerr.NewInvalidInputNoCtx("column '%s' doesn't exist in table", colName)
 }
 
-func (s *Scope) AlterTable(c *Compile) error {
+func (s *Scope) AlterTableInplace(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
-	dbName := c.db
+	dbName := qry.Database
+	if dbName == "" {
+		dbName = c.db
+	}
+
 	tblName := qry.GetTableDef().GetName()
 
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
@@ -659,7 +663,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
+
+		insertSQL2, err := makeInsertTablePartitionsSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
+		if err != nil {
+			return err
+		}
+		err = c.runSql(insertSQL2)
+		if err != nil {
+			return err
+		}
 	}
+
 	return maybeCreateAutoIncrement(
 		c.ctx,
 		dbSource,
@@ -1058,7 +1072,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName); e != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
 				return e
 			}
 			err = e
@@ -1249,7 +1263,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName); e != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
 				return e
 			}
 			err = e
@@ -1440,6 +1454,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				AutoIncrement: col.Typ.GetAutoIncr(),
 				IsHidden:      col.Hidden,
 				Seqnum:        uint16(col.Seqnum),
+				EnumVlaues:    colTyp.GetEnumvalues(),
 			},
 		}
 	}

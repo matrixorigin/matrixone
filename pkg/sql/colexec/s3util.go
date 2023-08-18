@@ -465,6 +465,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Time](), getFixedCols[types.Time](w.Bats, pos), nulls)
 		case types.T_timestamp:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Timestamp](), getFixedCols[types.Timestamp](w.Bats, pos), nulls)
+		case types.T_enum:
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Enum](), getFixedCols[types.Enum](w.Bats, pos), nulls)
 		case types.T_decimal64:
 			merge = NewMerge(len(w.Bats), sort.NewDecimal64Less(), getFixedCols[types.Decimal64](w.Bats, pos), nulls)
 		case types.T_decimal128:
@@ -556,17 +558,17 @@ func (w *S3Writer) GenerateWriter(proc *process.Process) (objectio.ObjectName, e
 func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
-	segId := Srv.GenerateSegment()
+	obj := Srv.GenerateObject()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
-	w.writer, err = blockio.NewBlockWriterNew(s3, segId, w.schemaVersion, w.seqnums)
+	w.writer, err = blockio.NewBlockWriterNew(s3, obj, w.schemaVersion, w.seqnums)
 	if err != nil {
 		return nil, err
 	}
 	w.lengths = w.lengths[:0]
-	return segId, err
+	return obj, err
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
@@ -602,7 +604,7 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 	return bat.Shuffle(sels, m)
 }
 
-func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
+func (w *S3Writer) WriteBlock(bat *batch.Batch, dataType ...objectio.DataMetaType) error {
 	if w.pk > -1 {
 		pkIdx := uint16(w.pk)
 		w.writer.SetPrimaryKey(pkIdx)
@@ -617,9 +619,16 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 			w.tablename, w.seqnums, bat.Attrs)
 	}
 	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.vecs[0].Length(), w.tablename, w.seqnums, w.attrs)
-	_, err := w.writer.WriteBatch(bat)
-	if err != nil {
-		return err
+	if len(dataType) > 0 && dataType[0] == objectio.SchemaTombstone {
+		_, err := w.writer.WriteTombstoneBatch(bat)
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err := w.writer.WriteBatch(bat)
+		if err != nil {
+			return err
+		}
 	}
 	w.lengths = append(w.lengths, uint64(bat.Vecs[0].Length()))
 	return nil

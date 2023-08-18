@@ -34,7 +34,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	// Build runtime filters only for broadcast join
-	if node.NodeType != plan.Node_JOIN || node.Stats.Shuffle {
+	if node.NodeType != plan.Node_JOIN || node.Stats.HashmapStats.Shuffle {
 		return
 	}
 
@@ -95,11 +95,11 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 
 	if len(probeExprs) == 1 {
 		probeNdv := getExprNdv(probeExprs[0], builder)
-		if probeNdv == -1 || node.Stats.HashmapSize/probeNdv >= 0.1 {
+		if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
 			return
 		}
 
-		if node.Stats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
+		if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
 			switch col := probeExprs[0].Expr.(type) {
 			case (*plan.Expr_Col):
 				ctx := builder.ctxByNode[leftChild.NodeId]

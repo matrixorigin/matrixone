@@ -27,33 +27,12 @@ func TestPut(t *testing.T) {
 	assert.Equal(t, 1, len(q.waiters))
 }
 
-func TestLen(t *testing.T) {
-	q := newWaiterQueue()
-	q.put(acquireWaiter("s1", []byte("w")))
-	q.put(acquireWaiter("s1", []byte("w1")))
-	q.put(acquireWaiter("s1", []byte("w2")))
-	assert.Equal(t, 3, q.len())
-
-	v, remain := q.pop()
-	assert.Equal(t, q.waiters[1:], remain)
-	assert.Equal(t, []byte("w"), v.txnID)
-
-	defer func() {
-		if err := recover(); err != nil {
-			return
-		}
-		assert.Fail(t, "must panic")
-	}()
-	q = newWaiterQueue()
-	q.pop()
-}
-
 func TestReset(t *testing.T) {
 	q := newWaiterQueue()
 	q.put(acquireWaiter("s1", []byte("w")))
 	q.put(acquireWaiter("s1", []byte("w1")))
 	q.put(acquireWaiter("s1", []byte("w2")))
-	q.pop()
+	q.moveToFirst("s1")
 
 	q.reset()
 	assert.Empty(t, q.waiters)
@@ -84,10 +63,10 @@ func TestQueueChange(t *testing.T) {
 
 	q.put(acquireWaiter("s1", []byte("w1")))
 	q.put(acquireWaiter("s1", []byte("w2")))
-	assert.Equal(t, 3, q.len())
+	assert.Equal(t, 3, len(q.waiters))
 
 	q.rollbackChange()
-	assert.Equal(t, 1, q.len())
+	assert.Equal(t, 1, len(q.waiters))
 }
 
 func TestAddSameTxnWaiter(t *testing.T) {
@@ -98,6 +77,6 @@ func TestAddSameTxnWaiter(t *testing.T) {
 	q.put(acquireWaiter("s1", []byte("w")))
 	assert.Equal(t, 2, len(q.waiters))
 
-	w, _ := q.pop()
+	w := q.moveToFirst("s1")
 	assert.Equal(t, 1, len(w.sameTxnWaiters))
 }

@@ -112,7 +112,7 @@ func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid) int32 {
 }
 
 // SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
-func (srv *Server) GenerateSegment() objectio.ObjectName {
+func (srv *Server) GenerateObject() objectio.ObjectName {
 	srv.Lock()
 	defer srv.Unlock()
 	return objectio.BuildObjectName(objectio.NewSegmentid(), 0)

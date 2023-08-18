@@ -26,6 +26,8 @@ import (
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
+const defaultGatherInterval = 15 * time.Second
+
 type metricExporter struct {
 	localCollector MetricCollector
 	nodeUUID       string
@@ -37,15 +39,29 @@ type metricExporter struct {
 	sync.Mutex
 	histFamilies []*pb.MetricFamily
 	now          func() int64
+
+	gatherInterval time.Duration
 }
 
-func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node, role string) metric.MetricExporter {
+type ExporterOption func(*metricExporter)
+
+func WithGatherInterval(interval time.Duration) ExporterOption {
+	return func(e *metricExporter) {
+		e.gatherInterval = interval
+	}
+}
+
+func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node, role string, opts ...ExporterOption) metric.MetricExporter {
 	m := &metricExporter{
 		localCollector: collector,
 		nodeUUID:       node,
 		role:           role,
 		gather:         gather,
 		now:            func() int64 { return time.Now().UnixMicro() },
+		gatherInterval: defaultGatherInterval,
+	}
+	for _, opt := range opts {
+		opt(m)
 	}
 	return m
 }
@@ -83,7 +99,7 @@ func (e *metricExporter) Start(inputCtx context.Context) bool {
 	e.stopWg.Add(1)
 	go func() {
 		defer e.stopWg.Done()
-		ticker := time.NewTicker(metric.GetGatherInterval())
+		ticker := time.NewTicker(e.gatherInterval)
 		defer ticker.Stop()
 		for {
 			select {

@@ -975,19 +975,17 @@ insert into td(d) select d+90 from td;
 insert into td(d) select d+100 from td;
 insert into td(d) select d+200 from td;
 insert into td(d) select d+300 from td;
--- @bvt:issue#10501
 insert into td(d) select d+400 from td;
 insert into td(d) select d+500 from td;
 insert into td(d) select d+600 from td;
 insert into td(d) select d+700 from td;
 insert into td(d) select d+800 from td;
 insert into td(d) select d+900 from td;
-
 insert into td(d) select d+1000 from td;
 insert into td(d) select d+2000 from td;
 insert into td(d) select d+3000 from td;
 select count(*) from td;
--- @bvt:issue
+
 
 -- @bvt:issue#10381
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
@@ -1246,5 +1244,14 @@ select `c`.col_int,`dd`.col_time, min(`dd`.col_int) over (partition by `c`.col_i
 drop table `c`;
 drop table `dd`;
 drop table `e`;
-
+drop table if exists t2;
+CREATE TABLE t2 (a int, b int);
+insert into t2 values(1,1);
+insert into t2 values(2,2);
+insert into t2 values(3,3);
+insert into t2 values(4,4);
+insert into t2 values(1,1);
+insert into t2 values(5,5);
+insert into t2 values(6,6);
+select a,min(a) over (partition by a) ,sum(a+1) over (partition by a) from t2;
 drop database test;

@@ -43,15 +43,17 @@ func TestMemCacheLeak(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	m := NewMemCache(WithLRU(4))
+	m := NewMemCache(NewLRUCache(4, true, nil), nil)
 
 	vec := &IOVector{
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToObjectBytes: func(reader io.Reader, data []byte) ([]byte, int64, error) {
-					return []byte{42}, 1, nil
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
+					cacheData := allocator.Alloc(1)
+					cacheData.Bytes()[0] = 42
+					return cacheData, nil
 				},
 			},
 		},
@@ -62,8 +64,7 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 	err = m.Update(ctx, vec, false)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), m.objCache.Capacity()-m.objCache.Available())
-	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
+	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
 	assert.Equal(t, int64(4), counter.FileService.Cache.Memory.Available.Load())
 	assert.Equal(t, int64(0), counter.FileService.Cache.Memory.Used.Load())
 
@@ -73,8 +74,10 @@ func TestMemCacheLeak(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToObjectBytes: func(reader io.Reader, data []byte) ([]byte, int64, error) {
-					return []byte{42}, 1, nil
+				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
+					cacheData := allocator.Alloc(1)
+					cacheData.Bytes()[0] = 42
+					return cacheData, nil
 				},
 			},
 		},
@@ -85,8 +88,7 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 	err = m.Update(ctx, vec, false)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), m.objCache.Capacity()-m.objCache.Available())
-	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
+	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
 	assert.Equal(t, int64(3), counter.FileService.Cache.Memory.Available.Load())
 	assert.Equal(t, int64(1), counter.FileService.Cache.Memory.Used.Load())
 
@@ -95,7 +97,7 @@ func TestMemCacheLeak(t *testing.T) {
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
-	m := NewMemCache(WithLRU(2))
+	m := NewMemCache(NewLRUCache(2, true, nil), nil)
 	ctx := context.Background()
 
 	n := 10

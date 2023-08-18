@@ -65,6 +65,7 @@ const (
 	DropSequence
 	AlterSequence
 	MagicDelete
+	Replace
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -127,6 +128,7 @@ type Scope struct {
 	Reg *process.WaitRegister
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
+	BuildIdx             int
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.

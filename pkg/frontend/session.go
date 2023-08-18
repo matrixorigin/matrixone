@@ -162,7 +162,11 @@ type Session struct {
 
 	curResultSize float64 // MB
 
+	// sentRows used to record rows it sent to client for motrace.StatementInfo.
+	// If there is NO exec_plan, sentRows will be 0.
 	sentRows atomic.Int64
+	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
+	writeCsvBytes atomic.Int64
 
 	createdTime time.Time
 
@@ -1145,8 +1149,7 @@ func (ses *Session) InitSetSessionVar(name string, value interface{}) error {
 	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
 		cv, err := def.GetType().Convert(value)
 		if err != nil {
-			errutil.ReportError(ses.GetRequestContext(), err)
-			return err
+			errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert to the system variable type %s failed, bad value %v", name, def.GetType().String(), value))
 		}
 
 		if def.UpdateSessVar == nil {
@@ -1544,18 +1547,22 @@ func (ses *Session) InitGlobalSystemVariables() error {
 				}
 
 				if sv, ok := gSysVarsDefs[variable_name]; ok {
+					if !sv.GetDynamic() || (sv.Scope != ScopeGlobal && sv.Scope != ScopeBoth) {
+						continue
+					}
 					val, err := sv.GetType().ConvertFromString(variable_value)
 					if err != nil {
+						errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
 						return err
 					}
 					err = ses.InitSetSessionVar(variable_name, val)
 					if err != nil {
-						return err
+						errutil.ReportError(ses.GetRequestContext(), moerr.NewInternalError(context.Background(), "init variable fail: variable %s convert from string value to the system variable type %s failed, bad value %s", variable_name, sv.Type.String(), variable_value))
 					}
 				}
 			}
 		} else {
-			return moerr.NewInternalError(sysTenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", sysAccountName)
+			return moerr.NewInternalError(sysTenantCtx, "there is no data in mo_mysql_compatibility_mode table for account %s", sysAccountName)
 		}
 	} else {
 		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
@@ -2012,6 +2019,7 @@ func (ses *Session) StatusSession() *status.Session {
 		statementID   string
 		statementType string
 		queryType     string
+		sqlSourceType string
 		queryStart    time.Time
 	)
 	if ses.txnHandler != nil && ses.txnHandler.txnOperator != nil {
@@ -2024,6 +2032,9 @@ func (ses *Session) StatusSession() *status.Session {
 		statementType = stmtInfo.StatementType
 		queryType = stmtInfo.QueryType
 		queryStart = stmtInfo.RequestAt
+	}
+	if v := ses.sqlType.Load(); v != nil {
+		sqlSourceType = v.(string)
 	}
 	return &status.Session{
 		NodeID:        ses.getRoutineManager().baseService.ID(),
@@ -2040,9 +2051,23 @@ func (ses *Session) StatusSession() *status.Session {
 		StatementID:   statementID,
 		StatementType: statementType,
 		QueryType:     queryType,
-		SQLSourceType: ses.sqlType.Load().(string),
+		SQLSourceType: sqlSourceType,
 		QueryStart:    queryStart,
 	}
+}
+
+func (ses *Session) SetSessionRoutineStatus(status string) error {
+	var err error
+	if status == tree.AccountStatusRestricted.String() {
+		ses.getRoutine().setResricted(true)
+	} else if status == tree.AccountStatusSuspend.String() {
+		ses.getRoutine().setResricted(false)
+	} else if status == tree.AccountStatusOpen.String() {
+		ses.getRoutine().setResricted(false)
+	} else {
+		err = moerr.NewInternalErrorNoCtx("SetSessionRoutineStatus have invalid status : %s", status)
+	}
+	return err
 }
 
 func checkPlanIsInsertValues(proc *process.Process,

@@ -72,11 +72,13 @@ func parseCmdTag(cmd []byte) pb.HAKeeperUpdateType {
 }
 
 func GetInitialClusterRequestCmd(numOfLogShards uint64,
-	numOfDNShards uint64, numOfLogReplicas uint64) []byte {
+	numOfDNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) []byte {
 	req := pb.InitialClusterRequest{
 		NumOfLogShards:   numOfLogShards,
 		NumOfDNShards:    numOfDNShards,
 		NumOfLogReplicas: numOfLogReplicas,
+		NextID:           nextID,
+		NextIDByKey:      nextIDByKey,
 	}
 	payload, err := req.Marshal()
 	if err != nil {
@@ -560,7 +562,14 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	if s.state.NextID > K8SIDRangeStart {
 		panic("too many IDs assigned during initial cluster request")
 	}
-	s.state.NextID = K8SIDRangeEnd
+	if req.NextID > K8SIDRangeEnd {
+		s.state.NextID = req.NextID
+	} else {
+		s.state.NextID = K8SIDRangeEnd
+	}
+	if req.NextIDByKey != nil && len(req.NextIDByKey) > 0 {
+		s.state.NextIDByKey = req.NextIDByKey
+	}
 
 	plog.Infof("initial cluster set, HAKeeper is in BOOTSTRAPPING state")
 	s.state.State = pb.HAKeeperBootstrapping
@@ -626,6 +635,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		TaskSchedulerState: s.state.TaskSchedulerState,
 		TaskTableUser:      s.state.TaskTableUser,
 		NextId:             s.state.NextID,
+		NextIDByKey:        s.state.NextIDByKey,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)

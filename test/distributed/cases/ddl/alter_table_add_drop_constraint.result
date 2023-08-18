@@ -1,0 +1,78 @@
+drop table if exists t1;
+CREATE TABLE t1(a INTEGER, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+insert into t1 values(1, 'ab', '1980-12-17', 800);
+insert into t1 values(2, 'ac', '1981-02-20', 1600);
+insert into t1 values(3, 'ad', '1981-02-22', 500);
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 add primary key pk1(a, b);
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    NO    PRI    null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 add constraint pk primary key pk1(c);
+Multiple primary key defined
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    NO    PRI    null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 drop primary key;
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 drop primary key;
+Can't DROP 'PRIMARY'; check that column/key exists
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00
+alter table t1 add constraint pk primary key pk1(a);
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
+select * from t1;
+a    b    c    d
+1    ab    1980-12-17    800.00
+2    ac    1981-02-20    1600.00
+3    ad    1981-02-22    500.00

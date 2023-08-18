@@ -31,14 +31,32 @@ import (
 
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	refCountAdd := int64(ap.ctr.localRegsCnt - 1)
-	atomic.AddInt64(&bat.Cnt, refCountAdd)
-	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-		jm.IncRef(refCountAdd)
-		jm.SetDupCount(int64(ap.ctr.localRegsCnt))
+	var refCountAdd int64
+	var err error
+	if !ap.RecSink {
+		refCountAdd = int64(ap.ctr.localRegsCnt - 1)
+		atomic.AddInt64(&bat.Cnt, refCountAdd)
+		if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+			jm.IncRef(refCountAdd)
+			jm.SetDupCount(int64(ap.ctr.localRegsCnt))
+		}
+	}
+	var bats []*batch.Batch
+	if ap.RecSink {
+		bats = append(bats, bat)
+		for k := 1; k < len(ap.LocalRegs); k++ {
+			bat, err = bat.Dup(proc.Mp())
+			if err != nil {
+				return false, err
+			}
+			bats = append(bats, bat)
+		}
 	}
 
 	for i, reg := range ap.LocalRegs {
+		if ap.RecSink {
+			bat = bats[i]
+		}
 		select {
 		case <-proc.Ctx.Done():
 			handleUnsent(proc, bat, refCountAdd, int64(i))

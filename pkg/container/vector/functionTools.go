@@ -102,8 +102,8 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 		}
 	}
 
-	if !v.GetNulls().EmptyByFlag() {
-		if v.typ.Width != 0 && v.typ.Width <= types.VarlenaInlineSize {
+	if !v.nsp.IsEmpty() {
+		if len(v.area) == 0 {
 			return &FunctionParameterNormalSpecial1[types.Varlena]{
 				typ:          *t,
 				sourceVector: v,
@@ -119,7 +119,7 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 			nullMap:      v.GetNulls().GetBitmap(),
 		}
 	}
-	if v.typ.Width != 0 && v.typ.Width <= types.VarlenaInlineSize {
+	if len(v.area) == 0 {
 		return &FunctionParameterWithoutNullSpecial1[types.Varlena]{
 			typ:          *t,
 			sourceVector: v,
@@ -560,6 +560,8 @@ func NewFunctionResultWrapper(
 		return newResultFunc[types.Blockid](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_uuid:
 		return newResultFunc[types.Uuid](v, getVectorMethod, putVectorMethod, mp)
+	case types.T_enum:
+		return newResultFunc[types.Enum](v, getVectorMethod, putVectorMethod, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }

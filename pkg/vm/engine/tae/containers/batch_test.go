@@ -136,7 +136,7 @@ func TestBatchWithPool(t *testing.T) {
 	uid := uuid.New()
 	pool := NewVectorPool(uid.String(), 200)
 
-	bat := NewBatchWithPool(seedBat.Attrs, colTypes, pool)
+	bat := BuildBatchWithPool(seedBat.Attrs, colTypes, 0, pool)
 
 	err := bat.Append(seedBat)
 	assert.NoError(t, err)
@@ -159,4 +159,36 @@ func TestBatchWithPool(t *testing.T) {
 	assert.Equal(t, 0, usedCnt)
 
 	pool.Destory()
+}
+
+func TestBatchSpliter(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	vecTypes := types.MockColTypes(17)
+	bat := MockBatch(vecTypes, 11, 3, nil)
+	defer bat.Close()
+	spliter := NewBatchSplitter(bat, 5)
+	expects_1 := []int{5, 5, 1}
+	var actuals_1 []int
+	for {
+		bat, err := spliter.Next()
+		if err != nil {
+			break
+		}
+		actuals_1 = append(actuals_1, bat.Length())
+	}
+	assert.Equal(t, expects_1, actuals_1)
+
+	bat2 := MockBatch(vecTypes, 10, 3, nil)
+	defer bat2.Close()
+	spliter = NewBatchSplitter(bat2, 5)
+	expects_2 := []int{5, 5}
+	var actuals_2 []int
+	for {
+		bat, err := spliter.Next()
+		if err != nil {
+			break
+		}
+		actuals_2 = append(actuals_2, bat.Length())
+	}
+	assert.Equal(t, expects_2, actuals_2)
 }

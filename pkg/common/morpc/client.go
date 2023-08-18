@@ -148,6 +148,9 @@ func (c *client) adjust() {
 			}
 		}
 	}
+	if c.options.maxIdleDuration == 0 {
+		c.options.maxIdleDuration = defaultMaxIdleDuration
+	}
 }
 
 func (c *client) maybeInitBackends() error {

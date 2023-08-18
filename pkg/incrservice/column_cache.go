@@ -16,7 +16,6 @@ package incrservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
@@ -104,6 +104,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt8,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt8 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"tinyint",
@@ -120,6 +123,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt16,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt16 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"smallint",
@@ -135,6 +141,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt32,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt32 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"int",
@@ -151,6 +160,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt64,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt64 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"bigint",
@@ -167,6 +179,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxUint8,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxUint8 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"tinyint unsigned",
@@ -183,6 +198,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxUint16,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxUint16 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"smallint unsigned",
@@ -199,6 +217,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxUint32,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxUint32 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"int unsigned",
@@ -425,7 +446,7 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 			return nil
 		}
 		c := col.allocatingC
-		// we must unlock here, becase we may wait for a long time. And Lock will added
+		// we must unlock here, because we may wait for a long time. And Lock will added
 		// before return, because the caller holds the lock and call this method and use
 		// defer to unlock.
 		col.Unlock()

@@ -458,7 +458,28 @@ jobs:
           echo 'Start OLTP Point Select Test With 100 threads'
           ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g | tee report/oltp-select.log
      
-      
+      - name: Result Summary
+        if: ${{ always() && !cancelled()  }}
+        run: |
+          cd $GITHUB_WORKSPACE/mo-load
+          files=("report/oltp-insert.log" "report/oltp-delete.log" "report/oltp-update.log" "report/oltp-select.log")
+          for filename in "${files[@]}"
+          do
+              if [ ! -f $filename ]; then
+                  continue
+              fi
+              echo -e "\n[$filename]"
+              grep "tps=" $filename > tmp
+              N=$(wc -l < tmp)
+              head -n 4 tmp
+              echo "..."
+              middle_start=$((N / 2 - 1))
+              middle_end=$((N / 2 + 1))
+              head -n $middle_end tmp | tail -n +$middle_start
+              echo "..."
+              tail -n 3 tmp 
+          done
+       
       - name: Collect Upload files
         if: ${{ always() || cancelled() }}
         run: |
@@ -625,7 +646,28 @@ jobs:
           sed -i 's/password=.*/password=${{ steps.account_for_tpcc.outputs.tpcc_password }}/g' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
-          
+      
+      - name: Result Summary
+        if: ${{ always() && !cancelled()  }}
+        run: |
+          cd $GITHUB_WORKSPACE/mo-tpcc
+          files=("report/tpcc-benchmark-10-10.log" "report/tpcc-benchmark-10-50.log" "report/tpcc-benchmark-10-100.log")
+          for filename in "${files[@]}"
+          do
+              if [ ! -f $filename ]; then
+                  continue
+              fi
+              echo -e "\n[$filename]"
+              grep "Running" $filename > tmp
+              N=$(wc -l < tmp)
+              head -n 4 tmp
+              echo "..."
+              middle_start=$((N / 2 - 1))
+              middle_end=$((N / 2 + 1))
+              head -n $middle_end tmp | tail -n +$middle_start
+              echo "..."
+              tail -n 3 tmp 
+          done    
       
       - name: Collect Upload files
         if: ${{ always() && !cancelled() }}
@@ -753,11 +795,7 @@ jobs:
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
-          sed -i s/debug/error/ etc/launch-tae-multi-CN-tae-DN/cn1.toml
-          sed -i s/debug/error/ etc/launch-tae-multi-CN-tae-DN/cn2.toml
-          sed -i s/debug/error/ etc/launch-tae-multi-CN-tae-DN/dn.toml
-          sed -i s/debug/error/ etc/launch-tae-multi-CN-tae-DN/log.toml
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch-tae-multi-CN-tae-DN         
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch    
       - name: Clone test-tool repository
         uses: actions/checkout@v3
         with:

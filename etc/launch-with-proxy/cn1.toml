@@ -18,7 +18,7 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "mo-data/s3"
+data-dir = "mo-data/shared"
 
 [fileservice.cache]
 memory-capacity = "512MB"
@@ -35,8 +35,7 @@ disableMetric = true
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
-listen-address = "0.0.0.0:7001"
-service-address = "127.0.0.1:7001"
+port-base = 18100
 
 [cn.Engine]
 type = "distributed-tae"

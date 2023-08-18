@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+	"hash/fnv"
 	"unsafe"
 
 	"github.com/google/uuid"
@@ -87,4 +88,45 @@ func IsEmptySegid(id *Segmentid) bool {
 
 func IsEmptyBlkid(id *Blockid) bool {
 	return bytes.Equal(id[:], emptyBlockId[:])
+}
+
+// some id hacks
+
+// used only in some special cases
+func HackU64ToRowid(v uint64) Rowid {
+	var id Rowid
+	copy(id[:], types.EncodeUint64(&v))
+	return id
+}
+
+// used only in some special cases
+func HackRowidToU64(id Rowid) uint64 {
+	return types.DecodeUint64(id[:])
+}
+
+// used only in some special cases
+func HackBlockid2Rowid(id *Blockid) Rowid {
+	var rowid Rowid
+	copy(rowid[:], id[:])
+	return rowid
+}
+
+// used only in some special cases
+func HackSegid2Rowid(id *Segmentid) Rowid {
+	var rowid Rowid
+	copy(rowid[:], id[:])
+	return rowid
+}
+
+// used only in some special cases
+func HackBytes2Rowid(bs []byte) Rowid {
+	var rowid types.Rowid
+	if size := len(bs); size <= types.RowidSize {
+		copy(rowid[:size], bs[:size])
+	} else {
+		hasher := fnv.New128()
+		hasher.Write(bs)
+		hasher.Sum(rowid[:0])
+	}
+	return rowid
 }

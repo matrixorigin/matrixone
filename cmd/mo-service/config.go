@@ -118,7 +118,7 @@ func NewConfig() *Config {
 	return &Config{
 		HAKeeperClient: logservice.HAKeeperClientConfig{
 			DiscoveryAddress: "",
-			ServiceAddresses: []string{logservice.DefaultServiceAddress},
+			ServiceAddresses: []string{logservice.DefaultLogServiceServiceAddress},
 			AllocateIDBatch:  100,
 			EnableCompress:   false,
 		},
@@ -349,7 +349,6 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend.SetLogAndVersion(&c.Log, version.Version)
-	cfg.Frontend.StorePath = filepath.Join(c.DataDir, "cn-data", cfg.UUID)
 	return cfg
 }
 

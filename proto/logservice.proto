@@ -109,6 +109,7 @@ message CNStoreHeartbeat {
   metadata.CNRole Role               = 6;
   bool            TaskServiceCreated = 7;
   string          QueryAddress       = 8;
+  string          InitWorkState      = 9;
 }
 
 
@@ -504,6 +505,8 @@ message InitialClusterRequest {
   uint64 NumOfLogShards   = 1;
   uint64 NumOfDNShards    = 2;
   uint64 NumOfLogReplicas = 3;
+  uint64 NextID           = 4;
+  map<string, uint64> NextIDByKey = 5;
 }
 
 // LogStoreInfo contains information of all replicas found on a Log store.
@@ -541,6 +544,7 @@ message CheckerState {
   TaskSchedulerState TaskSchedulerState = 7;
   TaskTableUser TaskTableUser           = 8 [(gogoproto.nullable) = false];
   uint64 NextId                         = 9;
+  map<string, uint64> NextIDByKey       = 10;
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
@@ -576,4 +580,13 @@ message ShardInfoQueryResult {
   uint64 Epoch                      = 3;
   uint64 LeaderID                   = 4;
   uint64 Term                       = 5;
+}
+
+// BackupData is the information that needs to backup, including NextID and
+// NextIDByKey in HAKeeperRSMState.
+message BackupData {
+  // NextID is a shared, global ID.
+  uint64 NextID                   = 1;
+  // NextIDByKey is IDs isolated by keys.
+  map<string, uint64> NextIDByKey = 2;
 }

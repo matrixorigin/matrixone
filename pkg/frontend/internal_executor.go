@@ -45,6 +45,22 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	if opts.IsInternal != nil {
 		sess.isInternal = *opts.IsInternal
 	}
+
+	acc := sess.GetTenantInfo()
+	if acc != nil {
+		if opts.AccountId != nil {
+			acc.SetTenantID(*opts.AccountId)
+		}
+
+		if opts.UserId != nil {
+			acc.SetUserID(*opts.UserId)
+		}
+
+		if opts.DefaultRoleId != nil {
+			acc.SetDefaultRoleID(*opts.DefaultRoleId)
+		}
+	}
+
 }
 
 type internalMiniExec interface {
@@ -398,6 +414,8 @@ func (ip *internalProtocol) ResetStatistics() {
 }
 
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
+
+func (ip *internalProtocol) CalculateOutTrafficBytes() int64 { return 0 }
 
 func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
 	return nil

@@ -65,7 +65,7 @@ func isSetLeaseHolderUpdate(cmd []byte) bool {
 
 func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	meta := storeMeta{
-		serviceAddress: cfg.ServiceAddress,
+		serviceAddress: cfg.LogServiceServiceAddr(),
 	}
 	if cfg.GossipProbeInterval.Duration == 0 {
 		panic("cfg.GossipProbeInterval.Duration is 0")
@@ -84,8 +84,8 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		NodeHostDir:         cfg.DataDir,
 		RTTMillisecond:      cfg.RTTMillisecond,
 		AddressByNodeHostID: true,
-		RaftAddress:         cfg.RaftAddress,
-		ListenAddress:       cfg.RaftListenAddress,
+		RaftAddress:         cfg.RaftServiceAddr(),
+		ListenAddress:       cfg.RaftListenAddr(),
 		Expert: config.ExpertConfig{
 			FS:           cfg.FS,
 			LogDBFactory: logdbFactory,
@@ -95,8 +95,8 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			LogDB:                   logdb,
 		},
 		Gossip: config.GossipConfig{
-			BindAddress:      cfg.GossipListenAddress,
-			AdvertiseAddress: cfg.GossipAddress,
+			BindAddress:      cfg.GossipListenAddr(),
+			AdvertiseAddress: cfg.GossipServiceAddr(),
 			Seed:             cfg.GossipSeedAddresses,
 			Meta:             meta.marshal(),
 			CanUseSelfAsSeed: cfg.GossipAllowSelfAsSeed,
@@ -835,9 +835,9 @@ func (l *store) hakeeperTick() {
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	m := pb.LogStoreHeartbeat{
 		UUID:           l.id(),
-		RaftAddress:    l.cfg.RaftAddress,
-		ServiceAddress: l.cfg.ServiceAddress,
-		GossipAddress:  l.cfg.GossipAddress,
+		RaftAddress:    l.cfg.RaftServiceAddr(),
+		ServiceAddress: l.cfg.LogServiceServiceAddr(),
+		GossipAddress:  l.cfg.GossipServiceAddr(),
 		Replicas:       make([]pb.LogReplicaInfo, 0),
 	}
 	opts := dragonboat.NodeHostInfoOption{

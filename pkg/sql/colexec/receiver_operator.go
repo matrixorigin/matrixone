@@ -30,9 +30,12 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool)
 	r.proc = proc
 	if isMergeType {
 		r.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
-		r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver)
+		r.chs = make([]chan *batch.Batch, r.aliveMergeReceiver)
+		r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver+1)
+		r.receiverListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
 		for i, mr := range proc.Reg.MergeReceivers {
-			r.receiverListener[i] = reflect.SelectCase{
+			r.chs[i] = mr.Ch
+			r.receiverListener[i+1] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(mr.Ch),
 			}
@@ -78,12 +81,12 @@ func (r *ReceiverOperator) FreeAllReg() {
 
 // clean up the batch left in channel
 func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
-	for {
-		bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch
-		if !ok || bat == nil {
-			break
+	ch := r.proc.Reg.MergeReceivers[regIdx].Ch
+	for len(ch) > 0 {
+		bat := <-ch
+		if bat != nil {
+			bat.Clean(r.proc.GetMPool())
 		}
-		bat.Clean(r.proc.GetMPool())
 	}
 }
 
@@ -102,34 +105,29 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 		}
 
 		start := time.Now()
-		// It is not convenience fo Select to receive proc.Ctx.Done()
-		// so we make sure that the proc.Cancel() will  pass to its
-		// children and the children will close the channel
 		chosen, value, ok := reflect.Select(r.receiverListener)
 		analyze.WaitStop(start)
-		if !ok {
-			select {
-			case <-r.proc.Ctx.Done():
-				logutil.Debugf("process context done during merge receive")
-			default:
-				logutil.Errorf("children pipeline closed unexpectedly")
-			}
-			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
-			r.aliveMergeReceiver--
+
+		// chosen == 0 means the info comes from proc context.Done
+		if chosen == 0 {
+			logutil.Debugf("process context done during merge receive")
 			return nil, true, nil
 		}
 
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
+		if !ok {
+			logutil.Errorf("children pipeline closed unexpectedly")
+			r.removeChosen(chosen)
+			return nil, true, nil
+		}
 
+		bat := (*batch.Batch)(value.UnsafePointer())
 		if bat == nil {
-			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
-			r.aliveMergeReceiver--
+			r.removeChosen(chosen)
 			continue
 		}
 
 		if bat.IsEmpty() {
-			bat.Clean(r.proc.Mp())
+			r.proc.PutBatch(bat)
 			continue
 		}
 
@@ -138,21 +136,25 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 }
 
 func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
-	for r.aliveMergeReceiver > 0 {
-		chosen, value, ok := reflect.Select(r.receiverListener)
-		if !ok {
-			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
-			r.aliveMergeReceiver--
-			continue
-		}
-
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
-		if bat == nil {
-			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
-			r.aliveMergeReceiver--
-			continue
-		}
-		bat.Clean(r.proc.Mp())
+	if len(r.receiverListener) > 0 {
+		// Remove the proc context.Done waiter because it MUST BE done
+		// when called this function
+		r.receiverListener = r.receiverListener[1:]
 	}
+
+	mp := r.proc.Mp()
+	// Senders will never send more because the context is done.
+	for _, ch := range r.chs {
+		for len(ch) > 0 {
+			bat := <-ch
+			if bat != nil {
+				bat.Clean(mp)
+			}
+		}
+	}
+}
+
+func (r *ReceiverOperator) removeChosen(idx int) {
+	r.receiverListener = append(r.receiverListener[:idx], r.receiverListener[idx+1:]...)
+	r.aliveMergeReceiver--
 }

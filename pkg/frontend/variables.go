@@ -220,14 +220,34 @@ func (svbt SystemVariableBoolType) Convert(value interface{}) (interface{}, erro
 }
 
 func (svbt SystemVariableBoolType) IsTrue(v interface{}) bool {
-	if vv, ok := v.(int8); ok {
+	switch vv := v.(type) {
+	case int:
+		return vv == 1
+	case uint:
+		return vv == uint(1)
+	case int8:
 		return vv == int8(1)
-	} else if vv3, ok3 := v.(int64); ok3 {
-		return vv3 == int64(1)
-	} else if vv2, ok2 := v.(string); ok2 {
-		return strings.ToLower(vv2) == "on"
+	case uint8:
+		return vv == uint8(1)
+	case int16:
+		return vv == int16(1)
+	case uint16:
+		return vv == uint16(1)
+	case int32:
+		return vv == int32(1)
+	case uint32:
+		return vv == uint32(1)
+	case int64:
+		return vv == int64(1)
+	case uint64:
+		return vv == uint64(1)
+	case bool:
+		return vv
+	case string:
+		return strings.ToLower(vv) == "on"
+	default:
+		return false
 	}
-	return false
 }
 
 func (svbt SystemVariableBoolType) Type() types.T {
@@ -1436,7 +1456,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           false,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("back_log", 1, 65535, false),
-		Default:           int64(-1),
+		Default:           int64(1),
 	},
 	"basedir": {
 		Name:              "basedir",
@@ -1975,7 +1995,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           int64(262144),
 	},
 	"keep_files_on_create": {
-		Name:              "join_buffer_size",
+		Name:              "keep_files_on_create",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
@@ -2694,14 +2714,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("print_identified_with_as_hex"),
 		Default:           int64(0),
 	},
-	"protocol_compression_algorithms": {
-		Name:              "protocol_compression_algorithms",
-		Scope:             ScopeGlobal,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableSetType("protocol_compression_algorithms", "zlib", "zstd", "uncompressed"),
-		Default:           "zlib",
-	},
 	"protocol_version": {
 		Name:              "protocol_version",
 		Scope:             ScopeGlobal,
@@ -3078,6 +3090,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("sql_log_off"),
 		Default:           int64(0),
 	},
+	"sql_log_bin": {
+		Name:              "sql_log_bin",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("sql_log_bin"),
+		Default:           int64(0),
+	},
 	"sql_notes": {
 		Name:              "sql_notes",
 		Scope:             ScopeBoth,
@@ -3164,7 +3184,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("table_definition_cache", 400, 524288, false),
-		Default:           int64(-1),
+		Default:           int64(500),
 	},
 	"table_encryption_privilege_check": {
 		Name:              "table_encryption_privilege_check",
@@ -3228,7 +3248,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("thread_cache_size", 0, 16384, false),
-		Default:           int64(-1),
+		Default:           int64(1),
 	},
 	"thread_handling": {
 		Name:              "thread_handling",
@@ -3429,6 +3449,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("xa_detach_on_prepare"),
 		Default:           int64(1),
+	},
+	"version": {
+		Name:              "version",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("version"),
+		Default:           "8.0.30-MatrixOne-v1.0.0",
+	},
+	"gtid_purged": {
+		Name:              "gtid_purged",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("gtid_purged"),
+		Default:           "",
 	},
 }
 

@@ -203,6 +203,8 @@ drop table if exists TRIGGERS;
 internal error: do not have privilege to execute the statement
 drop table if exists TABLES;
 internal error: do not have privilege to execute the statement
+drop table if exists PARTITIONS;
+internal error: do not have privilege to execute the statement
 create table A(a int);
 internal error: do not have privilege to execute the statement
 drop table if exists INFORMATION_SCHEMA.KEY_COLUMN_USAGE;
@@ -222,6 +224,8 @@ internal error: do not have privilege to execute the statement
 drop table if exists INFORMATION_SCHEMA.TRIGGERS;
 internal error: do not have privilege to execute the statement
 drop table if exists INFORMATION_SCHEMA.TABLES;
+internal error: do not have privilege to execute the statement
+drop table if exists INFORMATION_SCHEMA.PARTITIONS;
 internal error: do not have privilege to execute the statement
 create table INFORMATION_SCHEMA.A(a int);
 internal error: do not have privilege to execute the statement

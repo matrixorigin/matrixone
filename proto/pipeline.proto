@@ -59,6 +59,7 @@ message Dispatch {
   repeated int32 ShuffleRegIdxLocal=4;
   repeated int32 ShuffleRegIdxRemote=5;
   bool  is_sink = 6;
+  bool  rec_sink = 7;
 }
 
 message Merge {
@@ -77,6 +78,7 @@ message Aggregate {
   int32 op = 1;
   bool dist = 2;
   plan.Expr expr = 3;
+  bytes config =4;
 }
 
 message Group {
@@ -87,6 +89,8 @@ message Group {
   repeated plan.Type  types = 5;
   repeated Aggregate  aggs = 6;
   repeated MultiArguemnt MultiAggs = 7;
+  bool isShuffle = 8;
+  uint64 preAllocSize = 9;
 }
 
 message Insert{
@@ -430,6 +434,7 @@ message Pipeline {
   int32 children_count = 12;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 13;
+  int32 build_idx = 14;
 }
 
 message WrapNode {

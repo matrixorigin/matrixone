@@ -46,6 +46,22 @@ const (
 	MOAutoIncrTable = "mo_increment_columns"
 )
 
+var InternalColumns = map[string]int8{
+	Row_ID:                   0,
+	PrefixPriColName:         0,
+	PrefixCBColName:          0,
+	PrefixIndexTableName:     0,
+	CPrimaryKeyColName:       0,
+	FakePrimaryKeyColName:    0,
+	IndexTableIndexColName:   0,
+	IndexTablePrimaryColName: 0,
+}
+
+var InternalTableNames = map[string]int8{
+	IndexTableNamePrefix: 0,
+	MOAutoIncrTable:      0,
+}
+
 func ContainExternalHidenCol(col string) bool {
 	return col == ExternalFilePath
 }
@@ -70,6 +86,9 @@ const (
 const (
 	// Non-hard-coded data dictionary table
 	MO_INDEXES = "mo_indexes"
+
+	// MO_TABLE_PARTITIONS Data dictionary table of record table partition
+	MO_TABLE_PARTITIONS = "mo_table_partitions"
 
 	// MOTaskDB mo task db name
 	MOTaskDB = "mo_task"
@@ -145,6 +164,7 @@ const (
 	SystemColAttr_Update          = "attr_update"
 	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
 	SystemColAttr_Seqnum          = "attr_seqnum"
+	SystemColAttr_EnumValues      = "attr_enum"
 
 	BlockMeta_ID              = "block_id"
 	BlockMeta_Delete_ID       = "block_delete_id"
@@ -255,6 +275,7 @@ const (
 	MO_COLUMNS_ATT_UPDATE_IDX            = 20
 	MO_COLUMNS_ATT_IS_CLUSTERBY          = 21
 	MO_COLUMNS_ATT_SEQNUM_IDX            = 22
+	MO_COLUMNS_ATT_ENUM_IDX              = 23
 
 	BLOCKMETA_ID_IDX         = 0
 	BLOCKMETA_ENTRYSTATE_IDX = 1
@@ -321,7 +342,7 @@ type BlockInfo struct {
 	CommitTs   types.TS
 	SegmentID  types.Uuid
 
-	//TODO::putting them here is a bad idea, remove
+	//TODO:: putting them here is a bad idea, remove
 	//this block can be distributed to remote nodes.
 	CanRemote    bool
 	PartitionNum int
@@ -485,6 +506,32 @@ var (
 		SystemColAttr_Update,
 		SystemColAttr_IsClusterBy,
 		SystemColAttr_Seqnum,
+		SystemColAttr_EnumValues,
+	}
+	MoColumnsSchema_V1 = []string{
+		SystemColAttr_UniqName,
+		SystemColAttr_AccID,
+		SystemColAttr_DBID,
+		SystemColAttr_DBName,
+		SystemColAttr_RelID,
+		SystemColAttr_RelName,
+		SystemColAttr_Name,
+		SystemColAttr_Type,
+		SystemColAttr_Num,
+		SystemColAttr_Length,
+		SystemColAttr_NullAbility,
+		SystemColAttr_HasExpr,
+		SystemColAttr_DefaultExpr,
+		SystemColAttr_IsDropped,
+		SystemColAttr_ConstraintType,
+		SystemColAttr_IsUnsigned,
+		SystemColAttr_IsAutoIncrement,
+		SystemColAttr_Comment,
+		SystemColAttr_IsHidden,
+		SystemColAttr_HasUpdate,
+		SystemColAttr_Update,
+		SystemColAttr_IsClusterBy,
+		SystemColAttr_Seqnum,
 	}
 	MoTableMetaSchema = []string{
 		BlockMeta_ID,
@@ -546,6 +593,32 @@ var (
 		types.New(types.T_uint32, 0, 0),     // schema_version
 	}
 	MoColumnsTypes = []types.Type{
+		types.New(types.T_varchar, 256, 0),                 // att_uniq_name
+		types.New(types.T_uint32, 0, 0),                    // account_id
+		types.New(types.T_uint64, 0, 0),                    // att_database_id
+		types.New(types.T_varchar, 256, 0),                 // att_database
+		types.New(types.T_uint64, 0, 0),                    // att_relname_id
+		types.New(types.T_varchar, 256, 0),                 // att_relname
+		types.New(types.T_varchar, 256, 0),                 // attname
+		types.New(types.T_varchar, 256, 0),                 // atttyp
+		types.New(types.T_int32, 0, 0),                     // attnum
+		types.New(types.T_int32, 0, 0),                     // att_length
+		types.New(types.T_int8, 0, 0),                      // attnotnull
+		types.New(types.T_int8, 0, 0),                      // atthasdef
+		types.New(types.T_varchar, 2048, 0),                // att_default
+		types.New(types.T_int8, 0, 0),                      // attisdropped
+		types.New(types.T_char, 1, 0),                      // att_constraint_type
+		types.New(types.T_int8, 0, 0),                      // att_is_unsigned
+		types.New(types.T_int8, 0, 0),                      // att_is_auto_increment
+		types.New(types.T_varchar, 2048, 0),                // att_comment
+		types.New(types.T_int8, 0, 0),                      // att_is_hidden
+		types.New(types.T_int8, 0, 0),                      // att_has_update
+		types.New(types.T_varchar, 2048, 0),                // att_update
+		types.New(types.T_int8, 0, 0),                      // att_is_clusterby
+		types.New(types.T_uint16, 0, 0),                    // att_seqnum
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // att_enum
+	}
+	MoColumnsTypes_V1 = []types.Type{
 		types.New(types.T_varchar, 256, 0),  // att_uniq_name
 		types.New(types.T_uint32, 0, 0),     // account_id
 		types.New(types.T_uint64, 0, 0),     // att_database_id

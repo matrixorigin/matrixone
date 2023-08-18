@@ -131,8 +131,15 @@ func TestKeepaliveBind(t *testing.T) {
 				assert.NoError(t, c.Close())
 			}()
 
-			a.Get("s1", 1)
-			k := NewLockTableKeeper("s1", c, interval/5, interval/5, &sync.Map{})
+			bind := a.Get("s1", 1)
+			m := &sync.Map{}
+			m.Store(1,
+				newRemoteLockTable(
+					"s1",
+					bind,
+					c,
+					func(lt pb.LockTable) {}))
+			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m)
 
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
