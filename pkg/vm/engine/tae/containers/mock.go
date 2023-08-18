@@ -227,11 +227,11 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 		}
 	case types.T_array_float32:
 		for i := float32(1); i <= float32(rows); i++ {
-			vec.Append(types.ArrayToBytes(types.BuildTestArray[float32](i+1, i)), false)
+			vec.Append(types.ArrayToBytes([]float32{i + 1, i}), false)
 		}
 	case types.T_array_float64:
 		for i := float64(1); i <= float64(rows); i++ {
-			vec.Append(types.ArrayToBytes(types.BuildTestArray[float64](i+1, i)), false)
+			vec.Append(types.ArrayToBytes([]float64{i + 1, i}), false)
 		}
 	default:
 		panic(fmt.Sprintf("%v %s", t.Oid, "not supported"))

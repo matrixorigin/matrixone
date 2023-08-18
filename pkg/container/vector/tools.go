@@ -74,7 +74,7 @@ func MustStrCol(v *Vector) []string {
 	}
 }
 
-// MustArrayCol  required func
+// MustArrayCol  Converts Vector<[]T> to [][]T
 func MustArrayCol[T types.RealNumbers](v *Vector) [][]T {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
@@ -121,22 +121,6 @@ func ExpandStrCol(v *Vector) []string {
 	}
 	return MustStrCol(v)
 }
-
-// Not used anywhere.
-//func ExpandArrayCol[T types.RealNumbers](v *Vector) [][]T {
-//	if v.IsConst() {
-//		vs := make([][]T, v.Length())
-//		if len(v.data) > 0 {
-//			cols := v.col.([]types.Varlena)
-//			ss := types.GetArray[T](&cols[0], v.area)
-//			for i := range vs {
-//				vs[i] = ss
-//			}
-//		}
-//		return vs
-//	}
-//	return MustArrayCol[T](v)
-//}
 
 func ExpandBytesCol(v *Vector) [][]byte {
 	if v.IsConst() {
@@ -580,7 +564,7 @@ func compareNumber[T types.OrderedT](ctx context.Context, v1, v2 *Vector, fnName
 	}
 }
 
-// compareArray required func
+// compareArray This function is mainly used in the context of zonemap.
 func compareArray[T types.RealNumbers](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
 	switch fnName {
 	case ">":

@@ -383,7 +383,7 @@ var Types map[string]T = map[string]T{
 	"rowid":                 T_Rowid,
 	"blockid":               T_Blockid,
 
-	"array float32": T_array_float32, // TODO: should i include the space?
+	"array float32": T_array_float32,
 	"array float64": T_array_float64,
 }
 

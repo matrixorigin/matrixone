@@ -34,7 +34,7 @@ func TestLength(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 
 	{
-		//Array
+		//Array Float32
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float32, 3, 0))
 		err := AppendArrayList[float32](vec, [][]float32{{1, 2, 3}, {4, 5, 6}}, nil, mp)
@@ -44,7 +44,7 @@ func TestLength(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{
-		//Array
+		//Array Float64
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float64, 3, 0))
 		err := AppendArrayList[float64](vec, [][]float64{{1, 2, 3}, {4, 5, 6}}, nil, mp)
@@ -62,7 +62,7 @@ func TestSize(t *testing.T) {
 	vec.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 	{
-		//Array
+		//Array Float32
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float32, 4, 0))
 		require.Equal(t, 0, vec.Size())
@@ -70,7 +70,7 @@ func TestSize(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{
-		//Array
+		//Array Float64
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float64, 4, 0))
 		require.Equal(t, 0, vec.Size())
@@ -107,7 +107,7 @@ func TestGetUnionOneFunction(t *testing.T) {
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
-	{ // test const Array vector
+	{ // test const Array Float32 vector
 		mp := mpool.MustNewZero()
 		v := NewVec(types.New(types.T_array_float32, 4, 0))
 		w := NewVec(types.New(types.T_array_float32, 4, 0))
@@ -121,7 +121,7 @@ func TestGetUnionOneFunction(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 
 	}
-	{ // test const Array vector
+	{ // test const Array Float64 vector
 		mp := mpool.MustNewZero()
 		v := NewVec(types.New(types.T_array_float64, 4, 0))
 		w := NewVec(types.New(types.T_array_float64, 4, 0))
@@ -187,7 +187,7 @@ func TestAppend(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 
 	{
-		// Array
+		// Array Float32
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float32, 4, 0))
 		err := AppendArray[float32](vec, []float32{1, 2, 3, 0}, false, mp)
@@ -203,7 +203,7 @@ func TestAppend(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{
-		// Array
+		// Array Float64
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float64, 4, 0))
 		err := AppendArray[float64](vec, []float64{1, 2, 3, 0}, false, mp)
@@ -239,7 +239,7 @@ func TestAppendBytes(t *testing.T) {
 
 func TestAppendArray(t *testing.T) {
 	{
-		// Array
+		// Array Float32
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.T_array_float32.ToType())
 		err := AppendArray[float32](vec, []float32{1, 1, 1}, false, mp)
@@ -256,7 +256,7 @@ func TestAppendArray(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{
-		// Array
+		// Array Float64
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.T_array_float64.ToType())
 		err := AppendArray[float64](vec, []float64{1, 1, 1}, false, mp)
@@ -291,7 +291,7 @@ func TestDup(t *testing.T) {
 
 func TestShrink(t *testing.T) {
 	mp := mpool.MustNewZero()
-	{ // Array
+	{ // Array Float32
 		v := NewVec(types.T_array_float32.ToType())
 		err := AppendArrayList[float32](v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
@@ -300,7 +300,7 @@ func TestShrink(t *testing.T) {
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
-	{ // Array
+	{ // Array Float64
 		v := NewVec(types.T_array_float64.ToType())
 		err := AppendArrayList[float64](v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
@@ -535,7 +535,7 @@ func TestShrink(t *testing.T) {
 func TestShuffle(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	{ // Array
+	{ // Array Float32
 		v := NewVec(types.T_array_float32.ToType())
 		err := AppendArrayList[float32](v, [][]float32{{1, 1}, {2, 2}, {3, 3}}, nil, mp)
 		require.NoError(t, err)
@@ -545,7 +545,7 @@ func TestShuffle(t *testing.T) {
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
-	{ // Array
+	{ // Array Float64
 		v := NewVec(types.T_array_float64.ToType())
 		err := AppendArrayList[float64](v, [][]float64{{1, 1}, {2, 2}, {3, 3}}, nil, mp)
 		require.NoError(t, err)
@@ -814,7 +814,7 @@ func TestCopy(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
-	{ // Array
+	{ // Array Float32
 		v := NewVec(types.New(types.T_array_float32, 10, 0))
 		AppendArrayList[float32](v, [][]float32{{0, 0}, {0, 0}, {1, 1}, {0, 0}}, nil, mp)
 		w := NewVec(types.New(types.T_array_float32, 10, 0))
@@ -826,7 +826,7 @@ func TestCopy(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
-	{ // Array
+	{ // Array Float64
 		v := NewVec(types.New(types.T_array_float64, 10, 0))
 		AppendArrayList[float64](v, [][]float64{{0, 0}, {0, 0}, {1, 1}, {0, 0}}, nil, mp)
 		w := NewVec(types.New(types.T_array_float64, 10, 0))
@@ -895,7 +895,7 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	require.Equal(t, 3, len(vec4.GetBytesAt(2)))
 	require.True(t, vec4.GetNulls().Contains(uint64(1)))
 
-	{ //Array
+	{ //Array Float32
 		mp := mpool.MustNewZero()
 		vec5 := NewVec(types.New(types.T_array_float32, 2, 0))
 		AppendArray[float32](vec5, []float32{1, 1}, false, mp)
@@ -913,7 +913,7 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 		require.True(t, vec6.GetNulls().Contains(uint64(1)))
 		require.Equal(t, []float32{3, 3}, GetArrayAt[float32](vec6, 2))
 	}
-	{ //Array
+	{ //Array Float64
 		mp := mpool.MustNewZero()
 		vec5 := NewVec(types.New(types.T_array_float64, 2, 0))
 		AppendArray(vec5, []float64{1, 1}, false, mp)
@@ -1282,7 +1282,7 @@ func TestStrMarshalAndUnMarshal(t *testing.T) {
 func TestArrayMarshalAndUnMarshal(t *testing.T) {
 
 	{
-		// array float32
+		// Array Float32
 		mp := mpool.MustNewZero()
 		v := NewVec(types.New(types.T_array_float32, 2, 0))
 		err := AppendArrayList(v, [][]float32{{0, 0}, {1, 1}, {2, 2}}, nil, mp)
@@ -1304,7 +1304,7 @@ func TestArrayMarshalAndUnMarshal(t *testing.T) {
 	}
 
 	{
-		// array float64
+		// Array Float64
 		mp := mpool.MustNewZero()
 		v := NewVec(types.New(types.T_array_float64, 2, 0))
 		err := AppendArrayList(v, [][]float64{{0, 0}, {1, 1}, {2, 2}}, nil, mp)
@@ -1389,7 +1389,7 @@ func TestWindowWith(t *testing.T) {
 	vec3.Free(mp)
 
 	{
-		//Array
+		//Array Float32
 
 		vec7 := NewVec(types.T_array_float32.ToType())
 		AppendArray(vec7, []float32{1, 1, 1}, false, mp)
@@ -1422,7 +1422,7 @@ func TestWindowWith(t *testing.T) {
 	}
 
 	{
-		//Array
+		//Array Float64
 
 		vec7 := NewVec(types.T_array_float64.ToType())
 		AppendArray(vec7, []float64{1, 1, 1}, false, mp)
@@ -1625,7 +1625,7 @@ func TestSetFunction(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
-	{ // Array
+	{ // Array Float32
 		v := NewVec(types.T_array_float32.ToType())
 		w := NewConstNull(types.T_array_float32.ToType(), 0, mp)
 		err := AppendArrayList(v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}, {4, 4, 4}}, nil, mp)
@@ -1639,7 +1639,7 @@ func TestSetFunction(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
-	{ // Array
+	{ // Array Float64
 		v := NewVec(types.T_array_float64.ToType())
 		w := NewConstNull(types.T_array_float64.ToType(), 0, mp)
 		err := AppendArrayList(v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}, {4, 4, 4}}, nil, mp)
@@ -1741,7 +1741,7 @@ func TestSetFunction2(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 
-	// array type
+	// Array Float32 type
 	{
 		mp := mpool.MustNewZero()
 

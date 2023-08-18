@@ -37,7 +37,7 @@ type FunctionParameterWrapper[T types.FixedSizeT] interface {
 	GetValue(idx uint64) (T, bool)
 
 	// GetStrValue return the Idx th string value and if it's null or not.
-	//TODO: Later rename it to GetBytes.
+	//TODO: Later rename it to GetBytes as it makes more sense.
 	GetStrValue(idx uint64) ([]byte, bool)
 
 	// UnSafeGetAllValue return all the values.

@@ -2042,7 +2042,6 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
-			//TODO: Is T_ARRAY_FLOAT32 needed here?
 		// TODO: some type, we use string now. someday need fix it
 		case defines.MYSQL_TYPE_DECIMAL:
 			if value, err := mrs.GetString(ctx, rowIdx, i); err != nil {
@@ -2140,7 +2139,6 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
-			//TODO: check if T_ARRAY is required here?
 		case defines.MYSQL_TYPE_BOOL:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2

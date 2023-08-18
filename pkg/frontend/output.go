@@ -210,7 +210,6 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
-
 	case types.T_array_float32:
 		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
 	case types.T_array_float64:

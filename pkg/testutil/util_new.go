@@ -836,7 +836,7 @@ func NewArrayVector[T types.RealNumbers](n int, typ types.Type, m *mpool.MPool, 
 		if random {
 			v = rand.Int()
 		}
-		if err := vector.AppendArray[T](vec, types.BuildTestArray[T](T(v), T(v+1)), false, m); err != nil {
+		if err := vector.AppendArray[T](vec, []T{T(v), T(v + 1)}, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

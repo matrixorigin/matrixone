@@ -24,8 +24,10 @@ import (
 	"unsafe"
 )
 
+// NOTE: vecf32 and vecf64 in SQL is internally represented using T_array_float32 and T_array_float64.
+// array is used to avoid potential conflicts with the already existing vector class from vectorized execution engine.
+
 const (
-	//MaxArrayDimension Comment: https://github.com/arjunsk/matrixone/pull/35#discussion_r1275713689
 	MaxArrayDimension = 65536
 )
 
@@ -77,15 +79,14 @@ func StringToArray[T RealNumbers](str string, dims int32) ([]T, error) {
 		return nil, moerr.NewInternalErrorNoCtx("typeLen is over the maximum vector dimensions: %v", MaxArrayDimension)
 	}
 
-	//TODO: Dimension check int StringToArray has a wierd corner case.
+	//TODO:
+	// Dimension check int StringToArray has a weird corner case.
 	// select vector_dims("[1,2,3]") from t1;
 	// Here the dimension of the vector is MAX_LEN, but the "[1,2,3]" will give dimension = 3.
 	// There is a mismatch and it will fail. Need to check if StrToArray should have dimension check just like the code from PgVector?
 	// https://github.com/pgvector/pgvector/blob/a03f6ae4bc5cbcc1a0c332f67df3b8235641be69/src/vector.c#L251
-	// I wonder if they would fail for this test scenario or what?
-	//if int32(len(numStrs)) != dims {
-	//	return nil, moerr.NewInternalErrorNoCtx("input vector dimension %v doesn't match expected dimension %v", len(numStrs), dims)
-	//}
+	// UPDATE:
+	// pg-vector doesn't allow auto casting, ie doesn't allow select vector_dims("[1,2,3]") nor select b+"[1,2,3] from t1;
 
 	result := make([]T, len(numStrs))
 
@@ -114,12 +115,4 @@ func StringToArray[T RealNumbers](str string, dims int32) ([]T, error) {
 	}
 
 	return result, nil
-}
-
-// BuildTestArray used only in unit test to create vector of dim = 2
-func BuildTestArray[T RealNumbers](a, b T) (ret []T) {
-	ret = make([]T, 2)
-	ret[0] = a
-	ret[1] = b
-	return
 }

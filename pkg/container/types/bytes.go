@@ -104,7 +104,9 @@ func (v *Varlena) GetByteSlice(area []byte) []byte {
 	return area[voff : voff+vlen]
 }
 
-// GetArray required func
+// GetArray Returns []T from Varlena. If the Varlena size is less than Inline size,
+// it returns the value from the Varlena header.
+// Else, it returns the value from the area.
 func GetArray[T RealNumbers](v *Varlena, area []byte) []T {
 	svlen := (*v)[0]
 	if svlen <= VarlenaInlineSize {

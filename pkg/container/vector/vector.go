@@ -220,7 +220,7 @@ func (v *Vector) GetStringAt(i int) string {
 	return bs[i].GetString(v.area)
 }
 
-// GetArrayAt required func.
+// GetArrayAt Returns []T at the specific index of the vector
 func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	if v.IsConst() {
 		i = 0
@@ -274,7 +274,7 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) *Vec
 	return vec
 }
 
-// req. func
+// NewConstArray Creates a Const_Array Vector
 func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp *mpool.MPool) *Vector {
 	vec := &Vector{
 		typ:   typ,
@@ -345,10 +345,6 @@ func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
 func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 	return SetBytesAt(v, idx, []byte(bs), mp)
 }
-
-//func SetArrayAt[T types.RealNumbers](v *Vector, idx int, bs []T, mp *mpool.MPool) error {
-//	return SetBytesAt(v, idx, types.ArrayToBytes[T](bs), mp)
-//}
 
 // IsConstNull return true if the vector means a scalar Null.
 // e.g.
@@ -1745,37 +1741,6 @@ func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return appendOneBytes(v, ws[sel].GetByteSlice(w.area), false, mp)
 			}
 		}
-	//case types.T_array_float32:
-	//
-	//	return func(v, w *Vector, sel int64) error {
-	//		if w.IsConstNull() {
-	//			return appendOneFixed(v, types.Varlena{}, true, mp)
-	//		}
-	//		ws := MustFixedCol[types.Varlena](w)
-	//		if w.IsConst() {
-	//			return appendOneArray[float32](v, types.GetArray[float32](&ws[0], w.area), false, mp)
-	//		}
-	//		if nulls.Contains(&w.nsp, uint64(sel)) {
-	//			return appendOneArray[float32](v, []float32{}, true, mp)
-	//		} else {
-	//			return appendOneArray[float32](v, types.GetArray[float32](&ws[sel], w.area), false, mp)
-	//		}
-	//	}
-	//case types.T_array_float64:
-	//	return func(v, w *Vector, sel int64) error {
-	//		if w.IsConstNull() {
-	//			return appendOneFixed(v, types.Varlena{}, true, mp)
-	//		}
-	//		ws := MustFixedCol[types.Varlena](w)
-	//		if w.IsConst() {
-	//			return appendOneArray[float64](v, types.GetArray[float64](&ws[0], w.area), false, mp)
-	//		}
-	//		if nulls.Contains(&w.nsp, uint64(sel)) {
-	//			return appendOneArray[float64](v, []float64{}, true, mp)
-	//		} else {
-	//			return appendOneArray[float64](v, types.GetArray[float64](&ws[sel], w.area), false, mp)
-	//		}
-	//	}
 	case types.T_Blockid:
 		return func(v, w *Vector, sel int64) error {
 			if w.IsConstNull() {
@@ -2051,31 +2016,6 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return SetConstBytes(v, ws[sel].GetByteSlice(w.area), length, mp)
 		}
-
-	//case types.T_array_float32:
-	//	return func(v, w *Vector, sel int64, length int) error {
-	//		if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
-	//			return SetConstNull(v, length, mp)
-	//		}
-	//		ws := MustFixedCol[types.Varlena](w)
-	//		v.area = v.area[:0]
-	//		if w.IsConst() {
-	//			return SetConstArray[float32](v, types.GetArray[float32](&ws[0], w.area), length, mp)
-	//		}
-	//		return SetConstArray[float32](v, types.GetArray[float32](&ws[sel], w.area), length, mp)
-	//	}
-	//case types.T_array_float64:
-	//	return func(v, w *Vector, sel int64, length int) error {
-	//		if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
-	//			return SetConstNull(v, length, mp)
-	//		}
-	//		ws := MustFixedCol[types.Varlena](w)
-	//		v.area = v.area[:0]
-	//		if w.IsConst() {
-	//			return SetConstArray[float64](v, types.GetArray[float64](&ws[0], w.area), length, mp)
-	//		}
-	//		return SetConstArray[float64](v, types.GetArray[float64](&ws[sel], w.area), length, mp)
-	//	}
 	case types.T_Blockid:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
@@ -2499,6 +2439,7 @@ func (v *Vector) String() string {
 		}
 		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 	case types.T_array_float64:
+		//NOTE: Don't merge this with T_Varchar. We need to retrieve the Array and print the values.
 		col := MustArrayCol[float64](v)
 		if len(col) == 1 {
 			if nulls.Contains(&v.nsp, 0) {
@@ -2558,7 +2499,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	return nil
 }
 
-// req. func
+// SetConstArray set current vector as Constant_Array vector of given length.
 func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
 
@@ -2638,11 +2579,6 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64:
 		return appendOneBytes(vec, val.([]byte), false, mp)
-		//case types.T_array_float32:
-		//	return appendOneArray[float32](vec, val.([]float32), false, mp)
-		//case types.T_array_float64:
-		//	return appendOneArray[float64](vec, val.([]float64), false, mp)
-
 	}
 	return nil
 }
@@ -2686,16 +2622,6 @@ func AppendMultiFixed[T any](vec *Vector, vals T, isNull bool, cnt int, mp *mpoo
 	}
 	return appendMultiFixed(vec, vals, isNull, cnt, mp)
 }
-
-//func AppendMultiArrays[T types.RealNumbers](vec *Vector, vals []T, isNull bool, cnt int, mp *mpool.MPool) error {
-//	if vec.IsConst() {
-//		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
-//	}
-//	if mp == nil {
-//		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
-//	}
-//	return appendMultiArrays[T](vec, vals, isNull, cnt, mp)
-//}
 
 func AppendMultiBytes(vec *Vector, vals []byte, isNull bool, cnt int, mp *mpool.MPool) error {
 	if vec.IsConst() {
@@ -2746,7 +2672,7 @@ func AppendStringList(vec *Vector, ws []string, isNulls []bool, mp *mpool.MPool)
 	return appendStringList(vec, ws, isNulls, mp)
 }
 
-// req. func used in tests
+// AppendArrayList mainly used in unit tests
 func AppendArrayList[T types.RealNumbers](vec *Vector, ws [][]T, isNulls []bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
@@ -2790,7 +2716,7 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 	}
 }
 
-// req. funct (for test units)
+// appendOneArray mainly used for unit tests
 func appendOneArray[T types.RealNumbers](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
@@ -2845,29 +2771,6 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	}
 	return nil
 }
-
-//func appendMultiArrays[T types.RealNumbers](vec *Vector, val []T, isNull bool, cnt int, mp *mpool.MPool) error {
-//	var err error
-//	var va types.Varlena
-//	if err = extend(vec, cnt, mp); err != nil {
-//		return err
-//	}
-//	length := vec.length
-//	vec.length += cnt
-//	if isNull {
-//		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
-//	} else {
-//		col := vec.col.([]types.Varlena)
-//		err = BuildVarlenaFromArray[T](vec, &va, &val, mp)
-//		if err != nil {
-//			return err
-//		}
-//		for i := 0; i < cnt; i++ {
-//			col[length+i] = va
-//		}
-//	}
-//	return nil
-//}
 
 func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) error {
 	if err := extend(vec, len(vals), mp); err != nil {
@@ -2930,7 +2833,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	return nil
 }
 
-// req. func used in tests
+// appendArrayList mainly used for unit tests
 func appendArrayList[T types.RealNumbers](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
 	var err error
 
@@ -3476,7 +3379,7 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 	return BuildVarlenaNoInline(vec, v, bs, m)
 }
 
-// req. func
+// BuildVarlenaFromArray convert array to Varlena so that it can be stored in the vector
 func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
 	_bs := types.ArrayToBytes[T](*array)
 	bs := &_bs
