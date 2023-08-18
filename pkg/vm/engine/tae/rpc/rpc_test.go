@@ -439,7 +439,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		bat := batch.New(true, []string{hideDef[0].Name, schema.GetPrimaryKey().GetName()})
 		bat.Vecs[0], _ = view.GetColumnData(2).GetDownstreamVector().Window(0, 5)
 		bat.Vecs[1], _ = view.GetColumnData(1).GetDownstreamVector().Window(0, 5)
-		_, err := writer.WriteBatchWithOutIndex(bat)
+		_, err := writer.WriteTombstoneBatch(bat)
 		assert.Nil(t, err)
 	}
 	blocks, _, err = writer.Sync(context.Background())

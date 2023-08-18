@@ -15,14 +15,11 @@
 package updates
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -254,7 +251,7 @@ func (node *DeleteNode) setPersistedRows() {
 	if node.nt != NT_Persisted {
 		panic("unsupport")
 	}
-	bat, err := blockio.LoadColumns(
+	bat, err := blockio.LoadTombstoneColumns(
 		node.Txn.GetContext(),
 		[]uint16{0},
 		nil,
@@ -265,7 +262,7 @@ func (node *DeleteNode) setPersistedRows() {
 	if err != nil {
 		for {
 			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
-			bat, err = blockio.LoadColumns(
+			bat, err = blockio.LoadTombstoneColumns(
 				node.Txn.GetContext(),
 				[]uint16{0},
 				nil,
@@ -288,32 +285,6 @@ func (node *DeleteNode) setPersistedRows() {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func LoadPersistedDeletes(
-	ctx context.Context,
-	pkName string,
-	fs *objectio.ObjectFS,
-	location objectio.Location) (bat *containers.Batch, err error) {
-	movbat, err := blockio.LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
-	if err != nil {
-		return
-	}
-	bat = containers.NewBatch()
-	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, pkName, catalog.AttrAborted}
-	if persistedByCN(movbat) {
-		bat.AddVector(catalog.AttrRowID, containers.ToDNVector(movbat.Vecs[0]))
-		bat.AddVector("pk", containers.ToDNVector(movbat.Vecs[1]))
-	} else {
-		for i := 0; i < 4; i++ {
-			bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
-		}
-	}
-	return
-}
-
-func persistedByCN(bat *batch.Batch) bool {
-	return len(vector.MustFixedCol[bool](bat.Vecs[3])) == 0
 }
 
 func (node *DeleteNode) GeneralString() string {

@@ -331,11 +331,11 @@ func Prefetch(idxes []uint16, ids []uint16, service fileservice.FileService, key
 }
 
 func PrefetchTombstone(idxes []uint16, ids []uint16, service fileservice.FileService, key objectio.Location) error {
-	params, err := BuildTombstonePrefetchParams(service, key)
+	params, err := BuildPrefetchParams(service, key)
 	if err != nil {
 		return err
 	}
-	params.AddBlock(idxes, ids)
+	params.AddBlockWithType(idxes, ids, uint16(objectio.SchemaTombstone))
 	return pipeline.Prefetch(params)
 }
 

@@ -471,7 +471,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	pref, err := blockio.BuildTombstonePrefetchParams(h.db.Runtime.Fs.Service, loc)
+	pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
 	if err != nil {
 		return err
 	}
@@ -481,7 +481,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()})
+		pref.AddBlockWithType([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()}, uint16(objectio.SchemaTombstone))
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -932,7 +932,7 @@ func (h *Handle) HandleWrite(
 			}
 			var ok bool
 			var bat *batch.Batch
-			bat, err = blockio.LoadColumns(
+			bat, err = blockio.LoadTombstoneColumns(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
