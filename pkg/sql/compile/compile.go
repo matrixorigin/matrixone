@@ -2746,7 +2746,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
 		// this is for shuffle join
 		for _, mr := range rs.Proc.Reg.MergeReceivers {
-			mr.Ch = make(chan *batch.Batch, 16)
+			mr.Ch = make(chan *batch.Batch, 8)
 		}
 	} else {
 		rs.appendInstruction(vm.Instruction{
