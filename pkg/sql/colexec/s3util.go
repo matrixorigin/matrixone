@@ -604,7 +604,7 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 	return bat.Shuffle(sels, m)
 }
 
-func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
+func (w *S3Writer) WriteBlock(bat *batch.Batch, dataType ...objectio.DataMetaType) error {
 	if w.pk > -1 {
 		pkIdx := uint16(w.pk)
 		w.writer.SetPrimaryKey(pkIdx)
@@ -619,9 +619,16 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 			w.tablename, w.seqnums, bat.Attrs)
 	}
 	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.vecs[0].Length(), w.tablename, w.seqnums, w.attrs)
-	_, err := w.writer.WriteBatch(bat)
-	if err != nil {
-		return err
+	if len(dataType) > 0 && dataType[0] == objectio.SchemaTombstone {
+		_, err := w.writer.WriteTombstoneBatch(bat)
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err := w.writer.WriteBatch(bat)
+		if err != nil {
+			return err
+		}
 	}
 	w.lengths = append(w.lengths, uint64(bat.Vecs[0].Length()))
 	return nil

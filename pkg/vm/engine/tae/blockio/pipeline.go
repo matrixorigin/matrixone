@@ -152,36 +152,15 @@ func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			if params.dataType == objectio.CkpMetaStart {
-				ioVectors, err := reader.ReadMultiSubBlocks(ctx, params.ids, nil)
-				if err != nil {
-					res.Err = err
-					return
-				}
-				// no further reads
-				res.Res = nil
-				ioVectors.Release()
-			} else if params.dataType == objectio.SchemaTombstone {
-				ioVectors, err := reader.ReadTombstoneMultiBlocks(ctx,
-					params.ids, nil)
-				if err != nil {
-					res.Err = err
-					return
-				}
-				// no further reads
-				res.Res = nil
-				ioVectors.Release()
-			} else {
-				ioVectors, err := reader.ReadMultiBlocks(ctx,
-					params.ids, nil)
-				if err != nil {
-					res.Err = err
-					return
-				}
-				// no further reads
-				res.Res = nil
-				ioVectors.Release()
+			ioVectors, err := reader.ReadMultiBlocks(ctx,
+				params.ids, nil)
+			if err != nil {
+				res.Err = err
+				return
 			}
+			// no further reads
+			res.Res = nil
+			ioVectors.Release()
 			if params.reader == nil {
 				putReader(reader)
 			}
