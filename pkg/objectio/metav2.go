@@ -39,18 +39,15 @@ const (
 	metaHeaderLen = metaDummyOff + metaDummy
 )
 
-const InvalidSchemaType = 0xFF
-
 func ConvertToSchemaType(ckpIdx uint16) DataMetaType {
 	return CkpMetaStart + DataMetaType(ckpIdx)
 }
 
-type objectMetaV2 []byte
-
-func buildObjectMetaV2() objectMetaV2 {
-	var buf [metaHeaderLen]byte
-	return buf[:]
+func ConvertToCkpIdx(dataType uint16) uint16 {
+	return dataType - uint16(CkpMetaStart)
 }
+
+type objectMetaV2 []byte
 
 func (mh objectMetaV2) MustGetMeta(metaType DataMetaType) objectDataMetaV1 {
 	if metaType == SchemaData {
@@ -100,7 +97,7 @@ func (mh objectMetaV2) TombstoneMeta() (objectDataMetaV1, bool) {
 func (mh objectMetaV2) MustTombstoneMeta() objectDataMetaV1 {
 	meta, ok := mh.TombstoneMeta()
 	if !ok {
-		panic("no tombstone meta")
+		meta = mh.MustDataMeta()
 	}
 	return meta
 }

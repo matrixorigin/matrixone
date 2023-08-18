@@ -106,7 +106,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 
 		// just an empty batch.
 		if bat.IsEmpty() {
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 			continue
 		}
 		ana.Input(bat, isFirst)
@@ -124,7 +124,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 				return err
 			}
 		}
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 	}
 	return nil
 }
@@ -152,7 +152,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		// just an empty batch.
 		if bat.IsEmpty() {
-			bat.Clean(proc.Mp())
+			proc.PutBatch(bat)
 			continue
 		}
 		ana.Input(bat, isFirst)
@@ -201,7 +201,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		ana.Output(ctr.bat, isLast)
 		proc.SetInputBatch(ctr.bat)
 		ctr.bat = nil
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return false, nil
 	}
 }

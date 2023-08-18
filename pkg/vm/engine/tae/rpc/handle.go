@@ -451,27 +451,14 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		return nil
 	}
 	//for loading deleted rowid.
-	db, err := h.db.Catalog.GetDatabaseByID(req.DatabaseId)
-	if err != nil {
-		return err
-	}
-	tbl, err := db.GetTableEntryByID(req.TableID)
-	if err != nil {
-		return err
-	}
-	var version uint32
-	if req.Schema != nil {
-		version = req.Schema.Version
-	}
-	schema := tbl.GetVersionSchema(version)
-	pkIdx := schema.GetPrimaryKey().Idx
 	columnIdx := 0
+	pkIdx := 1
 	//start loading jobs asynchronously,should create a new root context.
 	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
 	if err != nil {
 		return err
 	}
-	pref, err := blockio.BuildTombstonePrefetchParams(h.db.Runtime.Fs.Service, loc)
+	pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
 	if err != nil {
 		return err
 	}
@@ -481,7 +468,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()})
+		pref.AddBlockWithType([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()}, uint16(objectio.SchemaTombstone))
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -932,7 +919,7 @@ func (h *Handle) HandleWrite(
 			}
 			var ok bool
 			var bat *batch.Batch
-			bat, err = blockio.LoadColumns(
+			bat, err = blockio.LoadTombstoneColumns(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,

@@ -421,13 +421,13 @@ func (r *blockMergeReader) prefetchDeletes() error {
 
 	//prefetch the deletes
 	for name, locs := range r.deletaLocs {
-		pref, err := blockio.BuildTombstonePrefetchParams(r.fs, locs[0])
+		pref, err := blockio.BuildPrefetchParams(r.fs, locs[0])
 		if err != nil {
 			return err
 		}
 		for _, loc := range locs {
 			//rowid + pk
-			pref.AddBlock([]uint16{0, uint16(r.pkidx)}, []uint16{loc.ID()})
+			pref.AddBlockWithType([]uint16{0, uint16(r.pkidx)}, []uint16{loc.ID()}, uint16(objectio.SchemaTombstone))
 
 		}
 		delete(r.deletaLocs, name)
