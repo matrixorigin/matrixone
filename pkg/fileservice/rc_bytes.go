@@ -14,11 +14,8 @@
 
 package fileservice
 
-// #include <stdlib.h>
-import "C"
 import (
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/cespare/xxhash"
 )
@@ -78,6 +75,10 @@ func newRCBytesPool(limit int64) *rcBytesPool {
 
 var _ CacheDataAllocator = new(rcBytesPool)
 
+func (r *rcBytesPool) Size() int64 {
+	return r.size.Load()
+}
+
 func (r *rcBytesPool) Alloc(size int) CacheData {
 	item := &RCBytes{
 		pool: r,
@@ -89,24 +90,9 @@ func (r *rcBytesPool) Alloc(size int) CacheData {
 }
 
 func alloc(size int) []byte {
-	ptr := C.calloc(C.size_t(size), 1)
-	if ptr == nil {
-		// NB: throw is like panic, except it guarantees the process will be
-		// terminated. The call below is exactly what the Go runtime invokes when
-		// it cannot allocate memory.
-		panic("out of memory")
-	}
-	// Interpret the C pointer as a pointer to a Go array, then slice.
-	return (*[MaxArrayLen]byte)(unsafe.Pointer(ptr))[:size:size]
+	return make([]byte, size, size)
 }
 
 // free frees the specified slice.
-func free(b []byte) {
-	if cap(b) != 0 {
-		if len(b) == 0 {
-			b = b[:cap(b)]
-		}
-		ptr := unsafe.Pointer(&b[0])
-		C.free(ptr)
-	}
+func free(_ []byte) {
 }

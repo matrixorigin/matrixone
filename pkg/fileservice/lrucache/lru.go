@@ -27,6 +27,7 @@ type LRU[K comparable, V BytesLike] struct {
 	capacity  int64
 	size      int64
 	evicts    *list.List
+	sizeFunc  func() int64
 	kv        map[K]*list.Element
 	postSet   func(key K, value V)
 	postGet   func(key K, value V)
@@ -60,6 +61,7 @@ type lruItem[K comparable, V BytesLike] struct {
 
 func New[K comparable, V BytesLike](
 	capacity int64,
+	sizeFunc func() int64,
 	postSet func(keySet K, valSet V),
 	postGet func(key K, value V),
 	postEvict func(keyEvicted K, valEvicted V),
@@ -71,6 +73,7 @@ func New[K comparable, V BytesLike](
 		postSet:   postSet,
 		postGet:   postGet,
 		postEvict: postEvict,
+		sizeFunc:  sizeFunc,
 	}
 }
 
@@ -81,9 +84,13 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 	if elem, ok := l.kv[key]; ok {
 		// replace
 		item := elem.Value.(*lruItem[K, V])
-		l.size -= item.Size
+		if l.sizeFunc == nil {
+			l.size -= item.Size
+		}
 		size := int64(len(value.Bytes()))
-		l.size += size
+		if l.sizeFunc == nil {
+			l.size += size
+		}
 		if !preloading {
 			l.evicts.MoveToFront(elem)
 		}
@@ -109,7 +116,9 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 			elem = l.evicts.PushFront(item)
 		}
 		l.kv[key] = elem
-		l.size += size
+		if l.sizeFunc == nil {
+			l.size += size
+		}
 	}
 
 	if l.postSet != nil {
@@ -130,8 +139,14 @@ func (l *LRU[K, V]) evict(ctx context.Context) {
 	}()
 
 	for {
-		if l.size <= l.capacity {
-			return
+		if l.sizeFunc == nil {
+			if l.size <= l.capacity {
+				return
+			}
+		} else {
+			if l.sizeFunc() <= l.capacity {
+				return
+			}
 		}
 		if len(l.kv) == 0 {
 			return
@@ -143,7 +158,9 @@ func (l *LRU[K, V]) evict(ctx context.Context) {
 				return
 			}
 			item := elem.Value.(*lruItem[K, V])
-			l.size -= item.Size
+			if l.sizeFunc == nil {
+				l.size -= item.Size
+			}
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)
 			if l.postEvict != nil {
@@ -179,9 +196,11 @@ func (l *LRU[K, V]) Get(ctx context.Context, key K, preloading bool) (value V, o
 func (l *LRU[K, V]) Flush() {
 	l.Lock()
 	defer l.Unlock()
+	/* nothing todo
 	l.size = 0
 	l.evicts = list.New()
 	l.kv = make(map[K]*list.Element)
+	*/
 }
 
 func (l *LRU[K, V]) Capacity() int64 {
@@ -191,11 +210,17 @@ func (l *LRU[K, V]) Capacity() int64 {
 func (l *LRU[K, V]) Used() int64 {
 	l.Lock()
 	defer l.Unlock()
+	if l.sizeFunc != nil {
+		return l.sizeFunc()
+	}
 	return l.size
 }
 
 func (l *LRU[K, V]) Available() int64 {
 	l.Lock()
 	defer l.Unlock()
+	if l.sizeFunc != nil {
+		return l.capacity - l.sizeFunc()
+	}
 	return l.capacity - l.size
 }

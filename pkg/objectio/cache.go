@@ -35,12 +35,12 @@ var metaCacheStats hitStats
 var metaCacheHitStats hitStats
 
 func init() {
-	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil, nil)
+	metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](512*1024*1024, nil, nil, nil, nil)
 }
 
 func InitMetaCache(size int64) {
 	onceInit.Do(func() {
-		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil, nil)
+		metaCache = lrucache.New[ObjectNameShort, fileservice.Bytes](size, nil, nil, nil, nil)
 	})
 }
 
