@@ -410,10 +410,10 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length)
 	case types.T_array_float32, types.T_array_float64:
-		s := vector.GenerateFunctionStrParameter(from)
 		//NOTE: Don't mix T_array and T_varchar.
 		// T_varchar will have "[1,2,3]" string
 		// T_array will have "@@@#@!#@!@#!" binary.
+		s := vector.GenerateFunctionStrParameter(from)
 		err = arrayTypeToOthers(proc, s, *toType, result, length)
 	case types.T_uuid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](from)

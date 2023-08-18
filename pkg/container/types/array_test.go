@@ -173,6 +173,7 @@ func TestStringToArray(t *testing.T) {
 	type args struct {
 		input string
 		dim   int32
+		typ   T
 	}
 	type testCase struct {
 		name       string
@@ -184,32 +185,32 @@ func TestStringToArray(t *testing.T) {
 	tests := []testCase{
 		{
 			name:       "Test1 - float32",
-			args:       args{input: "[1,2,3,-2]", dim: 4},
+			args:       args{input: "[1,2,3,-2]", dim: 4, typ: T_array_float32},
 			wantResF32: []float32{1, 2, 3, -2},
 		},
 		{
 			name:       "Test2 - float64",
-			args:       args{input: "[1,2,3,30]", dim: 4},
+			args:       args{input: "[1,2,3,30]", dim: 4, typ: T_array_float64},
 			wantResF64: []float64{1, 2, 3, 30},
 		},
 		{
 			name:    "Test3 - float64",
-			args:    args{input: "[1,2,3,", dim: 3},
+			args:    args{input: "[1,2,3,", dim: 3, typ: T_array_float64},
 			wantErr: moerr.NewInternalErrorNoCtx("malformed vector input: [1,2,3,"),
 		},
 		{
 			name:    "Test4 - float64",
-			args:    args{input: "[]", dim: 0},
+			args:    args{input: "[]", dim: 0, typ: T_array_float64},
 			wantErr: moerr.NewInternalErrorNoCtx("vector must not be of zero size."),
 		},
+		//{
+		//	name:    "Test4 - float64",
+		//	args:    args{input: "[1,2]", dim: 3, typ: T_array_float64},
+		//	wantErr: moerr.NewInternalErrorNoCtx("input vector dimension 2 doesn't match expected dimension 3"),
+		//},
 		{
 			name:    "Test4 - float64",
-			args:    args{input: "[1,2]", dim: 3},
-			wantErr: moerr.NewInternalErrorNoCtx("input vector dimension 2 doesn't match expected dimension 3"),
-		},
-		{
-			name:    "Test4 - float64",
-			args:    args{input: "[1,a]", dim: 2},
+			args:    args{input: "[1,a]", dim: 2, typ: T_array_float64},
 			wantErr: moerr.NewInternalErrorNoCtx("error while casting a to DOUBLE"),
 		},
 	}
@@ -217,23 +218,36 @@ func TestStringToArray(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.wantResF32 != nil {
-				if gotRes, err := StringToArray[float32](tt.args.input, tt.args.dim); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF32) {
+				if gotRes, err := StringToArray[float32](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF32) {
 					t.Errorf("StringToArray() = %v, want %v", gotRes, tt.wantResF32)
 				}
 			}
 			if tt.wantResF64 != nil {
-				if gotRes, err := StringToArray[float64](tt.args.input, tt.args.dim); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF64) {
+				if gotRes, err := StringToArray[float64](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF64) {
 					t.Errorf("StringToArray() = %v, want %v", gotRes, tt.wantResF64)
 				}
 			}
 
-			if tt.wantErr != nil {
-				if _, gotErr := StringToArray[float64](tt.args.input, tt.args.dim); gotErr != nil {
+			if tt.wantErr != nil && tt.args.typ == T_array_float32 {
+				if _, gotErr := StringToArray[float32](tt.args.input); gotErr == nil {
+					t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
+				} else {
 					if !reflect.DeepEqual(gotErr, tt.wantErr) {
 						t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
 					}
 				}
 			}
+
+			if tt.wantErr != nil && tt.args.typ == T_array_float64 {
+				if _, gotErr := StringToArray[float64](tt.args.input); gotErr == nil {
+					t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
+				} else {
+					if !reflect.DeepEqual(gotErr, tt.wantErr) {
+						t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
+					}
+				}
+			}
+
 		})
 	}
 }

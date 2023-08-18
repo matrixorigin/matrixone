@@ -1,3 +1,13 @@
+### Build
+```shell
+cd ..
+cd ..
+cd ..
+make
+./mo-service -debug-http :9876 -launch ./etc/launch/launch.toml >out.log  2>err.log;
+```
+
+### MySQL Client
 ```shell
 mysql -h 127.0.0.1 -P 6001 -udump -p111
 

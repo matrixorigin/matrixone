@@ -58,7 +58,7 @@ func ArraysToString[T RealNumbers](input [][]T) string {
 	return strings.Join(strValues, " ")
 }
 
-func StringToArray[T RealNumbers](str string, dims int32) ([]T, error) {
+func StringToArray[T RealNumbers](str string) ([]T, error) {
 	input := strings.TrimSpace(str)
 
 	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
@@ -77,9 +77,11 @@ func StringToArray[T RealNumbers](str string, dims int32) ([]T, error) {
 		return nil, moerr.NewInternalErrorNoCtx("typeLen is over the maximum vector dimensions: %v", MaxArrayDimension)
 	}
 
-	if int32(len(numStrs)) != dims {
-		return nil, moerr.NewInternalErrorNoCtx("input vector dimension %v doesn't match expected dimension %v", len(numStrs), dims)
-	}
+	//TODO: Need help. checking for dimension while casting is complex. VARCHAR --> VECF32.
+	// VARCHAR might have MaxVarlenSize and hence VECF32 will also have MaxVarlenSize. But instead you want it to have len(vecf32)
+	//if int32(len(numStrs)) != dims {
+	//	return nil, moerr.NewInternalErrorNoCtx("input vector dimension %v doesn't match expected dimension %v", len(numStrs), dims)
+	//}
 
 	result := make([]T, len(numStrs))
 
