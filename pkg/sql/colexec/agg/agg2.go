@@ -61,7 +61,7 @@ func (a *UnaryAgg[T1, T2]) Grows(count int, pool *mpool.MPool) error {
 			a.vs = types.DecodeSlice[T2](a.da)
 
 		} else {
-			data, err := pool.Grow(a.da, (count+len(a.es))*itemSize)
+			data, err := pool.Grow(a.da, finalCount*itemSize)
 			if err != nil {
 				return err
 			}
@@ -74,7 +74,6 @@ func (a *UnaryAgg[T1, T2]) Grows(count int, pool *mpool.MPool) error {
 		for i := len(a.es); i < finalCount; i++ {
 			a.es = append(a.es, true)
 		}
-		a.es = a.es[:finalCount]
 	}
 	return nil
 }
