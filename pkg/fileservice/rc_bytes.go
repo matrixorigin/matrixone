@@ -15,9 +15,10 @@
 package fileservice
 
 import (
+	"runtime"
 	"sync/atomic"
 
-	"github.com/cespare/xxhash"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 const (
@@ -30,7 +31,6 @@ const (
 // owner should call Release to give it back to the pool
 // new sharing owner should call Retain to increase ref count
 type RCBytes struct {
-	h     uint64
 	data  []byte
 	count atomic.Int32
 	pool  *rcBytesPool
@@ -42,9 +42,6 @@ func (r *RCBytes) Bytes() []byte {
 
 func (r *RCBytes) Slice(length int) CacheData {
 	r.data = r.data[:length]
-	if r.h == 0 {
-		r.h = xxhash.Sum64(r.data)
-	}
 	return r
 }
 
@@ -54,9 +51,6 @@ func (r *RCBytes) Retain() {
 
 func (r *RCBytes) Release() {
 	if c := r.count.Add(-1); c == 0 {
-		if xxhash.Sum64(r.data) != r.h {
-			panic("bad data")
-		}
 		free(r.data)
 		r.pool.size.Add(int64(cap(r.data)) * -1)
 	} else if c < 0 {
@@ -80,6 +74,11 @@ func (r *rcBytesPool) Size() int64 {
 }
 
 func (r *rcBytesPool) Alloc(size int) CacheData {
+	for r.size.Load() > r.limit {
+		runtime.Gosched()
+		logutil.Errorf("rcBytesPool out of capacity(size: %vGB, capacity: %vGB)",
+			float64(r.size.Load())/(1<<30), float64(r.limit)/(1<<30))
+	}
 	item := &RCBytes{
 		pool: r,
 		data: alloc(size),
