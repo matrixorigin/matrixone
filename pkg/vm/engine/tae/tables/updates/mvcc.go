@@ -164,7 +164,6 @@ func (n *MVCCHandle) CollectDeleteLocked(
 
 	rowIDVec = containers.MakeVector(types.T_Rowid.ToType())
 	commitTSVec = containers.MakeVector(types.T_TS.ToType())
-	abortVec = containers.MakeVector(types.T_bool.ToType())
 	aborts = &nulls.Bitmap{}
 	id := n.meta.ID
 
@@ -202,6 +201,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 			}
 			return !before
 		})
+	abortVec = containers.NewConstNullVector(types.T_bool.ToType(), rowIDVec.Length())
 	return
 }
 
