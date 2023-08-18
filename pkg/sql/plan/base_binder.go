@@ -315,8 +315,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			return
 		}
 		astArgs := []tree.Expr{
-			tree.NewNumValWithType(constant.MakeString(table), table, false, tree.P_char),
-			tree.NewNumValWithType(constant.MakeString(col), col, false, tree.P_char),
+			tree.NewNumValWithType(constant.MakeString(typ.Enumvalues), typ.Enumvalues, false, tree.P_char),
 		}
 
 		// bind ast function's args
