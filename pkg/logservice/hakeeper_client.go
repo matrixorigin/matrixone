@@ -91,6 +91,11 @@ type ProxyHAKeeperClient interface {
 	DeleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error
 }
 
+// BRHAKeeperClient is the HAKeeper client for backup and restore.
+type BRHAKeeperClient interface {
+	GetBackupData(ctx context.Context) ([]byte, error)
+}
+
 // TODO: HAKeeper discovery to be implemented
 
 var _ CNHAKeeperClient = (*managedHAKeeperClient)(nil)
@@ -435,6 +440,23 @@ func (c *managedHAKeeperClient) DeleteCNStore(ctx context.Context, cnStore pb.De
 	}
 }
 
+// GetBackupData implements the BRHAKeeperClient interface.
+func (c *managedHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, error) {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return nil, err
+		}
+		s, err := c.getClient().getBackupData(ctx)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return s, err
+	}
+}
+
 func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper)
 }
@@ -764,4 +786,23 @@ func (c *managedHAKeeperClient) getClient() *hakeeperClient {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.mu.client
+}
+
+func (c *hakeeperClient) getBackupData(ctx context.Context) ([]byte, error) {
+	req := pb.Request{
+		Method: pb.GET_CLUSTER_STATE,
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	p := pb.BackupData{
+		NextID:      resp.CheckerState.NextId,
+		NextIDByKey: resp.CheckerState.NextIDByKey,
+	}
+	bs, err := p.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return bs, nil
 }

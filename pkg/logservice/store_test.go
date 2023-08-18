@@ -300,7 +300,8 @@ func proceedHAKeeperToRunning(t *testing.T, store *store) {
 	assert.NoError(t, err)
 	assert.Equal(t, pb.HAKeeperCreated, state.State)
 
-	err = store.setInitialClusterInfo(1, 1, 1)
+	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+	err = store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey)
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -313,6 +314,8 @@ func proceedHAKeeperToRunning(t *testing.T, store *store) {
 	state, err = store.getCheckerState()
 	assert.NoError(t, err)
 	assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+	assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+	assert.Equal(t, nextIDByKey, state.NextIDByKey)
 
 	_, term, err := store.isLeaderHAKeeper()
 	assert.NoError(t, err)

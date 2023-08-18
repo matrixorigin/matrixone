@@ -383,7 +383,6 @@ drop table t1;
 -- @desc: alter table change column
 -- @label:bvt
 
--- @bvt:issue#11269
 -- column name test: Chinese character
 drop table if exists name01;
 create table name01 (col1 int, col2 decimal);
@@ -410,7 +409,6 @@ insert into name03 values (2, 3289.111111);
 alter table name03 change column col1 `RAVHJBWUIHNJCDW****&&*((()(*&^&^%^^&^*&` int;
 show create table name03;
 drop table name03;
--- @bvt:issue
 
 
 -- empty table modify column
@@ -703,7 +701,6 @@ drop table primary06;
 
 
 -- abnormal test:joint primary key, change one of the primary column null
--- @bvt:issue#11247
 drop table if exists primary07;
 create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
@@ -715,7 +712,6 @@ show create table primary07;
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary07' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table primary07;
--- @bvt:issue
 
 
 -- joint primary key
@@ -1086,7 +1082,6 @@ drop table abnormal04;
 
 
 -- abnormal test: temporary table
--- @bvt:issue#11259
 drop table if exists abnormal05;
 create temporary table abnormal05 (col1 datetime, col2 blob);
 insert into abnormal05 values ('1997-01-13 00:00:00', '342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f');
@@ -1100,7 +1095,6 @@ show create table abnormal05;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal05' and COLUMN_NAME not like '__mo%';
 drop table abnormal05;
--- @bvt:issue
 
 
 -- creating table, creating view, changeing the columns, view the view
@@ -1145,11 +1139,9 @@ insert into time01 values ('2020-01-01', '2000-10-10 12:12:12', '1970-01-01 12:2
 insert into time01 values ('1997-01-13', null, '1989-01-01 23:23:59.100000', '23:23:59');
 insert into time01 (col1, col2, col3, col4) values ('2030-12-31', '2031-09-09 01:01:01', '2013-12-12 10:10:10.125000', '10:12:12');
 select * from time01;
--- @bvt:issue#11259
 alter table time01 change col1 col1sbavhehfiwuejn int, change col2 col2chwjvhejkwbhjgeh int first, change col3 col3cvwheuhjhjk int after col1, change col4 col4ushebjfevce int;
 show create table time01;
 select * from time01;
--- @bvt:issue
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -1163,11 +1155,9 @@ insert into time02 values ('2000-10-10 12:12:12', '1970-01-01 12:23:59.323000', 
 insert into time02 values ( null, '1889-01-01 23:23:59.125000', '23:23:59');
 insert into time02 (col2, col3, col4) values ('2031-09-09 01:01:01', '2013-12-12 10:10:10.125000', '10:12:12');
 select * from time02;
--- @bvt:issue#11259
 alter table time02 change col2 decimal(20,10) first, change col3 decimal after col2, change col4 decimal(38,0);
 show create table time02;
 select * from time02;
--- @bvt:issue#11259
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue

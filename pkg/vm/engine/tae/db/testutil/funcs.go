@@ -390,7 +390,7 @@ func MockCNDeleteInS3(
 	if err != nil {
 		return
 	}
-	_, err = writer.WriteBatchWithOutIndex(containers.ToCNBatch(bat))
+	_, err = writer.WriteTombstoneBatch(containers.ToCNBatch(bat))
 	if err != nil {
 		return
 	}

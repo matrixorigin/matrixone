@@ -432,11 +432,11 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	isFirst := true
 	for key, value := range alterCtx.alterColMap {
 		if isFirst {
-			insertBuffer.WriteString(key)
+			insertBuffer.WriteString("`" + key + "`")
 			selectBuffer.WriteString(value)
 			isFirst = false
 		} else {
-			insertBuffer.WriteString(", " + key)
+			insertBuffer.WriteString(", " + "`" + key + "`")
 			selectBuffer.WriteString(", " + value)
 		}
 	}
@@ -507,6 +507,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	objRef, tableDef := ctx.Resolve(schemaName, tableName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+	}
+
+	if tableDef.IsTemporary {
+		return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
 	}
 
 	if tableDef.ViewSql != nil {
