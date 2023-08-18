@@ -9,6 +9,10 @@ Duplicate column name 'newcolumn'
 show create table samecolumn01;
 Table    Create Table
 samecolumn01    CREATE TABLE `samecolumn01` (\n`newcolumn` INT DEFAULT null,\n`col2` CHAR(1) DEFAULT null\n)
+show columns from samecolumn01;
+Field    Type    Null    Key    Default    Extra    Comment
+newcolumn    INT(32)    YES        null        
+col2    CHAR(1)    YES        null        
 drop table samecolumn01;
 drop table if exists rename01;
 create table rename01 (col1 int, col2 decimal);
@@ -16,6 +20,10 @@ alter table rename01 rename column col1 to col1New;
 show create table rename01;
 Table    Create Table
 rename01    CREATE TABLE `rename01` (\n`col1new` INT DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null\n)
+show columns from rename01;
+Field    Type    Null    Key    Default    Extra    Comment
+col1new    INT(32)    YES        null        
+col2    DECIMAL128(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'name01' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table rename01;
@@ -34,6 +42,10 @@ select * from rename02;
 colcolcol1    colcolcol2
 3    7
 2    &
+show columns from rename02;
+Field    Type    Null    Key    Default    Extra    Comment
+colcolcol1    INT(32)    YES        null        
+colcolcol2    BINARY(1)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename02' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table rename02;
@@ -70,6 +82,11 @@ col1new    col2    col3new
 2    3    329382
 3    4    121131312
 100    2    cfewquier
+show columns from rename03;
+Field    Type    Null    Key    Default    Extra    Comment
+col1new    INT(32)    YES        null        
+col2    INT(32)    YES        null        
+col3new    VARCHAR(20)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename03' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table rename03;
@@ -105,6 +122,10 @@ newnewa    b
 1    3
 1289    232
 10000    1
+show columns from rename04;
+Field    Type    Null    Key    Default    Extra    Comment
+newnewa    INT(32)    YES        null        
+b    INT(32)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename04' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table rename04;
@@ -135,6 +156,8 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 [unknown result because it is related to issue#11249]
 drop table rename06;
 no such table test.rename06
+show columns from rename06;
+no such table test.rename06
 alter table system.statement_info rename column role_id to role_idNew;
 [unknown result because it is related to issue#11269]
 alter table mo_catalog.mo_database rename column dat_type to newdat_type;
@@ -164,6 +187,8 @@ update primary01 set col1 = 2873892 where col1New = 2389324;
 update primary01 set col1New = 2873892 where col1New = 2389324;
 [unknown result because it is related to issue#11269]
 select * from primary01;
+[unknown result because it is related to issue#11269]
+show columns from primary01;
 [unknown result because it is related to issue#11269]
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
@@ -231,6 +256,17 @@ foreign01    CREATE TABLE `foreign01` (\n`col1new` INT NOT NULL,\n`col2new` VARC
 show create table foreign02;
 Table    Create Table
 foreign02    CREATE TABLE `foreign02` (\n`colnewcolumn` INT DEFAULT null,\n`col3` INT NOT NULL,\n`col2new` DOUBLE DEFAULT null,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+show columns from foreign01;
+Field    Type    Null    Key    Default    Extra    Comment
+col1new    INT(32)    NO    PRI    null        
+col2new    VARCHAR(100)    YES        null        
+col3    INT(32)    YES        null        
+col4    BIGINT(64)    YES        null        
+show columns from foreign02;
+Field    Type    Null    Key    Default    Extra    Comment
+colnewcolumn    INT(32)    YES        null        
+col3    INT(32)    NO    PRI    null        
+col2new    DOUBLE(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign02' and COLUMN_NAME not like '__mo%';
@@ -281,6 +317,12 @@ a    bnew    c    d
 3    ad    1981-02-22    500.00
 5    bh    1999-01-01    3000.00
 2    ac    2022-12-12    1600.00
+show columns from index01;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO        null        
+bnew    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table index01;
@@ -295,7 +337,7 @@ a    b    c    d
 2    ac    1981-02-20    1600.00
 3    ad    1981-02-22    500.00
 alter table index02 rename column b to bNewNew;
-show create table index02;;
+show create table index02;
 Table    Create Table
 index02    CREATE TABLE `index02` (\n`a` INT NOT NULL,\n`bnewnew` CHAR(10) DEFAULT null,\n`c` DATE DEFAULT null,\n`d` DECIMAL(7,2) DEFAULT null,\nPRIMARY KEY (`a`),\nKEY `a` (`a`,`bnewnew`),\nKEY `c` (`c`)\n)
 insert into index02 values (4, 'ab', '2000-10-10', 10000);
@@ -307,6 +349,18 @@ a    bnewnew    c    d
 2    ac    1981-02-20    1600.00
 5    gh    1999-12-31    20000.00
 3    database    1981-02-22    500.00
+show index from index02;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index02    1    a    1    a    A    0    NULL    NULL                    YES    NULL
+index02    1    a    2    bnewnew    A    0    NULL    NULL    YES                YES    NULL
+index02    1    c    1    c    A    0    NULL    NULL    YES                YES    NULL
+index02    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+show columns from index02;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+bnewnew    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 select * from index02;
@@ -329,6 +383,12 @@ select * from cluster01;
 newaaaaaaaa    b    c    d
 1    255    438    7328832832
 -32    32    8329    893434
+show columns from cluster01;
+Field    Type    Null    Key    Default    Extra    Comment
+newaaaaaaaa    TINYINT(8)    NO    PRI    null        
+b    SMALLINT(16)    YES        null        
+c    INT UNSIGNED(32)    YES        null        
+d    BIGINT(64)    NO        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table cluster01;
@@ -343,9 +403,24 @@ select * from temporary01;
 uuuyggbbjbj    col2
 3728937    37283
 -32893    -89232
+show columns from temporary01;
+Field    Type    Null    Key    Default    Extra    Comment
+uuuyggbbjbj    INT(32)    YES        null        
+col2    DECIMAL128(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temporary01' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table temporary01;
+drop table if exists ex_table_2_1;
+create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+alter table ex_table_2_1 rename column num_col1 to newnum_col1;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. error field terminator at line 13 column 109 near " '""' LINES TERMINATED BY '\\n'";
+alter table ex_table_2_1 rename column num_col2 to `shurhenwjkrferveg`;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. error field terminator at line 13 column 109 near " '""' LINES TERMINATED BY '\\n'";
+show create table ex_table_2_1;
+Table    Create Table
+ex_table_2_1    CREATE EXTERNAL TABLE `ex_table_2_1` (\n`num_col1` TINYINT DEFAULT NULL,\n`num_col2` SMALLINT DEFAULT NULL,\n`num_col3` INT DEFAULT NULL,\n`num_col4` BIGINT DEFAULT NULL,\n`num_col5` TINYINT UNSIGNED DEFAULT NULL,\n`num_col6` SMALLINT UNSIGNED DEFAULT NULL,\n`num_col7` INT UNSIGNED DEFAULT NULL,\n`num_col8` BIGINT UNSIGNED DEFAULT NULL,\n`num_col9` FLOAT(5,3) DEFAULT NULL,\n`num_col10` DOUBLE(6,5) DEFAULT NULL,\n`num_col11` DECIMAL(38,19) DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n'
+select * from ex_table_2_1;
+internal error: the input value 'abc' is not int8 type for column 0
 drop table if exists view01;
 drop table if exists view02;
 drop view if exists v0;
@@ -355,6 +430,12 @@ create table view02 (a int);
 insert into view02 values (1);
 alter table view01 rename column a to `cwhuenwjfdwcweffcfwef`;
 alter table view02 rename column a to `cwhuenwjfdwcweffcfwef`;
+show columns from view01;
+Field    Type    Null    Key    Default    Extra    Comment
+cwhuenwjfdwcweffcfwef    INT(32)    YES        null        
+show columns from view02;
+Field    Type    Null    Key    Default    Extra    Comment
+cwhuenwjfdwcweffcfwef    INT(32)    YES        null        
 show create table view01;
 Table    Create Table
 view01    CREATE TABLE `view01` (\n`cwhuenwjfdwcweffcfwef` INT DEFAULT null\n)
@@ -392,6 +473,9 @@ alter table rename01 rename column newRename to `newNewRename`;
 show create table rename01;
 Table    Create Table
 rename01    CREATE TABLE `rename01` (\n`newnewrename` INT DEFAULT null\n)
+show columns from rename01;
+Field    Type    Null    Key    Default    Extra    Comment
+newnewrename    INT(32)    YES        null        
 drop table rename01;
 drop role role_r1;
 drop user role_u1;
@@ -408,6 +492,10 @@ execute s2;
 show create table prepare01;
 Table    Create Table
 prepare01    CREATE TABLE `prepare01` (\n`col1` INT DEFAULT null,\n`col2` CHAR(1) DEFAULT null\n)
+show columns from prepare01;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    INT(32)    YES        null        
+col2    CHAR(1)    YES        null        
 update prepare01 set col1 = 2147483647 where col2 = 'c';
 delete from prepare01 where col2 = 'b';
 insert into prepare01 values (42342, '3');

@@ -12,6 +12,7 @@ create table samecolumn01 (col1 int, col2 char);
 alter table samecolumn01 rename column col1 to newColumn;
 alter table samecolumn01 rename column col2 to newcolumn;
 show create table samecolumn01;
+show columns from samecolumn01;
 drop table samecolumn01;
 
 -- rename column in empty table
@@ -19,6 +20,7 @@ drop table if exists rename01;
 create table rename01 (col1 int, col2 decimal);
 alter table rename01 rename column col1 to col1New;
 show create table rename01;
+show columns from rename01;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'name01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -36,6 +38,7 @@ insert into rename02 (colcolcol1, colcolcol2) values (3, '7');
 delete from rename02 where colcolcol1 = 1;
 update rename02 set colcolcol2 = '&' where colcolcol1 = 2;
 select * from rename02;
+show columns from rename02;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename02' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -61,6 +64,7 @@ update rename03 set col3New = '2798u3d3frew' where col3New = 6;
 -- @bvt:issue
 delete from rename03 where col3New is null;
 select * from rename03;
+show columns from rename03;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename03' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -84,6 +88,7 @@ update rename04 set newnewA = 10000 where b = 1;
 select * from rename04;
 delet from rename04 where newnewa = 10000;
 select * from rename04;
+show columns from rename04;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename04' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -113,6 +118,7 @@ alter table rename06 rename column col1 to `数据操作，数据收集732732346
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename06' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table rename06;
+show columns from rename06;
 -- @bvt:issue#11269
 
 
@@ -135,6 +141,7 @@ delete from primary01 where col1New = -2839;
 update primary01 set col1 = 2873892 where col1New = 2389324;
 update primary01 set col1New = 2873892 where col1New = 2389324;
 select * from primary01;
+show columns from primary01;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -176,6 +183,8 @@ select * from foreign01;
 select * from foreign02;
 show create table foreign01;
 show create table foreign02;
+show columns from foreign01;
+show columns from foreign02;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign02' and COLUMN_NAME not like '__mo%';
@@ -203,6 +212,7 @@ delete from index01 where bneW = 'ab';
 select * from index01;
 update index01 set c = '2022-12-12' where bNew = 'ac';
 select * from index01;
+show columns from index01;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -217,12 +227,14 @@ insert into index02 values(2, 'ac', '1981-02-20', 1600);
 insert into index02 values(3, 'ad', '1981-02-22', 500);
 select * from index02;
 alter table index02 rename column b to bNewNew;
-show create table index02;;
+show create table index02;
 insert into index02 values (4, 'ab', '2000-10-10', 10000);
 insert into index02 values (5, 'gh', '1999-12-31', 20000);
 delete from index02 where bnewnew = 'ab';
 update index02 set bnewnew = 'database' where bnewnEW = 'ad';
 select * from index02;
+show index from index02;
+show columns from index02;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -239,6 +251,7 @@ show create table cluster01;
 insert into cluster01 (a, b, c, d) values (-32, 32832, 8329, 893434);
 insert into cluster01 (NewAAAAAAAA, b, c, d) values (-32, 32, 8329, 893434);
 select * from cluster01;
+show columns from cluster01;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -253,10 +266,20 @@ alter table temporary01 rename column col1 to `UUUYGGBBJBJ`;
 insert into temporary01 (col1, col2) values (-32893, -89232);
 insert into temporary01 (`UUUYGGBBJBJ`, col2) values (-32893, -89232);
 select * from temporary01;
+show columns from temporary01;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temporary01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table temporary01;
+
+
+-- rename external table column
+drop table if exists ex_table_2_1;
+create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+alter table ex_table_2_1 rename column num_col1 to newnum_col1;
+alter table ex_table_2_1 rename column num_col2 to `shurhenwjkrferveg`;
+show create table ex_table_2_1;
+select * from ex_table_2_1;
 
 
 -- creating table, creating view, renaming the columns, view the view
@@ -269,6 +292,8 @@ create table view02 (a int);
 insert into view02 values (1);
 alter table view01 rename column a to `cwhuenwjfdwcweffcfwef`;
 alter table view02 rename column a to `cwhuenwjfdwcweffcfwef`;
+show columns from view01;
+show columns from view02;
 show create table view01;
 show create table view02;
 create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
@@ -303,6 +328,7 @@ use test;
 alter table rename01 rename column col1 to newRename;
 alter table rename01 rename column newRename to `newNewRename`;
 show create table rename01;
+show columns from rename01;
 -- @session
 drop table rename01;
 drop role role_r1;
@@ -319,6 +345,7 @@ show create table prepare01;
 prepare s2 from 'alter table prepare01 rename column col1dheuwhvcer to col1';
 execute s2;
 show create table prepare01;
+show columns from prepare01;
 update prepare01 set col1 = 2147483647 where col2 = 'c';
 delete from prepare01 where col2 = 'b';
 insert into prepare01 values (42342, '3');
