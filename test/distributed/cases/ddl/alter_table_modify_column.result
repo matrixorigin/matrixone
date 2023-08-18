@@ -1406,7 +1406,7 @@ alter table abnormal04 modify col1 float;
 You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 20 near " DEFAULT NULL
 )";
 alter table abnormal04 modify col2 int;
-internal error: not connect to a database
+invalid argument cast to int, bad value a
 select * from abnormal04;
 col1    col2
 {"x": "red"}    a
