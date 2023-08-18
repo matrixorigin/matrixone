@@ -592,15 +592,19 @@ func TestSetTaskSchedulerState(t *testing.T) {
 }
 
 func TestInitialClusterRequestCmd(t *testing.T) {
-	cmd := GetInitialClusterRequestCmd(2, 2, 3)
+	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+	cmd := GetInitialClusterRequestCmd(2, 2, 3, 10, nextIDByKey)
 	req := parseInitialClusterRequestCmd(cmd)
 	assert.Equal(t, uint64(2), req.NumOfLogShards)
 	assert.Equal(t, uint64(2), req.NumOfDNShards)
 	assert.Equal(t, uint64(3), req.NumOfLogReplicas)
+	assert.Equal(t, uint64(10), req.NextID)
+	assert.Equal(t, nextIDByKey, req.NextIDByKey)
 }
 
 func TestHandleInitialClusterRequestCmd(t *testing.T) {
-	cmd := GetInitialClusterRequestCmd(2, 2, 3)
+	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+	cmd := GetInitialClusterRequestCmd(2, 2, 3, K8SIDRangeEnd+10, nextIDByKey)
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	result, err := rsm.Update(sm.Entry{Cmd: cmd})
 	require.NoError(t, err)
@@ -635,7 +639,8 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 
 	assert.Equal(t, expected, rsm.state.ClusterInfo)
 	assert.Equal(t, pb.HAKeeperBootstrapping, rsm.state.State)
-	assert.Equal(t, K8SIDRangeEnd, rsm.state.NextID)
+	assert.Equal(t, K8SIDRangeEnd+10, rsm.state.NextID)
+	assert.Equal(t, nextIDByKey, rsm.state.NextIDByKey)
 }
 
 func TestGetCommandBatch(t *testing.T) {
