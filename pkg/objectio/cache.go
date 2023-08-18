@@ -124,17 +124,12 @@ func FastLoadBF(
 	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
-	name := location.Name()
-	key := encodeCacheKey(*name.Short(), cacheKeyTypeBloomFilter)
+	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 
 	v, ok := metaCache.Get(ctx, key, false)
 	if ok {
-		obj, err := Decode(v)
-		if err != nil {
-			return nil, err
-		}
 		metaCacheStats.Record(1, 1)
-		return obj.(BloomFilter), nil
+		return v.Bytes(), nil
 	}
 
 	meta, err := FastLoadObjectMeta(ctx, &location, false, fs)
@@ -142,17 +137,13 @@ func FastLoadBF(
 		return nil, err
 	}
 	extent := meta.MustDataMeta().BlockHeader().BFExtent()
-	v, err = ReadExtent(ctx, name.String(), &extent, cachePolicy, fs, constructorFactory)
+	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, cachePolicy, fs)
 	if err != nil {
 		return nil, err
 	}
-	obj, err := Decode(v)
-	if err != nil {
-		return nil, err
-	}
-	metaCache.Set(ctx, key, v[:], false)
+	metaCache.Set(ctx, key, fileservice.Bytes(bf), false)
 	metaCacheStats.Record(0, 1)
-	return obj.(BloomFilter), nil
+	return bf, nil
 }
 
 func FastLoadObjectMeta(

@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -707,6 +708,41 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}()
 
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+
+	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+	pkName := pkColumn.Name
+	pkType := types.T(pkColumn.Typ.Id)
+	for _, expr := range exprs {
+		ok, _, v := getPkValueByExpr(expr, pkName, pkType, tbl.proc)
+		if ok {
+			for _, blk := range blks {
+				bf, err := objectio.FastLoadBF(ctx, blk.MetaLocation(), fileservice.SkipMemory, fs)
+				if err != nil {
+					return err
+				}
+				buf := bf.GetBloomFilter(uint32(blk.MetaLocation().ID()))
+				bfIndex := index.NewEmptyBinaryFuseFilter()
+				if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
+					return err
+				}
+				v := types.EncodeValue(v, pkType)
+				if exist, err := bfIndex.MayContainsKey(v); err != nil {
+					// check bloom filter has some unknown error. return err
+					return indexwrapper.TranslateError(err)
+				} else if !exist {
+					// all keys were checked. definitely not
+					continue
+				}
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+			}
+			return nil
+		}
+	}
+
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	for _, expr := range exprs {
 		auxIdCnt += plan2.AssignAuxIdForExpr(expr, auxIdCnt)
@@ -721,10 +757,6 @@ func (tbl *txnTable) rangesOnePart(
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return err
-	}
 	hasDeletes := len(dirtyBlks) > 0
 	for _, blk := range blks {
 		// if expr is monotonic, we need evaluating expr for each block
