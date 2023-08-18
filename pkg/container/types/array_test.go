@@ -218,18 +218,18 @@ func TestStringToArray(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.wantResF32 != nil {
-				if gotRes, err := StringToArray[float32](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF32) {
+				if gotRes, err := StringToArray[float32](tt.args.input, tt.args.dim); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF32) {
 					t.Errorf("StringToArray() = %v, want %v", gotRes, tt.wantResF32)
 				}
 			}
 			if tt.wantResF64 != nil {
-				if gotRes, err := StringToArray[float64](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF64) {
+				if gotRes, err := StringToArray[float64](tt.args.input, tt.args.dim); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF64) {
 					t.Errorf("StringToArray() = %v, want %v", gotRes, tt.wantResF64)
 				}
 			}
 
 			if tt.wantErr != nil && tt.args.typ == T_array_float32 {
-				if _, gotErr := StringToArray[float32](tt.args.input); gotErr == nil {
+				if _, gotErr := StringToArray[float32](tt.args.input, tt.args.dim); gotErr == nil {
 					t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
 				} else {
 					if !reflect.DeepEqual(gotErr, tt.wantErr) {
@@ -239,7 +239,7 @@ func TestStringToArray(t *testing.T) {
 			}
 
 			if tt.wantErr != nil && tt.args.typ == T_array_float64 {
-				if _, gotErr := StringToArray[float64](tt.args.input); gotErr == nil {
+				if _, gotErr := StringToArray[float64](tt.args.input, tt.args.dim); gotErr == nil {
 					t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
 				} else {
 					if !reflect.DeepEqual(gotErr, tt.wantErr) {

@@ -58,7 +58,7 @@ func ArraysToString[T RealNumbers](input [][]T) string {
 	return strings.Join(strValues, " ")
 }
 
-func StringToArray[T RealNumbers](str string) ([]T, error) {
+func StringToArray[T RealNumbers](str string, dims int32) ([]T, error) {
 	input := strings.TrimSpace(str)
 
 	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
@@ -77,8 +77,12 @@ func StringToArray[T RealNumbers](str string) ([]T, error) {
 		return nil, moerr.NewInternalErrorNoCtx("typeLen is over the maximum vector dimensions: %v", MaxArrayDimension)
 	}
 
-	//TODO: Need help. checking for dimension while casting is complex. VARCHAR --> VECF32.
-	// VARCHAR might have MaxVarlenSize and hence VECF32 will also have MaxVarlenSize. But instead you want it to have len(vecf32)
+	//TODO: Dimension check int StringToArray has a wierd corner case.
+	// select vector_dims("[1,2,3]") from t1;
+	// Here the dimension of the vector is MAX_LEN, but the "[1,2,3]" will give dimension = 3.
+	// There is a mismatch and it will fail. Need to check if StrToArray should have dimension check just like the code from PgVector?
+	// https://github.com/pgvector/pgvector/blob/a03f6ae4bc5cbcc1a0c332f67df3b8235641be69/src/vector.c#L251
+	// I wonder if they would fail for this test scenario or what?
 	//if int32(len(numStrs)) != dims {
 	//	return nil, moerr.NewInternalErrorNoCtx("input vector dimension %v doesn't match expected dimension %v", len(numStrs), dims)
 	//}

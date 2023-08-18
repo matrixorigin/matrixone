@@ -903,6 +903,13 @@ func (t T) IsDateRelate() bool {
 	return false
 }
 
+func (t T) IsArrayRelate() bool {
+	if t == T_array_float32 || t == T_array_float64 {
+		return true
+	}
+	return false
+}
+
 // IsDecimal return true if the types.T is decimal64 or decimal128
 func (t T) IsDecimal() bool {
 	if t == T_decimal64 || t == T_decimal128 || t == T_decimal256 {
