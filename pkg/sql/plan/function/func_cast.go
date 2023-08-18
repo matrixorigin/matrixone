@@ -3928,8 +3928,6 @@ func strToArray[T types.RealNumbers](
 				return err
 			}
 		} else {
-			//TODO: Improve
-
 			// Convert "[1,2,3]" --> []float32{1.0, 2.0, 3.0}
 			a, err := types.StringToArray[T](convertByteSliceToString(v))
 			if err != nil {

@@ -75,11 +75,7 @@ func SortBlockColumns(
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64:
 		Sort(cols[pk], bytesLess, sortedIdx)
-	//case types.T_array_float32:
-	//	Sort(cols[pk], arrayLess[float32], sortedIdx)
-	//case types.T_array_float64:
-	//	Sort(cols[pk], arrayLess[float64], sortedIdx)
-	//TODO: should I Add T_array
+	//TODO: check if I should add T_array here? Is bytesLess enough?
 	default:
 		panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
 	}

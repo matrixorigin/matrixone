@@ -24,7 +24,7 @@ import (
 //TODO: Check on optimization.
 // 1. Should we return []T or *[]T
 // 2. Should we accept v1 *[]T. v1 is a Slice, so I think, it should be pass by reference.
-// 3. Later on, use tensor library to performance the computation (may be via GPU)
+// 3. Later on, use tensor library to improve the performance (may be via GPU)
 
 func Add[T types.RealNumbers](v1, v2 []T) []T {
 	n := len(v1)
