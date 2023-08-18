@@ -182,10 +182,8 @@ func TestCancelRunningTask(t *testing.T) {
 		v.Epoch++
 		mustUpdateTestTask(t, store, 1, []task.Task{v})
 		<-cancelC
-		for i := 0; i < 100; i++ {
-			if v := mustGetTestTask(t, store, 1)[0]; v.Status == task.TaskStatus_Completed {
-				break
-			}
+		for v := mustGetTestTask(t, store, 1)[0]; v.Status != task.TaskStatus_Completed; v = mustGetTestTask(t, store, 1)[0] {
+			time.Sleep(10 * time.Millisecond)
 		}
 		r.mu.RLock()
 		defer r.mu.RUnlock()
