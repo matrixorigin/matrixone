@@ -571,7 +571,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
-			algorithm = plan.AlterTable_INPLACE
+			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableChangeColumnClause:
