@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func (a *UnaryDistAgg[T1, T2]) Free2(pool *mpool.MPool) {
+func (a *UnaryDistAgg[T1, T2]) Free(pool *mpool.MPool) {
 	for _, mp := range a.maps {
 		if mp != nil {
 			mp.Free()
@@ -35,7 +35,7 @@ func (a *UnaryDistAgg[T1, T2]) Free2(pool *mpool.MPool) {
 	}
 }
 
-func (a *UnaryDistAgg[T1, T2]) Grows2(count int, pool *mpool.MPool) (err error) {
+func (a *UnaryDistAgg[T1, T2]) Grows(count int, pool *mpool.MPool) (err error) {
 	a.grows(count)
 
 	finalCount := len(a.es) + count
@@ -107,7 +107,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows2(count int, pool *mpool.MPool) (err error) 
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) Fill2(groupIdx int64, rowIndex int64, vectors []*vector.Vector) (err error) {
+func (a *UnaryDistAgg[T1, T2]) Fill(groupIdx int64, rowIndex int64, vectors []*vector.Vector) (err error) {
 	ok, err := a.maps[groupIdx].Insert(vectors, int(rowIndex))
 	if err != nil {
 		return err
@@ -136,7 +136,7 @@ func (a *UnaryDistAgg[T1, T2]) Fill2(groupIdx int64, rowIndex int64, vectors []*
 	return err
 }
 
-func (a *UnaryDistAgg[T1, T2]) BatchFill2(offset int64, groupStatus []uint8, groupOfRows []uint64, vectors []*vector.Vector) (err error) {
+func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfRows []uint64, vectors []*vector.Vector) (err error) {
 	// TODO: refer to the comments of UnaryAgg.BatchFill
 	var value T1
 	var str []byte
@@ -258,7 +258,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill2(offset int64, groupStatus []uint8, gro
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) BulkFill2(groupIdx int64, vectors []*vector.Vector) (err error) {
+func (a *UnaryDistAgg[T1, T2]) BulkFill(groupIdx int64, vectors []*vector.Vector) (err error) {
 	var value T1
 	var ok bool
 
@@ -357,7 +357,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill2(groupIdx int64, vectors []*vector.Vecto
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) Merge2(b Agg[any], groupIdx1, groupIdx2 int64) (err error) {
+func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], groupIdx1, groupIdx2 int64) (err error) {
 	a2 := b.(*UnaryDistAgg[T1, T2])
 	if a2.es[groupIdx2] {
 		return nil
@@ -379,7 +379,7 @@ func (a *UnaryDistAgg[T1, T2]) Merge2(b Agg[any], groupIdx1, groupIdx2 int64) (e
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) BatchMerge2(b Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) (err error) {
+func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) (err error) {
 	a2 := b.(*UnaryDistAgg[T1, T2])
 
 	var ok bool
@@ -410,7 +410,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge2(b Agg[any], offset int64, groupStatus
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) Eval2(pool *mpool.MPool) (vec *vector.Vector, err error) {
+func (a *UnaryDistAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err error) {
 	a.vs, err = a.eval(a.vs, nil)
 	if err != nil {
 		return nil, err
@@ -438,5 +438,5 @@ func (a *UnaryDistAgg[T1, T2]) Eval2(pool *mpool.MPool) (vec *vector.Vector, err
 	if a.isCount {
 		vec.GetNulls().Reset()
 	}
-	return nil, nil
+	return vec, nil
 }

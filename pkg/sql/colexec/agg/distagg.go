@@ -39,7 +39,7 @@ func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, oty
 	}
 }
 
-func (a *UnaryDistAgg[T1, T2]) Free(m *mpool.MPool) {
+func (a *UnaryDistAgg[T1, T2]) Free3(m *mpool.MPool) {
 	if a.da != nil {
 		m.Free(a.da)
 		a.da = nil
@@ -59,7 +59,7 @@ func (a *UnaryDistAgg[T1, T2]) InputTypes() []types.Type {
 	return a.ityps
 }
 
-func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
+func (a *UnaryDistAgg[T1, T2]) Grows3(size int, m *mpool.MPool) error {
 	if a.otyp.IsVarlen() {
 		if len(a.vs) == 0 {
 			a.es = make([]bool, 0, size)
@@ -129,7 +129,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel int64, vecs []*vector.Vector) error {
+func (a *UnaryDistAgg[T1, T2]) Fill3(i int64, sel int64, vecs []*vector.Vector) error {
 	ok, err := a.maps[i].Insert(vecs, int(sel))
 	if err != nil {
 		return err
@@ -157,7 +157,7 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel int64, vecs []*vector.Vector) e
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, vecs []*vector.Vector) error {
+func (a *UnaryDistAgg[T1, T2]) BatchFill3(start int64, os []uint8, vps []uint64, vecs []*vector.Vector) error {
 	var ok bool
 	var err error
 
@@ -212,7 +212,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, vecs []*vector.Vector) error {
+func (a *UnaryDistAgg[T1, T2]) BulkFill3(i int64, vecs []*vector.Vector) error {
 	var ok bool
 	var err error
 
@@ -260,7 +260,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, vecs []*vector.Vector) error {
 }
 
 // Merge a[x] += b[y]
-func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], x, y int64) error {
+func (a *UnaryDistAgg[T1, T2]) Merge3(b Agg[any], x, y int64) error {
 	var ok bool
 	var err error
 
@@ -286,7 +286,7 @@ func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], x, y int64) error {
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps []uint64) error {
+func (a *UnaryDistAgg[T1, T2]) BatchMerge3(b Agg[any], start int64, os []uint8, vps []uint64) error {
 	var ok bool
 	var err error
 
@@ -319,7 +319,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
+func (a *UnaryDistAgg[T1, T2]) Eval3(m *mpool.MPool) (*vector.Vector, error) {
 	defer func() {
 		a.Free(m)
 		a.da = nil
