@@ -171,7 +171,7 @@ max(c1)    min(c1)    max(c2)    min(c2)
 7    2    h    a
 show column_number from r_test;
 Number of columns in r_test
-4
+2
 show TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show TRIGGERS like '*%';
@@ -284,7 +284,7 @@ max(c1)    min(c1)    max(c2)    min(c2)
 null    null    null    null
 show column_number from r_test;
 Number of columns in r_test
-4
+2
 show TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show TRIGGERS like '*%';

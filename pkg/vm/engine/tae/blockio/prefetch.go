@@ -23,22 +23,14 @@ import (
 // provides the merge function, which can merge the PrefetchParams requests of
 // multiple blocks in an object/file
 type PrefetchParams struct {
-	dataType objectio.DataMetaType
-	ids      map[uint16]*objectio.ReadBlockOptions
-	fs       fileservice.FileService
-	key      objectio.Location
-	reader   *objectio.ObjectReader
+	ids    map[uint16]*objectio.ReadBlockOptions
+	fs     fileservice.FileService
+	key    objectio.Location
+	reader *objectio.ObjectReader
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
 	pp := buildPrefetchParams(service, key)
-	pp.dataType = objectio.SchemaData
-	return pp, nil
-}
-
-func BuildSubPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
-	pp := buildPrefetchParams(service, key)
-	pp.dataType = objectio.CkpMetaStart
 	return pp, nil
 }
 
@@ -67,8 +59,9 @@ func (p *PrefetchParams) AddBlock(idxes []uint16, ids []uint16) {
 	}
 	for _, id := range ids {
 		blocks[id] = &objectio.ReadBlockOptions{
-			Id:    id,
-			Idxes: columns,
+			Id:       id,
+			Idxes:    columns,
+			DataType: uint16(objectio.SchemaData),
 		}
 	}
 	p.mergeIds(blocks)

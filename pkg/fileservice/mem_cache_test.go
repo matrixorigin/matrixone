@@ -43,7 +43,7 @@ func TestMemCacheLeak(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	m := NewMemCache(WithLRU(4))
+	m := NewMemCache(NewLRUCache(4, true, nil), nil)
 
 	vec := &IOVector{
 		FilePath: "foo",
@@ -97,7 +97,7 @@ func TestMemCacheLeak(t *testing.T) {
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
-	m := NewMemCache(WithLRU(2))
+	m := NewMemCache(NewLRUCache(2, true, nil), nil)
 	ctx := context.Background()
 
 	n := 10

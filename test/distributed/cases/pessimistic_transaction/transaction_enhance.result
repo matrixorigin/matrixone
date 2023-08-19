@@ -166,12 +166,12 @@ begin;
 alter table atomic_table_13 drop foreign key ffa;
 use transaction_enhance;
 insert into atomic_table_13 values (8,"h");
-internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from atomic_table_13;
 c1    c2
 3    d
 4    e
 5    f
+8    h
 commit;
 show create table atomic_table_13;
 Table    Create Table
@@ -187,12 +187,12 @@ begin;
 alter table atomic_table_13 drop foreign key ffa;
 use transaction_enhance;
 insert into atomic_table_13 values (8,"h");
-internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from atomic_table_13;
 c1    c2
 3    d
 4    e
 5    f
+8    h
 rollback ;
 show create table atomic_table_13;
 Table    Create Table
@@ -339,3 +339,137 @@ SQL parser error: table "atomic_table_18" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 set autocommit=1;
 drop account if exists trans_acc1;
+
+drop table if exists alter01;
+drop table if exists alter02;
+create table alter01(col1 int primary key,col2 varchar(25));
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+begin;
+alter table alter01 modify col1 float;
+use transaction_enhance;
+insert into alter01 values (8,"h");
+select * from alter01;
+col1    col2
+3.0    a
+4.0    b
+5.0    c
+1.1E-44    h
+insert into alter01 values (6,"h");
+commit;
+select * from alter01;
+col1    col2
+3.0    a
+4.0    b
+5.0    c
+1.1E-44    h
+6.0    h
+drop table if exists alter01;
+[unknown result because it is related to issue#11213]
+drop table if exists alter02;
+[unknown result because it is related to issue#11213]
+create table alter01(col1 int not null ,col2 varchar(25));
+[unknown result because it is related to issue#11213]
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+[unknown result because it is related to issue#11213]
+begin;
+[unknown result because it is related to issue#11213]
+alter table alter01 modify col1 float;
+[unknown result because it is related to issue#11213]
+use transaction_enhance;
+[unknown result because it is related to issue#11213]
+insert into alter01 values (8,"h");
+[unknown result because it is related to issue#11213]
+select * from alter01;
+[unknown result because it is related to issue#11213]
+insert into alter01 values (6,"h");
+[unknown result because it is related to issue#11213]
+commit;
+[unknown result because it is related to issue#11213]
+select * from alter01;
+[unknown result because it is related to issue#11213]
+drop table if exists atomic_table_12_5;
+[unknown result because it is related to issue#11213]
+create table atomic_table_12_5(c1 int,c2 varchar(25));
+[unknown result because it is related to issue#11213]
+insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
+[unknown result because it is related to issue#11213]
+alter table atomic_table_12_5 add index key1(c1);
+[unknown result because it is related to issue#11213]
+begin;
+[unknown result because it is related to issue#11213]
+alter table atomic_table_12_5 change c1 clNew double;
+[unknown result because it is related to issue#11213]
+use transaction_enhance;
+[unknown result because it is related to issue#11213]
+insert into alter01 values (8,"h");
+[unknown result because it is related to issue#11213]
+show create table atomic_table_12_5;
+[unknown result because it is related to issue#11213]
+select * from atomic_table_12_5;
+[unknown result because it is related to issue#11213]
+show create table atomic_table_12_5;
+[unknown result because it is related to issue#11213]
+drop table if exists alter01;
+[unknown result because it is related to issue#11268]
+create table alter01(col1 int primary key,col2 varchar(25));
+[unknown result because it is related to issue#11268]
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+[unknown result because it is related to issue#11268]
+begin;
+[unknown result because it is related to issue#11268]
+alter table alter01 change col1 col1New float;
+[unknown result because it is related to issue#11268]
+use transaction_enhance;
+[unknown result because it is related to issue#11268]
+insert into alter01 values (8,"h");
+[unknown result because it is related to issue#11268]
+select * from alter01;
+[unknown result because it is related to issue#11268]
+insert into alter01 values (6,"h");
+[unknown result because it is related to issue#11268]
+select * from alter01;
+[unknown result because it is related to issue#11268]
+drop table if exists atomic_table_12_5;
+[unknown result because it is related to issue#11213]
+create table atomic_table_12_5(c1 int,c2 varchar(25));
+[unknown result because it is related to issue#11213]
+insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
+[unknown result because it is related to issue#11213]
+alter table atomic_table_12_5 add index key1(c1);
+[unknown result because it is related to issue#11213]
+begin;
+[unknown result because it is related to issue#11213]
+alter table atomic_table_12_5 rename column c1 to clNew;
+[unknown result because it is related to issue#11213]
+use transaction_enhance;
+[unknown result because it is related to issue#11213]
+insert into alter01 values (8,"h");
+[unknown result because it is related to issue#11213]
+show create table atomic_table_12_5;
+[unknown result because it is related to issue#11213]
+select * from atomic_table_12_5;
+[unknown result because it is related to issue#11213]
+show create table atomic_table_12_5;
+[unknown result because it is related to issue#11213]
+drop table if exists alter01;
+[unknown result because it is related to issue#11268]
+create table alter01(col1 int primary key,col2 varchar(25));
+[unknown result because it is related to issue#11268]
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+[unknown result because it is related to issue#11268]
+begin;
+[unknown result because it is related to issue#11268]
+alter table alter01 rename column col1 to col1New;
+[unknown result because it is related to issue#11268]
+use transaction_enhance;
+[unknown result because it is related to issue#11268]
+insert into alter01 values (8,"h");
+[unknown result because it is related to issue#11268]
+select * from alter01;
+[unknown result because it is related to issue#11268]
+insert into alter01 values (6,"h");
+[unknown result because it is related to issue#11268]
+select * from alter01;
+[unknown result because it is related to issue#11268]
+
+

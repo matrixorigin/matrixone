@@ -269,6 +269,7 @@ message TxnResponse {
 
 // TxnCommitRequest CN sent the commit request to coordinator DN.
 message TxnCommitRequest {
+    repeated TxnRequest       Payload = 1;
     bool                      Disable1PCOpt = 2;
 }
 

@@ -147,6 +147,7 @@ const (
 	ErrFkColumnCannotDropChild                  uint16 = 20464
 	ErrDependentByPartitionFunction             uint16 = 20465
 	ErrAlterOperationNotSupportedReasonFkRename uint16 = 20466
+	ErrPrimaryCantHaveNull                      uint16 = 20467
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -351,6 +352,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFkColumnCannotDropChild:                  {ER_FK_COLUMN_CANNOT_DROP_CHILD, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrDependentByPartitionFunction:             {ER_DEPENDENT_BY_PARTITION_FUNC, []string{MySQLDefaultSqlState}, "Column '%s' has a partitioning function dependency and cannot be dropped or renamed"},
 	ErrAlterOperationNotSupportedReasonFkRename: {ER_ALTER_OPERATION_NOT_SUPPORTED_REASON_FK_RENAME, []string{MySQLDefaultSqlState}, "Columns participating in a foreign key are renamed"},
+	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{MySQLDefaultSqlState}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1201,6 +1203,10 @@ func NewErrDependentByPartitionFunction(ctx context.Context, colName any) *Error
 
 func NewErrAlterOperationNotSupportedReasonFkRename(ctx context.Context) *Error {
 	return newError(ctx, ErrAlterOperationNotSupportedReasonFkRename)
+}
+
+func NewErrPrimaryCantHaveNull(ctx context.Context) *Error {
+	return newError(ctx, ErrPrimaryCantHaveNull)
 }
 
 var contextFunc atomic.Value
