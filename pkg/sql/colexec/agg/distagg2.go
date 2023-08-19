@@ -125,7 +125,12 @@ func (a *UnaryDistAgg[T1, T2]) Fill(groupIdx int64, rowIndex int64, vectors []*v
 	isNull := inputVector.IsConstNull() || inputVector.GetNulls().Contains(uint64(rowIndex))
 	if !isNull {
 		if inputVector.GetType().IsVarlen() {
-			value = (any)(inputVector.GetBytesAt(int(rowIndex))).(T1)
+			getValue := inputVector.GetBytesAt(int(rowIndex))
+			storeValue := make([]byte, len(getValue))
+			// bad copy.
+			copy(storeValue, getValue)
+
+			value = (any)(storeValue).(T1)
 		} else {
 			value = vector.MustFixedCol[T1](inputVector)[rowIndex]
 		}
@@ -149,8 +154,11 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, grou
 		if inputVector.IsConst() {
 			isNull := inputVector.IsConstNull()
 			if !isNull {
-				str = inputVector.GetBytesAt(0)
-				value = (any)(str).(T1)
+				getValue := inputVector.GetBytesAt(0)
+				storeValue := make([]byte, len(getValue))
+				copy(storeValue, getValue)
+
+				value = (any)(storeValue).(T1)
 				for i := uint64(0); i < loopLength; i++ {
 					if groupOfRows[i] == groupNotMatch {
 						continue
@@ -182,7 +190,11 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, grou
 				if isNull {
 					continue
 				}
-				str = inputVector.GetBytesAt(int(rowIndex))
+				getValue := inputVector.GetBytesAt(int(rowIndex))
+				storeValue := make([]byte, len(getValue))
+				copy(storeValue, getValue)
+
+				value = (any)(storeValue).(T1)
 				groupNumber := int64(groupOfRows[i] - 1)
 				ok, err = a.maps[groupNumber].InsertValue(str)
 				if err != nil {
@@ -266,17 +278,20 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(groupIdx int64, vectors []*vector.Vector
 
 	loopLength := inputVector.Length()
 	if inputVector.GetType().IsVarlen() {
-		var str []byte
+		var getValue []byte
 		if inputVector.IsConst() {
 			isNull := inputVector.IsConstNull()
 			if !isNull {
-				str = inputVector.GetBytesAt(0)
-				ok, err = a.maps[groupIdx].InsertValue(str)
+				getValue = inputVector.GetBytesAt(0)
+				ok, err = a.maps[groupIdx].InsertValue(getValue)
 				if err != nil {
 					return err
 				}
 				if ok {
-					value = (any)(str).(T1)
+					storeValue := make([]byte, len(getValue))
+					copy(storeValue, getValue)
+
+					value = (any)(storeValue).(T1)
 					a.vs[groupIdx], a.es[groupIdx], err = a.fill(groupIdx, value, a.vs[groupIdx], int64(loopLength), a.es[groupIdx], isNull)
 					if err != nil {
 						return err
@@ -295,17 +310,18 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(groupIdx int64, vectors []*vector.Vector
 				if isNull {
 					continue
 				}
-				str = inputVector.GetBytesAt(i)
-				ok, err = a.maps[groupIdx].InsertValue(str)
+				getValue = inputVector.GetBytesAt(i)
+				ok, err = a.maps[groupIdx].InsertValue(getValue)
 				if err != nil {
 					return err
 				}
 				if ok {
-					value = (any)(str).(T1)
+					value = (any)(getValue).(T1)
 					a.vs[groupIdx], a.es[groupIdx], err = a.fill(groupIdx, value, a.vs[groupIdx], 1, a.es[groupIdx], false)
 					if err != nil {
 						return err
 					}
+					a.srcs[groupIdx] = append(a.srcs[groupIdx], value)
 				}
 			}
 		}
@@ -417,7 +433,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err 
 	}
 
 	nullList := a.es
-	if a.op == WinDenseRank || a.op == WinRank {
+	if a.op == WinDenseRank || a.op == WinRank || a.op == WinRowNumber {
 		nullList = nil
 	}
 
