@@ -19,6 +19,7 @@ package logservice
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -285,7 +287,11 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 	case pb.DELETE_CN_STORE:
 		return s.handleDeleteCNStore(ctx, req), pb.LogRecordResponse{}
 	default:
-		panic("unknown log service method type")
+		resp := getResponse(req)
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+			moerr.NewNotSupported(ctx,
+				fmt.Sprintf("logservice method type %d", req.Method)))
+		return resp, pb.LogRecordResponse{}
 	}
 }
 
