@@ -50,6 +50,13 @@ const (
 	WinDenseRank
 )
 
+// TODO: It's a bad hack here, I will fix it later.
+// remove the special id from agg framwork is a better way.
+// just put these code here for now because I have no enough time to solve the import cycle problem.
+func GetFunctionIsWinOrderFunBySpecialId(id int) bool {
+	return id == WinRank || id == WinRowNumber || id == WinDenseRank
+}
+
 const (
 	groupNotMatch = 0
 )
@@ -88,10 +95,10 @@ type Agg[T any] interface {
 	encoding.BinaryMarshaler
 	encoding.BinaryUnmarshaler
 
-	// Type return the type of the agg's result.
+	// OutputType return the result type of the agg.
 	OutputType() types.Type
 
-	// InputType return the type of the agg's input.
+	// InputTypes return the input types of the agg.
 	InputTypes() []types.Type
 
 	// Free the agg.
@@ -103,23 +110,16 @@ type Agg[T any] interface {
 	// Eval method calculates and returns the final result of the aggregate function.
 	Eval(pool *mpool.MPool) (*vector.Vector, error)
 
-	// Fill use the one row of vector to update the data of groupIndex-group's agg.
+	// Fill use the one row of vector to fill agg.
 	Fill(groupIndex int64, rowIndex int64, vectors []*vector.Vector) error
 
-	// BulkFill use whole vector to update the data of groupIndex-group's agg.
+	// BulkFill use whole vector to fill agg.
 	BulkFill(groupIndex int64, vectors []*vector.Vector) error
 
-	// BatchFill use part of the vector to update the data of agg's group
-	//      os(origin-s) records information about which groups need to be updated
-	//      if length of os is N, we use first N of vps to do update work.
-	//      And if os[i] > 0, it means the agg's (vps[i]-1)th group is a new one (never been assigned a value),
-	//      Maybe this feature can help us to do some optimization work.
-	//      So we use the os as a parameter but not len(os).
-	//
-	//      agg's (vps[i]-1)th group is related to vector's (offset+i)th row.
-	//      rowCounts[i] is count number of the row[i]
-	// For a more detailed introduction of rowCounts, please refer to comments of Function Fill.
-	BatchFill(offset int64, os []uint8, vps []uint64, vecs []*vector.Vector) error
+	// BatchFill use part rows of the vector to fill agg.
+	// the rows are start from offset and end at offset+len(groupStatus)
+	// groupOfRows[i] is 1 means that the (i+offset)th row matched the first group and 0 means not matched.
+	BatchFill(offset int64, groupStatus []uint8, groupOfRows []uint64, vectors []*vector.Vector) error
 
 	// Merge will merge a couple of group between 2 aggregate function structures.
 	// It merges the groupIndex1-group of agg1 and
@@ -127,9 +127,8 @@ type Agg[T any] interface {
 	Merge(agg2 Agg[any], groupIndex1 int64, groupIndex2 int64) error
 
 	// BatchMerge merges multi groups of agg1 and agg2
-	//  agg1's (vps[i]-1)th group is related to agg2's (start+i)th group
-	// For more introduction of os, please refer to comments of Function BatchFill.
-	BatchMerge(agg2 Agg[any], start int64, os []uint8, vps []uint64) error
+	// groupIdxes[i] is 1 means that the (offset + i)th group of agg2 matched the first group and 0 means not matched.
+	BatchMerge(agg2 Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) error
 
 	// GetInputTypes get types of aggregate's input arguments.
 	GetInputTypes() []types.Type

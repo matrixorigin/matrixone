@@ -17,7 +17,6 @@ package agg
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -39,16 +38,20 @@ func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, oty
 	}
 }
 
-func (a *UnaryDistAgg[T1, T2]) Free3(m *mpool.MPool) {
-	if a.da != nil {
-		m.Free(a.da)
-		a.da = nil
-		a.vs = nil
-	}
+func (a *UnaryDistAgg[T1, T2]) Free(pool *mpool.MPool) {
 	for _, mp := range a.maps {
-		mp.Free()
+		if mp != nil {
+			mp.Free()
+			mp = nil
+		}
 	}
-	a.maps = nil
+	if a.otyp.IsVarlen() {
+		return
+	}
+	if a.da != nil {
+		pool.Free(a.da)
+		a.da = nil
+	}
 }
 
 func (a *UnaryDistAgg[T1, T2]) OutputType() types.Type {
@@ -59,317 +62,424 @@ func (a *UnaryDistAgg[T1, T2]) InputTypes() []types.Type {
 	return a.ityps
 }
 
-func (a *UnaryDistAgg[T1, T2]) Grows3(size int, m *mpool.MPool) error {
-	if a.otyp.IsVarlen() {
-		if len(a.vs) == 0 {
-			a.es = make([]bool, 0, size)
-			a.vs = make([]T2, 0, size)
-			a.srcs = make([][]T1, 0, size)
-			a.maps = make([]*hashmap.StrHashMap, 0, size)
+func (a *UnaryDistAgg[T1, T2]) Grows(count int, pool *mpool.MPool) (err error) {
+	a.grows(count)
 
-			a.vs = a.vs[:size]
-			for i := 0; i < size; i++ {
-				a.es = append(a.es, true)
-				a.srcs = append(a.srcs, make([]T1, 0, 1))
-				mp, err := hashmap.NewStrMap(false, 0, 0, m)
+	finalCount := len(a.es) + count
+	if a.otyp.IsVarlen() {
+		if len(a.es) == 0 {
+			a.es = make([]bool, count)
+			a.vs = make([]T2, count)
+			a.srcs = make([][]T1, count)
+			a.maps = make([]*hashmap.StrHashMap, count)
+			for i := 0; i < count; i++ {
+				a.es[i] = true
+				a.srcs[i] = make([]T1, 0, 1)
+				a.maps[i], err = hashmap.NewStrMap(false, 0, 0, pool)
 				if err != nil {
 					return err
 				}
-				a.maps = append(a.maps, mp)
 			}
+
 		} else {
-			var v T2
-			for i := 0; i < size; i++ {
+			var emptyResult T2
+			for i := 0; i < count; i++ {
 				a.es = append(a.es, true)
-				a.vs = append(a.vs, v)
+				a.vs = append(a.vs, emptyResult)
 				a.srcs = append(a.srcs, make([]T1, 0, 1))
-				mp, err := hashmap.NewStrMap(false, 0, 0, m)
-				if err != nil {
-					return err
+
+				m, err1 := hashmap.NewStrMap(false, 0, 0, pool)
+				if err1 != nil {
+					return err1
 				}
-				a.maps = append(a.maps, mp)
+				a.maps = append(a.maps, m)
 			}
 		}
-		a.grows(size)
-		return nil
-	}
-	sz := a.otyp.TypeSize()
-	n := len(a.vs)
-	if n == 0 {
-		data, err := m.Alloc(size * sz)
-		if err != nil {
-			return err
+
+	} else {
+		itemSize := a.otyp.TypeSize()
+		if len(a.es) == 0 {
+			data, err1 := pool.Alloc(count * itemSize)
+			if err1 != nil {
+				return err
+			}
+			a.da = data
+			a.vs = types.DecodeSlice[T2](a.da)
+			a.es = make([]bool, 0, count)
+			a.srcs = make([][]T1, 0, count)
+			a.maps = make([]*hashmap.StrHashMap, 0, count)
+		} else {
+			data, err1 := pool.Grow(a.da, finalCount*itemSize)
+			if err1 != nil {
+				return err
+			}
+			a.da = data
+			a.vs = types.DecodeSlice[T2](a.da)
 		}
-		a.da = data
-		a.es = make([]bool, 0, size)
-		a.srcs = make([][]T1, 0, size)
-		a.maps = make([]*hashmap.StrHashMap, 0, size)
-		a.vs = types.DecodeSlice[T2](a.da)
-	} else if n+size >= cap(a.vs) {
-		a.da = a.da[:n*sz]
-		data, err := m.Grow(a.da, (n+size)*sz)
-		if err != nil {
-			return err
+
+		a.vs = a.vs[:finalCount]
+		a.da = a.da[:finalCount*itemSize]
+		for i := len(a.es); i < finalCount; i++ {
+			a.es = append(a.es, true)
+			a.srcs = append(a.srcs, make([]T1, 0, 1))
+
+			m, err1 := hashmap.NewStrMap(false, 0, 0, pool)
+			if err1 != nil {
+				return err1
+			}
+			a.maps = append(a.maps, m)
 		}
-		a.da = data
-		a.vs = types.DecodeSlice[T2](a.da)
 	}
-	a.vs = a.vs[:n+size]
-	a.da = a.da[:(n+size)*sz]
-	for i := 0; i < size; i++ {
-		a.es = append(a.es, true)
-		mp, err := hashmap.NewStrMap(false, 0, 0, m)
-		if err != nil {
-			return err
-		}
-		a.maps = append(a.maps, mp)
-		a.srcs = append(a.srcs, make([]T1, 0, 1))
-	}
-	a.grows(size)
+
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) Fill3(i int64, sel int64, vecs []*vector.Vector) error {
-	ok, err := a.maps[i].Insert(vecs, int(sel))
+func (a *UnaryDistAgg[T1, T2]) Fill(groupIdx int64, rowIndex int64, vectors []*vector.Vector) (err error) {
+	ok, err := a.maps[groupIdx].Insert(vectors, int(rowIndex))
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return nil
 	}
-	var v T1
 
-	vec := vecs[0]
-	hasNull := vec.GetNulls().Contains(uint64(sel))
-	if hasNull {
-		return nil
+	var value T1
+	inputVector := vectors[0]
+
+	if inputVector.IsConst() {
+		rowIndex = 0
 	}
-	if vec.GetType().IsVarlen() {
-		v = (any)(vec.GetBytesAt(int(sel))).(T1)
+	isNull := inputVector.IsConstNull() || inputVector.GetNulls().Contains(uint64(rowIndex))
+	if !isNull {
+		if inputVector.GetType().IsVarlen() {
+			getValue := inputVector.GetBytesAt(int(rowIndex))
+			storeValue := make([]byte, len(getValue))
+			// bad copy.
+			copy(storeValue, getValue)
+
+			value = (any)(storeValue).(T1)
+		} else {
+			value = vector.MustFixedCol[T1](inputVector)[rowIndex]
+		}
+	}
+
+	a.srcs[groupIdx] = append(a.srcs[groupIdx], value)
+	a.vs[groupIdx], a.es[groupIdx], err = a.fill(groupIdx, value, a.vs[groupIdx], 1, a.es[groupIdx], isNull)
+	return err
+}
+
+func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfRows []uint64, vectors []*vector.Vector) (err error) {
+	// TODO: refer to the comments of UnaryAgg.BatchFill
+	var value T1
+	var ok bool
+	inputVector := vectors[0]
+	rowOffset := uint64(offset)
+	loopLength := uint64(len(groupStatus))
+
+	if inputVector.GetType().IsVarlen() {
+		if inputVector.IsConst() {
+			isNull := inputVector.IsConstNull()
+			if !isNull {
+				getValue := inputVector.GetBytesAt(0)
+				storeValue := make([]byte, len(getValue))
+				copy(storeValue, getValue)
+
+				value = (any)(storeValue).(T1)
+				for i := uint64(0); i < loopLength; i++ {
+					if groupOfRows[i] == groupNotMatch {
+						continue
+					}
+					groupNumber := int64(groupOfRows[i] - 1)
+
+					ok, err = a.maps[groupNumber].InsertValue(value)
+					if err != nil {
+						return err
+					}
+					if ok {
+						a.srcs[groupNumber] = append(a.srcs[groupNumber], value)
+						a.vs[groupNumber], a.es[groupNumber], err = a.fill(groupNumber, value, a.vs[groupNumber], 1, a.es[groupNumber], isNull)
+						if err != nil {
+							return err
+						}
+					}
+				}
+			}
+
+		} else {
+			nulls := inputVector.GetNulls()
+			for i := uint64(0); i < loopLength; i++ {
+				if groupOfRows[i] == groupNotMatch {
+					continue
+				}
+				rowIndex := rowOffset + i
+				isNull := nulls.Contains(rowIndex)
+				if isNull {
+					continue
+				}
+				getValue := inputVector.GetBytesAt(int(rowIndex))
+
+				groupNumber := int64(groupOfRows[i] - 1)
+				ok, err = a.maps[groupNumber].InsertValue(getValue)
+				if err != nil {
+					return err
+				}
+				if ok {
+					storeValue := make([]byte, len(getValue))
+					copy(storeValue, getValue)
+					value = (any)(storeValue).(T1)
+
+					a.srcs[groupNumber] = append(a.srcs[groupNumber], value)
+					a.vs[groupNumber], a.es[groupNumber], err = a.fill(groupNumber, value, a.vs[groupNumber], 1, a.es[groupNumber], isNull)
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+		}
+
 	} else {
-		v = vector.GetFixedAt[T1](vec, int(sel))
+		values := vector.MustFixedCol[T1](inputVector)
+		if inputVector.IsConst() {
+			isNull := inputVector.IsConstNull()
+			if !isNull {
+				value = values[0]
+				for i := uint64(0); i < loopLength; i++ {
+					if groupOfRows[i] == groupNotMatch {
+						continue
+					}
+					groupNumber := int64(groupOfRows[i] - 1)
+
+					ok, err = a.maps[groupNumber].InsertValue(value)
+					if err != nil {
+						return err
+					}
+					if ok {
+						a.srcs[groupNumber] = append(a.srcs[groupNumber], value)
+						a.vs[groupNumber], a.es[groupNumber], err = a.fill(groupNumber, value, a.vs[groupNumber], 1, a.es[groupNumber], isNull)
+						if err != nil {
+							return err
+						}
+					}
+				}
+			}
+
+		} else {
+			nulls := inputVector.GetNulls()
+			for i := uint64(0); i < loopLength; i++ {
+				if groupOfRows[i] == groupNotMatch {
+					continue
+				}
+				rowIndex := rowOffset + i
+				isNull := nulls.Contains(rowIndex)
+				if isNull {
+					continue
+				}
+				value = values[rowIndex]
+				groupNumber := int64(groupOfRows[i] - 1)
+				ok, err = a.maps[groupNumber].InsertValue(value)
+				if err != nil {
+					return err
+				}
+				if ok {
+					a.srcs[groupNumber] = append(a.srcs[groupNumber], value)
+					a.vs[groupNumber], a.es[groupNumber], err = a.fill(groupNumber, value, a.vs[groupNumber], 1, a.es[groupNumber], isNull)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
-	a.srcs[i] = append(a.srcs[i], v)
-	a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], 1, a.es[i], hasNull)
-	if a.err == nil {
-		a.err = err
-	}
+
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) BatchFill3(start int64, os []uint8, vps []uint64, vecs []*vector.Vector) error {
+func (a *UnaryDistAgg[T1, T2]) BulkFill(groupIdx int64, vectors []*vector.Vector) (err error) {
+	var value T1
 	var ok bool
-	var err error
 
-	vec := vecs[0]
-	if vec.GetType().IsVarlen() {
-		for i := range os {
-			if vps[i] == 0 {
-				continue
+	inputVector := vectors[0]
+
+	loopLength := inputVector.Length()
+	if inputVector.GetType().IsVarlen() {
+		var getValue []byte
+		if inputVector.IsConst() {
+			isNull := inputVector.IsConstNull()
+			if !isNull {
+				getValue = inputVector.GetBytesAt(0)
+				ok, err = a.maps[groupIdx].InsertValue(getValue)
+				if err != nil {
+					return err
+				}
+				if ok {
+					storeValue := make([]byte, len(getValue))
+					copy(storeValue, getValue)
+
+					value = (any)(storeValue).(T1)
+					a.vs[groupIdx], a.es[groupIdx], err = a.fill(groupIdx, value, a.vs[groupIdx], int64(loopLength), a.es[groupIdx], isNull)
+					if err != nil {
+						return err
+					}
+
+					for i := 0; i < loopLength; i++ {
+						a.srcs[groupIdx] = append(a.srcs[groupIdx], value)
+					}
+				}
 			}
-			j := vps[i] - 1
-			str := vec.GetBytesAt(i + int(start))
-			if ok, err = a.maps[j].InsertValue(str); err != nil {
+
+		} else {
+			nulls := inputVector.GetNulls()
+			for i := 0; i < loopLength; i++ {
+				isNull := nulls.Contains(uint64(i))
+				if isNull {
+					continue
+				}
+				getValue = inputVector.GetBytesAt(i)
+				ok, err = a.maps[groupIdx].InsertValue(getValue)
+				if err != nil {
+					return err
+				}
+				if ok {
+					value = (any)(getValue).(T1)
+					a.vs[groupIdx], a.es[groupIdx], err = a.fill(groupIdx, value, a.vs[groupIdx], 1, a.es[groupIdx], false)
+					if err != nil {
+						return err
+					}
+					a.srcs[groupIdx] = append(a.srcs[groupIdx], value)
+				}
+			}
+		}
+
+	} else {
+		values := vector.MustFixedCol[T1](inputVector)
+		if inputVector.IsConst() {
+			isNull := inputVector.IsConstNull()
+			if !isNull {
+				value = values[0]
+			}
+			ok, err = a.maps[groupIdx].InsertValue(value)
+			if err != nil {
 				return err
 			}
 			if ok {
-				hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
-				if hasNull {
+				a.vs[groupIdx], a.es[groupIdx], err = a.fill(groupIdx, value, a.vs[groupIdx], int64(loopLength), a.es[groupIdx], isNull)
+				if err != nil {
+					return err
+				}
+
+				for i := 0; i < loopLength; i++ {
+					a.srcs[groupIdx] = append(a.srcs[groupIdx], value)
+				}
+			}
+
+		} else {
+			nulls := inputVector.GetNulls()
+			for i := 0; i < loopLength; i++ {
+				isNull := nulls.Contains(uint64(i))
+				if isNull {
 					continue
 				}
-
-				copyStr := make([]byte, len(str))
-				copy(copyStr, str)
-
-				v := (any)(copyStr).(T1)
-				a.srcs[j] = append(a.srcs[j], v)
-				a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], 1, a.es[j], hasNull)
-				if a.err == nil {
-					a.err = err
+				value = values[i]
+				ok, err = a.maps[groupIdx].InsertValue(value)
+				if err != nil {
+					return err
+				}
+				if ok {
+					a.vs[groupIdx], a.es[groupIdx], err = a.fill(groupIdx, value, a.vs[groupIdx], 1, a.es[groupIdx], false)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
-		return nil
 	}
-	vs := vector.MustFixedCol[T1](vec)
-	for i := range os {
-		if vps[i] == 0 {
-			continue
-		}
-		j := vps[i] - 1
-		v := vs[int64(i)+start]
-		if ok, err = a.maps[j].InsertValue(v); err != nil {
-			return err
-		}
-		if ok {
-			hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
-			if hasNull {
-				continue
-			}
-			a.srcs[j] = append(a.srcs[j], v)
-			a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], 1, a.es[j], hasNull)
-			if a.err == nil {
-				a.err = err
-			}
-		}
-	}
-	return nil
-}
 
-func (a *UnaryDistAgg[T1, T2]) BulkFill3(i int64, vecs []*vector.Vector) error {
-	var ok bool
-	var err error
-
-	vec := vecs[0]
-	if vec.GetType().IsVarlen() {
-		length := vec.Length()
-		for j := 0; j < length; j++ {
-			str := vec.GetBytesAt(j)
-			if ok, err = a.maps[i].InsertValue(str); err != nil {
-				return err
-			}
-			if ok {
-				hasNull := vec.GetNulls().Contains(uint64(j))
-				if hasNull {
-					continue
-				}
-
-				copyStr := make([]byte, len(str))
-				copy(copyStr, str)
-
-				v := any(copyStr).(T1)
-				a.srcs[i] = append(a.srcs[i], v)
-				a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], 1, a.es[i], hasNull)
-				if a.err == nil {
-					a.err = err
-				}
-			}
-		}
-		return nil
-	}
-	vs := vector.MustFixedCol[T1](vec)
-	for j, v := range vs {
-		if ok, err = a.maps[i].InsertValue(v); err != nil {
-			return err
-		}
-		if ok {
-			hasNull := vec.GetNulls().Contains(uint64(j))
-			if hasNull {
-				continue
-			}
-			a.srcs[i] = append(a.srcs[i], v)
-			a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], 1, a.es[i], hasNull)
-			if a.err == nil {
-				a.err = err
-			}
-		}
-	}
 	return nil
 }
 
 // Merge a[x] += b[y]
-func (a *UnaryDistAgg[T1, T2]) Merge3(b Agg[any], x, y int64) error {
-	var ok bool
-	var err error
-
-	b0 := b.(*UnaryDistAgg[T1, T2])
-	if b0.es[y] {
+func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], groupIdx1, groupIdx2 int64) (err error) {
+	a2 := b.(*UnaryDistAgg[T1, T2])
+	if a2.es[groupIdx2] {
 		return nil
 	}
-	if a.es[x] && !b0.es[y] {
-		a.otyp = b0.otyp
-	}
-	for i, v := range b0.srcs[y] {
-		if ok, err = a.maps[x].InsertValue(v); err != nil {
+
+	var ok bool
+	for _, v := range a2.srcs[groupIdx2] {
+		if ok, err = a.maps[groupIdx1].InsertValue(v); err != nil {
 			return err
 		}
 		if ok {
-			a.vs[x], a.es[x], err = a.fill(x, v, a.vs[x], 1, a.es[x], false)
-			if a.err == nil {
-				a.err = err
+			a.vs[groupIdx1], a.es[groupIdx1], err = a.fill(groupIdx1, v, a.vs[groupIdx1], 1, a.es[groupIdx1], false)
+			if err != nil {
+				return err
 			}
-			a.srcs[x] = append(a.srcs[x], b0.srcs[y][i])
+			a.srcs[groupIdx1] = append(a.srcs[groupIdx1], v)
 		}
 	}
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) BatchMerge3(b Agg[any], start int64, os []uint8, vps []uint64) error {
-	var ok bool
-	var err error
+func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) (err error) {
+	a2 := b.(*UnaryDistAgg[T1, T2])
 
-	b0 := b.(*UnaryDistAgg[T1, T2])
-	for i := range os {
-		if vps[i] == 0 {
+	var ok bool
+	for i := range groupStatus {
+		if groupIdxes[i] == groupNotMatch {
 			continue
 		}
-		j := vps[i] - 1
-		k := int64(i) + start
-		if b0.es[k] {
+		groupIdx1 := int64(groupIdxes[i] - 1)
+		groupIdx2 := offset + int64(i)
+		if a2.es[groupIdx2] {
 			continue
 		}
-		if a.es[j] && !b0.es[int64(i)+start] {
-			a.otyp = b0.otyp
-		}
-		for h, v := range b0.srcs[k] {
-			if ok, err = a.maps[j].InsertValue(v); err != nil {
+
+		for _, v := range a2.srcs[groupIdx2] {
+			if ok, err = a.maps[groupIdx1].InsertValue(v); err != nil {
 				return err
 			}
 			if ok {
-				a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], 1, a.es[j], false)
-				if a.err == nil {
-					a.err = err
+				a.vs[groupIdx1], a.es[groupIdx1], err = a.fill(groupIdx1, v, a.vs[groupIdx1], 1, a.es[groupIdx1], false)
+				if err != nil {
+					return err
 				}
-				a.srcs[j] = append(a.srcs[j], b0.srcs[k][h])
+				a.srcs[groupIdx1] = append(a.srcs[groupIdx1], v)
 			}
 		}
 	}
+
 	return nil
 }
 
-func (a *UnaryDistAgg[T1, T2]) Eval3(m *mpool.MPool) (*vector.Vector, error) {
-	defer func() {
-		a.Free(m)
-		a.da = nil
-		a.vs = nil
-		a.es = nil
-		for _, mp := range a.maps {
-			mp.Free()
-		}
-		a.maps = nil
-	}()
-	nsp := nulls.NewWithSize(len(a.es))
-	if !a.isCount {
-		for i, e := range a.es {
-			if e {
-				nsp.Set(uint64(i))
-			}
-		}
-	}
-	if a.otyp.IsVarlen() {
-		vec := vector.NewVec(a.otyp)
-		a.vs, a.err = a.eval(a.vs, a.err)
-		if a.err != nil {
-			return nil, a.err
-		}
-		vs := (any)(a.vs).([][]byte)
-		if err := vector.AppendBytesList(vec, vs, nil, m); err != nil {
-			vec.Free(m)
-			return nil, err
-		}
-		vec.SetNulls(nsp)
-		return vec, nil
-	}
-	vec := vector.NewVec(a.otyp)
-	a.vs, a.err = a.eval(a.vs, a.err)
-	if a.err != nil {
-		return nil, a.err
-	}
-	if err := vector.AppendFixedList(vec, a.vs, nil, m); err != nil {
-		vec.Free(m)
+func (a *UnaryDistAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err error) {
+	a.vs, err = a.eval(a.vs, nil)
+	if err != nil {
 		return nil, err
 	}
-	vec.SetNulls(nsp)
+
+	nullList := a.es
+	if GetFunctionIsWinOrderFunBySpecialId(a.op) {
+		nullList = nil
+	}
+
+	vec = vector.NewVec(a.otyp)
+	if a.otyp.IsVarlen() {
+		vs := (any)(a.vs).([][]byte)
+		if err = vector.AppendBytesList(vec, vs, nullList, pool); err != nil {
+			vec.Free(pool)
+			return nil, err
+		}
+	} else {
+		if err = vector.AppendFixedList[T2](vec, a.vs, nullList, pool); err != nil {
+			vec.Free(pool)
+			return nil, err
+		}
+	}
+
+	if a.isCount {
+		vec.GetNulls().Reset()
+	}
 	return vec, nil
 }
 
