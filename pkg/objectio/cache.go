@@ -36,10 +36,21 @@ type BlockReadStats struct {
 	// the mem cache statistics info for each entry
 	EntryMemCacheHitStats hitStats
 	BlksByReaderStats     hitStats
-	CounterSet            perfcounter.CounterSet
+	CounterSet            *perfcounter.CounterSet
 }
 
-var BlkReadStats BlockReadStats
+const (
+	BlkReadStatsExporterName = "block read stats exporter"
+)
+
+func newBlockReadStats() *BlockReadStats {
+	s := BlockReadStats{
+		CounterSet: new(perfcounter.CounterSet),
+	}
+	return &s
+}
+
+var BlkReadStats = newBlockReadStats()
 
 var metaCache *lrucache.LRU[ObjectNameShort, fileservice.Bytes]
 var onceInit sync.Once
@@ -63,24 +74,9 @@ func ExportCacheStats() string {
 	w, wt := metaCacheStats.ExportW()
 	t, tt := metaCacheStats.Export()
 
-	h1, t1 := BlkReadStats.BlkMemCacheHitStats.ExportW()
-	h2, t2 := BlkReadStats.EntryMemCacheHitStats.ExportW()
-	ratio1 := float32(1)
-	if t1 != 0 {
-		ratio1 = float32(h1) / float32(t1)
-	}
-	h3, t3 := BlkReadStats.BlksByReaderStats.ExportW()
-	ratio3 := float32(1)
-	if t3 != 0 {
-		ratio3 = float32(h3) / float32(t3)
-	}
 	fmt.Fprintf(
 		&buf,
-		"MetaCacheWindow: %d/%d | %d/%d, MetaCacheTotal: %d/%d | %d/%d, BlkReadStats: (%d/%d=%0.3f vs %d/%d) |||(%d/%d=%0.3f)",
-		hw, hwt, w, wt, ht, htt, t, tt,
-		h1, t1, ratio1,
-		h2, t2,
-		h3, t3, ratio3,
+		"MetaCacheWindow: %d/%d | %d/%d, MetaCacheTotal: %d/%d | %d/%d", hw, hwt, w, wt, ht, htt, t, tt,
 	)
 
 	return buf.String()
