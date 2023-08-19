@@ -3314,11 +3314,18 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minv = types.EncodeFixed(minVal)
 		maxv = types.EncodeFixed(maxVal)
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
-		//NOTE: ZM sees array as bytes. So we can use VarlenGetMinMax() TODO: confirm this
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		minv, maxv = VarlenGetMinMax(v)
-
+	case types.T_array_float32:
+		// Zone map Comparator should be consistent with the SQL Comparator for Array.
+		// Hence, we are not using bytesComparator for Array.
+		_minv, _maxv := ArrayGetMinMax[float32](v)
+		minv = types.ArrayToBytes[float32](_minv)
+		maxv = types.ArrayToBytes[float32](_maxv)
+	case types.T_array_float64:
+		_minv, _maxv := ArrayGetMinMax[float64](v)
+		minv = types.ArrayToBytes[float64](_minv)
+		maxv = types.ArrayToBytes[float64](_maxv)
 	default:
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
