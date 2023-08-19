@@ -115,6 +115,8 @@ func NewKafkaAdapter(configMap *kafka.ConfigMap) (*KafkaAdapter, error) {
 	}
 
 	// Create a new consumer client instance
+	//todo : handle the offset reset
+	configMap.SetKey("auto.offset.reset", "earliest")
 	consumer, err := kafka.NewConsumer(configMap)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create confluent consumer client: %w", err)
@@ -272,7 +274,7 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 		}
 
 		for i := int64(0); i < partitionLimit; i++ {
-			msg, err := ka.Consumer.ReadMessage(-1) // Wait indefinitely until a message is available
+			msg, err := ka.Consumer.ReadMessage(10)
 			if err != nil {
 				// Check for timeout
 				var kafkaErr kafka.Error

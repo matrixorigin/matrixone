@@ -55,7 +55,7 @@ func (cm *ConnectorManager) CreateConnector(ctx context.Context, name string, op
 // Connector is an interface for various types of connectors.
 type Connector interface {
 	Prepare() error
-	Start() error
+	Start(ctx context.Context) error
 	Close() error
 }
 
@@ -65,6 +65,7 @@ type KafkaMoConnector struct {
 	kafkaAdapter *mokafka.KafkaAdapter
 	options      map[string]any
 	ie           executor.SQLExecutor
+	stopChan     chan struct{}
 }
 
 func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
@@ -105,6 +106,7 @@ func NewKafkaMoConnector(options map[string]any, ie executor.SQLExecutor) (*Kafk
 	}
 
 	kmc.kafkaAdapter = kafkaAdapter
+	kmc.stopChan = make(chan struct{})
 	return kmc, nil
 }
 
@@ -145,9 +147,9 @@ func (k *KafkaMoConnector) Prepare() error {
 }
 
 // Start begins consuming messages from Kafka and writing them to the MO Table.
-func (k *KafkaMoConnector) Start() error {
+func (k *KafkaMoConnector) Start(ctx context.Context) error {
 	if k.kafkaAdapter == nil || k.kafkaAdapter.Consumer == nil {
-		return moerr.NewInternalError(context.Background(), "Kafka consumer not initialized")
+		return moerr.NewInternalError(ctx, "Kafka consumer not initialized")
 	}
 
 	// Define the topic to consume from
@@ -155,53 +157,56 @@ func (k *KafkaMoConnector) Start() error {
 
 	// Subscribe to the topic
 	if err := k.kafkaAdapter.Consumer.Subscribe(topic, nil); err != nil {
-		return moerr.NewInternalError(context.Background(), "Failed to subscribe to topic")
+		return moerr.NewInternalError(ctx, "Failed to subscribe to topic")
 	}
-
 	// Continuously listen for messages
 	for {
-		ev := k.kafkaAdapter.Consumer.Poll(100)
-		if ev == nil {
-			continue
-		}
-
-		switch e := ev.(type) {
-		case *kafka.Message:
-			var insertSQL string
-			var err error
-
-			switch k.options["value"].(string) {
-			case "json":
-				// Convert the JSON message into an SQL INSERT statement
-				insertSQL, err = convertJSONToInsertSQL(string(e.Value), k.options["database"].(string), k.options["table"].(string))
-			case "avro":
-				// Handle Avro decoding and conversion to SQL here
-				// For now, we'll skip it since you mentioned not to use SchemaRegistry
-			case "protobuf":
-				// Handle Protobuf decoding and conversion to SQL here
-				// For now, we'll skip it since you mentioned not to use SchemaRegistry
-			default:
-				return moerr.NewInternalError(context.Background(), "Unsupported value format")
-			}
-
-			if err != nil {
-				return moerr.NewInternalError(context.Background(), "Error converting message to SQL")
-			}
-
-			// Execute the INSERT statement
-			opts := executor.Options{}
-			_, err = k.ie.Exec(context.Background(), insertSQL, opts)
-			if err != nil {
-				return moerr.NewInternalError(context.Background(), "Error executing SQL")
-			}
-		case kafka.Error:
-			// Handle the error accordingly.
-			return moerr.NewInternalError(context.Background(), "Error reading message")
+		select {
+		case <-k.stopChan:
+			return nil
 		default:
-			// Ignored other types of events
+			ev := k.kafkaAdapter.Consumer.Poll(100)
+			if ev == nil {
+				continue
+			}
+
+			switch e := ev.(type) {
+			case *kafka.Message:
+				var insertSQL string
+				var err error
+
+				switch k.options["value"].(string) {
+				case "json":
+					// Convert the JSON message into an SQL INSERT statement
+					insertSQL, err = convertJSONToInsertSQL(string(e.Value), k.options["database"].(string), k.options["table"].(string))
+				case "avro":
+					// Handle Avro decoding and conversion to SQL here
+					// For now, we'll skip it since you mentioned not to use SchemaRegistry
+				case "protobuf":
+					// Handle Protobuf decoding and conversion to SQL here
+					// For now, we'll skip it since you mentioned not to use SchemaRegistry
+				default:
+					return moerr.NewInternalError(ctx, "Unsupported value format")
+				}
+
+				if err != nil {
+					return moerr.NewInternalError(ctx, "Error converting message to SQL")
+				}
+
+				// Execute the INSERT statement
+				opts := executor.Options{}
+				_, err = k.ie.Exec(ctx, insertSQL, opts)
+				if err != nil {
+					return moerr.NewInternalError(ctx, "Error executing SQL")
+				}
+			case kafka.Error:
+				// Handle the error accordingly.
+				return e
+			default:
+				// Ignored other types of events
+			}
 		}
 	}
-	return nil
 }
 
 // Assuming a simple function to convert JSON to SQL INSERT statement
@@ -211,6 +216,7 @@ func convertJSONToInsertSQL(jsonMessage string, database string, table string) (
 }
 
 func (k *KafkaMoConnector) Close() error {
+	close(k.stopChan)
 	// Close the Kafka consumer.
 	if k.kafkaAdapter != nil && k.kafkaAdapter.Consumer != nil {
 		if err := k.kafkaAdapter.Consumer.Close(); err != nil {
