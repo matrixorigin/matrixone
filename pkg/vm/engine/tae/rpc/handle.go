@@ -614,6 +614,7 @@ func loadDataForMOCatalog(
 				}
 			}
 			e.Bat, err = batch.BatchToProtoBatch(bat)
+			e.FileName = ""
 			if err != nil {
 				return err
 			}
@@ -627,18 +628,16 @@ func (h *Handle) HandlePreCommitWrite(
 	meta txn.TxnMeta,
 	req *api.PrecommitWriteCmd,
 	resp *api.SyncLogTailResp) (err error) {
-	var e any
-
 	es := req.EntryList
 	err = loadDataForMOCatalog(ctx, es, h.db.Runtime.Fs.Service, nil)
 	if err != nil {
 		return err
 	}
-	for len(es) > 0 {
-		e, es, err = catalog.ParseEntryList(es)
-		if err != nil {
-			return err
-		}
+	entries, err := catalog.ParseEntryList(es)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
 		switch cmds := e.(type) {
 		case []catalog.CreateDatabase:
 			for _, cmd := range cmds {

@@ -65,87 +65,193 @@ func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDe
 	}
 }
 
-// consume a set of entries and return a command and the remaining entries
-func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
+func ParseEntryList(es []*api.Entry) (res []any, err error) {
 	if len(es) == 0 {
-		return nil, nil, nil
+		return
 	}
-	e := es[0]
-	if e.DatabaseId != MO_CATALOG_ID {
-		return e, es[1:], nil
-	}
-	switch e.TableId {
-	case MO_DATABASE_ID:
-		bat, err := batch.ProtoBatchToBatch(e.Bat)
-		if err != nil {
-			return nil, nil, err
-		}
-		if e.EntryType == api.Entry_Insert {
-			return genCreateDatabases(GenRows(bat)), es[1:], nil
-		}
-		return genDropDatabases(GenRows(bat)), es[1:], nil
-	case MO_TABLES_ID:
-		bat, err := batch.ProtoBatchToBatch(e.Bat)
-		if err != nil {
-			return nil, nil, err
-		}
-		if e.EntryType == api.Entry_Delete {
-			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
-		} else if e.EntryType == api.Entry_Update {
-			return genUpdateConstraint(GenRows(bat)), es[1:], nil
-		} else if e.EntryType == api.Entry_Alter {
-			e, err := genUpdateAltertable(GenRows(bat))
+	tableDefs := make(map[uint64][]engine.TableDef)
+	for _, e := range es {
+		switch e.TableId {
+		case MO_DATABASE_ID:
+			bat, err := batch.ProtoBatchToBatch(e.Bat)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
-			return e, es[1:], nil
-		}
-		cmds := genCreateTables(GenRows(bat))
-		idx := 0
-		for i := range cmds {
-			// tae's logic
-			if len(cmds[i].Comment) > 0 {
-				cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
-					Comment: cmds[i].Comment,
-				})
+			if e.EntryType == api.Entry_Insert {
+				res = append(res, genCreateDatabases(GenRows(bat)))
+			} else {
+				res = append(res, genDropDatabases(GenRows(bat)))
 			}
-			if len(cmds[i].Viewdef) > 0 {
-				cmds[i].Defs = append(cmds[i].Defs, &engine.ViewDef{
-					View: cmds[i].Viewdef,
-				})
+		case MO_TABLES_ID:
+			bat, err := batch.ProtoBatchToBatch(e.Bat)
+			if err != nil {
+				return nil, err
 			}
-			if len(cmds[i].Constraint) > 0 {
-				c := new(engine.ConstraintDef)
-				if err = c.UnmarshalBinary(cmds[i].Constraint); err != nil {
-					return nil, nil, err
+			if e.EntryType == api.Entry_Delete {
+				res = append(res, genDropOrTruncateTables(GenRows(bat)))
+			} else if e.EntryType == api.Entry_Update {
+				res = append(res, genUpdateConstraint(GenRows(bat)))
+			} else if e.EntryType == api.Entry_Alter {
+				e, err := genUpdateAltertable(GenRows(bat))
+				if err != nil {
+					return nil, err
 				}
-				cmds[i].Defs = append(cmds[i].Defs, c)
+				res = append(res, e)
+			} else {
+				cmds := genCreateTables(GenRows(bat))
+				//idx := 0
+				for i := range cmds {
+					// tae's logic
+					if len(cmds[i].Comment) > 0 {
+						cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
+							Comment: cmds[i].Comment,
+						})
+					}
+					if len(cmds[i].Viewdef) > 0 {
+						cmds[i].Defs = append(cmds[i].Defs, &engine.ViewDef{
+							View: cmds[i].Viewdef,
+						})
+					}
+					if len(cmds[i].Constraint) > 0 {
+						c := new(engine.ConstraintDef)
+						if err = c.UnmarshalBinary(cmds[i].Constraint); err != nil {
+							return nil, err
+						}
+						cmds[i].Defs = append(cmds[i].Defs, c)
+					}
+					if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
+						cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
+							Partitioned: cmds[i].Partitioned,
+							Partition:   cmds[i].Partition,
+						})
+					}
+					pro := new(engine.PropertiesDef)
+					pro.Properties = append(pro.Properties, engine.Property{
+						Key:   SystemRelAttr_Kind,
+						Value: string(cmds[i].RelKind),
+					})
+					pro.Properties = append(pro.Properties, engine.Property{
+						Key:   SystemRelAttr_CreateSQL,
+						Value: cmds[i].CreateSql,
+					})
+					cmds[i].Defs = append(cmds[i].Defs, pro)
+				}
+				res = append(res, cmds)
 			}
-			if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
-				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
-					Partitioned: cmds[i].Partitioned,
-					Partition:   cmds[i].Partition,
-				})
+		case MO_COLUMNS_ID:
+			bat, err := batch.ProtoBatchToBatch(e.Bat)
+			if err != nil {
+				return nil, err
 			}
-			pro := new(engine.PropertiesDef)
-			pro.Properties = append(pro.Properties, engine.Property{
-				Key:   SystemRelAttr_Kind,
-				Value: string(cmds[i].RelKind),
-			})
-			pro.Properties = append(pro.Properties, engine.Property{
-				Key:   SystemRelAttr_CreateSQL,
-				Value: cmds[i].CreateSql,
-			})
-			cmds[i].Defs = append(cmds[i].Defs, pro)
-			if err = fillCreateTable(&idx, &cmds[i], es); err != nil {
-				return nil, nil, err
+			rows := GenRows(bat)
+			for _, row := range rows {
+				tid := row[MO_COLUMNS_ATT_RELNAME_ID_IDX].(uint64)
+				def, err := genTableDefs(row)
+				if err != nil {
+					return nil, err
+				}
+				tableDefs[tid] = append(tableDefs[tid], def)
+			}
+		default:
+			res = append(res, e)
+		}
+	}
+
+	for _, e := range res {
+		switch cmds := e.(type) {
+		case []CreateTable:
+			for i := range cmds {
+				tid := cmds[i].TableId
+				if defs, ok := tableDefs[tid]; ok {
+					cmds[i].Defs = append(cmds[i].Defs, defs...)
+				}
 			}
 		}
-		return cmds, es[idx+1:], nil
-	default:
-		return e, es[1:], nil
 	}
+	return
 }
+
+// consume a set of entries and return a command and the remaining entries
+//func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
+//	if len(es) == 0 {
+//		return nil, nil, nil
+//	}
+//	e := es[0]
+//	if e.DatabaseId != MO_CATALOG_ID {
+//		return e, es[1:], nil
+//	}
+//	switch e.TableId {
+//	case MO_DATABASE_ID:
+//		bat, err := batch.ProtoBatchToBatch(e.Bat)
+//		if err != nil {
+//			return nil, nil, err
+//		}
+//		if e.EntryType == api.Entry_Insert {
+//			return genCreateDatabases(GenRows(bat)), es[1:], nil
+//		}
+//		return genDropDatabases(GenRows(bat)), es[1:], nil
+//	case MO_TABLES_ID:
+//		bat, err := batch.ProtoBatchToBatch(e.Bat)
+//		if err != nil {
+//			return nil, nil, err
+//		}
+//		if e.EntryType == api.Entry_Delete {
+//			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
+//		} else if e.EntryType == api.Entry_Update {
+//			return genUpdateConstraint(GenRows(bat)), es[1:], nil
+//		} else if e.EntryType == api.Entry_Alter {
+//			e, err := genUpdateAltertable(GenRows(bat))
+//			if err != nil {
+//				return nil, nil, err
+//			}
+//			return e, es[1:], nil
+//		}
+//		cmds := genCreateTables(GenRows(bat))
+//		idx := 0
+//		for i := range cmds {
+//			// tae's logic
+//			if len(cmds[i].Comment) > 0 {
+//				cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
+//					Comment: cmds[i].Comment,
+//				})
+//			}
+//			if len(cmds[i].Viewdef) > 0 {
+//				cmds[i].Defs = append(cmds[i].Defs, &engine.ViewDef{
+//					View: cmds[i].Viewdef,
+//				})
+//			}
+//			if len(cmds[i].Constraint) > 0 {
+//				c := new(engine.ConstraintDef)
+//				if err = c.UnmarshalBinary(cmds[i].Constraint); err != nil {
+//					return nil, nil, err
+//				}
+//				cmds[i].Defs = append(cmds[i].Defs, c)
+//			}
+//			if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
+//				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
+//					Partitioned: cmds[i].Partitioned,
+//					Partition:   cmds[i].Partition,
+//				})
+//			}
+//			pro := new(engine.PropertiesDef)
+//			pro.Properties = append(pro.Properties, engine.Property{
+//				Key:   SystemRelAttr_Kind,
+//				Value: string(cmds[i].RelKind),
+//			})
+//			pro.Properties = append(pro.Properties, engine.Property{
+//				Key:   SystemRelAttr_CreateSQL,
+//				Value: cmds[i].CreateSql,
+//			})
+//			cmds[i].Defs = append(cmds[i].Defs, pro)
+//			if err = fillCreateTable(&idx, &cmds[i], es); err != nil {
+//				return nil, nil, err
+//			}
+//		}
+//		return cmds, es[idx+1:], nil
+//	default:
+//		return e, es[1:], nil
+//	}
+//}
 
 func GenBlockInfo(rows [][]any) []BlockInfo {
 	infos := make([]BlockInfo, len(rows))
@@ -252,32 +358,32 @@ func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 	return cmds
 }
 
-func fillCreateTable(idx *int, cmd *CreateTable, es []*api.Entry) error {
-	for i, e := range es {
-		// to find tabledef, only need to detect the insertion of mo_columns
-		if e.TableId != MO_COLUMNS_ID || e.EntryType != api.Entry_Insert {
-			continue
-		}
-		bat, err := batch.ProtoBatchToBatch(e.Bat)
-		if err != nil {
-			return err
-		}
-		rows := GenRows(bat)
-		for _, row := range rows {
-			if row[MO_COLUMNS_ATT_RELNAME_ID_IDX].(uint64) == cmd.TableId {
-				def, err := genTableDefs(row)
-				if err != nil {
-					return err
-				}
-				cmd.Defs = append(cmd.Defs, def)
-				if i > *idx {
-					*idx = i
-				}
-			}
-		}
-	}
-	return nil
-}
+//func fillCreateTable(idx *int, cmd *CreateTable, es []*api.Entry) error {
+//	for i, e := range es {
+//		// to find tabledef, only need to detect the insertion of mo_columns
+//		if e.TableId != MO_COLUMNS_ID || e.EntryType != api.Entry_Insert {
+//			continue
+//		}
+//		bat, err := batch.ProtoBatchToBatch(e.Bat)
+//		if err != nil {
+//			return err
+//		}
+//		rows := GenRows(bat)
+//		for _, row := range rows {
+//			if row[MO_COLUMNS_ATT_RELNAME_ID_IDX].(uint64) == cmd.TableId {
+//				def, err := genTableDefs(row)
+//				if err != nil {
+//					return err
+//				}
+//				cmd.Defs = append(cmd.Defs, def)
+//				if i > *idx {
+//					*idx = i
+//				}
+//			}
+//		}
+//	}
+//	return nil
+//}
 
 func genTableDefs(row []any) (engine.TableDef, error) {
 	var attr engine.Attribute
