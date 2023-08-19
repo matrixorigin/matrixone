@@ -198,7 +198,11 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 	}
 	if estimatedHashmapCount != 0 {
-		logutil.Infof("!!!! estimated hashmap count %v, actual hashmap count %v", estimatedHashmapCount, ctr.mp.GroupCount())
+		if estimatedHashmapCount < int(ctr.mp.GroupCount()) {
+			logutil.Infof("!!!! estimated hashmap count %v, actual hashmap count %v", estimatedHashmapCount, ctr.mp.GroupCount())
+		} else {
+			logutil.Infof("@@@@ estimated hashmap count %v, actual hashmap count %v", estimatedHashmapCount, ctr.mp.GroupCount())
+		}
 	}
 	return nil
 }
