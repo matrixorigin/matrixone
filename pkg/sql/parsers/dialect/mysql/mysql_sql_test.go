@@ -79,7 +79,7 @@ var (
 		output string
 	}{
 		{
-			input:  "CREATE CONNECTOR movedata WITH (VALUE_SCHEMA_ID = test)",
+			input:  "CREATE CONNECTOR movedata WITH (VALUE_SCHEMA_ID = 'test')",
 			output: "create connector movedata with (value_schema_id = test)",
 		}, {
 			input:  "CREATE STREAM enriched WITH (\n    VALUE_SCHEMA_ID = 1\n  ) AS\n  SELECT\n     cs.*,\n     u.name,\n     u.classification,\n     u.level\n  FROM clickstream cs\n    JOIN users u ON u.id = cs.userId",

@@ -6084,6 +6084,7 @@ default_opt:
     {
         $$ = true
     }
+
 create_connector_stmt:
     CREATE CONNECTOR table_name connector_option_list_opt
     {
