@@ -1,5 +1,10 @@
--- standard
+-- pre
+drop database if exists db1;
+create database db1;
+use db1;
 drop table if exists vec_table;
+
+-- standard
 create table vec_table(a int, b vecf32(3), c vecf64(3));
 insert into vec_table values(1, "[1,2,3]", "[4,5,6]");
 select * from vec_table;
@@ -45,3 +50,11 @@ create unique index t3 on vec_table(b);
 
 -- agg
 select count(b) from vec_table;
+
+-- insert, flush and select
+insert into vec_table values(2, "[0,2,3]", "[4,4,6]");
+insert into vec_table values(3, "[1,3,3]", "[4,1,6]");
+select mo_ctl('dn', 'flush', 'db1.vec_table');
+select * from vec_table where b> "[1,2,3]";
+select * from vec_table where b!= "[1,2,3]";
+select * from vec_table where b= "[1,2,3]";
