@@ -17,6 +17,7 @@ package index
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
 	"sort"
 	"strings"
@@ -356,6 +357,11 @@ func (zm ZM) getValue(buf []byte) any {
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		return buf
+	case types.T_array_float32:
+		// Used by MO_TABLE_COL_MAX and ZoneMap.String()
+		return types.BytesToArray[float32](buf)
+	case types.T_array_float64:
+		return types.BytesToArray[float64](buf)
 	}
 	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }
@@ -704,6 +710,24 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		})
 
 		return lowerBound < len(col) && bytes.Compare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0
+
+	case types.T_array_float32:
+		col := vector.MustArrayCol[float32](vec)
+		minVal, maxVal := types.BytesToArray[float32](zm.GetMinBuf()), types.BytesToArray[float32](zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return moarray.Compare[float32](minVal, col[i]) <= 0
+		})
+
+		return lowerBound < len(col) && moarray.Compare[float32](maxVal, col[lowerBound]) >= 0
+
+	case types.T_array_float64:
+		col := vector.MustArrayCol[float64](vec)
+		minVal, maxVal := types.BytesToArray[float64](zm.GetMinBuf()), types.BytesToArray[float64](zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return moarray.Compare[float64](minVal, col[i]) <= 0
+		})
+
+		return lowerBound < len(col) && moarray.Compare[float64](maxVal, col[lowerBound]) >= 0
 
 	default:
 		return true

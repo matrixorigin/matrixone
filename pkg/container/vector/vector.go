@@ -2603,6 +2603,7 @@ func AppendBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error {
 	return appendOneBytes(vec, val, isNull, mp)
 }
 
+// AppendArray mainly used in tests
 func AppendArray[T types.RealNumbers](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
@@ -3314,11 +3315,21 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minv = types.EncodeFixed(minVal)
 		maxv = types.EncodeFixed(maxVal)
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64:
-		//NOTE: ZM sees array as bytes. So we can use VarlenGetMinMax() TODO: confirm this
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		minv, maxv = VarlenGetMinMax(v)
-
+	case types.T_array_float32:
+		// Zone map Comparator should be consistent with the SQL Comparator for Array.
+		// Hence, we are not using bytesComparator for Array.
+		// [Update]: We won't be using the Min and Max inside the ZM. Vector index is going to be handled
+		// outside the zonemap via indexing techniques like HNSW etc.
+		// For Array ZM, we will mostly make it uninitialized or set theoretical min and max.
+		_minv, _maxv := ArrayGetMinMax[float32](v)
+		minv = types.ArrayToBytes[float32](_minv)
+		maxv = types.ArrayToBytes[float32](_maxv)
+	case types.T_array_float64:
+		_minv, _maxv := ArrayGetMinMax[float64](v)
+		minv = types.ArrayToBytes[float64](_minv)
+		maxv = types.ArrayToBytes[float64](_maxv)
 	default:
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}

@@ -354,6 +354,12 @@ func getValueInStr(value any) string {
 		return v
 	case []byte:
 		return string(v)
+	case []float32:
+		// Used by zonemap Min,Max
+		// Used by MO_TABLE_COL_MAX
+		return types.ArrayToString[float32](v)
+	case []float64:
+		return types.ArrayToString[float64](v)
 	case int:
 		return strconv.FormatInt(int64(v), 10)
 	case uint:

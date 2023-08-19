@@ -60,3 +60,6 @@ select mo_ctl('dn', 'flush', 'vecdb.vec_table');
 select * from vec_table where b> "[1,2,3]";
 select * from vec_table where b!= "[1,2,3]";
 select * from vec_table where b= "[1,2,3]";
+
+-- post
+drop database vecdb;

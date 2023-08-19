@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
 	"sort"
 
@@ -61,6 +62,7 @@ var (
 		types.New(types.T_timestamp, 0, 5),
 		types.New(types.T_timestamp, 0, 6),
 	}
+	//No need to add T_array here, as Array is cast from varchar.
 )
 
 // ExpressionExecutor
@@ -1343,6 +1345,23 @@ func SortInFilter(vec *vector.Vector) {
 		col, area := vector.MustVarlenaRawData(vec)
 		sort.Slice(col, func(i, j int) bool {
 			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
+		})
+
+	case types.T_array_float32:
+		col, area := vector.MustVarlenaRawData(vec)
+		sort.Slice(col, func(i, j int) bool {
+			return moarray.Compare[float32](
+				types.GetArray[float32](&col[i], area),
+				types.GetArray[float32](&col[j], area),
+			) < 0
+		})
+	case types.T_array_float64:
+		col, area := vector.MustVarlenaRawData(vec)
+		sort.Slice(col, func(i, j int) bool {
+			return moarray.Compare[float64](
+				types.GetArray[float64](&col[i], area),
+				types.GetArray[float64](&col[j], area),
+			) < 0
 		})
 	}
 }
