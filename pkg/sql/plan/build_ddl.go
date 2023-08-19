@@ -606,6 +606,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
 			}
+			if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
+				if colType.GetWidth() > types.MaxArrayDimension {
+					return moerr.NewInvalidInput(ctx.GetContext(), "vector width (%d) is too long", colType.GetWidth())
+				}
+			}
 			var pks []string
 			var comment string
 			var auto_incr bool
@@ -1857,6 +1862,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
 					return nil, moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
+				}
+			}
+
+			if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
+				if colType.GetWidth() > types.MaxArrayDimension {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "vector width (%d) is too long", colType.GetWidth())
 				}
 			}
 			var pks []string
