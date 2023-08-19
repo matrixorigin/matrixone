@@ -43,6 +43,9 @@ b + [1,2,3]
 select b + sqrt(b) from vec_table;
 b + sqrt(b)
 [2, 3.414213562373095, 4.732050807568877]
+select b + c from vec_table;
+b + c
+[5, 7, 9]
 select abs(b) from vec_table;
 abs(b)
 [1, 2, 3]

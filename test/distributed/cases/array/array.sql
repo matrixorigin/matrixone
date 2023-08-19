@@ -21,6 +21,7 @@ select * from vec_table where b= cast("[1,2,3]" as vecf32);
 select cast("[1,2,3]" as vecf32(3));
 select b + "[1,2,3]" from vec_table;
 select b + sqrt(b) from vec_table;
+select b + c from vec_table;
 
 -- vector ops
 select abs(b) from vec_table;
