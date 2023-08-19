@@ -718,29 +718,33 @@ func (tbl *txnTable) rangesOnePart(
 	pkType := types.T(pkColumn.Typ.Id)
 	for _, expr := range exprs {
 		ok, _, v := getPkValueByExpr(expr, pkName, pkType, tbl.proc)
-		if ok {
-			for _, blk := range blks {
-				bf, err := objectio.FastLoadBF(ctx, blk.MetaLocation(), fileservice.SkipMemory, fs)
-				if err != nil {
-					return err
-				}
-				buf := bf.GetBloomFilter(uint32(blk.MetaLocation().ID()))
-				bfIndex := index.NewEmptyBinaryFuseFilter()
-				if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
-					return err
-				}
-				v := types.EncodeValue(v, pkType)
-				if exist, err := bfIndex.MayContainsKey(v); err != nil {
-					// check bloom filter has some unknown error. return err
-					return indexwrapper.TranslateError(err)
-				} else if !exist {
-					// all keys were checked. definitely not
-					continue
-				}
-				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-			}
-			return nil
+		if !ok {
+			continue
 		}
+		pkValue := types.EncodeValue(v, pkType)
+		bfIndex := index.NewEmptyBinaryFuseFilter()
+		for _, blk := range blks {
+			bf, dataMeta, err := objectio.FastLoadBF(ctx, blk.MetaLocation(), fileservice.SkipMemory, fs, objDataMeta)
+			if err != nil {
+				return err
+			}
+			if dataMeta != nil {
+				objDataMeta = dataMeta
+			}
+			buf := bf.GetBloomFilter(uint32(blk.MetaLocation().ID()))
+			if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
+				return err
+			}
+			if exist, err := bfIndex.MayContainsKey(pkValue); err != nil {
+				// check bloom filter has some unknown error. return err
+				return indexwrapper.TranslateError(err)
+			} else if !exist {
+				// all keys were checked. definitely not
+				continue
+			}
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+		}
+		return nil
 	}
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
