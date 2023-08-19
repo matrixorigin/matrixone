@@ -137,7 +137,6 @@ func (l *LRU[K, V]) evict(ctx context.Context) {
 			})
 		}
 	}()
-
 	for {
 		if l.sizeFunc == nil {
 			if l.size <= l.capacity {

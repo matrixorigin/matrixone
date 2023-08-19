@@ -14,8 +14,16 @@
 
 package fileservice
 
+// #include <stdlib.h>
+import "C"
 import (
 	"sync/atomic"
+	"unsafe"
+)
+
+const (
+	// MaxArrayLen is a safe maximum length for slices on this architecture.
+	MaxArrayLen = 1<<50 - 1
 )
 
 // RCBytes represents a reference counting []byte from a pool
@@ -76,9 +84,22 @@ func (r *rcBytesPool) Alloc(size int) CacheData {
 }
 
 func alloc(size int) []byte {
-	return make([]byte, size, size)
+	ptr := C.calloc(C.size_t(size), 1)
+	if ptr == nil {
+		// NB: throw is like panic, except it guarantees the process will be
+		// terminated. The call below is exactly what the Go runtime invokes when
+		// it cannot allocate memory.
+		panic("out of memory")
+	}
+	// Interpret the C pointer as a pointer to a Go array, then slice.
+	return (*[MaxArrayLen]byte)(unsafe.Pointer(ptr))[:size:size]
 }
 
 // free frees the specified slice.
 func free(b []byte) {
+	if cap(b) != 0 {
+		b = b[:cap(b)]
+		ptr := unsafe.Pointer(&b[0])
+		C.free(ptr)
+	}
 }
