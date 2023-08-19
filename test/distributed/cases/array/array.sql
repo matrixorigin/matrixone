@@ -1,7 +1,7 @@
 -- pre
-drop database if exists db1;
-create database db1;
-use db1;
+drop database if exists vecdb;
+create database vecdb;
+use vecdb;
 drop table if exists vec_table;
 
 -- standard
@@ -54,7 +54,8 @@ select count(b) from vec_table;
 -- insert, flush and select
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");
 insert into vec_table values(3, "[1,3,3]", "[4,1,6]");
-select mo_ctl('dn', 'flush', 'db1.vec_table');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'vecdb.vec_table');
 select * from vec_table where b> "[1,2,3]";
 select * from vec_table where b!= "[1,2,3]";
 select * from vec_table where b= "[1,2,3]";
