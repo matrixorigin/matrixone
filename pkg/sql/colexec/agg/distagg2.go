@@ -358,13 +358,85 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill2(groupIdx int64, vectors []*vector.Vecto
 }
 
 func (a *UnaryDistAgg[T1, T2]) Merge2(b Agg[any], groupIdx1, groupIdx2 int64) (err error) {
+	a2 := b.(*UnaryDistAgg[T1, T2])
+	if a2.es[groupIdx2] {
+		return nil
+	}
+
+	var ok bool
+	for _, v := range a2.srcs[groupIdx2] {
+		if ok, err = a.maps[groupIdx1].InsertValue(v); err != nil {
+			return err
+		}
+		if ok {
+			a.vs[groupIdx1], a.es[groupIdx1], err = a.fill(groupIdx1, v, a.vs[groupIdx1], 1, a.es[groupIdx1], false)
+			if err != nil {
+				return err
+			}
+			a.srcs[groupIdx1] = append(a.srcs[groupIdx1], v)
+		}
+	}
 	return nil
 }
 
 func (a *UnaryDistAgg[T1, T2]) BatchMerge2(b Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) (err error) {
+	a2 := b.(*UnaryDistAgg[T1, T2])
+
+	var ok bool
+	for i := range groupStatus {
+		if groupIdxes[i] == groupNotMatch {
+			continue
+		}
+		groupIdx1 := int64(groupIdxes[i] - 1)
+		groupIdx2 := offset + int64(i)
+		if a2.es[groupIdx2] {
+			continue
+		}
+
+		for _, v := range a2.srcs[groupIdx2] {
+			if ok, err = a.maps[groupIdx1].InsertValue(v); err != nil {
+				return err
+			}
+			if ok {
+				a.vs[groupIdx1], a.es[groupIdx1], err = a.fill(groupIdx1, v, a.vs[groupIdx1], 1, a.es[groupIdx1], false)
+				if err != nil {
+					return err
+				}
+				a.srcs[groupIdx1] = append(a.srcs[groupIdx1], v)
+			}
+		}
+	}
+
 	return nil
 }
 
 func (a *UnaryDistAgg[T1, T2]) Eval2(pool *mpool.MPool) (vec *vector.Vector, err error) {
+	a.vs, err = a.eval(a.vs, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	nullList := a.es
+	if a.op == WinDenseRank || a.op == WinRank {
+		nullList = nil
+	}
+
+	vec = vector.NewVec(a.otyp)
+	if a.otyp.IsVarlen() {
+		vs := (any)(a.vs).([][]byte)
+		if err = vector.AppendBytesList(vec, vs, nullList, pool); err != nil {
+			vec.Free(pool)
+			return nil, err
+		}
+	} else {
+		if err = vector.AppendFixedList[T2](vec, a.vs, nullList, pool); err != nil {
+			vec.Free(pool)
+			return nil, err
+		}
+	}
+
+	if a.isCount {
+		vec.GetNulls().Reset()
+	}
 	return nil, nil
 }

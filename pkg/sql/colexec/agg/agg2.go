@@ -287,15 +287,20 @@ func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err erro
 		return nil, err
 	}
 
+	nullList := a.es
+	if a.op == WinDenseRank || a.op == WinRank {
+		nullList = nil
+	}
+
 	vec = vector.NewVec(a.otyp)
 	if a.otyp.IsVarlen() {
 		vs := (any)(a.vs).([][]byte)
-		if err = vector.AppendBytesList(vec, vs, a.es, pool); err != nil {
+		if err = vector.AppendBytesList(vec, vs, nullList, pool); err != nil {
 			vec.Free(pool)
 			return nil, err
 		}
 	} else {
-		if err = vector.AppendFixedList[T2](vec, a.vs, a.es, pool); err != nil {
+		if err = vector.AppendFixedList[T2](vec, a.vs, nullList, pool); err != nil {
 			vec.Free(pool)
 			return nil, err
 		}
