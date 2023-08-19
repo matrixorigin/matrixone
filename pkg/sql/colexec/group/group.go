@@ -243,6 +243,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					ctr.bat.Aggs[i] = nil
 					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 					anal.Alloc(int64(vec.Size()))
+
+					ag.Free(proc.Mp())
 				}
 				ctr.bat.Aggs = nil
 			}
