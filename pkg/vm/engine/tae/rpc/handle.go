@@ -571,7 +571,8 @@ func loadDataForMOCatalog(
 		if e.DatabaseId != catalog.MO_CATALOG_ID {
 			continue
 		}
-		if e.TableId == catalog.MO_DATABASE_ID {
+		if e.TableId != catalog.MO_TABLES_ID &&
+			e.TableId != catalog.MO_COLUMNS_ID {
 			continue
 		}
 		if e.FileName == "" {
