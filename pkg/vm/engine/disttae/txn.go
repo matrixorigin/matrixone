@@ -207,7 +207,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			blockInfo,
 			table.db.txn.dnStores[0],
 		)
-		//err = tbl.Write(txn.proc.Ctx, metaLoc)
 		if err != nil {
 			return err
 		}
