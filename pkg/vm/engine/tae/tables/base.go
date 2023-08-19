@@ -692,13 +692,16 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 			if bat == nil {
 				bat = containers.NewBatchWithCapacity(len(delBat.Attrs))
 				for i, name := range delBat.Attrs {
+					if !withAborted && name == catalog.AttrAborted {
+						continue
+					}
 					bat.AddVector(
 						name,
 						blk.rt.VectorPool.Transient.GetVector(delBat.Vecs[i].GetType()),
 					)
 				}
 			}
-			for _, name := range delBat.Attrs {
+			for _, name := range bat.Attrs {
 				retVec := bat.GetVectorByName(name)
 				srcVec := delBat.GetVectorByName(name)
 				retVec.PreExtend(sels.Length())

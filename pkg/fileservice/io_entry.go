@@ -67,14 +67,14 @@ func (e *IOEntry) ReadFromOSFile(file *os.File) error {
 	return nil
 }
 
-func DataAsObject(r io.Reader, data []byte, allocator CacheDataAllocator) (cacheData CacheData, err error) {
+func DataAsObject(r io.Reader, data []byte) (cacheData CacheData, err error) {
 	if len(data) == 0 {
 		data, err = io.ReadAll(r)
 		if err != nil {
 			return
 		}
 	}
-	cacheData = allocator.Alloc(len(data))
+	cacheData = DefaultCacheDataAllocator.Alloc(len(data))
 	copy(cacheData.Bytes(), data)
 	return
 }

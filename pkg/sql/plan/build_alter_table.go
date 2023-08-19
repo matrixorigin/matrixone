@@ -36,23 +36,14 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef := ctx.Resolve(schemaName, tableName)
+	_, tableDef := ctx.Resolve(schemaName, tableName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
 
-	if tableDef.ViewSql != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
-	}
-	if objRef.PubInfo != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
-	}
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
 	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
-	}
-	if tableDef.Partition != nil {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "Currently, partition table does not support alter table")
 	}
 
 	// 2. split alter_option list
@@ -432,11 +423,11 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	isFirst := true
 	for key, value := range alterCtx.alterColMap {
 		if isFirst {
-			insertBuffer.WriteString(key)
+			insertBuffer.WriteString("`" + key + "`")
 			selectBuffer.WriteString(value)
 			isFirst = false
 		} else {
-			insertBuffer.WriteString(", " + key)
+			insertBuffer.WriteString(", " + "`" + key + "`")
 			selectBuffer.WriteString(", " + value)
 		}
 	}
@@ -507,6 +498,14 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	objRef, tableDef := ctx.Resolve(schemaName, tableName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+	}
+
+	if tableDef.IsTemporary {
+		return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
+	}
+
+	if tableDef.ClusterBy != nil {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table for cluster table")
 	}
 
 	if tableDef.ViewSql != nil {

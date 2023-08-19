@@ -255,7 +255,7 @@ func (node *DeleteNode) setPersistedRows() {
 	if node.nt != NT_Persisted {
 		panic("unsupport")
 	}
-	bat, datas, err := blockio.LoadColumns(
+	bat, datas, err := blockio.LoadTombstoneColumns(
 		node.Txn.GetContext(),
 		false,
 		[]uint16{0},
@@ -267,7 +267,7 @@ func (node *DeleteNode) setPersistedRows() {
 	if err != nil {
 		for {
 			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
-			bat, datas, err = blockio.LoadColumns(
+			bat, datas, err = blockio.LoadTombstoneColumns(
 				node.Txn.GetContext(),
 				false,
 				[]uint16{0},

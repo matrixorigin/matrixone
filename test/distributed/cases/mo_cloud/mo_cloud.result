@@ -1,0 +1,743 @@
+create account if not exists test_tenant_1 admin_name 'test_account' identified by '111';
+CREATE DATABASE IF NOT EXISTS mo_mo;
+USE mo_mo;
+select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname = 'statement_mo' and relkind = 'cluster';
+count(*)
+0
+select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'stu' and relkind = 'r';
+count(*)
+0
+select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'statement_time' and relkind = 'r';
+count(*)
+0
+select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'moins' and relkind = 'r';
+count(*)
+0
+select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'storage' and relkind = 'r';
+count(*)
+0
+select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'storage_time' and relkind = 'r';
+count(*)
+0
+CREATE CLUSTER TABLE `mo_catalog`.`statement_mo` (`statement_id` varchar(36) NOT NULL,`account` VARCHAR(300) NOT NULL,`response_at` datetime(3) NULL,`stu` DECIMAL(23,3) NOT NULL,PRIMARY KEY (`statement_id`, `account_id`));
+internal error: do not have privilege to execute the statement
+CREATE TABLE `statement_time` (`cluster` varchar(191) NOT NULL,`last_time` datetime(3) NOT NULL,PRIMARY KEY (`cluster`));
+CREATE TABLE `stu` (`account` VARCHAR(300) NOT NULL,`start_time` datetime(3) NOT NULL,`end_time` datetime(3) NOT NULL,`stu` decimal(23,3) NOT NULL,`type` longtext NOT NULL);
+CREATE TABLE `mo_mo`.`wb_version` (`id` varchar(128),`wb_id` varchar(128),`sql_content` MEDIUMTEXT,`version` varchar(255),`status` tinyint(4),`created_at` datetime,`updated_at` datetime,PRIMARY KEY (`id`),INDEX `wb_id_idx` (`wb_id`));
+CREATE TABLE `mo_mo`.`wb` (`id` varchar(128),`account_id` varchar(128),`sql_user` varchar(128),`name` varchar(128),`created_at` datetime,`updated_at` datetime,PRIMARY KEY (`id`),UNIQUE INDEX `unq_account_name` (`account_id`,`sql_user`,`name`));
+CREATE TABLE `moins` (`id` varchar(128) NOT NULL,`name` VARCHAR(255) NOT NULL,`account_name` varchar(128) NOT NULL,`provider` longtext NOT NULL,`provider_id` longtext,`region` longtext NOT NULL,`pty` longtext NOT NULL,`version` longtext,`status` longtext,`qt` longtext,`policy` longtext,`created_by` longtext,`created_at` datetime(3) NULL,PRIMARY KEY (`id`));
+CREATE TABLE `operation` (`id` varchar(128) NOT NULL,`created_at` datetime(3) NULL,`statement_id` varchar(128) NOT NULL,`connection_id` bigint unsigned NOT NULL,`db` varchar(128) NOT NULL,`run_status` varchar(64) NOT NULL,`err_msg` text NOT NULL,`rows_affected` bigint,PRIMARY KEY (`id`),INDEX `idx_operation_created_at` (`created_at` asc));
+CREATE TABLE `storage_time` (`cluster` varchar(191) NOT NULL,`last_time` datetime(3) NOT NULL,PRIMARY KEY (`cluster`));
+CREATE TABLE `storage` (`collecttime` datetime NOT NULL,`value` double NOT NULL,`account` varchar(128) NOT NULL,`interval` int NOT NULL);
+INSERT INTO `mo_mo`.`operation` (`id`,`created_at`,`statement_id`,`connection_id`,`db`,`run_status`,`err_msg`,`rows_affected`) VALUES ('fef17f18-d337-4f81-b5f5-3888690ac3a0','2023-07-28 05:01:57.296','',0,'','','',0);
+SELECT * FROM (select `statement`,system.statement_info.statement_id,IF(`status`='Running', TIMESTAMPDIFF(MICROSECOND,`request_at`,now())*1000, `duration`) AS `duration`,`status`,`query_type`,`request_at`,system.statement_info.response_at,`user`,`database`,`transaction_id`,`session_id`,`rows_read`,`bytes_scan`,`result_count` from system.statement_info left join mo_catalog.statement_mo ON system.statement_info.statement_id = mo_catalog.statement_mo.statement_id where 1=1 AND `request_at` >= '2023-07-28 04:09:33' AND system.statement_info.statement_id LIKE '%cd%' AND system.statement_info.account = 'c3daefe4_2197_4192_a10e_d0acc5d9da30' AND `user` IN ('ab') AND `session_id` LIKE '%ef%' AND `duration` > 1000000000 AND `statement` LIKE '%show%' ESCAPE '\\\\' )t ORDER BY request_at DESC LIMIT 20;
+SQL parser error: table "statement_mo" does not exist
+SELECT * FROM `mo_mo`.`moins` WHERE id = 'c3daefe4-2197-4192-a10e-d0acc5d9da30';
+id    name    account_name    provider    provider_id    region    pty    version    status    qt    policy    created_by    created_at
+SELECT * FROM `mo_mo`.`operation` WHERE `operation`.`id` = 'fef17f18-d337-4f81-b5f5-3888690ac3a0' ORDER BY `operation`.`id` LIMIT 1;
+id    created_at    statement_id    connection_id    db    run_status    err_msg    rows_affected
+fef17f18-d337-4f81-b5f5-3888690ac3a0    2023-07-28 05:01:57.296000000        0                0
+SELECT `stat_ts`, sum(`stu`) as value FROM(SELECT concat(DATE_FORMAT(date_add(`start_time`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`start_time`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, SUM(`stu`) AS stu FROM mo_mo.stu WHERE `start_time` >= '2023-07-28 03:04:53' AND `start_time` <= '2023-07-28 03:34:53' AND account = '863f0767_0361_4a8c_a3e8_73b2be140a74' GROUP BY concat(DATE_FORMAT(date_add(`start_time`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`start_time`,Interval 1 MINUTE)) / 1) as int),2,0),':00') ORDER BY concat(DATE_FORMAT(date_add(`start_time`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`start_time`,Interval 1 MINUTE)) / 1) as int),2,0),':00') LIMIT 100)t GROUP BY `stat_ts`;
+stat_ts    value
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='engines' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+engine    VARCHAR(64)    null    null
+support    VARCHAR(8)    null    null
+comment    VARCHAR(160)    null    null
+transactions    VARCHAR(3)    null    null
+xa    VARCHAR(3)    null    null
+savepoints    VARCHAR(3)    null    null
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='key_column_usage' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+constraint_catalog    VARCHAR(64)    null    null
+constraint_schema    VARCHAR(64)    null    null
+constraint_name    VARCHAR(64)    null    null
+table_catalog    VARCHAR(64)    null    null
+table_schema    VARCHAR(64)    null    null
+table_name    VARCHAR(64)    null    null
+column_name    VARCHAR(64)    null    null
+ordinal_position    INT UNSIGNED(32)    null    null
+position_in_unique_constraint    INT UNSIGNED(32)    null    null
+referenced_table_schema    VARCHAR(64)    null    null
+referenced_table_name    VARCHAR(64)    null    null
+referenced_column_name    VARCHAR(64)    null    null
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='keywords' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+word    VARCHAR(64)    null    null
+reserved    INT UNSIGNED(32)    null    null
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='parameters' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+specific_catalog    VARCHAR(64)    null    null
+specific_schema    VARCHAR(64)    null    null
+specific_name    VARCHAR(64)    null    null
+ordinal_position    BIGINT UNSIGNED(64)    null    null
+parameter_mode    VARCHAR(5)    null    null
+parameter_name    VARCHAR(64)    null    null
+data_type    TEXT(0)    null    null
+character_maximum_length    BIGINT(64)    null    null
+character_octet_length    BIGINT(64)    null    null
+numeric_precision    INT UNSIGNED(32)    null    null
+numeric_scale    BIGINT(64)    null    null
+datetime_precision    INT UNSIGNED(32)    null    null
+character_set_name    VARCHAR(64)    null    null
+collation_name    VARCHAR(64)    null    null
+dtd_identifier    TEXT(0)    null    null
+routine_type    VARCHAR(64)    null    null
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_catalog' and att_relname='mo_columns' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+invalid input: mo_table_col_max has bad input table mo_columns
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_sample_data_tpch_sf1' and att_relname='lineitem' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_sample_data_tpch_sf1' and att_relname='supplier' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='columns_priv' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+host    CHAR(255)    null    null
+db    CHAR(64)    null    null
+user    CHAR(32)    null    null
+table_name    CHAR(64)    null    null
+column_name    CHAR(64)    null    null
+timestamp    TIMESTAMP(0)    null    null
+column_priv    VARCHAR(10)    null    null
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='db' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+host    CHAR(255)    null    null
+db    CHAR(64)    null    null
+user    CHAR(32)    null    null
+select_priv    VARCHAR(10)    null    null
+insert_priv    VARCHAR(10)    null    null
+update_priv    VARCHAR(10)    null    null
+delete_priv    VARCHAR(10)    null    null
+create_priv    VARCHAR(10)    null    null
+drop_priv    VARCHAR(10)    null    null
+grant_priv    VARCHAR(10)    null    null
+references_priv    VARCHAR(10)    null    null
+index_priv    VARCHAR(10)    null    null
+alter_priv    VARCHAR(10)    null    null
+create_tmp_table_priv    VARCHAR(10)    null    null
+lock_tables_priv    VARCHAR(10)    null    null
+create_view_priv    VARCHAR(10)    null    null
+show_view_priv    VARCHAR(10)    null    null
+create_routine_priv    VARCHAR(10)    null    null
+alter_routine_priv    VARCHAR(10)    null    null
+execute_priv    VARCHAR(10)    null    null
+event_priv    VARCHAR(10)    null    null
+trigger_priv    VARCHAR(10)    null    null
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='procs_priv' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+host    CHAR(255)    null    null
+db    CHAR(64)    null    null
+user    CHAR(32)    null    null
+routine_name    CHAR(64)    null    null
+routine_type    VARCHAR(10)    null    null
+grantor    VARCHAR(288)    null    null
+proc_priv    VARCHAR(10)    null    null
+timestamp    TIMESTAMP(0)    null    null
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='tables_priv' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+host    CHAR(255)    null    null
+db    CHAR(64)    null    null
+user    CHAR(32)    null    null
+table_name    CHAR(64)    null    null
+grantor    VARCHAR(288)    null    null
+timestamp    TIMESTAMP(0)    null    null
+table_priv    VARCHAR(10)    null    null
+column_priv    VARCHAR(10)    null    null
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mysql' and att_relname='user' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+host    CHAR(255)    null    null
+user    CHAR(32)    null    null
+select_priv    VARCHAR(10)    null    null
+insert_priv    VARCHAR(10)    null    null
+update_priv    VARCHAR(10)    null    null
+delete_priv    VARCHAR(10)    null    null
+create_priv    VARCHAR(10)    null    null
+drop_priv    VARCHAR(10)    null    null
+reload_priv    VARCHAR(10)    null    null
+shutdown_priv    VARCHAR(10)    null    null
+process_priv    VARCHAR(10)    null    null
+file_priv    VARCHAR(10)    null    null
+grant_priv    VARCHAR(10)    null    null
+references_priv    VARCHAR(10)    null    null
+index_priv    VARCHAR(10)    null    null
+alter_priv    VARCHAR(10)    null    null
+show_db_priv    VARCHAR(10)    null    null
+super_priv    VARCHAR(10)    null    null
+create_tmp_table_priv    VARCHAR(10)    null    null
+lock_tables_priv    VARCHAR(10)    null    null
+execute_priv    VARCHAR(10)    null    null
+repl_slave_priv    VARCHAR(10)    null    null
+repl_client_priv    VARCHAR(10)    null    null
+create_view_priv    VARCHAR(10)    null    null
+show_view_priv    VARCHAR(10)    null    null
+create_routine_priv    VARCHAR(10)    null    null
+alter_routine_priv    VARCHAR(10)    null    null
+create_user_priv    VARCHAR(10)    null    null
+event_priv    VARCHAR(10)    null    null
+trigger_priv    VARCHAR(10)    null    null
+create_tablespace_priv    VARCHAR(10)    null    null
+ssl_type    VARCHAR(10)    null    null
+ssl_cipher    BLOB(0)    null    null
+x509_issuer    BLOB(0)    null    null
+x509_subject    BLOB(0)    null    null
+max_questions    INT UNSIGNED(32)    null    null
+max_updates    INT UNSIGNED(32)    null    null
+max_connections    INT UNSIGNED(32)    null    null
+max_user_connections    INT UNSIGNED(32)    null    null
+plugin    CHAR(64)    null    null
+authentication_string    TEXT(0)    null    null
+password_expired    VARCHAR(10)    null    null
+password_last_changed    TIMESTAMP(0)    null    null
+password_lifetime    SMALLINT UNSIGNED(16)    null    null
+account_locked    VARCHAR(10)    null    null
+create_role_priv    VARCHAR(10)    null    null
+drop_role_priv    VARCHAR(10)    null    null
+password_reuse_history    SMALLINT UNSIGNED(16)    null    null
+password_reuse_time    SMALLINT UNSIGNED(16)    null    null
+password_require_current    VARCHAR(10)    null    null
+user_attributes    JSON(0)    null    null
+SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='system_metrics' and att_relname='metric' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
+name    data_type    maximum    minimum
+metric_name    VARCHAR(1024)    null    null
+collecttime    DATETIME(0)    null    null
+value    DOUBLE(0)    null    null
+node    VARCHAR(1024)    null    null
+role    VARCHAR(1024)    null    null
+account    VARCHAR(1024)    null    null
+type    VARCHAR(1024)    null    null
+__mo_cbkey_011collecttime011metric_name007account    VARCHAR(65535)    null    null
+SELECT concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, AVG(duration) AS value, `query_type` AS type FROM `system`.`statement_info` WHERE request_at >= '2023-07-28 04:20:43' AND request_at <= '2023-07-28 04:50:43' AND `query_type` in ('DQL','DDL','DML','DCL','TCL','Other') GROUP BY `query_type`, concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00') ORDER BY concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00')LIMIT 100;
+stat_ts    value    type
+SELECT count(*) FROM (select `statement`,system.statement_info.statement_id,IF(`status`='Running', TIMESTAMPDIFF(MICROSECOND,`request_at`,now())*1000, `duration`) AS `duration`,`status`,`query_type`,`request_at`,system.statement_info.response_at,`user`,`database`,`transaction_id`,`session_id`,`rows_read`,`bytes_scan`,`result_count` from system.statement_info left join mo_catalog.statement_mo ON system.statement_info.statement_id = mo_catalog.statement_mo.statement_id where 1=1 AND `request_at` >= '2023-07-28 04:09:33' AND system.statement_info.statement_id LIKE '%cd%' AND system.statement_info.account = 'c3daefe4_2197_4192_a10e_d0acc5d9da30' AND `user` IN ('ab') AND `session_id` LIKE '%ef%' AND `duration` > 1000000000 AND `statement` LIKE '%show%' ESCAPE '\\\\' )t;
+SQL parser error: table "statement_mo" does not exist
+SELECT count(*) FROM `mo_catalog`.`mo_database`;
+count(*)
+6
+SELECT count(*) FROM `system`.`statement_info` WHERE 1=1 AND `request_at` >= '2023-07-28 03:03:28' AND system.statement_info.account = '91731e77_49ea_4a8a_b1c7_d5512c7ae96e' AND sql_source_type IN ('ab','external_sql') ;
+count(*)
+0
+SHOW CREATE TABLE information_schema.engines;
+Table    Create Table
+engines    CREATE TABLE `engines` (\n`engine` VARCHAR(64) DEFAULT NULL,\n`support` VARCHAR(8) DEFAULT NULL,\n`comment` VARCHAR(160) DEFAULT NULL,\n`transactions` VARCHAR(3) DEFAULT NULL,\n`xa` VARCHAR(3) DEFAULT NULL,\n`savepoints` VARCHAR(3) DEFAULT NULL\n)
+SHOW CREATE TABLE information_schema.key_column_usage;
+Table    Create Table
+key_column_usage    CREATE TABLE `key_column_usage` (\n`constraint_catalog` VARCHAR(64) DEFAULT NULL,\n`constraint_schema` VARCHAR(64) DEFAULT NULL,\n`constraint_name` VARCHAR(64) DEFAULT NULL,\n`table_catalog` VARCHAR(64) DEFAULT NULL,\n`table_schema` VARCHAR(64) DEFAULT NULL,\n`table_name` VARCHAR(64) DEFAULT NULL,\n`column_name` VARCHAR(64) DEFAULT NULL,\n`ordinal_position` INT UNSIGNED DEFAULT NULL,\n`position_in_unique_constraint` INT UNSIGNED DEFAULT NULL,\n`referenced_table_schema` VARCHAR(64) DEFAULT NULL,\n`referenced_table_name` VARCHAR(64) DEFAULT NULL,\n`referenced_column_name` VARCHAR(64) DEFAULT NULL\n)
+SHOW CREATE TABLE information_schema.keywords;
+Table    Create Table
+keywords    CREATE TABLE `keywords` (\n`word` VARCHAR(64) DEFAULT NULL,\n`reserved` INT UNSIGNED DEFAULT NULL\n)
+SHOW CREATE TABLE information_schema.parameters;
+Table    Create Table
+parameters    CREATE TABLE `parameters` (\n`specific_catalog` VARCHAR(64) DEFAULT NULL,\n`specific_schema` VARCHAR(64) DEFAULT NULL,\n`specific_name` VARCHAR(64) DEFAULT NULL,\n`ordinal_position` BIGINT UNSIGNED DEFAULT NULL,\n`parameter_mode` VARCHAR(5) DEFAULT NULL,\n`parameter_name` VARCHAR(64) DEFAULT NULL,\n`data_type` TEXT DEFAULT NULL,\n`character_maximum_length` BIGINT DEFAULT NULL,\n`character_octet_length` BIGINT DEFAULT NULL,\n`numeric_precision` INT UNSIGNED DEFAULT NULL,\n`numeric_scale` BIGINT DEFAULT NULL,\n`datetime_precision` INT UNSIGNED DEFAULT NULL,\n`character_set_name` VARCHAR(64) DEFAULT NULL,\n`collation_name` VARCHAR(64) DEFAULT NULL,\n`dtd_identifier` TEXT DEFAULT NULL,\n`routine_type` VARCHAR(64) DEFAULT NULL\n)
+SHOW CREATE TABLE mo_catalog.mo_columns;
+Table    Create Table
+mo_columns    CREATE TABLE `mo_columns` (\n`att_uniq_name` VARCHAR(256) DEFAULT NULL,\n`account_id` INT UNSIGNED DEFAULT NULL,\n`att_database_id` BIGINT UNSIGNED DEFAULT NULL,\n`att_database` VARCHAR(256) DEFAULT NULL,\n`att_relname_id` BIGINT UNSIGNED DEFAULT NULL,\n`att_relname` VARCHAR(256) DEFAULT NULL,\n`attname` VARCHAR(256) DEFAULT NULL,\n`atttyp` VARCHAR(256) DEFAULT NULL,\n`attnum` INT DEFAULT NULL,\n`att_length` INT DEFAULT NULL,\n`attnotnull` TINYINT DEFAULT NULL,\n`atthasdef` TINYINT DEFAULT NULL,\n`att_default` VARCHAR(2048) DEFAULT NULL,\n`attisdropped` TINYINT DEFAULT NULL,\n`att_constraint_type` CHAR(1) DEFAULT NULL,\n`att_is_unsigned` TINYINT DEFAULT NULL,\n`att_is_auto_increment` TINYINT DEFAULT NULL,\n`att_comment` VARCHAR(2048) DEFAULT NULL,\n`att_is_hidden` TINYINT DEFAULT NULL,\n`attr_has_update` TINYINT DEFAULT NULL,\n`attr_update` VARCHAR(2048) DEFAULT NULL,\n`attr_is_clusterby` TINYINT DEFAULT NULL,\n`attr_seqnum` SMALLINT UNSIGNED DEFAULT NULL,\n`attr_enum` VARCHAR(65535) DEFAULT NULL,\nPRIMARY KEY (`att_uniq_name`)\n)
+SHOW CREATE TABLE mo_sample_data_tpch_sf1.lineitem;
+no such table mo_sample_data_tpch_sf1.lineitem
+SHOW CREATE TABLE mo_sample_data_tpch_sf1.supplier;
+no such table mo_sample_data_tpch_sf1.supplier
+SHOW CREATE TABLE mysql.columns_priv;
+Table    Create Table
+columns_priv    CREATE TABLE `columns_priv` (\n`host` CHAR(255) DEFAULT '',\n`db` CHAR(64) DEFAULT '',\n`user` CHAR(32) DEFAULT '',\n`table_name` CHAR(64) DEFAULT '',\n`column_name` CHAR(64) DEFAULT '',\n`timestamp` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n`column_priv` VARCHAR(10) DEFAULT '',\nPRIMARY KEY (`host`,`db`,`user`,`table_name`,`column_name`)\n)
+SHOW CREATE TABLE mysql.db;
+Table    Create Table
+db    CREATE TABLE `db` (\n`host` CHAR(255) DEFAULT '',\n`db` CHAR(64) DEFAULT '',\n`user` CHAR(32) DEFAULT '',\n`select_priv` VARCHAR(10) DEFAULT 'N',\n`insert_priv` VARCHAR(10) DEFAULT 'N',\n`update_priv` VARCHAR(10) DEFAULT 'N',\n`delete_priv` VARCHAR(10) DEFAULT 'N',\n`create_priv` VARCHAR(10) DEFAULT 'N',\n`drop_priv` VARCHAR(10) DEFAULT 'N',\n`grant_priv` VARCHAR(10) DEFAULT 'N',\n`references_priv` VARCHAR(10) DEFAULT 'N',\n`index_priv` VARCHAR(10) DEFAULT 'N',\n`alter_priv` VARCHAR(10) DEFAULT 'N',\n`create_tmp_table_priv` VARCHAR(10) DEFAULT 'N',\n`lock_tables_priv` VARCHAR(10) DEFAULT 'N',\n`create_view_priv` VARCHAR(10) DEFAULT 'N',\n`show_view_priv` VARCHAR(10) DEFAULT 'N',\n`create_routine_priv` VARCHAR(10) DEFAULT 'N',\n`alter_routine_priv` VARCHAR(10) DEFAULT 'N',\n`execute_priv` VARCHAR(10) DEFAULT 'N',\n`event_priv` VARCHAR(10) DEFAULT 'N',\n`trigger_priv` VARCHAR(10) DEFAULT 'N',\nPRIMARY KEY (`host`,`db`,`user`),\nKEY `user` (`user`)\n)
+SHOW CREATE TABLE mysql.procs_priv;
+Table    Create Table
+procs_priv    CREATE TABLE `procs_priv` (\n`host` CHAR(255) DEFAULT '',\n`db` CHAR(64) DEFAULT '',\n`user` CHAR(32) DEFAULT '',\n`routine_name` CHAR(64) DEFAULT '',\n`routine_type` VARCHAR(10) NOT NULL,\n`grantor` VARCHAR(288) DEFAULT '',\n`proc_priv` VARCHAR(10) DEFAULT '',\n`timestamp` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\nPRIMARY KEY (`host`,`db`,`user`,`routine_name`,`routine_type`),\nKEY `grantor` (`grantor`)\n)
+SHOW CREATE TABLE mysql.tables_priv;
+Table    Create Table
+tables_priv    CREATE TABLE `tables_priv` (\n`host` CHAR(255) DEFAULT '',\n`db` CHAR(64) DEFAULT '',\n`user` CHAR(32) DEFAULT '',\n`table_name` CHAR(64) DEFAULT '',\n`grantor` VARCHAR(288) DEFAULT '',\n`timestamp` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n`table_priv` VARCHAR(10) DEFAULT '',\n`column_priv` VARCHAR(10) DEFAULT '',\nPRIMARY KEY (`host`,`db`,`user`,`table_name`),\nKEY `grantor` (`grantor`)\n)
+SHOW CREATE TABLE mysql.user;
+Table    Create Table
+user    CREATE TABLE `user` (\n`host` CHAR(255) DEFAULT '',\n`user` CHAR(32) DEFAULT '',\n`select_priv` VARCHAR(10) DEFAULT 'N',\n`insert_priv` VARCHAR(10) DEFAULT 'N',\n`update_priv` VARCHAR(10) DEFAULT 'N',\n`delete_priv` VARCHAR(10) DEFAULT 'N',\n`create_priv` VARCHAR(10) DEFAULT 'N',\n`drop_priv` VARCHAR(10) DEFAULT 'N',\n`reload_priv` VARCHAR(10) DEFAULT 'N',\n`shutdown_priv` VARCHAR(10) DEFAULT 'N',\n`process_priv` VARCHAR(10) DEFAULT 'N',\n`file_priv` VARCHAR(10) DEFAULT 'N',\n`grant_priv` VARCHAR(10) DEFAULT 'N',\n`references_priv` VARCHAR(10) DEFAULT 'N',\n`index_priv` VARCHAR(10) DEFAULT 'N',\n`alter_priv` VARCHAR(10) DEFAULT 'N',\n`show_db_priv` VARCHAR(10) DEFAULT 'N',\n`super_priv` VARCHAR(10) DEFAULT 'N',\n`create_tmp_table_priv` VARCHAR(10) DEFAULT 'N',\n`lock_tables_priv` VARCHAR(10) DEFAULT 'N',\n`execute_priv` VARCHAR(10) DEFAULT 'N',\n`repl_slave_priv` VARCHAR(10) DEFAULT 'N',\n`repl_client_priv` VARCHAR(10) DEFAULT 'N',\n`create_view_priv` VARCHAR(10) DEFAULT 'N',\n`show_view_priv` VARCHAR(10) DEFAULT 'N',\n`create_routine_priv` VARCHAR(10) DEFAULT 'N',\n`alter_routine_priv` VARCHAR(10) DEFAULT 'N',\n`create_user_priv` VARCHAR(10) DEFAULT 'N',\n`event_priv` VARCHAR(10) DEFAULT 'N',\n`trigger_priv` VARCHAR(10) DEFAULT 'N',\n`create_tablespace_priv` VARCHAR(10) DEFAULT 'N',\n`ssl_type` VARCHAR(10) DEFAULT '',\n`ssl_cipher` BLOB NOT NULL,\n`x509_issuer` BLOB NOT NULL,\n`x509_subject` BLOB NOT NULL,\n`max_questions` INT UNSIGNED DEFAULT '0',\n`max_updates` INT UNSIGNED DEFAULT '0',\n`max_connections` INT UNSIGNED DEFAULT '0',\n`max_user_connections` INT UNSIGNED DEFAULT '0',\n`plugin` CHAR(64) DEFAULT 'caching_sha2_password',\n`authentication_string` TEXT DEFAULT NULL,\n`password_expired` VARCHAR(10) DEFAULT 'N',\n`password_last_changed` TIMESTAMP DEFAULT null,\n`password_lifetime` SMALLINT UNSIGNED DEFAULT null,\n`account_locked` VARCHAR(10) DEFAULT 'N',\n`create_role_priv` VARCHAR(10) DEFAULT 'N',\n`drop_role_priv` VARCHAR(10) DEFAULT 'N',\n`password_reuse_history` SMALLINT UNSIGNED DEFAULT null,\n`password_reuse_time` SMALLINT UNSIGNED DEFAULT null,\n`password_require_current` VARCHAR(10) DEFAULT null,\n`user_attributes` JSON DEFAULT null,\nPRIMARY KEY (`host`,`user`)\n)
+SHOW CREATE TABLE system_metrics.metric;
+Table    Create Table
+metric    CREATE TABLE `metric` (\n`metric_name` VARCHAR(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n`collecttime` DATETIME NOT NULL COMMENT 'metric data collect time',\n`value` DOUBLE DEFAULT '0.0' COMMENT 'metric value',\n`node` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n`role` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n`account` VARCHAR(1024) DEFAULT 'sys' COMMENT 'account name',\n`type` VARCHAR(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) CLUSTER BY (`collecttime`, `metric_name`, `account`)
+SHOW CREATE TABLE system_metrics.server_connections;
+View    Create View
+server_connections    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_connections` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_connections"
+SHOW CREATE TABLE system_metrics.server_storage_usage;
+View    Create View
+server_storage_usage    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_storage_usage` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_storage_usage"
+SHOW CREATE TABLE system_metrics.sql_statement_errors;
+View    Create View
+sql_statement_errors    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_errors` as select `collecttime`, `value`, `node`, `role`, `account`, `type` from `system_metrics`.`metric` where `metric_name` = "sql_statement_errors"
+SHOW CREATE TABLE system_metrics.sql_transaction_total;
+View    Create View
+sql_transaction_total    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_transaction_total` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "sql_transaction_total"
+SHOW GLOBAL VARIABLES LIKE 'save_query_result';
+Variable_name    Value
+save_query_result    off
+SHOW SUBSCRIPTIONS;
+Name    From_Account
+SHOW TABLES FROM mo_sample_data_tpch_sf1;
+invalid database mo_sample_data_tpch_sf1
+UPDATE `mo_mo`.`operation` SET `created_at`='2023-07-28 05:00:13.704',`statement_id`='a3055a4e-2d03-11ee-9e81-96ce077ba0f3',`connection_id`=11349,`db`='mo_sample_data_tpch_sf10',`run_status`='success' WHERE `id` = '3b30a3c1-4dca-4ded-9576-51a99e47b53a';
+drop table if exists `mo_catalog`.`statement_mo`;
+internal error: do not have privilege to execute the statement
+drop table if exists `statement_time`;
+drop table if exists `stu`;
+drop table if exists `mo_mo`.`wb_version`;
+drop table if exists `mo_mo`.`wb`;
+drop table if exists `moins`;
+drop table if exists `operation`;
+drop table if exists `storage_time`;
+drop table if exists `storage`;
+USE system_metrics;
+SELECT `stat_ts`, SUM(`value`) as value, `type` FROM(SELECT concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, AVG(`value`)/15 AS value, `node`, `type` FROM sql_statement_total WHERE `collecttime` >= '2023-07-28 05:37:43' AND `collecttime` <= '2023-07-28 06:07:43' AND `type` in ('DQL','DDL','DML','DCL','TCL','Other') GROUP BY `node`,`type`, concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00')  ORDER BY concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') LIMIT 100)t GROUP BY `stat_ts`,`type`;
+stat_ts    value    type
+USE system_metrics;
+SELECT `stat_ts`, SUM(`value`) as value, `type` FROM(SELECT concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, SUM(`value`) AS value, `node`, `type` FROM sql_statement_errors WHERE `collecttime` >= '2023-07-28 05:37:43' AND `collecttime` <= '2023-07-28 06:07:43' AND `type` in ('DQL','DDL','DML','DCL','TCL','Other') GROUP BY `node`,`type`, concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00')  ORDER BY concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') LIMIT 100)t GROUP BY `stat_ts`,`type`;
+stat_ts    value    type
+USE system_metrics;
+SELECT `stat_ts`, SUM(`value`) as value, `type` FROM(SELECT concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, SUM(`value`) AS value, `node`, `type` FROM sql_statement_total WHERE `collecttime` >= '2023-07-28 05:37:43' AND `collecttime` <= '2023-07-28 06:07:43' AND `type` in ('DQL','DDL','DML','DCL','TCL','Other') GROUP BY `node`,`type`, concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00')  ORDER BY concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') LIMIT 100)t GROUP BY `stat_ts`,`type`;
+stat_ts    value    type
+USE system_metrics;
+SELECT `stat_ts`, sum(`value`) as value FROM(SELECT concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, AVG(`value`) AS value, `node` FROM server_connections WHERE `collecttime` >= '2023-07-28 03:23:31' AND `collecttime` <= '2023-07-28 03:53:31' AND account = '2ef38bf3_b821_4cab_879e_3b788f1e922f'GROUP BY `node`, concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00')  ORDER BY concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') LIMIT 100)t GROUP BY `stat_ts`;
+stat_ts    value
+USE system_metrics;
+SELECT `stat_ts`, sum(`value`) as value FROM(SELECT concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, AVG(`value`) AS value, `node` FROM server_storage_usage WHERE `collecttime` >= '2023-07-28 05:36:55' AND `collecttime` <= '2023-07-28 06:06:55' AND account = 'c3daefe4_2197_4192_a10e_d0acc5d9da30'GROUP BY `node`, concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00')  ORDER BY concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') LIMIT 100)t GROUP BY `stat_ts`;
+stat_ts    value
+USE system_metrics;
+SELECT `stat_ts`, sum(`value`) as value FROM(SELECT concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, SUM(`value`) AS value, `node` FROM sql_transaction_errors WHERE `collecttime` >= '2023-07-28 05:37:43' AND `collecttime` <= '2023-07-28 06:07:43' GROUP BY `node`, concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00')  ORDER BY concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') LIMIT 100)t GROUP BY `stat_ts`;
+stat_ts    value
+USE system_metrics;
+SELECT `stat_ts`, sum(`value`) as value FROM(SELECT concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, SUM(`value`) AS value, `node` FROM sql_transaction_total WHERE `collecttime` >= '2023-07-28 05:37:43' AND `collecttime` <= '2023-07-28 06:07:43' GROUP BY `node`, concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00')  ORDER BY concat(DATE_FORMAT(date_add(`collecttime`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`collecttime`,Interval 1 MINUTE)) / 1) as int),2,0),':00') LIMIT 100)t GROUP BY `stat_ts`;
+stat_ts    value
+select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'operation' and relkind = 'r';
+count(*)
+0
+select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'wb' and relkind = 'r';
+count(*)
+0
+DESC `information_schema`.`character_sets` ;
+Field    Type    Null    Key    Default    Extra    Comment
+character_set_name    VARCHAR(64)    YES        null        
+default_collate_name    VARCHAR(64)    YES        null        
+description    VARCHAR(2048)    YES        null        
+maxlen    INT UNSIGNED(32)    YES        null        
+DESC `information_schema`.`engines` ;
+Field    Type    Null    Key    Default    Extra    Comment
+engine    VARCHAR(64)    YES        null        
+support    VARCHAR(8)    YES        null        
+comment    VARCHAR(160)    YES        null        
+transactions    VARCHAR(3)    YES        null        
+xa    VARCHAR(3)    YES        null        
+savepoints    VARCHAR(3)    YES        null        
+DESC `information_schema`.`key_column_usage` ;
+Field    Type    Null    Key    Default    Extra    Comment
+constraint_catalog    VARCHAR(64)    YES        null        
+constraint_schema    VARCHAR(64)    YES        null        
+constraint_name    VARCHAR(64)    YES        null        
+table_catalog    VARCHAR(64)    YES        null        
+table_schema    VARCHAR(64)    YES        null        
+table_name    VARCHAR(64)    YES        null        
+column_name    VARCHAR(64)    YES        null        
+ordinal_position    INT UNSIGNED(32)    YES        null        
+position_in_unique_constraint    INT UNSIGNED(32)    YES        null        
+referenced_table_schema    VARCHAR(64)    YES        null        
+referenced_table_name    VARCHAR(64)    YES        null        
+referenced_column_name    VARCHAR(64)    YES        null        
+DESC `information_schema`.`keywords` ;
+Field    Type    Null    Key    Default    Extra    Comment
+word    VARCHAR(64)    YES        null        
+reserved    INT UNSIGNED(32)    YES        null        
+DESC `information_schema`.`parameters` ;
+Field    Type    Null    Key    Default    Extra    Comment
+specific_catalog    VARCHAR(64)    YES        null        
+specific_schema    VARCHAR(64)    YES        null        
+specific_name    VARCHAR(64)    YES        null        
+ordinal_position    BIGINT UNSIGNED(64)    YES        null        
+parameter_mode    VARCHAR(5)    YES        null        
+parameter_name    VARCHAR(64)    YES        null        
+data_type    TEXT(0)    YES        null        
+character_maximum_length    BIGINT(64)    YES        null        
+character_octet_length    BIGINT(64)    YES        null        
+numeric_precision    INT UNSIGNED(32)    YES        null        
+numeric_scale    BIGINT(64)    YES        null        
+datetime_precision    INT UNSIGNED(32)    YES        null        
+character_set_name    VARCHAR(64)    YES        null        
+collation_name    VARCHAR(64)    YES        null        
+dtd_identifier    TEXT(0)    YES        null        
+routine_type    VARCHAR(64)    YES        null        
+DESC `mo_catalog`.`mo_columns` ;
+Field    Type    Null    Key    Default    Extra    Comment
+att_uniq_name    VARCHAR(256)    YES    PRI    null        
+account_id    INT UNSIGNED(0)    YES        null        
+att_database_id    BIGINT UNSIGNED(0)    YES        null        
+att_database    VARCHAR(256)    YES        null        
+att_relname_id    BIGINT UNSIGNED(0)    YES        null        
+att_relname    VARCHAR(256)    YES        null        
+attname    VARCHAR(256)    YES        null        
+atttyp    VARCHAR(256)    YES        null        
+attnum    INT(0)    YES        null        
+att_length    INT(0)    YES        null        
+attnotnull    TINYINT(0)    YES        null        
+atthasdef    TINYINT(0)    YES        null        
+att_default    VARCHAR(2048)    YES        null        
+attisdropped    TINYINT(0)    YES        null        
+att_constraint_type    CHAR(1)    YES        null        
+att_is_unsigned    TINYINT(0)    YES        null        
+att_is_auto_increment    TINYINT(0)    YES        null        
+att_comment    VARCHAR(2048)    YES        null        
+att_is_hidden    TINYINT(0)    YES        null        
+attr_has_update    TINYINT(0)    YES        null        
+attr_update    VARCHAR(2048)    YES        null        
+attr_is_clusterby    TINYINT(0)    YES        null        
+attr_seqnum    SMALLINT UNSIGNED(0)    YES        null        
+attr_enum    VARCHAR(65535)    YES        null        
+DESC `mo_sample_data_tpch_sf10`.`region` ;
+invalid database mo_sample_data_tpch_sf10
+DESC `mo_sample_data_tpch_sf1`.`customer` ;
+invalid database mo_sample_data_tpch_sf1
+DESC `mo_sample_data_tpch_sf1`.`lineitem` ;
+invalid database mo_sample_data_tpch_sf1
+DESC `mo_sample_data_tpch_sf1`.`nation` ;
+invalid database mo_sample_data_tpch_sf1
+DESC `mo_sample_data_tpch_sf1`.`orders` ;
+invalid database mo_sample_data_tpch_sf1
+DESC `mo_sample_data_tpch_sf1`.`supplier` ;
+invalid database mo_sample_data_tpch_sf1
+DESC `mysql`.`columns_priv` ;
+Field    Type    Null    Key    Default    Extra    Comment
+host    CHAR(255)    NO    PRI    ''        
+db    CHAR(64)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+table_name    CHAR(64)    NO    PRI    ''        
+column_name    CHAR(64)    NO    PRI    ''        
+timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+column_priv    VARCHAR(10)    NO        ''        
+DESC `mysql`.`db` ;
+Field    Type    Null    Key    Default    Extra    Comment
+host    CHAR(255)    NO    PRI    ''        
+db    CHAR(64)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+select_priv    VARCHAR(10)    NO        'N'        
+insert_priv    VARCHAR(10)    NO        'N'        
+update_priv    VARCHAR(10)    NO        'N'        
+delete_priv    VARCHAR(10)    NO        'N'        
+create_priv    VARCHAR(10)    NO        'N'        
+drop_priv    VARCHAR(10)    NO        'N'        
+grant_priv    VARCHAR(10)    NO        'N'        
+references_priv    VARCHAR(10)    NO        'N'        
+index_priv    VARCHAR(10)    NO        'N'        
+alter_priv    VARCHAR(10)    NO        'N'        
+create_tmp_table_priv    VARCHAR(10)    NO        'N'        
+lock_tables_priv    VARCHAR(10)    NO        'N'        
+create_view_priv    VARCHAR(10)    NO        'N'        
+show_view_priv    VARCHAR(10)    NO        'N'        
+create_routine_priv    VARCHAR(10)    NO        'N'        
+alter_routine_priv    VARCHAR(10)    NO        'N'        
+execute_priv    VARCHAR(10)    NO        'N'        
+event_priv    VARCHAR(10)    NO        'N'        
+trigger_priv    VARCHAR(10)    NO        'N'        
+DESC `mysql`.`procs_priv` ;
+Field    Type    Null    Key    Default    Extra    Comment
+host    CHAR(255)    NO    PRI    ''        
+db    CHAR(64)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+routine_name    CHAR(64)    NO    PRI    ''        
+routine_type    VARCHAR(10)    NO    PRI    null        
+grantor    VARCHAR(288)    NO        ''        
+proc_priv    VARCHAR(10)    NO        ''        
+timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+DESC `mysql`.`tables_priv` ;
+Field    Type    Null    Key    Default    Extra    Comment
+host    CHAR(255)    NO    PRI    ''        
+db    CHAR(64)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+table_name    CHAR(64)    NO    PRI    ''        
+grantor    VARCHAR(288)    NO        ''        
+timestamp    TIMESTAMP(0)    NO        current_timestamp()        
+table_priv    VARCHAR(10)    NO        ''        
+column_priv    VARCHAR(10)    NO        ''        
+DESC `mysql`.`user` ;
+Field    Type    Null    Key    Default    Extra    Comment
+host    CHAR(255)    NO    PRI    ''        
+user    CHAR(32)    NO    PRI    ''        
+select_priv    VARCHAR(10)    NO        'N'        
+insert_priv    VARCHAR(10)    NO        'N'        
+update_priv    VARCHAR(10)    NO        'N'        
+delete_priv    VARCHAR(10)    NO        'N'        
+create_priv    VARCHAR(10)    NO        'N'        
+drop_priv    VARCHAR(10)    NO        'N'        
+reload_priv    VARCHAR(10)    NO        'N'        
+shutdown_priv    VARCHAR(10)    NO        'N'        
+process_priv    VARCHAR(10)    NO        'N'        
+file_priv    VARCHAR(10)    NO        'N'        
+grant_priv    VARCHAR(10)    NO        'N'        
+references_priv    VARCHAR(10)    NO        'N'        
+index_priv    VARCHAR(10)    NO        'N'        
+alter_priv    VARCHAR(10)    NO        'N'        
+show_db_priv    VARCHAR(10)    NO        'N'        
+super_priv    VARCHAR(10)    NO        'N'        
+create_tmp_table_priv    VARCHAR(10)    NO        'N'        
+lock_tables_priv    VARCHAR(10)    NO        'N'        
+execute_priv    VARCHAR(10)    NO        'N'        
+repl_slave_priv    VARCHAR(10)    NO        'N'        
+repl_client_priv    VARCHAR(10)    NO        'N'        
+create_view_priv    VARCHAR(10)    NO        'N'        
+show_view_priv    VARCHAR(10)    NO        'N'        
+create_routine_priv    VARCHAR(10)    NO        'N'        
+alter_routine_priv    VARCHAR(10)    NO        'N'        
+create_user_priv    VARCHAR(10)    NO        'N'        
+event_priv    VARCHAR(10)    NO        'N'        
+trigger_priv    VARCHAR(10)    NO        'N'        
+create_tablespace_priv    VARCHAR(10)    NO        'N'        
+ssl_type    VARCHAR(10)    NO        ''        
+ssl_cipher    BLOB(0)    NO        null        
+x509_issuer    BLOB(0)    NO        null        
+x509_subject    BLOB(0)    NO        null        
+max_questions    INT UNSIGNED(32)    NO        '0'        
+max_updates    INT UNSIGNED(32)    NO        '0'        
+max_connections    INT UNSIGNED(32)    NO        '0'        
+max_user_connections    INT UNSIGNED(32)    NO        '0'        
+plugin    CHAR(64)    NO        'caching_sha2_password'        
+authentication_string    TEXT(0)    YES        null        
+password_expired    VARCHAR(10)    NO        'N'        
+password_last_changed    TIMESTAMP(0)    YES        null        
+password_lifetime    SMALLINT UNSIGNED(16)    YES        null        
+account_locked    VARCHAR(10)    NO        'N'        
+create_role_priv    VARCHAR(10)    NO        'N'        
+drop_role_priv    VARCHAR(10)    NO        'N'        
+password_reuse_history    SMALLINT UNSIGNED(16)    YES        null        
+password_reuse_time    SMALLINT UNSIGNED(16)    YES        null        
+password_require_current    VARCHAR(10)    YES        null        
+user_attributes    JSON(0)    YES        null        
+DESC `system_metrics`.`metric` ;
+Field    Type    Null    Key    Default    Extra    Comment
+metric_name    VARCHAR(1024)    YES        'sys'        metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...
+collecttime    DATETIME(0)    NO        null        metric data collect time
+value    DOUBLE(0)    YES        '0.0'        metric value
+node    VARCHAR(1024)    YES        'monolithic'        mo node uuid
+role    VARCHAR(1024)    YES        'monolithic'        mo node role, like: CN, DN, LOG
+account    VARCHAR(1024)    YES        'sys'        account name
+type    VARCHAR(1024)    NO        null        sql type, like: insert, select, ...
+DESC `system_metrics`.`server_connections` ;
+Field    Type    Null    Key    Default    Extra    Comment
+collecttime    DATETIME(0)    NO        null        
+value    DOUBLE(0)    YES        null        
+node    VARCHAR(1024)    YES        null        
+role    VARCHAR(1024)    YES        null        
+account    VARCHAR(1024)    YES        null        
+DESC `system_metrics`.`server_storage_usage` ;
+Field    Type    Null    Key    Default    Extra    Comment
+collecttime    DATETIME(0)    NO        null        
+value    DOUBLE(0)    YES        null        
+node    VARCHAR(1024)    YES        null        
+role    VARCHAR(1024)    YES        null        
+account    VARCHAR(1024)    YES        null        
+DESC `system_metrics`.`sql_statement_errors` ;
+Field    Type    Null    Key    Default    Extra    Comment
+collecttime    DATETIME(0)    NO        null        
+value    DOUBLE(0)    YES        null        
+node    VARCHAR(1024)    YES        null        
+role    VARCHAR(1024)    YES        null        
+account    VARCHAR(1024)    YES        null        
+type    VARCHAR(1024)    NO        null        
+DESC `system_metrics`.`sql_transaction_total` ;
+Field    Type    Null    Key    Default    Extra    Comment
+collecttime    DATETIME(0)    NO        null        
+value    DOUBLE(0)    YES        null        
+node    VARCHAR(1024)    YES        null        
+role    VARCHAR(1024)    YES        null        
+account    VARCHAR(1024)    YES        null        
+INSERT INTO `mo_catalog`.`statement_mo` (`statement_id`,`account`,`response_at`,`stu`,`account_id`) VALUES ('057247c5-2d0c-11ee-9e81-96ce077ba0f3','91731e77_49ea_4a8a_b1c7_d5512c7ae96e','2023-07-28 06:00:20','0.0003963262009632',2);
+no such table mo_catalog.statement_mo
+INSERT INTO `mo_mo`.`statement_time` (`cluster`,`last_time`) VALUES ('ab','2023-07-28 04:50:00');
+no such table mo_mo.statement_time
+INSERT INTO `mo_mo`.`stu` (`account`,`start_time`,`end_time`,`stu`,`type`) VALUES ('2ef38bf3_b821_4cab_879e_3b788f1e922f','2023-07-28 07:19:00','2023-07-28 07:20:00','0.0002629868102331','ab');
+no such table mo_mo.stu
+INSERT INTO `mo_mo`.`stu` (`account`,`start_time`,`end_time`,`stu`,`type`) VALUES ('2ef38bf3_b821_4cab_879e_3b788f1e922f','2023-07-28 07:52:00','2023-07-28 07:53:00','0.0056437809323943','cd');
+no such table mo_mo.stu
+INSERT INTO `mo_mo`.`moins` (`id`,`name`,`account_name`,`provider`,`provider_id`,`region`,`pty`,`version`,`status`,`qt`,`policy`,`created_by`,`created_at`) VALUES ('c3daefe4-2197-4192-a10e-d0acc5d9da30','free0','c3daefe4_2197_4192_a10e_d0acc5d9da30','ab','1527','cd','ef','nightly-2257011e','','{\stu\:1000,\storage\:53687}','{\allow_list\:[\0.0.0.0/0\]}','154b8231-cc1d-4629-88c6-d007cf4f4af8','2023-07-28 06:06:03.608');
+no such table mo_mo.moins
+INSERT INTO `mo_mo`.`storage_time` (`cluster`,`last_time`) VALUES ('ab','2023-07-28 03:30:00');
+no such table mo_mo.storage_time
+INSERT INTO `mo_mo`.`storage` (`collecttime`,`value`,`account`,`interval`) VALUES ('2023-07-28 03:30:00',0.075000,'301b1fe7_0d51_404e_9e18_33fe2f1d29b2',10);
+no such table mo_mo.storage
+INSERT INTO `mo_mo`.`wb_version` (`id`,`wb_id`,`sql_content`,`version`,`status`,`created_at`,`updated_at`) VALUES ('6c1eede6-70d9-4185-82fe-f5341777d27d','ba8f2a64-3396-465c-a770-77600865d6c2','create database hx;','2023-07-28T05:01:41Z',1,'2023-07-28 05:01:41.047','2023-07-28 05:01:41.047');
+no such table mo_mo.wb_version
+INSERT INTO `mo_mo`.`wb` (`id`,`account_id`,`sql_user`,`name`,`created_at`,`updated_at`) VALUES ('30415473-5276-42c5-8302-4e9a7e605900','91731e77_49ea_4a8a_b1c7_d5512c7ae96e','admin','New sql wb 2','2023-07-28 06:21:56.89','2023-07-28 06:21:56.89');
+no such table mo_mo.wb
+SELECT * FROM `mo_catalog`.`mo_account` WHERE `mo_account`.`account_name` = 'c3daefe4_2197_4192_a10e_d0acc5d9da30' ORDER BY `mo_account`.`account_name` LIMIT 1;
+SQL parser error: table "mo_account" does not exist
+SELECT * FROM `mo_mo`.`statement_time` WHERE cluster = 'ab' LIMIT 1;
+SQL parser error: table "statement_time" does not exist
+SELECT * FROM `mo_mo`.`storage_time` WHERE cluster = 'ab' LIMIT 1;
+SQL parser error: table "storage_time" does not exist
+SELECT * FROM `mo_mo`.`wb_version` WHERE wb_id = '9579cf34-2faf-4b9b-83dc-09638c39265a' AND id = '06945b61-372b-4289-964b-0a6b098e2c4e' ORDER BY updated_at DESC;
+SQL parser error: table "wb_version" does not exist
+SELECT * FROM `mo_mo`.`wb` WHERE 1=1 AND account_id = '91731e77_49ea_4a8a_b1c7_d5512c7ae96e' AND sql_user = 'admin' AND name LIKE '%New sql wb %' ORDER BY updated_at DESC LIMIT 100;
+SQL parser error: table "wb" does not exist
+SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE 'mo_mo%' ORDER BY SCHEMA_NAME='mo_mo' DESC,SCHEMA_NAME limit 1;
+schema_name
+mo_mo
+SELECT `collecttime`,`value`,`account` FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' and collectTime >= '2023-07-28 03:23:00' and collectTime < '2023-07-28 03:30:00';
+collecttime    value    account
+SELECT `statement_id`,`stats`,`duration`,`sql_source_type`,`account`,`response_at` FROM `system`.`statement_info` WHERE status != 'Running' and account != 'sys' and account != 'ob' and response_at >= '2023-07-28 04:49:00' and response_at < '2023-07-28 04:50:00';
+statement_id    stats    duration    sql_source_type    account    response_at
+SELECT `value` FROM `system_metrics`.`server_storage_usage` WHERE account = '863f0767_0361_4a8c_a3e8_73b2be140a74' and collecttime > '2023-07-28 06:07:53' and collecttime <= '2023-07-28 06:10:53' ORDER BY collecttime DESC LIMIT 1;
+value
+SELECT collecttime FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' ORDER BY collecttime asc LIMIT 1;
+collecttime
+SELECT count(*) FROM `mo_mo`.`moins` WHERE id = '2ef38bf3-b821-4cab-879e-3b788f1e922f';
+SQL parser error: table "moins" does not exist
+SELECT count(*) FROM `mo_mo`.`wb_version` WHERE wb_id = 'd457fd59-a865-4a5b-80b0-6e19a6059f1f';
+SQL parser error: table "wb_version" does not exist
+SELECT count(*) FROM `mo_mo`.`wb` WHERE account_id = '91731e77_49ea_4a8a_b1c7_d5512c7ae96e' AND sql_user = 'admin' AND id = '30415473-5276-42c5-8302-4e9a7e605900';
+SQL parser error: table "wb" does not exist
+SELECT count(*) FROM information_schema.tables WHERE table_schema = '' AND table_name = 'moins' AND table_type = 'BASE TABLE';
+count(*)
+0
+SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id;
+name    tables    owner
+system    1    accountadmin
+system_metrics    7    accountadmin
+information_schema    15    accountadmin
+mysql    5    accountadmin
+mo_mo    0    accountadmin
+mo_catalog    15    -
+SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id ORDER BY reldatabase, relname;
+datname    relname    relkind    owner
+mo_mo    null    null    -
+information_schema    character_sets    r    accountadmin
+information_schema    columns    v    accountadmin
+information_schema    engines    r    accountadmin
+information_schema    key_column_usage    r    accountadmin
+information_schema    keywords    r    accountadmin
+information_schema    parameters    r    accountadmin
+information_schema    partitions    v    accountadmin
+information_schema    processlist    v    accountadmin
+information_schema    profiling    r    accountadmin
+information_schema    routines    r    accountadmin
+information_schema    schemata    v    accountadmin
+information_schema    tables    v    accountadmin
+information_schema    triggers    r    accountadmin
+information_schema    user_privileges    r    accountadmin
+information_schema    views    v    accountadmin
+mo_catalog    mo_columns    r    -
+mo_catalog    mo_database    r    -
+mo_catalog    mo_increment_columns        accountadmin
+mo_catalog    mo_indexes    r    accountadmin
+mo_catalog    mo_mysql_compatibility_mode    r    accountadmin
+mo_catalog    mo_pubs    r    accountadmin
+mo_catalog    mo_role    r    accountadmin
+mo_catalog    mo_role_grant    r    accountadmin
+mo_catalog    mo_role_privs    r    accountadmin
+mo_catalog    mo_stages    r    accountadmin
+mo_catalog    mo_stored_procedure    r    accountadmin
+mo_catalog    mo_table_partitions    r    accountadmin
+mo_catalog    mo_tables    r    -
+mo_catalog    mo_user    r    accountadmin
+mo_catalog    mo_user_defined_function    r    accountadmin
+mo_catalog    mo_user_grant    r    accountadmin
+mysql    columns_priv    r    accountadmin
+mysql    db    r    accountadmin
+mysql    procs_priv    r    accountadmin
+mysql    tables_priv    r    accountadmin
+mysql    user    r    accountadmin
+system    statement_info    r    accountadmin
+system_metrics    metric    r    accountadmin
+system_metrics    server_connections    v    accountadmin
+system_metrics    server_storage_usage    v    accountadmin
+system_metrics    sql_statement_errors    v    accountadmin
+system_metrics    sql_statement_total    v    accountadmin
+system_metrics    sql_transaction_errors    v    accountadmin
+system_metrics    sql_transaction_total    v    accountadmin
+SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='information_schema';
+name    owner
+columns    accountadmin
+processlist    accountadmin
+schemata    accountadmin
+tables    accountadmin
+partitions    accountadmin
+views    accountadmin
+SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mo_sample_data_tpch_sf1';
+name    owner
+SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mysql';
+name    owner
+SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='system';
+name    owner
+SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='system_metrics';
+name    owner
+sql_statement_total    accountadmin
+sql_statement_errors    accountadmin
+sql_transaction_total    accountadmin
+sql_transaction_errors    accountadmin
+server_connections    accountadmin
+server_storage_usage    accountadmin
+SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
+name    rows    size    owner
+key_column_usage    0    0    accountadmin
+profiling    0    0    accountadmin
+user_privileges    0    0    accountadmin
+character_sets    0    0    accountadmin
+triggers    0    0    accountadmin
+engines    0    0    accountadmin
+routines    0    0    accountadmin
+parameters    0    0    accountadmin
+keywords    747    21267    accountadmin
+SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mo_sample_data_tpch_sf1';
+name    rows    size    owner
+SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mysql';
+name    rows    size    owner
+user    0    0    accountadmin
+db    0    0    accountadmin
+procs_priv    0    0    accountadmin
+columns_priv    0    0    accountadmin
+tables_priv    0    0    accountadmin
+SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='system';
+name    rows    size    owner
+statement_info    0    0    accountadmin
+SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='system_metrics';
+name    rows    size    owner
+metric    0    0    accountadmin
+SELECT count(*) FROM `system`.`statement_info` WHERE status != 'Running' and account != 'sys' and account != 'ob' ORDER BY response_at asc LIMIT 1;
+SQL syntax error: column "statement_info.response_at" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x WHERE datname='information_schema';
+owner
+accountadmin
+SELECT role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x WHERE datname='mo_sample_data_tpch_sf1';
+owner
+SELECT role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x WHERE datname='mysql';
+owner
+accountadmin
+SELECT role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x WHERE datname='system';
+owner
+accountadmin
+SELECT role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x WHERE datname='system_metrics';
+owner
+accountadmin
+SELECT sum(`value`*`interval`) FROM `mo_mo`.`storage` WHERE collecttime > '2023-07-28 00:00:00' AND collecttime <= '2023-07-28 03:54:39' AND account = '91731e77_49ea_4a8a_b1c7_d5512c7ae96e';
+SQL parser error: table "storage" does not exist
+UPDATE `mo_mo`.`statement_time` SET `last_time`='2023-07-28 09:00:00' WHERE `cluster` = 'ab';
+no such table mo_mo.statement_time
+UPDATE `mo_mo`.`storage_time` SET `last_time`='2023-07-28 03:30:00' WHERE `cluster` = 'ab';
+no such table mo_mo.storage_time
+UPDATE `mo_mo`.`wb_version` SET `status`=2,`version`='2023-07-28T05:00:35Z',`updated_at`='2023-07-28 05:00:35.752' WHERE wb_id = 'ba8f2a64-3396-465c-a770-77600865d6c2' AND id = '7f660329-a51b-4b17-b981-fc9acd9b492a';
+no such table mo_mo.wb_version
+UPDATE `mo_mo`.`wb` SET `updated_at`='2023-07-28 06:02:41.452' WHERE id = '9579cf34-2faf-4b9b-83dc-09638c39265a';
+no such table mo_mo.wb
+alter account `2ef38bf3_b821_4cab_879e_3b788f1e922f` admin_name 'admin' identified by 'abcd';
+internal error: do not have privilege to execute the statement
+delete from mo_mo.operation where created_at <= '2023-07-21 13:42:02';
+no such table mo_mo.operation
+select distinct IF(relkind = 'v', 0, mo_table_rows('information_schema','character_sets')) as `rows` from mo_catalog.mo_tables where reldatabase='information_schema' and relname='character_sets';
+rows
+0
+select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','customer')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='customer';
+rows
+select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','lineitem')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='lineitem';
+rows
+select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','nation')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='nation';
+rows
+select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','orders')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='orders';
+rows
+select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','supplier')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='supplier';
+rows
+select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf10','region')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf10' and relname='region';
+rows
+select sum(stu) from mo_mo.stu where account = '863f0767_0361_4a8c_a3e8_73b2be140a74' and start_time >= '2023-07-28 03:34:59' and start_time <= '2023-07-28 06:10:52';
+SQL parser error: table "stu" does not exist
+drop database if exists mo_mo;
+drop account test_tenant_1;

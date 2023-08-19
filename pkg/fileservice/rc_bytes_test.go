@@ -21,15 +21,8 @@ import (
 )
 
 func TestRCBytesPool(t *testing.T) {
-	bs := RCBytesPool.Get(0)
-	assert.Equal(t, rcBytesPoolMinCap, cap(bs.Value))
-	bs.Release()
-
-	bs = RCBytesPool.Get(rcBytesPoolMaxCap)
-	assert.Equal(t, rcBytesPoolMaxCap, cap(bs.Value))
-	bs.Release()
-
-	bs = RCBytesPool.Get(rcBytesPoolMaxCap * 2)
-	assert.Equal(t, rcBytesPoolMaxCap*2, len(bs.Value))
+	p := newRCBytesPool(1 << 10)
+	bs := p.Alloc(0)
+	assert.Equal(t, 0, cap(bs.Bytes()))
 	bs.Release()
 }

@@ -43,15 +43,15 @@ func TestMemCacheLeak(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	m := NewMemCache(WithLRU(4))
+	m := NewMemCache(4, nil, nil)
 
 	vec := &IOVector{
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
-					cacheData := allocator.Alloc(1)
+				ToCacheData: func(reader io.Reader, data []byte) (CacheData, error) {
+					cacheData := DefaultCacheDataAllocator.Alloc(1)
 					cacheData.Bytes()[0] = 42
 					return cacheData, nil
 				},
@@ -74,8 +74,8 @@ func TestMemCacheLeak(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToCacheData: func(reader io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
-					cacheData := allocator.Alloc(1)
+				ToCacheData: func(reader io.Reader, data []byte) (CacheData, error) {
+					cacheData := DefaultCacheDataAllocator.Alloc(1)
 					cacheData.Bytes()[0] = 42
 					return cacheData, nil
 				},
@@ -97,7 +97,7 @@ func TestMemCacheLeak(t *testing.T) {
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
-	m := NewMemCache(WithLRU(2))
+	m := NewMemCache(2, nil, nil)
 	ctx := context.Background()
 
 	n := 10

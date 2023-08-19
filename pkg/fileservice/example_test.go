@@ -57,8 +57,8 @@ func TestCacheExample(t *testing.T) {
 			{
 				Offset: 0,
 				Size:   2,
-				ToCacheData: func(_ io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
-					cacheData := allocator.Alloc(len(data))
+				ToCacheData: func(_ io.Reader, data []byte) (CacheData, error) {
+					cacheData := DefaultCacheDataAllocator.Alloc(len(data))
 					copy(cacheData.Bytes(), data)
 					return cacheData, nil
 				},

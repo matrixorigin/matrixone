@@ -58,13 +58,13 @@ func testCachingFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
+					ToCacheData: func(r io.Reader, data []byte) (CacheData, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						cacheData := allocator.Alloc(len(bs))
+						cacheData := DefaultCacheDataAllocator.Alloc(len(bs))
 						copy(cacheData.Bytes(), bs)
 						return cacheData, nil
 					},

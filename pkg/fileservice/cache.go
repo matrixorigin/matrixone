@@ -29,8 +29,18 @@ type CacheConfig struct {
 	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
 	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
 
+	CacheCallbacks
+
 	enableDiskCacheForLocalFS bool // for testing only
 }
+
+type CacheCallbacks struct {
+	PostGet   []CacheCallbackFunc
+	PostSet   []CacheCallbackFunc
+	PostEvict []CacheCallbackFunc
+}
+
+type CacheCallbackFunc = func(CacheKey, CacheData)
 
 func (c *CacheConfig) setDefaults() {
 	if c.MemoryCapacity == nil {

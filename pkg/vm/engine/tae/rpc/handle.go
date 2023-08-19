@@ -24,7 +24,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/google/shlex"
@@ -452,21 +454,8 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		return nil
 	}
 	//for loading deleted rowid.
-	db, err := h.db.Catalog.GetDatabaseByID(req.DatabaseId)
-	if err != nil {
-		return err
-	}
-	tbl, err := db.GetTableEntryByID(req.TableID)
-	if err != nil {
-		return err
-	}
-	var version uint32
-	if req.Schema != nil {
-		version = req.Schema.Version
-	}
-	schema := tbl.GetVersionSchema(version)
-	pkIdx := schema.GetPrimaryKey().Idx
 	columnIdx := 0
+	pkIdx := 1
 	//start loading jobs asynchronously,should create a new root context.
 	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
 	if err != nil {
@@ -482,7 +471,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()})
+		pref.AddBlockWithType([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()}, uint16(objectio.SchemaTombstone))
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -570,6 +559,74 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
+func loadDataForMOCatalog(
+	ctx context.Context,
+	es []*api.Entry,
+	fs fileservice.FileService,
+	m *mpool.MPool,
+) (err error) {
+	for _, e := range es {
+		if e.EntryType != api.Entry_Insert {
+			continue
+		}
+		if e.DatabaseId != catalog.MO_CATALOG_ID {
+			continue
+		}
+		if e.TableId != catalog.MO_TABLES_ID &&
+			e.TableId != catalog.MO_COLUMNS_ID {
+			continue
+		}
+		if e.FileName == "" {
+			continue
+		}
+		bat, err := batch.ProtoBatchToBatch(e.Bat)
+		if err != nil {
+			return err
+		}
+		rows := catalog.GenRows(bat)
+		for _, row := range rows {
+			metaLoc := string(row[0].([]byte))
+			location, err := blockio.EncodeLocationFromString(metaLoc)
+			if err != nil {
+				return err
+			}
+			var bat *batch.Batch
+			if e.TableId == catalog.MO_TABLES_ID {
+				//TODO when to Release?
+				bat, _, err = blockio.LoadColumns(
+					ctx,
+					true,
+					catalog.MoTablesIdxs,
+					catalog.MoTablesTypes,
+					fs,
+					location,
+					m)
+				if err != nil {
+					return err
+				}
+			} else {
+				//TODO when to call Release?
+				bat, _, err = blockio.LoadColumns(
+					ctx,
+					true,
+					catalog.MoColumnsIdxs,
+					catalog.MoColumnsTypes,
+					fs,
+					location,
+					m)
+				if err != nil {
+					return err
+				}
+			}
+			e.Bat, err = batch.BatchToProtoBatch(bat)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return
+}
+
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -578,7 +635,10 @@ func (h *Handle) HandlePreCommitWrite(
 	var e any
 
 	es := req.EntryList
-
+	err = loadDataForMOCatalog(ctx, es, h.db.Runtime.Fs.Service, nil)
+	if err != nil {
+		return err
+	}
 	for len(es) > 0 {
 		e, es, err = catalog.ParseEntryList(es)
 		if err != nil {
@@ -934,7 +994,7 @@ func (h *Handle) HandleWrite(
 			var ok bool
 			var bat *batch.Batch
 			var datas []fileservice.CacheData
-			bat, datas, err = blockio.LoadColumns(
+			bat, datas, err = blockio.LoadTombstoneColumns(
 				ctx,
 				false,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
