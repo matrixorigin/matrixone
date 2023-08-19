@@ -43,6 +43,7 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn 
 type TableEntry struct {
 	*BaseEntryImpl[*TableMVCCNode]
 	*TableNode
+	Stats   common.TableCompactStat
 	ID      uint64
 	db      *DBEntry
 	entries map[types.Uuid]*common.GenericDLNode[*SegmentEntry]
@@ -50,6 +51,8 @@ type TableEntry struct {
 	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
 	rows      atomic.Uint64
+	// used for the next flush table tail.
+	DeletedDirties []*BlockEntry
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
 }

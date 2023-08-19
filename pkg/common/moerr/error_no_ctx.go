@@ -312,6 +312,10 @@ func NewTxnNeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnNeedRetry)
 }
 
+func NewTxnNeedRetryWithDefChangedNoCtx() *Error {
+	return newError(Context(), ErrTxnNeedRetryWithDefChanged)
+}
+
 func NewTxnCannotRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnCannotRetry)
 }

@@ -144,7 +144,7 @@ func (entry *compactBlockEntry) Set1PC()     {}
 func (entry *compactBlockEntry) Is1PC() bool { return false }
 func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	dataBlock := entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
-	if dataBlock.HasDeleteIntentsPreparedIn(entry.txn.GetStartTS().Next(), types.MaxTs()) {
+	if found, _ := dataBlock.HasDeleteIntentsPreparedIn(entry.txn.GetStartTS().Next(), types.MaxTs()); found {
 		err = moerr.NewTxnWWConflictNoCtx()
 	}
 	return
