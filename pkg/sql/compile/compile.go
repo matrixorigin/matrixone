@@ -73,8 +73,10 @@ import (
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold   uint64 = 10 * mpool.MB
-	SingleLineSizeEstimate uint64 = 300 * mpool.B
+	DistributedThreshold              uint64 = 10 * mpool.MB
+	SingleLineSizeEstimate            uint64 = 300 * mpool.B
+	shuffleJoinProbeChannelBufferSize        = 8
+	shuffleJoinBuildChannelBufferSize        = 2
 )
 
 var (
@@ -2746,7 +2748,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
 		// this is for shuffle join build scope
 		for _, mr := range rs.Proc.Reg.MergeReceivers {
-			mr.Ch = make(chan *batch.Batch, 2)
+			mr.Ch = make(chan *batch.Batch, shuffleJoinBuildChannelBufferSize)
 		}
 	} else {
 		rs.appendInstruction(vm.Instruction{
