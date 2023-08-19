@@ -235,6 +235,10 @@ func (entry *SegmentEntry) IsSorted() bool {
 	return entry.sorted
 }
 
+func (entry *SegmentEntry) IsSortedLocked() bool {
+	return entry.sorted
+}
+
 func (entry *SegmentEntry) GetTable() *TableEntry {
 	return entry.table
 }

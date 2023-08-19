@@ -473,7 +473,7 @@ func (s *MergeTaskBuilder) onSegment(segmentEntry *catalog.SegmentEntry) (err er
 	}
 
 	s.delSegBuilder.resetForNewSeg()
-	s.delSegBuilder.segIsSorted = segmentEntry.IsSorted()
+	s.delSegBuilder.segIsSorted = segmentEntry.IsSortedLocked()
 	return
 }
 
