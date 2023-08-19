@@ -17,6 +17,7 @@ package compute
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,6 +50,10 @@ func CompareBytes(a, b []byte) int {
 	} else {
 		return 0
 	}
+}
+
+func CompareArrayFromBytes[T types.RealNumbers](a, b []byte) int {
+	return moarray.Compare[T](types.BytesToArray[T](a), types.BytesToArray[T](b))
 }
 
 func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
@@ -100,6 +105,11 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
 		return CompareBytes(a, b)
+	case types.T_array_float32:
+		//Zone map comparator
+		return CompareArrayFromBytes[float32](a, b)
+	case types.T_array_float64:
+		return CompareArrayFromBytes[float64](a, b)
 	case types.T_any:
 		return 0
 	default:
@@ -158,6 +168,11 @@ func CompareGeneric(a, b any, t types.T) int {
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
 		return CompareBytes(a.([]byte), b.([]byte))
+	case types.T_array_float32:
+		// Used by GetRowByFilter in TAE.
+		return CompareArrayFromBytes[float32](a.([]byte), b.([]byte))
+	case types.T_array_float64:
+		return CompareArrayFromBytes[float64](a.([]byte), b.([]byte))
 	case types.T_any:
 		return 0
 	default:

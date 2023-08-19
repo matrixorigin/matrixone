@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestComapreGeneric(t *testing.T) {
+func TestCompareGeneric(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	x := types.Decimal256{
 		B0_63: 0, B64_127: 0,
