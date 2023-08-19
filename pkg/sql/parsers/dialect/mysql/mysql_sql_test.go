@@ -2451,6 +2451,24 @@ var (
 			input:  "SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '65c4c218-d343-11eb-8106-525400f4f901:1-769275'",
 			output: "set global GTID_PURGED = 65c4c218-d343-11eb-8106-525400f4f901:1-769275",
 		}, {
+			input:  " /*!40103 SET TIME_ZONE='+00:00' */",
+			output: "set time_zone = 0:00",
+		}, {
+			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
+			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
+		},
+		{
+			input:  "/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */",
+			output: "set OLD_TIME_ZONE = @@TIME_ZONE",
+		},
+		{
+			input:  "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */",
+			output: "set OLD_SQL_MODE = @@SQL_MODE, sql_mode = no_auto_value_on_zero",
+		},
+		{
+			input:  "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;",
+			output: "set OLD_SQL_NOTES = @@SQL_NOTES, sql_notes = 0",
+		}, {
 			input:  "alter table t1 algorithm = DEFAULT",
 			output: "alter table t1 alter algorithm not enforce",
 		}, {
