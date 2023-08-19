@@ -15,7 +15,6 @@
 package group_concat
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -118,21 +117,6 @@ func (gc *GroupConcat) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// Dup will duplicate a new agg with the same type.
-func (gc *GroupConcat) Dup() agg.Agg[any] {
-	var newRes []string = make([]string, len(gc.res))
-	copy(newRes, gc.res)
-	var newItyp []types.Type = make([]types.Type, 0, len(gc.ityp))
-	copy(newItyp, gc.ityp)
-	var inserts []string = make([]string, 0, len(gc.inserts))
-	return &GroupConcat{
-		arg:     gc.arg,
-		res:     newRes,
-		inserts: inserts,
-		ityp:    newItyp,
-	}
-}
-
 // Type return the type of the agg's result.
 func (gc *GroupConcat) OutputType() types.Type {
 	typ := types.T_text.ToType()
@@ -147,33 +131,6 @@ func (gc *GroupConcat) OutputType() types.Type {
 // group_concat is not a normal agg func, we don't need this func
 func (gc *GroupConcat) InputTypes() []types.Type {
 	return gc.ityp
-}
-
-// String return related information of the agg.
-// used to show query plans.
-func (gc *GroupConcat) String() string {
-	buf := new(bytes.Buffer)
-	buf.WriteString("group_concat( ")
-	if gc.arg.Dist {
-		buf.WriteString("distinct ")
-	}
-	for i, expr := range gc.arg.GroupExpr {
-		if i > 0 {
-			buf.WriteString(", ")
-		}
-		buf.WriteString(fmt.Sprintf("%v", expr))
-	}
-	if len(gc.arg.OrderByExpr) > 0 {
-		buf.WriteString(" order by ")
-	}
-	for i, expr := range gc.arg.OrderByExpr {
-		if i > 0 {
-			buf.WriteString(", ")
-		}
-		buf.WriteString(fmt.Sprintf("%v", expr))
-	}
-	buf.WriteString(fmt.Sprintf(" separtor %v)", gc.arg.Separator))
-	return buf.String()
 }
 
 // Free the agg.
@@ -285,7 +242,7 @@ func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, vecs []*vector.Vec
 	return nil
 }
 
-func (gc *GroupConcat) BulkFill(groupIndex int64, rowCount int, vecs []*vector.Vector) error {
+func (gc *GroupConcat) BulkFill(groupIndex int64, vecs []*vector.Vector) error {
 	length := vecs[0].Length()
 	for i := 0; i < length; i++ {
 		if err := gc.Fill(groupIndex, int64(i), vecs); err != nil {
