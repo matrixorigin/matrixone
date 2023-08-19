@@ -350,18 +350,19 @@ func (c *Compile) Run(_ uint64) error {
 		c.fatalLog(0, err)
 
 		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
-		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+		if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
 			c.proc.TxnOperator.Txn().IsRCIsolation() {
 			c.proc.TxnOperator.ResetRetry(true)
 			c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 
 			// clear the workspace of the failed statement
-			if err = c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); err != nil {
-				return err
+			if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
+				return e
 			}
 			//  increase the statement id
-			if err = c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); err != nil {
-				return err
+			if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
+				return e
 			}
 
 			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
@@ -378,6 +379,13 @@ func (c *Compile) Run(_ uint64) error {
 				c.stmt,
 				c.isInternal,
 				c.cnLabel)
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				pn, err := c.buildPlanFunc()
+				if err != nil {
+					return err
+				}
+				c.pn = pn
+			}
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 				c.fatalLog(1, err)
 				return err
@@ -1305,8 +1313,8 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		if err != nil {
 			return nil, err
 		}
-		err = lockTable(c.e, c.proc, rel)
-		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+		err = lockTable(c.e, c.proc, rel, false)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -3314,6 +3322,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 	fatal := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
 		moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) ||
 		moerr.IsMoErrCode(err, moerr.ER_DUP_ENTRY) ||
@@ -3321,7 +3330,9 @@ func (c *Compile) fatalLog(retry int, err error) {
 	if !fatal {
 		return
 	}
-	if retry == 0 && moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+	if retry == 0 &&
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
 		return
 	}
 
@@ -3329,4 +3340,8 @@ func (c *Compile) fatalLog(retry int, err error) {
 		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
 		retry,
 		err.Error())
+}
+
+func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
+	c.buildPlanFunc = buildPlanFunc
 }
