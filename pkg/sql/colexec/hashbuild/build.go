@@ -179,7 +179,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		proc.PutBatch(batches[i])
 	}
-	batches = nil
 
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil
