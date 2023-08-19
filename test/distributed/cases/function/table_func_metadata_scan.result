@@ -36,10 +36,10 @@ a    8192    0    32806
 select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
 col_name    rows_cnt    null_cnt    origin_size
 a    8192    0    32806
-b    8192    4096    197698
+b    8192    4096    197690
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
 sum(origin_size)
-230504
+230496
 select approx_count(*) from t;
 approx_count(*)
 8192

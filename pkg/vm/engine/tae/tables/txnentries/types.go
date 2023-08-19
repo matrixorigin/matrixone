@@ -19,14 +19,17 @@ import (
 )
 
 const (
-	IOET_WALTxnCommand_Compact uint16 = 3006
-	IOET_WALTxnCommand_Merge   uint16 = 3007
+	IOET_WALTxnCommand_Compact        uint16 = 3006
+	IOET_WALTxnCommand_Merge          uint16 = 3007
+	IOET_WALTxnCommand_FlushTableTail uint16 = 3014
 
-	IOET_WALTxnCommand_Compact_V1 uint16 = 1
-	IOET_WALTxnCommand_Merge_V1   uint16 = 1
+	IOET_WALTxnCommand_Compact_V1        uint16 = 1
+	IOET_WALTxnCommand_Merge_V1          uint16 = 1
+	IOET_WALTxnCommand_FlashTableTail_V1 uint16 = 1
 
-	IOET_WALTxnCommand_Compact_CurrVer = IOET_WALTxnCommand_Compact_V1
-	IOET_WALTxnCommand_Merge_CurrVer   = IOET_WALTxnCommand_Merge_V1
+	IOET_WALTxnCommand_Compact_CurrVer        = IOET_WALTxnCommand_Compact_V1
+	IOET_WALTxnCommand_Merge_CurrVer          = IOET_WALTxnCommand_Merge_V1
+	IOET_WALTxnCommand_FlushTableTail_CurrVer = IOET_WALTxnCommand_FlashTableTail_V1
 )
 
 func init() {
@@ -50,6 +53,18 @@ func init() {
 		nil,
 		func(b []byte) (any, error) {
 			cmd := new(mergeBlocksCmd)
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_FlushTableTail,
+			Version: IOET_WALTxnCommand_FlashTableTail_V1,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			cmd := new(flushTableTailCmd)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},
