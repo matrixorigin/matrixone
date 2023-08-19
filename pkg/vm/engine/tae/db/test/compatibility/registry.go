@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	version = 3
+	version = 4
 )
 
 type optType int
@@ -96,7 +96,11 @@ func (pc PrepareCase) GetSchema(t *testing.T) *catalog.Schema {
 	schema := catalog.MockSchemaAll(pc.schemaCfg.colCnt, pc.schemaCfg.pkIdx)
 	schema.BlockMaxRows = pc.schemaCfg.blockMaxRows
 	schema.SegmentMaxBlocks = pc.schemaCfg.segmentMaxBlocks
-	schema.Name = fmt.Sprintf("test_%d", version)
+	ver, err := ReadPrepareVersion()
+	if err != nil {
+		t.Error(err)
+	}
+	schema.Name = fmt.Sprintf("test_%d", ver)
 	return schema
 }
 

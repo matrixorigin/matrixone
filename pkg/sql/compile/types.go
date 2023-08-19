@@ -212,6 +212,8 @@ type Compile struct {
 
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
+
+	buildPlanFunc func() (*plan2.Plan, error)
 }
 
 type RemoteReceivRegInfo struct {
