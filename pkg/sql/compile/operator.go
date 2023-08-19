@@ -1188,10 +1188,19 @@ func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 }
 
 // cross-cn dispath  will send same batch to all register
-func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node) *dispatch.Argument {
+func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node, left bool) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
 	if node.Stats.HashmapStats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
+		if node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Complex {
+			if left {
+				arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+			} else {
+				arg.ShuffleType = plan2.ShuffleToMultiMatchedReg
+			}
+		} else {
+			arg.ShuffleType = plan2.ShuffleToRegIndex
+		}
 		return arg
 	}
 	if hasRemote {
