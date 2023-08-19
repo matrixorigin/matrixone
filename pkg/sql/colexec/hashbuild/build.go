@@ -168,7 +168,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if count > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
 			groupCount := ctr.mp.GroupCount()
 			rate := float64(groupCount) / float64(i)
-			hashmapCount := uint64(float64(count) * rate)
+			hashmapCount := uint64(float64(count) * rate * 1.05)
 			estimatedHashmapCount = int(hashmapCount)
 			if hashmapCount > groupCount {
 				err = ctr.mp.PreAlloc(hashmapCount-groupCount, proc.Mp())
