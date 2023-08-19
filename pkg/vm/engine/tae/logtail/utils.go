@@ -1963,9 +1963,9 @@ func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
 		if bat == nil {
 			return
 		}
-		vec = data.bats[MetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation)
+		vec = data.bats[DNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation)
 		vec.Close()
-		vec = data.bats[MetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType)
+		vec = data.bats[DNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType)
 		vec.Close()
 	}
 }
