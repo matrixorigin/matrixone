@@ -541,7 +541,6 @@ drop table primary06;
 
 
 -- abnormal test :joint primary key, modify one of the primary column null
--- @bvt:issue#11247
 drop table if exists primary07;
 create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
@@ -553,7 +552,6 @@ show create table primary07;
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary07' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table primary07;
--- @bvt:issue
 
 
 -- joint primary key
@@ -873,7 +871,9 @@ insert into abnormal04 values (('{"x": 17, "x": "red"}'),'a');
 insert into abnormal04 values (('{"x": 17, "x": "red", "x": [3, 5, 7]}'), 'b');
 select * from abnormal04;
 alter table abnormal04 modify col1 float;
+-- @bvt:issue#11291
 alter table abnormal04 modify col2 int;
+-- @bvt:issue
 select * from abnormal04;
 show create table abnormal04;
 -- @bvt:issue#11249
