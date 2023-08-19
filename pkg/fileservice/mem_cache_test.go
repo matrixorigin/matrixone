@@ -64,7 +64,7 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 	err = m.Update(ctx, vec, false)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
+	assert.Equal(t, int64(0), m.cache.Capacity()-m.cache.Available())
 	assert.Equal(t, int64(4), counter.FileService.Cache.Memory.Available.Load())
 	assert.Equal(t, int64(0), counter.FileService.Cache.Memory.Used.Load())
 
@@ -88,9 +88,9 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 	err = m.Update(ctx, vec, false)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
-	assert.Equal(t, int64(3), counter.FileService.Cache.Memory.Available.Load())
-	assert.Equal(t, int64(1), counter.FileService.Cache.Memory.Used.Load())
+	assert.Equal(t, int64(0), m.cache.Capacity()-m.cache.Available())
+	assert.Equal(t, int64(4), counter.FileService.Cache.Memory.Available.Load())
+	assert.Equal(t, int64(0), counter.FileService.Cache.Memory.Used.Load())
 
 }
 

@@ -342,43 +342,6 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 	return
 }
 
-func (r *objectReaderV1) ReadMultiAllSubBlocks(
-	ctx context.Context,
-	opts map[uint16]*ReadBlockOptions,
-	m *mpool.MPool,
-) (ioVec *fileservice.IOVector, err error) {
-	var metaHeader ObjectMeta
-	if metaHeader, err = r.ReadMeta(ctx, m); err != nil {
-		return
-	}
-	ioVec = &fileservice.IOVector{
-		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 0),
-	}
-	for _, opt := range opts {
-		meta, _ := metaHeader.SubMeta(uint16(ConvertToSchemaType(opt.Id)))
-		for seqnum := range opt.Idxes {
-			for i := uint32(0); i < meta.BlockCount(); i++ {
-				blkmeta := meta.GetBlockMeta(uint32(meta.BlockHeader().StartID()) + i)
-				if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
-					// prefetch, do not generate
-					continue
-				}
-				col := blkmeta.ColumnMeta(seqnum)
-				ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-					Offset: int64(col.Location().Offset()),
-					Size:   int64(col.Location().Length()),
-
-					ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg(), r.fs),
-				})
-			}
-		}
-	}
-
-	err = r.fs.Read(ctx, ioVec)
-	return
-}
-
 func (r *objectReaderV1) ReadAllMeta(
 	ctx context.Context,
 	m *mpool.MPool,
