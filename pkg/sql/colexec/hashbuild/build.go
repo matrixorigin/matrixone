@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -119,6 +118,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 	batches := make([]*batch.Batch, 0)
 	rowCount := 0
+	var tmpBatch *batch.Batch
 
 	for {
 		var bat *batch.Batch
@@ -143,22 +143,31 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		anal.Alloc(int64(bat.Size()))
 
 		rowCount += bat.RowCount()
-		if len(batches) == 0 {
+		if bat.RowCount() >= batchSize/2 {
 			batches = append(batches, bat)
 		} else {
-			currentBatch := batches[len(batches)-1]
-			if currentBatch.RowCount() >= batchSize {
-				batches = append(batches, bat)
+			if tmpBatch == nil {
+				tmpBatch, err = bat.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
 			} else {
-				batches[len(batches)-1], err = currentBatch.Append(proc.Ctx, proc.Mp(), bat)
-				proc.PutBatch(bat)
+				tmpBatch, err = tmpBatch.Append(proc.Ctx, proc.Mp(), bat)
 				if err != nil {
 					return err
 				}
 			}
+			if tmpBatch.RowCount() >= batchSize {
+				batches = append(batches, tmpBatch)
+				tmpBatch = nil
+			}
+			proc.PutBatch(bat)
 		}
 	}
 
+	if tmpBatch != nil {
+		batches = append(batches, tmpBatch)
+	}
 	err = ctr.bat.PreExtend(proc.Mp(), rowCount)
 	if err != nil {
 		return err
@@ -170,8 +179,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		proc.PutBatch(batches[i])
 	}
-
-	logutil.Infof(" preextend batch to %v, batch count %v", rowCount, ctr.bat.RowCount())
+	batches = nil
 
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil
