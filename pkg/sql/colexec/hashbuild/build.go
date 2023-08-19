@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const batchSize = 8192
+
 func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" hash build ")
 }
@@ -115,6 +117,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
 
+	batches := make([]*batch.Batch, 0)
+	rowCount := 0
+
 	for {
 		var bat *batch.Batch
 		if ap.ctr.isMerge {
@@ -136,11 +141,37 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		anal.Input(bat, isFirst)
 		anal.Alloc(int64(bat.Size()))
-		ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat)
-		proc.PutBatch(bat)
+
+		rowCount += bat.RowCount()
+		if len(batches) == 0 {
+			batches = append(batches, bat)
+		} else {
+			currentBatch := batches[len(batches)-1]
+			if currentBatch.RowCount() >= batchSize {
+				batches = append(batches, bat)
+			} else {
+				batches[len(batches)-1], err = currentBatch.Append(proc.Ctx, proc.Mp(), bat)
+				proc.PutBatch(bat)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
 		if err != nil {
 			return err
 		}
+	}
+
+	err = ctr.bat.PreExtend(proc.Mp(), rowCount)
+	if err != nil {
+		return err
+	}
+	for i := range batches {
+		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), batches[i]); err != nil {
+			return err
+		}
+		proc.PutBatch(batches[i])
 	}
 
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
