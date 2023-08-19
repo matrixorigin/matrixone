@@ -170,7 +170,7 @@ var (
 			"attname AS COLUMN_NAME,"+
 			"attnum AS ORDINAL_POSITION,"+
 			"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,"+
-			"(case when attnotnull != 0 then 'YES' else 'NO' end) as IS_NULLABLE,"+
+			"(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
 			"mo_show_visible_bin(atttyp,2) as DATA_TYPE,"+
 			"internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
 			"internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,"+
