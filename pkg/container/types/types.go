@@ -327,7 +327,7 @@ type FixedSizeT interface {
 }
 
 type RealNumbers interface {
-	constraints.Signed | constraints.Float
+	constraints.Float
 }
 
 type FixedSizeTExceptStrType interface {
