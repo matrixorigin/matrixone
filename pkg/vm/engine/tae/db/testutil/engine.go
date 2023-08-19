@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -463,6 +464,10 @@ func getBatchLength(bat *containers.Batch) int {
 }
 
 func isBatchEqual(ctx context.Context, t *testing.T, bat1, bat2 *containers.Batch) {
+	oldver := -1
+	if ver := ctx.Value(CtxOldVersion{}); ver != nil {
+		oldver = ver.(int)
+	}
 	require.Equal(t, getBatchLength(bat1), getBatchLength(bat2))
 	require.Equal(t, len(bat1.Vecs), len(bat2.Vecs))
 	for i := 0; i < getBatchLength(bat1); i++ {
@@ -471,6 +476,14 @@ func isBatchEqual(ctx context.Context, t *testing.T, bat1, bat2 *containers.Batc
 			// for commitTS and rowid in checkpoint
 			if vec1.Length() == 0 || vec2.Length() == 0 {
 				// logutil.Warnf("empty vec attr %v", bat1.Attrs[j])
+				continue
+			}
+			if oldver >= 0 && oldver <= int(logtail.CheckpointVersion5) && // read old version checkpoint
+				logtail.CheckpointCurrentVersion > logtail.CheckpointVersion5 && // check on new version
+				bat1.Attrs[j] == pkgcatalog.BlockMeta_MemTruncPoint {
+				// memTruncatePoint vector is committs vec in old checkpoint
+				// it can't be the same with newly collected on new version checkpoint, just skip it
+				logutil.Infof("isBatchEqual skip attr %v for ver.%d on ver.%d", bat1.Attrs[j], oldver, logtail.CheckpointCurrentVersion)
 				continue
 			}
 			// t.Logf("attr %v, row %d", bat1.Attrs[j], i)
