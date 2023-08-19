@@ -1072,7 +1072,9 @@ insert into abnormal04 values (('{"x": 17, "x": "red"}'),'a');
 insert into abnormal04 values (('{"x": 17, "x": "red", "x": [3, 5, 7]}'), 'b');
 select * from abnormal04;
 alter table abnormal04 change col1 col1NewCOl float;
+-- @bvt:issue#11291
 alter table abnormal04 change col2 col2NewCOL int;
+-- @bvt:issue
 select * from abnormal04;
 show create table abnormal04;
 -- @bvt:issue#11249

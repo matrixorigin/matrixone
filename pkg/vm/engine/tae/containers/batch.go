@@ -95,7 +95,10 @@ func (bat *Batch) AppendPlaceholder() {
 }
 
 func (bat *Batch) GetVectorByName(name string) Vector {
-	pos := bat.Nameidx[name]
+	pos, ok := bat.Nameidx[name]
+	if !ok {
+		panic(fmt.Sprintf("vector %s not found", name))
+	}
 	return bat.Vecs[pos]
 }
 
