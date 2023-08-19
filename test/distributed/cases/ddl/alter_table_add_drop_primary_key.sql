@@ -153,16 +153,17 @@ drop table pri09;
 
 -- add multiple primary key columns to a common table
 drop table if exists pri10;
-create table pri10 (col1 decimal, col2 varchar(100));
-insert into pri10 (col1, col2) values (32423.32432432, '327983472udj3ih98f728uoj4defn324f');
-insert into pri10 values (-23423.432432432, '324vyugegf3yg4yffever34332f34f3f324trf3r3vvb4f3f43');
+create table pri10 (col1 int, col2 char(1));
+insert into pri10 (col1, col2) values (1, 'a');
+insert into pri10 values (-2, '*');
 select * from pri10;
 alter table pri10 add constraint primary key (col1, col2);
 show create table pri10;
 show columns from pri10;
-insert into pri10 (col1, col2) values (32423.32432432, null);
-insert into pri10 values (10, '324vyugegf3yg4yffever34332f34f3f324trf3r3vvb4f3f43');
-insert into pri10 (col1, col2) values (32423.32432432, '327983472udj3ih98f728uoj4defn324f');
+insert into pri10 (col1, col2) values (1, null);
+insert into pri10 values (-2, 'p');
+-- @pattern
+insert into pri10 (col1, col2) values (1, 'a');
 select * from pri10;
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri10' and COLUMN_NAME not like '__mo%';
