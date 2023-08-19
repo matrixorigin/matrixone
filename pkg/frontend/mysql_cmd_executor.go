@@ -3867,8 +3867,6 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_NULL)
 	case types.T_json:
 		col.SetColumnType(defines.MYSQL_TYPE_JSON)
-	case types.T_array_float32, types.T_array_float64:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_bool:
 		col.SetColumnType(defines.MYSQL_TYPE_BOOL)
 	case types.T_int8:
@@ -3898,6 +3896,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_char:
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_array_float32, types.T_array_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_binary:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
