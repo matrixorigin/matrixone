@@ -345,6 +345,9 @@ func (c *Config) Validate() error {
 	if c.Txn.MaxActiveAges.Duration == 0 {
 		c.Txn.MaxActiveAges.Duration = time.Minute * 2
 	}
+	if c.Txn.MaxActive == 0 {
+		c.Txn.MaxActive = runtime.NumCPU() * 4
+	}
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
