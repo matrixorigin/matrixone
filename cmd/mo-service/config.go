@@ -257,8 +257,13 @@ func (c *Config) createFileService(ctx context.Context, defaultName string, perf
 		})
 	}
 
-	for _, config := range c.FileServices {
+	// set distributed cache callbacks
+	for i, config := range c.FileServices {
+		c.setDistributedCacheCallbacks(&config)
+		c.FileServices[i] = config
+	}
 
+	for _, config := range c.FileServices {
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
 			ctx,
@@ -449,4 +454,16 @@ func (c *Config) mustGetServiceUUID() string {
 		return c.ProxyConfig.UUID
 	}
 	panic("impossible")
+}
+
+func (c *Config) setDistributedCacheCallbacks(fsConfig *fileservice.Config) {
+
+	fsConfig.Cache.PostSet = append(fsConfig.Cache.PostSet, func(key fileservice.CacheKey, value fileservice.CacheData) {
+		//TODO
+	})
+
+	fsConfig.Cache.PostEvict = append(fsConfig.Cache.PostEvict, func(key fileservice.CacheKey, value fileservice.CacheData) {
+		//TODO
+	})
+
 }

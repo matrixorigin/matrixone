@@ -1072,9 +1072,7 @@ insert into abnormal04 values (('{"x": 17, "x": "red"}'),'a');
 insert into abnormal04 values (('{"x": 17, "x": "red", "x": [3, 5, 7]}'), 'b');
 select * from abnormal04;
 alter table abnormal04 change col1 col1NewCOl float;
--- @bvt:issue#11291
 alter table abnormal04 change col2 col2NewCOL int;
--- @bvt:issue
 select * from abnormal04;
 show create table abnormal04;
 -- @bvt:issue#11249
@@ -1118,7 +1116,6 @@ drop view v0;
 
 
 -- cluster by
--- @bvt:issue#11260
 drop table if exists cluster01;
 create table cluster01(col1 int, col2 decimal) cluster by col1;
 insert into cluster01 values (1, 389234924);
@@ -1127,7 +1124,6 @@ alter table cluster01 change col2 col2worejnfenrororiri float;
 alter table cluster01 change col1 iwijwehfndatabasectm double after col2worejnfenrororiri;
 show create table cluster01;
 select * from cluster01;
--- @bvt:issue
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 drop table cluster01;
