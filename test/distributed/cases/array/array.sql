@@ -47,6 +47,7 @@ select b + "[1,2,3" from vec_table;
 select b + "1,2,3" from vec_table;
 create table t2(a int, b vecf32(3) primary key);
 create unique index t3 on vec_table(b);
+create table t3(a int, b vecf32(65537));
 
 -- agg
 select count(b) from vec_table;

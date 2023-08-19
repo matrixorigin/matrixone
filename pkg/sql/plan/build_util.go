@@ -124,7 +124,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
 			} else if fstr == "vecf32" || fstr == "vecf64" {
 				if width > types.MaxArrayDimension {
-					return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxArrayDimension: %v", types.MaxArrayDimension)
+					return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
 				}
 				if width < 1 {
 					return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen cannot be less than 1")

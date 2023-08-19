@@ -87,6 +87,8 @@ create table t2(a int, b vecf32(3) primary key);
 not supported: VECTOR column 'b' cannot be in primary key
 create unique index t3 on vec_table(b);
 not supported: VECTOR column 'b' cannot be in index
+create table t3(a int, b vecf32(65537));
+Data truncation: data out of range: data type vecf32,  typeLen is over the MaxArrayDimension: 65536
 select count(b) from vec_table;
 count(b)
 1

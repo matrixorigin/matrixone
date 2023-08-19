@@ -76,7 +76,7 @@ func StringToArray[T RealNumbers](str string) ([]T, error) {
 
 	numStrs := strings.Split(input, ",")
 	if len(numStrs) > MaxArrayDimension {
-		return nil, moerr.NewInternalErrorNoCtx("typeLen is over the maximum vector dimensions: %v", MaxArrayDimension)
+		return nil, moerr.NewInternalErrorNoCtx("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
 	}
 	result := make([]T, len(numStrs))
 
