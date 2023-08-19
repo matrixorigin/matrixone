@@ -148,8 +148,12 @@ func (l *localLockTable) doLock(
 		c.offset = c.idx
 		c.result.Timestamp = v.ts
 		c.result.HasConflict = true
+		c.result.TableDefChanged = v.defChanged
 		if !c.result.HasPrevCommit {
 			c.result.HasPrevCommit = !v.ts.IsEmpty()
+		}
+		if c.opts.TableDefChanged {
+			c.opts.TableDefChanged = v.defChanged
 		}
 		blocked = false
 	}
@@ -177,7 +181,9 @@ func (l *localLockTable) unlock(
 		if lock, ok := l.mu.store.Get(key); ok {
 			if lock.isLockRow() || lock.isLockRangeEnd() {
 				lock.waiter.clearAllNotify(l.bind.ServiceID, "unlock")
-				next := lock.waiter.close(l.bind.ServiceID, notifyValue{ts: commitTS})
+				next := lock.waiter.close(
+					l.bind.ServiceID,
+					notifyValue{ts: commitTS, defChanged: lock.isLockTableDefChanged()})
 				logUnlockTableKeyOnLocal(l.bind.ServiceID, txn, l.bind, key, lock, next)
 			}
 			l.mu.store.Delete(key)
@@ -291,7 +297,7 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 			l.handleLockConflictLocked(c.txn, c.w, key, lock)
 			return c
 		}
-		l.addRowLockLocked(c.txn, row, getWaiter(l.bind.ServiceID, c.w, c.txn), c.opts.Mode)
+		l.addRowLockLocked(c.txn, row, getWaiter(l.bind.ServiceID, c.w, c.txn), c.opts)
 		// lock added, need create new waiter next time
 		c.w = nil
 	}
@@ -314,7 +320,7 @@ func (l *localLockTable) acquireRangeLockLocked(c lockContext) lockContext {
 		logLocalLockRange(l.bind.ServiceID, c.txn, l.bind.Table, start, end, c.opts.Mode)
 		c.w = getWaiter(l.bind.ServiceID, c.w, c.txn)
 
-		conflict, conflictWith := l.addRangeLockLocked(c.w, c.txn, start, end, c.opts.Mode)
+		conflict, conflictWith := l.addRangeLockLocked(c.w, c.txn, start, end, c.opts)
 		if len(conflict) > 0 {
 			c.w = getWaiter(l.bind.ServiceID, c.w, c.txn)
 			if c.opts.async {
@@ -337,8 +343,8 @@ func (l *localLockTable) addRowLockLocked(
 	txn *activeTxn,
 	row []byte,
 	waiter *waiter,
-	mode pb.LockMode) {
-	lock := newRowLock(txn.txnID, mode)
+	opts LockOptions) {
+	lock := newRowLock(txn.txnID, opts)
 	lock.waiter = waiter
 
 	// we must first add the lock to txn to ensure that the
@@ -415,7 +421,7 @@ func (l *localLockTable) addRangeLockLocked(
 	w *waiter,
 	txn *activeTxn,
 	start, end []byte,
-	mode pb.LockMode) ([]byte, Lock) {
+	opts LockOptions) ([]byte, Lock) {
 	w = getWaiter(l.bind.ServiceID, w, txn)
 	mc := newMergeContext(w)
 	defer mc.close()
@@ -492,7 +498,7 @@ func (l *localLockTable) addRangeLockLocked(
 	}
 
 	mc.commit(l.bind, txn, l.mu.store)
-	startLock, endLock := newRangeLock(txn.txnID, mode)
+	startLock, endLock := newRangeLock(txn.txnID, opts)
 	startLock.waiter = w
 	endLock.waiter = w
 
