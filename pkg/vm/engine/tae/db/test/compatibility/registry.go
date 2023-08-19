@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	version = 3
+	version = 4
 )
 
 type optType int

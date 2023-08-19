@@ -20,18 +20,22 @@ package catalog
 // Return a int code.
 type Processor interface {
 	OnDatabase(database *DBEntry) error
+	OnPostDatabase(database *DBEntry) error
 	OnTable(table *TableEntry) error
+	OnPostTable(table *TableEntry) error
 	OnPostSegment(segment *SegmentEntry) error
 	OnSegment(segment *SegmentEntry) error
 	OnBlock(block *BlockEntry) error
 }
 
 type LoopProcessor struct {
-	DatabaseFn    func(*DBEntry) error
-	TableFn       func(*TableEntry) error
-	SegmentFn     func(*SegmentEntry) error
-	BlockFn       func(*BlockEntry) error
-	PostSegmentFn func(*SegmentEntry) error
+	DatabaseFn     func(*DBEntry) error
+	TableFn        func(*TableEntry) error
+	SegmentFn      func(*SegmentEntry) error
+	BlockFn        func(*BlockEntry) error
+	PostDatabaseFn func(*DBEntry) error
+	PostTableFn    func(*TableEntry) error
+	PostSegmentFn  func(*SegmentEntry) error
 }
 
 func (p *LoopProcessor) OnDatabase(database *DBEntry) error {
@@ -41,9 +45,23 @@ func (p *LoopProcessor) OnDatabase(database *DBEntry) error {
 	return nil
 }
 
+func (p *LoopProcessor) OnPostDatabase(database *DBEntry) error {
+	if p.PostDatabaseFn != nil {
+		return p.PostDatabaseFn(database)
+	}
+	return nil
+}
+
 func (p *LoopProcessor) OnTable(table *TableEntry) error {
 	if p.TableFn != nil {
 		return p.TableFn(table)
+	}
+	return nil
+}
+
+func (p *LoopProcessor) OnPostTable(table *TableEntry) error {
+	if p.PostTableFn != nil {
+		return p.PostTableFn(table)
 	}
 	return nil
 }

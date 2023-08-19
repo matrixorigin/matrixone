@@ -47,8 +47,9 @@ const (
 	CheckpointVersion3 uint32 = 3
 	CheckpointVersion4 uint32 = 4
 	CheckpointVersion5 uint32 = 5
+	CheckpointVersion6 uint32 = 6
 
-	CheckpointCurrentVersion = CheckpointVersion5
+	CheckpointCurrentVersion = CheckpointVersion6
 )
 
 const (
@@ -117,6 +118,7 @@ var checkpointDataSchemas_V2 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V3 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V4 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V5 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V6 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
@@ -138,15 +140,15 @@ func init() {
 		SegDNSchema,
 		DelSchema,
 		SegDNSchema,
-		BlkMetaSchema, // 15
+		BlkMetaSchema_V1, // 15
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 19
+		BlkMetaSchema_V1, // 19
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 23
+		BlkMetaSchema_V1, // 23
 		DNMetaSchema,
 	}
 	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
@@ -165,15 +167,15 @@ func init() {
 		SegDNSchema,
 		DelSchema,
 		SegDNSchema,
-		BlkMetaSchema, // 15
+		BlkMetaSchema_V1, // 15
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 19
+		BlkMetaSchema_V1, // 19
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 23
+		BlkMetaSchema_V1, // 23
 		DNMetaSchema,
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
@@ -192,15 +194,15 @@ func init() {
 		SegDNSchema,
 		DelSchema,
 		SegDNSchema,
-		BlkMetaSchema, // 15
+		BlkMetaSchema_V1, // 15
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 19
+		BlkMetaSchema_V1, // 19
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 23
+		BlkMetaSchema_V1, // 23
 		DNMetaSchema,
 	}
 	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
@@ -219,18 +221,46 @@ func init() {
 		SegDNSchema,
 		DelSchema,
 		SegDNSchema,
-		BlkMetaSchema, // 15
+		BlkMetaSchema_V1, // 15
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 19
+		BlkMetaSchema_V1, // 19
 		BlkDNSchema,
 		DelSchema,
 		BlkDNSchema,
-		BlkMetaSchema, // 23
+		BlkMetaSchema_V1, // 23
 		DNMetaSchema,
 	}
 	checkpointDataSchemas_V5 = [MaxIDX]*catalog.Schema{
+		MetaSchema,
+		catalog.SystemDBSchema,
+		TxnNodeSchema,
+		DBDelSchema, // 3
+		DBDNSchema,
+		catalog.SystemTableSchema,
+		TblDNSchema,
+		TblDelSchema, // 7
+		TblDNSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
+		SegSchema, // 11
+		SegDNSchema,
+		DelSchema,
+		SegDNSchema,
+		BlkMetaSchema_V1, // 15
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema_V1, // 19
+		BlkDNSchema,
+		DelSchema,
+		BlkDNSchema,
+		BlkMetaSchema_V1, // 23
+		DNMetaSchema,
+	}
+
+	checkpointDataSchemas_V6 = [MaxIDX]*catalog.Schema{
 		MetaSchema,
 		catalog.SystemDBSchema,
 		TxnNodeSchema,
@@ -265,7 +295,8 @@ func init() {
 	registerCheckpointDataReferVersion(CheckpointVersion3, checkpointDataSchemas_V3[:])
 	registerCheckpointDataReferVersion(CheckpointVersion4, checkpointDataSchemas_V4[:])
 	registerCheckpointDataReferVersion(CheckpointVersion5, checkpointDataSchemas_V5[:])
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V5
+	registerCheckpointDataReferVersion(CheckpointVersion6, checkpointDataSchemas_V6[:])
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V6
 }
 
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
@@ -562,7 +593,7 @@ func NewCNCheckpointData() *CNCheckpointData {
 	}
 }
 
-func swithCheckpointIdx(i uint16, tableID uint64) uint16 {
+func switchCheckpointIdx(i uint16, tableID uint64) uint16 {
 	idx := uint16(i)
 
 	if i == BlockInsert {
@@ -690,7 +721,7 @@ func (data *CNCheckpointData) PrefetchFrom(
 				break
 			}
 		}
-		idx := swithCheckpointIdx(uint16(i), tableID)
+		idx := switchCheckpointIdx(uint16(i), tableID)
 		schema := checkpointDataReferVersions[version][uint32(idx)]
 		idxes := make([]uint16, len(schema.attrs))
 		for attr := range schema.attrs {
@@ -1046,7 +1077,7 @@ func (data *CNCheckpointData) ReadFromData(
 				break
 			}
 		}
-		idx := swithCheckpointIdx(uint16(i), tableID)
+		idx := switchCheckpointIdx(uint16(i), tableID)
 		it := table.locations.MakeIterator()
 		for it.HasNext() {
 			block := it.Next()
@@ -1081,6 +1112,15 @@ func (data *CNCheckpointData) ReadFromData(
 				if err != nil {
 					return
 				}
+			}
+		}
+
+		if version <= CheckpointVersion5 {
+			if dataBats[i] != nil && (idx == BLKCNMetaInsertIDX || idx == BLKMetaInsertIDX) {
+				blkMetaBat := dataBats[i]
+				committs := blkMetaBat.Vecs[2+pkgcatalog.BLOCKMETA_COMMITTS_IDX]
+				blkMetaBat.Attrs = append(blkMetaBat.Attrs, pkgcatalog.BlockMeta_MemTruncPoint)
+				blkMetaBat.Vecs = append(blkMetaBat.Vecs, committs)
 			}
 		}
 	}
@@ -1421,7 +1461,7 @@ func (data *CheckpointData) WriteTo(
 					break
 				}
 			}
-			idx := swithCheckpointIdx(uint16(i), tid)
+			idx := switchCheckpointIdx(uint16(i), tid)
 			for _, block := range blockIndexs[idx] {
 				if table.End <= block.GetStartOffset() {
 					break
@@ -1897,6 +1937,29 @@ func (data *CheckpointData) readAll(
 					}
 				}
 			}
+
+			if version <= CheckpointVersion5 {
+				if uint16(idx) == BLKDNMetaInsertIDX {
+					for _, bat := range bats {
+						committs := bat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs)
+						bat.AddVector(pkgcatalog.BlockMeta_MemTruncPoint, committs)
+					}
+				}
+
+				if uint16(idx) == BLKMetaInsertIDX {
+					for _, bat := range bats {
+						committs := bat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs)
+						bat.AddVector(pkgcatalog.BlockMeta_MemTruncPoint, committs)
+					}
+				}
+
+				if uint16(idx) == BLKCNMetaInsertIDX {
+					for _, bat := range bats {
+						committs := bat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs)
+						bat.AddVector(pkgcatalog.BlockMeta_MemTruncPoint, committs)
+					}
+				}
+			}
 			for i := range bats {
 				data.bats[idx].Append(bats[i])
 			}
@@ -2341,6 +2404,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkDNMetaInsSortedVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_Sorted).GetDownstreamVector()
 	blkDNMetaInsSegIDVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).GetDownstreamVector()
 	blkDNMetaInsCommitTsVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).GetDownstreamVector()
+	blkDNMetaInsMemTruncVec := blkDNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).GetDownstreamVector()
 
 	blkDNMetaInsTxnDBIDVec := blkDNMetaInsTxnBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
 	blkDNMetaInsTxnTIDVec := blkDNMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
@@ -2364,6 +2428,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkCNMetaInsSortedVec := blkCNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_Sorted).GetDownstreamVector()
 	blkCNMetaInsSegIDVec := blkCNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).GetDownstreamVector()
 	blkCNMetaInsCommitTsVec := blkCNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).GetDownstreamVector()
+	blkCNMetaInsMemTruncVec := blkCNMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).GetDownstreamVector()
 
 	blkMetaInsRowIDVec := blkMetaInsBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector()
 	blkMetaInsCommitTimeVec := blkMetaInsBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
@@ -2374,6 +2439,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkMetaInsSortedVec := blkMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_Sorted).GetDownstreamVector()
 	blkMetaInsSegIDVec := blkMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).GetDownstreamVector()
 	blkMetaInsCommitTsVec := blkMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).GetDownstreamVector()
+	blkMetaInsMemTruncVec := blkMetaInsBat.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).GetDownstreamVector()
 
 	blkMetaInsTxnDBIDVec := blkMetaInsTxnBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
 	blkMetaInsTxnTIDVec := blkMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
@@ -2477,6 +2543,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					false,
 					common.DefaultAllocator,
 				)
+				vector.AppendFixed(blkDNMetaInsMemTruncVec, metaNode.Start, false, common.DefaultAllocator)
 				vector.AppendFixed(
 					blkDNMetaInsRowIDVec,
 					objectio.HackBlockid2Rowid(&entry.ID),
@@ -2607,6 +2674,12 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					false,
 					common.DefaultAllocator,
 				)
+				memTrucate := metaNode.Start
+				if !entry.IsAppendable() && metaNode.DeletedAt.Equal(metaNode.GetEnd()) {
+					memTrucate = types.TS{}
+				}
+				vector.AppendFixed(blkCNMetaInsMemTruncVec, memTrucate, false, common.DefaultAllocator)
+
 			} else {
 				is_sorted := false
 				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
@@ -2666,6 +2739,8 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					false,
 					common.DefaultAllocator,
 				)
+
+				vector.AppendFixed(blkMetaInsMemTruncVec, metaNode.Start, false, common.DefaultAllocator)
 
 				vector.AppendFixed(
 					blkMetaInsTxnDBIDVec,

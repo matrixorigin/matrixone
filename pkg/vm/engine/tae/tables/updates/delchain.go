@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -82,6 +83,17 @@ func (chain *DeleteChain) StringLocked() string {
 		return true
 	})
 	return msg
+}
+
+func (chain *DeleteChain) EstimateMemSizeLocked() int {
+	size := 0
+	if chain.mask != nil {
+		size += chain.mask.GetBitmap().Size()
+	}
+	size += int(float32(len(chain.links)*(4+8)) * 1.1) /*map size*/
+	size += chain.MVCCChain.Depth() * (DeleteNodeApproxSize + 16 /* link node overhead */)
+
+	return size + DeleteChainApproxSize
 }
 
 func (chain *DeleteChain) GetController() *MVCCHandle { return chain.mvcc }
@@ -293,7 +305,7 @@ func (chain *DeleteChain) CollectDeletesInRange(
 
 // any uncommited node, return true
 // any committed node with prepare ts within [from, to], return true
-func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (found bool) {
+func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (found, isPersisted bool) {
 	chain.LoopChain(func(n *DeleteNode) bool {
 		if n.IsMerged() {
 			found, _ = n.PreparedIn(from, to)
@@ -304,6 +316,9 @@ func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (f
 			return true
 		}
 
+		if n.nt == NT_Persisted {
+			isPersisted = true
+		}
 		found, _ = n.PreparedIn(from, to)
 		if n.IsAborted() {
 			found = false
@@ -336,9 +351,31 @@ func (chain *DeleteChain) CollectDeletesLocked(
 		}
 		if !n.IsVisible(txn) {
 			it := n.GetDeleteMaskLocked().Iterator()
-			for it.HasNext() {
-				row := it.Next()
-				merged.Del(uint64(row))
+			if n.dt != handle.DT_MergeCompact {
+				for it.HasNext() {
+					row := it.Next()
+					merged.Del(uint64(row))
+				}
+			} else {
+				ts := txn.GetStartTS()
+				rt := chain.mvcc.meta.GetBlockData().GetRuntime()
+				tsMapping := rt.TransferDelsMap.GetDelsForBlk(chain.mvcc.meta.ID).Mapping
+				if tsMapping == nil {
+					logutil.Warnf("flushtabletail check special dels for %s, no tsMapping", chain.mvcc.meta.ID.String())
+					return true
+				}
+				for it.HasNext() {
+					row := it.Next()
+					committs, ok := tsMapping[int(row)]
+					if !ok {
+						logutil.Errorf("flushtabletail check Transfer dels for %s row %d not in dels", chain.mvcc.meta.ID.String(), row)
+						continue
+					}
+					// if the ts can't see the del, then remove it from merged
+					if committs.Greater(ts) {
+						merged.Del(uint64(row))
+					}
+				}
 			}
 		}
 		return true

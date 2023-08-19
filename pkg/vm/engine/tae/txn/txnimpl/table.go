@@ -254,9 +254,10 @@ func (tbl *txnTable) recurTransferDelete(
 	if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
 		return err
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d",
 			depth,
+			tbl.schema.Name,
 			id.BlockID.String(),
 			row,
 			blockID.String(),
@@ -866,6 +867,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (er
 	if err != nil {
 		return
 	}
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
@@ -885,6 +887,7 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	if err != nil {
 		return
 	}
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
