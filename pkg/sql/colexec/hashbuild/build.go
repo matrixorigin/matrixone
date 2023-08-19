@@ -16,10 +16,10 @@ package hashbuild
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -157,22 +157,21 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 			}
 		}
-
-		if err != nil {
-			return err
-		}
 	}
 
 	err = ctr.bat.PreExtend(proc.Mp(), rowCount)
 	if err != nil {
 		return err
 	}
+
 	for i := range batches {
 		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), batches[i]); err != nil {
 			return err
 		}
 		proc.PutBatch(batches[i])
 	}
+
+	logutil.Infof(" preextend batch to %v, batch count %v", rowCount, ctr.bat.RowCount())
 
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil
