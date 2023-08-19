@@ -16,8 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -156,8 +154,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	count := ctr.bat.RowCount()
 
 	ctr.sels = make([][]int32, count)
-
-	estimatedHashmapCount := 0
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -173,7 +169,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				rate = 1
 			}
 			hashmapCount := uint64(float64(count) * rate)
-			estimatedHashmapCount = int(hashmapCount)
 			if hashmapCount > groupCount {
 				err = ctr.mp.PreAlloc(hashmapCount-groupCount, proc.Mp())
 				if err != nil {
@@ -199,13 +194,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				ctr.sels[ai] = make([]int32, 0)
 			}
 			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
-		}
-	}
-	if estimatedHashmapCount != 0 {
-		if estimatedHashmapCount < int(ctr.mp.GroupCount()) {
-			logutil.Infof("!!!! estimated hashmap count %v, actual hashmap count %v", estimatedHashmapCount, ctr.mp.GroupCount())
-		} else {
-			logutil.Infof("@@@@ estimated hashmap count %v, actual hashmap count %v", estimatedHashmapCount, ctr.mp.GroupCount())
 		}
 	}
 	return nil
