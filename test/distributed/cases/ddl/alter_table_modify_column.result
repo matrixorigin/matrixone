@@ -29,9 +29,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -43,9 +43,9 @@ a    b    c
 alter table t1 modify a VARCHAR(20) after b;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    CHAR(10)    YES        null
-a    VARCHAR(20)    NO    PRI    null
-c    DATE(0)    YES        null
+b    CHAR(10)    YES        null        
+a    VARCHAR(20)    NO    PRI    null        
+c    DATE(0)    YES        null        
 select * from t1;
 b    a    c
 ab    1    1980-12-17
@@ -55,9 +55,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -69,9 +69,9 @@ a    b    c
 alter table t1 modify a VARCHAR(20) after c;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
-a    VARCHAR(20)    NO    PRI    null
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+a    VARCHAR(20)    NO    PRI    null        
 select * from t1;
 b    c    a
 ab    1980-12-17    1
@@ -81,9 +81,9 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER, b CHAR(10), c date, PRIMARY KEY(a));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
@@ -95,9 +95,9 @@ a    b    c
 alter table t1 modify b VARCHAR(20) first;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    VARCHAR(20)    YES        null
-a    INT(32)    NO    PRI    null
-c    DATE(0)    YES        null
+b    VARCHAR(20)    YES        null        
+a    INT(32)    NO    PRI    null        
+c    DATE(0)    YES        null        
 select * from t1;
 b    a    c
 ab    1    1980-12-17
@@ -107,10 +107,10 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -122,10 +122,10 @@ a    b    c    d
 alter table t1 modify b VARCHAR(20), modify d int unsigned;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    VARCHAR(20)    YES        null
-c    DATE(0)    YES        null
-d    INT UNSIGNED(32)    YES        null
+a    INT(32)    NO    PRI    null        
+b    VARCHAR(20)    YES        null        
+c    DATE(0)    YES        null        
+d    INT UNSIGNED(32)    YES        null        
 select * from t1;
 a    b    c    d
 1    ab    1980-12-17    800
@@ -135,10 +135,10 @@ drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    YES        null
-c    DATE(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    YES        null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
@@ -154,10 +154,10 @@ Multiple primary key defined
 alter table t1 modify b VARCHAR(20) first, modify d int unsigned after b;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-b    VARCHAR(20)    YES        null
-d    INT UNSIGNED(32)    YES        null
-a    INT(32)    NO    PRI    null
-c    DATE(0)    YES        null
+b    VARCHAR(20)    YES        null        
+d    INT UNSIGNED(32)    YES        null        
+a    INT(32)    NO    PRI    null        
+c    DATE(0)    YES        null        
 select * from t1;
 b    d    a    c
 ab    800    1    1980-12-17
@@ -167,10 +167,10 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER, b CHAR(10), c datetime, d decimal(7,2), PRIMARY KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null
-b    CHAR(10)    NO    PRI    null
-c    DATETIME(0)    YES        null
-d    DECIMAL64(7)    YES        null
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    NO    PRI    null        
+c    DATETIME(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17 11:34:45', 800);
 insert into t1 values(2, 'ac', '1981-02-20 10:34:45', 1600);
 insert into t1 values(3, 'ad', '1981-02-22 09:34:45', 500);
@@ -879,32 +879,29 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 [unknown result because it is related to issue#11249]
 drop table primary06;
 drop table if exists primary07;
-[unknown result because it is related to issue#11247]
 create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
-[unknown result because it is related to issue#11247]
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
-[unknown result because it is related to issue#11247]
 insert into primary07 values (2, -324.2342432423, -1243.42334234242);
-[unknown result because it is related to issue#11247]
 alter table primary07 modify col1 double default null;
-[unknown result because it is related to issue#11247]
+All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 alter table primary07 modify col2 int default null;
-[unknown result because it is related to issue#11247]
+All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 show create table primary07;
-[unknown result because it is related to issue#11247]
+Table    Create Table
+primary07    CREATE TABLE `primary07` (\n`col1` INT NOT NULL,\n`col2` FLOAT NOT NULL,\n`col3` DECIMAL(38,0) DEFAULT NULL,\nPRIMARY KEY (`col1`,`col2`)\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary07' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table primary07;
-no such table db1.primary07
 drop table if exists primary07;
 create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
 insert into primary07 values (2, -324.2342432423, -1243.42334234242);
 alter table primary07 modify col1 double not null;
+All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 alter table primary07 modify col2 decimal(28,10);
 show create table primary07;
 Table    Create Table
-primary07    CREATE TABLE `primary07` (\n`col1` DOUBLE NOT NULL,\n`col2` DECIMAL(28,10) NOT NULL,\n`col3` DECIMAL(38,0) DEFAULT null,\nPRIMARY KEY (`col1`,`col2`)\n)
+primary07    CREATE TABLE `primary07` (\n`col1` INT NOT NULL,\n`col2` DECIMAL(28,10) NOT NULL,\n`col3` DECIMAL(38,0) DEFAULT null,\nPRIMARY KEY (`col1`,`col2`)\n)
 drop table primary07;
 drop table if exists index01;
 CREATE TABLE index01(a INTEGER not null , b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
@@ -1429,9 +1426,9 @@ col1    col2
 1997-01-13 00:00:00    342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
 2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 alter table abnormal05 modify col1 float;
-SQL parser error: table "abnormal05" does not exist
+alter table for temporary table is not yet implemented
 alter table abnormal05 modify col2 int;
-SQL parser error: table "abnormal05" does not exist
+alter table for temporary table is not yet implemented
 select * from abnormal05;
 col1    col2
 1997-01-13 00:00:00    342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
@@ -1467,14 +1464,16 @@ create table cluster01(col1 int, col2 decimal) cluster by col1;
 insert into cluster01 values (1, 389234924);
 insert into cluster01 values (2, -2893428);
 alter table cluster01 modify column col2 float;
+not supported: alter table for cluster table
 alter table cluster01 modify col1 double after col2;
+not supported: alter table for cluster table
 show create table cluster01;
 Table    Create Table
-cluster01    CREATE TABLE `cluster01` (\n`col2` FLOAT DEFAULT null,\n`col1` DOUBLE DEFAULT null\n) CLUSTER BY (`col1`)
+cluster01    CREATE TABLE `cluster01` (\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n) CLUSTER BY (`col1`)
 select * from cluster01;
-col2    col1
-3.892349E8    1.0
--2893428.0    2.0
+col1    col2
+1    389234924
+2    -2893428
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table cluster01;

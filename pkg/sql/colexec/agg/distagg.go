@@ -83,12 +83,12 @@ func (a *UnaryDistAgg[T1, T2]) Grows3(size int, m *mpool.MPool) error {
 				a.es = append(a.es, true)
 				a.vs = append(a.vs, v)
 				a.srcs = append(a.srcs, make([]T1, 0, 1))
+				mp, err := hashmap.NewStrMap(false, 0, 0, m)
+				if err != nil {
+					return err
+				}
+				a.maps = append(a.maps, mp)
 			}
-			mp, err := hashmap.NewStrMap(false, 0, 0, m)
-			if err != nil {
-				return err
-			}
-			a.maps = append(a.maps, mp)
 		}
 		a.grows(size)
 		return nil
@@ -177,7 +177,11 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill3(start int64, os []uint8, vps []uint64,
 				if hasNull {
 					continue
 				}
-				v := (any)(str).(T1)
+
+				copyStr := make([]byte, len(str))
+				copy(copyStr, str)
+
+				v := (any)(copyStr).(T1)
 				a.srcs[j] = append(a.srcs[j], v)
 				a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], 1, a.es[j], hasNull)
 				if a.err == nil {
@@ -218,8 +222,8 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill3(i int64, vecs []*vector.Vector) error {
 
 	vec := vecs[0]
 	if vec.GetType().IsVarlen() {
-		len := vec.Length()
-		for j := 0; j < len; j++ {
+		length := vec.Length()
+		for j := 0; j < length; j++ {
 			str := vec.GetBytesAt(j)
 			if ok, err = a.maps[i].InsertValue(str); err != nil {
 				return err
@@ -229,7 +233,11 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill3(i int64, vecs []*vector.Vector) error {
 				if hasNull {
 					continue
 				}
-				v := any(str).(T1)
+
+				copyStr := make([]byte, len(str))
+				copy(copyStr, str)
+
+				v := any(copyStr).(T1)
 				a.srcs[i] = append(a.srcs[i], v)
 				a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], 1, a.es[i], hasNull)
 				if a.err == nil {

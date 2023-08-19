@@ -478,7 +478,7 @@ func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 		return
 	}
 	if isPersistedByCN {
-		bat, err = LoadColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
+		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
@@ -514,10 +514,11 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows *nulls.B
 	rows = nulls.NewWithSize(0)
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
-	aborts := vector.MustFixedCol[bool](deletes.Vecs[3])
+	aborts := deletes.Vecs[3]
 
 	for i, rowid := range rowids {
-		if aborts[i] || tss[i].Greater(ts) {
+		abort := vector.GetFixedAt[bool](aborts, i)
+		if abort || tss[i].Greater(ts) {
 			continue
 		}
 		row := rowid.GetRowOffset()
