@@ -167,6 +167,7 @@ import (
     ifNotExists bool
     defaultOptional bool
     streamOptional bool
+    connectorOptional bool
     fullOpt bool
     boolVal bool
     int64Val int64
@@ -397,6 +398,10 @@ import (
 // Stream
 %token <str> SOURCE STREAM HEADERS
 
+// Connector
+
+%token <str> CONNECTOR
+
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
@@ -444,7 +449,7 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> create_stream_stmt
+%type <statement> create_stream_stmt create_connector_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -534,7 +539,7 @@ import (
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
+%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list connector_option_list_opt connector_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -549,7 +554,7 @@ import (
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
 
-%type <tableOption> table_option stream_option
+%type <tableOption> table_option stream_option connector_option
 %type <from> from_clause from_opt
 %type <where> where_expression_opt having_opt
 %type <groupBy> group_by_opt
@@ -5066,6 +5071,7 @@ create_ddl_stmt:
 |   create_sequence_stmt
 |   create_procedure_stmt
 |	create_stream_stmt
+|	create_connector_stmt
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -6078,6 +6084,14 @@ default_opt:
     {
         $$ = true
     }
+create_connector_stmt:
+    CREATE CONNECTOR table_name connector_option_list_opt
+    {
+        $$ = &tree.CreateConnector{
+            ConnectorName: $3,
+            Options: $4,
+        }
+    }
 
 create_stream_stmt:
     CREATE replace_opt STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
@@ -6645,6 +6659,31 @@ linear_opt:
 |   LINEAR
     {
         $$ = true
+    }
+
+connector_option_list_opt:
+    {
+        $$ = nil
+    }
+|	WITH '(' connector_option_list ')'
+	{
+		$$ = $3
+	}
+
+connector_option_list:
+	connector_option
+	{
+		$$ = []tree.TableOption{$1}
+	}
+|	connector_option_list ',' connector_option
+	{
+		$$ = append($1, $3)
+	}
+
+connector_option:
+	ident equal_opt literal
+    {
+        $$ = &tree.CreateConnectorWithOption{Key: tree.Identifier($1.Compare()) , Val: $3}
     }
 
 stream_option_list_opt:
