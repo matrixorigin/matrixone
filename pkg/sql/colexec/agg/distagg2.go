@@ -144,7 +144,6 @@ func (a *UnaryDistAgg[T1, T2]) Fill(groupIdx int64, rowIndex int64, vectors []*v
 func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfRows []uint64, vectors []*vector.Vector) (err error) {
 	// TODO: refer to the comments of UnaryAgg.BatchFill
 	var value T1
-	var str []byte
 	var ok bool
 	inputVector := vectors[0]
 	rowOffset := uint64(offset)
@@ -165,7 +164,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, grou
 					}
 					groupNumber := int64(groupOfRows[i] - 1)
 
-					ok, err = a.maps[groupNumber].InsertValue(str)
+					ok, err = a.maps[groupNumber].InsertValue(value)
 					if err != nil {
 						return err
 					}
@@ -191,17 +190,16 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, grou
 					continue
 				}
 				getValue := inputVector.GetBytesAt(int(rowIndex))
-				storeValue := make([]byte, len(getValue))
-				copy(storeValue, getValue)
 
-				value = (any)(storeValue).(T1)
 				groupNumber := int64(groupOfRows[i] - 1)
-				ok, err = a.maps[groupNumber].InsertValue(str)
+				ok, err = a.maps[groupNumber].InsertValue(getValue)
 				if err != nil {
 					return err
 				}
 				if ok {
-					value = (any)(str).(T1)
+					storeValue := make([]byte, len(getValue))
+					copy(storeValue, getValue)
+					value = (any)(storeValue).(T1)
 
 					a.srcs[groupNumber] = append(a.srcs[groupNumber], value)
 					a.vs[groupNumber], a.es[groupNumber], err = a.fill(groupNumber, value, a.vs[groupNumber], 1, a.es[groupNumber], isNull)
