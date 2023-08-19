@@ -18,8 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -73,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -575,10 +574,10 @@ func constructLockOp(n *plan.Node, proc *process.Process, eng engine.Engine) (*l
 		if target.LockTable {
 			if target.IsPartitionTable {
 				for _, pTblId := range target.PartitionTableIds {
-					arg.LockTable(pTblId)
+					arg.LockTable(pTblId, false)
 				}
 			} else {
-				arg.LockTable(target.TableId)
+				arg.LockTable(target.TableId, false)
 			}
 		}
 	}
