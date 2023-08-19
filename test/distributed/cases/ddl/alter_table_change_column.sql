@@ -1116,7 +1116,6 @@ drop view v0;
 
 
 -- cluster by
--- @bvt:issue#11260
 drop table if exists cluster01;
 create table cluster01(col1 int, col2 decimal) cluster by col1;
 insert into cluster01 values (1, 389234924);
@@ -1125,7 +1124,6 @@ alter table cluster01 change col2 col2worejnfenrororiri float;
 alter table cluster01 change col1 iwijwehfndatabasectm double after col2worejnfenrororiri;
 show create table cluster01;
 select * from cluster01;
--- @bvt:issue
 -- @bvt:issue#11249
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 drop table cluster01;

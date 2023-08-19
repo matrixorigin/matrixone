@@ -73,8 +73,10 @@ import (
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold   uint64 = 10 * mpool.MB
-	SingleLineSizeEstimate uint64 = 300 * mpool.B
+	DistributedThreshold              uint64 = 10 * mpool.MB
+	SingleLineSizeEstimate            uint64 = 300 * mpool.B
+	shuffleJoinProbeChannelBufferSize        = 8
+	shuffleJoinBuildChannelBufferSize        = 2
 )
 
 var (
@@ -2614,9 +2616,6 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, sum, c.anal.Nodes())
 			ss[i].BuildIdx = lnum
-			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, 16)
-			}
 		}
 		children = append(children, ss...)
 		if !single {
@@ -2698,7 +2697,6 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil {
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *batch.Batch, 16),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -2748,6 +2746,10 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 			},
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
+		// this is for shuffle join build scope
+		for _, mr := range rs.Proc.Reg.MergeReceivers {
+			mr.Ch = make(chan *batch.Batch, shuffleJoinBuildChannelBufferSize)
+		}
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
