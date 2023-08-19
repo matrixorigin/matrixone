@@ -17,7 +17,6 @@ package moconnector
 import (
 	"context"
 	"fmt"
-
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -118,7 +117,7 @@ func (k *KafkaMoConnector) validateParams() error {
 
 	for _, field := range mandatoryFields {
 		if _, exists := k.options[field]; !exists || k.options[field] == "" {
-			return fmt.Errorf("Missing or empty mandatory field: %s", field)
+			return moerr.NewInternalError(context.Background(), "missing required params")
 		}
 	}
 
@@ -147,29 +146,91 @@ func (k *KafkaMoConnector) Prepare() error {
 
 // Start begins consuming messages from Kafka and writing them to the MO Table.
 func (k *KafkaMoConnector) Start() error {
-	// Start a loop or goroutine to continuously consume messages from Kafka.
+	if k.kafkaAdapter == nil || k.kafkaAdapter.Consumer == nil {
+		return moerr.NewInternalError(context.Background(), "Kafka consumer not initialized")
+	}
+
+	// Define the topic to consume from
+	topic := k.options["topic"].(string)
+
+	// Subscribe to the topic
+	if err := k.kafkaAdapter.Consumer.Subscribe(topic, nil); err != nil {
+		return moerr.NewInternalError(context.Background(), "Failed to subscribe to topic")
+	}
+
+	// Continuously listen for messages
+	for {
+		ev := k.kafkaAdapter.Consumer.Poll(100)
+		if ev == nil {
+			continue
+		}
+
+		switch e := ev.(type) {
+		case *kafka.Message:
+			var insertSQL string
+			var err error
+
+			switch k.options["value"].(string) {
+			case "json":
+				// Convert the JSON message into an SQL INSERT statement
+				insertSQL, err = convertJSONToInsertSQL(string(e.Value), k.options["database"].(string), k.options["table"].(string))
+			case "avro":
+				// Handle Avro decoding and conversion to SQL here
+				// For now, we'll skip it since you mentioned not to use SchemaRegistry
+			case "protobuf":
+				// Handle Protobuf decoding and conversion to SQL here
+				// For now, we'll skip it since you mentioned not to use SchemaRegistry
+			default:
+				return moerr.NewInternalError(context.Background(), "Unsupported value format")
+			}
+
+			if err != nil {
+				return moerr.NewInternalError(context.Background(), "Error converting message to SQL")
+			}
+
+			// Execute the INSERT statement
+			opts := executor.Options{}
+			_, err = k.ie.Exec(context.Background(), insertSQL, opts)
+			if err != nil {
+				return moerr.NewInternalError(context.Background(), "Error executing SQL")
+			}
+		case kafka.Error:
+			// Handle the error accordingly.
+			return moerr.NewInternalError(context.Background(), "Error reading message")
+		default:
+			// Ignored other types of events
+		}
+	}
 	return nil
 }
 
-// Close gracefully shuts down the connector.
+// Assuming a simple function to convert JSON to SQL INSERT statement
+func convertJSONToInsertSQL(jsonMessage string, database string, table string) (string, error) {
+	// This is a placeholder. Actual conversion logic will depend on the structure of the JSON and the table schema.
+	return fmt.Sprintf("INSERT INTO %s.%s VALUES (...);", database, table), nil
+}
+
 func (k *KafkaMoConnector) Close() error {
-	// Ensure any remaining data is processed.
 	// Close the Kafka consumer.
-	// Release any other resources.
+	if k.kafkaAdapter != nil && k.kafkaAdapter.Consumer != nil {
+		if err := k.kafkaAdapter.Consumer.Close(); err != nil {
+			return moerr.NewInternalError(context.Background(), "Error closing Kafka consumer")
+		}
+	}
 	return nil
 }
 
 func (k *KafkaMoConnector) createOrFindTable(options map[string]interface{}) error {
 	database := options["database"].(string)
-	tablePrefix := options["table.prefix"].(string)
-	tableName := tablePrefix + "_someName" // adjust based on your naming conventions
+	tableName := options["table"].(string)
 
 	// Check if the table exists
 	if !k.doesTableExist(context.Background(), database, tableName) {
-		// Create the table
-		if err := k.createTable(context.Background(), database, tableName); err != nil {
-			return fmt.Errorf("failed to create table %s: %v", tableName, err)
-		}
+		// Todo: enable create table
+		//if err := k.createTable(context.Background(), database, tableName); err != nil {
+		//	return fmt.Errorf("failed to create table %s: %v", tableName, err)
+		//}
+		return moerr.NewInternalError(context.Background(), "Table does not exist")
 	}
 
 	return nil
