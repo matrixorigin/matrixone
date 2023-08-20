@@ -60,20 +60,21 @@ const (
 
 var (
 	// for blk meta response
-	BlkMetaSchema   *catalog.Schema
-	DelSchema       *catalog.Schema
-	SegSchema       *catalog.Schema
-	TxnNodeSchema   *catalog.Schema
-	DBDNSchema      *catalog.Schema
-	TblDNSchema     *catalog.Schema
-	SegDNSchema     *catalog.Schema
-	BlkDNSchema     *catalog.Schema
-	MetaSchema_V1   *catalog.Schema
-	MetaSchema      *catalog.Schema
-	DBDelSchema     *catalog.Schema
-	TblDelSchema    *catalog.Schema
-	ColumnDelSchema *catalog.Schema
-	DNMetaSchema    *catalog.Schema
+	BlkMetaSchema    *catalog.Schema // latest version
+	BlkMetaSchema_V1 *catalog.Schema // previous version
+	DelSchema        *catalog.Schema
+	SegSchema        *catalog.Schema
+	TxnNodeSchema    *catalog.Schema
+	DBDNSchema       *catalog.Schema
+	TblDNSchema      *catalog.Schema
+	SegDNSchema      *catalog.Schema
+	BlkDNSchema      *catalog.Schema
+	MetaSchema_V1    *catalog.Schema
+	MetaSchema       *catalog.Schema
+	DBDelSchema      *catalog.Schema
+	TblDelSchema     *catalog.Schema
+	ColumnDelSchema  *catalog.Schema
+	DNMetaSchema     *catalog.Schema
 )
 
 var (
@@ -297,6 +298,23 @@ func init() {
 		}
 	}
 	if err := BlkMetaSchema.Finalize(true); err != nil { // no phyaddr column
+		panic(err)
+	}
+
+	BlkMetaSchema_V1 = catalog.NewEmptySchema("blkMetaV1")
+
+	for i, colname := range pkgcatalog.MoTableMetaSchemaV1 {
+		if i == 0 {
+			if err := BlkMetaSchema_V1.AppendPKCol(colname, pkgcatalog.MoTableMetaTypesV1[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := BlkMetaSchema_V1.AppendCol(colname, pkgcatalog.MoTableMetaTypesV1[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err := BlkMetaSchema_V1.Finalize(true); err != nil { // no phyaddr column
 		panic(err)
 	}
 
