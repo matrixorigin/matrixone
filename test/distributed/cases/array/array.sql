@@ -21,6 +21,10 @@ select * from vec_table where b<= "[1,2,3]";
 select * from vec_table where b!= "[1,2,3]";
 select * from vec_table where b= "[1,2,3]";
 select * from vec_table where b= cast("[1,2,3]" as vecf32);
+select b + "[1,2,3]" from vec_table;
+select b + "[1,2]" from vec_table;
+select b + "[1,2,3,4]" from vec_table;
+
 
 -- cast
 select cast("[1,2,3]" as vecf32(3));
