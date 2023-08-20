@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -713,37 +712,11 @@ func (tbl *txnTable) rangesOnePart(
 		return err
 	}
 
-	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-	pkName := pkColumn.Name
-	pkType := types.T(pkColumn.Typ.Id)
-	for _, expr := range exprs {
-		ok, _, v := getPkValueByExpr(expr, pkName, pkType, tbl.proc)
-		if !ok {
-			continue
-		}
-		pkValue := types.EncodeValue(v, pkType)
-		bfIndex := index.NewEmptyBinaryFuseFilter()
-		for _, blk := range blks {
-			bf, dataMeta, err := objectio.FastLoadBF(ctx, blk.MetaLocation(), fileservice.SkipMemory, fs, objDataMeta)
-			if err != nil {
-				return err
-			}
-			if dataMeta != nil {
-				objDataMeta = dataMeta
-			}
-			buf := bf.GetBloomFilter(uint32(blk.MetaLocation().ID()))
-			if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
-				return err
-			}
-			if exist, err := bfIndex.MayContainsKey(pkValue); err != nil {
-				// check bloom filter has some unknown error. return err
-				return indexwrapper.TranslateError(err)
-			} else if !exist {
-				// all keys were checked. definitely not
-				continue
-			}
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-		}
+	if done, err := tbl.tryFastRanges(
+		exprs, blks, dirtyBlks, ranges, fs,
+	); err != nil {
+		return err
+	} else if done {
 		return nil
 	}
 
@@ -827,6 +800,116 @@ func (tbl *txnTable) rangesOnePart(
 		blk.PartitionNum = -1
 		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
+	blockio.RecordBlockSelectivity(len(*ranges)-1, len(blks))
+	return
+}
+
+func (tbl *txnTable) tryFastRanges(
+	exprs []*plan.Expr,
+	blks []catalog.BlockInfo,
+	dirtyBlks map[types.Blockid]struct{},
+	ranges *[][]byte,
+	fs fileservice.FileService,
+) (done bool, err error) {
+	if tbl.primaryIdx == -1 {
+		done = false
+		return
+	}
+	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+	pkName := pkColumn.Name
+	pkType := types.T(pkColumn.Typ.Id)
+	var pkVal any
+	for _, expr := range exprs {
+		ok, _, v := getPkValueByExpr(expr, pkName, pkType, tbl.proc)
+		if ok {
+			pkVal = v
+			break
+		}
+	}
+	if pkVal == nil {
+		done = false
+		return
+	}
+	val := types.EncodeValue(pkVal, pkType)
+	hasDeletes := len(dirtyBlks) > 0
+
+	var (
+		meta    objectio.ObjectDataMeta
+		bf      objectio.BloomFilter
+		bfIdx   index.StaticFilter
+		skipObj bool
+	)
+	for _, blk := range blks {
+		location := blk.MetaLocation()
+		if !objectio.IsSameObjectLocVsMeta(location, meta) {
+			var objMeta objectio.ObjectMeta
+			if objMeta, err = objectio.FastLoadObjectMeta(
+				tbl.proc.Ctx, &location, false, tbl.db.txn.engine.fs,
+			); err != nil {
+				return
+			}
+
+			// reset bloom filter to nil for each object
+			bf = nil
+			bfIdx = index.NewEmptyBinaryFuseFilter()
+
+			// check whether the object is skipped by zone map
+			// If object zone map doesn't contains the pk value, we need to check bloom filter
+			dataMeta := objMeta.MustDataMeta()
+			pkZM := dataMeta.MustGetColumn(uint16(pkColumn.ColId)).ZoneMap()
+			if skipObj = !pkZM.ContainsKey(val); skipObj {
+				continue
+			}
+
+			// check whether the object is skipped by bloom filter
+			if bf, err = objectio.LoadBFWithMeta(
+				tbl.proc.Ctx, meta, location, fs,
+			); err != nil {
+				return
+			}
+			if err = index.DecodeBloomFilter(bfIdx, bf); err != nil {
+				return
+			}
+			var exist bool
+			if exist, err = bfIdx.MayContainsKey(val); err != nil {
+				return
+			} else {
+				skipObj = !exist
+			}
+		}
+
+		if skipObj {
+			continue
+		}
+
+		blkBf := bf.GetBloomFilter(uint32(location.ID()))
+		blkBfIdx := index.NewEmptyBinaryFuseFilter()
+		if err = index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
+			return
+		}
+		var exist bool
+		if exist, err = blkBfIdx.MayContainsKey(val); err != nil {
+			return
+		} else {
+			if !exist {
+				continue
+			}
+		}
+
+		if hasDeletes {
+			if _, ok := dirtyBlks[blk.BlockID]; !ok {
+				blk.CanRemote = true
+			}
+			blk.PartitionNum = -1
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+			continue
+		}
+
+		blk.CanRemote = true
+		blk.PartitionNum = -1
+		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+	}
+	done = true
 	blockio.RecordBlockSelectivity(len(*ranges)-1, len(blks))
 	return
 }
