@@ -834,9 +834,9 @@ func (tbl *txnTable) tryFastRanges(
 	hasDeletes := len(dirtyBlks) > 0
 
 	var (
-		meta    objectio.ObjectDataMeta
-		bf      objectio.BloomFilter
-		bfIdx   index.StaticFilter
+		meta objectio.ObjectDataMeta
+		bf   objectio.BloomFilter
+		// bfIdx   index.StaticFilter
 		skipObj bool
 	)
 	for _, blk := range blks {
@@ -851,12 +851,12 @@ func (tbl *txnTable) tryFastRanges(
 
 			// reset bloom filter to nil for each object
 			bf = nil
-			bfIdx = index.NewEmptyBinaryFuseFilter()
+			// bfIdx = index.NewEmptyBinaryFuseFilter()
 
 			// check whether the object is skipped by zone map
 			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			dataMeta := objMeta.MustDataMeta()
-			pkZM := dataMeta.MustGetColumn(uint16(pkColumn.ColId)).ZoneMap()
+			meta = objMeta.MustDataMeta()
+			pkZM := meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
 			if skipObj = !pkZM.ContainsKey(val); skipObj {
 				continue
 			}
@@ -867,15 +867,17 @@ func (tbl *txnTable) tryFastRanges(
 			); err != nil {
 				return
 			}
-			if err = index.DecodeBloomFilter(bfIdx, bf); err != nil {
-				return
-			}
-			var exist bool
-			if exist, err = bfIdx.MayContainsKey(val); err != nil {
-				return
-			} else {
-				skipObj = !exist
-			}
+
+			// TODO: use object bf first
+			// if err = index.DecodeBloomFilter(bfIdx, bf.GetObjectBloomFilter()); err != nil {
+			// 	return
+			// }
+			// var exist bool
+			// if exist, err = bfIdx.MayContainsKey(val); err != nil {
+			// 	return
+			// } else {
+			// 	skipObj = !exist
+			// }
 		}
 
 		if skipObj {
