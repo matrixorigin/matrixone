@@ -51,7 +51,6 @@ func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
 	_x := c.vs[veci].GetBytesAt(int(vi))
 	_y := c.vs[vecj].GetBytesAt(int(vj))
 
-	//TODO: Taking Oid from only one item. Is this OK?
 	switch c.vs[veci].GetType().Oid {
 	case types.T_array_float32:
 		return CompareArrayFromBytes[float32](_x, _y, c.desc)

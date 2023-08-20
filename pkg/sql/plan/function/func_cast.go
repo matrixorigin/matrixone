@@ -3928,14 +3928,12 @@ func strToArray[T types.RealNumbers](
 				return err
 			}
 		} else {
-			// Convert "[1,2,3]" --> []float32{1.0, 2.0, 3.0}
-			a, err := types.StringToArray[T](convertByteSliceToString(v))
+
+			b, err := types.StringToArrayToBytes[T](convertByteSliceToString(v))
 			if err != nil {
 				return err
 			}
-			// Convert []float32{1.0, 2.0, 3.0} --> []byte{11, 33, 45, 56,.....}
-			b := types.ArrayToBytes[T](a)
-			if err := to.AppendBytes(b, false); err != nil {
+			if err = to.AppendBytes(b, false); err != nil {
 				return err
 			}
 		}
