@@ -2584,7 +2584,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 				*tree.LockTableStmt, *tree.UnLockTableStmt,
-				*tree.CreateStage, *tree.DropStage, *tree.AlterStage:
+				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateConnector:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -2607,6 +2607,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 				if _, ok := cw.GetAst().(*tree.DropDatabase); ok {
 					_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+				}
+
+				if _, ok := cw.GetAst().(*tree.CreateConnector); ok {
+					// todo : Creat and launch Connector
 				}
 
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
