@@ -204,6 +204,11 @@ func TypeMatch(v any, typ types.T) bool {
 		_, ok = v.([]byte)
 	case types.T_binary:
 		_, ok = v.([]byte)
+	case types.T_array_float32:
+		//TODO: Verify if this is correct for T_array
+		_, ok = v.([]byte)
+	case types.T_array_float64:
+		_, ok = v.([]byte)
 	case types.T_varbinary:
 		_, ok = v.([]byte)
 	case types.T_json:

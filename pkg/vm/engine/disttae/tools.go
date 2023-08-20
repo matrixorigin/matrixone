@@ -1301,6 +1301,7 @@ func transferSval(v string, oid types.T) (bool, bool, any) {
 		var uv types.Uuid
 		copy(uv[:], []byte(v)[:])
 		return true, false, uv
+		//TODO: should we add T_array for this code?
 	default:
 		return false, false, nil
 	}

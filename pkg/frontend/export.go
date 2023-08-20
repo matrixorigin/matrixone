@@ -465,6 +465,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 				value := addEscapeToString(vec.GetBytesAt(i))
 				writeByte = appendBytes(writeByte, value, symbol[j], closeby, true)
+				//TODO: How should we export T_array in CSV? Is it as "[1,2,3]"?
 			case types.T_date:
 				val := vector.GetFixedAt[types.Date](vec, i)
 				writeByte = appendBytes(writeByte, []byte(val.String()), symbol[j], closeby, flag[j])
