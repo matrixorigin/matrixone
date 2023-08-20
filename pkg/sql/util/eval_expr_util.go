@@ -614,7 +614,7 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 	checkStrLen := func(s string) ([]byte, error) {
 		typ := vec.GetType()
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && typ.Oid != types.T_binary && destLen != 0 {
+		if typ.Oid != types.T_text && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
 			if utf8.RuneCountInString(s) > destLen {
 				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -631,13 +631,17 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 				}
 
 				if len(_v) < int(typ.Width) {
-					add0 := int(typ.Width) - len(v)
+					add0 := int(typ.Width) - len(_v)
 					for ; add0 != 0; add0-- {
 						_v = append(_v, 0)
 					}
 				}
 
 				v = types.ArrayToBytes[float32](_v)
+
+				if len(_v) > destLen {
+					return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(_v), destLen))
+				}
 			case types.T_array_float64:
 				_v, err := types.StringToArray[float64](s)
 				if err != nil {
@@ -646,13 +650,17 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 
 				// zero padding from []T{1,2} to T{1,2,0}
 				if len(_v) < int(typ.Width) {
-					add0 := int(typ.Width) - len(v)
+					add0 := int(typ.Width) - len(_v)
 					for ; add0 != 0; add0-- {
 						_v = append(_v, 0)
 					}
 				}
 
 				v = types.ArrayToBytes[float64](_v)
+
+				if len(_v) > destLen {
+					return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(_v), destLen))
+				}
 			default:
 				return nil, moerr.NewInternalErrorNoCtx("%s is not supported array type", typ.String())
 

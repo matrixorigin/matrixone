@@ -52,6 +52,13 @@ create table t3(a int, b vecf32(65537));
 -- agg
 select count(b) from vec_table;
 
+-- insert test (zero pad, more dim error)
+create table t4(a int, b vecf32(5), c vecf64(5));
+insert into t4 values(1, "[1,2,3,4,5]", "[1,2,3,4,5]");
+insert into t4 values(1, "[1,2]", "[1,2]");
+insert into t4 values(1, "[1,2,3,4,5,6]", "[1,2,3,4,5,6]");
+select * from t4;
+
 -- insert, flush and select
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");
 insert into vec_table values(3, "[1,3,3]", "[4,1,6]");
