@@ -3676,6 +3676,11 @@ drop_view_stmt:
     {
         $$ = &tree.DropView{IfExists: $3, Names: $4}
     }
+|
+    DROP CONNECTOR exists_opt table_name_list
+    {
+        $$ = &tree.DropView{IfExists: $3, Names: $4}
+    }
 
 drop_database_stmt:
     DROP DATABASE exists_opt ident
@@ -6684,8 +6689,12 @@ connector_option_list:
 connector_option:
 	ident equal_opt literal
     {
-        $$ = &tree.CreateConnectorWithOption{Key: tree.Identifier($1.Compare()) , Val: $3}
+        $$ = &tree.CreateConnectorWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
     }
+    |   STRING equal_opt literal
+        {
+             $$ = &tree.CreateConnectorWithOption{Key: tree.Identifier($1), Val: $3}
+        }
 
 stream_option_list_opt:
     {

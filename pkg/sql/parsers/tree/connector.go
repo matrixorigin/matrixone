@@ -47,3 +47,6 @@ func (node *CreateConnectorWithOption) Format(ctx *FmtCtx) {
 	ctx.WriteString(" = ")
 	node.Val.Format(ctx)
 }
+
+func (node *CreateConnector) GetStatementType() string { return "Create Connector" }
+func (node *CreateConnector) GetQueryType() string     { return QueryTypeDDL }
