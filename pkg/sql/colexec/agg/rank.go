@@ -54,11 +54,14 @@ func (r *Rank) Eval(vs []int64, err error) ([]int64, error) {
 }
 
 func (r *Rank) Fill(i int64, value int64, ov int64, z int64, isEmpty bool, isNull bool) (int64, bool, error) {
-	n := int(i) - len(r.Ps)
-	for j := 0; j < n+1; j++ {
-		r.Ps = append(r.Ps, []int64{})
+	for z > 0 {
+		n := int(i) - len(r.Ps)
+		for j := 0; j < n+1; j++ {
+			r.Ps = append(r.Ps, []int64{})
+		}
+		r.Ps[i] = append(r.Ps[i], value)
+		z--
 	}
-	r.Ps[i] = append(r.Ps[i], value)
 	return 0, false, nil
 }
 

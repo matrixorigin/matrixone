@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
@@ -55,6 +56,10 @@ type Stats struct {
 	blockSelectivity      hitStats
 	columnSelectivity     hitStats
 	readFilterSelectivity hitStats
+	readDelCnt            stats.Counter
+	readDelOpTotal        stats.Counter
+	readDelRead           stats.Counter
+	readDelBisect         stats.Counter
 }
 
 func NewStats() *Stats {
@@ -104,6 +109,21 @@ func (s *Stats) ExportColumnSelctivity() (
 	return
 }
 
+func (s *Stats) RecordReadDel(total, read, bisect time.Duration) {
+	s.readDelOpTotal.Add(int64(total))
+	s.readDelRead.Add(int64(read))
+	s.readDelBisect.Add(int64(bisect))
+	s.readDelCnt.Add(1)
+}
+
+func (s *Stats) ExportReadDel() (total, read, bisect time.Duration, cnt int64) {
+	total = time.Duration(s.readDelOpTotal.SwapW(0))
+	read = time.Duration(s.readDelRead.SwapW(0))
+	bisect = time.Duration(s.readDelBisect.SwapW(0))
+	cnt = s.readDelCnt.SwapW(0)
+	return
+}
+
 func (s *Stats) ExportString() string {
 	var w bytes.Buffer
 	whit, wtotal := s.ExportBlockSelectivity()
@@ -127,5 +147,7 @@ func (s *Stats) ExportString() string {
 		rate = float64(hit) / float64(total)
 	}
 	fmt.Fprintf(&w, "RDF[%d/%d=%0.2f,%d/%d=%0.2f]", whit, wtotal, wrate, hit, total, rate)
+	rtotal, rread, rbisect, rcnt := s.ExportReadDel()
+	fmt.Fprintf(&w, "RDD[%v/%v/%v/%v]", rtotal, rread, rbisect, rcnt)
 	return w.String()
 }

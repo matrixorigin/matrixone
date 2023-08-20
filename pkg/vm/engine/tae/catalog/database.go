@@ -616,6 +616,9 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 		if err = table.RecurLoop(processor); err != nil {
 			return
 		}
+		if err = processor.OnPostTable(table); err != nil {
+			break
+		}
 		tableIt.Next()
 	}
 	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {

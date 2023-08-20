@@ -22,9 +22,17 @@ import (
 )
 
 const (
-	HashMapSizeForShuffle = 250000
-	MAXShuffleDOP         = 64
-	ShuffleThreshHold     = 50000
+	HashMapSizeForShuffle           = 250000
+	MAXShuffleDOP                   = 64
+	ShuffleThreshHold               = 50000
+	ShuffleTypeThreshHoldLowerLimit = 32
+	ShuffleTypeThreshHoldUpperLimit = 1024
+)
+
+const (
+	ShuffleToRegIndex        int32 = 0
+	ShuffleToLocalMatchedReg int32 = 1
+	ShuffleToMultiMatchedReg int32 = 2
 )
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
@@ -127,7 +135,8 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	}
 	colName := tableDef.Cols[col.ColPos].Name
 
-	//for shuffle join, if left child is not sorted, the cost will be very high
+	// for shuffle join, if left child is not sorted, the cost will be very high
+	// should use complex shuffle type
 	if n.NodeType == plan.Node_JOIN {
 		leftSorted := true
 		if GetSortOrder(tableDef, colName) != 0 {
@@ -136,14 +145,16 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
 			leftSorted = false
 		}
-		// if hashmap size too large, have to go shuffle whenever left is sorted
-		if !leftSorted && n.Stats.HashmapStats.HashmapSize < 100000000 {
-			var threshHold float64 = 32
+		if !leftSorted {
+			leftCost := builder.qry.Nodes[n.Children[0]].Stats.Outcnt
+			rightCost := builder.qry.Nodes[n.Children[1]].Stats.Outcnt
 			if n.BuildOnLeft {
-				threshHold = 512
-			}
-			if builder.qry.Nodes[n.Children[0]].Stats.Outcnt > threshHold*builder.qry.Nodes[n.Children[1]].Stats.Outcnt {
-				return
+				// its better for right join to go shuffle, but can not go complex shuffle
+				if n.BuildOnLeft && leftCost > ShuffleTypeThreshHoldUpperLimit*rightCost {
+					return
+				}
+			} else if leftCost > ShuffleTypeThreshHoldLowerLimit*rightCost {
+				n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Complex
 			}
 		}
 	}

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
+
+var (
+	AppendNodeApproxSize int
+	DeleteNodeApproxSize int
+
+	DeleteChainApproxSize int
+	MVCCHandleApproxSize  int
+)
+
+func init() {
+	txnNodeSize := int(unsafe.Sizeof(txnbase.TxnMVCCNode{}))
+	AppendNodeApproxSize = int(unsafe.Sizeof(AppendNode{})) + txnNodeSize
+	DeleteNodeApproxSize = int(unsafe.Sizeof(DeleteNode{})) + txnNodeSize
+
+	DeleteChainApproxSize = int(unsafe.Sizeof(DeleteChain{}))
+	MVCCHandleApproxSize = int(unsafe.Sizeof(MVCCHandle{}))
+}
 
 type MVCCHandle struct {
 	*sync.RWMutex
@@ -70,6 +88,14 @@ func (n *MVCCHandle) StringLocked() string {
 	}
 	s = fmt.Sprintf("%s\n%s", s, n.appends.StringLocked())
 	return s
+}
+
+func (n *MVCCHandle) EstimateMemSizeLocked() int {
+	size := n.deletes.Load().EstimateMemSizeLocked()
+	if n.appends != nil {
+		size += len(n.appends.MVCC) * AppendNodeApproxSize
+	}
+	return size + MVCCHandleApproxSize
 }
 
 // ==========================================================

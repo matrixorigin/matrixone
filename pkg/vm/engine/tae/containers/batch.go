@@ -145,6 +145,14 @@ func (bat *Batch) Length() int {
 	return bat.Vecs[0].Length()
 }
 
+func (bat *Batch) ApproxSize() int {
+	size := 0
+	for _, vec := range bat.Vecs {
+		size += vec.ApproxSize()
+	}
+	return size
+}
+
 func (bat *Batch) Allocated() int {
 	allocated := 0
 	for _, vec := range bat.Vecs {
