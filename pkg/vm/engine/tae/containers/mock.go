@@ -226,6 +226,7 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 			vec.Append(types.Enum(i), false)
 		}
 	case types.T_array_float32:
+		// Used for creating MockBatch in DN txn_test.go
 		for i := float32(1); i <= float32(rows); i++ {
 			vec.Append(types.ArrayToBytes([]float32{i + 1, i}), false)
 		}

@@ -286,6 +286,21 @@ func TestIndex(t *testing.T) {
 	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(bat.Attrs[12], window)
 	assert.Error(t, err)
+
+	// T_array
+	schema = catalog.MockSchemaAll(20, 12)
+	bat = catalog.MockBatch(schema, 500)
+	defer bat.Close()
+	idx = NewSimpleTableIndex()
+	err = idx.BatchDedup(bat.Attrs[19], bat.Vecs[19])
+	assert.Nil(t, err)
+	err = idx.BatchInsert(bat.Attrs[19], bat.Vecs[19], 0, bat.Vecs[19].Length(), 0, false)
+	assert.Nil(t, err)
+
+	window = bat.Vecs[19].Window(20, 2)
+	assert.Equal(t, 2, window.Length())
+	err = idx.BatchDedup(bat.Attrs[19], window)
+	assert.Error(t, err)
 }
 
 func TestLoad(t *testing.T) {
