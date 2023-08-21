@@ -26,15 +26,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.MaxSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggMaxSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.MaxReturnType,
-				specialId:  agg.AggregateMax,
+				retType:    aggMaxReturnType,
 			},
 		},
 	},
@@ -44,15 +43,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.MinSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggMinSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.MinReturnType,
-				specialId:  agg.AggregateMin,
+				retType:    aggMinxReturnType,
 			},
 		},
 	},
@@ -62,15 +60,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.SumSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggSumSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.SumReturnType,
-				specialId:  agg.AggregateSum,
+				retType:    aggSumReturnType,
 			},
 		},
 	},
@@ -80,15 +77,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.AvgSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggAvgSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.AvgReturnType,
-				specialId:  agg.AggregateAvg,
+				retType:    aggAvgReturnType,
 			},
 		},
 	},
@@ -111,8 +107,7 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.CountReturnType,
-				specialId:  agg.AggregateCount,
+				retType:    aggCountReturnType,
 			},
 		},
 	},
@@ -135,8 +130,7 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.CountReturnType,
-				specialId:  agg.AggregateStarCount,
+				retType:    aggCountReturnType,
 			},
 		},
 	},
@@ -159,8 +153,7 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.CountReturnType,
-				specialId:  agg.AggregateStarCount,
+				retType:    aggCountReturnType,
 			},
 		},
 	},
@@ -170,15 +163,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitAndSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggBitAndSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.BitAndReturnType,
-				specialId:  agg.AggregateBitAnd,
+				retType:    aggBitAndReturnType,
 			},
 		},
 	},
@@ -188,15 +180,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitOrSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggBitOrSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.BitOrReturnType,
-				specialId:  agg.AggregateBitOr,
+				retType:    aggBitOrReturnType,
 			},
 		},
 	},
@@ -206,15 +197,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitXorSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggBitXorSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.BitXorReturnType,
-				specialId:  agg.AggregateBitXor,
+				retType:    aggBitXorReturnType,
 			},
 		},
 	},
@@ -224,15 +214,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.VarianceSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggVarianceSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.VarianceReturnType,
-				specialId:  agg.AggregateVariance,
+				retType:    aggVarianceReturnType,
 			},
 		},
 	},
@@ -242,15 +231,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.StdDevPopSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggStdDevSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.StdDevPopReturnType,
-				specialId:  agg.AggregateStdDevPop,
+				retType:    aggStdDevReturnType,
 			},
 		},
 	},
@@ -274,7 +262,6 @@ var supportedAggregateFunctions = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    agg.ApproxCountReturnType,
-				specialId:  agg.AggregateApproxCountDistinct,
 			},
 		},
 	},
@@ -284,15 +271,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.AnyValueSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggAnyValueSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.AnyValueReturnType,
-				specialId:  agg.AggregateAnyValue,
+				retType:    aggAnyValueReturnType,
 			},
 		},
 	},
@@ -302,15 +288,14 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.MedianSupported)
+			return fixedUnaryAggTypeCheck(inputs, aggMedianSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.MedianReturnType,
-				specialId:  agg.AggregateMedian,
+				retType:    aggMedianReturnType,
 			},
 		},
 	},
@@ -327,8 +312,7 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.GroupConcatReturnType,
-				specialId:  agg.AggregateGroupConcat,
+				retType:    aggGroupConcatReturnType,
 			},
 		},
 	},

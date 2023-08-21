@@ -332,13 +332,9 @@ type overload struct {
 	newOp func() executeLogicOfOverload
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
-	// we use two flags to mark whether function is one of them, and if so, we will record the special id of it.
-	// This id will be passed to the real execution framework of Agg function and window function.
-	//
-	// XXX define a special structure to records this information may suitable ?
-	isAgg     bool
-	isWin     bool
-	specialId int
+	// we use two flags to mark whether function is one of them.
+	isAgg bool
+	isWin bool
 
 	// if true, overload was unable to run in parallel.
 	// For example,
@@ -369,13 +365,13 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetSpecialId() int {
-	return ov.specialId
-}
-
 func (ov *overload) GetExecuteMethod() executeLogicOfOverload {
 	f := ov.newOp
 	return f()
+}
+
+func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
+	return ov.retType
 }
 
 func (ov *overload) IsWin() bool {

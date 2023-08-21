@@ -17,7 +17,6 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
 var supportedWindowFunctions = []FuncNew{
@@ -35,10 +34,7 @@ var supportedWindowFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
-				},
-				specialId: agg.WinRank,
+				retType:    winRankReturnType,
 			},
 		},
 	},
@@ -56,10 +52,7 @@ var supportedWindowFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
-				},
-				specialId: agg.WinRowNumber,
+				retType:    winRowNumberReturnType,
 			},
 		},
 	},
@@ -77,10 +70,7 @@ var supportedWindowFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
-				},
-				specialId: agg.WinDenseRank,
+				retType:    winDenseRankReturnType,
 			},
 		},
 	},
