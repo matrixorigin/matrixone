@@ -393,31 +393,33 @@ grant show databases on account * to role_r1;
 grant connect on account * to role_r1;
 grant select on table * to role_r1;
 grant show tables on database * to role_r1;
-use alter_table_change_column;
-invalid database alter_table_change_column
+use alter_table_add_drop_primary_key;
 alter table test01 add constraint primary key(col1);
 internal error: do not have privilege to execute the statement
 grant alter table on database * to role_r1;
-use alter_table_change_column;
-invalid database alter_table_change_column
+use alter_table_add_drop_primary_key;
 alter table test01 add constraint primary key(col1);
-no such table .test01
-show create table test01;
-no such table .test01
-show columns from test01;
-no such table .test01
-alter table test01 drop primary key;
-no such table .test01
-show create table test01;
-no such table .test01
-show columns from test01;
-no such table .test01
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(10) DEFAULT NULL\n)
+test01    CREATE TABLE `test01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(10) DEFAULT null,\nPRIMARY KEY (`col1`)\n)
 show columns from test01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
+col1    INT(32)    NO    PRI    null        
+col2    VARCHAR(10)    YES        null        
+alter table test01 drop primary key;
+show create table test01;
+Table    Create Table
+test01    CREATE TABLE `test01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(10) DEFAULT null\n)
+show columns from test01;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    INT(32)    NO        null        
+col2    VARCHAR(10)    YES        null        
+show create table test01;
+Table    Create Table
+test01    CREATE TABLE `test01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(10) DEFAULT null\n)
+show columns from test01;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    INT(32)    NO        null        
 col2    VARCHAR(10)    YES        null        
 drop table test01;
 drop role role_r1;
