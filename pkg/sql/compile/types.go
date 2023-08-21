@@ -199,7 +199,7 @@ type Compile struct {
 	// ast
 	stmt tree.Statement
 
-	s3CounterSet perfcounter.CounterSet
+	counterSet perfcounter.CounterSet
 
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
@@ -212,6 +212,8 @@ type Compile struct {
 
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
+
+	buildPlanFunc func() (*plan2.Plan, error)
 }
 
 type RemoteReceivRegInfo struct {

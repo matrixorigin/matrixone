@@ -68,3 +68,21 @@ id    name    mother    father
 2    Ed    null    null
 4    Jack    1    2
 5    Jane    null    null
+CREATE TABLE employees_hierarchy (id INT PRIMARY KEY, name VARCHAR(50),manager_id INT);
+INSERT INTO employees_hierarchy (id, name, manager_id) VALUES(1, 'Alice', NULL), (2, 'Bob', 1),(3, 'Charlie', 1),(4, 'David', 2),(5, 'Eve', 2),(6, 'Frank', 3);
+WITH RECURSIVE employee_hierarchy_cte (id, name, manager_id, level) AS (SELECT id, name, manager_id, 0 FROM employees_hierarchy WHERE name = 'Alice' UNION ALL SELECT e.id, e.name, e.manager_id, eh.level + 1 FROM employees_hierarchy AS e JOIN employee_hierarchy_cte AS eh ON e.manager_id = eh.id) SELECT name, level FROM employee_hierarchy_cte;
+name    level
+Alice    0
+Bob    1
+Charlie    1
+David    2
+Eve    2
+Frank    2
+WITH RECURSIVE employee_hierarchy_cte (id, name, manager_id, level) AS (SELECT id, name, manager_id, 0 FROM employees_hierarchy WHERE name = 'Alice' UNION ALL SELECT e.id, e.name, e.manager_id, eh.level + 1 FROM employees_hierarchy AS e JOIN employee_hierarchy_cte AS eh ON e.manager_id = eh.id) SELECT t.name, t.level FROM employee_hierarchy_cte as t;
+name    level
+Alice    0
+Bob    1
+Charlie    1
+David    2
+Eve    2
+Frank    2

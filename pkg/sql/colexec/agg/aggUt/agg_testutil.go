@@ -170,6 +170,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		// Marshal and Unmarshal()
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
+		agg0.Free(m)
 		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
 		unmarshalErr := agg1.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
@@ -190,6 +191,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 			vec.Free(m)
 		}
 		v.Free(m)
+		agg1.Free(m)
 	}
 
 	// Merge() Test
@@ -217,6 +219,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		// Marshal and Unmarshal()
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
+		agg0.Free(m)
 		mAgg, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
 		unmarshalErr := mAgg.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
@@ -224,6 +227,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 
 		// Merge()
 		mAgg.Merge(agg1, 0, 0)
+		agg1.Free(m)
 
 		// Eval()
 		v, err := mAgg.Eval(m)
@@ -236,8 +240,12 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 			vec2.Free(m)
 		}
 		v.Free(m)
+		mAgg.Free(m)
 	}
-	//require.Equal(t, int64(0), m.Size())
+
+	// the ut should be rewritten because the source vector is not allocate from mpool.
+	// it's bad to check the size of mpool.
+	//require.Equal(t, int64(0), m.CurrNB())
 }
 
 func GetVector(typ types.Type, input any, nsp []uint64) (*vector.Vector, int) {
