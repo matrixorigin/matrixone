@@ -352,6 +352,9 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.ses.isInternal,
 		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
 	)
+	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
+		return buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+	})
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }

@@ -156,6 +156,13 @@ func (node *memoryNode) Rows() uint32 {
 	return uint32(node.data.Length())
 }
 
+func (node *memoryNode) EstimateMemSize() int {
+	if node.data == nil {
+		return 0
+	}
+	return node.data.ApproxSize()
+}
+
 func (node *memoryNode) GetColumnDataWindow(
 	readSchema *catalog.Schema,
 	from uint32,
