@@ -92,13 +92,13 @@ func (e *StatsLogWriter) gatherAndWrite(ctx context.Context) {
 		}
 	}
 
+	// logging block read statistics info here
 	v := ctx.Value(ServiceTypeKey).(string)
 	if v == metadata.ServiceType_name[int32(metadata.ServiceType_CN)] || v == LaunchMode {
 		e.writeBlkReadStats()
 	}
 }
 
-// logging block read statistics info here
 func (e *StatsLogWriter) writeBlkReadStats() {
 	blkHit, blkTotal := objectio.BlkReadStats.BlkMemCacheHitStats.ExportW()
 	blkHitRate := float32(1)
@@ -119,9 +119,10 @@ func (e *StatsLogWriter) writeBlkReadStats() {
 	}
 
 	e.logger.Info(fmt.Sprintf("duration: %d, "+
-		"blk hit rate: %d/%d=%.3f, entry hit rate: %d/%d=%.3f, blks in each reader: %d/%d=%.3f",
+		"blk hit rate: %d/%d=%.4f, entry hit rate: %d/%d=%.4f, (average) blks in each reader: %d/%d=%.4f",
 		e.gatherInterval,
 		blkHit, blkTotal, blkHitRate,
 		entryHit, entryTotal, entryHitRate,
 		blkNum, readerNum, blksInEachReader))
+
 }

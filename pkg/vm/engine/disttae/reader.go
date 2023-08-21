@@ -338,6 +338,8 @@ func (r *blockReader) Read(
 
 	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)
 	if filter != nil {
+		// try to store the blkReadStats CounterSet into ctx, so that
+		// it can record the mem cache hit stats when call MemCache.Read() later soon.
 		statsCtx, numRead, numHit = r.prepareGatherStats()
 	}
 
@@ -354,6 +356,7 @@ func (r *blockReader) Read(
 	}
 
 	if filter != nil {
+		// we collect mem cache hit related statistics info for blk read here
 		r.gatherStats(numRead, numHit)
 	}
 
@@ -389,35 +392,7 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 	}
 
 	objectio.BlkReadStats.EntryMemCacheHitStats.Record(int(curNumHit), int(curNumRead))
-
-	//writeBlkReadStats()
-
 }
-
-// logging block read statistics info here
-//func writeBlkReadStats() {
-//	blkHit, blkTotal := objectio.BlkReadStats.BlkMemCacheHitStats.ExportW()
-//	blkHitRate := float32(1)
-//	if blkTotal != 0 {
-//		blkHitRate = float32(blkHit) / float32(blkTotal)
-//	}
-//
-//	entryHit, entryTotal := objectio.BlkReadStats.EntryMemCacheHitStats.ExportW()
-//	entryHitRate := float32(1)
-//	if entryTotal != 0 {
-//		entryHitRate = float32(entryHit) / float32(entryTotal)
-//	}
-//
-//	readerNum, blkNum := objectio.BlkReadStats.BlksByReaderStats.ExportW()
-//	blksInEachReader := float32(1)
-//	if readerNum != 0 {
-//		blksInEachReader = float32(blkNum) / float32(readerNum)
-//	}
-//
-//	logutil.Info(fmt.Sprintf("duration: %d, blk hit rate: %.3f, entry hit rate: %.3f, blks in each reader: %.3f",
-//		99999, blkHitRate, entryHitRate, blksInEachReader))
-//
-//}
 
 // -----------------------------------------------------------------
 // ---------------------- blockMergeReader -------------------------

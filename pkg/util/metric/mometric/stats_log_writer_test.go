@@ -16,6 +16,9 @@ package mometric
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -107,7 +110,7 @@ func TestStatsLogWriter(t *testing.T) {
 
 	// 2.3 Start the LogWriter
 	c := newStatsLogWriter(stats.DefaultRegistry, customLogger, 100*time.Millisecond)
-	serviceCtx := context.Background()
+	serviceCtx := context.WithValue(context.Background(), ServiceTypeKey, "DN")
 	assert.True(t, c.Start(serviceCtx))
 
 	// 3. Perform operations on Dev Stats
@@ -157,4 +160,43 @@ func waitUtil(timeout, checkInterval time.Duration, check func() bool) error {
 			time.Sleep(checkInterval)
 		}
 	}
+}
+
+func TestWriteBlkReadStats(t *testing.T) {
+	h1, t1 := rand.Int(), rand.Int()+1
+	objectio.BlkReadStats.BlksByReaderStats.Record(h1, t1)
+
+	h2, t2 := rand.Int(), rand.Int()+1
+	objectio.BlkReadStats.EntryMemCacheHitStats.Record(h2, t2)
+
+	h3, t3 := rand.Int(), rand.Int()+1
+	objectio.BlkReadStats.BlkMemCacheHitStats.Record(h3, t3)
+
+	s := new(StatsLogWriter)
+	type threadSafeWrittenLog struct {
+		content []zapcore.Entry
+		// This is because, BusyLoop and StatsLogger read (ie len) and write (content) to the same field.
+		sync.Mutex
+	}
+
+	writtenLogs := threadSafeWrittenLog{}
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
+	s.logger = runtime.ProcessLevelRuntime().Logger().WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+		writtenLogs.Lock()
+		defer writtenLogs.Unlock()
+		writtenLogs.content = append(writtenLogs.content, entry)
+		return nil
+	}))
+	s.writeBlkReadStats()
+
+	expected := fmt.Sprintf("duration: %d, "+
+		"blk hit rate: %d/%d=%.4f, entry hit rate: %d/%d=%.4f, (average)blks in each reader: %d/%d=%.4f",
+		s.gatherInterval,
+		h3, t3, float32(h3)/float32(t3),
+		h2, t2, float32(h2)/float32(t2),
+		t1, h1, float32(t1)/float32(h1),
+	)
+
+	require.Equal(t, writtenLogs.content[0].Level, zapcore.InfoLevel)
+	require.Equal(t, writtenLogs.content[0].Message, expected)
 }

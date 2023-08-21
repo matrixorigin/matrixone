@@ -31,17 +31,14 @@ type CacheConfig struct {
 }
 
 type BlockReadStats struct {
-	// the mem cache statistics info for each block
+	// using this we can collect the number of blks have read and hit among them
 	BlkMemCacheHitStats hitStats
-	// the mem cache statistics info for each entry
+	// using this we can collect the number of entries have read and hit among them
 	EntryMemCacheHitStats hitStats
-	BlksByReaderStats     hitStats
-	CounterSet            *perfcounter.CounterSet
+	// using this we can collect the number of blks each reader will read
+	BlksByReaderStats hitStats
+	CounterSet        *perfcounter.CounterSet
 }
-
-const (
-	BlkReadStatsExporterName = "block read stats exporter"
-)
 
 func newBlockReadStats() *BlockReadStats {
 	s := BlockReadStats{
@@ -130,4 +127,5 @@ func FastLoadObjectMeta(
 	extent := location.Extent()
 	name := location.Name()
 	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, fileservice.SkipMemory, fs)
+
 }
