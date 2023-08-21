@@ -539,7 +539,7 @@ import (
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list connector_option_list_opt connector_option_list
+%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list connector_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -6091,11 +6091,11 @@ default_opt:
     }
 
 create_connector_stmt:
-    CREATE CONNECTOR table_name connector_option_list_opt
+    CREATE CONNECTOR table_name WITH '(' connector_option_list ')'
     {
         $$ = &tree.CreateConnector{
             ConnectorName: $3,
-            Options: $4,
+            Options: $6,
         }
     }
 
@@ -6666,15 +6666,6 @@ linear_opt:
     {
         $$ = true
     }
-
-connector_option_list_opt:
-    {
-        $$ = nil
-    }
-|	WITH '(' connector_option_list ')'
-	{
-		$$ = $3
-	}
 
 connector_option_list:
 	connector_option
