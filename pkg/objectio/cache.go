@@ -118,37 +118,26 @@ func LoadObjectMetaByExtent(
 	return
 }
 
-func FastLoadBF(
+func LoadBFWithMeta(
 	ctx context.Context,
+	meta ObjectDataMeta,
 	location Location,
-	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
-	maybeObj ObjectDataMeta,
-) (BloomFilter, ObjectDataMeta, error) {
+) (BloomFilter, error) {
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
-
 	v, ok := metaCache.Get(ctx, key, false)
 	if ok {
 		metaCacheStats.Record(1, 1)
-		return v.Bytes(), nil, nil
+		return v.Bytes(), nil
 	}
-
-	dataMeta := maybeObj
-	if !IsSameObjectLocVsMeta(location, dataMeta) {
-		meta, err := FastLoadObjectMeta(ctx, &location, false, fs)
-		if err != nil {
-			return nil, nil, err
-		}
-		dataMeta = meta.MustDataMeta()
-	}
-	extent := dataMeta.BlockHeader().BFExtent()
-	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, cachePolicy, fs)
+	extent := meta.BlockHeader().BFExtent()
+	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipMemory, fs)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	metaCache.Set(ctx, key, fileservice.Bytes(bf), false)
 	metaCacheStats.Record(0, 1)
-	return bf, dataMeta, nil
+	return bf, nil
 }
 
 func FastLoadObjectMeta(
