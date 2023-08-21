@@ -81,9 +81,9 @@ func Benchmark_unsafeStringAt(b *testing.B) {
 	/*
 		Benchmark_unsafeStringAt
 		Benchmark_unsafeStringAt/stringAt-RuneCast
-		Benchmark_unsafeStringAt/stringAt-RuneCast-10         	1000000000	         0.5972 ns/op
+		Benchmark_unsafeStringAt/stringAt-RuneCast-10         	1000000000	         0.6082 ns/op
 		Benchmark_unsafeStringAt/stringAt-Unsafe
-		Benchmark_unsafeStringAt/stringAt-Unsafe-10           	1000000000	         0.6285 ns/op
+		Benchmark_unsafeStringAt/stringAt-Unsafe-10           	1000000000	         0.3023 ns/op
 	*/
 }
 
@@ -127,17 +127,16 @@ func BenchmarkStringToArray(b *testing.B) {
 
 	/*
 		Benchmark 1: (this)
-		BenchmarkStringToArray
 		BenchmarkStringToArray/StringToArray-Trim_Split
-		BenchmarkStringToArray/StringToArray-Trim_Split-10         	1000000000	         0.0000722 ns/op
+		BenchmarkStringToArray/StringToArray-Trim_Split-10         	1000000000	         0.0000663 ns/op
 		BenchmarkStringToArray/StringToArray-ForLoop-RuneCast
-		BenchmarkStringToArray/StringToArray-ForLoop-RuneCast-10   	    4512	    250405 ns/op
+		BenchmarkStringToArray/StringToArray-ForLoop-RuneCast-10   	    4532	    253686 ns/op
 		BenchmarkStringToArray/StringToArray-ForLoop-Unsafe
-		BenchmarkStringToArray/StringToArray-ForLoop-Unsafe-10     	    6218	    187644 ns/op
+		BenchmarkStringToArray/StringToArray-ForLoop-Unsafe-10     	    6182	    190168 ns/op
 
 		Benchmark 2:  While inserting via SQL Alchemy
-		# mo       macos   insert/second=330.54838430904914 Split 				 (v1)
-		# mo       macos   insert/second=321.54838430904914 ForLoop-WithRuneCast (v2)
-		# mo       macos   insert/second=326.291181957156	ForLoop-WithUnsafe 	 (v3)
+		# mo       macos   insert/second=340.54838430904914 Split 				 (v1)
+		# mo       macos   insert/second=312.77797824688696 ForLoop-WithRuneCast (v2)
+		# mo       macos   insert/second=320.189254686237	ForLoop-WithUnsafe 	 (v3)
 	*/
 }

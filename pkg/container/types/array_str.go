@@ -27,7 +27,6 @@ import (
 // Once the strategy is finalized, we will remove it.
 
 // StringToArrayV2 this implementation uses only one forloop instead of split(",")
-// StringToArrayV2 this implementation uses only one forloop instead of split(",")
 func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 	// Convert the string to a rune slice for efficient index based looping
 	runes := []rune(str)
@@ -236,7 +235,10 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 
 // unsafeStringAt used when we want str[idx] without casting str to []rune
 func unsafeStringAt(str string, idx int) rune {
-	return rune(*(*byte)(unsafe.Pointer((*reflect.StringHeader)(unsafe.Pointer(&str)).Data + uintptr(idx))))
+	// SCA fix from here: https://github.com/go101/go101/blob/7487c205ec72cd2658b614f9e289a77a5b42a99a/pages/fundamentals/unsafe.html#L1160
+	hdr := (*reflect.StringHeader)(unsafe.Pointer(&str))
+	pbyte := (*byte)(unsafe.Add(unsafe.Pointer(hdr.Data), idx))
+	return rune(*pbyte)
 }
 
 // indexFrom Find the next occurrence of substr after start
