@@ -24,8 +24,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+type ConnectorStatus int
+
+const (
+	CREATED ConnectorStatus = iota
+	RUNNING
+	STOPPED
+	ERROR
+)
+
+func (s ConnectorStatus) String() string {
+	return [...]string{"CREATED", "RUNNING", "STOPPED", "ERROR"}[s]
+}
+
+// ConnectorManagerInterface defines the operations for managing connectors.
+type ConnectorManagerInterface interface {
+	// CreateConnector creates a new connector based on the provided name and options.
+	CreateConnector(ctx context.Context, name string, options map[string]interface{}) error
+
+	// StopConnector stops the connector with the given name.
+	StopConnector(ctx context.Context, name string) error
+
+	// GetConnector retrieves the connector with the given name.
+	GetConnector(name string) (Connector, error)
+
+	ListConnectors() []Connector
+}
+
+var _ ConnectorManagerInterface = (*ConnectorManager)(nil)
+
 type ConnectorManager struct {
+	ctx        context.Context
 	connectors map[string]Connector
+}
+
+func NewConnectorManager(ctx context.Context) *ConnectorManager {
+	return &ConnectorManager{
+		connectors: make(map[string]Connector),
+	}
 }
 
 func (cm *ConnectorManager) CreateConnector(ctx context.Context, name string, options map[string]any) error {
@@ -52,11 +88,32 @@ func (cm *ConnectorManager) CreateConnector(ctx context.Context, name string, op
 	return nil
 }
 
+func (cm *ConnectorManager) StopConnector(ctx context.Context, name string) error {
+	//todo: implement stop connecot
+	return nil
+}
+
+func (cm *ConnectorManager) GetConnector(name string) (Connector, error) {
+	if connector, exists := cm.connectors[name]; exists {
+		return connector, nil
+	}
+	return nil, moerr.NewInternalError(context.Background(), "Connector not found")
+}
+
+func (cm *ConnectorManager) ListConnectors() []Connector {
+	connectors := make([]Connector, 0)
+	for _, connector := range cm.connectors {
+		connectors = append(connectors, connector)
+	}
+	return connectors
+}
+
 // Connector is an interface for various types of connectors.
 type Connector interface {
 	Prepare() error
 	Start(ctx context.Context) error
 	Close() error
+	Status() ConnectorStatus
 }
 
 // KafkaMoConnector is an example implementation of the Connector interface for a Kafka to MO Table connection.
@@ -66,6 +123,7 @@ type KafkaMoConnector struct {
 	options      map[string]any
 	ie           executor.SQLExecutor
 	stopChan     chan struct{}
+	status       ConnectorStatus
 }
 
 func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
@@ -134,6 +192,9 @@ func (k *KafkaMoConnector) validateParams() error {
 	}
 
 	return nil
+}
+func (k *KafkaMoConnector) Status() ConnectorStatus {
+	return k.status
 }
 
 // Prepare initializes resources, validates configurations, and prepares the connector for starting.
