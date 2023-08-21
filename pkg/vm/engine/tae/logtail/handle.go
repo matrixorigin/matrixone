@@ -542,6 +542,16 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID, false)
+	// for appendable block(deleted, because we skip empty metaloc), non-dropped non-appendabled blocks, those new nodes are
+	// produced by flush table tail, it's safe to truncate mem data in CN
+	memTruncTs := node.Start
+	if !e.IsAppendable() && committs.Equal(deletets) {
+		// for deleted non-appendable block, it must be produced by merging blocks. In this case,
+		// do not truncate any data in CN, because merging blocks didn't flush deletes to disk.
+		memTruncTs = types.TS{}
+	}
+
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).Append(memTruncTs, false)
 	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts, false)
 	insBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(&e.ID), false)
 
@@ -835,4 +845,13 @@ func LoadCheckpointEntries(
 		}
 	}
 	return entries, closeCBs, nil
+}
+
+func LoadCheckpointEntriesFromKey(ctx context.Context,fs fileservice.FileService, location objectio.Location)  (*batch.Batch, error) {
+		data := NewCNCheckpointData()
+	    bat,err := data.ReadFromDataWithKey(ctx, location, fs, nil)
+	    if err != nil {
+	    	return nil ,err
+		}
+		return bat, nil
 }

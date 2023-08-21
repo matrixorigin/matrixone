@@ -144,7 +144,11 @@ func Multiplex(
 		ret[i].PreExtend(int(toLayout[i]))
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
-			ret[i].Append(col[s].Get(cursors[s]), col[s].IsNull(cursors[s]))
+			if col[s].IsNull(cursors[s]) {
+				ret[i].Append(nil, true)
+			} else {
+				ret[i].Append(col[s].Get(cursors[s]), false)
+			}
 			cursors[s]++
 			k++
 		}

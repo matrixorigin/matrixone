@@ -95,7 +95,10 @@ func (bat *Batch) AppendPlaceholder() {
 }
 
 func (bat *Batch) GetVectorByName(name string) Vector {
-	pos := bat.Nameidx[name]
+	pos, ok := bat.Nameidx[name]
+	if !ok {
+		panic(fmt.Sprintf("vector %s not found", name))
+	}
 	return bat.Vecs[pos]
 }
 
@@ -140,6 +143,14 @@ func (bat *Batch) Compact() {
 
 func (bat *Batch) Length() int {
 	return bat.Vecs[0].Length()
+}
+
+func (bat *Batch) ApproxSize() int {
+	size := 0
+	for _, vec := range bat.Vecs {
+		size += vec.ApproxSize()
+	}
+	return size
 }
 
 func (bat *Batch) Allocated() int {

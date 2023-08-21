@@ -828,47 +828,32 @@ col1    col2
 1    cdsdsa
 drop table t1;
 drop table if exists name01;
-[unknown result because it is related to issue#11269]
 create table name01 (col1 int, col2 decimal);
-[unknown result because it is related to issue#11269]
 insert into name01 values (1, 378292);
-[unknown result because it is related to issue#11269]
 insert into name01 values (2, 3289.111111);
-[unknown result because it is related to issue#11269]
 alter table name01 change column col1 `数据库管理系统数据库操作系统数据库系统数据库` int;
-[unknown result because it is related to issue#11269]
 show create table name01;
-[unknown result because it is related to issue#11269]
+Table    Create Table
+name01    CREATE TABLE `name01` (\n`数据库管理系统数据库操作系统数据库系统数据库` INT DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null\n)
 drop table name01;
-[unknown result because it is related to issue#11269]
 drop table if exists name02;
-[unknown result because it is related to issue#11269]
 create table name02 (col1 int, col2 decimal);
-[unknown result because it is related to issue#11269]
 insert into name02 values (1, 378292);
-[unknown result because it is related to issue#11269]
 insert into name02 values (2, 3289.111111);
-[unknown result because it is related to issue#11269]
 alter table name02 change column col1  `cwhueh   3u2j4kfker` int;
-[unknown result because it is related to issue#11269]
 show create table name02;
-[unknown result because it is related to issue#11269]
+Table    Create Table
+name02    CREATE TABLE `name02` (\n`cwhueh   3u2j4kfker` INT DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null\n)
 drop table name02;
-[unknown result because it is related to issue#11269]
 drop table if exists name03;
-[unknown result because it is related to issue#11269]
 create table name03 (col1 int, col2 decimal);
-[unknown result because it is related to issue#11269]
 insert into name03 values (1, 378292);
-[unknown result because it is related to issue#11269]
 insert into name03 values (2, 3289.111111);
-[unknown result because it is related to issue#11269]
 alter table name03 change column col1 `RAVHJBWUIHNJCDW****&&*((()(*&^&^%^^&^*&` int;
-[unknown result because it is related to issue#11269]
 show create table name03;
-[unknown result because it is related to issue#11269]
+Table    Create Table
+name03    CREATE TABLE `name03` (\n`ravhjbwuihnjcdw****&&*((()(*&^&^%^^&^*&` INT DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null\n)
 drop table name03;
-[unknown result because it is related to issue#11269]
 drop table if exists name04;
 create table name04 (col1 int, col2 varchar(10));
 alter table name04 change column col1 col1New varchar(10);
@@ -1273,43 +1258,41 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 [unknown result because it is related to issue#11249]
 drop table primary06;
 drop table if exists primary07;
-[unknown result because it is related to issue#11247]
 create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
-[unknown result because it is related to issue#11247]
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
-[unknown result because it is related to issue#11247]
 insert into primary07 values (2, -324.2342432423, -1243.42334234242);
-[unknown result because it is related to issue#11247]
 alter table primary07 change col1 col1New double default null;
-[unknown result because it is related to issue#11247]
+All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 alter table primary07 change col2 col2New int default null;
-[unknown result because it is related to issue#11247]
+All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 show create table primary07;
-[unknown result because it is related to issue#11247]
+Table    Create Table
+primary07    CREATE TABLE `primary07` (\n`col1` INT NOT NULL,\n`col2` FLOAT NOT NULL,\n`col3` DECIMAL(38,0) DEFAULT NULL,\nPRIMARY KEY (`col1`,`col2`)\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary07' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table primary07;
-no such table db2.primary07
 drop table if exists primary08;
 create table primary08(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
 insert into primary08 values (1, 213412.32143, 3214312.34243214242);
 insert into primary08 values (2, -324.2342432423, -1243.42334234242);
 alter table primary08 change col1 col1New double not null;
+All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 alter table primary08 change col2 col2New decimal(28,10);
 show create table primary08;
 Table    Create Table
-primary08    CREATE TABLE `primary08` (\n`col1new` DOUBLE NOT NULL,\n`col2new` DECIMAL(28,10) NOT NULL,\n`col3` DECIMAL(38,0) DEFAULT null,\nPRIMARY KEY (`col1new`,`col2new`)\n)
+primary08    CREATE TABLE `primary08` (\n`col1` INT NOT NULL,\n`col2new` DECIMAL(28,10) NOT NULL,\n`col3` DECIMAL(38,0) DEFAULT null,\nPRIMARY KEY (`col1`,`col2new`)\n)
 insert into primary08 values (3, 73829.273897298374823, 38298390.3242223);
 update primary08 set col2 = 32432.3242424242 where col1 = 1;
 internal error: column 'col2' not found in table 
 update primary08 set col2New = 32432.3242424242 where col1New = 1;
+invalid input: column col1new does not exist
 delete from primary08 where col1 = 1;
-invalid input: column col1 does not exist
 delete from primary08 where col1New = 2;
+invalid input: column col1new does not exist
 select * from primary08;
-col1new    col2new    col3
-3.0    73829.2738972984    38298390
-1.0    32432.3242424242    3214312
+col1    col2new    col3
+2    -324.2342529297    -1243
+3    73829.2738972984    38298390
 drop table primary08;
 drop table if exists primary09;
 [unknown result because it is related to issue#11264]
@@ -1856,7 +1839,7 @@ alter table abnormal04 change col1 col1NewCOl float;
 You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 20 near " DEFAULT NULL
 )";
 alter table abnormal04 change col2 col2NewCOL int;
-internal error: not connect to a database
+invalid argument cast to int, bad value a
 select * from abnormal04;
 col1    col2
 {"x": "red"}    a
@@ -1868,49 +1851,58 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 [unknown result because it is related to issue#11249]
 drop table abnormal04;
 drop table if exists abnormal05;
-[unknown result because it is related to issue#11259]
 create temporary table abnormal05 (col1 datetime, col2 blob);
-[unknown result because it is related to issue#11259]
 insert into abnormal05 values ('1997-01-13 00:00:00', '342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f');
-[unknown result because it is related to issue#11259]
 insert into abnormal05 values ('2012-01-13 23:23:59', '63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573');
-[unknown result because it is related to issue#11259]
 select * from abnormal05;
-[unknown result because it is related to issue#11259]
+col1    col2
+1997-01-13 00:00:00    342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
+2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 alter table abnormal05 change col1 col1_euwhnew float;
-[unknown result because it is related to issue#11259]
+alter table for temporary table is not yet implemented
 alter table abnormal05 change col2 col2_njkwhew int;
-[unknown result because it is related to issue#11259]
+alter table for temporary table is not yet implemented
 select * from abnormal05;
-[unknown result because it is related to issue#11259]
+col1    col2
+1997-01-13 00:00:00    342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
+2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 show create table abnormal05;
-[unknown result because it is related to issue#11259]
+Table    Create Table
+abnormal05    CREATE TABLE `abnormal05` (\n`col1` DATETIME DEFAULT NULL,\n`col2` BLOB DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal05' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table abnormal05;
 [unknown result because it is related to issue#11249]
 drop table if exists view01;
+[unknown result because it is related to issue#11249]
 drop table if exists view02;
+[unknown result because it is related to issue#11249]
 drop view v0;
-invalid view 'db2.v0'
+[unknown result because it is related to issue#11249]
 create table view01 (a int);
+[unknown result because it is related to issue#11249]
 insert into view01 values (1),(2);
+[unknown result because it is related to issue#11249]
 create table view02 (a int);
+[unknown result because it is related to issue#11249]
 insert into view02 values (1);
+[unknown result because it is related to issue#11249]
 create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
+[unknown result because it is related to issue#11249]
 show create view v0;
-View    Create View
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
+[unknown result because it is related to issue#11249]
 alter table view01 change a aCOL float;
+[unknown result because it is related to issue#11249]
 show create table view01;
-Table    Create Table
-view01    CREATE TABLE `view01` (\n`acol` FLOAT DEFAULT null\n)
+[unknown result because it is related to issue#11249]
 show create view v0;
-View    Create View
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
+[unknown result because it is related to issue#11249]
 drop table view01;
+[unknown result because it is related to issue#11249]
 drop table view02;
+[unknown result because it is related to issue#11249]
 drop view v0;
+[unknown result because it is related to issue#11249]
 drop table if exists cluster01;
 [unknown result because it is related to issue#11260]
 create table cluster01(col1 int, col2 decimal) cluster by col1;
@@ -1920,15 +1912,20 @@ insert into cluster01 values (1, 389234924);
 insert into cluster01 values (2, -2893428);
 [unknown result because it is related to issue#11260]
 alter table cluster01 change col2 col2worejnfenrororiri float;
-[unknown result because it is related to issue#11260]
+not supported: alter table for cluster table
 alter table cluster01 change col1 iwijwehfndatabasectm double after col2worejnfenrororiri;
-[unknown result because it is related to issue#11260]
+not supported: alter table for cluster table
 show create table cluster01;
-[unknown result because it is related to issue#11260]
+Table    Create Table
+cluster01    CREATE TABLE `cluster01` (\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n) CLUSTER BY (`col1`)
 select * from cluster01;
-[unknown result because it is related to issue#11260]
+col1    col2
+1    389234924
+2    -2893428
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+cluster01    col1    INT    NO
+cluster01    col2    DECIMAL128    NO
 drop table cluster01;
 [unknown result because it is related to issue#11249]
 drop table if exists time01;
@@ -1942,11 +1939,15 @@ col1    col2    col3    col4
 1997-01-13    null    1989-01-01 23:23:59    23:23:59
 2030-12-31    2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
 alter table time01 change col1 col1sbavhehfiwuejn int, change col2 col2chwjvhejkwbhjgeh int first, change col3 col3cvwheuhjhjk int after col1, change col4 col4ushebjfevce int;
-[unknown result because it is related to issue#11259]
+Unknown column 'col1' in 'Columns Set'
 show create table time01;
-[unknown result because it is related to issue#11259]
+Table    Create Table
+time01    CREATE TABLE `time01` (\n`col1` DATE DEFAULT NULL,\n`col2` DATETIME DEFAULT NULL,\n`col3` TIMESTAMP DEFAULT NULL,\n`col4` TIME DEFAULT NULL\n)
 select * from time01;
-[unknown result because it is related to issue#11259]
+col1    col2    col3    col4
+2020-01-01    2000-10-10 12:12:12    1970-01-01 12:23:59    01:01:29
+1997-01-13    null    1989-01-01 23:23:59    23:23:59
+2030-12-31    2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table time01;
@@ -1961,11 +1962,15 @@ col2    col3    col4
 null    1889-01-01 23:23:59    23:23:59
 2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
 alter table time02 change col2 decimal(20,10) first, change col3 decimal after col2, change col4 decimal(38,0);
-[unknown result because it is related to issue#11259]
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 39 near "(20,10) first, change col3 decimal after col2, change col4 decimal(38,0);";
 show create table time02;
-[unknown result because it is related to issue#11259]
+Table    Create Table
+time02    CREATE TABLE `time02` (\n`col2` DATETIME DEFAULT NULL,\n`col3` TIMESTAMP DEFAULT NULL,\n`col4` TIME DEFAULT NULL\n)
 select * from time02;
-[unknown result because it is related to issue#11259]
+col2    col3    col4
+2000-10-10 12:12:12    1970-01-01 12:23:59    01:01:29
+null    1889-01-01 23:23:59    23:23:59
+2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
 [unknown result because it is related to issue#11249]
 drop table time02;

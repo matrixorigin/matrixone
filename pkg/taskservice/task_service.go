@@ -188,6 +188,7 @@ func (s *taskService) Complete(
 func (s *taskService) Heartbeat(ctx context.Context, value task.Task) error {
 	value.LastHeartbeat = time.Now().UnixMilli()
 	n, err := s.store.Update(ctx, []task.Task{value},
+		WithTaskIDCond(EQ, value.ID),
 		WithTaskStatusCond(EQ, task.TaskStatus_Running),
 		WithTaskEpochCond(LE, value.Epoch),
 		WithTaskRunnerCond(EQ, value.TaskRunner))
