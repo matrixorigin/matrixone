@@ -18,8 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -73,7 +71,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
@@ -384,6 +384,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 				},
 			},
 		}
+	case vm.Stream:
+		t := sourceIns.Arg.(*stream.Argument)
+		res.Arg = &stream.Argument{
+			TblDef: t.TblDef,
+			Limit:  t.Limit,
+			Offset: t.Offset,
+		}
 	case vm.Connector:
 		ok := false
 		if regMap != nil {
@@ -575,10 +582,10 @@ func constructLockOp(n *plan.Node, proc *process.Process, eng engine.Engine) (*l
 		if target.LockTable {
 			if target.IsPartitionTable {
 				for _, pTblId := range target.PartitionTableIds {
-					arg.LockTable(pTblId)
+					arg.LockTable(pTblId, false)
 				}
 			} else {
-				arg.LockTable(target.TableId)
+				arg.LockTable(target.TableId, false)
 			}
 		}
 	}
@@ -665,6 +672,15 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 		},
 	}
 }
+
+func constructStream(n *plan.Node, p [2]int64) *stream.Argument {
+	return &stream.Argument{
+		TblDef: n.TableDef,
+		Offset: p[0],
+		Limit:  p[1],
+	}
+}
+
 func constructTableFunction(n *plan.Node) *table_function.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
