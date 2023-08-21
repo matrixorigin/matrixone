@@ -334,6 +334,8 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			return 0, err
 		}
 		meta = objMeta.MustDataMeta()
+		ret += int64(meta.BlockHeader().ZoneMapArea().Length())
+		ret += int64(meta.BlockHeader().BFExtent().Length())
 		for _, col := range neededCols {
 			colmata := meta.MustGetColumn(uint16(col.Seqnum))
 			ret += int64(colmata.Location().Length())
