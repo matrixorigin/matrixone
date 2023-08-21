@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"unsafe"
 
@@ -165,6 +166,13 @@ func (b *Blockid) String() string {
 func (b *Blockid) ShortString() string {
 	filen, blkn := b.Offsets()
 	return fmt.Sprintf("%d-%d", filen, blkn)
+}
+
+func (b *Blockid) ShortStringEx() string {
+	var shortuuid [8]byte
+	hex.Encode(shortuuid[:], b[:4])
+	filen, blkn := b.Offsets()
+	return fmt.Sprintf("%s-%d-%d", string(shortuuid[:]), filen, blkn)
 }
 
 func (b *Blockid) Offsets() (uint16, uint16) {

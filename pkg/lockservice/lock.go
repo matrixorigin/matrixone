@@ -26,24 +26,28 @@ const (
 	flagLockRangeEnd
 	flagLockExclusiveMode
 	flagLockSharedMode
+	flagLockTableDefChanged
 )
 
-func newRangeLock(txnID []byte, mode pb.LockMode) (Lock, Lock) {
-	l := newLock(txnID, mode)
+func newRangeLock(txnID []byte, opts LockOptions) (Lock, Lock) {
+	l := newLock(txnID, opts)
 	return l.toRangeStartLock(), l.toRangeEndLock()
 }
 
-func newRowLock(txnID []byte, mode pb.LockMode) Lock {
-	l := newLock(txnID, mode)
+func newRowLock(txnID []byte, opts LockOptions) Lock {
+	l := newLock(txnID, opts)
 	return l.toRowLock()
 }
 
-func newLock(txnID []byte, mode pb.LockMode) Lock {
+func newLock(txnID []byte, opts LockOptions) Lock {
 	l := Lock{txnID: txnID}
-	if mode == pb.LockMode_Exclusive {
+	if opts.Mode == pb.LockMode_Exclusive {
 		l.value |= flagLockExclusiveMode
 	} else {
 		l.value |= flagLockSharedMode
+	}
+	if opts.TableDefChanged {
+		l.value |= flagLockTableDefChanged
 	}
 	return l
 }
@@ -73,6 +77,10 @@ func (l Lock) isLockRangeEnd() bool {
 
 func (l Lock) isLockRangeStart() bool {
 	return l.value&flagLockRangeStart != 0
+}
+
+func (l Lock) isLockTableDefChanged() bool {
+	return l.value&flagLockTableDefChanged != 0
 }
 
 func (l Lock) getLockMode() pb.LockMode {
