@@ -454,7 +454,7 @@ func (s *Scope) PushdownRun() error {
 	for {
 		bat := <-reg.Ch
 		if bat == nil {
-			s.Proc.Reg.InputBatch = bat
+			s.Proc.SetInputBatch(bat)
 			_, err = vm.Run(s.Instructions, s.Proc)
 			s.Proc.Cancel()
 			return err
@@ -462,7 +462,7 @@ func (s *Scope) PushdownRun() error {
 		if bat.RowCount() == 0 {
 			continue
 		}
-		s.Proc.Reg.InputBatch = bat
+		s.Proc.SetInputBatch(bat)
 		if end, err = vm.Run(s.Instructions, s.Proc); err != nil || end {
 			return err
 		}
@@ -478,6 +478,8 @@ func (s *Scope) JoinRun(c *Compile) error {
 			probeScope := c.newJoinProbeScope(s, nil)
 			s.PreScopes = append(s.PreScopes, probeScope)
 		}
+		// this is for shuffle join probe scope
+		s.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, shuffleJoinProbeChannelBufferSize)
 		return s.MergeRun(c)
 	}
 

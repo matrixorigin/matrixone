@@ -166,23 +166,25 @@ func TestRunTaskWithDisableRetry(t *testing.T) {
 
 func TestCancelRunningTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
-		c := make(chan struct{})
 		cancelC := make(chan struct{})
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
-			close(c)
-			<-ctx.Done()
-			close(cancelC)
+			select {
+			case <-ctx.Done():
+			case cancelC <- struct{}{}:
+			}
 			return nil
 		})
 		v := newTestTask("t1")
 		v.Metadata.Options.MaxRetryTimes = 0
 		mustAddTestTask(t, store, 1, v)
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
-		<-c
 		v = mustGetTestTask(t, store, 1)[0]
 		v.Epoch++
 		mustUpdateTestTask(t, store, 1, []task.Task{v})
 		<-cancelC
+		for v := mustGetTestTask(t, store, 1)[0]; v.Status != task.TaskStatus_Completed; v = mustGetTestTask(t, store, 1)[0] {
+			time.Sleep(10 * time.Millisecond)
+		}
 		r.mu.RLock()
 		defer r.mu.RUnlock()
 		assert.Equal(t, 0, len(r.mu.runningTasks))

@@ -427,7 +427,7 @@ func (r *blockMergeReader) prefetchDeletes() error {
 		}
 		for _, loc := range locs {
 			//rowid + pk
-			pref.AddBlock([]uint16{0, uint16(r.pkidx)}, []uint16{loc.ID()})
+			pref.AddBlockWithType([]uint16{0, uint16(r.pkidx)}, []uint16{loc.ID()}, uint16(objectio.SchemaTombstone))
 
 		}
 		delete(r.deletaLocs, name)

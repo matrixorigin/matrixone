@@ -42,8 +42,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		proc.SetInputBatch(bat)
 		return process.ExecNext, nil
 	}
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
@@ -53,7 +53,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
 	if ap.Seen >= ap.Limit {
-		proc.Reg.InputBatch = nil
+		proc.SetInputBatch(nil)
 		proc.PutBatch(bat)
 		return process.ExecStop, nil
 	}

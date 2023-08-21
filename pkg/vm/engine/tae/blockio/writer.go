@@ -132,11 +132,6 @@ func (w *BlockWriter) WriteSubBatch(batch *batch.Batch, dataType objectio.DataMe
 	return w.writer.WriteSubBlock(batch, dataType)
 }
 
-// WriteBatch write a fixed schema batch, usually not a user table
-func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error) {
-	return w.writer.WriteWithoutSeqnum(batch)
-}
-
 func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
 	if w.objMetaBuilder != nil {
 		if w.isSetPK {

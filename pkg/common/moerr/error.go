@@ -147,6 +147,7 @@ const (
 	ErrFkColumnCannotDropChild                  uint16 = 20464
 	ErrDependentByPartitionFunction             uint16 = 20465
 	ErrAlterOperationNotSupportedReasonFkRename uint16 = 20466
+	ErrPrimaryCantHaveNull                      uint16 = 20467
 
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
@@ -177,30 +178,31 @@ const (
 	ErrDNShardNotFound  uint16 = 20605
 	ErrShardNotReported uint16 = 20606
 	// Generic TAE error
-	ErrTAEError                  uint16 = 20607
-	ErrTAERead                   uint16 = 20608
-	ErrRpcError                  uint16 = 20609
-	ErrWaitTxn                   uint16 = 20610
-	ErrTxnNotFound               uint16 = 20611
-	ErrTxnNotActive              uint16 = 20612
-	ErrTAEWrite                  uint16 = 20613
-	ErrTAECommit                 uint16 = 20614
-	ErrTAERollback               uint16 = 20615
-	ErrTAEPrepare                uint16 = 20616
-	ErrTAEPossibleDuplicate      uint16 = 20617
-	ErrTxnRWConflict             uint16 = 20618
-	ErrTxnWWConflict             uint16 = 20619
-	ErrNotFound                  uint16 = 20620
-	ErrTxnInternal               uint16 = 20621
-	ErrTxnReadConflict           uint16 = 20622
-	ErrPrimaryKeyDuplicated      uint16 = 20623
-	ErrAppendableSegmentNotFound uint16 = 20624
-	ErrAppendableBlockNotFound   uint16 = 20625
-	ErrTAEDebug                  uint16 = 20626
-	ErrDuplicateKey              uint16 = 20627
-	ErrTxnNeedRetry              uint16 = 20628
-	ErrTAENeedRetry              uint16 = 20629
-	ErrTxnCannotRetry            uint16 = 20630
+	ErrTAEError                   uint16 = 20607
+	ErrTAERead                    uint16 = 20608
+	ErrRpcError                   uint16 = 20609
+	ErrWaitTxn                    uint16 = 20610
+	ErrTxnNotFound                uint16 = 20611
+	ErrTxnNotActive               uint16 = 20612
+	ErrTAEWrite                   uint16 = 20613
+	ErrTAECommit                  uint16 = 20614
+	ErrTAERollback                uint16 = 20615
+	ErrTAEPrepare                 uint16 = 20616
+	ErrTAEPossibleDuplicate       uint16 = 20617
+	ErrTxnRWConflict              uint16 = 20618
+	ErrTxnWWConflict              uint16 = 20619
+	ErrNotFound                   uint16 = 20620
+	ErrTxnInternal                uint16 = 20621
+	ErrTxnReadConflict            uint16 = 20622
+	ErrPrimaryKeyDuplicated       uint16 = 20623
+	ErrAppendableSegmentNotFound  uint16 = 20624
+	ErrAppendableBlockNotFound    uint16 = 20625
+	ErrTAEDebug                   uint16 = 20626
+	ErrDuplicateKey               uint16 = 20627
+	ErrTxnNeedRetry               uint16 = 20628
+	ErrTAENeedRetry               uint16 = 20629
+	ErrTxnCannotRetry             uint16 = 20630
+	ErrTxnNeedRetryWithDefChanged uint16 = 20631
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -351,6 +353,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFkColumnCannotDropChild:                  {ER_FK_COLUMN_CANNOT_DROP_CHILD, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrDependentByPartitionFunction:             {ER_DEPENDENT_BY_PARTITION_FUNC, []string{MySQLDefaultSqlState}, "Column '%s' has a partitioning function dependency and cannot be dropped or renamed"},
 	ErrAlterOperationNotSupportedReasonFkRename: {ER_ALTER_OPERATION_NOT_SUPPORTED_REASON_FK_RENAME, []string{MySQLDefaultSqlState}, "Columns participating in a foreign key are renamed"},
+	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{MySQLDefaultSqlState}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
 
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -362,36 +365,37 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend"},
 
 	// Group 6: txn
-	ErrTxnClosed:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
-	ErrTxnWriteConflict:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn write conflict %s"},
-	ErrMissingTxn:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "missing txn"},
-	ErrUnresolvedConflict:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unresolved conflict"},
-	ErrTxnError:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "transaction error: %s"},
-	ErrDNShardNotFound:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not found"},
-	ErrShardNotReported:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not reported"},
-	ErrTAEError:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae error %s"},
-	ErrTAERead:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae read error"},
-	ErrRpcError:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc error"},
-	ErrWaitTxn:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn wait error"},
-	ErrTxnNotFound:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn not found"},
-	ErrTxnNotActive:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn not active, state %s"},
-	ErrTAEWrite:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae write error"},
-	ErrTAECommit:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae commit error %s"},
-	ErrTAERollback:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae rollback error %s"},
-	ErrTAEPrepare:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae prepare error %s"},
-	ErrTAEPossibleDuplicate:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae possible duplicate"},
-	ErrTxnRWConflict:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "r-w conflict"},
-	ErrTxnWWConflict:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "w-w conflict"},
-	ErrNotFound:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not found"},
-	ErrTxnInternal:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn internal error"},
-	ErrTxnReadConflict:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn read conflict %s"},
-	ErrPrimaryKeyDuplicated:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
-	ErrAppendableSegmentNotFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
-	ErrAppendableBlockNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
-	ErrDuplicateKey:              {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
-	ErrTxnNeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
-	ErrTAENeedRetry:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae need retry"},
-	ErrTxnCannotRetry:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
+	ErrTxnClosed:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
+	ErrTxnWriteConflict:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn write conflict %s"},
+	ErrMissingTxn:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "missing txn"},
+	ErrUnresolvedConflict:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unresolved conflict"},
+	ErrTxnError:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "transaction error: %s"},
+	ErrDNShardNotFound:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not found"},
+	ErrShardNotReported:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not reported"},
+	ErrTAEError:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae error %s"},
+	ErrTAERead:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae read error"},
+	ErrRpcError:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc error"},
+	ErrWaitTxn:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn wait error"},
+	ErrTxnNotFound:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn not found"},
+	ErrTxnNotActive:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn not active, state %s"},
+	ErrTAEWrite:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae write error"},
+	ErrTAECommit:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae commit error %s"},
+	ErrTAERollback:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae rollback error %s"},
+	ErrTAEPrepare:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae prepare error %s"},
+	ErrTAEPossibleDuplicate:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae possible duplicate"},
+	ErrTxnRWConflict:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "r-w conflict"},
+	ErrTxnWWConflict:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "w-w conflict"},
+	ErrNotFound:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not found"},
+	ErrTxnInternal:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn internal error"},
+	ErrTxnReadConflict:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn read conflict %s"},
+	ErrPrimaryKeyDuplicated:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
+	ErrAppendableSegmentNotFound:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
+	ErrAppendableBlockNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
+	ErrDuplicateKey:               {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
+	ErrTxnNeedRetry:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
+	ErrTAENeedRetry:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae need retry"},
+	ErrTxnCannotRetry:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
+	ErrTxnNeedRetryWithDefChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode, def changed"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -1025,6 +1029,10 @@ func NewTxnNeedRetry(ctx context.Context) *Error {
 	return newError(ctx, ErrTxnNeedRetry)
 }
 
+func NewTxnNeedRetryWithDefChanged(ctx context.Context) *Error {
+	return newError(ctx, ErrTxnNeedRetryWithDefChanged)
+}
+
 func NewTxnCannotRetry(ctx context.Context) *Error {
 	return newError(ctx, ErrTxnCannotRetry)
 }
@@ -1201,6 +1209,10 @@ func NewErrDependentByPartitionFunction(ctx context.Context, colName any) *Error
 
 func NewErrAlterOperationNotSupportedReasonFkRename(ctx context.Context) *Error {
 	return newError(ctx, ErrAlterOperationNotSupportedReasonFkRename)
+}
+
+func NewErrPrimaryCantHaveNull(ctx context.Context) *Error {
+	return newError(ctx, ErrPrimaryCantHaveNull)
 }
 
 var contextFunc atomic.Value

@@ -14,15 +14,20 @@
 
 package hashtable
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+)
 
 const (
 	kInitialCellCntBits = 10
 	kInitialCellCnt     = 1 << kInitialCellCntBits
+	maxBlockSize        = mpool.GB / 4
 )
 
-func maxElemCnt(cellCnt uint64) uint64 {
-	if cellCnt < 16*1024*1024 {
+func maxElemCnt(cellCnt, cellSize uint64) uint64 {
+	if cellCnt*cellSize < maxBlockSize {
 		return cellCnt / 2
 	} else {
 		return cellCnt * 3 / 4

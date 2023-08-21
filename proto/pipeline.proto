@@ -56,10 +56,11 @@ message Dispatch {
   int32 func_id = 1;
   repeated Connector local_connector = 2;
   repeated WrapNode remote_connector = 3;
-  repeated int32 ShuffleRegIdxLocal=4;
-  repeated int32 ShuffleRegIdxRemote=5;
-  bool  is_sink = 6;
-  bool  rec_sink = 7;
+  repeated int32 shuffle_reg_idx_local=4;
+  repeated int32 shuffle_reg_idx_remote=5;
+  int32 shuffle_type=6;
+  bool  is_sink = 7;
+  bool  rec_sink = 8;
 }
 
 message Merge {
@@ -151,6 +152,7 @@ message LockTarget {
   int32 refresh_ts_idx_in_bat   = 4;
   int32 filter_col_idx_in_bat   = 5;
   bool lock_table               = 6;
+  bool ChangeDef               = 7;
 }
 
 message LockOp {

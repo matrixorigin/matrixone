@@ -162,6 +162,15 @@ func GetOneBlockMeta(rel handle.Relation) *catalog.BlockEntry {
 	return it.GetBlock().GetMeta().(*catalog.BlockEntry)
 }
 
+func GetAllBlockMetas(rel handle.Relation) (metas []*catalog.BlockEntry) {
+	it := rel.MakeBlockIt()
+	for ; it.Valid(); it.Next() {
+		blk := it.GetBlock()
+		metas = append(metas, blk.GetMeta().(*catalog.BlockEntry))
+	}
+	return
+}
+
 func CheckAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
 	schema := rel.Schema().(*catalog.Schema)
 	for _, def := range schema.ColDefs {
@@ -390,7 +399,7 @@ func MockCNDeleteInS3(
 	if err != nil {
 		return
 	}
-	_, err = writer.WriteBatchWithOutIndex(containers.ToCNBatch(bat))
+	_, err = writer.WriteTombstoneBatch(containers.ToCNBatch(bat))
 	if err != nil {
 		return
 	}

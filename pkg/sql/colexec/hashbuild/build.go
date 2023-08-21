@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const batchSize = 8192
 
 func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" hash build ")
@@ -115,6 +116,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
 
+	batches := make([]*batch.Batch, 0)
+	rowCount := 0
+	var tmpBatch *batch.Batch
+
 	for {
 		var bat *batch.Batch
 		if ap.ctr.isMerge {
@@ -130,17 +135,49 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if bat == nil {
 			break
 		}
-		if bat.RowCount() == 0 {
-			bat.Clean(proc.Mp())
+		if bat.IsEmpty() {
+			proc.PutBatch(bat)
 			continue
 		}
 		anal.Input(bat, isFirst)
 		anal.Alloc(int64(bat.Size()))
-		ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat)
-		proc.PutBatch(bat)
-		if err != nil {
+
+		rowCount += bat.RowCount()
+		if bat.RowCount() >= batchSize/2 {
+			batches = append(batches, bat)
+		} else {
+			if tmpBatch == nil {
+				tmpBatch, err = bat.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
+			} else {
+				tmpBatch, err = tmpBatch.Append(proc.Ctx, proc.Mp(), bat)
+				if err != nil {
+					return err
+				}
+			}
+			if tmpBatch.RowCount() >= batchSize {
+				batches = append(batches, tmpBatch)
+				tmpBatch = nil
+			}
+			proc.PutBatch(bat)
+		}
+	}
+
+	if tmpBatch != nil {
+		batches = append(batches, tmpBatch)
+	}
+	err = ctr.bat.PreExtend(proc.Mp(), rowCount)
+	if err != nil {
+		return err
+	}
+
+	for i := range batches {
+		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), batches[i]); err != nil {
 			return err
 		}
+		proc.PutBatch(batches[i])
 	}
 
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {

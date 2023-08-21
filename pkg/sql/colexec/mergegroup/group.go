@@ -76,6 +76,8 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 						if vec != nil {
 							anal.Alloc(int64(vec.Size()))
 						}
+
+						agg.Free(proc.Mp())
 					}
 					ctr.bat.Aggs = nil
 				}
