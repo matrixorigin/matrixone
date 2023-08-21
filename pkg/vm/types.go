@@ -59,6 +59,7 @@ const (
 	Deletion
 	Insert
 	External
+	Stream
 
 	Minus
 	Intersect

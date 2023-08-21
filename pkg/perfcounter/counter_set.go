@@ -84,6 +84,7 @@ type DistTAECounterSet struct {
 		MetadataDeleteEntries stats.Counter
 
 		InsertRows   stats.Counter
+		DeleteRows   stats.Counter
 		ActiveRows   stats.Counter
 		InsertBlocks stats.Counter
 	}

@@ -837,13 +837,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	blkDeleteAt := blk.GetDeleteAt()
-	if !blkDeleteAt.IsEmpty() {
-		if !blkDeleteAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), blkDeleteAt.ToString()))
-		}
-		return
-	}
+
 	prevUn := blk.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*MetadataMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
@@ -1142,6 +1136,9 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 		}
 		if err = dbEntry.RecurLoop(processor); err != nil {
 			return
+		}
+		if err = processor.OnPostDatabase(dbEntry); err != nil {
+			break
 		}
 		dbIt.Next()
 	}
