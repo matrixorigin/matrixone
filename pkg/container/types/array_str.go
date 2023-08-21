@@ -47,9 +47,12 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 	// skip [
 	strIdx++
 
-	// we take the subarray from x based on final array dimension.
-	x := make([]T, MaxArrayDimension)
+	// we tried making x as `array` with size=MaxArrayDimension and returning the subarray as result.
+	// Then we made x as `slice` and did the same operation. We did not observe any significant change.
+	// May be should we add pooling on `x`?
+	var x []T
 	dim := 0
+	var val T
 	var err error
 
 	// find the next "," from the strIdx. More like IndexOf(",", startIdx) from java.
@@ -75,7 +78,8 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 		}
 
 		// convert numStr to T
-		x[dim], err = stringToT[T](str[strIdx:commaPos])
+		val, err = stringToT[T](str[strIdx:commaPos])
+		x = append(x, val)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +111,8 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 	}
 
 	// convert numStr to T and incr dim
-	x[dim], err = stringToT[T](str[strIdx:endBracketPos])
+	val, err = stringToT[T](str[strIdx:endBracketPos])
+	x = append(x, val)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +133,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 	}
 
 	// return subarray of x based on the final dimension.
-	return x[:dim], nil
+	return x, nil
 }
 
 // StringToArrayV3 this implementation uses only one forloop without casting string to rune array (via unsafe)
@@ -149,9 +154,12 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 	// skip [
 	strIdx++
 
-	// we take the subarray from x based on final array dimension.
-	x := make([]T, MaxArrayDimension)
+	// we tried making x as `array` with size=MaxArrayDimension and returning the subarray as result.
+	// Then we made x as `slice` and did the same operation. We did not observe any significant change.
+	// May be should we add pooling on `x`?
+	var x []T
 	dim := 0
+	var val T
 	var err error
 
 	// find the next "," from the strIdx. More like IndexOf(",", startIdx) from java.
@@ -177,7 +185,8 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 		}
 
 		// convert numStr to T
-		x[dim], err = stringToT[T](str[strIdx:commaPos])
+		val, err = stringToT[T](str[strIdx:commaPos])
+		x = append(x, val)
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +218,8 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 	}
 
 	// convert numStr to T and incr dim
-	x[dim], err = stringToT[T](str[strIdx:endBracketPos])
+	val, err = stringToT[T](str[strIdx:endBracketPos])
+	x = append(x, val)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +240,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 	}
 
 	// return subarray of x based on the final dimension.
-	return x[:dim], nil
+	return x, nil
 }
 
 // unsafeStringAt used when we want str[idx] without casting str to []rune
