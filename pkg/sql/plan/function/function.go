@@ -82,6 +82,10 @@ func GetFunctionIsWinOrderFunByName(name string) bool {
 	return f.isWindowOrder()
 }
 
+func GetFunctionIsWinFunById(functionID int32) bool {
+	return allSupportedFunctions[functionID].isWindowOrder()
+}
+
 func GetFunctionIsMonotonicById(ctx context.Context, overloadID int64) (bool, error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {

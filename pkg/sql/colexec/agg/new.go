@@ -17,153 +17,124 @@ package agg
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
-
-// ReturnType get aggregate operator's return type according to its operator-id and input-types.
-func ReturnType(op int, typ types.Type) (types.Type, error) {
-	var otyp types.Type
-
-	switch op {
-	case AggregateAvg:
-		otyp = AvgReturnType([]types.Type{typ})
-	case AggregateMax:
-		otyp = MaxReturnType([]types.Type{typ})
-	case AggregateMin:
-		otyp = MinReturnType([]types.Type{typ})
-	case AggregateSum:
-		otyp = SumReturnType([]types.Type{typ})
-	case AggregateCount, AggregateStarCount:
-		otyp = CountReturnType([]types.Type{typ})
-	case AggregateApproxCountDistinct:
-		otyp = ApproxCountReturnType([]types.Type{typ})
-	case AggregateVariance:
-		otyp = VarianceReturnType([]types.Type{typ})
-	case AggregateBitAnd:
-		otyp = BitAndReturnType([]types.Type{typ})
-	case AggregateBitXor:
-		otyp = BitXorReturnType([]types.Type{typ})
-	case AggregateBitOr:
-		otyp = BitOrReturnType([]types.Type{typ})
-	case AggregateStdDevPop:
-		otyp = StdDevPopReturnType([]types.Type{typ})
-	case AggregateMedian:
-		otyp = MedianReturnType([]types.Type{typ})
-	case WinRank:
-		otyp = RankReturnType()
-	case WinRowNumber:
-		otyp = RowNumberReturnType()
-	case WinDenseRank:
-		otyp = DenseRankReturnType()
-	}
-	if otyp.Oid == types.T_any {
-		return typ, moerr.NewInternalErrorNoCtx("'%v' not support %s", typ, Names[op])
-	}
-	return otyp, nil
-}
 
 func New(op int, dist bool, typ types.Type) (Agg[any], error) {
 	return NewWithConfig(op, dist, typ, nil)
 }
 
-func NewWithConfig(op int, dist bool, typ types.Type, config any) (Agg[any], error) {
-	switch op {
-	case AggregateSum:
-		return newSum(typ, dist), nil
-	case AggregateAvg:
-		return newAvg(typ, dist), nil
-	case AggregateMax:
-		return newMax(typ, dist), nil
-	case AggregateMin:
-		return newMin(typ, dist), nil
-	case AggregateCount:
-		return newCount(typ, dist, false), nil
-	case AggregateStarCount:
-		return newCount(typ, dist, true), nil
-	case AggregateApproxCountDistinct:
-		return newApprox(typ, dist), nil
-	case AggregateVariance:
-		return newVariance(typ, dist), nil
-	case AggregateBitAnd:
-		return newBitAnd(typ, dist), nil
-	case AggregateBitXor:
-		return newBitXor(typ, dist), nil
-	case AggregateBitOr:
-		return newBitOr(typ, dist), nil
-	case AggregateStdDevPop:
-		return newStdDevPop(typ, dist), nil
-	case AggregateAnyValue:
-		return newAnyValue(typ, dist), nil
-	case AggregateMedian:
-		return newMedian(typ, dist), nil
-	case AggregateGroupConcat:
-		return NewGroupConcat(typ, dist, config), nil
-	case WinRank:
-		r := NewRank()
-		return NewUnaryAgg(WinRank, r, false, typ, RankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
-	case WinRowNumber:
-		r := NewRowNumber()
-		return NewUnaryAgg(WinRowNumber, r, false, typ, RowNumberReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
-	case WinDenseRank:
-		r := NewDenseRank()
-		return NewUnaryAgg(WinDenseRank, r, false, typ, DenseRankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+func NewWithConfig(op int, dist bool, inputType types.Type, config any) (a Agg[any], err error) {
+	overloadID := int64(op)
+
+	f, exist := function.GetFunctionByIdWithoutError(overloadID)
+	if !exist {
+		panic(moerr.NewInternalErrorNoCtx("unsupported aggregate %d", overloadID))
 	}
-	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for aggregate %s", typ, Names[op]))
+	functionID, _ := function.DecodeOverloadID(overloadID)
+
+	retTyp := f.GetReturnTypeMethod()
+	outputTyp := retTyp([]types.Type{inputType})
+
+	switch functionID {
+	case function.SUM:
+		return newSum(inputType, outputTyp, dist), nil
+	case function.AVG:
+		return newAvg(inputType, outputTyp, dist), nil
+	case function.MAX:
+		return newMax(inputType, outputTyp, dist), nil
+	case function.MIN:
+		return newMin(inputType, outputTyp, dist), nil
+	case function.COUNT:
+		return newCount(inputType, outputTyp, dist, false), nil
+	case function.STARCOUNT:
+		return newCount(inputType, outputTyp, dist, true), nil
+	case function.APPROX_COUNT_DISTINCT:
+		return newApprox(inputType, outputTyp, dist), nil
+	case function.VAR_POP:
+		return newVariance(inputType, outputTyp, dist), nil
+	case function.BIT_AND:
+		return newBitAnd(inputType, outputTyp, dist), nil
+	case function.BIT_XOR:
+		return newBitXor(inputType, outputTyp, dist), nil
+	case function.BIT_OR:
+		return newBitOr(inputType, outputTyp, dist), nil
+	case function.STDDEV_POP:
+		return newStdDevPop(inputType, outputTyp, dist), nil
+	case function.ANY_VALUE:
+		return newAnyValue(inputType, outputTyp, dist), nil
+	case function.MEDIAN:
+		return newMedian(inputType, outputTyp, dist), nil
+	case function.GROUP_CONCAT:
+		outputTyp = retTyp(nil)
+		return NewGroupConcat(inputType, outputTyp, dist, config), nil
+	case function.RANK:
+		r := NewRank()
+		return NewUnaryAgg(WinRank, r, false, inputType, RankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+	case function.ROW_NUMBER:
+		r := NewRowNumber()
+		return NewUnaryAgg(WinRowNumber, r, false, inputType, RowNumberReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+	case function.DENSE_RANK:
+		r := NewDenseRank()
+		return NewUnaryAgg(WinDenseRank, r, false, inputType, DenseRankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+	}
+	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for aggregate %s", inputType, Names[functionID]))
 }
 
-func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
+func newCount(typ types.Type, otyp types.Type, dist bool, isStar bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
-		return newGenericCount[bool](typ, dist, isStar)
+		return newGenericCount[bool](typ, otyp, dist, isStar)
 	case types.T_int8:
-		return newGenericCount[int8](typ, dist, isStar)
+		return newGenericCount[int8](typ, otyp, dist, isStar)
 	case types.T_int16:
-		return newGenericCount[int16](typ, dist, isStar)
+		return newGenericCount[int16](typ, otyp, dist, isStar)
 	case types.T_int32:
-		return newGenericCount[int32](typ, dist, isStar)
+		return newGenericCount[int32](typ, otyp, dist, isStar)
 	case types.T_int64:
-		return newGenericCount[int64](typ, dist, isStar)
+		return newGenericCount[int64](typ, otyp, dist, isStar)
 	case types.T_uint8:
-		return newGenericCount[uint8](typ, dist, isStar)
+		return newGenericCount[uint8](typ, otyp, dist, isStar)
 	case types.T_uint16:
-		return newGenericCount[uint16](typ, dist, isStar)
+		return newGenericCount[uint16](typ, otyp, dist, isStar)
 	case types.T_uint32:
-		return newGenericCount[uint32](typ, dist, isStar)
+		return newGenericCount[uint32](typ, otyp, dist, isStar)
 	case types.T_uint64:
-		return newGenericCount[uint64](typ, dist, isStar)
+		return newGenericCount[uint64](typ, otyp, dist, isStar)
 	case types.T_float32:
-		return newGenericCount[float32](typ, dist, isStar)
+		return newGenericCount[float32](typ, otyp, dist, isStar)
 	case types.T_float64:
-		return newGenericCount[float64](typ, dist, isStar)
+		return newGenericCount[float64](typ, otyp, dist, isStar)
 	case types.T_char:
-		return newGenericCount[[]byte](typ, dist, isStar)
+		return newGenericCount[[]byte](typ, otyp, dist, isStar)
 	case types.T_varchar:
-		return newGenericCount[[]byte](typ, dist, isStar)
+		return newGenericCount[[]byte](typ, otyp, dist, isStar)
 	case types.T_blob:
-		return newGenericCount[[]byte](typ, dist, isStar)
+		return newGenericCount[[]byte](typ, otyp, dist, isStar)
 	case types.T_json:
-		return newGenericCount[[]byte](typ, dist, isStar)
+		return newGenericCount[[]byte](typ, otyp, dist, isStar)
 	case types.T_text:
-		return newGenericCount[[]byte](typ, dist, isStar)
+		return newGenericCount[[]byte](typ, otyp, dist, isStar)
 	case types.T_binary:
-		return newGenericCount[[]byte](typ, dist, isStar)
+		return newGenericCount[[]byte](typ, otyp, dist, isStar)
 	case types.T_varbinary:
-		return newGenericCount[[]byte](typ, dist, isStar)
+		return newGenericCount[[]byte](typ, otyp, dist, isStar)
 	case types.T_date:
-		return newGenericCount[types.Date](typ, dist, isStar)
+		return newGenericCount[types.Date](typ, otyp, dist, isStar)
 	case types.T_datetime:
-		return newGenericCount[types.Datetime](typ, dist, isStar)
+		return newGenericCount[types.Datetime](typ, otyp, dist, isStar)
 	case types.T_time:
-		return newGenericCount[types.Time](typ, dist, isStar)
+		return newGenericCount[types.Time](typ, otyp, dist, isStar)
 	case types.T_timestamp:
-		return newGenericCount[types.Timestamp](typ, dist, isStar)
+		return newGenericCount[types.Timestamp](typ, otyp, dist, isStar)
 	case types.T_enum:
-		return newGenericCount[types.Enum](typ, dist, isStar)
+		return newGenericCount[types.Enum](typ, otyp, dist, isStar)
 	case types.T_decimal64:
-		return newGenericCount[types.Decimal64](typ, dist, isStar)
+		return newGenericCount[types.Decimal64](typ, otyp, dist, isStar)
 	case types.T_decimal128:
-		return newGenericCount[types.Decimal128](typ, dist, isStar)
+		return newGenericCount[types.Decimal128](typ, otyp, dist, isStar)
 	case types.T_uuid:
-		return newGenericCount[types.Uuid](typ, dist, isStar)
+		return newGenericCount[types.Uuid](typ, otyp, dist, isStar)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for count", typ))
 }
@@ -224,326 +195,326 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for anyvalue", typ))
 }
 
-func newAvg(typ types.Type, dist bool) Agg[any] {
+func newAvg(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
-		return newGenericAvg[int8](typ, dist)
+		return newGenericAvg[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericAvg[int16](typ, dist)
+		return newGenericAvg[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericAvg[int32](typ, dist)
+		return newGenericAvg[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericAvg[int64](typ, dist)
+		return newGenericAvg[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericAvg[uint8](typ, dist)
+		return newGenericAvg[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericAvg[uint16](typ, dist)
+		return newGenericAvg[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericAvg[uint32](typ, dist)
+		return newGenericAvg[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericAvg[uint64](typ, dist)
+		return newGenericAvg[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericAvg[float32](typ, dist)
+		return newGenericAvg[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericAvg[float64](typ, dist)
+		return newGenericAvg[float64](typ, otyp, dist)
 	case types.T_decimal64:
 		aggPriv := NewD64Avg(typ)
 		if dist {
-			return NewUnaryDistAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.AVG, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.AVG, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewD128Avg(typ)
 		if dist {
-			return NewUnaryDistAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.AVG, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.AVG, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for avg", typ))
 }
 
-func newSum(typ types.Type, dist bool) Agg[any] {
-	switch typ.Oid {
+func newSum(ityp types.Type, otyp types.Type, dist bool) Agg[any] {
+	switch ityp.Oid {
 	case types.T_int8:
-		return newGenericSum[int8, int64](typ, dist)
+		return newGenericSum[int8, int64](ityp, otyp, dist)
 	case types.T_int16:
-		return newGenericSum[int16, int64](typ, dist)
+		return newGenericSum[int16, int64](ityp, otyp, dist)
 	case types.T_int32:
-		return newGenericSum[int32, int64](typ, dist)
+		return newGenericSum[int32, int64](ityp, otyp, dist)
 	case types.T_int64:
-		return newGenericSum[int64, int64](typ, dist)
+		return newGenericSum[int64, int64](ityp, otyp, dist)
 	case types.T_uint8:
-		return newGenericSum[uint8, uint64](typ, dist)
+		return newGenericSum[uint8, uint64](ityp, otyp, dist)
 	case types.T_uint16:
-		return newGenericSum[uint16, uint64](typ, dist)
+		return newGenericSum[uint16, uint64](ityp, otyp, dist)
 	case types.T_uint32:
-		return newGenericSum[uint32, uint64](typ, dist)
+		return newGenericSum[uint32, uint64](ityp, otyp, dist)
 	case types.T_uint64:
-		return newGenericSum[uint64, uint64](typ, dist)
+		return newGenericSum[uint64, uint64](ityp, otyp, dist)
 	case types.T_float32:
-		return newGenericSum[float32, float64](typ, dist)
+		return newGenericSum[float32, float64](ityp, otyp, dist)
 	case types.T_float64:
-		return newGenericSum[float64, float64](typ, dist)
+		return newGenericSum[float64, float64](ityp, otyp, dist)
 	case types.T_decimal64:
 		aggPriv := NewD64Sum()
 		if dist {
-			return NewUnaryDistAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.SUM, aggPriv, false, ityp, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.SUM, aggPriv, false, ityp, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewD128Sum()
 		if dist {
-			return NewUnaryDistAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.SUM, aggPriv, false, ityp, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.SUM, aggPriv, false, ityp, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
-	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for sum", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for sum", ityp))
 }
 
-func newMax(typ types.Type, dist bool) Agg[any] {
+func newMax(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		aggPriv := NewBoolMax()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_int8:
-		return newGenericMax[int8](typ, dist)
+		return newGenericMax[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericMax[int16](typ, dist)
+		return newGenericMax[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericMax[int32](typ, dist)
+		return newGenericMax[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericMax[int64](typ, dist)
+		return newGenericMax[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericMax[uint8](typ, dist)
+		return newGenericMax[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericMax[uint16](typ, dist)
+		return newGenericMax[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericMax[uint32](typ, dist)
+		return newGenericMax[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericMax[uint64](typ, dist)
+		return newGenericMax[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericMax[float32](typ, dist)
+		return newGenericMax[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericMax[float64](typ, dist)
+		return newGenericMax[float64](typ, otyp, dist)
 	case types.T_binary:
 		aggPriv := NewStrMax()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_varbinary:
 		aggPriv := NewStrMax()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_char:
 		aggPriv := NewStrMax()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_varchar:
 		aggPriv := NewStrMax()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_blob:
 		aggPriv := NewStrMax()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_text:
 		aggPriv := NewStrMax()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_date:
-		return newGenericMax[types.Date](typ, dist)
+		return newGenericMax[types.Date](typ, otyp, dist)
 	case types.T_datetime:
-		return newGenericMax[types.Datetime](typ, dist)
+		return newGenericMax[types.Datetime](typ, otyp, dist)
 	case types.T_time:
-		return newGenericMax[types.Time](typ, dist)
+		return newGenericMax[types.Time](typ, otyp, dist)
 	case types.T_timestamp:
-		return newGenericMax[types.Timestamp](typ, dist)
+		return newGenericMax[types.Timestamp](typ, otyp, dist)
 	case types.T_enum:
-		return newGenericMax[types.Enum](typ, dist)
+		return newGenericMax[types.Enum](typ, otyp, dist)
 	case types.T_decimal64:
 		aggPriv := NewD64Max()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewD128Max()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_uuid:
 		aggPriv := NewUuidMax()
 		if dist {
-			return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for max", typ))
 }
 
-func newMin(typ types.Type, dist bool) Agg[any] {
+func newMin(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		aggPriv := NewBoolMin()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_int8:
-		return newGenericMin[int8](typ, dist)
+		return newGenericMin[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericMin[int16](typ, dist)
+		return newGenericMin[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericMin[int32](typ, dist)
+		return newGenericMin[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericMin[int64](typ, dist)
+		return newGenericMin[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericMin[uint8](typ, dist)
+		return newGenericMin[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericMin[uint16](typ, dist)
+		return newGenericMin[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericMin[uint32](typ, dist)
+		return newGenericMin[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericMin[uint64](typ, dist)
+		return newGenericMin[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericMin[float32](typ, dist)
+		return newGenericMin[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericMin[float64](typ, dist)
+		return newGenericMin[float64](typ, otyp, dist)
 	case types.T_binary:
 		aggPriv := NewStrMin()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_varbinary:
 		aggPriv := NewStrMin()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_char:
 		aggPriv := NewStrMin()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_varchar:
 		aggPriv := NewStrMin()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_blob:
 		aggPriv := NewStrMin()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_text:
 		aggPriv := NewStrMin()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_date:
-		return newGenericMin[types.Date](typ, dist)
+		return newGenericMin[types.Date](typ, otyp, dist)
 	case types.T_datetime:
-		return newGenericMin[types.Datetime](typ, dist)
+		return newGenericMin[types.Datetime](typ, otyp, dist)
 	case types.T_time:
-		return newGenericMin[types.Time](typ, dist)
+		return newGenericMin[types.Time](typ, otyp, dist)
 	case types.T_timestamp:
-		return newGenericMin[types.Timestamp](typ, dist)
+		return newGenericMin[types.Timestamp](typ, otyp, dist)
 	case types.T_enum:
-		return newGenericMin[types.Enum](typ, dist)
+		return newGenericMin[types.Enum](typ, otyp, dist)
 	case types.T_decimal64:
 		aggPriv := NewD64Min()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewD128Min()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_uuid:
 		aggPriv := NewUuidMin()
 		if dist {
-			return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for min", typ))
 }
 
-func newApprox(typ types.Type, dist bool) Agg[any] {
+func newApprox(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
-		return newGenericApproxcd[bool](typ, dist)
+		return newGenericApproxcd[bool](typ, otyp, dist)
 	case types.T_int8:
-		return newGenericApproxcd[int8](typ, dist)
+		return newGenericApproxcd[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericApproxcd[int16](typ, dist)
+		return newGenericApproxcd[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericApproxcd[int32](typ, dist)
+		return newGenericApproxcd[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericApproxcd[int64](typ, dist)
+		return newGenericApproxcd[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericApproxcd[uint8](typ, dist)
+		return newGenericApproxcd[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericApproxcd[uint16](typ, dist)
+		return newGenericApproxcd[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericApproxcd[uint32](typ, dist)
+		return newGenericApproxcd[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericApproxcd[uint64](typ, dist)
+		return newGenericApproxcd[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericApproxcd[float32](typ, dist)
+		return newGenericApproxcd[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericApproxcd[float64](typ, dist)
+		return newGenericApproxcd[float64](typ, otyp, dist)
 	case types.T_char:
-		return newGenericApproxcd[[]byte](typ, dist)
+		return newGenericApproxcd[[]byte](typ, otyp, dist)
 	case types.T_varchar:
-		return newGenericApproxcd[[]byte](typ, dist)
+		return newGenericApproxcd[[]byte](typ, otyp, dist)
 	case types.T_blob:
-		return newGenericApproxcd[[]byte](typ, dist)
+		return newGenericApproxcd[[]byte](typ, otyp, dist)
 	case types.T_text:
-		return newGenericApproxcd[[]byte](typ, dist)
+		return newGenericApproxcd[[]byte](typ, otyp, dist)
 	case types.T_binary:
-		return newGenericApproxcd[[]byte](typ, dist)
+		return newGenericApproxcd[[]byte](typ, otyp, dist)
 	case types.T_varbinary:
-		return newGenericApproxcd[[]byte](typ, dist)
+		return newGenericApproxcd[[]byte](typ, otyp, dist)
 	case types.T_date:
-		return newGenericApproxcd[types.Date](typ, dist)
+		return newGenericApproxcd[types.Date](typ, otyp, dist)
 	case types.T_datetime:
-		return newGenericApproxcd[types.Datetime](typ, dist)
+		return newGenericApproxcd[types.Datetime](typ, otyp, dist)
 	case types.T_time:
-		return newGenericApproxcd[types.Time](typ, dist)
+		return newGenericApproxcd[types.Time](typ, otyp, dist)
 	case types.T_timestamp:
-		return newGenericApproxcd[types.Timestamp](typ, dist)
+		return newGenericApproxcd[types.Timestamp](typ, otyp, dist)
 	case types.T_enum:
-		return newGenericApproxcd[types.Enum](typ, dist)
+		return newGenericApproxcd[types.Enum](typ, otyp, dist)
 	case types.T_decimal64:
-		return newGenericApproxcd[types.Decimal64](typ, dist)
+		return newGenericApproxcd[types.Decimal64](typ, otyp, dist)
 	case types.T_decimal128:
-		return newGenericApproxcd[types.Decimal128](typ, dist)
+		return newGenericApproxcd[types.Decimal128](typ, otyp, dist)
 	case types.T_uuid:
-		return newGenericApproxcd[types.Uuid](typ, dist)
+		return newGenericApproxcd[types.Uuid](typ, otyp, dist)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for approx_count_distinct", typ))
 }
@@ -777,52 +748,52 @@ func newStrAnyValue(typ types.Type, dist bool) Agg[any] {
 	return NewUnaryAgg(AggregateAnyValue, aggPriv, false, typ, AnyValueReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericSum[T1 Numeric, T2 ReturnTyp](typ types.Type, dist bool) Agg[any] {
+func newGenericSum[T1 Numeric, T2 ReturnTyp](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewSum[T1, T2]()
 	if dist {
-		return NewUnaryDistAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.SUM, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateSum, aggPriv, false, typ, SumReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.SUM, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericAvg[T Numeric](typ types.Type, dist bool) Agg[any] {
+func newGenericAvg[T Numeric](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewAvg[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.AVG, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.AVG, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericMax[T Compare](typ types.Type, dist bool) Agg[any] {
+func newGenericMax[T Compare](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewMax[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.MAX, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericMin[T Compare](typ types.Type, dist bool) Agg[any] {
+func newGenericMin[T Compare](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewMin[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.MIN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericCount[T types.OrderedT | Decimal128AndString](typ types.Type, dist bool, isStar bool) Agg[any] {
+func newGenericCount[T types.OrderedT | Decimal128AndString](typ types.Type, otyp types.Type, dist bool, isStar bool) Agg[any] {
 	aggPriv := NewCount[T](isStar)
 	if dist {
-		return NewUnaryDistAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.COUNT, aggPriv, true, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.COUNT, aggPriv, true, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericApproxcd[T any](typ types.Type, dist bool) Agg[any] {
+func newGenericApproxcd[T any](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewApproxc[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateApproxCountDistinct, aggPriv, false, typ, ApproxCountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.APPROX_COUNT, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateApproxCountDistinct, aggPriv, false, typ, ApproxCountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.APPROX_COUNT, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
 func newGenericBitOr[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {

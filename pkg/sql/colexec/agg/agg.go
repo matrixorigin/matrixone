@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func NewUnaryAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
@@ -36,7 +37,6 @@ func NewUnaryAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp ty
 		batchFill: batchFill,
 		isCount:   isCount,
 		ityps:     []types.Type{ityp},
-		err:       nil,
 	}
 }
 
@@ -319,7 +319,7 @@ func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err erro
 
 	// TODO: it's a bad hack here. I will remove it later. and change it to a better way like `a.IsOrderedWindow()`
 	nullList := a.es
-	if GetFunctionIsWinOrderFunBySpecialId(a.op) {
+	if function.GetFunctionIsWinFunById(int32(a.op)) {
 		nullList = nil
 	}
 

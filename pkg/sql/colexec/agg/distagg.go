@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
@@ -34,7 +35,6 @@ func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, oty
 		merge:   merge,
 		isCount: isCount,
 		ityps:   []types.Type{ityp},
-		err:     nil,
 	}
 }
 
@@ -459,7 +459,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err 
 	}
 
 	nullList := a.es
-	if GetFunctionIsWinOrderFunBySpecialId(a.op) {
+	if function.GetFunctionIsWinFunById(int32(a.op)) {
 		nullList = nil
 	}
 
