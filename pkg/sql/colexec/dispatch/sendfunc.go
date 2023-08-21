@@ -112,6 +112,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 				select {
 				case <-reg.Ctx.Done():
 					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
+					return nil
 				case reg.Ch <- bat:
 				}
 			}
@@ -145,6 +146,7 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 				select {
 				case <-reg.Ctx.Done():
 					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
+					return nil
 				case reg.Ch <- bat:
 				}
 			}
@@ -164,6 +166,7 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 				select {
 				case <-reg.Ctx.Done():
 					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
+					return nil
 				case reg.Ch <- bat:
 				}
 			}
