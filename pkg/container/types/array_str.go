@@ -116,7 +116,7 @@ func StringToArrayV2[T RealNumbers](str string) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	dim++
+	//dim++
 
 	// set strIdx after endBracket
 	strIdx = endBracketPos + 1
@@ -223,7 +223,7 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
-	dim++
+	//dim++
 
 	// set strIdx after endBracket
 	strIdx = endBracketPos + 1
