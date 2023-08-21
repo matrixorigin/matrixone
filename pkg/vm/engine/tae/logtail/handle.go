@@ -847,11 +847,42 @@ func LoadCheckpointEntries(
 	return entries, closeCBs, nil
 }
 
-func LoadCheckpointEntriesFromKey(ctx context.Context,fs fileservice.FileService, location objectio.Location)  (*batch.Batch, error) {
-		data := NewCNCheckpointData()
-	    bat,err := data.ReadFromDataWithKey(ctx, location, fs, nil)
-	    if err != nil {
-	    	return nil ,err
+func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location) (map[string]*fileservice.DirEntry, error) {
+	files := make(map[string]*fileservice.DirEntry, 0)
+	locations := make([]objectio.Location, 0)
+	locations = append(locations, location)
+	data := NewCheckpointData()
+	reader, err := blockio.NewObjectReader(fs, location)
+	if err != nil {
+		return nil, err
+	}
+	err = data.readMetaBatch(ctx, CheckpointVersion5, reader, nil)
+	if err != nil {
+		return nil, err
+	}
+	err = data.readAll(ctx, CheckpointVersion5, fs)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, location = range data.locations {
+		locations = append(locations, location)
+	}
+	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
+		metaLoc := objectio.Location(data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		if metaLoc.IsEmpty() {
+			continue
 		}
-		return bat, nil
+		locations = append(locations, metaLoc)
+	}
+	for _, location = range locations {
+		if files[location.Name().String()] == nil {
+			dentry, err := fs.StatFile(ctx, location.Name().String())
+			if err != nil {
+				return nil, err
+			}
+			files[location.Name().String()] = dentry
+		}
+	}
+	return files, nil
 }

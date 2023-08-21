@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -40,14 +41,14 @@ func TestBackupData(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 10
-	testutil.CreateRelation(t, db, "db", schema, true)
+	testutil.CreateRelation(t, db.DB, "db", schema, true)
 
 	totalRows := uint64(schema.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
@@ -61,30 +62,19 @@ func TestBackupData(t *testing.T) {
 	start := time.Now()
 	for _, data := range bats {
 		wg.Add(1)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db, &wg))
+		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
 		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 	{
-		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
+		txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 		testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
-	now := time.Now()
-	testutils.WaitExpect(20000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
-	})
-	t.Log(time.Since(now))
-	t.Logf("Checkpointed: %d", db.Runtime.Scheduler.GetCheckpointedLSN())
-	t.Logf("GetPenddingLSNCnt: %d", db.Runtime.Scheduler.GetPenddingLSNCnt())
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-	t.Log(db.Catalog.SimplePPString(common.PPL1))
-	wg.Add(1)
-	testutil.AppendFailClosure(t, bats[0], schema.Name, db, &wg)()
-	wg.Wait()
+	db.ForceLongCheckpoint()
 
 	dir := path.Join(db.Dir, "/local")
 	c := fileservice.Config{
@@ -94,7 +84,26 @@ func TestBackupData(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
+	db.ForceCheckpoint()
+	db.BGCheckpointRunner.DisableCheckpoint()
+	checkpoints := db.BGCheckpointRunner.GetAllCheckpoints()
+	files := make(map[string]string, 0)
+	for _, candidate := range checkpoints {
+		if files[candidate.GetLocation().Name().String()] == "" {
+			logutil.Infof("checkpoints name: %v", candidate.GetLocation().Name().String())
+			files[candidate.GetLocation().Name().String()] = candidate.GetLocation().String()
+		}
+	}
 
-	err = BackupData(ctx, db.Opts.Fs, service, "local")
+	locations := make([]string, 0)
+	for _, location := range files {
+		locations = append(locations, location)
+	}
+	err = execBackup(ctx, db.Opts.Fs, service, locations)
 	assert.Nil(t, err)
+	db.Opts.Fs = service
+	db.Restart(ctx)
+	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
+	assert.NoError(t, txn.Commit(context.Background()))
 }

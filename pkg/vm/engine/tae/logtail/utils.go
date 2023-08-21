@@ -1827,7 +1827,6 @@ func (data *CheckpointData) readMetaBatch(
 		if err != nil {
 			return
 		}
-		// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
 		data.bats[MetaIDX] = bats[0]
 	}
 	return
