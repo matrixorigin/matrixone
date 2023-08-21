@@ -190,7 +190,7 @@ func TestWriteBlkReadStats(t *testing.T) {
 	s.writeBlkReadStats()
 
 	expected := fmt.Sprintf("duration: %d, "+
-		"blk hit rate: %d/%d=%.4f, entry hit rate: %d/%d=%.4f, (average)blks in each reader: %d/%d=%.4f",
+		"blk hit rate: %d/%d=%.4f, entry hit rate: %d/%d=%.4f, (average) blks in each reader: %d/%d=%.4f",
 		s.gatherInterval,
 		h3, t3, float32(h3)/float32(t3),
 		h2, t2, float32(h2)/float32(t2),
