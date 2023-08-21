@@ -91,8 +91,9 @@ type Runtime struct {
 
 	Fs *objectio.ObjectFS
 
-	TransferTable *model.HashPageTable
-	Scheduler     tasks.TaskScheduler
+	TransferTable   *model.HashPageTable
+	TransferDelsMap *model.TransDelsForBlks
+	Scheduler       tasks.TaskScheduler
 
 	Options *options.Options
 
@@ -103,6 +104,7 @@ type Runtime struct {
 
 func NewRuntime(opts ...RuntimeOption) *Runtime {
 	r := new(Runtime)
+	r.TransferDelsMap = model.NewTransDelsForBlks()
 	for _, opt := range opts {
 		opt(r)
 	}

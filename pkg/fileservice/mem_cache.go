@@ -38,7 +38,7 @@ func NewMemCache(
 		counterSets: counterSets,
 	}
 	ret.memoryPool = newRCBytesPool(capacity)
-	ret.cache = NewLRUCache(capacity, true, callBack, ret.memoryPool.Size)
+	ret.cache = NewLRUCache(capacity, true, callBack, ret.memoryPool.Size, ret.memoryPool.ForceGCChan())
 	return ret
 }
 
@@ -47,6 +47,7 @@ func NewLRUCache(
 	checkOverlaps bool,
 	callbacks *CacheCallbacks,
 	sizeFunc func() int64,
+	forceGCCh chan struct{},
 ) *lrucache.LRU[CacheKey, CacheData] {
 
 	var overlapChecker *interval.OverlapChecker
@@ -96,7 +97,7 @@ func NewLRUCache(
 		}
 	}
 
-	return lrucache.New[CacheKey, CacheData](capacity, sizeFunc, postSetFn, postGetFn, postEvictFn)
+	return lrucache.New[CacheKey, CacheData](capacity, sizeFunc, postSetFn, postGetFn, postEvictFn, forceGCCh)
 }
 
 var _ IOVectorCache = new(MemCache)
@@ -146,7 +147,7 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		bs, ok := m.cache.Get(ctx, key, vector.Preloading)
+		bs, ok := m.cache.Get(ctx, key)
 		numRead++
 		if ok {
 			vector.Entries[i].CachedData = bs
@@ -193,7 +194,7 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		m.cache.Set(ctx, key, entry.CachedData, vector.Preloading)
+		m.cache.Set(ctx, key, entry.CachedData)
 
 	}
 	return nil

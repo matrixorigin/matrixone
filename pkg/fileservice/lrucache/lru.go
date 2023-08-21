@@ -22,12 +22,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
+const (
+	ForceGCRatio = 0.5
+)
+
 type LRU[K comparable, V BytesLike] struct {
 	sync.Mutex
 	capacity  int64
 	size      int64
 	evicts    *list.List
 	sizeFunc  func() int64
+	forceGCCh chan struct{}
 	kv        map[K]*list.Element
 	postSet   func(key K, value V)
 	postGet   func(key K, value V)
@@ -65,8 +70,9 @@ func New[K comparable, V BytesLike](
 	postSet func(keySet K, valSet V),
 	postGet func(key K, value V),
 	postEvict func(keyEvicted K, valEvicted V),
+	forceGCCh chan struct{},
 ) *LRU[K, V] {
-	return &LRU[K, V]{
+	ret := &LRU[K, V]{
 		capacity:  capacity,
 		evicts:    list.New(),
 		kv:        make(map[K]*list.Element),
@@ -74,10 +80,15 @@ func New[K comparable, V BytesLike](
 		postGet:   postGet,
 		postEvict: postEvict,
 		sizeFunc:  sizeFunc,
+		forceGCCh: forceGCCh,
 	}
+	if ret.forceGCCh != nil {
+		go ret.forceGC()
+	}
+	return ret
 }
 
-func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
+func (l *LRU[K, V]) Set(ctx context.Context, key K, value V) {
 	l.Lock()
 	defer l.Unlock()
 
@@ -90,9 +101,6 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 		size := int64(len(value.Bytes()))
 		if l.sizeFunc == nil {
 			l.size += size
-		}
-		if !preloading {
-			l.evicts.MoveToFront(elem)
 		}
 		item.Size = size
 		item.Key = key
@@ -109,12 +117,7 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 			Value: value,
 			Size:  size,
 		}
-		var elem *list.Element
-		if preloading {
-			elem = l.evicts.PushBack(item)
-		} else {
-			elem = l.evicts.PushFront(item)
-		}
+		elem := l.evicts.PushFront(item)
 		l.kv[key] = elem
 		if l.sizeFunc == nil {
 			l.size += size
@@ -175,13 +178,10 @@ func (l *LRU[K, V]) evict(ctx context.Context) {
 	}
 }
 
-func (l *LRU[K, V]) Get(ctx context.Context, key K, preloading bool) (value V, ok bool) {
+func (l *LRU[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	l.Lock()
 	defer l.Unlock()
 	if elem, ok := l.kv[key]; ok {
-		if !preloading {
-			l.evicts.MoveToFront(elem)
-		}
 		item := elem.Value.(*lruItem[K, V])
 		item.NumRead++
 		if l.postGet != nil {
@@ -222,4 +222,31 @@ func (l *LRU[K, V]) Available() int64 {
 		return l.capacity - l.sizeFunc()
 	}
 	return l.capacity - l.size
+}
+
+func (l *LRU[K, V]) forceGC() {
+	/*
+		for {
+			select {
+			case <-l.forceGCCh:
+				l.Lock()
+				for float64(l.sizeFunc()) >= float64(l.capacity)*0.5 {
+					if len(l.kv) == 0 {
+						break
+					}
+					elem := l.evicts.Back()
+					if elem == nil {
+						break
+					}
+					item := elem.Value.(*lruItem[K, V])
+					l.evicts.Remove(elem)
+					delete(l.kv, item.Key)
+					if l.postEvict != nil {
+						l.postEvict(item.Key, item.Value)
+					}
+				}
+				l.Unlock()
+			}
+		}
+	*/
 }

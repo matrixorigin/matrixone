@@ -24,7 +24,6 @@ import (
 	"net"
 	stdhttp "net/http"
 	"net/url"
-	"os"
 	pathpkg "path"
 	gotrace "runtime/trace"
 	"sort"
@@ -516,29 +515,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
 
-		// try to load from disk cache
-		if s.diskCache != nil {
-			r, err := s.diskCache.GetFileContent(ctx, vector.FilePath, min)
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
-				os.IsNotExist(err) {
-				err = nil
-			}
-			if err != nil {
-				return nil, err
-			}
-			if r != nil {
-				// cache hit
-				if readToEnd {
-					return r, nil
-				} else {
-					return &readCloser{
-						r:         io.LimitReader(r, max-min),
-						closeFunc: r.Close,
-					}, nil
-				}
-			}
-		}
-
 		if readToEnd {
 			r, err := s.s3GetObject(
 				ctx,
@@ -724,16 +700,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		vector.Entries[i] = entry
 	}
 
-	return nil
-}
-
-func (s *S3FS) Preload(ctx context.Context, filePath string) error {
-	if s.diskCache != nil {
-		err := s.diskCache.SetFileContent(ctx, filePath, s.read)
-		if err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

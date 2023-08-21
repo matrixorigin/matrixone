@@ -51,9 +51,6 @@ type FileService interface {
 	// returns ErrFileNotFound if requested file not found
 	StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 
-	// Preload indicates the service to preload a file
-	Preload(ctx context.Context, filePath string) error
-
 	// Alloc used to allocate a block of memory of size from the fs private pool
 	Alloc(size int) CacheData
 }
@@ -78,8 +75,6 @@ type IOVector struct {
 	ExpireAt time.Time
 	// CachePolicy controls cache policy for the vector
 	CachePolicy CachePolicy
-	// Preloading indicates whether the I/O is for preloading
-	Preloading bool
 
 	// Hash stores hash sum of written file if both Sum and New is not null
 	// Hash.Sum may be incorrect if Write fails

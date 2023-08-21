@@ -212,7 +212,7 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
 	if node.nt == NT_Persisted {
-		if node.chain.Load().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()) {
+		if found, _ := node.chain.Load().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()); found {
 			return txnif.ErrTxnNeedRetry
 		}
 	}
@@ -365,6 +365,10 @@ func (node *DeleteNode) StringLocked() string {
 	if node.nt == NT_Persisted {
 		ntype = "PERSISTED"
 	}
+	dtype := "N"
+	if node.dt == handle.DT_MergeCompact {
+		dtype = "MC"
+	}
 	commitState := "C"
 	if node.GetEnd() == txnif.UncommitTS {
 		commitState = "UC"
@@ -376,7 +380,7 @@ func (node *DeleteNode) StringLocked() string {
 	case NT_Persisted:
 		payload = fmt.Sprintf("[delta=%s]", node.deltaloc.String())
 	}
-	s := fmt.Sprintf("[%s:%s]%s%s", ntype, commitState, payload, node.TxnMVCCNode.String())
+	s := fmt.Sprintf("[%s:%s:%s]%s%s", ntype, commitState, dtype, payload, node.TxnMVCCNode.String())
 	return s
 }
 

@@ -1,11 +1,11 @@
 logservices = [
-    "./etc/launch/log.toml",
+    "./etc/launch-tae-CN-tae-DN/log.toml",
 ]
 
 dnservices = [
-    "./etc/launch/dn.toml"
+    "./etc/launch-tae-CN-tae-DN/dn.toml"
 ]
 
 cnservices = [
-    "./etc/launch/cn.toml"
+    "./etc/launch-tae-CN-tae-DN/cn.toml"
 ]

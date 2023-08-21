@@ -18,7 +18,6 @@ package fileservice
 import "C"
 import (
 	"sync/atomic"
-	"unsafe"
 )
 
 const (
@@ -59,12 +58,13 @@ func (r *RCBytes) Release() {
 }
 
 type rcBytesPool struct {
-	limit int64
-	size  atomic.Int64
+	limit     int64
+	size      atomic.Int64
+	forceGCCh chan struct{}
 }
 
 func newRCBytesPool(limit int64) *rcBytesPool {
-	return &rcBytesPool{limit: limit}
+	return &rcBytesPool{limit: limit, forceGCCh: make(chan struct{})}
 }
 
 var _ CacheDataAllocator = new(rcBytesPool)
@@ -73,7 +73,20 @@ func (r *rcBytesPool) Size() int64 {
 	return r.size.Load()
 }
 
+func (r *rcBytesPool) ForceGCChan() chan struct{} {
+	return r.forceGCCh
+}
+
 func (r *rcBytesPool) Alloc(size int) CacheData {
+	/*
+		if r.size.Load() > r.limit {
+			r.forceGCCh <- struct{}{}
+			// forced cleanup of excess memory
+			// runtime.GC()
+			go debug.FreeOSMemory()
+		}
+	*/
+
 	item := &RCBytes{
 		pool: r,
 		data: alloc(size),
@@ -83,23 +96,29 @@ func (r *rcBytesPool) Alloc(size int) CacheData {
 	return item
 }
 
+// the impact of gc and cgo is currently ambiguous and it is not clear how it will be handled for the time being
 func alloc(size int) []byte {
-	ptr := C.calloc(C.size_t(size), 1)
-	if ptr == nil {
-		// NB: throw is like panic, except it guarantees the process will be
-		// terminated. The call below is exactly what the Go runtime invokes when
-		// it cannot allocate memory.
-		panic("out of memory")
-	}
-	// Interpret the C pointer as a pointer to a Go array, then slice.
-	return (*[MaxArrayLen]byte)(unsafe.Pointer(ptr))[:size:size]
+	return make([]byte, size, size)
+	/*
+		ptr := C.calloc(C.size_t(size), 1)
+		if ptr == nil {
+			// NB: throw is like panic, except it guarantees the process will be
+			// terminated. The call below is exactly what the Go runtime invokes when
+			// it cannot allocate memory.
+			panic("out of memory")
+		}
+		// Interpret the C pointer as a pointer to a Go array, then slice.
+		return (*[MaxArrayLen]byte)(unsafe.Pointer(ptr))[:size:size]
+	*/
 }
 
 // free frees the specified slice.
 func free(b []byte) {
-	if cap(b) != 0 {
-		b = b[:cap(b)]
-		ptr := unsafe.Pointer(&b[0])
-		C.free(ptr)
-	}
+	/*
+		if cap(b) != 0 {
+			b = b[:cap(b)]
+			ptr := unsafe.Pointer(&b[0])
+			C.free(ptr)
+		}
+	*/
 }

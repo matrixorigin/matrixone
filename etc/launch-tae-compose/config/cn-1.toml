@@ -44,9 +44,21 @@ service-addresses = ["logservice:32001"]
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
-port-base = 18200
+listen-address = "0.0.0.0:6002"
+service-address = "cn-1:6002"
 sql-address = "cn-1:6001"
-service-host = "cn-1"
+
+[cn.lockservice]
+listen-address = "0.0.0.0:17001"
+service-address = "cn-1:17001"
+
+[cn.ctl.address]
+listen-address = "0.0.0.0:19958"
+service-address = "cn-1:19958"
+
+[cn.query-service.address]
+listen-address = "0.0.0.0:19998"
+service-address = "cn-1:19998"
 
 [cn.Engine]
 type = "distributed-tae"
@@ -54,3 +66,4 @@ type = "distributed-tae"
 [cn.frontend]
 port = 6001
 
+[cn.txn]

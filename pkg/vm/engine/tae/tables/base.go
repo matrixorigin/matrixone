@@ -80,6 +80,22 @@ func (blk *baseBlock) Close() {
 	// TODO
 }
 
+func (blk *baseBlock) GetRuntime() *dbutils.Runtime {
+	return blk.rt
+}
+
+func (blk *baseBlock) EstimateMemSize() int {
+	node := blk.PinNode()
+	defer node.Unref()
+	blk.RLock()
+	defer blk.RUnlock()
+	size := blk.mvcc.EstimateMemSizeLocked()
+	if !node.IsPersisted() {
+		size += node.MustMNode().EstimateMemSize()
+	}
+	return size
+}
+
 func (blk *baseBlock) PinNode() *Node {
 	n := blk.node.Load()
 	// if ref fails, reload.
@@ -323,7 +339,9 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 		abortVec := deletes.Vecs[3].GetDownstreamVector()
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
-		for i := 0; i < deletes.Length(); i++ {
+
+		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), &blk.meta.ID)
+		for i := rstart; i < rend; i++ {
 			if skipAbort {
 				abort := vector.GetFixedAt[bool](abortVec, i)
 				if abort {
@@ -579,11 +597,10 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
-func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool) {
+func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isPersist bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
-	return
+	return blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 }
 
 func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *containers.BlockView, err error) {

@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"io"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -95,30 +94,10 @@ type CacheKey struct {
 
 // DataCache caches IOEntry.CachedData
 type DataCache interface {
-	Set(ctx context.Context, key CacheKey, value CacheData, preloading bool)
-	Get(ctx context.Context, key CacheKey, preloading bool) (value CacheData, ok bool)
+	Set(ctx context.Context, key CacheKey, value CacheData)
+	Get(ctx context.Context, key CacheKey) (value CacheData, ok bool)
 	Flush()
 	Capacity() int64
 	Used() int64
 	Available() int64
-}
-
-// FileContentCache caches contents of files
-type FileContentCache interface {
-	GetFileContent(
-		ctx context.Context,
-		path string,
-		offset int64,
-	) (
-		r io.ReadCloser,
-		err error,
-	)
-
-	SetFileContent(
-		ctx context.Context,
-		path string,
-		readFunc func(ctx context.Context, vec *IOVector) error,
-	) (
-		err error,
-	)
 }

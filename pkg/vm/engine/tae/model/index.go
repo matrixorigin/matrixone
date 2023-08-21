@@ -33,7 +33,7 @@ type simpleLRU struct {
 
 func NewSimpleLRU(capacity int64) LRUCache {
 	return &simpleLRU{
-		impl: *lrucache.New[any, fileservice.Bytes](capacity, nil, nil, nil, nil),
+		impl: *lrucache.New[any, fileservice.Bytes](capacity, nil, nil, nil, nil, nil),
 	}
 }
 
@@ -42,10 +42,10 @@ func (lru *simpleLRU) Size() int64 {
 }
 
 func (lru *simpleLRU) Get(ctx context.Context, k any) (v []byte, ok bool) {
-	v, ok = lru.impl.Get(ctx, k, false)
+	v, ok = lru.impl.Get(ctx, k)
 	return
 }
 
 func (lru *simpleLRU) Set(ctx context.Context, k any, v []byte) {
-	lru.impl.Set(ctx, k, v, false)
+	lru.impl.Set(ctx, k, v)
 }

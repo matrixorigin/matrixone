@@ -377,7 +377,7 @@ func (blk *txnSysBlock) GetColumnDataById(ctx context.Context, colIdx int) (view
 	}
 }
 
-func (blk *txnSysBlock) Prefetch(idxes []uint16) error {
+func (blk *txnSysBlock) Prefetch(idxes []int) error {
 	return nil
 }
 
