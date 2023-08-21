@@ -73,10 +73,8 @@ import (
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold              uint64 = 10 * mpool.MB
-	SingleLineSizeEstimate            uint64 = 300 * mpool.B
-	shuffleJoinProbeChannelBufferSize        = 8
-	shuffleJoinBuildChannelBufferSize        = 2
+	DistributedThreshold   uint64 = 10 * mpool.MB
+	SingleLineSizeEstimate uint64 = 300 * mpool.B
 )
 
 var (
@@ -147,7 +145,7 @@ func (c *Compile) clear() {
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
-	c.s3CounterSet.FileService.ResetS3()
+	c.counterSet = perfcounter.CounterSet{}
 }
 
 // helper function to judge if init temporary engine is needed
@@ -187,7 +185,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	}()
 
 	// with values
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
 	c.ctx = c.proc.Ctx
 
 	// session info and callback function to write back query result.
@@ -207,6 +205,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
 	// generate logic pipeline for query.
 	c.scope, err = c.compileScope(ctx, pn)
+
 	if err != nil {
 		return err
 	}
@@ -819,6 +818,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 		// RelationName
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+	case plan.Node_STREAM_SCAN:
+		ss, err := c.compileStreamScan(ctx, n)
+		if err != nil {
+			return nil, err
+		}
+
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_FILTER, plan.Node_PROJECT, plan.Node_PRE_DELETE:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -1189,7 +1195,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			r.Ctx = rs.Proc.Ctx
 		}
 		rs.Proc.Reg.MergeReceivers = receivers
-		return []*Scope{rs}, nil
+		return c.compileProjection(n, []*Scope{rs}), nil
 	case plan.Node_RECURSIVE_SCAN:
 		receivers := make([]*process.WaitRegister, len(n.SourceStep))
 		for i, step := range n.SourceStep {
@@ -1297,6 +1303,54 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 		Arg:     &merge.Argument{},
 	})
 	return ds
+}
+
+func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
+	_, span := trace.Start(ctx, "compileStreamScan")
+	defer span.End()
+
+	// TODO:
+	// end, err := GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, factory KafkaAdapterFactory) (int64, error)
+	end := int64(0)
+	ps := calculatePartitions(0, end, int64(ncpu))
+
+	ss := make([]*Scope, len(ps))
+	for i := range ss {
+		ss[i] = &Scope{
+			Magic:    Normal,
+			NodeInfo: engine.Node{Addr: c.addr, Mcpu: ncpu},
+			Proc:     process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
+		}
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.Stream,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructStream(n, ps[i]),
+		})
+	}
+	return ss, nil
+}
+
+const StreamMaxInterval = 8192
+
+func calculatePartitions(start, end, n int64) [][2]int64 {
+	var ps [][2]int64
+	interval := (end - start) / n
+	if interval < StreamMaxInterval {
+		interval = StreamMaxInterval
+	}
+	var r int64
+	l := start
+	for i := int64(0); i < n; i++ {
+		r = l + interval
+		if r >= end {
+			ps = append(ps, [2]int64{l, end})
+			break
+		}
+		ps = append(ps, [2]int64{l, r})
+		l = r
+	}
+	return ps
 }
 
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
@@ -2628,6 +2682,9 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, sum, c.anal.Nodes())
 			ss[i].BuildIdx = lnum
+			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+				rr.Ch = make(chan *batch.Batch, 16)
+			}
 		}
 		children = append(children, ss...)
 		if !single {
@@ -2709,6 +2766,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil {
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
+			Ch:  make(chan *batch.Batch, 16),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -2758,10 +2816,6 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 			},
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
-		// this is for shuffle join build scope
-		for _, mr := range rs.Proc.Reg.MergeReceivers {
-			mr.Ch = make(chan *batch.Batch, shuffleJoinBuildChannelBufferSize)
-		}
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
@@ -2826,13 +2880,13 @@ func (c *Compile) initAnalyze(qry *plan.Query) {
 
 func (c *Compile) fillAnalyzeInfo() {
 	// record the number of s3 requests
-	c.anal.S3IOInputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Put.Load())
-	c.anal.S3IOInputCount(c.anal.curr, c.s3CounterSet.FileService.S3.List.Load())
+	c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.Put.Load())
+	c.anal.S3IOInputCount(c.anal.curr, c.counterSet.FileService.S3.List.Load())
 
-	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Head.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Get.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.Delete.Load())
-	c.anal.S3IOOutputCount(c.anal.curr, c.s3CounterSet.FileService.S3.DeleteMulti.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Head.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Get.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.Delete.Load())
+	c.anal.S3IOOutputCount(c.anal.curr, c.counterSet.FileService.S3.DeleteMulti.Load())
 
 	for i, anal := range c.anal.analInfos {
 		atomic.StoreInt64(&c.anal.qry.Nodes[i].AnalyzeInfo.InputRows, atomic.LoadInt64(&anal.InputRows))
