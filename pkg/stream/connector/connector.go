@@ -62,7 +62,7 @@ type Connector interface {
 // KafkaMoConnector is an example implementation of the Connector interface for a Kafka to MO Table connection.
 
 type KafkaMoConnector struct {
-	kafkaAdapter *mokafka.KafkaAdapter
+	kafkaAdapter mokafka.KafkaAdapterInterface
 	options      map[string]any
 	ie           executor.SQLExecutor
 	stopChan     chan struct{}
@@ -125,12 +125,12 @@ func (k *KafkaMoConnector) validateParams() error {
 
 	// 2. Check for valid type
 	if k.options["type"] != "kafka-mo" {
-		return fmt.Errorf("Invalid connector type: %s", k.options["type"])
+		return moerr.NewInternalError(context.Background(), "Invalid connector type")
 	}
 
 	// 3. Check for supported value format
 	if k.options["value"] != "json" {
-		return fmt.Errorf("Unsupported value format: %s", k.options["value"])
+		return moerr.NewInternalError(context.Background(), "Unsupported value format")
 	}
 
 	return nil
@@ -148,15 +148,20 @@ func (k *KafkaMoConnector) Prepare() error {
 
 // Start begins consuming messages from Kafka and writing them to the MO Table.
 func (k *KafkaMoConnector) Start(ctx context.Context) error {
-	if k.kafkaAdapter == nil || k.kafkaAdapter.Consumer == nil {
-		return moerr.NewInternalError(ctx, "Kafka consumer not initialized")
+	if k.kafkaAdapter == nil {
+		return moerr.NewInternalError(ctx, "Kafka Adapter not initialized")
 	}
 
+	ct, err := k.kafkaAdapter.GetKafkaConsumer()
+
+	if err != nil {
+		return moerr.NewInternalError(ctx, "Kafka Adapter Consumer not initialized")
+	}
 	// Define the topic to consume from
 	topic := k.options["topic"].(string)
 
 	// Subscribe to the topic
-	if err := k.kafkaAdapter.Consumer.Subscribe(topic, nil); err != nil {
+	if err := ct.Subscribe(topic, nil); err != nil {
 		return moerr.NewInternalError(ctx, "Failed to subscribe to topic")
 	}
 	// Continuously listen for messages
@@ -165,7 +170,7 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 		case <-k.stopChan:
 			return nil
 		default:
-			ev := k.kafkaAdapter.Consumer.Poll(100)
+			ev := ct.Poll(100)
 			if ev == nil {
 				continue
 			}
@@ -218,10 +223,12 @@ func convertJSONToInsertSQL(jsonMessage string, database string, table string) (
 func (k *KafkaMoConnector) Close() error {
 	close(k.stopChan)
 	// Close the Kafka consumer.
-	if k.kafkaAdapter != nil && k.kafkaAdapter.Consumer != nil {
-		if err := k.kafkaAdapter.Consumer.Close(); err != nil {
-			return moerr.NewInternalError(context.Background(), "Error closing Kafka consumer")
-		}
+	ct, err := k.kafkaAdapter.GetKafkaConsumer()
+	if err != nil {
+		return moerr.NewInternalError(context.Background(), "Kafka Adapter Consumer not initialized")
+	}
+	if err := ct.Close(); err != nil {
+		return moerr.NewInternalError(context.Background(), "Error closing Kafka consumer")
 	}
 	return nil
 }
@@ -233,9 +240,6 @@ func (k *KafkaMoConnector) createOrFindTable(options map[string]interface{}) err
 	// Check if the table exists
 	if !k.doesTableExist(context.Background(), database, tableName) {
 		// Todo: enable create table
-		//if err := k.createTable(context.Background(), database, tableName); err != nil {
-		//	return fmt.Errorf("failed to create table %s: %v", tableName, err)
-		//}
 		return moerr.NewInternalError(context.Background(), "Table does not exist")
 	}
 
