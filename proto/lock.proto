@@ -43,10 +43,11 @@ enum WaitPolicy {
 
 // LockOptions lock options
 message LockOptions {
-  Granularity Granularity = 1;
-  LockMode    Mode        = 2;
-  WaitPolicy  Policy      = 3;
-  string      ForwardTo   = 4;
+  Granularity Granularity     = 1;
+  LockMode    Mode            = 2;
+  WaitPolicy  Policy          = 3;
+  string      ForwardTo       = 4;
+  bool        TableDefChanged = 5;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -208,14 +209,16 @@ message KeepRemoteLockResponse {
 // Result result is used to tell the caller the result of the lock operation.
 message Result {
   // LockedOn lock is locked on which locktable
-  LockTable           LockedOn      = 1 [(gogoproto.nullable) = false];
+  LockTable           LockedOn        = 1 [(gogoproto.nullable) = false];
   // HasConflict if true means encounter lock conflict
-  bool                HasConflict   = 2;
+  bool                HasConflict     = 2;
   // HasPrevCommit if HasPrevCommit && HasConflict, Timestamp is the latest commit
   // timestamp.
-  bool                HasPrevCommit = 3;
+  bool                HasPrevCommit   = 3;
   // Timestamp is used to help determine which version of RC should be queried 
   // under the RC isolation level, this timestamp ensures that the latest data 
   // is always read.
-  timestamp.Timestamp Timestamp     = 4 [(gogoproto.nullable) = false];
+  timestamp.Timestamp Timestamp       = 4 [(gogoproto.nullable) = false];
+  // TableDefChanged conflict with ddl lock, need rebuild plan to get new table def
+  bool                TableDefChanged = 5;
 }

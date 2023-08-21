@@ -1716,3 +1716,19 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
 }
+
+// databaseIsValid checks whether the database exists or not.
+func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+
+	if dbName == "" {
+		return "", moerr.NewNoDB(ctx.GetContext())
+	}
+
+	if !ctx.DatabaseExists(dbName) {
+		return "", moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+	return dbName, nil
+}

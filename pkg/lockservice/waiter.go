@@ -382,8 +382,9 @@ func (w *waiter) reset(serviceID string) {
 }
 
 type notifyValue struct {
-	err error
-	ts  timestamp.Timestamp
+	err        error
+	ts         timestamp.Timestamp
+	defChanged bool
 }
 
 func (v notifyValue) String() string {

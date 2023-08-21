@@ -15,15 +15,16 @@
 package txnentries
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -32,17 +33,18 @@ import (
 
 type mergeBlocksEntry struct {
 	sync.RWMutex
-	txn         txnif.AsyncTxn
-	relation    handle.Relation
-	droppedSegs []*catalog.SegmentEntry
-	deletes     []*nulls.Bitmap
-	createdSegs []*catalog.SegmentEntry
-	droppedBlks []*catalog.BlockEntry
-	createdBlks []*catalog.BlockEntry
-	mapping     []uint32
-	fromAddr    []uint32
-	toAddr      []uint32
-	skippedBlks []int
+	txn           txnif.AsyncTxn
+	relation      handle.Relation
+	droppedSegs   []*catalog.SegmentEntry
+	deletes       []*nulls.Bitmap
+	createdSegs   []*catalog.SegmentEntry
+	droppedBlks   []*catalog.BlockEntry
+	createdBlks   []*catalog.BlockEntry
+	transMappings *BlkTransferBooking
+	mapping       []uint32
+	fromAddr      []uint32
+	toAddr        []uint32
+	skippedBlks   []int
 
 	rt *dbutils.Runtime
 }
@@ -52,24 +54,26 @@ func NewMergeBlocksEntry(
 	relation handle.Relation,
 	droppedSegs, createdSegs []*catalog.SegmentEntry,
 	droppedBlks, createdBlks []*catalog.BlockEntry,
+	transMappings *BlkTransferBooking,
 	mapping, fromAddr, toAddr []uint32,
 	deletes []*nulls.Bitmap,
 	skipBlks []int,
 	rt *dbutils.Runtime,
 ) *mergeBlocksEntry {
 	return &mergeBlocksEntry{
-		txn:         txn,
-		relation:    relation,
-		createdSegs: createdSegs,
-		droppedSegs: droppedSegs,
-		createdBlks: createdBlks,
-		droppedBlks: droppedBlks,
-		mapping:     mapping,
-		fromAddr:    fromAddr,
-		toAddr:      toAddr,
-		deletes:     deletes,
-		skippedBlks: skipBlks,
-		rt:          rt,
+		txn:           txn,
+		relation:      relation,
+		createdSegs:   createdSegs,
+		droppedSegs:   droppedSegs,
+		createdBlks:   createdBlks,
+		droppedBlks:   droppedBlks,
+		transMappings: transMappings,
+		mapping:       mapping,
+		fromAddr:      fromAddr,
+		toAddr:        toAddr,
+		deletes:       deletes,
+		skippedBlks:   skipBlks,
+		rt:            rt,
 	}
 }
 
@@ -122,33 +126,6 @@ func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err er
 
 func (entry *mergeBlocksEntry) Set1PC()     {}
 func (entry *mergeBlocksEntry) Is1PC() bool { return false }
-func (entry *mergeBlocksEntry) resolveAddr(fromPos int, fromOffset uint32) (toPos int, toOffset uint32) {
-	totalFromOffset := entry.fromAddr[fromPos] + fromOffset
-	totalToOffset := entry.mapping[totalFromOffset]
-	left, right := 0, len(entry.toAddr)-1
-	for left <= right {
-		toPos = (left + right) / 2
-		if entry.toAddr[toPos] < totalToOffset {
-			left = toPos + 1
-		} else if entry.toAddr[toPos] > totalToOffset {
-			right = toPos - 1
-		} else {
-			break
-		}
-	}
-
-	// if toPos == 0 && entry.toAddr[toPos] < totalToOffset {
-	if entry.toAddr[toPos] > totalToOffset {
-		toPos = toPos - 1
-	}
-	toOffset = totalToOffset - entry.toAddr[toPos]
-	// logutil.Infof("mapping=%v", entry.mapping)
-	// logutil.Infof("fromPos=%d, fromOff=%d", fromPos, fromOffset)
-	// logutil.Infof("fromAddr=%v", entry.fromAddr)
-	// logutil.Infof("toAddr=%v", entry.toAddr)
-	// logutil.Infof("toPos=%d, toOffset=%d", toPos, toOffset)
-	return
-}
 
 func (entry *mergeBlocksEntry) isSkipped(fromPos int) bool {
 	for _, offset := range entry.skippedBlks {
@@ -162,67 +139,52 @@ func (entry *mergeBlocksEntry) isSkipped(fromPos int) bool {
 func (entry *mergeBlocksEntry) transferBlockDeletes(
 	dropped *catalog.BlockEntry,
 	blks []handle.Block,
-	fromPos int,
-	skippedCnt int) (err error) {
+	delTbls []*model.TransDels,
+	blkidx int) (err error) {
+
 	id := dropped.AsCommonID()
 	page := model.NewTransferHashPage(id, time.Now())
-	var (
-		length uint32
-		view   *containers.BlockView
-	)
 
-	posInFromAddr := fromPos - skippedCnt
-	if posInFromAddr+1 == len(entry.fromAddr) {
-		length = uint32(len(entry.mapping)) - entry.fromAddr[posInFromAddr]
-	} else {
-		length = entry.fromAddr[posInFromAddr+1] - entry.fromAddr[posInFromAddr]
+	mapping := entry.transMappings.Mappings[blkidx]
+	if len(mapping) == 0 {
+		panic("cannot tranfer empty block")
 	}
-
-	var (
-		offsetInDropped              uint32
-		offsetInOldBlkBeforeApplyDel uint32
-	)
-	deleteMap := entry.deletes[fromPos]
-	delCnt := uint32(0)
-	if deleteMap != nil {
-		delCnt = uint32(deleteMap.GetCardinality())
+	for srcRow, dst := range mapping {
+		blkid := blks[dst.Idx].ID()
+		page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
 	}
-	for ; offsetInOldBlkBeforeApplyDel < delCnt+length; offsetInOldBlkBeforeApplyDel++ {
-		if deleteMap != nil && deleteMap.Contains(uint64(offsetInOldBlkBeforeApplyDel)) {
-			continue
-		}
-		// add a record
-		toPos, toRow := entry.resolveAddr(posInFromAddr, offsetInDropped)
-		rowid := objectio.NewRowid(&entry.createdBlks[toPos].ID, toRow)
-		// offset in oldblk -> new rowid
-		page.Train(offsetInOldBlkBeforeApplyDel, *rowid)
-
-		// bump
-		offsetInDropped++
-	}
-	if offsetInDropped != length {
-		panic("tranfer logic error")
-	}
-
 	_ = entry.rt.TransferTable.AddPage(page)
 
 	dataBlock := dropped.GetBlockData()
-	if view, err = dataBlock.CollectChangesInRange(
-		entry.txn.GetContext(),
-		entry.txn.GetStartTS(),
-		entry.txn.GetCommitTS()); err != nil || view == nil {
-		return
+
+	bat, err := dataBlock.CollectDeleteInRange(entry.txn.GetContext(), entry.txn.GetStartTS().Next(), entry.txn.GetPrepareTS(), false)
+	if err != nil {
+		return err
+	}
+	if bat == nil || bat.Length() == 0 {
+		return nil
 	}
 
-	view.DeleteMask = compute.ShuffleByDeletes(view.DeleteMask, entry.deletes[fromPos])
-	if !view.DeleteMask.IsEmpty() {
-		it := view.DeleteMask.GetBitmap().Iterator()
-		for it.HasNext() {
-			row := it.Next()
-			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, uint32(row))
-			if err = blks[toPos].RangeDelete(toRow, toRow, handle.DT_MergeCompact); err != nil {
-				return
-			}
+	tblEntry := dropped.GetSegment().GetTable()
+	tblEntry.Stats.Lock()
+	tblEntry.DeletedDirties = append(tblEntry.DeletedDirties, dropped)
+	tblEntry.Stats.Unlock()
+	rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.PhyAddrColumnName).GetDownstreamVector())
+	ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
+
+	count := len(rowid)
+	for i := 0; i < count; i++ {
+		row := rowid[i].GetRowOffset()
+		destpos, ok := mapping[int(row)]
+		if !ok {
+			panic(fmt.Sprintf("%s find no transfer mapping for row %d", dropped.ID.String(), row))
+		}
+		if delTbls[destpos.Idx] == nil {
+			delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
+		}
+		delTbls[destpos.Idx].Mapping[destpos.Row] = ts[i]
+		if err = blks[destpos.Idx].RangeDelete(uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact); err != nil {
+			return err
 		}
 	}
 	return
@@ -230,6 +192,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 
 func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 	blks := make([]handle.Block, len(entry.createdBlks))
+	delTbls := make([]*model.TransDels, len(entry.createdBlks))
 	for i, meta := range entry.createdBlks {
 		id := meta.AsCommonID()
 		seg, err := entry.relation.GetSegment(id.SegmentID())
@@ -244,28 +207,38 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 		blks[i] = blk
 	}
 
-	skippedCnt := 0
 	ids := make([]*common.ID, 0)
 
-	for fromPos, dropped := range entry.droppedBlks {
-		if entry.isSkipped(fromPos) {
-			skippedCnt++
+	for idx, dropped := range entry.droppedBlks {
+		if entry.isSkipped(idx) {
+			if len(entry.transMappings.Mappings[idx]) != 0 {
+				panic("empty block do not match")
+			}
 			continue
 		}
 
 		if err = entry.transferBlockDeletes(
 			dropped,
 			blks,
-			fromPos,
-			skippedCnt); err != nil {
+			delTbls,
+			idx); err != nil {
 			break
 		}
 		ids = append(ids, dropped.AsCommonID())
+	}
+	if err == nil {
+		for i, delTbl := range delTbls {
+			if delTbl != nil {
+				destid := blks[i].ID()
+				entry.rt.TransferDelsMap.SetDelsForBlk(destid, delTbl)
+			}
+		}
 	}
 	if err != nil {
 		for _, id := range ids {
 			_ = entry.rt.TransferTable.DeletePage(id)
 		}
 	}
+
 	return
 }
