@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -1026,6 +1027,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
 		}
+	case *stream.Argument:
+		in.StreamScan = &pipeline.StreamScan{
+			TblDef: t.TblDef,
+			Limit:  t.Limit,
+			Offset: t.Offset,
+		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
@@ -1420,6 +1427,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 					},
 				},
 			},
+		}
+	case vm.Stream:
+		t := opr.GetStreamScan()
+		v.Arg = &stream.Argument{
+			TblDef: t.TblDef,
+			Limit:  t.Limit,
+			Offset: t.Offset,
 		}
 	default:
 		return v, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
