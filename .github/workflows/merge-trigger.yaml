@@ -2,6 +2,7 @@ name:  MO Checkin Regression On EKS
 
 on:
   pull_request_target:
+    branches: [ main,'[0-9]+.[0-9]+.[0-9]+.*' ]
     types:
       - closed
     paths:
@@ -9,8 +10,6 @@ on:
       - '**.c'
       - '**.h'
       - '.github/workflows/merge-trigger.yaml'
-env:
-   branch: main
 
 jobs:
   docker_image_build:
