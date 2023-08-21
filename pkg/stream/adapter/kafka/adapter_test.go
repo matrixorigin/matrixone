@@ -26,7 +26,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka/example/proto/test_v1"
+	"github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka/test/proto/test_v1"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -224,7 +224,6 @@ func TestRetrieveDataWIthProtobuf(t *testing.T) {
 	topic := "TestTopic"
 
 	// Produce mock data
-	// (You can add more messages or customize this part as necessary)
 	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": broker})
 	if err != nil {
 		t.Fatalf("Failed to create producer: %s", err)
