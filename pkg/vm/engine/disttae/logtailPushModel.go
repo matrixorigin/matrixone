@@ -354,13 +354,13 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 			e.setPushClientStatus(false)
 
-			if ctx.Err() != nil {
-				logutil.Infof("[log-tail-push-client] context has done, exit log tail receive routine.")
-				return
-			}
-
 			logutil.Infof("[log-tail-push-client] clean finished, start to reconnect to dn log tail service")
 			for {
+				if ctx.Err() != nil {
+					logutil.Infof("[log-tail-push-client] mo context has done, exit log tail receive routine.")
+					return
+				}
+
 				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
 				if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
 					logutil.Errorf("[log-tail-push-client] rebuild the cn log tail client failed, reason: %s", err)
@@ -698,6 +698,11 @@ func (e *Engine) InitLogTailPushModel(
 
 	// try to init log tail client. if failed, retry.
 	for {
+		if err := ctx.Err(); err != nil {
+			logutil.Infof("[log-tail-push-client] mo context has done, init log tail client failed.")
+			return err
+		}
+
 		// get log tail service address.
 		dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
 		if err := e.pClient.init(dnLogTailServerBackend, timestampWaiter); err != nil {
