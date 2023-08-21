@@ -16,9 +16,9 @@ package stream
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -56,23 +56,13 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	return process.ExecStop, moerr.NewNYI(proc.Ctx, "stream scan operator")
-	//_, span := trace.Start(proc.Ctx, "StreamCall")
-	//defer span.End()
-
-	//p := arg.(*Argument)
-	//if p.end {
-	//	proc.SetInputBatch(nil)
-	//	return process.ExecStop, nil
-	//}
-	//
-	////TODO:
-	////b, err := RetrieveData(ctx, p.configs, p.attrs, p.types, p.Offset, p.Limit, proc.Mp(), NewKafkaAdapter)
-	////if err != nil {
-	////	return process.ExecStop, err
-	////}
-	//p.end = true
-	//proc.SetInputBatch(nil)
-	//
-	//return process.ExecStop, nil
+	_, span := trace.Start(proc.Ctx, "StreamCall")
+	defer span.End()
+	p := arg.(*Argument)
+	b, err := mokafka.RetrieveData(proc.Ctx, p.configs, p.attrs, p.types, p.Offset, p.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
+	if err != nil {
+		return process.ExecStop, err
+	}
+	proc.SetInputBatch(b)
+	return process.ExecStop, nil
 }
