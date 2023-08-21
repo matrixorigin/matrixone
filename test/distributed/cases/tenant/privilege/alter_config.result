@@ -1,0 +1,63 @@
+create database alter_db;
+select version();
+version()
+0.7
+use alter_db;
+alter database alter_db set mysql_compatibility_mode = '1.0.0';
+select version();
+version()
+1.0.0
+alter database alter_db set mysql_compatibility_mode = '0.8.0';
+select version();
+version()
+0.8.0
+drop database alter_db;
+create user alter_user1 identified by '123';
+create role role1;
+grant create database on account * to role1;
+grant role1 to alter_user1;
+create user alter_user2 identified by '123';
+grant role1 to alter_user2;
+create database alter_db1;
+alter database alter_db1 set mysql_compatibility_mode = '0.9.0';
+select version();
+version()
+8.0.30-MatrixOne-v0.8.0
+alter database alter_db1 set mysql_compatibility_mode = '0.9.1';
+select version();
+version()
+8.0.30-MatrixOne-v0.8.0
+drop role role1;
+drop user alter_user1,alter_user2;
+create account alter_account ADMIN_NAME admin IDENTIFIED BY '12345';
+select version();
+version()
+8.0.30-MatrixOne-v0.8.0
+create database alter_db2;
+alter database alter_db2 set mysql_compatibility_mode = '1.0.0';
+select version();
+version()
+8.0.30-MatrixOne-v0.8.0
+drop database alter_db2;
+create user alter_user3 identified by '123';
+create role role1;
+grant create database on account * to role1;
+grant role1 to alter_user3;
+create user alter_user4 identified by '123';
+grant role1 to alter_user4;
+create database alter_db3;
+select version();
+version()
+8.0.30-MatrixOne-v0.8.0
+alter database alter_db3 set mysql_compatibility_mode = '1.0.0';
+select version();
+version()
+8.0.30-MatrixOne-v0.8.0
+select version();
+version()
+8.0.30-MatrixOne-v0.8.0
+alter database alter_db3 set mysql_compatibility_mode = '1.0.0';
+select version();
+version()
+8.0.30-MatrixOne-v0.8.0
+drop account alter_account;
