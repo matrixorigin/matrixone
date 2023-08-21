@@ -66,7 +66,7 @@ func LoadObjectMetaByExtent(
 	cachePolicy fileservice.CachePolicy,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
-	v, ok := metaCache.Get(ctx, *name.Short(), false)
+	v, ok := metaCache.Get(ctx, *name.Short())
 	if ok {
 		var obj any
 		obj, err = Decode(v)
@@ -89,7 +89,7 @@ func LoadObjectMetaByExtent(
 		return
 	}
 	meta = obj.(ObjectMeta)
-	metaCache.Set(ctx, *name.Short(), v[:], false)
+	metaCache.Set(ctx, *name.Short(), v[:])
 	metaCacheStats.Record(0, 1)
 	if !prefetch {
 		metaCacheHitStats.Record(0, 1)
