@@ -3666,6 +3666,11 @@ drop_table_stmt:
     {
         $$ = &tree.DropTable{IfExists: $4, Names: $5}
     }
+|   DROP STREAM exists_opt table_name_list
+    {
+        $$ = &tree.DropTable{IfExists: $3, Names: $4}
+    }
+
 
 drop_view_stmt:
     DROP VIEW exists_opt table_name_list
@@ -6102,7 +6107,7 @@ create_stream_stmt:
             Replace: $2,
             Source: false,
             IfNotExists: $4,
-            StreamName: *$5,
+            StreamName: $5,
             Defs: $7,
             Options: $9,
         }
@@ -6113,7 +6118,7 @@ create_stream_stmt:
             Replace: $2,
             Source: true,
             IfNotExists: $5,
-            StreamName: *$6,
+            StreamName: $6,
             Defs: $8,
             Options: $10,
         }
@@ -6123,7 +6128,7 @@ create_stream_stmt:
         $$ = &tree.CreateStream {
             Replace: $2,
             IfNotExists: $4,
-            StreamName: *$5,
+            StreamName: $5,
             AsSource: $8,
             Options: $6,
         }
@@ -6705,7 +6710,11 @@ stream_option_list:
 stream_option:
 	ident equal_opt literal
     {
-        $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1.Compare()) , Val: $3}
+        $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
+    }
+|   STRING equal_opt literal
+    {
+         $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1), Val: $3}
     }
 
 table_option_list_opt:

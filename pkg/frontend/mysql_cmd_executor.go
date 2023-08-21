@@ -2584,7 +2584,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 				*tree.LockTableStmt, *tree.UnLockTableStmt,
-				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateConnector:
+				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateStream, *tree.CreateConnector:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -2758,11 +2758,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			err = doCheckFilePath(requestCtx, ses, st)
+			isPathChanged, err := doCheckFilePath(requestCtx, ses, st)
 			if err != nil {
 				return err
 			}
-			ses.SetExportParam(st.Ep)
+			if !isPathChanged {
+				ses.SetExportParam(st.Ep)
+			}
 		}
 	}
 
@@ -3244,7 +3246,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 		*tree.CreateRole, *tree.DropRole,
 		*tree.Revoke, *tree.Grant,
-		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
+		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.CreateStream,
 		*tree.Delete, *tree.TruncateTable, *tree.LockTableStmt, *tree.UnLockTableStmt:
 		//change privilege
 		switch cw.GetAst().(type) {

@@ -86,9 +86,7 @@ message Response {
 // AlterAccountRequest is the "alter account restricted" query request.
 message AlterAccountRequest {
   // Tenant is the tenant which to alter.
-  string Tenant = 1;
-  // SysTenet is true if the tenant is a system tenant.
-  bool SysTenant = 2;
+  int64 TenantId = 1;
   // Status is the tenant which will be alter to.
   string Status = 3;
 }
