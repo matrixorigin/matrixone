@@ -1197,7 +1197,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			r.Ctx = rs.Proc.Ctx
 		}
 		rs.Proc.Reg.MergeReceivers = receivers
-		return []*Scope{rs}, nil
+		return c.compileProjection(n, []*Scope{rs}), nil
 	case plan.Node_RECURSIVE_SCAN:
 		receivers := make([]*process.WaitRegister, len(n.SourceStep))
 		for i, step := range n.SourceStep {
