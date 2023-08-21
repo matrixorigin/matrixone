@@ -1,6 +1,6 @@
 CREATE TABLE shirts (
-    name VARCHAR(40),
-    size ENUM('x-small', 'small', 'medium', 'large', 'x-large')
+                        name VARCHAR(40),
+                        size ENUM('x-small', 'small', 'medium', 'large', 'x-large')
 );
 INSERT INTO shirts (name, size) VALUES ('dress shirt','large'), ('t-shirt','medium'), ('polo shirt','small');
 SELECT name, size FROM shirts;
@@ -18,7 +18,6 @@ drop table t_enum;
 -- @case
 -- @desc: datatype:enum
 -- @label:bvt
-
 
 -- abnormal create table: non-string type
 drop table if exists enum01;
@@ -39,8 +38,11 @@ drop table if exists enum01;
 create table enum01 (col1 enum('red','blue','green'));
 insert into enum01 values ('red'),('blue'),('green');
 desc enum01;
+select * from enum01;
+update enum01 set col1 ='blue' where col1 = 'green';
+delete from enum01 where col1 = 'blue';
 show create table enum01;
-select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'enum01' and COLUMN_NAME not like '__mo%';
+select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum01' and COLUMN_NAME not like '__mo%';
 select * from enum01;
 
 
@@ -51,18 +53,22 @@ insert into enum02 values ('red'),('blue'),('green');
 insert into enum02 values (null);
 insert into enum02 values ('');
 select * from enum02;
+show columns from enum03;
+select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
 drop table enum02;
 
 
--- update
-update enum01 set col1 ='blue' where col1 = 'green';
-delete from enum01 where col1 = 'blue';
+-- enum column constraint not null
+drop table if exists enum03;
+create table enum03 (col1 enum('ejwuijfew', 'ewrwrewretr', 'werwre') not null);
+insert into enum03 values ('ejwuijfew');
+insert into enum03 values (null);
+select * from enum03;
+show create table enum03;
+show columns from enum03;
+select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
+drop table enum03;
 
--- error update
-update enum01 set col1 ='yellow' where col1 ='green';
-
-select * from enum01;
-drop table enum01;
 
 -- insert into select
 drop table if exists enum02;
@@ -80,75 +86,139 @@ drop table enum02;
 drop table enum03;
 
 
--- create table enums
-drop table if exists enum03;
-create table enum03 (col1 enum('0','1','2020'), col2 enum('red','green','blue'));
-insert into enum03 values('2020','blue');
-select * from enum03;
-select cast(col1 as year) from enum03;
-select cast(col2 as year) from enum03;
-select cast(col1 as binary) from enum03;
-select cast(col1 as varbinary(10)) from enum03;
-
-select cast(col1 as varchar(20)) from enum03;
-select cast(col2 as char) from enum03;
-
-select cast(col1 as text) from enum03;
-select cast(col1 as int) from enum03;
-
-select cast(col1 as blob) from enum03;
-select cast(col1 as float) from enum03;
-select cast(col2 as decimal) from enum03;
-select cast(col1 as decimal(20,18)) from enum03;
-select cast(col1 as date) from enum03;
-select cast(col1 as datetime) from enum03;
-select cast(col2 as time) from enum03;
-select cast(col2 as timestamp) from enum03;
-
-select cast(col1 as boolean) from enum03;
-select cast(col2 as boolean) from enum03;
-drop table enum03;
-
--- the inserted value can be obtained by implicit conversion
+-- abnormal test: insert non-enumerated value, error
 drop table if exists enum04;
-create table enum04(a int, b enum('1','2','3','4','1.23454342','8392432.24321342'));
-insert into enum04 values(1,1);
-insert into enum04 values(2,2);
-insert into enum04 values(3,3);
-insert into enum04 values(4,1.23454342);
-insert into enum04 values(5,8392432.24321342);
+create table enum04 (col1 enum ('2133212312hsay899323--__', 'euijn2fde324', 'e32rew'));
+insert into enum04 values ('2133212312hsay899323--__');
+insert into enum04 values ('euijn2fde324');
+insert into enum04 (col1) values ('welll');
 select * from enum04;
+drop table enum04;
 
--- implicit conversion(insert the value at the index location)
--- float,decimal,int convert to index
+
+-- if there are numbers stored as strings in the enumeration type, the corresponding column still represents the sequence number as a number rather than a specific value, for example
 drop table if exists enum05;
-create table enum05(col1 enum('ehjwfwe','3822.833333','vhriewjvlrew'));
-insert into enum05 values(3.2341221);
-insert into enum05 values('ehjwfwe');
-insert into enum05 values('vhriewjvlrew');
-insert into enum05 values(1);
-insert into enum05 values(1.39243218394082492);
+create table enum05 (a int,b enum('4','3','2','1'));
+insert into enum05 values(1,1);
 select * from enum05;
-
--- enum convert to time/timestamp/date/datetime
-drop table if exists enum06;
-create table enum06(col1 enum('2023-01-13','08:00:00','2019-03-05 01:53:55.63','2004-01-22 21:45:33'));
-insert into enum06 values('2023-01-13');
-insert into enum06 values('08:00:00');
-insert into enum06 values('2019-03-05 01:53:55.63');
-select cast(col1 as time) from enum06;
-select cast(col1 as timestamp) from enum06;
-select cast(col1 as date) from enum06;
-select cast(col1 as datetime) from enum06;
-select * from enum06;
-
--- if the modified column value conflicts with the list value, the modification fails
-drop table if exists enum05;
-create table enum05(col1 enum('1','2','3','4','5'));
-insert into enum05 values(1);
-insert into enum05 values(2);
-alter table enum05 col1('2','3','4','5');
+insert into enum05 values(2,'1');
+select * from enum05;
 drop table enum05;
+
+
+-- create table enum column as primary key
+-- @bvt:issue#11352
+drop table if exists pri01;
+create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew') primary key);
+show create table pri01;
+insert into pri01 values ('qy4iujd3wi4fu4h3f');
+insert into pri01 values ('qy4iujd3wi4fu4h3f');
+insert into pri01 (col1) values ('323242r34df432432');
+insert into pri01 (col1) values (null);
+select * from pri01;
+show create table pri01;
+show columns from pri01;
+drop table pri01;
+-- @bvt:issue
+
+
+-- alter table add primary key for enum column and duplicate exists
+drop table if exists pri02;
+create table pri02 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
+insert into pri02 values (1, '数据库');
+insert into pri02 values (2, '数据库');
+select * from pri02;
+alter table pri02 add primary key (col2);
+show create table pri02;
+show columns from pri02;
+select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
+drop table pri02;
+
+
+-- alter table add primary key for enum column and duplicate does not exists
+drop table if exists pri03;
+create table pri03 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
+insert into pri03 values (1, '数据库');
+insert into pri03 values (2, '数据库系统');
+select * from pri03;
+alter table pri03 add primary key (col2);
+show create table pri03;
+show columns from pri03;
+select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
+drop table pri03;
+
+
+-- alter table drop primary key for enum column
+-- @bvt:issue#11352
+drop table if exists pri04;
+create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system') primary key);
+insert into pri04 (col1, col2) values (1, 'database');
+insert into pri04 values (2, 'database management system');
+show create table pri04;
+alter table pri04 drop primary key;
+show create table pri04;
+show columns from pri04;
+select * from pri04 where col2 = 'database';
+select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
+drop table pri04;
+-- @bvt:issue
+
+
+-- insert into table,  either use a number to represent a number or insert a specific value
+-- query, update, or delete data, can also use numeric numbers or specific values
+drop table if exists inert01;
+create table insert01 (id int primary key,
+                       order_number VARCHAR(20),
+                       status enum('Pending', 'Processing', 'Completed', 'Cancelled')
+);
+insert into insert01 values(1,'111',1),(2,'222',2),(3,'333',3),(4,'444','Cancelled');
+select * from insert01;
+show create table insert01;
+show columns from insert01;
+delete from insert01 where status=3;
+update insert01 set status='Pending' where status=2;
+select * from insert01;
+select * from insert01 where status=4;
+select * from insert01 where status in ('Pending',4);
+drop table insert01;
+
+
+-- default
+drop table if exists default01;
+create table default01 (`col1` enum('T', 'E') not null default 'T');
+desc default01;
+insert into default01 values(default);
+select * from default01;
+drop table default01;
+
+drop table if exists default02;
+create table default02 (`col1` enum('T', 'E') not null default '1');
+desc default02;
+insert into default02 values(default);
+select * from default02;
+drop table default02;
+
+drop table if exists default03;
+create table default03 (`col1` enum('T', 'E') not null default 1);
+desc default03;
+insert into default03 values(default);
+select * from default03;
+drop table default03;
+
+drop table if exists default04;
+create table default04 (`col1` enum('T', 'E') not null default 2);
+desc default04;
+insert into default04 values(default);
+select * from default04;
+drop table default04;
+
+drop table if exists default05;
+create table default05 (`col1` enum('T', 'E') not null default '2');
+desc default05;
+insert into default05 values(default);
+select * from default05;
+drop table default05;
+
 
 -- enumeration types support operators
 drop table if exists enum04;
@@ -178,87 +248,59 @@ select * from enum04 where col2 like '%921384';
 select coalesce(null,null,col2) from enum04;
 drop table enum04;
 
+
 -- builtin function
-drop table if exists enum05;
-create table enum05(col1 enum('  云原生数据库  ','存储引擎 TAE','索引元数据表 ','     ') not null primary key,col2 enum(' database','engine ','index meta data'),col3 int, col4 binary(10),col5 varchar(20));
-insert into enum05 values('  云原生数据库  ',' database',328904,'&^&*Uef3r','balance!');
-insert into enum05 values('存储引擎 TAE','engine ',-38291,'0039293','春天是彩色的');
-insert into enum05 values('索引元数据表 ','index meta data',0,'------','8ueiwlvr');
-insert into enum05 values('     ','engine ',0,'------','8ueiwlvr');
+-- @bvt:issue#11352
+drop table if exists builtin01;
+create table builtin01(col1 enum('  云原生数据库  ','存储引擎 TAE', 'database system') not null primary key,col2 enum(' database','engine ','index meta data'));
+insert into builtin01 values('  云原生数据库  ',' database');
+insert into builtin01 values('存储引擎 TAE','engine ');
+insert into builtin01 values('database system','engine ');
+select * from builtin01;
+select concat_ws(',,,',col1,col2) from builtin01;
+select find_in_set('  云原生数据库  ',col1) from builtin01;
+select length(col1) as length_col1, length(col2) as length_col2 from builtin01;
+select char_length(col1),char_length(col2) from builtin01;
+select ltrim(col1) from builtin01;
+select rtrim(col2) from builtin01;
+select lpad(col1,20,'-') from builtin01;
+select rpad(col2,10,'****') from builtin01;
+select startswith(col2,'eng') from builtin01;
+select endswith(col1,'数据表') from builtin01;
+select reverse(col1),reverse(col2) from builtin01;
+select substring(col1,4,6),substring(col2,1,6) from builtin01;
+select * from builtin01 where col1 = space(5);
+select bit_length(col2) from builtin01;
+select empty(col2) from builtin01;
 
-select * from enum05;
-select concat_ws(',,,',col1,col2) from enum05;
-select find_in_set('云原生数据库',col1) from enum05;
-select oct(col1) from enum05;
-select length(col1) as length_col1,length(col2) as length_col2 from enum05;
-select char_length(col1),char_length(col2) from enum05;
-select ltrim(col1) from enum05;
-select rtrim(col2) from enum05;
-select lpad(col1,20,'-') from enum05;
-select rpad(col2,60,'****') from enum05;
-select startswith(col2,'eng') from enum05;
-select endswith(col1,'数据表') from enum05;
-select reverse(col1),reverse(col2) from enum05;
-select substring(col1,4,6),substring(col2,1,6) from enum05;
-select * from enum05 where col1 = space(5);
-select bit_length(col2) from enum05;
-select bin(col1) as bin_col1,bin(col2) as bin_col2 from enum05;
-select hex(col1) as hex_col1,hex(col2) as hex_col2 from enum05;
-select oct(col1) from enum05;
-select empty(col2) from enum05;
 
--- subquery
-select group_concat(col1,col2) from enum05 where col1 = (select col1 from enum05 where col2 = 'index meta data');
-select * from enum05 where col2 = (select col2 from enum05 where col1 = '索引元数据表');
+-- aggregate:count, max, min, any_value, group_concat
+select count(col1) as count_col1 from builtin01;
+-- @bvt:issue
+-- @bvt:issue#11348
+select max(col1), max(col2) from builtin01;
+select min(col1), min(col2) from builtin01;
+-- @bvt:issue
+-- @bvt:issue
+select group_concat(col1,col2) from builtin01;
+drop table builtin01;
+-- @bvt:issue
 
--- aggregate:count,max,min,any_value,group_concat
-select count(col1) as count_col1 from enum05;
-select max(col1),max(col2) from enum05;
-select min(col1),min(col2) from enum05;
-select any_value(col1) from enum05;
-select any_value(col2) from enum05;
-select group_concat(col1,col2) from enum05;
 
-drop table enum05;
+-- aggregate: max, min
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'));
+insert into agg01 values (1, 'egwjqebwq');
+insert into agg01 values (2, 'weueiwqeowqehwgqjhenw');
+insert into agg01 values (3, 'qwewqewqeqewq');
+insert into agg01 values (4, null);
+-- @bvt:issue#11348
+select max(col2) from agg01;
+select min(col2) from agg01;
+-- @bvt:issue
+select * from agg01;
+drop table agg01;
 
--- prepare
-drop table if exists prepare01;
-create table prepare01 (a int, b enum('100','shujuku'));
-insert into prepare01 values(1, 'shujuku');
-insert into prepare01 values(2, '100');
-select * from prepare01;
-prepare stmt1 from 'update prepare01 set b=? where a = 1';
-set @bin_a= '100';
-execute stmt1 using @bin_a;
-select * from prepare01;
-
-prepare stmt2 from 'insert into prepare01 values(3,?)';
-set @bin_b='shujuku';
-execute stmt2 using @bin_b;
-select * from prepare01;
-drop table prepare01;
-
--- join
-drop table if exists join01;
-drop table if exists join02;
-create table join01(col1 enum('操作系统','数据库','数据库管理系统','  '), col2 enum('opertion system','db','DBMS'));
-insert into join01 values('操作系统','db');
-insert into join01 values('操作系统','db');
-insert into join01 values('  ','opertion system');
-select * from join01;
-create table join02(col1 enum('数据结构','数据库','数据库管理系统','  '), col2 enum('opertion system','db','DBMS'));
-insert into join02 values('数据结构','db');
-insert into join02 values('数据库','db');
-insert into join02 values('数据库管理系统','opertion system');
-select * from join02;
-
-select join01.col1,join02.col2 from join01,join02 where join01.col2 = join02.col2;
-select join01.col1,join02.col2 from join01 left join join02 on join01.col2 = join02.col2;
-select join01.col1,join02.col2 from join01 right join join02 on join01.col2 != join02.col2;
-select join01.col1,join02.col2 from join01 inner join join02 on join01.col2 = join02.col2;
-select join01.col1,join02.col2 from join01 natural join join02;
-drop table join01;
-drop table join02;
 
 -- cte
 drop table if exists cte01;
@@ -271,25 +313,3 @@ with cte_1 as(select * from cte01 where col2 = 'hfjsa') select col2 from cte_1 w
 with cte_2 as(select col1,col2 from cte01 where col1 = 3) select col2 from cte_2 where col2 = '&**())_';
 drop table cte01;
 
--- view
-drop table if exists view01;
-drop table if exists view02;
-drop view if exists v0;
-create table view01(col1 enum('S','L','M'));
-insert into view01 values('S');
-insert into view01 values('L');
-insert into view01 values('M');
-create table view02(col1 enum('W','S','M'));
-insert into view02 values('W');
-insert into view02 values('S');
-
-create view v0 as select view01.col1, view02.col1 as b from view01 left join view02 using(col1);
-show create view v0;
-drop view v0;
-drop table view01;
-drop table view02;
-
-drop database test;
-
-load data infile '/data/mo-load-data/data/100_columns/40000000_100_columns_load_data.csv' into table test.table_100_columns_4000w  FIELDS TERMINATED BY ',' LINES TERMINATED BY '
-' parallel 'true';
