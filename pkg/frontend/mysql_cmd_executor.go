@@ -1167,6 +1167,11 @@ func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deal
 	return doDeallocate(ctx, mce.GetSession(), st)
 }
 
+func (mce *MysqlCmdExecutor) handleCreateConnector(ctx context.Context, st *tree.CreateConnector) error {
+	//todo: handle Create connector
+	return nil
+}
+
 // handleReset
 func (mce *MysqlCmdExecutor) handleReset(ctx context.Context, st *tree.Reset) error {
 	return doReset(ctx, mce.GetSession(), st)
@@ -2584,7 +2589,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 				*tree.LockTableStmt, *tree.UnLockTableStmt,
-				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateStream, *tree.CreateConnector:
+				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateStream:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -2607,10 +2612,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 				if _, ok := cw.GetAst().(*tree.DropDatabase); ok {
 					_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
-				}
-
-				if _, ok := cw.GetAst().(*tree.CreateConnector); ok {
-					// todo : Creat and launch Connector
 				}
 
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
@@ -2640,7 +2641,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
 				}
-
+			case *tree.CreateConnector:
+				// todo : Creat and launch Connector
 			case *tree.Deallocate:
 				//we will not send response in COM_STMT_CLOSE command
 				if ses.GetCmd() != COM_STMT_CLOSE {
@@ -2843,6 +2845,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 		if err != nil {
 			mce.GetSession().RemovePrepareStmt(prepareStmt.Name)
+			return err
+		}
+	case *tree.CreateConnector:
+		selfHandle = true
+		err = mce.handleCreateConnector(requestCtx, st)
+		if err != nil {
 			return err
 		}
 	case *tree.Deallocate:

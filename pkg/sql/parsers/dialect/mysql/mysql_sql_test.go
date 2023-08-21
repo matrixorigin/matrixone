@@ -88,6 +88,9 @@ var (
 			input:  "drop stream if exists s",
 			output: "drop table if exists s",
 		}, {
+			input:  "drop connector if exists s",
+			output: "drop connector if exists s",
+		}, {
 			input:  "CREATE STREAM enriched WITH (\n    VALUE_SCHEMA_ID = 1\n  ) AS\n  SELECT\n     cs.*,\n     u.name,\n     u.classification,\n     u.level\n  FROM clickstream cs\n    JOIN users u ON u.id = cs.userId",
 			output: "create stream enriched with (value_schema_id = 1) as select cs.*, u.name, u.classification, u.level from clickstream as cs inner join users as u on u.id = cs.userid",
 		}, {

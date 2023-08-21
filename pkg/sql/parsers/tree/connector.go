@@ -14,6 +14,24 @@
 
 package tree
 
+type DropConnector struct {
+	statementImpl
+	IfExists bool
+	Names    TableNames
+}
+
+func (node *DropConnector) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop connector")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteByte(' ')
+	node.Names.Format(ctx)
+}
+
+func (node *DropConnector) GetStatementType() string { return "Drop Connector" }
+func (node *DropConnector) GetQueryType() string     { return QueryTypeDDL }
+
 type CreateConnector struct {
 	statementImpl
 	ConnectorName *TableName
