@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/confluentinc/confluent-kafka-go/schemaregistry"
 	"os"
 	"strings"
 	"testing"
@@ -29,6 +30,43 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka/test/proto/test_v1"
 	"github.com/stretchr/testify/assert"
 )
+
+type MockKafkaAdapter struct{}
+
+func (m *MockKafkaAdapter) InitSchemaRegistry(url string) error {
+	return nil // Mocked response
+}
+
+func (m *MockKafkaAdapter) Close() {
+	// Mocked response
+}
+
+func (m *MockKafkaAdapter) GetKafkaConsumer() (*kafka.Consumer, error) {
+	return nil, nil // Mocked response
+}
+func (m *MockKafkaAdapter) CreateTopic(ctx context.Context, topicName string, partitions int, replicationFactor int) error {
+	return nil // Mocked response
+}
+
+func (m *MockKafkaAdapter) DescribeTopicDetails(ctx context.Context, topicName string) (*kafka.TopicMetadata, error) {
+	return nil, nil // Mocked response
+}
+
+func (m *MockKafkaAdapter) ReadMessagesFromPartition(topic string, partition int32, offset int64, limit int) ([]*kafka.Message, error) {
+	return nil, nil // Mocked response
+}
+
+func (m *MockKafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit int64) ([]*kafka.Message, error) {
+	return nil, nil // Mocked response
+}
+
+func (m *MockKafkaAdapter) GetSchemaForTopic(topic string, isKey bool) (schemaregistry.SchemaMetadata, error) {
+	return schemaregistry.SchemaMetadata{}, nil // Mocked response
+}
+
+func (m *MockKafkaAdapter) ProduceMessage(topic string, key, value []byte) (int64, error) {
+	return 0, nil // Mocked response
+}
 
 func TestNewKafkaAdapter(t *testing.T) {
 
@@ -110,7 +148,7 @@ func TestValidateConfig_MissingRequiredKeys(t *testing.T) {
 		BootstrapServersKey: "localhost:9092",
 	}
 
-	err := ValidateConfig(ctx, configs)
+	err := ValidateConfig(ctx, configs, NewKafkaAdapter)
 	if err == nil || !strings.Contains(err.Error(), "missing required key") {
 		t.Errorf("Expected an error about missing keys, got: %v", err)
 	}
@@ -125,7 +163,7 @@ func TestValidateConfig_UnsupportedValueKey(t *testing.T) {
 		BootstrapServersKey: "localhost:9092",
 	}
 
-	err := ValidateConfig(ctx, configs)
+	err := ValidateConfig(ctx, configs, NewKafkaAdapter)
 	if err == nil || !strings.Contains(err.Error(), "Unsupported value for key") {
 		t.Errorf("Expected an error about unsupported value, got: %v", err)
 	}
@@ -136,14 +174,15 @@ func TestValidateConfig_ValidConfigurations(t *testing.T) {
 	configs := map[string]interface{}{
 		TypeKey:             "someType",
 		TopicKey:            "someTopic",
-		ValueKey:            "json", // or PROTOBUF or PROTOBUFSR with their required configs
+		ValueKey:            "json", // or PROTOBUF
 		BootstrapServersKey: "localhost:9092",
-		// Add additional required fields based on ValueKey type if needed
 	}
 
 	// Assuming you have a way to stub out or mock NewKafkaAdapter and DescribeTopicDetails here
-
-	err := ValidateConfig(ctx, configs)
+	mockFactory := func(configMap *kafka.ConfigMap) (KafkaAdapterInterface, error) {
+		return &MockKafkaAdapter{}, nil
+	}
+	err := ValidateConfig(ctx, configs, mockFactory)
 	if err != nil {
 		t.Errorf("Did not expect an error, got: %v", err)
 	}
@@ -178,10 +217,13 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 
 	// produce 100 messages
 	for i := 0; i < 100; i++ {
-		p.Produce(&kafka.Message{
+		err := p.Produce(&kafka.Message{
 			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
 			Value:          []byte(value),
 		}, nil)
+		if err != nil {
+			return
+		}
 	}
 
 	// Setup configs for RetrieveData

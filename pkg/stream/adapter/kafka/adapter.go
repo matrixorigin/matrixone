@@ -89,6 +89,18 @@ func (p *ProtoDataGetter) GetFieldValue(name string) (interface{}, bool) {
 	return val, val != nil
 }
 
+type KafkaAdapterInterface interface {
+	InitSchemaRegistry(url string) error
+	Close()
+	CreateTopic(ctx context.Context, topicName string, partitions int, replicationFactor int) error
+	DescribeTopicDetails(ctx context.Context, topicName string) (*kafka.TopicMetadata, error)
+	ReadMessagesFromPartition(topic string, partition int32, offset int64, limit int) ([]*kafka.Message, error)
+	ReadMessagesFromTopic(topic string, offset int64, limit int64) ([]*kafka.Message, error)
+	GetSchemaForTopic(topic string, isKey bool) (schemaregistry.SchemaMetadata, error)
+
+	GetKafkaConsumer() (*kafka.Consumer, error)
+	ProduceMessage(topic string, key, value []byte) (int64, error)
+}
 type KafkaAdapter struct {
 	Producer       *kafka.Producer
 	Consumer       *kafka.Consumer
@@ -107,7 +119,7 @@ func (ka *KafkaAdapter) InitSchemaRegistry(url string) error {
 	return nil
 }
 
-func NewKafkaAdapter(configMap *kafka.ConfigMap) (*KafkaAdapter, error) {
+func NewKafkaAdapter(configMap *kafka.ConfigMap) (KafkaAdapterInterface, error) {
 	// Create a new admin client instance
 	adminClient, err := kafka.NewAdminClient(configMap)
 	if err != nil {
@@ -115,7 +127,7 @@ func NewKafkaAdapter(configMap *kafka.ConfigMap) (*KafkaAdapter, error) {
 	}
 
 	// Create a new consumer client instance
-	//todo : handle the offset reset
+	//todo : better handle the offset reset
 	configMap.SetKey("auto.offset.reset", "earliest")
 	consumer, err := kafka.NewConsumer(configMap)
 	if err != nil {
@@ -138,6 +150,9 @@ func NewKafkaAdapter(configMap *kafka.ConfigMap) (*KafkaAdapter, error) {
 	}, nil
 }
 
+func (ka *KafkaAdapter) GetKafkaConsumer() (*kafka.Consumer, error) {
+	return ka.Consumer, nil
+}
 func (ka *KafkaAdapter) Close() {
 
 	// Close the Producer if it's initialized
@@ -274,7 +289,7 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 		}
 
 		for i := int64(0); i < partitionLimit; i++ {
-			msg, err := ka.Consumer.ReadMessage(10)
+			msg, err := ka.Consumer.ReadMessage(-1)
 			if err != nil {
 				// Check for timeout
 				var kafkaErr kafka.Error
@@ -398,7 +413,7 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 	return batch
 }
 
-func populateBatchFromMSG(ctx context.Context, ka *KafkaAdapter, typs []types.Type, attrKeys []string, msgs []*kafka.Message, configs map[string]interface{}, mp *mpool.MPool) (*batch.Batch, error) {
+func populateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []types.Type, attrKeys []string, msgs []*kafka.Message, configs map[string]interface{}, mp *mpool.MPool) (*batch.Batch, error) {
 	b := newBatch(len(msgs), typs, mp)
 
 	value, ok := configs[ValueKey].(string)
@@ -631,7 +646,7 @@ func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
 	return kafkaConfigs
 }
 
-func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
+func ValidateConfig(ctx context.Context, configs map[string]interface{}, factory func(configMap *kafka.ConfigMap) (KafkaAdapterInterface, error)) error {
 	var requiredKeys = []string{
 		TypeKey,
 		TopicKey,
@@ -675,7 +690,7 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
 	kafkaConfigs := convertToKafkaConfig(configs)
 
 	// Create the Kafka adapter
-	ka, err := NewKafkaAdapter(kafkaConfigs)
+	ka, err := factory(kafkaConfigs)
 	if err != nil {
 		return err
 	}
@@ -689,10 +704,10 @@ func ValidateConfig(ctx context.Context, configs map[string]interface{}) error {
 	return nil
 }
 
-type KafkaAdapterFactory func(configMap *kafka.ConfigMap) (*KafkaAdapter, error)
+type KafkaAdapterFactory func(configMap *kafka.ConfigMap) (KafkaAdapterInterface, error)
 
 func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, factory KafkaAdapterFactory) (int64, error) {
-	err := ValidateConfig(ctx, configs)
+	err := ValidateConfig(ctx, configs, NewKafkaAdapter)
 	if err != nil {
 		return 0, err
 	}
@@ -711,9 +726,10 @@ func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, f
 	}
 
 	var totalSize int64
+	kaConsumer, _ := ka.GetKafkaConsumer()
 	for _, p := range meta.Partitions {
 		// Fetch the high watermark for the partition
-		_, highwatermarkHigh, err := ka.Consumer.QueryWatermarkOffsets(configs["topic"].(string), p.ID, -1)
+		_, highwatermarkHigh, err := kaConsumer.QueryWatermarkOffsets(configs["topic"].(string), p.ID, -1)
 		if err != nil {
 			return 0, err
 		}
@@ -722,7 +738,7 @@ func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, f
 	return totalSize, nil
 }
 func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []string, types []types.Type, offset int64, limit int64, mp *mpool.MPool, factory KafkaAdapterFactory) (*batch.Batch, error) {
-	err := ValidateConfig(ctx, configs)
+	err := ValidateConfig(ctx, configs, NewKafkaAdapter)
 	if err != nil {
 		return nil, err
 	}
