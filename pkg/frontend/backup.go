@@ -26,6 +26,7 @@ func doBackup(ctx context.Context, ses *Session, bs *tree.BackupStart) error {
     conf := &backup.Config{
         //Timestamp: dnTs,
         HAkeeper: ses.GetParameterUnit().HAKeeperClient,
+        SharedFs: ses.GetParameterUnit().FileService,
     }
     return backup.Backup(ctx, bs, conf)
 }

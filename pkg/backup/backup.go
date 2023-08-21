@@ -97,7 +97,7 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 
 func backupTae(ctx context.Context, config *Config) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
-	return saveDumpFiles(ctx, fs, 1, 1)
+	return BackupData(ctx, config.SharedFs, fs, "")
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {

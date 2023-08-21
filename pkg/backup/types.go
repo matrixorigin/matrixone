@@ -183,6 +183,9 @@ type Config struct {
     // For General usage
     GeneralDir fileservice.FileService
 
+    // For locating tae's storage fs
+    SharedFs fileservice.FileService
+
     // For tae and hakeeper
     TaeDir fileservice.FileService
 
