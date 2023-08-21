@@ -2521,6 +2521,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
 
+	planTimeConsumedInfo := GetPlanTimeConsumedInfoRefFromCtx(requestCtx)
+	planTimeConsumedInfo.executeStmtStart = time.Now()
+
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
 	if endStmtProfile != nil {
@@ -3170,7 +3173,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 
 		runBegin := time.Now()
-		requestCtx = context.WithValue(requestCtx, defines.RunBeginTimeKey{}, runBegin)
+		planTimeConsumedInfo.runStart = runBegin
 
 		/*
 			Step 2: Start pipeline
@@ -3408,6 +3411,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.SetSql(input.getSql())
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
+
+	planTimeConsumedInfo := PlanTimeConsumedInfo{}
+	planTimeConsumedInfo.parseStart = beginInstant
+
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
@@ -3466,8 +3473,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.proc.SessionInfo = proc.SessionInfo
 
 	//parse here
-	parseStartTime := time.Now()
-
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		input,
 		ses.GetUserName(),
@@ -3484,10 +3489,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	}
 
 	//parse end
-	parseEndTime := time.Now()
-	averageParseTime := getAverageParseTime(cws, parseEndTime.Sub(parseStartTime))
-	requestCtx = context.WithValue(requestCtx, defines.AverageParseTimeKey{}, averageParseTime)
-	requestCtx = context.WithValue(requestCtx, defines.ParseEndTimeKey{}, parseEndTime)
+	planTimeConsumedInfo.parseEnd = time.Now()
+	planTimeConsumedInfo.numStmt = int64(len(cws))
+	planTimeConsumedInfo.numNeedToRecordStats = getNumNeedToRecordStats(cws)
+	requestCtx = ContextWithPlanTimeConsumedInfo(requestCtx, &planTimeConsumedInfo)
 
 	defer func() {
 		ses.SetMysqlResultSet(nil)
@@ -3498,6 +3503,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	singleStatement := len(cws) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, cw := range cws {
+		planTimeConsumedInfo.loopStart = time.Now()
+
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
 				cwft.stmt.GetQueryType() == tree.QueryTypeOth ||
@@ -3546,6 +3553,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 				return err
 			}
 		}
+
+		planTimeConsumedInfo.loopEnd = time.Now()
 
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly)
 		if err != nil {
@@ -4117,13 +4126,31 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.BytesScan += bytes
 			}
 		}
-		//add time which is consumed  by parser and planner
-		statsByte.WithTimeConsumed(statsByte.GetTimeConsumed() + 0)
+		//add time which is consumed by parser and planner
+		statsByte.WithTimeConsumed(statsByte.GetTimeConsumed() + GetTimeConsumedByPlan(*GetPlanTimeConsumedInfoRefFromCtx(ctx)))
 
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
 	return
+}
+
+func GetTimeConsumedByPlan(info PlanTimeConsumedInfo) float64 {
+	logutil.Infof(fmt.Sprintln(
+		" parseStart ", info.parseStart,
+		" parseEnd ", info.parseEnd,
+		" numStmt ", info.numStmt,
+		" numNeedToRecordStats ", info.numNeedToRecordStats,
+		" loopStart ", info.loopStart,
+		" loopEnd ", info.loopEnd,
+		" executeStmtStart ", info.executeStmtStart,
+		" runStart ", info.runStart))
+
+	var res int64 = 0
+	res += (int64(info.parseEnd.Sub(info.parseStart)/time.Nanosecond) * info.numNeedToRecordStats) / info.numStmt
+	res += int64(info.loopEnd.Sub(info.loopStart) / time.Nanosecond)
+	res += int64(info.runStart.Sub(info.executeStmtStart) / time.Nanosecond)
+	return float64(res)
 }
 
 func needToRecordStats(cw ComputationWrapper) bool {
@@ -4141,17 +4168,12 @@ func needToRecordStats(cw ComputationWrapper) bool {
 	return false
 }
 
-func getAverageParseTime(cws []ComputationWrapper, duration time.Duration) int64 {
+func getNumNeedToRecordStats(cws []ComputationWrapper) int64 {
 	var numNeedToRecordStats int64 = 0
-	var length = int64(len(cws))
-
-	if length < 1 {
-		return 0
-	}
 	for _, cw := range cws {
 		if needToRecordStats(cw) {
 			numNeedToRecordStats++
 		}
 	}
-	return (int64(duration/time.Nanosecond) * numNeedToRecordStats) / length
+	return numNeedToRecordStats
 }

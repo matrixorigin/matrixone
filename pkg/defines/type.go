@@ -215,7 +215,3 @@ type AutoIncrCache struct {
 	MaxNum uint64
 	Step   uint64
 }
-
-type AverageParseTimeKey struct{}
-type ParseEndTimeKey struct{}
-type RunBeginTimeKey struct{}

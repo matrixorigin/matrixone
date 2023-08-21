@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	"time"
+
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -241,4 +243,34 @@ func (s *SessionAllocator) Alloc(capacity int) []byte {
 
 func (s SessionAllocator) Free(bs []byte) {
 	s.mp.Free(bs)
+}
+
+type PlanTimeConsumedInfo struct {
+	parseStart           time.Time
+	parseEnd             time.Time
+	numStmt              int64
+	numNeedToRecordStats int64
+
+	loopStart time.Time
+	loopEnd   time.Time
+
+	executeStmtStart time.Time
+
+	runStart time.Time
+}
+
+type PlanTimeConsumedInfoKey struct{}
+
+func GetPlanTimeConsumedInfoRefFromCtx(ctx context.Context) *PlanTimeConsumedInfo {
+
+	ref, ok := ctx.Value(PlanTimeConsumedInfoKey{}).(*PlanTimeConsumedInfo)
+
+	if ok && ref != nil {
+		return ref
+	}
+	panic("there is no PlanTimeConsumedInfoKey in ctx or PlanTimeConsumedInfoRef is nil ")
+}
+
+func ContextWithPlanTimeConsumedInfo(ctx context.Context, ref *PlanTimeConsumedInfo) context.Context {
+	return context.WithValue(ctx, PlanTimeConsumedInfoKey{}, ref)
 }
