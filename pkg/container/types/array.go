@@ -229,7 +229,6 @@ func stringToT[T RealNumbers](str string) (t T, err error) {
 	default:
 		panic(moerr.NewInternalErrorNoCtx("not implemented"))
 	}
-	return t, nil
 }
 
 // StringToArrayToBytes convert "[1,2,3]" --> []float32{1.0,2.0,3.0} --> []bytes{11,33...}
