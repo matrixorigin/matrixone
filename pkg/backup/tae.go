@@ -9,7 +9,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -64,8 +63,8 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 		retByts = append(retByts, executor.GetBytesRows(cols[0]))
 		return true
 	})
-  
-  fileName, err := getFileNames(ctx, retByts)
+
+	fileName, err := getFileNames(ctx, retByts)
 	if err != nil {
 		return err
 	}
@@ -73,11 +72,11 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 }
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
-	files := make(map[string]*fileservice.DirEntry, 0)
-	for _, name := range fileName {
+	for _, name := range names {
 		if len(name) == 0 {
 			continue
 		}
+		fmt.Println(name)
 		key, err := blockio.EncodeLocationFromString(name)
 		if err != nil {
 			return err
