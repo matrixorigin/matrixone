@@ -17,7 +17,6 @@ package mometric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math/rand"
 	"sync"
 	"testing"
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/stretchr/testify/assert"

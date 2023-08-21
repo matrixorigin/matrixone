@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 

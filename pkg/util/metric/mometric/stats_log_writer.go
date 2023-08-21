@@ -17,13 +17,13 @@ package mometric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 

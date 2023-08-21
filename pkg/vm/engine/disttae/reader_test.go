@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"context"
+	"math/rand"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/require"
-	"math/rand"
-	"testing"
 )
 
 func TestGatherStats(t *testing.T) {
