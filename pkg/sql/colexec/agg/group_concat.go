@@ -105,7 +105,7 @@ func (g *GroupConcat) MarshalBinary() ([]byte, error) {
 	for i := range bytes {
 		strings = append(strings, bytes[i].String())
 	}
-	res := types.EncodeStringSlice(strings)
+ 	res := types.EncodeStringSlice(strings)
 
 	return res, nil
 }

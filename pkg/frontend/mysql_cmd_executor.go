@@ -3170,6 +3170,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 
 		runBegin := time.Now()
+		requestCtx = context.WithValue(requestCtx, defines.RunBeginTimeKey{}, runBegin)
+
 		/*
 			Step 2: Start pipeline
 			Producing the data row and sending the data row
@@ -3462,6 +3464,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(ses.proc)
 	ses.proc.SessionInfo = proc.SessionInfo
+
+	//parse here
+	parseStartTime := time.Now()
+
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		input,
 		ses.GetUserName(),
@@ -3476,6 +3482,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr
 	}
+
+	//parse end
+	parseEndTime := time.Now()
+	averageParseTime := getAverageParseTime(cws, parseEndTime.Sub(parseStartTime))
+	requestCtx = context.WithValue(requestCtx, defines.AverageParseTimeKey{}, averageParseTime)
+	requestCtx = context.WithValue(requestCtx, defines.ParseEndTimeKey{}, parseEndTime)
 
 	defer func() {
 		ses.SetMysqlResultSet(nil)
@@ -4105,8 +4117,41 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.BytesScan += bytes
 			}
 		}
+		//add time which is consumed  by parser and planner
+		statsByte.WithTimeConsumed(statsByte.GetTimeConsumed() + 0)
+
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
 	return
+}
+
+func needToRecordStats(cw ComputationWrapper) bool {
+	switch cw.GetAst().(type) {
+	//same as executeStmt
+	case *tree.Select,
+		*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
+		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
+		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
+		*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
+		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages:
+		return true
+	}
+
+	return false
+}
+
+func getAverageParseTime(cws []ComputationWrapper, duration time.Duration) int64 {
+	var numNeedToRecordStats int64 = 0
+	var length = int64(len(cws))
+
+	if length < 1 {
+		return 0
+	}
+	for _, cw := range cws {
+		if needToRecordStats(cw) {
+			numNeedToRecordStats++
+		}
+	}
+	return (int64(duration/time.Nanosecond) * numNeedToRecordStats) / length
 }
