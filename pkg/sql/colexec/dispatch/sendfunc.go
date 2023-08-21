@@ -110,6 +110,8 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 		if regIndex == batIndex {
 			if bat != nil && bat.RowCount() != 0 {
 				select {
+				case <-proc.Ctx.Done():
+					logutil.Warnf("proc's ctx done during shuffle dispatch to all local")
 				case <-reg.Ctx.Done():
 					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
 					return nil
