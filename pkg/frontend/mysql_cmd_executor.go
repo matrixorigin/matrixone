@@ -348,7 +348,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		_, err = r.Ranges(ses.requestCtx, nil)
+		err = r.UpdateBlockInfos(ses.requestCtx)
 		if err != nil {
 			return err
 		}
