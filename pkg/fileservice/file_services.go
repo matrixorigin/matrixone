@@ -101,21 +101,6 @@ func (f *FileServices) Read(ctx context.Context, vector *IOVector) error {
 	return fs.Read(ctx, vector)
 }
 
-func (f *FileServices) ReadCache(ctx context.Context, vector *IOVector) error {
-	path, err := ParsePathAtService(vector.FilePath, "")
-	if err != nil {
-		return err
-	}
-	if path.Service == "" {
-		path.Service = f.defaultName
-	}
-	fs, err := Get[FileService](f, path.Service)
-	if err != nil {
-		return err
-	}
-	return fs.ReadCache(ctx, vector)
-}
-
 func (f *FileServices) Write(ctx context.Context, vector IOVector) error {
 	path, err := ParsePathAtService(vector.FilePath, "")
 	if err != nil {
