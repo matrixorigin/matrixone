@@ -52,7 +52,7 @@ func startCluster(
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet, shutdownC); err != nil {
 		return err
 	}
-	if err := startDNServiceCluster(ctx, cfg.DNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startDNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
 		return err
 	}
 	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {

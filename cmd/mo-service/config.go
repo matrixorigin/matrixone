@@ -60,8 +60,8 @@ var (
 type LaunchConfig struct {
 	// LogServiceConfigFiles log service config files
 	LogServiceConfigFiles []string `toml:"logservices"`
-	// DNServiceConfigsFiles log service config files
-	DNServiceConfigsFiles []string `toml:"dnservices"`
+	// TNServiceConfigsFiles log service config files
+	TNServiceConfigsFiles []string `toml:"tnservices"`
 	// CNServiceConfigsFiles log service config files
 	CNServiceConfigsFiles []string `toml:"cnservices"`
 	// CNServiceConfigsFiles log service config files
