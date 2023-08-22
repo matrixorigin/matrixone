@@ -685,7 +685,7 @@ func (ses *Session) GetTempTableStorage() *memorystorage.Storage {
 	return ses.tempTablestorage
 }
 
-func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.DNService, error) {
+func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.TNService, error) {
 	// Without concurrency, there is no potential for data competition
 
 	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
@@ -698,7 +698,7 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.DNService, er
 	}
 	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
 	dnAddr := defines.TEMPORARY_TABLE_DN_ADDR
-	dnStore := metadata.DNService{
+	dnStore := metadata.TNService{
 		ServiceID:         uuid.NewString(),
 		TxnServiceAddress: dnAddr,
 		Shards:            shards,

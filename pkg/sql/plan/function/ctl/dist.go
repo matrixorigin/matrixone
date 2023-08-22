@@ -56,7 +56,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 		cluster := clusterservice.GetMOCluster()
 		var requests []txn.CNOpRequest
 		cluster.GetDNService(clusterservice.NewSelector(),
-			func(store metadata.DNService) bool {
+			func(store metadata.TNService) bool {
 				for _, shard := range store.Shards {
 					if len(targetDNs) == 0 || containsDN(shard.ShardID) {
 						payLoad, e := payload(shard.ShardID, parameter, proc)

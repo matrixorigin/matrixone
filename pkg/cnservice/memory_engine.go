@@ -77,7 +77,7 @@ func (s *service) initMemoryEngineNonDist(
 		shard,
 	}
 	dnAddr := "1"
-	dnServices := []metadata.DNService{{
+	dnServices := []metadata.TNService{{
 		ServiceID:         uuid.NewString(),
 		TxnServiceAddress: dnAddr,
 		Shards:            shards,

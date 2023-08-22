@@ -55,10 +55,10 @@ func New(
 	cli client.TxnClient,
 	idGen IDGenerator,
 ) *Engine {
-	var services []metadata.DNService
+	var services []metadata.TNService
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetDNService(clusterservice.NewSelector(),
-		func(d metadata.DNService) bool {
+		func(d metadata.TNService) bool {
 			services = append(services, d)
 			return true
 		})
@@ -484,7 +484,7 @@ func (e *Engine) getTNServices() []DNStore {
 	var values []DNStore
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetDNService(clusterservice.NewSelector(),
-		func(d metadata.DNService) bool {
+		func(d metadata.TNService) bool {
 			values = append(values, d)
 			return true
 		})

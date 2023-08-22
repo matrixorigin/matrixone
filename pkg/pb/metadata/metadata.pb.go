@@ -639,8 +639,8 @@ func (m *CNService) GetQueryAddress() string {
 	return ""
 }
 
-// DNService dn service metadata
-type DNService struct {
+// TNService dn service metadata
+type TNService struct {
 	// ServiceID service ID
 	ServiceID string `protobuf:"bytes,1,opt,name=ServiceID,proto3" json:"ServiceID,omitempty"`
 	// TxnServiceAddress is used to provide txn service
@@ -660,16 +660,16 @@ type DNService struct {
 	XXX_sizecache        int32                `json:"-"`
 }
 
-func (m *DNService) Reset()         { *m = DNService{} }
-func (m *DNService) String() string { return proto.CompactTextString(m) }
-func (*DNService) ProtoMessage()    {}
-func (*DNService) Descriptor() ([]byte, []int) {
+func (m *TNService) Reset()         { *m = TNService{} }
+func (m *TNService) String() string { return proto.CompactTextString(m) }
+func (*TNService) ProtoMessage()    {}
+func (*TNService) Descriptor() ([]byte, []int) {
 	return fileDescriptor_56d9f74966f40d04, []int{8}
 }
-func (m *DNService) XXX_Unmarshal(b []byte) error {
+func (m *TNService) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *DNService) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TNService) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_DNService.Marshal(b, m, deterministic)
 	} else {
@@ -681,61 +681,61 @@ func (m *DNService) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return b[:n], nil
 	}
 }
-func (m *DNService) XXX_Merge(src proto.Message) {
+func (m *TNService) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_DNService.Merge(m, src)
 }
-func (m *DNService) XXX_Size() int {
+func (m *TNService) XXX_Size() int {
 	return m.Size()
 }
-func (m *DNService) XXX_DiscardUnknown() {
+func (m *TNService) XXX_DiscardUnknown() {
 	xxx_messageInfo_DNService.DiscardUnknown(m)
 }
 
 var xxx_messageInfo_DNService proto.InternalMessageInfo
 
-func (m *DNService) GetServiceID() string {
+func (m *TNService) GetServiceID() string {
 	if m != nil {
 		return m.ServiceID
 	}
 	return ""
 }
 
-func (m *DNService) GetTxnServiceAddress() string {
+func (m *TNService) GetTxnServiceAddress() string {
 	if m != nil {
 		return m.TxnServiceAddress
 	}
 	return ""
 }
 
-func (m *DNService) GetLogTailServiceAddress() string {
+func (m *TNService) GetLogTailServiceAddress() string {
 	if m != nil {
 		return m.LogTailServiceAddress
 	}
 	return ""
 }
 
-func (m *DNService) GetLockServiceAddress() string {
+func (m *TNService) GetLockServiceAddress() string {
 	if m != nil {
 		return m.LockServiceAddress
 	}
 	return ""
 }
 
-func (m *DNService) GetCtlAddress() string {
+func (m *TNService) GetCtlAddress() string {
 	if m != nil {
 		return m.CtlAddress
 	}
 	return ""
 }
 
-func (m *DNService) GetShards() []DNShard {
+func (m *TNService) GetShards() []DNShard {
 	if m != nil {
 		return m.Shards
 	}
 	return nil
 }
 
-func (m *DNService) GetLabels() map[string]LabelList {
+func (m *TNService) GetLabels() map[string]LabelList {
 	if m != nil {
 		return m.Labels
 	}
@@ -803,7 +803,7 @@ func init() {
 	proto.RegisterType((*CNStore)(nil), "metadata.CNStore")
 	proto.RegisterType((*CNService)(nil), "metadata.CNService")
 	proto.RegisterMapType((map[string]LabelList)(nil), "metadata.CNService.LabelsEntry")
-	proto.RegisterType((*DNService)(nil), "metadata.DNService")
+	proto.RegisterType((*TNService)(nil), "metadata.DNService")
 	proto.RegisterMapType((map[string]LabelList)(nil), "metadata.DNService.LabelsEntry")
 	proto.RegisterType((*LabelList)(nil), "metadata.LabelList")
 }
@@ -1258,7 +1258,7 @@ func (m *CNService) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *DNService) Marshal() (dAtA []byte, err error) {
+func (m *TNService) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -1268,12 +1268,12 @@ func (m *DNService) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *DNService) MarshalTo(dAtA []byte) (int, error) {
+func (m *TNService) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *DNService) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TNService) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -1590,7 +1590,7 @@ func (m *CNService) Size() (n int) {
 	return n
 }
 
-func (m *DNService) Size() (n int) {
+func (m *TNService) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -2804,7 +2804,7 @@ func (m *CNService) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *DNService) Unmarshal(dAtA []byte) error {
+func (m *TNService) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {

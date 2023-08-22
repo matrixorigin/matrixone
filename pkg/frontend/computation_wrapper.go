@@ -387,7 +387,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 				nil,
 				0,
 				clusterservice.WithDisableRefresh(),
-				clusterservice.WithServices(nil, []metadata.DNService{
+				clusterservice.WithServices(nil, []metadata.TNService{
 					*dnStore,
 				})),
 		)

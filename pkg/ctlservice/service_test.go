@@ -107,7 +107,7 @@ func runCtlServiceTest(
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 
 	cns := make([]metadata.CNService, 0, len(serviceMetadatas))
-	dns := make([]metadata.DNService, 0, len(serviceMetadatas))
+	dns := make([]metadata.TNService, 0, len(serviceMetadatas))
 	addresses := make([]string, 0, len(serviceMetadatas))
 	services := make([]*service, 0, len(serviceMetadatas))
 	for _, v := range serviceMetadatas {
@@ -123,7 +123,7 @@ func runCtlServiceTest(
 				WorkState:  metadata.WorkState_Working,
 			})
 		} else if v.serviceType == metadata.ServiceType_DN {
-			dns = append(dns, metadata.DNService{
+			dns = append(dns, metadata.TNService{
 				ServiceID:  v.serviceID,
 				CtlAddress: address,
 			})

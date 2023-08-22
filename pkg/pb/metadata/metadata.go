@@ -88,7 +88,7 @@ func (m CNService) DebugString() string {
 	return buf.String()
 }
 
-func (m DNService) DebugString() string {
+func (m TNService) DebugString() string {
 	var buf bytes.Buffer
 	buf.WriteString(m.ServiceID)
 	buf.WriteString("/txn(")

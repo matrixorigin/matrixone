@@ -79,7 +79,7 @@ var (
 
 var GcCycle = 10 * time.Second
 
-type DNStore = metadata.DNService
+type DNStore = metadata.TNService
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)

@@ -46,7 +46,7 @@ type ShardPolicy interface {
 		getDefs getDefsFunc,
 		colName string,
 		vec *vector.Vector,
-		nodes []metadata.DNService,
+		nodes []metadata.TNService,
 	) (
 		sharded []*ShardedVector,
 		err error,
@@ -57,7 +57,7 @@ type ShardPolicy interface {
 		tableID ID,
 		getDefs getDefsFunc,
 		batch *batch.Batch,
-		nodes []metadata.DNService,
+		nodes []metadata.TNService,
 	) (
 		sharded []*ShardedBatch,
 		err error,
@@ -124,10 +124,10 @@ type NoShard struct {
 	shard   Shard
 }
 
-func (s *NoShard) setShard(stores []metadata.DNService) {
+func (s *NoShard) setShard(stores []metadata.TNService) {
 	s.setOnce.Do(func() {
 		type ShardInfo struct {
-			Store metadata.DNService
+			Store metadata.TNService
 			Shard metadata.DNShard
 		}
 		infos := make([]ShardInfo, 0, len(stores))
@@ -164,7 +164,7 @@ func (s *NoShard) Vector(
 	getDefs getDefsFunc,
 	colName string,
 	vec *vector.Vector,
-	nodes []metadata.DNService,
+	nodes []metadata.TNService,
 ) (
 	sharded []*ShardedVector,
 	err error,
@@ -182,7 +182,7 @@ func (s *NoShard) Batch(
 	tableID ID,
 	getDefs getDefsFunc,
 	bat *batch.Batch,
-	nodes []metadata.DNService,
+	nodes []metadata.TNService,
 ) (
 	sharded []*ShardedBatch,
 	err error,

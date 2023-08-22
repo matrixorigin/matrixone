@@ -125,7 +125,7 @@ func initTestRuntime(shardIDs ...uint64) {
 		nil,
 		0,
 		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(nil, []metadata.DNService{
+		clusterservice.WithServices(nil, []metadata.TNService{
 			{
 				Shards: shards,
 			},

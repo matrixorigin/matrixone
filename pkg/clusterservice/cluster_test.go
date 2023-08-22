@@ -71,7 +71,7 @@ func TestClusterRefresh(t *testing.T) {
 		time.Millisecond*10,
 		func(hc *testHAKeeperClient, c *cluster) {
 			cnt := 0
-			apply := func(c metadata.DNService) bool {
+			apply := func(c metadata.TNService) bool {
 				cnt++
 				return true
 			}
@@ -90,7 +90,7 @@ func BenchmarkGetService(b *testing.B) {
 		time.Hour,
 		func(hc *testHAKeeperClient, c *cluster) {
 			cnt := 0
-			apply := func(c metadata.DNService) bool {
+			apply := func(c metadata.TNService) bool {
 				cnt++
 				return true
 			}

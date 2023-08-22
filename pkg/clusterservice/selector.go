@@ -72,7 +72,7 @@ func (s Selector) filterCN(cn metadata.CNService) bool {
 	return s.filter(cn.ServiceID, cn.Labels)
 }
 
-func (s Selector) filterDN(dn metadata.DNService) bool {
+func (s Selector) filterDN(dn metadata.TNService) bool {
 	return s.filter(dn.ServiceID, dn.Labels)
 }
 

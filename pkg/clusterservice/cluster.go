@@ -42,7 +42,7 @@ type Option func(*cluster)
 // WithServices set init cn and dn services
 func WithServices(
 	cnServices []metadata.CNService,
-	dnServices []metadata.DNService) Option {
+	dnServices []metadata.TNService) Option {
 	return func(c *cluster) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -73,7 +73,7 @@ type cluster struct {
 	mu              struct {
 		sync.RWMutex
 		cnServices map[string]metadata.CNService
-		dnServices map[string]metadata.DNService
+		dnServices map[string]metadata.TNService
 	}
 	options struct {
 		disableRefresh bool
@@ -99,7 +99,7 @@ func NewMOCluster(
 		refreshInterval: refreshInterval,
 	}
 	c.mu.cnServices = make(map[string]metadata.CNService, 1024)
-	c.mu.dnServices = make(map[string]metadata.DNService, 1024)
+	c.mu.dnServices = make(map[string]metadata.TNService, 1024)
 
 	for _, opt := range opts {
 		opt(c)
@@ -136,7 +136,7 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	}
 }
 
-func (c *cluster) GetDNService(selector Selector, apply func(metadata.DNService) bool) {
+func (c *cluster) GetDNService(selector Selector, apply func(metadata.TNService) bool) {
 	c.waitReady()
 
 	c.mu.RLock()
@@ -264,8 +264,8 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 	}
 }
 
-func newDNService(dn logpb.DNStore) metadata.DNService {
-	v := metadata.DNService{
+func newDNService(dn logpb.DNStore) metadata.TNService {
+	v := metadata.TNService{
 		ServiceID:             dn.UUID,
 		TxnServiceAddress:     dn.ServiceAddress,
 		LogTailServiceAddress: dn.LogtailServerAddress,
