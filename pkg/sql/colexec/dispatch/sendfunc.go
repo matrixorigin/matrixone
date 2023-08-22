@@ -111,10 +111,9 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 			if bat != nil && bat.RowCount() != 0 {
 				select {
 				case <-proc.Ctx.Done():
-					logutil.Warnf("proc's ctx done during shuffle dispatch to all local")
+					return moerr.NewInternalErrorNoCtx("proc's ctx done during shuffle dispatch a bat to local reg")
 				case <-reg.Ctx.Done():
-					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
-					return nil
+					return moerr.NewInternalErrorNoCtx("reg's ctx done during shuffle dispatch a bat to local reg")
 				case reg.Ch <- bat:
 				}
 			}
@@ -146,9 +145,10 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && bat.RowCount() != 0 {
 				select {
+				case <-proc.Ctx.Done():
+					return moerr.NewInternalErrorNoCtx("proc's ctx done during shuffle dispatch a bat to local reg")
 				case <-reg.Ctx.Done():
-					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
-					return nil
+					return moerr.NewInternalErrorNoCtx("reg's ctx done during shuffle dispatch a bat to local reg")
 				case reg.Ch <- bat:
 				}
 			}
@@ -166,9 +166,10 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && bat.RowCount() != 0 {
 				select {
+				case <-proc.Ctx.Done():
+					return moerr.NewInternalErrorNoCtx("proc's ctx done during shuffle dispatch a bat to local reg")
 				case <-reg.Ctx.Done():
-					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
-					return nil
+					return moerr.NewInternalErrorNoCtx("reg's ctx done during shuffle dispatch a bat to local reg")
 				case reg.Ch <- bat:
 				}
 			}
