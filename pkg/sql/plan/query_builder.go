@@ -1120,20 +1120,20 @@ func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBoo
 	}
 }
 
-func (builder *QueryBuilder) remapSinkScanColRefs(nodeID int32, step int32, sinkColRef map[[2]int32]int) {
-	node := builder.qry.Nodes[nodeID]
-
-	switch node.NodeType {
-	case plan.Node_SINK_SCAN:
-		for _, expr := range node.ProjectList {
-			expr.Expr.(*plan.Expr_Col).Col.ColPos = int32(sinkColRef[[2]int32{step, expr.Expr.(*plan.Expr_Col).Col.ColPos}])
-		}
-	default:
-		for i := range node.Children {
-			builder.remapSinkScanColRefs(node.Children[i], step, sinkColRef)
-		}
-	}
-}
+//func (builder *QueryBuilder) remapSinkScanColRefs(nodeID int32, step int32, sinkColRef map[[2]int32]int) {
+//	node := builder.qry.Nodes[nodeID]
+//
+//	switch node.NodeType {
+//	case plan.Node_SINK_SCAN:
+//		for _, expr := range node.ProjectList {
+//			expr.Expr.(*plan.Expr_Col).Col.ColPos = int32(sinkColRef[[2]int32{step, expr.Expr.(*plan.Expr_Col).Col.ColPos}])
+//		}
+//	default:
+//		for i := range node.Children {
+//			builder.remapSinkScanColRefs(node.Children[i], step, sinkColRef)
+//		}
+//	}
+//}
 
 func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
@@ -1283,9 +1283,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 	}
 
-	for i := 1; i < len(builder.qry.Steps); i++ {
-		builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
-	}
+	//for i := 1; i < len(builder.qry.Steps); i++ {
+	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
+	//}
 
 	return builder.qry, nil
 }
@@ -1759,7 +1759,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 						return 0, err
 					}
 					sourceStep := builder.appendStep(recursiveNodeId)
-					nodeID := appendSinkScanNodeWithTag(builder, subCtx, sourceStep, subCtx.sinkTag)
+					nodeID := appendRecursiveScanNode(builder, subCtx, sourceStep, subCtx.sinkTag)
 					subCtx.recRecursiveScanNodeId = nodeID
 					recursiveNodeId, err = builder.buildSelect(&tree.Select{Select: r}, subCtx, false)
 					if err != nil {
@@ -3007,6 +3007,9 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		} else {
 			if node.NodeType == plan.Node_FUNCTION_SCAN {
 				return moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
+			}
+			if node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_SINK_SCAN {
+				return nil
 			}
 
 			table = node.TableDef.Name
