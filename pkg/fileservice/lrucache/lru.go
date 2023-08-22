@@ -225,28 +225,25 @@ func (l *LRU[K, V]) Available() int64 {
 }
 
 func (l *LRU[K, V]) forceGC() {
-	for {
-		select {
-		case <-l.forceGCCh:
-			for float64(l.sizeFunc()) >= float64(l.capacity)*ForceGCRatio {
-				l.Lock()
-				if len(l.kv) == 0 {
-					l.Unlock()
-					break
-				}
-				elem := l.evicts.Back()
-				if elem == nil {
-					l.Unlock()
-					break
-				}
-				item := elem.Value.(*lruItem[K, V])
-				l.evicts.Remove(elem)
-				delete(l.kv, item.Key)
-				if l.postEvict != nil {
-					l.postEvict(item.Key, item.Value)
-				}
+	for range l.forceGCCh {
+		for float64(l.sizeFunc()) >= float64(l.capacity)*ForceGCRatio {
+			l.Lock()
+			if len(l.kv) == 0 {
 				l.Unlock()
+				break
 			}
+			elem := l.evicts.Back()
+			if elem == nil {
+				l.Unlock()
+				break
+			}
+			item := elem.Value.(*lruItem[K, V])
+			l.evicts.Remove(elem)
+			delete(l.kv, item.Key)
+			if l.postEvict != nil {
+				l.postEvict(item.Key, item.Value)
+			}
+			l.Unlock()
 		}
 	}
 }
