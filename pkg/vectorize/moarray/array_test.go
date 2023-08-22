@@ -161,6 +161,7 @@ func TestDivide(t *testing.T) {
 		args    args
 		wantF32 []float32
 		wantF64 []float64
+		wantErr bool
 	}
 	tests := []testCase{
 		{
@@ -169,21 +170,39 @@ func TestDivide(t *testing.T) {
 			wantF32: []float32{0.5, 0.6666667, 0.75},
 		},
 		{
-			name:    "Test2 - float64",
+			name:    "Test2 - float32 - error",
+			args:    args{leftArgF32: []float32{1, 4, 3}, rightArgF32: []float32{1, 0, 4}},
+			wantErr: true,
+		},
+		{
+			name:    "Test3 - float64",
 			args:    args{leftArgF64: []float64{1, 4, 3}, rightArgF64: []float64{1, 3, 4}},
 			wantF64: []float64{1, 1.3333333333333333, 0.75},
+		},
+		{
+			name:    "Test4 - float64 - error",
+			args:    args{leftArgF64: []float64{1, 4, 3}, rightArgF64: []float64{1, 0, 4}},
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes := Divide[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if tt.wantErr {
+					if _, gotErr := Divide[float32](tt.args.leftArgF32, tt.args.rightArgF32); gotErr == nil {
+						t.Errorf("Divide() should throw error")
+					}
+				} else if gotRes, _ := Divide[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.wantF32) {
 					t.Errorf("Divide() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes := Divide[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if tt.wantErr {
+					if _, gotErr := Divide[float64](tt.args.leftArgF64, tt.args.rightArgF64); gotErr == nil {
+						t.Errorf("Divide() should throw error")
+					}
+				} else if gotRes, _ := Divide[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.wantF64) {
 					t.Errorf("Divide() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}

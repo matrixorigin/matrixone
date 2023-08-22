@@ -53,6 +53,10 @@ create table t2(a int, b vecf32(3) primary key);
 create unique index t3 on vec_table(b);
 create table t3(a int, b vecf32(65537));
 
+-- throw error for Nan/Inf
+select sqrt(cast("[1,2,-3]" as vecf32));
+select b/(cast("[1,2,0]" as vecf32)) from vec_table;
+
 -- agg
 select count(b) from vec_table;
 

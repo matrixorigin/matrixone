@@ -15,7 +15,6 @@
 package function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -408,9 +407,6 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-	if len(v1) != len(v2) {
-		return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-	}
 
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
@@ -421,9 +417,6 @@ func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 }
 
 func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-	if len(v1) != len(v2) {
-		return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-	}
 
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
@@ -434,9 +427,6 @@ func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 }
 
 func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-	if len(v1) != len(v2) {
-		return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-	}
 
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
@@ -447,14 +437,14 @@ func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 }
 
 func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-	if len(v1) != len(v2) {
-		return nil, moerr.NewInternalErrorNoCtx("Dimensions should be same")
-	}
 
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	r := moarray.Divide(_v1, _v2)
+	r, err := moarray.Divide(_v1, _v2)
+	if err != nil {
+		return nil, err
+	}
 
 	return types.ArrayToBytes[T](r), nil
 }
