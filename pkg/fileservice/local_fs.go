@@ -316,6 +316,44 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
+func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	ctx, span := trace.Start(ctx, "LocalFS.ReadCache")
+	defer span.End()
+
+	if len(vector.Entries) == 0 {
+		return moerr.NewEmptyVectorNoCtx()
+	}
+
+	unlock, wait := l.ioLocks.Lock(IOLockKey{
+		File: vector.FilePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
+	}
+
+	if l.memCache != nil {
+		if err := l.memCache.Read(ctx, vector); err != nil {
+			return err
+		}
+	}
+
+	if l.diskCache != nil {
+		if err := l.diskCache.Read(ctx, vector); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 	if vector.allDone() {
 		return nil

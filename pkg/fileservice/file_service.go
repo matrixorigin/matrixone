@@ -40,6 +40,10 @@ type FileService interface {
 	// returns ErrEmptyVector if no IOEntry is passed
 	Read(ctx context.Context, vector *IOVector) error
 
+	// ReadCache reads cached data if any
+	// if cache hit, IOEntry.CachedData will be set
+	ReadCache(ctx context.Context, vector *IOVector) error
+
 	// List lists sub-entries in a dir
 	List(ctx context.Context, dirPath string) ([]DirEntry, error)
 

@@ -75,6 +75,16 @@ func (s *subPathFS) Read(ctx context.Context, vector *IOVector) error {
 	return s.upstream.Read(ctx, &subVector)
 }
 
+func (s *subPathFS) ReadCache(ctx context.Context, vector *IOVector) error {
+	subVector := *vector
+	p, err := s.toUpstreamPath(subVector.FilePath)
+	if err != nil {
+		return err
+	}
+	subVector.FilePath = p
+	return s.upstream.ReadCache(ctx, &subVector)
+}
+
 func (s *subPathFS) List(ctx context.Context, dirPath string) ([]DirEntry, error) {
 	p, err := s.toUpstreamPath(dirPath)
 	if err != nil {
