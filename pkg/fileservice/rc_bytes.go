@@ -96,7 +96,7 @@ func (r *rcBytesPool) Alloc(size int) CacheData {
 
 // the impact of gc and cgo is currently ambiguous and it is not clear how it will be handled for the time being
 func alloc(size int) []byte {
-	return make([]byte, size, size)
+	return make([]byte, size)
 	/*
 		ptr := C.calloc(C.size_t(size), 1)
 		if ptr == nil {

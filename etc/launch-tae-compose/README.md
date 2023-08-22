@@ -1,37 +1,37 @@
 # Launch-tae-CN-tae-dn with docker-compose
 
 - [docker compose version](https://docs.docker.com/compose/install/) >= v2.12.1
-- support profiles: launch-tae-multi-CN-tae-DN, launch-tae-CN-tae-DN
+- support profiles: launch, launch-multi-cn
 
 ## build and up 
 
 build new image
 
 ```shell
-docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
 ```
 
 use default image
 
 ```shell
-docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN pull
-docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d
+docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn pull
+docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d
 ```
 
 ## Check log
 
 ```shell
 # cn-0
-docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs cn-0
 
 # cn-1 
-docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs cn-1
 
 # dn
-docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs dn
 
 # logService
-docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs logservice
 ```
 
 ## minio as s3 service
@@ -45,18 +45,18 @@ password: minio123
 
 cn-0
 ```shell
-mysql -h 127.0.0.1 -P 7001 -udump -p111
+mysql -h 127.0.0.1 -P 6001 -udump -p111
 ```
 
 cn-1:
 ```shell
-mysql -h 127.0.0.1 -P 8001 -udump -p111
+mysql -h 127.0.0.1 -P 7001 -udump -p111
 ```
 
 ## down
 
 ```shell
-docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn down --remove-orphans
 ```
 
 ## clean dangling image
