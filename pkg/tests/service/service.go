@@ -335,7 +335,7 @@ func (c *testCluster) Start() error {
 	}
 
 	// start dn services
-	if err := c.startDNServices(ctx); err != nil {
+	if err := c.startTNServices(ctx); err != nil {
 		return err
 	}
 
@@ -1417,8 +1417,8 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 	return svcs
 }
 
-// startDNServices initializes and starts all dn services.
-func (c *testCluster) startDNServices(ctx context.Context) error {
+// startTNServices initializes and starts all dn services.
+func (c *testCluster) startTNServices(ctx context.Context) error {
 	// initialize all dn services
 	c.dn.svcs = c.initDNServices(c.fileservices)
 
