@@ -130,8 +130,7 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) 
 	return tbl, nil
 }
 
-func (tbl *txnTable) PrePreareTransfer(phase string) (err error) {
-	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+func (tbl *txnTable) PrePreareTransfer(phase string, ts types.TS) (err error) {
 	return tbl.TransferDeletes(ts, phase)
 }
 
