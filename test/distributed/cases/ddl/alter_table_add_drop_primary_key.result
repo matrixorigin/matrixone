@@ -18,7 +18,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
 col2    DECIMAL128(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri01    col1    INT    NO
+pri01    col2    DECIMAL128    YES
 drop table pri01;
 drop table if exists pri02;
 create table pri02 (col1 char, col2 bigint unsigned);
@@ -40,7 +42,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    CHAR(1)    YES        null        
 col2    BIGINT UNSIGNED(64)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri02    col1    CHAR    YES
+pri02    col2    BIGINT UNSIGNED    YES
 drop table pri02;
 drop table if exists pri03;
 create table pri03 (col1 char, col2 bigint unsigned);
@@ -59,7 +63,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    CHAR(1)    NO    PRI    null        
 col2    BIGINT UNSIGNED(64)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri03    col1    CHAR    NO
+pri03    col2    BIGINT UNSIGNED    YES
 drop table pri03;
 drop table if exists pri04;
 create table pri04 (col1 varchar(100), col2 float);
@@ -81,7 +87,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    VARCHAR(100)    YES        null        
 col2    FLOAT(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri04    col1    VARCHAR    YES
+pri04    col2    FLOAT    YES
 drop table pri04;
 drop table if exists pri05;
 create table pri05 (col1 date, col2 double);
@@ -100,7 +108,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    DATE(0)    NO    PRI    null        
 col2    DOUBLE(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri05' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri05    col1    DATE    NO
+pri05    col2    DOUBLE    YES
 drop table pri05;
 drop table if exists pri06;
 create table pri06 (col1 smallint default null, col2 double);
@@ -112,9 +122,11 @@ col1    col2
 200    3.289323423E9
 alter table pri06 add constraint primary key (col1);
 show create table pri06;
-[unknown result because it is related to issue#11289]
+
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri06' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri06    col1    SMALLINT    NO
+pri06    col2    DOUBLE    YES
 show columns from pri06;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    SMALLINT(16)    NO    PRI    null        
@@ -145,7 +157,9 @@ col1    col2
 12    -3.2734928490328403E10
 1000000    3.289323423E9
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri07' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri07    col1    DECIMAL128    NO
+pri07    col2    DOUBLE    YES
 drop table pri07;
 drop table if exists pri08;
 create table pri08 (col1 binary, col2 int unsigned);
@@ -173,7 +187,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    BINARY(1)    NO    PRI    null        
 col2    INT UNSIGNED(32)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri08' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri08    col1    BINARY    NO
+pri08    col2    INT UNSIGNED    YES
 drop table pri08;
 drop table if exists pri09;
 create table pri09 (col1 binary, col2 int unsigned);
@@ -193,7 +209,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1    BINARY(1)    YES        null        
 col2    INT UNSIGNED(32)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri09' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri09    col1    BINARY    YES
+pri09    col2    INT UNSIGNED    YES
 drop table pri09;
 drop table if exists pri10;
 create table pri10 (col1 int, col2 char(1));
@@ -215,14 +233,16 @@ insert into pri10 (col1, col2) values (1, null);
 constraint violation: Column 'col2' cannot be null
 insert into pri10 values (-2, 'p');
 insert into pri10 (col1, col2) values (1, 'a');
-Duplicate entry ('\(\d\,\w\)'|'\d\w\d{12}') for key '__mo_cpkey_col'
+Duplicate entry '3a150146016100' for key '__mo_cpkey_col'
 select * from pri10;
 col1    col2
 1    a
 -2    *
 -2    p
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri10' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri10    col1    INT    NO
+pri10    col2    CHAR    NO
 drop table pri10;
 drop table if exists pri11;
 create table pri11 (col1 int primary key , col2 decimal, col3 char);
@@ -243,7 +263,10 @@ col1    col2    col3
 1    3289034    q
 2    3829    a
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri11' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri11    col1    INT    NO
+pri11    col2    DECIMAL128    YES
+pri11    col3    CHAR    YES
 drop table pri11;
 drop table if exists temp01;
 create temporary table temp01 (col1 datetime, col2 blob);
@@ -265,7 +288,7 @@ temp01    CREATE TABLE `temp01` (\n`col1` DATETIME DEFAULT NULL,\n`col2` BLOB DE
 show columns from temp01;
 Field    Type    Null    Key    Default    Extra    Comment
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temp01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
 drop table temp01;
 drop table if exists ex_table_2_1;
 create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
@@ -305,7 +328,9 @@ col2    DECIMAL128(38)    YES        null
 select * from droppri01;
 col1    col2
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'droppri01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+droppri01    col1    INT    NO
+droppri01    col2    DECIMAL128    YES
 drop table droppri01;
 drop table if exists pri01;
 create table pri01(col1 int, col2 decimal);
@@ -319,13 +344,15 @@ Table    Create Table
 pri01    CREATE TABLE `pri01` (\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT null\n)
 alter table pri01 add constraint primary key(col2);
 show create table pri01;
-[unknown result because it is related to issue#11299]
+
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO        null        
 col2    DECIMAL128(38)    NO    PRI    null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+pri01    col1    INT    NO
+pri01    col2    DECIMAL128    NO
 drop table pri01;
 drop table if exists droppri02;
 create table droppri02 (col1 int auto_increment, col2 decimal, col3 char, col4 varchar not null, col5 float, primary key (col1, col2, col3));
