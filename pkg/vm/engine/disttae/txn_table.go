@@ -638,11 +638,6 @@ func (tbl *txnTable) rangesOnePart(
 		tbl.lastTS = tbl.db.txn.meta.SnapshotTS
 	}
 
-	//blks contains all visible blocks to this txn, namely
-	//includes committed blocks and uncommitted blocks by CN writing S3.
-	blks := make([]catalog.BlockInfo, 0, len(committedblocks))
-	blks = append(blks, committedblocks...)
-
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
 		iter := state.NewDirtyBlocksIter()
@@ -664,8 +659,12 @@ func (tbl *txnTable) rangesOnePart(
 	if err != nil {
 		return err
 	}
+	//blks contains all visible blocks to this txn, namely
+	//includes committed blocks and uncommitted blocks by CN writing S3.
+	blks := make([]catalog.BlockInfo, 0, len(committedblocks)+len(insertedS3Blks))
+	blks = append(blks, committedblocks...)
+	blks = append(blks, insertedS3Blks...)
 	for _, blk := range insertedS3Blks {
-		blks = append(blks, blk)
 		if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
 			dirtyBlks[blk.BlockID] = struct{}{}
 		}
