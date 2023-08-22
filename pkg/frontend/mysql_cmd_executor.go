@@ -3298,7 +3298,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
-		rspLen = runResult.AffectRows
+		if runResult == nil {
+			rspLen = 0
+		} else {
+			rspLen = runResult.AffectRows
+		}
 		echoTime := time.Now()
 
 		logDebug(ses, "time of SendResponse %s", time.Since(echoTime).String())
