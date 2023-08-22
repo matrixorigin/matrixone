@@ -17,6 +17,7 @@ package fileservice
 // #include <stdlib.h>
 import "C"
 import (
+	"runtime"
 	"sync/atomic"
 )
 
@@ -78,14 +79,11 @@ func (r *rcBytesPool) ForceGCChan() chan struct{} {
 }
 
 func (r *rcBytesPool) Alloc(size int) CacheData {
-	/*
-		if r.size.Load() > r.limit {
-			r.forceGCCh <- struct{}{}
-			// forced cleanup of excess memory
-			// runtime.GC()
-			go debug.FreeOSMemory()
-		}
-	*/
+	if r.size.Load() > r.limit {
+		r.forceGCCh <- struct{}{}
+		// forced cleanup of excess memory
+		runtime.GC()
+	}
 
 	item := &RCBytes{
 		pool: r,
