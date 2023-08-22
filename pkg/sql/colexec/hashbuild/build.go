@@ -44,6 +44,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	}
 
 	if ap.NeedHashMap {
+
 		if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 			return err
 		}
