@@ -75,7 +75,7 @@ type ShardedBatch struct {
 }
 
 func (e *Engine) allShards() (shards []Shard, err error) {
-	for _, store := range getDNServices(e.cluster) {
+	for _, store := range getTNServices(e.cluster) {
 		for _, shard := range store.Shards {
 			shards = append(shards, Shard{
 				DNShardRecord: metadata.DNShardRecord{
@@ -90,7 +90,7 @@ func (e *Engine) allShards() (shards []Shard, err error) {
 }
 
 func (e *Engine) anyShard() (shards []Shard, err error) {
-	for _, store := range getDNServices(e.cluster) {
+	for _, store := range getTNServices(e.cluster) {
 		for _, shard := range store.Shards {
 			shards = append(shards, Shard{
 				DNShardRecord: metadata.DNShardRecord{
