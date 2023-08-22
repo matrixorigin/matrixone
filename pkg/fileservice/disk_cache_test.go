@@ -17,9 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
-	"sync"
 	"testing"
 	"time"
 
@@ -47,9 +45,9 @@ func TestDiskCache(t *testing.T) {
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
-					Offset: 0,
-					Size:   1,
-					Data:   []byte("a"),
+					Offset:     0,
+					Size:       1,
+					CachedData: Bytes([]byte("a")),
 				},
 				// no data
 				{
@@ -58,9 +56,9 @@ func TestDiskCache(t *testing.T) {
 				},
 				// size unknown
 				{
-					Offset: 9999,
-					Size:   -1,
-					Data:   []byte("abc"),
+					Offset:     9999,
+					Size:       -1,
+					CachedData: Bytes([]byte("abc")),
 				},
 			},
 		}
@@ -134,200 +132,6 @@ func TestDiskCache(t *testing.T) {
 	assert.Equal(t, 1, numWritten)
 }
 
-func TestDiskCachePreload(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	var counterSet perfcounter.CounterSet
-	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
-
-	// new
-	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
-	assert.Nil(t, err)
-
-	// set content
-	err = cache.SetFileContent(ctx, "foo", func(_ context.Context, vec *IOVector) error {
-		_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	assert.Nil(t, err)
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.SetFileContent.Load())
-	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.StatFile.Load())
-
-	// get content
-	r, err := cache.GetFileContent(ctx, "foo", 0)
-	assert.Nil(t, err)
-	data, err := io.ReadAll(r)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("foo"), data)
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.GetFileContent.Load())
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.StatFile.Load())
-
-	r, err = cache.GetFileContent(ctx, "foo", 1)
-	assert.Nil(t, err)
-	data, err = io.ReadAll(r)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("oo"), data)
-	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.GetFileContent.Load())
-	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.StatFile.Load())
-
-	// read
-	vec := &IOVector{
-		FilePath: "foo",
-		Entries: []IOEntry{
-			{
-				Offset: 0,
-				Size:   3,
-			},
-			{
-				Offset: 1,
-				Size:   2,
-			},
-			{
-				Offset: 2,
-				Size:   1,
-			},
-		},
-	}
-	assert.Nil(t, cache.Read(ctx, vec))
-	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
-	assert.Equal(t, []byte("oo"), vec.Entries[1].Data)
-	assert.Equal(t, []byte("o"), vec.Entries[2].Data)
-	assert.Equal(t, int64(3), counterSet.FileService.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.StatFile.Load())
-
-	// update
-	assert.Nil(t, cache.Update(ctx, vec, false))
-	assert.Equal(t, int64(3), counterSet.FileService.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.StatFile.Load())
-
-	// read and update again
-	assert.Nil(t, cache.Read(ctx, vec))
-	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
-	assert.Equal(t, []byte("oo"), vec.Entries[1].Data)
-	assert.Equal(t, []byte("o"), vec.Entries[2].Data)
-	assert.Equal(t, int64(4), counterSet.FileService.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.StatFile.Load())
-	assert.Nil(t, cache.Update(ctx, vec, false))
-	assert.Equal(t, int64(4), counterSet.FileService.Cache.Disk.OpenFile.Load())
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.StatFile.Load())
-
-}
-
-func TestDiskCacheConcurrentSetFileContent(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	var counterSet perfcounter.CounterSet
-	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
-
-	// new
-	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
-	assert.Nil(t, err)
-
-	n := 128
-	wg := new(sync.WaitGroup)
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func() {
-			defer wg.Done()
-			err := cache.SetFileContent(ctx, "foo", func(_ context.Context, vec *IOVector) error {
-				_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
-				if err != nil {
-					return err
-				}
-				return nil
-			})
-			assert.Nil(t, err)
-		}()
-	}
-	wg.Wait()
-
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.SetFileContent.Load())
-}
-
-func TestDiskCacheEviction(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	var counterSet perfcounter.CounterSet
-	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
-
-	// counter
-	numWritten := 0
-	numEvict := 0
-	ctx = OnDiskCacheWritten(ctx, func(path string, entry IOEntry) {
-		numWritten++
-	})
-	ctx = OnDiskCacheEvict(ctx, func(path string) {
-		numEvict++
-	})
-
-	// new
-	cache, err := NewDiskCache(ctx, dir, 3, time.Second, 1, nil)
-	assert.Nil(t, err)
-
-	n := 128
-	wg := new(sync.WaitGroup)
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		i := i
-		go func() {
-			defer wg.Done()
-			err := cache.SetFileContent(ctx, fmt.Sprintf("%v", i), func(_ context.Context, vec *IOVector) error {
-				_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
-				if err != nil {
-					return err
-				}
-				return nil
-			})
-			assert.Nil(t, err)
-		}()
-	}
-	wg.Wait()
-
-	assert.Equal(t, int64(128), counterSet.FileService.Cache.Disk.SetFileContent.Load())
-
-	cache.evict(ctx)
-	assert.True(t, counterSet.FileService.Cache.Disk.Evict.Load() > 0)
-
-	assert.True(t, numEvict > 0)
-}
-
-func TestImmediatelyEviction(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	var counterSet perfcounter.CounterSet
-	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
-
-	evictInterval := time.Hour * 1
-	cache, err := NewDiskCache(ctx, dir, 3, evictInterval, 0.8, nil)
-	assert.Nil(t, err)
-
-	err = cache.SetFileContent(ctx, "a", func(_ context.Context, vec *IOVector) error {
-		_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	assert.Nil(t, err)
-
-	err = cache.SetFileContent(ctx, "b", func(_ context.Context, vec *IOVector) error {
-		_, err := vec.Entries[0].WriterForRead.Write([]byte("foo"))
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	assert.Nil(t, err)
-
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.EvictImmediately.Load())
-}
-
 func TestDiskCacheWriteAgain(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -344,8 +148,8 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
-				Size: 3,
-				Data: []byte("foo"),
+				Size:       3,
+				CachedData: Bytes([]byte("foo")),
 			},
 		},
 	}, false)
@@ -357,9 +161,9 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
-				Size:   3,
-				Data:   []byte("foo"),
-				Offset: 99,
+				Size:       3,
+				CachedData: Bytes([]byte("foo")),
+				Offset:     99,
 			},
 		},
 	}, false)
@@ -373,8 +177,8 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
-				Size: 3,
-				Data: []byte("foo"),
+				Size:       3,
+				CachedData: Bytes([]byte("foo")),
 			},
 		},
 	}, false)

@@ -19,7 +19,7 @@ type CreateStream struct {
 	Replace     bool
 	Source      bool
 	IfNotExists bool
-	StreamName  TableName
+	StreamName  *TableName
 	Defs        TableDefs
 	ColNames    IdentifierList
 	AsSource    *Select
@@ -81,6 +81,9 @@ func (node *CreateStream) Format(ctx *FmtCtx) {
 	ctx.WriteString(" as ")
 	node.AsSource.Format(ctx)
 }
+
+func (node *CreateStream) GetStatementType() string { return "Create Stream" }
+func (node *CreateStream) GetQueryType() string     { return QueryTypeDDL }
 
 type CreateStreamWithOption struct {
 	createOptionImpl
