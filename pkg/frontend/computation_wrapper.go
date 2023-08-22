@@ -427,7 +427,7 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 	}()
 	runResult, err := cwft.compile.Run(ts)
 	cwft.runResult = runResult
-	// cwft.compile = nil
+	cwft.compile = nil
 	return runResult, err
 }
 
