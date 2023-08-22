@@ -49,12 +49,12 @@ func TestAdd(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes := Add[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if gotRes, _ := Add[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.wantF32) {
 					t.Errorf("Add() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes := Add[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if gotRes, _ := Add[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.wantF64) {
 					t.Errorf("Add() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -92,12 +92,12 @@ func TestSubtract(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes := Subtract[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if gotRes, _ := Subtract[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.wantF32) {
 					t.Errorf("Subtract() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes := Subtract[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if gotRes, _ := Subtract[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.wantF64) {
 					t.Errorf("Subtract() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -135,12 +135,12 @@ func TestMultiply(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes := Multiply[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if gotRes, _ := Multiply[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.wantF32) {
 					t.Errorf("Multiply() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes := Multiply[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if gotRes, _ := Multiply[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.wantF64) {
 					t.Errorf("Multiply() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -170,7 +170,7 @@ func TestDivide(t *testing.T) {
 			wantF32: []float32{0.5, 0.6666667, 0.75},
 		},
 		{
-			name:    "Test2 - float32 - error",
+			name:    "Test2 - float32 - div by zero",
 			args:    args{leftArgF32: []float32{1, 4, 3}, rightArgF32: []float32{1, 0, 4}},
 			wantErr: true,
 		},
@@ -180,8 +180,13 @@ func TestDivide(t *testing.T) {
 			wantF64: []float64{1, 1.3333333333333333, 0.75},
 		},
 		{
-			name:    "Test4 - float64 - error",
+			name:    "Test4 - float64 - div by zero",
 			args:    args{leftArgF64: []float64{1, 4, 3}, rightArgF64: []float64{1, 0, 4}},
+			wantErr: true,
+		},
+		{
+			name:    "Test5 - float64 - dimension mismatch",
+			args:    args{leftArgF64: []float64{1, 4}, rightArgF64: []float64{1, 1, 4}},
 			wantErr: true,
 		},
 	}

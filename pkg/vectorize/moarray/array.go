@@ -15,10 +15,13 @@
 package moarray
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
+)
+
+const (
+	DimensionMismatchErrMsg = "dimension mismatch"
 )
 
 //TODO: Check on optimization.
@@ -26,46 +29,62 @@ import (
 // 2. Should we accept v1 *[]T. v1 is a Slice, so I think, it should be pass by reference.
 // 3. Later on, use tensor library to improve the performance (may be via GPU)
 
-func Add[T types.RealNumbers](v1, v2 []T) []T {
+func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
+	if len(v1) != len(v2) {
+		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+	}
 	n := len(v1)
 	r := make([]T, n)
 	for i := 0; i < n; i++ {
 		r[i] = v1[i] + v2[i]
 	}
-	return r
+	return r, nil
 }
 
-func Subtract[T types.RealNumbers](v1, v2 []T) []T {
+func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
+	if len(v1) != len(v2) {
+		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+	}
 	n := len(v1)
 	r := make([]T, n)
 	for i := 0; i < n; i++ {
 		r[i] = v1[i] - v2[i]
 	}
-	return r
+	return r, nil
 }
 
-func Multiply[T types.RealNumbers](v1, v2 []T) []T {
+func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
+	if len(v1) != len(v2) {
+		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+	}
 	n := len(v1)
 	r := make([]T, n)
 	for i := 0; i < n; i++ {
 		r[i] = v1[i] * v2[i]
 	}
-	return r
+	return r, nil
 }
 
-func Divide[T types.RealNumbers](v1, v2 []T) []T {
+func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
+	if len(v1) != len(v2) {
+		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+	}
 	n := len(v1)
 	r := make([]T, n)
 	for i := 0; i < n; i++ {
+		if v2[i] == 0 {
+			return nil, moerr.NewDivByZeroNoCtx()
+		}
 		r[i] = v1[i] / v2[i]
 	}
-	return r
+	return r, nil
 }
 
 func Compare[T types.RealNumbers](v1, v2 []T) int {
 	if len(v1) != len(v2) {
 		// NOTE: We will not compare Arrays with different dimension.
-		panic(moerr.NewInvalidArgNoCtx("dimension mismatch", fmt.Sprintf("%d != %d", len(v1), len(v2))))
+		// panic is fine here as Compare is used in many places, which does not use err.
+		panic(moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg))
 	}
 	for i := 0; i < len(v1); i++ {
 		if v1[i] == v2[i] {
@@ -126,7 +145,7 @@ func Summation[T types.RealNumbers](v []T) float64 {
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	if len(v1) != len(v2) {
-		return 0, moerr.NewInvalidArgNoCtx("dimension mismatch", fmt.Sprintf("%d != %d", len(v1), len(v2)))
+		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
 	}
 
 	n := len(v1)
@@ -176,7 +195,7 @@ func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float32, error) {
 
 	if len(v1) != len(v2) {
-		return 0, moerr.NewInvalidArgNoCtx("dimension mismatch", fmt.Sprintf("%d != %d", len(v1), len(v2)))
+		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
 	}
 
 	a, err := InnerProduct[T](v1, v2)

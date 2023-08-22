@@ -411,7 +411,10 @@ func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	r := moarray.Add(_v1, _v2)
+	r, err := moarray.Add(_v1, _v2)
+	if err != nil {
+		return nil, err
+	}
 
 	return types.ArrayToBytes[T](r), nil
 }
@@ -421,7 +424,10 @@ func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	r := moarray.Subtract(_v1, _v2)
+	r, err := moarray.Subtract(_v1, _v2)
+	if err != nil {
+		return nil, err
+	}
 
 	return types.ArrayToBytes[T](r), nil
 }
@@ -431,7 +437,10 @@ func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
 
-	r := moarray.Multiply(_v1, _v2)
+	r, err := moarray.Multiply(_v1, _v2)
+	if err != nil {
+		return nil, err
+	}
 
 	return types.ArrayToBytes[T](r), nil
 }

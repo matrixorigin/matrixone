@@ -41,9 +41,9 @@ select b + "[1,2,3]" from vec_table;
 b + [1,2,3]
 [2, 4, 6]
 select b + "[1,2]" from vec_table;
-internal error: Dimensions should be same
+invalid input: dimension mismatch
 select b + "[1,2,3,4]" from vec_table;
-internal error: Dimensions should be same
+invalid input: dimension mismatch
 select cast("[1,2,3]" as vecf32(3));
 cast([1,2,3] as vecf32(3))
 [1, 2, 3]
@@ -96,6 +96,10 @@ create unique index t3 on vec_table(b);
 not supported: VECTOR column 'b' cannot be in index
 create table t3(a int, b vecf32(65537));
 Data truncation: data out of range: data type vecf32,  typeLen is over the MaxVectorLen : 65536
+select sqrt(cast("[1,2,-3]" as vecf32));
+invalid argument Sqrt, bad value -3
+select b/(cast("[1,2,0]" as vecf32)) from vec_table;
+Data truncation: division by zero
 select count(b) from vec_table;
 count(b)
 1
