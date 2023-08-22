@@ -22,7 +22,7 @@ import (
 )
 
 func TestLRU(t *testing.T) {
-	l := New[int, Bytes](1, nil, nil, nil, nil)
+	l := New[int, Bytes](4, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	l.Set(ctx, 1, []byte{42})
@@ -50,7 +50,7 @@ func TestLRUCallbacks(t *testing.T) {
 	evictEntryMap := make(map[int][]byte)
 	postEvictInvokedMap := make(map[int]bool)
 
-	l := New(1, nil,
+	l := New(4, nil,
 		func(key int, _ Bytes) {
 			postSetInvokedMap[key] = true
 		},

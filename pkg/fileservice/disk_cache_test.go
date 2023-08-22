@@ -36,7 +36,7 @@ func TestDiskCache(t *testing.T) {
 	})
 
 	// new
-	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
+	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, DefaultCacheDataAllocator, nil)
 	assert.Nil(t, err)
 
 	// update
@@ -118,14 +118,14 @@ func TestDiskCache(t *testing.T) {
 	testRead(cache)
 
 	// new cache instance and read
-	cache, err = NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
+	cache, err = NewDiskCache(ctx, dir, 1024, time.Second, 1, DefaultCacheDataAllocator, nil)
 	assert.Nil(t, err)
 	testRead(cache)
 
 	assert.Equal(t, 1, numWritten)
 
 	// new cache instance and update
-	cache, err = NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
+	cache, err = NewDiskCache(ctx, dir, 1024, time.Second, 1, DefaultCacheDataAllocator, nil)
 	assert.Nil(t, err)
 	testUpdate(cache)
 
@@ -139,7 +139,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	evictInterval := time.Hour * 1
-	cache, err := NewDiskCache(ctx, dir, 3, evictInterval, 0.8, nil)
+	cache, err := NewDiskCache(ctx, dir, 3, evictInterval, 0.8, DefaultCacheDataAllocator, nil)
 	assert.Nil(t, err)
 	cache.noAutoEviction = true
 

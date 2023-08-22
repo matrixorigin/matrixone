@@ -468,7 +468,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				entry.Size = int64(len(data))
 
 			} else {
-				cacheData := l.memCache.Alloc(int(entry.Size))
+				cacheData := l.Alloc(int(entry.Size))
 				defer func() {
 					entry.Data = nil
 					cacheData.Release()
