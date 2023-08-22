@@ -239,6 +239,25 @@ func TestVectorZM(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func TestZMArray(t *testing.T) {
+	zm := NewZM(types.T_array_float32, 0)
+	zm.Update(types.ArrayToBytes[float32]([]float32{1, 1, 1}))
+	zm.Update(types.ArrayToBytes[float32]([]float32{5, 5, 5}))
+
+	require.True(t, zm.IsArray())
+	require.False(t, zm.IsInited())
+
+	require.Nil(t, zm.GetMin())
+	require.Nil(t, zm.GetMax())
+
+	require.Equal(t, 0, len(zm.GetMinBuf()))
+	require.Equal(t, 0, len(zm.GetMaxBuf()))
+
+	require.False(t, zm.ContainsKey(types.ArrayToBytes[float32]([]float32{1, 1, 1})))
+	require.False(t, zm.ContainsKey(types.ArrayToBytes[float32]([]float32{5, 5, 5})))
+	require.False(t, zm.ContainsKey(types.ArrayToBytes[float32]([]float32{3, 3, 3})))
+}
+
 func TestZMNull(t *testing.T) {
 	zm := NewZM(types.T_int64, 0)
 	x := zm.GetMin()

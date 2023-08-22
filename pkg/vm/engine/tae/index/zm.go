@@ -124,6 +124,10 @@ func (zm ZM) IsString() bool {
 	return zm.GetType().FixedLength() < 0
 }
 
+func (zm ZM) IsArray() bool {
+	return zm.GetType().IsArrayRelate()
+}
+
 func (zm ZM) Valid() bool {
 	return len(zm) == ZMSize && zm.IsInited()
 }
@@ -1155,6 +1159,9 @@ func adjustBytes(bs []byte) {
 
 func UpdateZM(zm ZM, v []byte) {
 	if !zm.IsInited() {
+		if zm.IsArray() {
+			return
+		}
 		zm.doInit(v)
 		return
 	}
