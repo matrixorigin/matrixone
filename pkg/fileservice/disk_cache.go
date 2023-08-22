@@ -22,7 +22,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"sync"
 	"time"
 
@@ -199,7 +199,11 @@ func (d *DiskCache) Update(
 	}
 
 	for _, entry := range vector.Entries {
-		if len(entry.Data) == 0 {
+		if entry.CachedData == nil {
+			// no data
+			continue
+		}
+		if len(entry.CachedData.Bytes()) == 0 {
 			// no data
 			continue
 		}
@@ -243,7 +247,7 @@ func (d *DiskCache) Update(
 				return // ignore error
 			}
 			numOpen++
-			n, err := f.Write(entry.Data)
+			n, err := f.Write(entry.CachedData.Bytes())
 			if err != nil {
 				f.Close()
 				os.Remove(f.Name())
@@ -348,7 +352,7 @@ func (d *DiskCache) evict(ctx context.Context) {
 		if entry.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
+		if !cacheFilePattern.MatchString(entry.Name()) {
 			return nil
 		}
 		info, err := entry.Info()
@@ -433,7 +437,9 @@ func (d *DiskCache) newFileContentWriter(contentPath string) (w io.Writer, done 
 	}, f.Close, nil
 }
 
-const cacheFileSuffix = ".mofscache"
+const cacheFileSuffix = ".mofscache-v2"
+
+var cacheFilePattern = regexp.MustCompile(`.mofscache.*`)
 
 func (d *DiskCache) entryDataFilePath(path string, entry IOEntry) string {
 	if entry.Size < 0 {

@@ -38,7 +38,7 @@ func benchmarkFileService(ctx context.Context, b *testing.B, newFS func() FileSe
 				Offset:      offset,
 				Size:        int64(len(part)),
 				Data:        part,
-				ToCacheData: DataAsObject,
+				ToCacheData: CacheOriginalData,
 			})
 			offset += int64(len(part))
 		}
@@ -60,7 +60,7 @@ func benchmarkFileService(ctx context.Context, b *testing.B, newFS func() FileSe
 				readVector.Entries = append(readVector.Entries, IOEntry{
 					Offset:      offset,
 					Size:        int64(len(part)),
-					ToCacheData: DataAsObject,
+					ToCacheData: CacheOriginalData,
 				})
 				offset += int64(len(part))
 			}
