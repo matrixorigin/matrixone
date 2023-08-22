@@ -65,6 +65,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 
 	proc.SetInputBatch(b)
-
+	//todo: change to process.ExecNext
 	return process.ExecStop, nil
 }
