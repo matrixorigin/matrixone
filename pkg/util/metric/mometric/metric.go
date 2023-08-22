@@ -45,7 +45,9 @@ const (
 	ALL_IN_ONE_MODE  = "monolithic"
 )
 
-const ServiceTypeKey = "ServiceTypeKey"
+type CtxServiceType string
+
+const ServiceTypeKey CtxServiceType = "ServiceTypeKey"
 const LaunchMode = "ALL"
 
 type statusServer struct {

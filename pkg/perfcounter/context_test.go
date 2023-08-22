@@ -16,10 +16,10 @@ package perfcounter
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestWithCounterSetFrom(t *testing.T) {
@@ -30,6 +30,38 @@ func TestWithCounterSetFrom(t *testing.T) {
 		set.DistTAE.Logtail.Entries.Add(1)
 	})
 	assert.Equal(t, int64(1), c1.DistTAE.Logtail.Entries.Load())
+}
+
+func makeCounterSetArray(cnt int) []*CounterSet {
+	var s []*CounterSet
+
+	for i := 0; i < cnt; i++ {
+		s = append(s, new(CounterSet))
+	}
+
+	return s
+}
+
+func BenchmarkWithCounterSetNonNested(b *testing.B) {
+	sets := makeCounterSetArray(100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for i := 0; i < b.N; i++ {
+		WithCounterSet(ctx, sets...)
+	}
+}
+
+func BenchmarkWithCounterSetNested(b *testing.B) {
+	sets := makeCounterSetArray(100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for i := 0; i < b.N; i++ {
+		ctx = WithCounterSet(ctx, sets...)
+	}
 }
 
 func TestAddDuplicateCounterSetToContext(t *testing.T) {
