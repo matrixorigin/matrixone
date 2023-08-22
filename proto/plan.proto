@@ -251,6 +251,8 @@ message ColDef {
 	bool clusterBy		= 12;
 	bool primary        = 13;
 	int32 pkidx 		= 14;
+	bool headers = 15;
+	string header = 16;
 }
 
 message Default {
@@ -610,6 +612,7 @@ message Node {
 		FUNCTION_SCAN = 3;
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
+		STREAM_SCAN = 6;
 
 		// Proj, for convenience
 		PROJECT = 10;
