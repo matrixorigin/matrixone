@@ -352,7 +352,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		engine:   e,
 		meta:     op.TxnRef(),
 		idGen:    e.idGen,
-		dnStores: e.getDNServices(),
+		dnStores: e.getTNServices(),
 		tableCache: struct {
 			cachedIndex int
 			tableMap    *sync.Map
@@ -480,7 +480,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 	return op.GetWorkspace().(*Transaction)
 }
 
-func (e *Engine) getDNServices() []DNStore {
+func (e *Engine) getTNServices() []DNStore {
 	var values []DNStore
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetDNService(clusterservice.NewSelector(),
