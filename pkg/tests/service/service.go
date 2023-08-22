@@ -368,7 +368,7 @@ func (c *testCluster) Close() error {
 	}
 
 	// close all dn services
-	if err := c.closeDNServices(); err != nil {
+	if err := c.closeTNServices(); err != nil {
 		return err
 	}
 
@@ -1474,8 +1474,8 @@ func (c *testCluster) startCNServices(ctx context.Context) error {
 	return nil
 }
 
-// closeDNServices closes all dn services.
-func (c *testCluster) closeDNServices() error {
+// closeTNServices closes all dn services.
+func (c *testCluster) closeTNServices() error {
 	c.logger.Info("start to close dn services")
 
 	for i, ds := range c.dn.svcs {
