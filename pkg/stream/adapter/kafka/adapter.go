@@ -279,6 +279,9 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 		if partitionLimit > availableMessages {
 			partitionLimit = availableMessages
 		}
+		if limit == 0 {
+			partitionLimit = availableMessages
+		}
 
 		// Assign the specific partition with the desired offset
 		err = ka.Consumer.Assign([]kafka.TopicPartition{
