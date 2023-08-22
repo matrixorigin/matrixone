@@ -217,7 +217,9 @@ update index02 set bnewnew = 'database' where bnewnEW = 'ad';
 select * from index02;
 show index from index02;
 show columns from index02;
+-- @bvt:issue#11392
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
+-- @bvt:issue
 select * from index02;
 
 
