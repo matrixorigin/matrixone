@@ -98,7 +98,6 @@ var analPool = sync.Pool{
 func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
 	c := pool.Get().(*Compile)
-	c.clear()
 	c.e = e
 	c.db = db
 	c.ctx = ctx
@@ -128,7 +127,7 @@ func putCompile(c *Compile) {
 	}
 
 	c.proc.CleanValueScanBatchs()
-	// c.clear()
+	c.clear()
 	pool.Put(c)
 }
 
@@ -345,13 +344,12 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
-	fmt.Printf("ccccccccccccccccccc  %s", DebugShowScopes(c.scope))
 	var cc *Compile
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer task.End()
 	defer func() {
 		putCompile(c)
-		// putCompile(cc)
+		putCompile(cc)
 	}()
 	result := &util2.RunResult{
 		AffectRows: 0,
@@ -438,7 +436,6 @@ func (c *Compile) runOnce() error {
 			wg.Done()
 		})
 	}
-	fmt.Printf("aaaaaaaaaaaaaaaaaaaaaa  %s\n", c.sql)
 	wg.Wait()
 	c.scope = nil
 	close(errC)

@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -2508,6 +2509,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	userName string,
 ) (retErr error) {
 	var err error
+	var runResult *util2.RunResult
 	var cmpBegin time.Time
 	var ret interface{}
 	var runner ComputationRunner
@@ -3267,8 +3269,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 
-		runResult, err := runner.Run(0)
-		if err != nil {
+		if runResult, err = runner.Run(0); err != nil {
 			if loadLocalErrGroup != nil { // release resources
 				err2 = proc.LoadLocalReader.Close()
 				if err2 != nil {
