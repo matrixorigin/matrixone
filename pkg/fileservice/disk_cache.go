@@ -39,6 +39,8 @@ type DiskCache struct {
 	fileExists      sync.Map
 	perfCounterSets []*perfcounter.CounterSet
 
+	alloc CacheDataAllocator
+
 	evictState struct {
 		sync.Mutex
 		timer        *time.Timer
@@ -58,6 +60,7 @@ func NewDiskCache(
 	capacity int64,
 	evictInterval time.Duration,
 	evictTarget float64,
+	alloc CacheDataAllocator,
 	perfCounterSets []*perfcounter.CounterSet,
 ) (*DiskCache, error) {
 
@@ -76,6 +79,7 @@ func NewDiskCache(
 		return nil, err
 	}
 	ret := &DiskCache{
+		alloc:           alloc,
 		capacity:        capacity,
 		evictInterval:   evictInterval,
 		evictTarget:     evictTarget,
@@ -145,7 +149,7 @@ func (d *DiskCache) Read(
 			continue
 		}
 
-		if err := entry.ReadFromOSFile(file); err != nil {
+		if err := entry.ReadFromOSFile(file, d.alloc); err != nil {
 			// ignore error
 			numError++
 			continue

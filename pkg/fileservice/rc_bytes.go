@@ -17,7 +17,7 @@ package fileservice
 // #include <stdlib.h>
 import "C"
 import (
-	"runtime"
+	"sync"
 	"sync/atomic"
 )
 
@@ -58,14 +58,18 @@ func (r *RCBytes) Release() {
 	}
 }
 
+type pool struct {
+	sync.Mutex
+	datas []*RCBytes
+}
+
 type rcBytesPool struct {
-	limit     int64
-	size      atomic.Int64
-	forceGCCh chan struct{}
+	limit int64
+	size  atomic.Int64
 }
 
 func newRCBytesPool(limit int64) *rcBytesPool {
-	return &rcBytesPool{limit: limit, forceGCCh: make(chan struct{})}
+	return &rcBytesPool{limit: limit}
 }
 
 var _ CacheDataAllocator = new(rcBytesPool)
@@ -74,27 +78,17 @@ func (r *rcBytesPool) Size() int64 {
 	return r.size.Load()
 }
 
-func (r *rcBytesPool) ForceGCChan() chan struct{} {
-	return r.forceGCCh
-}
-
 func (r *rcBytesPool) Alloc(size int) CacheData {
-	if r.size.Load() > r.limit {
-		r.forceGCCh <- struct{}{}
-		// forced cleanup of excess memory
-		runtime.GC()
-	}
-
+	r.size.Add(int64(size))
 	item := &RCBytes{
 		pool: r,
 		data: alloc(size),
 	}
-	r.size.Add(int64(size))
 	item.Retain()
 	return item
 }
 
-// the impact of gc and cgo is currently ambiguous and it is not clear how it will be handled for the time being
+// the relationship between cgo and gc is ambiguous
 func alloc(size int) []byte {
 	return make([]byte, size)
 	/*

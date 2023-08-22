@@ -38,7 +38,7 @@ func NewMemCache(
 		counterSets: counterSets,
 	}
 	ret.memoryPool = newRCBytesPool(capacity)
-	ret.cache = NewLRUCache(capacity, true, callBack, ret.memoryPool.Size, ret.memoryPool.ForceGCChan())
+	ret.cache = NewLRUCache(capacity, true, callBack, ret.memoryPool.Size)
 	return ret
 }
 
@@ -47,7 +47,6 @@ func NewLRUCache(
 	checkOverlaps bool,
 	callbacks *CacheCallbacks,
 	sizeFunc func() int64,
-	forceGCCh chan struct{},
 ) *lrucache.LRU[CacheKey, CacheData] {
 
 	var overlapChecker *interval.OverlapChecker
@@ -97,7 +96,7 @@ func NewLRUCache(
 		}
 	}
 
-	return lrucache.New[CacheKey, CacheData](capacity, sizeFunc, postSetFn, postGetFn, postEvictFn, forceGCCh)
+	return lrucache.New[CacheKey, CacheData](capacity, sizeFunc, postSetFn, postGetFn, postEvictFn)
 }
 
 var _ IOVectorCache = new(MemCache)

@@ -162,6 +162,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			int64(*config.DiskCapacity),
 			config.DiskMinEvictInterval.Duration,
 			*config.DiskEvictTarget,
+			s,
 			s.perfCounterSets,
 		)
 		if err != nil {

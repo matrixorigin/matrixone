@@ -122,6 +122,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 				int64(*config.DiskCapacity),
 				config.DiskMinEvictInterval.Duration,
 				*config.DiskEvictTarget,
+				l,
 				l.perfCounterSets,
 			)
 			if err != nil {
@@ -467,9 +468,12 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				entry.Size = int64(len(data))
 
 			} else {
-				if int64(len(entry.Data)) < entry.Size {
-					entry.Data = make([]byte, entry.Size)
-				}
+				cacheData := l.memCache.Alloc(int(entry.Size))
+				defer func() {
+					entry.Data = nil
+					cacheData.Release()
+				}()
+				entry.Data = cacheData.Bytes()[:entry.Size]
 				n, err := io.ReadFull(r, entry.Data)
 				if err != nil {
 					return err

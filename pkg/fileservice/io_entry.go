@@ -35,13 +35,15 @@ func (e *IOEntry) setCachedData() error {
 	return nil
 }
 
-func (e *IOEntry) ReadFromOSFile(file *os.File) error {
+func (e *IOEntry) ReadFromOSFile(file *os.File, alloc CacheDataAllocator) error {
 	r := io.LimitReader(file, e.Size)
 
-	if len(e.Data) < int(e.Size) {
-		e.Data = make([]byte, e.Size)
-	}
-
+	cacheData := alloc.Alloc(int(e.Size))
+	defer func() {
+		e.Data = nil
+		cacheData.Release()
+	}()
+	e.Data = cacheData.Bytes()[:e.Size]
 	n, err := io.ReadFull(r, e.Data)
 	if err != nil {
 		return err
