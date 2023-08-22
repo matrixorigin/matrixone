@@ -45,9 +45,9 @@ func TestDiskCache(t *testing.T) {
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
-					Offset: 0,
-					Size:   1,
-					Data:   []byte("a"),
+					Offset:     0,
+					Size:       1,
+					CachedData: Bytes([]byte("a")),
 				},
 				// no data
 				{
@@ -56,9 +56,9 @@ func TestDiskCache(t *testing.T) {
 				},
 				// size unknown
 				{
-					Offset: 9999,
-					Size:   -1,
-					Data:   []byte("abc"),
+					Offset:     9999,
+					Size:       -1,
+					CachedData: Bytes([]byte("abc")),
 				},
 			},
 		}
@@ -148,8 +148,8 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
-				Size: 3,
-				Data: []byte("foo"),
+				Size:       3,
+				CachedData: Bytes([]byte("foo")),
 			},
 		},
 	}, false)
@@ -161,9 +161,9 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
-				Size:   3,
-				Data:   []byte("foo"),
-				Offset: 99,
+				Size:       3,
+				CachedData: Bytes([]byte("foo")),
+				Offset:     99,
 			},
 		},
 	}, false)
@@ -177,8 +177,8 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
-				Size: 3,
-				Data: []byte("foo"),
+				Size:       3,
+				CachedData: Bytes([]byte("foo")),
 			},
 		},
 	}, false)
