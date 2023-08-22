@@ -433,7 +433,11 @@ func (h *Handle) HandleBackup(
 	timeout := req.FlushDuration
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	currTs = types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
 	if err != nil {
 		return nil, err
