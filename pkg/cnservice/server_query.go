@@ -34,7 +34,6 @@ func (s *service) initQueryService() {
 
 func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_KillConn, s.handleKillConn, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_AlterAccount, s.handleAlterAccount, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -51,22 +50,5 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	}
 
 	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
-	return nil
-}
-
-func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, resp *query.Response) error {
-	if req == nil || req.AlterAccountRequest == nil {
-		return moerr.NewInternalError(ctx, "bad request")
-	}
-	rm := s.mo.GetRoutineManager()
-	if rm == nil {
-		return moerr.NewInternalError(ctx, "routine manager not initialized")
-	}
-	accountMgr := rm.GetAccountRoutineManager()
-	if accountMgr == nil {
-		return moerr.NewInternalError(ctx, "account routine manager not initialized")
-	}
-
-	accountMgr.AlterRoutineStatue(req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
 	return nil
 }

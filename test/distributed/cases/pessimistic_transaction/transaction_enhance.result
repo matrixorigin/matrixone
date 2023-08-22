@@ -471,45 +471,5 @@ insert into alter01 values (6,"h");
 [unknown result because it is related to issue#11268]
 select * from alter01;
 [unknown result because it is related to issue#11268]
-drop table if exists alter01;
-[unknown result because it is related to issue#11213]
-create table alter01(col1 int,col2 varchar(25));
-[unknown result because it is related to issue#11213]
-insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11213]
-begin;
-[unknown result because it is related to issue#11213]
-alter table alter01 add constraint primary key (col1);
-[unknown result because it is related to issue#11213]
-use transaction_enhance;
-[unknown result because it is related to issue#11213]
-insert into alter01 values (8,"h");
-[unknown result because it is related to issue#11213]
-select * from alter01;
-[unknown result because it is related to issue#11213]
-insert into alter01 values (6,"h");
-[unknown result because it is related to issue#11213]
-select * from alter01;
-[unknown result because it is related to issue#11213]
-drop table if exists alter01;
-[unknown result because it is related to issue#11213]
-create table alter01(col1 int primary key,col2 varchar(25));
-[unknown result because it is related to issue#11213]
-insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11213]
-begin;
-[unknown result because it is related to issue#11213]
-alter table alter01 drop primary key;
-[unknown result because it is related to issue#11213]
-use transaction_enhance;
-[unknown result because it is related to issue#11213]
-insert into alter01 values (8,"h");
-[unknown result because it is related to issue#11213]
-select * from alter01;
-[unknown result because it is related to issue#11213]
-insert into alter01 values (6,"h");
-[unknown result because it is related to issue#11213]
-select * from alter01;
-[unknown result because it is related to issue#11213]
 
 

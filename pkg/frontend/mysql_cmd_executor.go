@@ -54,7 +54,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
-	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -349,7 +348,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		err = r.UpdateBlockInfos(ses.requestCtx)
+		_, err = r.Ranges(ses.requestCtx, nil)
 		if err != nil {
 			return err
 		}
@@ -2509,7 +2508,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	userName string,
 ) (retErr error) {
 	var err error
-	var runResult *util2.RunResult
 	var cmpBegin time.Time
 	var ret interface{}
 	var runner ComputationRunner
@@ -2756,13 +2754,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			isPathChanged, err := doCheckFilePath(requestCtx, ses, st)
+			err = doCheckFilePath(requestCtx, ses, st)
 			if err != nil {
 				return err
 			}
-			if !isPathChanged {
-				ses.SetExportParam(st.Ep)
-			}
+			ses.SetExportParam(st.Ep)
 		}
 	}
 
@@ -3187,7 +3183,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 		// todo: add trace
-		if _, err = runner.Run(0); err != nil {
+		if err = runner.Run(0); err != nil {
 			return err
 		}
 
@@ -3269,7 +3265,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 
-		if runResult, err = runner.Run(0); err != nil {
+		if err = runner.Run(0); err != nil {
 			if loadLocalErrGroup != nil { // release resources
 				err2 = proc.LoadLocalReader.Close()
 				if err2 != nil {
@@ -3298,11 +3294,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
-		if runResult == nil {
-			rspLen = 0
-		} else {
-			rspLen = runResult.AffectRows
-		}
+		rspLen = cw.GetAffectedRows()
 		echoTime := time.Now()
 
 		logDebug(ses, "time of SendResponse %s", time.Since(echoTime).String())
@@ -3358,7 +3350,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		/*
 			Step 1: Start
 		*/
-		if _, err = runner.Run(0); err != nil {
+		if err = runner.Run(0); err != nil {
 			return err
 		}
 

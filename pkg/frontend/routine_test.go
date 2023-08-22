@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	util "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -104,7 +103,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	}
 	uuid, _ := uuid.NewUUID()
 	runner := mock_frontend.NewMockComputationRunner(ctrl)
-	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) (*util.RunResult, error) {
+	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) error {
 		proto := ses.GetMysqlProtocol()
 		if mrs != nil {
 			if res.isSleepSql {
@@ -118,10 +117,10 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 			err = proto.SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount())
 			if err != nil {
 				logutil.Errorf("flush error %v", err)
-				return nil, err
+				return err
 			}
 		}
-		return &util.RunResult{AffectRows: 0}, nil
+		return nil
 	}).AnyTimes()
 	mcw := mock_frontend.NewMockComputationWrapper(ctrl)
 	mcw.EXPECT().GetAst().Return(stmt).AnyTimes()

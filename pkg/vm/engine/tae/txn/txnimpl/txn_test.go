@@ -434,7 +434,6 @@ func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Ca
 	factory := tables.NewDataFactory(rt, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, factory, 0),
 		TxnFactory(c), types.NewMockHLCClock(1))
-	rt.Now = mgr.Now
 	mgr.Start(context.Background())
 	return c, mgr, driver
 }

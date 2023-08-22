@@ -42,10 +42,10 @@ func (lru *simpleLRU) Size() int64 {
 }
 
 func (lru *simpleLRU) Get(ctx context.Context, k any) (v []byte, ok bool) {
-	v, ok = lru.impl.Get(ctx, k)
+	v, ok = lru.impl.Get(ctx, k, false)
 	return
 }
 
 func (lru *simpleLRU) Set(ctx context.Context, k any, v []byte) {
-	lru.impl.Set(ctx, k, v)
+	lru.impl.Set(ctx, k, v, false)
 }

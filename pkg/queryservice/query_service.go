@@ -95,6 +95,8 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config, sm *Ses
 func (s *queryService) registerHandlers() {
 	s.handler.RegisterHandleFunc(uint32(pb.CmdMethod_ShowProcessList),
 		s.handleShowProcessList, false)
+	s.handler.RegisterHandleFunc(uint32(pb.CmdMethod_AlterAccount),
+		s.handleAlterAccount, false)
 }
 
 // AddHandleFunc implements the QueryService interface.

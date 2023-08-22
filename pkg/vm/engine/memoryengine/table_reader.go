@@ -221,7 +221,3 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([][]byte, error) {
 	}
 	return shards, nil
 }
-
-func (t *Table) UpdateBlockInfos(_ context.Context) error {
-	return nil
-}

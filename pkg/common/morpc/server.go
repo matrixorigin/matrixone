@@ -136,16 +136,13 @@ func NewRPCServer(name, address string, codec Codec, options ...ServerOption) (R
 			return newFuture(s.releaseFuture)
 		},
 	}
-	if err := s.stopper.RunTask(s.closeDisconnectedSession); err != nil {
-		panic(err)
-	}
 	return s, nil
 }
 
 func (s *server) Start() error {
 	err := s.application.Start()
 	if err != nil {
-		s.logger.Fatal("start rpc server failed",
+		s.logger.Fatal("start rpcserver failed",
 			zap.Error(err))
 		return err
 	}
@@ -156,7 +153,7 @@ func (s *server) Close() error {
 	s.stopper.Stop()
 	err := s.application.Stop()
 	if err != nil {
-		s.logger.Error("stop rpc server failed",
+		s.logger.Error("stop rpcserver failed",
 			zap.Error(err))
 	}
 
@@ -419,27 +416,6 @@ func (s *server) releaseFuture(f *Future) {
 
 func (s *server) newFuture() *Future {
 	return s.pool.futures.Get().(*Future)
-}
-
-func (s *server) closeDisconnectedSession(ctx context.Context) {
-	// TODO(fagongzi): modify goetty to support connection event
-	timer := time.NewTicker(time.Second * 10)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			s.sessions.Range(func(key, value any) bool {
-				id := key.(uint64)
-				rs, err := s.application.GetSession(id)
-				if err == nil && rs == nil {
-					s.closeClientSession(value.(*clientSession))
-				}
-				return true
-			})
-		}
-	}
 }
 
 type clientSession struct {

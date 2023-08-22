@@ -21,8 +21,3 @@ create table t1(a int, b int, c int);
 insert into t1 values (1,1,1), (2,2,2), (3,3,3);
 replace t1 values (1,2,3), (2,3,4);
 select a, b, c from t1;
-create table t4 (a int unique key, b varchar(64));
-replace into t4 values (1, 'a');
-select * from t4;
-replace into t4 values (1, 'b');
-select * from t4;

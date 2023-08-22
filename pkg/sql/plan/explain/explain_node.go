@@ -360,11 +360,6 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Type: " + ndesc.Node.JoinType.String()
-	if ndesc.Node.BuildOnLeft {
-		if ndesc.Node.JoinType == plan.Node_SEMI || ndesc.Node.JoinType == plan.Node_ANTI {
-			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
-		}
-	}
 	return result, nil
 }
 
@@ -400,10 +395,6 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 				return "", err
 			}
 			buf.WriteString(")")
-		}
-
-		if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Complex {
-			buf.WriteString(" COMPLEX ")
 		}
 	}
 
@@ -540,12 +531,6 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 				return "", err
 			}
 			buf.WriteString(")")
-		}
-
-		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
-			buf.WriteString(" REUSE ")
-		} else if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
-			buf.WriteString(" RESHUFFLE ")
 		}
 	}
 	return buf.String(), nil

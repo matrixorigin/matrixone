@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
@@ -79,7 +78,6 @@ func WithRuntimeThrottle(t *Throttle) RuntimeOption {
 }
 
 type Runtime struct {
-	Now        func() types.TS
 	VectorPool struct {
 		Small     *containers.VectorPool
 		Transient *containers.VectorPool

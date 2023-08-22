@@ -2451,44 +2451,6 @@ var (
 			input:  "SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '65c4c218-d343-11eb-8106-525400f4f901:1-769275'",
 			output: "set global GTID_PURGED = 65c4c218-d343-11eb-8106-525400f4f901:1-769275",
 		}, {
-			input:  " /*!40103 SET TIME_ZONE='+00:00' */",
-			output: "set time_zone = 0:00",
-		}, {
-			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
-			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
-		},
-		{
-			input:  "/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */",
-			output: "set OLD_TIME_ZONE = @@TIME_ZONE",
-		},
-		{
-			input:  "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */",
-			output: "set OLD_SQL_MODE = @@SQL_MODE, sql_mode = no_auto_value_on_zero",
-		},
-		{
-			input:  "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;",
-			output: "set OLD_SQL_NOTES = @@SQL_NOTES, sql_notes = 0",
-		}, {
-			input:  "SELECT /*+ RESOURCE_GROUP(resouce_group_name) */ * from table_name;",
-			output: "select * from table_name",
-		}, {
-			input:  "SELECT /*+ qb_name(viewSub, v@sel_1 . @sel_2) use_index(e3@viewSub, idx) hash_agg(viewSub) */ * FROM v;",
-			output: "select * from v",
-		}, {
-			input:  "SELECT * FROM t1 dt WHERE EXISTS( WITH RECURSIVE qn AS (SELECT a AS b UNION ALL SELECT b+1 FROM qn WHERE b=0 or b = 1) SELECT * FROM qn dtqn1 where exists (select /*+ NO_DECORRELATE() */ b from qn where dtqn1.b+1))",
-			output: "select * from t1 as dt where exists (with recursive qn as (select a as b union all select b + 1 from qn where b = 0 or b = 1) select * from qn as dtqn1 where exists (select b from qn where dtqn1.b + 1))",
-		}, {
-			input:  "select /*+use_index(tmp1, code)*/ * from tmp1 where code > 1",
-			output: "select * from tmp1 where code > 1",
-		}, {
-			input:  "explain analyze select /*+ HASH_JOIN(t1, t2) */ t1.k from t t1, t t2 where t1.v = t2.v+1",
-			output: "explain (analyze) select t1.k from t as t1 cross join t as t2 where t1.v = t2.v + 1",
-		},
-		{
-			input:  "prepare stmt from 'select /*+ inl_join(t2) */ * from t t1 join t t2 on t1.a = t2.a and t1.c = t2.c where t2.a = 1 or t2.b = 1;';",
-			output: "prepare stmt from select /*+ inl_join(t2) */ * from t t1 join t t2 on t1.a = t2.a and t1.c = t2.c where t2.a = 1 or t2.b = 1;",
-		},
-		{
 			input:  "alter table t1 algorithm = DEFAULT",
 			output: "alter table t1 alter algorithm not enforce",
 		}, {
