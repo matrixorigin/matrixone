@@ -219,7 +219,7 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		err := p.Produce(&kafka.Message{
 			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
-			Value:          []byte(value),
+			Value:          value,
 		}, nil)
 		if err != nil {
 			return
@@ -241,7 +241,7 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 		types.New(types.T_int32, 10, 0),
 	}
 	offset := int64(0)
-	limit := int64(50)
+	limit := int64(500)
 
 	// Call RetrieveData
 	batch, err := RetrieveData(context.Background(), configs, attrs, types, offset, limit, mpool.MustNewZero(), NewKafkaAdapter)
@@ -270,6 +270,7 @@ func TestRetrieveDataWIthProtobuf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create producer: %s", err)
 	}
+	defer p.Close()
 
 	user := test_v1.UserMessage{
 		Name:  "test_name",
@@ -315,4 +316,41 @@ func TestRetrieveDataWIthProtobuf(t *testing.T) {
 	assert.Equal(t, 2, batch.VectorCount(), "Expected 2 vectors in the batch")
 	assert.Equal(t, batch.Vecs[0].Length(), 50, "Expected 50 row in the batch")
 
+}
+
+func TestProduce(t *testing.T) {
+	broker := "127.0.0.1:62891"
+	topic := "usertest"
+
+	// Produce mock data
+	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": broker})
+	if err != nil {
+		t.Fatalf("Failed to create producer: %s", err)
+	}
+	defer p.Close() // Close the producer when done
+
+	type MessagePayload struct {
+		Name string `json:"name"`
+		Age  int32  `json:"age"`
+	}
+	payload := MessagePayload{
+		Name: "gavin",
+		Age:  188,
+	}
+	value, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %s", err)
+	}
+
+	// produce 100 messages
+	for i := 0; i < 100; i++ {
+		err := p.Produce(&kafka.Message{
+			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+			Value:          value,
+			Key:            value,
+		}, nil)
+		if err != nil {
+			t.Fatalf("Failed to produce message: %s", err)
+		}
+	}
 }

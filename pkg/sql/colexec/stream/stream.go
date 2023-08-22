@@ -34,7 +34,7 @@ func Prepare(proc *process.Process, arg any) error {
 	p := arg.(*Argument)
 	p.attrs = make([]string, len(p.TblDef.Cols))
 	p.types = make([]types.Type, len(p.TblDef.Cols))
-	p.configs = make(map[string]interface{})
+	p.Configs = make(map[string]interface{})
 	for i, col := range p.TblDef.Cols {
 		p.attrs[i] = col.Name
 		p.types[i] = types.Type{
@@ -47,7 +47,7 @@ func Prepare(proc *process.Process, arg any) error {
 		switch v := def.Def.(type) {
 		case *plan.TableDef_DefType_Properties:
 			for _, x := range v.Properties.Properties {
-				p.configs[x.Key] = x.Value
+				p.Configs[x.Key] = x.Value
 			}
 		}
 	}
@@ -59,10 +59,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	_, span := trace.Start(proc.Ctx, "StreamCall")
 	defer span.End()
 	p := arg.(*Argument)
-	b, err := mokafka.RetrieveData(proc.Ctx, p.configs, p.attrs, p.types, p.Offset, p.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
+	b, err := mokafka.RetrieveData(proc.Ctx, p.Configs, p.attrs, p.types, p.Offset, p.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
 	if err != nil {
 		return process.ExecStop, err
 	}
+
 	proc.SetInputBatch(b)
+
 	return process.ExecStop, nil
 }

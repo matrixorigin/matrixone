@@ -269,7 +269,7 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 		}
 
 		// Calculate the number of messages available to consume
-		availableMessages := int64(highwatermarkHigh - offset)
+		availableMessages := highwatermarkHigh - offset
 		if availableMessages <= 0 {
 			continue
 		}
@@ -398,24 +398,33 @@ func (ka *KafkaAdapter) ProduceMessage(topic string, key, value []byte) (int64, 
 	return int64(m.TopicPartition.Offset), nil
 }
 
-func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch {
+func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) (*batch.Batch, error) {
+
+	//alloc space for vector
 	batch := batch.NewWithSize(len(typs))
 	for i, typ := range typs {
+		typ.Size = int32(typ.Oid.TypeLen())
 		switch typ.Oid {
 		case types.T_datetime:
 			typ.Scale = 6
 		}
 		vec := vector.NewVec(typ)
-		vec.PreExtend(batchSize, pool)
+		err := vec.PreExtend(batchSize, pool)
+		if err != nil {
+			return nil, err
+		}
 		vec.SetLength(batchSize)
 		batch.Vecs[i] = vec
 	}
-	return batch
+	return batch, nil
 }
 
 func populateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []types.Type, attrKeys []string, msgs []*kafka.Message, configs map[string]interface{}, mp *mpool.MPool) (*batch.Batch, error) {
-	b := newBatch(len(msgs), typs, mp)
-
+	b, err := newBatch(len(msgs), typs, mp)
+	if err != nil {
+		return nil, err
+	}
+	unexpectEOF := false
 	value, ok := configs[ValueKey].(string)
 	if !ok {
 		return nil, moerr.NewInternalError(ctx, "expected string value for key: %s", ValueKey)
@@ -425,7 +434,7 @@ func populateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 		for i, msg := range msgs {
 			err := populateOneRowData(ctx, b, attrKeys, &JsonDataGetter{Key: msg.Key, Value: msg.Value}, i, typs, mp)
 			if err != nil {
-				return nil, err
+				// return nil, err
 			}
 		}
 	case PROTOBUF:
@@ -463,6 +472,16 @@ func populateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 	default:
 		return nil, moerr.NewInternalError(ctx, "Unsupported value for key: %s", ValueKey)
 	}
+
+	n := b.Vecs[0].Length()
+	if unexpectEOF && n > 0 {
+		n--
+		for i := 0; i < b.VectorCount(); i++ {
+			vec := b.GetVector(int32(i))
+			vec.SetLength(n)
+		}
+	}
+	b.SetRowCount(n)
 	return b, nil
 }
 func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string, getter DataGetter, rowIdx int, typs []types.Type, mp *mpool.MPool) error {
@@ -736,38 +755,4 @@ func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, f
 		totalSize += int64(highwatermarkHigh)
 	}
 	return totalSize, nil
-}
-func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []string, types []types.Type, offset int64, limit int64, mp *mpool.MPool, factory KafkaAdapterFactory) (*batch.Batch, error) {
-	err := ValidateConfig(ctx, configs, NewKafkaAdapter)
-	if err != nil {
-		return nil, err
-	}
-
-	configMap := convertToKafkaConfig(configs)
-
-	ka, err := factory(configMap)
-	if err != nil {
-		return nil, err
-	}
-	defer ka.Close()
-
-	// init schema registry client if schema registry url is set
-	if sr, ok := configs[SchemaRegistryKey]; ok {
-		err = ka.InitSchemaRegistry(sr.(string))
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	messages, err := ka.ReadMessagesFromTopic(configs["topic"].(string), offset, limit)
-	if err != nil {
-		return nil, err
-	}
-
-	b, err := populateBatchFromMSG(ctx, ka, types, attrs, messages, configs, mp)
-	if err != nil {
-		return nil, err
-	}
-
-	return b, nil
 }
