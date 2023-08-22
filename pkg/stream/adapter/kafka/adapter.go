@@ -123,7 +123,7 @@ func NewKafkaAdapter(configMap *kafka.ConfigMap) (KafkaAdapterInterface, error) 
 	// Create a new admin client instance
 	adminClient, err := kafka.NewAdminClient(configMap)
 	if err != nil {
-		return nil, fmt.Errorf("unable to create confluent admin client: %w", err)
+		return nil, err
 	}
 
 	// Create a new consumer client instance
@@ -131,13 +131,13 @@ func NewKafkaAdapter(configMap *kafka.ConfigMap) (KafkaAdapterInterface, error) 
 	configMap.SetKey("auto.offset.reset", "earliest")
 	consumer, err := kafka.NewConsumer(configMap)
 	if err != nil {
-		return nil, fmt.Errorf("unable to create confluent consumer client: %w", err)
+		return nil, moerr.NewInternalError(context.Background(), fmt.Sprintf("unable to create confluent consumer client: %s", err))
 	}
 
 	// Create a new producer client instance
 	producer, err := kafka.NewProducer(configMap)
 	if err != nil {
-		return nil, fmt.Errorf("unable to create confluent producer client: %w", err)
+		return nil, moerr.NewInternalError(context.Background(), fmt.Sprintf("unable to create confluent producer client: %s", err))
 	}
 
 	// Return a new KafkaAdapter instance
@@ -216,7 +216,7 @@ func (ka *KafkaAdapter) DescribeTopicDetails(ctx context.Context, topicName stri
 
 func (ka *KafkaAdapter) ReadMessagesFromPartition(topic string, partition int32, offset int64, limit int) ([]*kafka.Message, error) {
 	if ka.Consumer == nil {
-		return nil, fmt.Errorf("consumer not initialized")
+		return nil, moerr.NewInternalError(context.Background(), "consumer not initialized")
 	}
 
 	// Assign the specific partition with the desired offset
@@ -224,7 +224,7 @@ func (ka *KafkaAdapter) ReadMessagesFromPartition(topic string, partition int32,
 		{Topic: &topic, Partition: partition, Offset: kafka.Offset(offset)},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to assign partition: %w", err)
+		return nil, moerr.NewInternalError(context.Background(), fmt.Sprintf("failed to assign partition: %s", err))
 	}
 
 	var messages []*kafka.Message
@@ -235,7 +235,7 @@ func (ka *KafkaAdapter) ReadMessagesFromPartition(topic string, partition int32,
 			if kafkaErr, ok := err.(kafka.Error); ok && kafkaErr.Code() == kafka.ErrTimedOut {
 				break // Exit the loop if a timeout occurs
 			} else {
-				return nil, fmt.Errorf("failed to read message: %w", err)
+				return nil, moerr.NewInternalError(context.Background(), fmt.Sprintf("failed to read message: %s", err))
 			}
 		}
 		messages = append(messages, msg)
@@ -265,7 +265,7 @@ func (ka *KafkaAdapter) ReadMessagesFromTopic(topic string, offset int64, limit 
 		// Fetch the high watermark for the partition
 		_, highwatermarkHigh, err := ka.Consumer.QueryWatermarkOffsets(topic, p.ID, -1)
 		if err != nil {
-			return nil, fmt.Errorf("failed to query watermark offsets: %w", err)
+			return nil, err
 		}
 
 		// Calculate the number of messages available to consume
@@ -311,12 +311,12 @@ func (ka *KafkaAdapter) BatchRead(topic string, startOffset int64, limit int, ba
 	// Fetch metadata to get all partitions
 	meta, err := ka.Consumer.GetMetadata(&topic, false, 5000) // timeout in ms
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch metadata: %w", err)
+		return nil, err
 	}
 
 	topicMetadata, ok := meta.Topics[topic]
 	if !ok {
-		return nil, fmt.Errorf("topic not found in metadata")
+		return nil, moerr.NewInternalError(context.Background(), "topic not found in metadata")
 	}
 
 	numGoroutines := (limit + batchSize - 1) / batchSize
@@ -628,7 +628,7 @@ func deserializeProtobuf(md *desc.MessageDescriptor, in []byte, isKafkSR bool) (
 func readMessageIndexes(payload []byte) (int, []int, error) {
 	arrayLen, bytesRead := binary.Varint(payload)
 	if bytesRead <= 0 {
-		return bytesRead, nil, fmt.Errorf("unable to read message indexes")
+		return bytesRead, nil, moerr.NewInternalError(context.Background(), "unable to read message indexes")
 	}
 	if arrayLen == 0 {
 		// Handle the optimization for the first message in the schema
@@ -638,7 +638,7 @@ func readMessageIndexes(payload []byte) (int, []int, error) {
 	for i := 0; i < int(arrayLen); i++ {
 		idx, read := binary.Varint(payload[bytesRead:])
 		if read <= 0 {
-			return bytesRead, nil, fmt.Errorf("unable to read message indexes")
+			return bytesRead, nil, moerr.NewInternalError(context.Background(), "unable to read message indexes")
 		}
 		bytesRead += read
 		msgIndexes[i] = int(idx)
