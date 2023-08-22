@@ -111,7 +111,9 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					prel.Ranges(ctx, nil)
+					if err = prel.UpdateBlockInfos(ctx); err != nil {
+						return err
+					}
 					prows, err = prel.Rows(ctx)
 					if err != nil {
 						return err
@@ -119,7 +121,9 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					rows += prows
 				}
 			} else {
-				rel.Ranges(ctx, nil)
+				if err = rel.UpdateBlockInfos(ctx); err != nil {
+					return err
+				}
 				rows, err = rel.Rows(ctx)
 				if err != nil {
 					return err
@@ -204,7 +208,9 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					prel.Ranges(ctx, nil)
+					if prel.UpdateBlockInfos(ctx); err != nil {
+						return err
+					}
 					psize, err = prel.Size(ctx, AllColumns)
 					if err != nil {
 						return err
@@ -212,7 +218,9 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					size += psize
 				}
 			} else {
-				rel.Ranges(ctx, nil)
+				if err = rel.UpdateBlockInfos(ctx); err != nil {
+					return err
+				}
 				size, err = rel.Size(ctx, AllColumns)
 				if err != nil {
 					return err

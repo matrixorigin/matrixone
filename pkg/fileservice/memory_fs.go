@@ -275,6 +275,10 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
+func (m *MemoryFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
+	return nil
+}
+
 func (m *MemoryFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
 	select {
 	case <-ctx.Done():

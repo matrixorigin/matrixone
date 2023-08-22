@@ -12,6 +12,7 @@ import (
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	types "github.com/matrixorigin/matrixone/pkg/container/types"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	util "github.com/matrixorigin/matrixone/pkg/util"
 	process "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -39,11 +40,12 @@ func (m *MockComputationRunner) EXPECT() *MockComputationRunnerMockRecorder {
 }
 
 // Run mocks base method.
-func (m *MockComputationRunner) Run(ts uint64) error {
+func (m *MockComputationRunner) Run(ts uint64) (*util.RunResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Run", ts)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(*util.RunResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Run indicates an expected call of Run.
@@ -204,11 +206,12 @@ func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx interface{}) *g
 }
 
 // Run mocks base method.
-func (m *MockComputationWrapper) Run(ts uint64) error {
+func (m *MockComputationWrapper) Run(ts uint64) (*util.RunResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Run", ts)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(*util.RunResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Run indicates an expected call of Run.
