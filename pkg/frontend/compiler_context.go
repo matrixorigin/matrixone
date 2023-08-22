@@ -459,6 +459,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 					refChildTbls = k.Tables
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
+				case *engine.StreamConfigsDef:
+					properties = append(properties, k.Configs...)
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
