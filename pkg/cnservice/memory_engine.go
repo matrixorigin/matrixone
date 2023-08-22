@@ -77,14 +77,14 @@ func (s *service) initMemoryEngineNonDist(
 		shard,
 	}
 	dnAddr := "1"
-	dnServices := []metadata.TNService{{
+	tnServices := []metadata.TNService{{
 		ServiceID:         uuid.NewString(),
 		TxnServiceAddress: dnAddr,
 		Shards:            shards,
 	}}
 	cluster := clusterservice.NewMOCluster(nil, 0,
 		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(nil, dnServices))
+		clusterservice.WithServices(nil, tnServices))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
 	storage, err := memorystorage.NewMemoryStorage(
