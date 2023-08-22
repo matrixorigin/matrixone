@@ -13,7 +13,7 @@ with non_cte_4 as (select count(id) as emp_num,manager_id from emp group by mana
 with non_cte_5(manager_id,job_name,employee_id)as (select a.manager_id,name,id from emp a where exists (select id from employees_mgr b where a.manager_id=b.id))select * from non_cte_5;
 with non_cte_6(manager_id,job_name,employee_id) as (select a.manager_id,name,id from emp a where exists (select id from employees_mgr b where a.manager_id=b.id))select manager_id,job_name,count(employee_id) as emp_num from non_cte_6 group by manager_id,job_name order by manager_id,job_name;
 with non_cte_7(manager_id,emp_num)as (select manager_id ,count(id) from emp where manager_id is not null group by manager_id) select avg(emp_num) as "average emp per manager" from non_cte_7;
-with recursive non_cte_10(id, productID,js,price,old_price) AS (select p.id,p.p_id,'20' as js,p.price+3.65,ceil(p.price) from product p where p.p_id < 100)select id, productID,js,price,old_price from cte_ab_10 order by old_price;
+with non_cte_10(id, productID,js,price,old_price) AS (select p.id,p.p_id,'20' as js,p.price+3.65,ceil(p.price) from product p where p.p_id < 100)select id, productID,js,price,old_price from cte_ab_10 order by old_price;
 
 -- abnormal test: drop table ,truncate table
 truncate table non_cte_6;
@@ -54,6 +54,10 @@ union all select c.id,c.p_name from non_cte_11 c;
 --expression_name: key word,number
 with date as(select manager_id,id,name from emp  order by manager_id )select * from date;
 with 111 as(select manager_id,id,name from emp  order by manager_id )select * from 111;
+
+-- non recursive prepare
+prepare s1 from 'with non_cte_1 as(select manager_id,id,name from emp  order by manager_id ) select manager_id,id,name from non_cte_1 where id in (29,72);';
+execute s1;
 
 -- recursive cte
 CREATE TABLE MyEmployees
@@ -149,6 +153,10 @@ emp_cte as (
 SELECT ManagerID, EmployeeID, Title
 FROM DirectReports union all select id,manager_id,name from emp_cte ORDER BY ManagerID;
 
+-- recursive cte: prepare
+prepare stmt from 'with recursive cte_ab_8(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_8 c on p.manager_id= c.id) select * from cte_ab_8';
+execute stmt;
+
 -- recursive cte :insert cte
 create table cte_insert_table (c1 int,c2 int ,c3 varchar(50),c4 int);
 insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
@@ -217,10 +225,6 @@ AS (SELECT concat(e.FirstName," ",e.LastName) as name,
 SELECT EmployeeID, Name, Title, EmployeeLevel
 FROM DirectReports order by EmployeeID);
 select * from cte_view order by EmployeeLevel;
-
--- recursive cte
-with recursive  cte_ab_15(productID,price) as(select p_id,price from product  union all select c.productID,p.price from product p join cte_ab_15 c on p.p_id = c.productID)select * from cte_ab_15;
-
 
 -- recursive cte abnormal:  recursive_query include sum/avg/count/max/min,group by,having,order by
 with recursive cte_ab_1(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, avg(p.price) FROM product p JOIN cte_ab_1 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_1;
