@@ -221,7 +221,7 @@ func (s *Scanner) Scan() (int, string) {
 			case '\'':
 				return s.Scan()
 			default:
-				return s.stepBackOneChar(ch)
+				return s.scanStringAddPlus(ch, STRING)
 			}
 		default:
 			return s.Scan()
@@ -349,6 +349,39 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 	ch := s.cur()
 	buf := s.strBuilder
 	defer s.strBuilder.Reset()
+	for s.Pos < len(s.buf) {
+		if ch == delim {
+			if delim != '$' {
+				s.inc()
+			} else {
+				return typ, buf.String()
+			}
+			if s.cur() != delim {
+				return typ, buf.String()
+			}
+		} else if ch == '\\' {
+			ch = handleEscape(s, buf)
+			if ch == eofChar {
+				break
+			}
+		}
+		buf.WriteByte(byte(ch))
+		if s.Pos < len(s.buf) {
+			s.inc()
+			ch = s.cur()
+		}
+	}
+	return LEX_ERROR, buf.String()
+}
+
+func (s *Scanner) scanStringAddPlus(delim uint16, typ int) (int, string) {
+	if delim == '$' {
+		s.inc() // advance the first '$'
+	}
+	ch := s.cur()
+	buf := s.strBuilder
+	defer s.strBuilder.Reset()
+	buf.WriteByte(byte('+'))
 	for s.Pos < len(s.buf) {
 		if ch == delim {
 			if delim != '$' {
