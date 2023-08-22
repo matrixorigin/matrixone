@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"math"
 	"sort"
+
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -223,7 +224,11 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 				// ToConst just returns a new pointer to the same memory.
 				// so we need to duplicate it.
-				fixed.resultVector, err = result.ToConst(0, 1, mp).Dup(mp)
+				constResult, err := result.ToConst(0, 1, mp)
+				if err != nil {
+					return nil, err
+				}
+				fixed.resultVector, err = constResult.Dup(mp)
 				executor.Free()
 				if err != nil {
 					return nil, err

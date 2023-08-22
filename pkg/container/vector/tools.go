@@ -140,12 +140,16 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 			return err
 		}
 		v.data = ndata[:cap(ndata)]
-		v.setupColFromData()
+		err = v.setupColFromData()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (v *Vector) setupColFromData() {
+func (v *Vector) setupColFromData() error {
+	var err error
 	if v.GetType().IsVarlen() {
 		v.col = DecodeFixedCol[types.Varlena](v)
 	} else {
@@ -197,11 +201,12 @@ func (v *Vector) setupColFromData() {
 		case types.T_enum:
 			v.col = DecodeFixedCol[types.Enum](v)
 		default:
-			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
+			err = moerr.NewInvalidArgNoCtx("unknown type %s", v.typ.Oid)
 		}
 	}
 	tlen := v.GetType().TypeSize()
 	v.capacity = cap(v.data) / tlen
+	return err
 }
 
 func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
@@ -241,7 +246,10 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 		return rvec, nil
 	}
 	rvec.data = vec.Data
-	rvec.setupColFromData()
+	err := rvec.setupColFromData()
+	if err != nil {
+		return nil, err
+	}
 	return rvec, nil
 }
 

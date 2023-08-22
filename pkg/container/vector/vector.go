@@ -442,7 +442,10 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	data = data[4:]
 	if dataLen > 0 {
 		v.data = data[:dataLen]
-		v.setupColFromData()
+		err := v.setupColFromData()
+		if err != nil {
+			return err
+		}
 		data = data[dataLen:]
 	}
 
@@ -499,7 +502,10 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 			return err
 		}
 		copy(v.data, data[:dataLen])
-		v.setupColFromData()
+		err := v.setupColFromData()
+		if err != nil {
+			return err
+		}
 		data = data[dataLen:]
 	}
 
@@ -533,10 +539,10 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	return nil
 }
 
-func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
+func (v *Vector) ToConst(row, length int, mp *mpool.MPool) (*Vector, error) {
 	w := NewConstNull(v.typ, length, mp)
 	if v.IsConstNull() || v.nsp.Contains(uint64(row)) {
-		return w
+		return w, nil
 	}
 
 	if v.IsConst() {
@@ -545,14 +551,17 @@ func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
 
 	sz := v.typ.TypeSize()
 	w.data = v.data[row*sz : (row+1)*sz]
-	w.setupColFromData()
+	err := w.setupColFromData()
+	if err != nil {
+		return nil, err
+	}
 	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
 	w.cantFreeData = true
 	w.cantFreeArea = true
 
-	return w
+	return w, nil
 }
 
 // PreExtend use to expand the capacity of the vector
@@ -2754,7 +2763,10 @@ func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) 
 		return err
 	}
 	v.data = data
-	v.setupColFromData()
+	err = v.setupColFromData()
+	if err != nil {
+		return err
+	}
 	ws := v.col.([]T)[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(&v.nsp, sels, false)
@@ -2811,7 +2823,10 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
 	w.length = end - start
-	w.setupColFromData()
+	err := w.setupColFromData()
+	if err != nil {
+		return nil, err
+	}
 	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
@@ -2842,7 +2857,10 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		w.data = make([]byte, length)
 		copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
 		w.length = end - start
-		w.setupColFromData()
+		err := w.setupColFromData()
+		if err != nil {
+			return err
+		}
 		if v.typ.IsVarlen() {
 			w.area = make([]byte, len(v.area))
 			copy(w.area, v.area)
