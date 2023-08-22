@@ -55,11 +55,7 @@ func initAllSupportedFunctions() {
 		allSupportedFunctions[fn.functionId] = fn
 	}
 
-	agg.NewAgg = func(overloadID int64, isDistinct bool, inputTypes []types.Type) (agg.Agg[any], error) {
-		return generateAggExecutor(overloadID, isDistinct, inputTypes, nil)
-	}
-	agg.NewAggWithConfig = generateAggExecutor
-	agg.IsWinOrderFun = GetFunctionIsWinOrderFunById
+	agg.InitAggFramework(generateAggExecutorWithoutConfig, generateAggExecutor, GetFunctionIsWinOrderFunById)
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
@@ -232,6 +228,11 @@ func generateAggExecutor(
 
 	outputTyp := f.retType(inputTypes)
 	return f.aggFramework.aggNew(isDistinct, inputTypes, outputTyp, config)
+}
+
+func generateAggExecutorWithoutConfig(
+	overloadID int64, isDistinct bool, inputTypes []types.Type) (agg.Agg[any], error) {
+	return generateAggExecutor(overloadID, isDistinct, inputTypes, nil)
 }
 
 func GetAggFunctionStringByID(overloadID int64) string {

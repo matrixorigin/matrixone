@@ -22,6 +22,16 @@ var NewAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg
 var NewAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (Agg[any], error)
 var IsWinOrderFun func(functionID int32) bool
 
+func InitAggFramework(
+	newAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error),
+	newAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (Agg[any], error),
+	isWinOrderFun func(functionID int32) bool) {
+
+	NewAgg = newAgg
+	NewAggWithConfig = newAggWithConfig
+	IsWinOrderFun = isWinOrderFun
+}
+
 //func newCount(typ types.Type, otyp types.Type, dist bool, isStar bool) Agg[any] {
 //	switch typ.Oid {
 //	case types.T_bool:
