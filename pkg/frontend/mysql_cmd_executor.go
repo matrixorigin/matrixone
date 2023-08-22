@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -2508,6 +2509,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	userName string,
 ) (retErr error) {
 	var err error
+	var runResult *util2.RunResult
 	var cmpBegin time.Time
 	var ret interface{}
 	var runner ComputationRunner
@@ -3185,7 +3187,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 		// todo: add trace
-		if err = runner.Run(0); err != nil {
+		if _, err = runner.Run(0); err != nil {
 			return err
 		}
 
@@ -3267,7 +3269,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 
-		if err = runner.Run(0); err != nil {
+		if runResult, err = runner.Run(0); err != nil {
 			if loadLocalErrGroup != nil { // release resources
 				err2 = proc.LoadLocalReader.Close()
 				if err2 != nil {
@@ -3296,7 +3298,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
-		rspLen = cw.GetAffectedRows()
+		if runResult == nil {
+			rspLen = 0
+		} else {
+			rspLen = runResult.AffectRows
+		}
 		echoTime := time.Now()
 
 		logDebug(ses, "time of SendResponse %s", time.Since(echoTime).String())
@@ -3352,7 +3358,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		/*
 			Step 1: Start
 		*/
-		if err = runner.Run(0); err != nil {
+		if _, err = runner.Run(0); err != nil {
 			return err
 		}
 
