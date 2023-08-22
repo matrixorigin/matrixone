@@ -108,8 +108,8 @@ type ClusterOperation interface {
 
 // ClusterAwareness provides cluster awareness information.
 type ClusterAwareness interface {
-	// ListDNServices lists uuid of all dn services.
-	ListDNServices() []string
+	// ListTNServices lists uuid of all dn services.
+	ListTNServices() []string
 	// ListLogServices lists uuid of all log services.
 	ListLogServices() []string
 	// ListCnServices lists uuid of all cn services.
@@ -1019,7 +1019,7 @@ func (c *testCluster) WaitLogStoreReportedIndexed(ctx context.Context, index int
 // --------------------------------------------------------------
 // The following are implements for interface `ClusterAwareness`.
 // --------------------------------------------------------------
-func (c *testCluster) ListDNServices() []string {
+func (c *testCluster) ListTNServices() []string {
 	ids := make([]string, 0, len(c.dn.svcs))
 	for _, cfg := range c.dn.cfgs {
 		ids = append(ids, cfg.UUID)

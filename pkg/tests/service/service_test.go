@@ -178,7 +178,7 @@ func TestClusterAwareness(t *testing.T) {
 	// -------------------------------------------
 	// the following would test `ClusterAwareness`
 	// -------------------------------------------
-	dsuuids := c.ListDNServices()
+	dsuuids := c.ListTNServices()
 	require.Equal(t, dnSvcNum, len(dsuuids))
 
 	lsuuids := c.ListLogServices()
@@ -248,7 +248,7 @@ func TestClusterOperation(t *testing.T) {
 	// -------------------------------------------
 
 	// 1. start/close dn services via different ways
-	dsuuids := c.ListDNServices()
+	dsuuids := c.ListTNServices()
 	require.Equal(t, dnSvcNum, len(dsuuids))
 	// 1.a start/close dn service by uuid
 	{
@@ -414,7 +414,7 @@ func TestClusterState(t *testing.T) {
 	leader := c.WaitHAKeeperLeader(ctx1)
 	require.NotNil(t, leader)
 
-	dsuuids := c.ListDNServices()
+	dsuuids := c.ListTNServices()
 	require.Equal(t, dnSvcNum, len(dsuuids))
 
 	lsuuids := c.ListLogServices()
