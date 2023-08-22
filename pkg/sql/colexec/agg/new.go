@@ -70,13 +70,13 @@ func NewWithConfig(op int, dist bool, inputType types.Type, config any) (a Agg[a
 		return NewGroupConcat(inputType, outputTyp, dist, config), nil
 	case function.RANK:
 		r := NewRank()
-		return NewUnaryAgg(WinRank, r, false, inputType, RankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+		return NewUnaryAgg(WinRank, r, false, inputType, outputTyp, r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
 	case function.ROW_NUMBER:
 		r := NewRowNumber()
-		return NewUnaryAgg(WinRowNumber, r, false, inputType, RowNumberReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+		return NewUnaryAgg(WinRowNumber, r, false, inputType, outputTyp, r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
 	case function.DENSE_RANK:
 		r := NewDenseRank()
-		return NewUnaryAgg(WinDenseRank, r, false, inputType, DenseRankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+		return NewUnaryAgg(WinDenseRank, r, false, inputType, outputTyp, r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for aggregate %s", inputType, Names[functionID]))
 }
@@ -139,60 +139,60 @@ func newCount(typ types.Type, otyp types.Type, dist bool, isStar bool) Agg[any] 
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for count", typ))
 }
 
-func newAnyValue(typ types.Type, dist bool) Agg[any] {
+func newAnyValue(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
-		return newGenericAnyValue[bool](typ, dist)
+		return newGenericAnyValue[bool](typ, otyp, dist)
 	case types.T_int8:
-		return newGenericAnyValue[int8](typ, dist)
+		return newGenericAnyValue[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericAnyValue[int16](typ, dist)
+		return newGenericAnyValue[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericAnyValue[int32](typ, dist)
+		return newGenericAnyValue[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericAnyValue[int64](typ, dist)
+		return newGenericAnyValue[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericAnyValue[uint8](typ, dist)
+		return newGenericAnyValue[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericAnyValue[uint16](typ, dist)
+		return newGenericAnyValue[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericAnyValue[uint32](typ, dist)
+		return newGenericAnyValue[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericAnyValue[uint64](typ, dist)
+		return newGenericAnyValue[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericAnyValue[float32](typ, dist)
+		return newGenericAnyValue[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericAnyValue[float64](typ, dist)
+		return newGenericAnyValue[float64](typ, otyp, dist)
 	case types.T_char:
-		return newStrAnyValue(typ, dist)
+		return newStrAnyValue(typ, otyp, dist)
 	case types.T_varchar:
-		return newStrAnyValue(typ, dist)
+		return newStrAnyValue(typ, otyp, dist)
 	case types.T_binary:
-		return newStrAnyValue(typ, dist)
+		return newStrAnyValue(typ, otyp, dist)
 	case types.T_varbinary:
-		return newStrAnyValue(typ, dist)
+		return newStrAnyValue(typ, otyp, dist)
 	case types.T_blob:
-		return newStrAnyValue(typ, dist)
+		return newStrAnyValue(typ, otyp, dist)
 	case types.T_text:
-		return newStrAnyValue(typ, dist)
+		return newStrAnyValue(typ, otyp, dist)
 	case types.T_date:
-		return newGenericAnyValue[types.Date](typ, dist)
+		return newGenericAnyValue[types.Date](typ, otyp, dist)
 	case types.T_datetime:
-		return newGenericAnyValue[types.Datetime](typ, dist)
+		return newGenericAnyValue[types.Datetime](typ, otyp, dist)
 	case types.T_time:
-		return newGenericAnyValue[types.Time](typ, dist)
+		return newGenericAnyValue[types.Time](typ, otyp, dist)
 	case types.T_timestamp:
-		return newGenericAnyValue[types.Timestamp](typ, dist)
+		return newGenericAnyValue[types.Timestamp](typ, otyp, dist)
 	case types.T_enum:
-		return newGenericAnyValue[types.Enum](typ, dist)
+		return newGenericAnyValue[types.Enum](typ, otyp, dist)
 	case types.T_decimal64:
-		return newGenericAnyValue[types.Decimal64](typ, dist)
+		return newGenericAnyValue[types.Decimal64](typ, otyp, dist)
 	case types.T_decimal128:
-		return newGenericAnyValue[types.Decimal128](typ, dist)
+		return newGenericAnyValue[types.Decimal128](typ, otyp, dist)
 	case types.T_uuid:
-		return newGenericAnyValue[types.Uuid](typ, dist)
+		return newGenericAnyValue[types.Uuid](typ, otyp, dist)
 	}
-	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for anyvalue", typ))
+	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for any_value", typ))
 }
 
 func newAvg(typ types.Type, otyp types.Type, dist bool) Agg[any] {
@@ -519,233 +519,233 @@ func newApprox(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for approx_count_distinct", typ))
 }
 
-func newBitOr(typ types.Type, dist bool) Agg[any] {
+func newBitOr(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
-		return newGenericBitOr[int8](typ, dist)
+		return newGenericBitOr[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericBitOr[int16](typ, dist)
+		return newGenericBitOr[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericBitOr[int32](typ, dist)
+		return newGenericBitOr[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericBitOr[int64](typ, dist)
+		return newGenericBitOr[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericBitOr[uint8](typ, dist)
+		return newGenericBitOr[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericBitOr[uint16](typ, dist)
+		return newGenericBitOr[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericBitOr[uint32](typ, dist)
+		return newGenericBitOr[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericBitOr[uint64](typ, dist)
+		return newGenericBitOr[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericBitOr[float32](typ, dist)
+		return newGenericBitOr[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericBitOr[float64](typ, dist)
+		return newGenericBitOr[float64](typ, otyp, dist)
 	case types.T_binary, types.T_varbinary:
 		aggPriv := NewBitOrBinary()
 		if dist {
-			return NewUnaryDistAgg(AggregateBitOr, aggPriv, false, typ, BitOrReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.BIT_OR, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateBitOr, aggPriv, false, typ, BitOrReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.BIT_OR, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for bitor", typ))
 }
 
-func newBitXor(typ types.Type, dist bool) Agg[any] {
+func newBitXor(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
-		return newGenericBitXor[int8](typ, dist)
+		return newGenericBitXor[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericBitXor[int16](typ, dist)
+		return newGenericBitXor[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericBitXor[int32](typ, dist)
+		return newGenericBitXor[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericBitXor[int64](typ, dist)
+		return newGenericBitXor[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericBitXor[uint8](typ, dist)
+		return newGenericBitXor[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericBitXor[uint16](typ, dist)
+		return newGenericBitXor[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericBitXor[uint32](typ, dist)
+		return newGenericBitXor[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericBitXor[uint64](typ, dist)
+		return newGenericBitXor[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericBitXor[float32](typ, dist)
+		return newGenericBitXor[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericBitXor[float64](typ, dist)
+		return newGenericBitXor[float64](typ, otyp, dist)
 	case types.T_binary, types.T_varbinary:
 		aggPriv := NewBitXorBinary()
 		if dist {
-			return NewUnaryDistAgg(AggregateBitXor, aggPriv, false, typ, BitXorReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.BIT_XOR, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateBitXor, aggPriv, false, typ, BitXorReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.BIT_XOR, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for bitxor", typ))
 }
 
-func newBitAnd(typ types.Type, dist bool) Agg[any] {
+func newBitAnd(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
-		return newGenericBitAnd[int8](typ, dist)
+		return newGenericBitAnd[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericBitAnd[int16](typ, dist)
+		return newGenericBitAnd[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericBitAnd[int32](typ, dist)
+		return newGenericBitAnd[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericBitAnd[int64](typ, dist)
+		return newGenericBitAnd[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericBitAnd[uint8](typ, dist)
+		return newGenericBitAnd[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericBitAnd[uint16](typ, dist)
+		return newGenericBitAnd[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericBitAnd[uint32](typ, dist)
+		return newGenericBitAnd[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericBitAnd[uint64](typ, dist)
+		return newGenericBitAnd[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericBitAnd[float32](typ, dist)
+		return newGenericBitAnd[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericBitAnd[float64](typ, dist)
+		return newGenericBitAnd[float64](typ, otyp, dist)
 	case types.T_binary, types.T_varbinary:
 		aggPriv := NewBitAndBinary()
 		if dist {
-			return NewUnaryDistAgg(AggregateBitAnd, aggPriv, false, typ, BitAndReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.BIT_AND, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateBitAnd, aggPriv, false, typ, BitAndReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.BIT_AND, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for bitand", typ))
 }
 
-func newVariance(typ types.Type, dist bool) Agg[any] {
+func newVariance(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
-		return newGenericVariance[int8](typ, dist)
+		return newGenericVariance[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericVariance[int16](typ, dist)
+		return newGenericVariance[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericVariance[int32](typ, dist)
+		return newGenericVariance[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericVariance[int64](typ, dist)
+		return newGenericVariance[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericVariance[uint8](typ, dist)
+		return newGenericVariance[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericVariance[uint16](typ, dist)
+		return newGenericVariance[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericVariance[uint32](typ, dist)
+		return newGenericVariance[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericVariance[uint64](typ, dist)
+		return newGenericVariance[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericVariance[float32](typ, dist)
+		return newGenericVariance[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericVariance[float64](typ, dist)
+		return newGenericVariance[float64](typ, otyp, dist)
 	case types.T_decimal64:
 		aggPriv := NewVD64(typ)
 		if dist {
-			return NewUnaryDistAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.VAR_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.VAR_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewVD128(typ)
 		if dist {
-			return NewUnaryDistAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.VAR_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.VAR_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for variance", typ))
 }
 
-func newStdDevPop(typ types.Type, dist bool) Agg[any] {
+func newStdDevPop(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
-		return newGenericStdDevPop[int8](typ, dist)
+		return newGenericStdDevPop[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericStdDevPop[int16](typ, dist)
+		return newGenericStdDevPop[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericStdDevPop[int32](typ, dist)
+		return newGenericStdDevPop[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericStdDevPop[int64](typ, dist)
+		return newGenericStdDevPop[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericStdDevPop[uint8](typ, dist)
+		return newGenericStdDevPop[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericStdDevPop[uint16](typ, dist)
+		return newGenericStdDevPop[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericStdDevPop[uint32](typ, dist)
+		return newGenericStdDevPop[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericStdDevPop[uint64](typ, dist)
+		return newGenericStdDevPop[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericStdDevPop[float32](typ, dist)
+		return newGenericStdDevPop[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericStdDevPop[float64](typ, dist)
+		return newGenericStdDevPop[float64](typ, otyp, dist)
 	case types.T_decimal64:
 		aggPriv := NewStdD64(typ)
 		if dist {
-			return NewUnaryDistAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.STDDEV_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.STDDEV_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewStdD128(typ)
 		if dist {
-			return NewUnaryDistAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.STDDEV_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.STDDEV_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for stddev", typ))
 }
 
-func newMedian(typ types.Type, dist bool) Agg[any] {
+func newMedian(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
-		return newGenericMedian[int8](typ, dist)
+		return newGenericMedian[int8](typ, otyp, dist)
 	case types.T_int16:
-		return newGenericMedian[int16](typ, dist)
+		return newGenericMedian[int16](typ, otyp, dist)
 	case types.T_int32:
-		return newGenericMedian[int32](typ, dist)
+		return newGenericMedian[int32](typ, otyp, dist)
 	case types.T_int64:
-		return newGenericMedian[int64](typ, dist)
+		return newGenericMedian[int64](typ, otyp, dist)
 	case types.T_uint8:
-		return newGenericMedian[uint8](typ, dist)
+		return newGenericMedian[uint8](typ, otyp, dist)
 	case types.T_uint16:
-		return newGenericMedian[uint16](typ, dist)
+		return newGenericMedian[uint16](typ, otyp, dist)
 	case types.T_uint32:
-		return newGenericMedian[uint32](typ, dist)
+		return newGenericMedian[uint32](typ, otyp, dist)
 	case types.T_uint64:
-		return newGenericMedian[uint64](typ, dist)
+		return newGenericMedian[uint64](typ, otyp, dist)
 	case types.T_float32:
-		return newGenericMedian[float32](typ, dist)
+		return newGenericMedian[float32](typ, otyp, dist)
 	case types.T_float64:
-		return newGenericMedian[float64](typ, dist)
+		return newGenericMedian[float64](typ, otyp, dist)
 	case types.T_decimal64:
 		aggPriv := NewD64Median()
 		if dist {
 			panic(moerr.NewNotSupportedNoCtx("median in distinct mode"))
 		}
-		return NewUnaryAgg(AggregateMedian, aggPriv, false, typ, MedianReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MEDIAN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := NewD128Median()
 		if dist {
 			panic(moerr.NewNotSupportedNoCtx("median in distinct mode"))
 		}
-		return NewUnaryAgg(AggregateMedian, aggPriv, false, typ, MedianReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.MEDIAN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(moerr.NewNotSupportedNoCtx("median on type '%s'", typ))
 }
 
-func newGenericAnyValue[T any](typ types.Type, dist bool) Agg[any] {
+func newGenericAnyValue[T any](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewAnyValue[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateAnyValue, aggPriv, false, typ, AnyValueReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.ANY_VALUE, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateAnyValue, aggPriv, false, typ, AnyValueReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.ANY_VALUE, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newStrAnyValue(typ types.Type, dist bool) Agg[any] {
+func newStrAnyValue(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewStrAnyValue()
 	if dist {
-		return NewUnaryDistAgg(AggregateAnyValue, aggPriv, false, typ, AnyValueReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.ANY_VALUE, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateAnyValue, aggPriv, false, typ, AnyValueReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.ANY_VALUE, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
 func newGenericSum[T1 Numeric, T2 ReturnTyp](typ types.Type, otyp types.Type, dist bool) Agg[any] {
@@ -796,54 +796,54 @@ func newGenericApproxcd[T any](typ types.Type, otyp types.Type, dist bool) Agg[a
 	return NewUnaryAgg(function.APPROX_COUNT, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericBitOr[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
+func newGenericBitOr[T types.Ints | types.UInts | types.Floats](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewBitOr[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateBitOr, aggPriv, false, typ, BitOrReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.BIT_OR, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateBitOr, aggPriv, false, typ, BitOrReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.BIT_OR, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericBitXor[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
+func newGenericBitXor[T types.Ints | types.UInts | types.Floats](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewBitXor[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateBitXor, aggPriv, false, typ, BitXorReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.BIT_XOR, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateBitXor, aggPriv, false, typ, BitXorReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.BIT_XOR, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericBitAnd[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
+func newGenericBitAnd[T types.Ints | types.UInts | types.Floats](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewBitAnd[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateBitAnd, aggPriv, false, typ, BitAndReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.BIT_AND, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateBitAnd, aggPriv, false, typ, BitAndReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.BIT_AND, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericVariance[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
+func newGenericVariance[T types.Ints | types.UInts | types.Floats](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewVariance[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.VAR_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateVariance, aggPriv, false, typ, VarianceReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.VAR_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericStdDevPop[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
+func newGenericStdDevPop[T types.Ints | types.UInts | types.Floats](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewStdDevPop[T]()
 	if dist {
-		return NewUnaryDistAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(function.STDDEV_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return NewUnaryAgg(AggregateStdDevPop, aggPriv, false, typ, StdDevPopReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.STDDEV_POP, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
-func newGenericMedian[T Numeric](typ types.Type, dist bool) Agg[any] {
+func newGenericMedian[T Numeric](typ types.Type, otyp types.Type, dist bool) Agg[any] {
 	aggPriv := NewMedian[T]()
 	if dist {
 		panic(moerr.NewNotSupportedNoCtx("median in distinct mode"))
 	}
-	return NewUnaryAgg(AggregateMedian, aggPriv, false, typ, MedianReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(function.MEDIAN, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func NewGroupConcat(typ types.Type, dist bool, config any) Agg[any] {
+func NewGroupConcat(typ types.Type, otyp types.Type, dist bool, config any) Agg[any] {
 
 	separator := ","
 	bytes, ok := config.([]byte)
@@ -855,9 +855,9 @@ func NewGroupConcat(typ types.Type, dist bool, config any) Agg[any] {
 	case types.T_varchar:
 		aggPriv := newGroupConcat(separator)
 		if dist {
-			return NewUnaryDistAgg(AggregateGroupConcat, aggPriv, false, typ, GroupConcatReturnType(nil), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(function.GROUP_CONCAT, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return NewUnaryAgg(AggregateGroupConcat, aggPriv, false, typ, GroupConcatReturnType(nil), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(function.GROUP_CONCAT, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for group_concat", typ))
