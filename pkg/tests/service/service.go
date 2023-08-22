@@ -1318,10 +1318,10 @@ func (c *testCluster) buildCNConfigs(
 	return cfgs, opts
 }
 
-// initDNServices builds all dn services.
+// initTNServices builds all dn services.
 //
 // Before initializing dn service, log service must be started already.
-func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
+func (c *testCluster) initTNServices(fileservices *fileServices) []DNService {
 	batch := c.opt.initial.dnServiceNum
 
 	c.logger.Info("initialize dn services", zap.Int("batch", batch))
@@ -1420,7 +1420,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 // startTNServices initializes and starts all dn services.
 func (c *testCluster) startTNServices(ctx context.Context) error {
 	// initialize all dn services
-	c.dn.svcs = c.initDNServices(c.fileservices)
+	c.dn.svcs = c.initTNServices(c.fileservices)
 
 	// start dn services
 	for _, ds := range c.dn.svcs {
