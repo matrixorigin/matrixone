@@ -25,7 +25,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 col1new    INT(32)    YES        null        
 col2    DECIMAL128(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'name01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
 drop table rename01;
 drop table if exists rename02;
 create table rename02 (`colcolcol1` int, `colcolcol2` binary);
@@ -47,7 +47,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 colcolcol1    INT(32)    YES        null        
 colcolcol2    BINARY(1)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename02' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+rename02    colcolcol1    INT    YES
+rename02    colcolcol2    BINARY    YES
 drop table rename02;
 drop table if exists rename03;
 create table rename03(col1 int, col2 int, col3 varchar(20));
@@ -75,7 +77,6 @@ col1new    col2    col3new
 3    4    121131312
 update rename03 set col1New = 100 where col1New = 1;
 update rename03 set col3New = '2798u3d3frew' where col3New = 6;
-[unknown result because it is related to issue#11274]
 delete from rename03 where col3New is null;
 select * from rename03;
 col1new    col2    col3new
@@ -88,7 +89,10 @@ col1new    INT(32)    YES        null
 col2    INT(32)    YES        null        
 col3new    VARCHAR(20)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename03' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+rename03    col1new    INT    YES
+rename03    col2    INT    YES
+rename03    col3new    VARCHAR    YES
 drop table rename03;
 drop table if exists rename04;
 create table rename04(a int,b int);
@@ -127,7 +131,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 newnewa    INT(32)    YES        null        
 b    INT(32)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename04' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+rename04    b    INT    YES
+rename04    newnewa    INT    YES
 drop table rename04;
 drop table if exists rename06;
 create table rename06(col1 int);
@@ -143,57 +149,55 @@ alter table rename06 rename column col1 to **&&^^%%^&**;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 44 near " **&&^^%^&**;";
 drop table rename06;
 drop table if exists rename06;
-[unknown result because it is related to issue#11269]
+
 create table rename06(col1 int);
-[unknown result because it is related to issue#11269]
+
 insert into rename06 values(1),(2);
-[unknown result because it is related to issue#11269]
+
 alter table rename06 rename column col1 to `数据库系统`;
-[unknown result because it is related to issue#11269]
+
 alter table rename06 rename column col1 to `数据操作，数据收集7327323467dhhjfkrnfe`;
-[unknown result because it is related to issue#11269]
+
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename06' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+
 drop table rename06;
-no such table test.rename06
+
 show columns from rename06;
-no such table test.rename06
+
 alter table system.statement_info rename column role_id to role_idNew;
-[unknown result because it is related to issue#11269]
+internal error: do not have privilege to execute the statement
 alter table mo_catalog.mo_database rename column dat_type to newdat_type;
-[unknown result because it is related to issue#11269]
+internal error: do not have privilege to execute the statement
 alter table mysql.procs_priv rename column grantor to newGrantor;
-[unknown result because it is related to issue#11269]
+internal error: do not have privilege to execute the statement
 drop table if exists primary01;
-[unknown result because it is related to issue#11269]
 create table primary01 (col1 int primary key , col2 decimal);
-[unknown result because it is related to issue#11269]
 insert into primary01 values (2389324, 32784329.4309403);
-[unknown result because it is related to issue#11269]
 insert into primary01 values (3287, 89384038);
-[unknown result because it is related to issue#11269]
 alter table primary01 rename column col1 to col1New;
-[unknown result because it is related to issue#11269]
 show create table primary01;
-[unknown result because it is related to issue#11269]
+Table    Create Table
+primary01    CREATE TABLE `primary01` (\n`col1new` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT null,\nPRIMARY KEY (`col1new`)\n)
 insert into primary01 values (-2839, 8239802839.00000000);
-[unknown result because it is related to issue#11269]
 insert into primary01 (col1New, col2) values (3287, 3293892.3232);
-[unknown result because it is related to issue#11269]
+Duplicate entry '3287' for key 'col1new'
 delete from primary01 where col1New = -2839;
-[unknown result because it is related to issue#11269]
 update primary01 set col1 = 2873892 where col1New = 2389324;
-[unknown result because it is related to issue#11269]
+internal error: column 'col1' not found in table 
 update primary01 set col1New = 2873892 where col1New = 2389324;
-[unknown result because it is related to issue#11269]
 select * from primary01;
-[unknown result because it is related to issue#11269]
+col1new    col2
+3287    89384038
+2873892    32784329
 show columns from primary01;
-[unknown result because it is related to issue#11269]
+Field    Type    Null    Key    Default    Extra    Comment
+col1new    INT(32)    NO    PRI    null        
+col2    DECIMAL128(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+primary01    col1new    INT    NO
+primary01    col2    DECIMAL128    YES
 drop table primary01;
-no such table test.primary01
 drop table if exists foreign01;
 create table foreign01(col1 int primary key,
 col2 varchar(20),
@@ -268,9 +272,16 @@ colnewcolumn    INT(32)    YES        null
 col3    INT(32)    NO    PRI    null        
 col2new    DOUBLE(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+foreign01    col1new    INT    NO
+foreign01    col2new    VARCHAR    YES
+foreign01    col3    INT    YES
+foreign01    col4    BIGINT    YES
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign02' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+foreign02    col2new    DOUBLE    YES
+foreign02    col3    INT    NO
+foreign02    colnewcolumn    INT    YES
 drop table foreign02;
 drop table foreign01;
 drop table if exists index01;
@@ -324,7 +335,11 @@ bnew    CHAR(10)    YES        null
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+index01    a    INT    NO
+index01    bnew    CHAR    YES
+index01    c    DATE    YES
+index01    d    DECIMAL64    YES
 drop table index01;
 drop table if exists index02;
 CREATE TABLE index02(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), INDEX(a, b), KEY(c));
@@ -362,7 +377,11 @@ bnewnew    CHAR(10)    YES        null
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+index02    a    INT    NO
+index02    bnewnew    CHAR    YES
+index02    c    DATE    YES
+index02    d    DECIMAL64    YES
 select * from index02;
 a    bnewnew    c    d
 2    ac    1981-02-20    1600.00
@@ -390,7 +409,11 @@ b    SMALLINT(16)    YES        null
 c    INT UNSIGNED(32)    YES        null        
 d    BIGINT(64)    NO        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+cluster01    b    SMALLINT    YES
+cluster01    c    INT UNSIGNED    YES
+cluster01    d    BIGINT    NO
+cluster01    newaaaaaaaa    TINYINT    NO
 drop table cluster01;
 drop table if exists temporary01;
 create table temporary01 (col1 int, col2 decimal);
@@ -408,7 +431,9 @@ Field    Type    Null    Key    Default    Extra    Comment
 uuuyggbbjbj    INT(32)    YES        null        
 col2    DECIMAL128(38)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temporary01' and COLUMN_NAME not like '__mo%';
-[unknown result because it is related to issue#11249]
+table_name    column_name    data_type    is_nullable
+temporary01    col2    DECIMAL128    YES
+temporary01    uuuyggbbjbj    INT    YES
 drop table temporary01;
 drop table if exists ex_table_2_1;
 create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
