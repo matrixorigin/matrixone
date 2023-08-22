@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2968,7 +2967,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
 
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
-				logutil.Errorf("post drop account error: %s", err.Error())
+				logutil.Errorf("post alter account suspend error: %s", err.Error())
 			}
 		}
 
@@ -2979,9 +2978,9 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(true)
 				}
 			}
-			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusRestricted.String(), ses.GetParameterUnit().QueryService)
+			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusRestricted.String())
 			if err != nil {
-				return err
+				logutil.Errorf("post alter account restricted error: %s", err.Error())
 			}
 		}
 
@@ -2992,9 +2991,9 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 					rt.setResricted(false)
 				}
 			}
-			err = alterSessionStatus(ctx, ses.GetTenantInfo().Tenant, aa.Name, ses.GetTenantInfo().GetUser(), tree.AccountStatusOpen.String(), ses.GetParameterUnit().QueryService)
+			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusOpen.String())
 			if err != nil {
-				return err
+				logutil.Errorf("post alter account not restricted error: %s", err.Error())
 			}
 		}
 	}
@@ -3485,7 +3484,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 	return err
 }
 
-func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
+func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) (bool, error) {
 	var err error
 	var filePath string
 	var sql string
@@ -3493,8 +3492,9 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
 	var stageName string
 	var stageStatus string
 	var url string
+	var isPathChanged bool
 	if st.Ep == nil {
-		return err
+		return isPathChanged, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -3505,7 +3505,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
-		return err
+		return isPathChanged, err
 	}
 
 	// detect filepath contain stage or not
@@ -3516,20 +3516,20 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 
 		erArray, err = getResultSet(ctx, bh)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 
 		// if have stage enabled
 		if execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
+			return isPathChanged, moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
 		} else {
 			// use the filepath
-			return err
+			return isPathChanged, err
 		}
 	} else {
 
@@ -3537,32 +3537,32 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
 		// check the stage status
 		sql, err = getSqlForCheckStageStatusWithStageName(ctx, stageName)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 
 		erArray, err = getResultSet(ctx, bh)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 		if execResultArrayHasData(erArray) {
 			stageStatus, err = erArray[0].GetString(ctx, 0, 1)
 			if err != nil {
-				return err
+				return isPathChanged, err
 			}
 
 			// is the stage staus is disabled
 			if stageStatus == tree.StageStatusDisabled.String() {
-				return moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
+				return isPathChanged, moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
 			} else if stageStatus == tree.StageStatusEnabled.String() {
 				// replace the filepath using stage url
 				url, err = erArray[0].GetString(ctx, 0, 0)
 				if err != nil {
-					return err
+					return isPathChanged, err
 				}
 
 				filePath = strings.Replace(filePath, stageName+":", url, 1)
@@ -3570,10 +3570,10 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
 			}
 
 		} else {
-			return moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
+			return isPathChanged, moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
 		}
 	}
-	return err
+	return isPathChanged, err
 
 }
 
@@ -9037,14 +9037,25 @@ func addInitSystemVariablesSql(accountId int, accountName, variable_name string,
 	return initMoMysqlCompatibilityMode
 }
 
-// alterSessionStatus alter all nodes session status which the tenant has been alter restricted or open.
-func alterSessionStatus(ctx context.Context, curtenant, tenant string, user string, status string, qs queryservice.QueryService) error {
+// postAlterSessionStatus post alter all nodes session status which the tenant has been alter restricted or open.
+func postAlterSessionStatus(
+	ctx context.Context,
+	ses *Session,
+	accountName string,
+	tenantId int64,
+	status string) error {
+	qs := ses.GetParameterUnit().QueryService
+	if qs == nil {
+		return moerr.NewInternalError(ctx, "query service is not initialized")
+	}
+	currTenant := ses.GetTenantInfo().Tenant
+	currUser := ses.GetTenantInfo().User
 	var nodes []string
 	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": tenant}, clusterservice.EQ)
-	sysTenant := isSysTenant(curtenant)
+		map[string]string{"account": accountName}, clusterservice.EQ)
+	sysTenant := isSysTenant(currTenant)
 	if sysTenant {
-		disttae.SelectForSuperTenant(clusterservice.NewSelector(), user, nil,
+		disttae.SelectForSuperTenant(clusterservice.NewSelector(), currUser, nil,
 			func(s *metadata.CNService) {
 				nodes = append(nodes, s.QueryAddress)
 			})
@@ -9075,9 +9086,8 @@ func alterSessionStatus(ctx context.Context, curtenant, tenant string, user stri
 		go func(addr string) {
 			req := qs.NewRequest(query.CmdMethod_AlterAccount)
 			req.AlterAccountRequest = &query.AlterAccountRequest{
-				Tenant:    tenant,
-				SysTenant: isSysTenant(tenant),
-				Status:    status,
+				TenantId: tenantId,
+				Status:   status,
 			}
 			resp, err := qs.SendMessage(ctx, addr, req)
 			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
@@ -9094,7 +9104,9 @@ func alterSessionStatus(ctx context.Context, curtenant, tenant string, user stri
 				queryResp, ok := res.response.(*query.Response)
 
 				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
-					retErr = moerr.NewInternalError(ctx, "alter account failed")
+					retErr = moerr.NewInternalError(ctx,
+						fmt.Sprintf("alter account status for account %s failed on node %s",
+							accountName, res.nodeAddr))
 				}
 			}
 		case <-ctx.Done():
