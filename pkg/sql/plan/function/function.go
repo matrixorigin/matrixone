@@ -54,10 +54,12 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedWindowFunctions {
 		allSupportedFunctions[fn.functionId] = fn
 	}
+
 	agg.NewAgg = func(overloadID int64, isDistinct bool, inputTypes []types.Type) (agg.Agg[any], error) {
 		return generateAggExecutor(overloadID, isDistinct, inputTypes, nil)
 	}
 	agg.NewAggWithConfig = generateAggExecutor
+	agg.IsWinOrderFun = GetFunctionIsWinOrderFunById
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
@@ -87,7 +89,7 @@ func GetFunctionIsWinOrderFunByName(name string) bool {
 	return f.isWindowOrder()
 }
 
-func GetFunctionIsWinFunById(functionID int32) bool {
+func GetFunctionIsWinOrderFunById(functionID int32) bool {
 	return allSupportedFunctions[functionID].isWindowOrder()
 }
 

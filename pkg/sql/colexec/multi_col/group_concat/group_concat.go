@@ -17,6 +17,7 @@ package group_concat
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
 	"strings"
 	"unsafe"
@@ -338,7 +339,7 @@ func (gc *GroupConcat) GetInputTypes() []types.Type {
 // GetOperatorId get types of aggregate's aggregate id.
 // this is used to print log in group string();
 func (gc *GroupConcat) GetOperatorId() int {
-	return agg.AggregateGroupConcat
+	return int(function.GroupConcatFunctionID)
 }
 
 func (gc *GroupConcat) IsDistinct() bool {
