@@ -72,6 +72,7 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 }
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
+	files := make(map[string]*fileservice.DirEntry, 0)
 	for _, name := range names {
 		if len(name) == 0 {
 			continue
@@ -81,18 +82,27 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			return err
 		}
-		files, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key)
+		locations, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key)
 		if err != nil {
 			return err
 		}
-		for _, dentry := range files {
-			if dentry.IsDir {
-				panic("not support dir")
+		for _, location := range locations {
+			if files[location.Name().String()] == nil {
+				dentry, err := srcFs.StatFile(ctx, location.Name().String())
+				if err != nil {
+					return err
+				}
+				files[location.Name().String()] = dentry
 			}
-			err := CopyFile(ctx, srcFs, dstFs, dentry, "")
-			if err != nil {
-				return err
-			}
+		}
+	}
+	for _, dentry := range files {
+		if dentry.IsDir {
+			panic("not support dir")
+		}
+		err := CopyFile(ctx, srcFs, dstFs, dentry, "")
+		if err != nil {
+			return err
 		}
 	}
 

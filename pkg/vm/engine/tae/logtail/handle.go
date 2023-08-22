@@ -847,8 +847,7 @@ func LoadCheckpointEntries(
 	return entries, closeCBs, nil
 }
 
-func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location) (map[string]*fileservice.DirEntry, error) {
-	files := make(map[string]*fileservice.DirEntry, 0)
+func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location) ([]objectio.Location, error) {
 	locations := make([]objectio.Location, 0)
 	locations = append(locations, location)
 	data := NewCheckpointData()
@@ -875,14 +874,5 @@ func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileServic
 		}
 		locations = append(locations, metaLoc)
 	}
-	for _, location = range locations {
-		if files[location.Name().String()] == nil {
-			dentry, err := fs.StatFile(ctx, location.Name().String())
-			if err != nil {
-				return nil, err
-			}
-			files[location.Name().String()] = dentry
-		}
-	}
-	return files, nil
+	return locations, nil
 }
