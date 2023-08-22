@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,7 +47,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 
 	bat := proc.InputBatch()
 	if bat == nil {
-		logutil.Infof("shuffle is ending, sending last batches")
 		return sendOneBatch(ap, proc, true), nil
 	}
 	if bat.IsEmpty() {
