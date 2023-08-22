@@ -1160,6 +1160,8 @@ func adjustBytes(bs []byte) {
 func UpdateZM(zm ZM, v []byte) {
 	if !zm.IsInited() {
 		if zm.IsArray() {
+			// If the zm is of type ARRAY, we don't init it.
+			// vector index will be handled separately using HNSW library etc.
 			return
 		}
 		zm.doInit(v)
