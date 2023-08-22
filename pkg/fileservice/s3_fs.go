@@ -495,12 +495,6 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		}
 	}
 
-	if s.diskCache != nil {
-		if err := s.diskCache.Read(ctx, vector); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 

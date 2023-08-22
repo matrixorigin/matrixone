@@ -39,8 +39,10 @@ func Prepare(proc *process.Process, arg any) error {
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 
-	if ap.ctr.state == outPut {
+	if ap.ctr.state == outPutNotEnding {
 		return sendOneBatch(ap, proc, false), nil
+	} else if ap.ctr.state == outPutEnding {
+		return sendOneBatch(ap, proc, true), nil
 	}
 
 	bat := proc.InputBatch()
@@ -195,7 +197,11 @@ func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) process.Ex
 				proc.SetInputBatch(ap.ctr.shuffledBats[i])
 				ap.ctr.shuffledBats[i] = nil
 			} else {
-				ap.ctr.state = outPut
+				if isEnding {
+					ap.ctr.state = outPutEnding
+				} else {
+					ap.ctr.state = outPutNotEnding
+				}
 				return process.ExecHasMore
 			}
 		}

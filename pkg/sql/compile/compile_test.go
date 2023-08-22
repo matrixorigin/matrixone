@@ -125,8 +125,8 @@ func TestCompile(t *testing.T) {
 		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil)
 		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
-		c.GetAffectedRows()
-		err = c.Run(0)
+		c.getAffectedRows()
+		_, err = c.Run(0)
 		require.NoError(t, err)
 		// Enable memory check
 		tc.proc.FreeVectors()
@@ -144,8 +144,8 @@ func TestCompileWithFaults(t *testing.T) {
 	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil)
 	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
-	c.GetAffectedRows()
-	err = c.Run(0)
+	c.getAffectedRows()
+	_, err = c.Run(0)
 	require.NoError(t, err)
 }
 
