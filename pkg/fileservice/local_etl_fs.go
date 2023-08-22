@@ -338,10 +338,6 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 }
 
-func (l *LocalETLFS) ReadCache(ctx context.Context, vector *IOVector) error {
-	return nil
-}
-
 func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
 	select {
 	case <-ctx.Done():
