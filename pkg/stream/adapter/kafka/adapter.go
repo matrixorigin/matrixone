@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -607,7 +606,7 @@ func convertProtobufSchemaToMD(schema string, msgTypeName string) (*desc.Message
 	fds, err := parser.ParseFiles("test.proto")
 
 	if err != nil {
-		log.Fatalf("Failed to parse proto content: %v", err)
+		return nil, err
 	}
 	fd := fds[0]
 	md := fd.FindMessage(msgTypeName)
