@@ -637,7 +637,12 @@ func (txn *Transaction) getCachedTable(
 		}
 	}
 	if v, ok := txn.tableCache.tableMap.Load(k); ok {
-		return v.(*txnTable)
+		txnTable := v.(*txnTable)
+		schemaChangeTs := txn.engine.catalog.GetSchemaChange(k.name)
+		if txnTable.lastTS.PhysicalTime < schemaChangeTs {
+			return nil
+		}
+		return txnTable
 	}
 	return nil
 }

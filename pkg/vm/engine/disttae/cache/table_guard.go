@@ -37,7 +37,8 @@ type tableGuard struct {
 		// If a table is dropped, it is pushed into this slice.
 		deletedTables []*TableItem
 		// The number of deleted tables which are garbage collected.
-		gcCount int
+		gcCount       int
+		schema_change map[string]int64
 	}
 }
 
@@ -45,7 +46,26 @@ type tableGuard struct {
 func newTableGuard() *tableGuard {
 	t := &tableGuard{}
 	t.mu.deletedTables = make([]*TableItem, 0, defaultDeletedTableSize)
+	t.mu.schema_change = make(map[string]int64)
 	return t
+}
+
+// setSchemaChange
+func (g *tableGuard) setSchemaChange(name string, ts int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.mu.schema_change[name] = ts
+}
+
+// getSchemaChange
+func (g *tableGuard) getSchemaChange(name string) int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if ts, exits := g.mu.schema_change[name]; exits {
+		return ts
+	} else {
+		return 0
+	}
 }
 
 // pushDeletedTable pushes a dropped table item.

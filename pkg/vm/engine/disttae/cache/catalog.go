@@ -362,19 +362,26 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.ClusterByIdx = -1
 		copy(item.Rowid[:], rowids[i][:])
 		// invalid old name table
-		if exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]}); ok && exist.Name != item.Name {
-			logutil.Infof("rename invalidate %d-%s,v%d@%s", exist.Id, exist.Name, exist.Version, item.Ts.String())
-			newItem := &TableItem{
-				deleted:    true,
-				Id:         exist.Id,
-				Name:       exist.Name,
-				Rowid:      exist.Rowid,
-				AccountId:  exist.AccountId,
-				DatabaseId: exist.DatabaseId,
-				Version:    exist.Version,
-				Ts:         item.Ts,
+		exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]})
+		if ok {
+			if exist.Name != item.Name {
+				logutil.Infof("rename invalidate %d-%s,v%d@%s", exist.Id, exist.Name, exist.Version, item.Ts.String())
+				newItem := &TableItem{
+					deleted:    true,
+					Id:         exist.Id,
+					Name:       exist.Name,
+					Rowid:      exist.Rowid,
+					AccountId:  exist.AccountId,
+					DatabaseId: exist.DatabaseId,
+					Version:    exist.Version,
+					Ts:         item.Ts,
+				}
+				cc.tables.addTableItem(newItem)
 			}
-			cc.tables.addTableItem(newItem)
+			if exist.Version != item.Version {
+				logutil.Infof("tbl %s old_ver=%d, new_ver=%d", exist.Name, exist.Version, item.Version)
+				cc.tables.tableGuard.setSchemaChange(exist.Name, timestamps[i].Physical())
+			}
 		}
 		cc.tables.addTableItem(item)
 		cc.tables.rowidIndex.Set(item)
@@ -588,6 +595,11 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 // GetDeletedTableIndex returns the max index of deleted tables slice.
 func (cc *CatalogCache) GetDeletedTableIndex() int {
 	return cc.tables.tableGuard.getDeletedTableIndex()
+}
+
+// GetDeletedTableIndex returns the max index of deleted tables slice.
+func (cc *CatalogCache) GetSchemaChange(name string) int64 {
+	return cc.tables.tableGuard.getSchemaChange(name)
 }
 
 // GetDeletedTables returns the deleted tables in [cachedIndex+1:] whose timestamp is less than ts.
