@@ -217,11 +217,14 @@ func (s *Scanner) Scan() (int, string) {
 		switch s.cur() {
 		case '+':
 			s.inc()
-			return s.Scan()
-		case '*':
-			return s.Scan()
+			switch s.cur() {
+			case '\'':
+				return s.Scan()
+			default:
+				return s.stepBackOneChar(ch)
+			}
 		default:
-			return s.stepBackOneChar(ch)
+			return s.Scan()
 		}
 	default:
 		return s.stepBackOneChar(ch)
