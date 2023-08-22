@@ -21,34 +21,34 @@ drop table non_cte_7;
 
 --  multi non recursive cte
 with non_cte_8(manager_id,name) as
-    (SELECT a.manager_id,
-        a.name AS job_name
-    FROM emp a), non_cte_9(id,name) as
-    (SELECT m.id,
+    (select a.manager_id,
+        a.name as job_name
+    from emp a), non_cte_9(id,name) as
+    (select m.id,
          m.name
-    FROM employees_mgr m
-    WHERE m.name != "lucky")
-SELECT a.manager_id,a.name
-FROM non_cte_8 a
-JOIN non_cte_9 b
-    ON a.manager_id = b.id
-ORDER BY  a.manager_id;
+    from employees_mgr m
+    where m.name != "lucky")
+select a.manager_id,a.name
+from non_cte_8 a
+join non_cte_9 b
+    on a.manager_id = b.id
+order by  a.manager_id;
 
 with non_cte_8(manager_id,name) as
-    (SELECT a.manager_id,
-        a.name AS job_name
-    FROM emp a), non_cte_9(id,name) as
-    (SELECT m.id,
+    (select a.manager_id,
+        a.name as job_name
+    from emp a), non_cte_9(id,name) as
+    (select m.id,
          m.name
-    FROM employees_mgr m
-    WHERE m.name != "lucky"), non_cte_11(id,p_name) as
+    from employees_mgr m
+    where m.name != "lucky"), non_cte_11(id,p_name) as
     (
     select p.id,p.p_name from product p
     )
-select ncte.manager_id,ncte.name from (SELECT a.manager_id,a.name
-FROM non_cte_8 a
-JOIN non_cte_9 b
-    ON a.manager_id = b.id) as ncte
+select ncte.manager_id,ncte.name from (select a.manager_id,a.name
+from non_cte_8 a
+join non_cte_9 b
+    on a.manager_id = b.id) as ncte
 union all select c.id,c.p_name from non_cte_11 c;
 
 --expression_name: key word,number
@@ -117,21 +117,21 @@ FROM DirectReports order by EmployeeID;
 
 -- recursive cte :concat function
 with recursive cte_ab_11(id, productID,price) AS
-    (SELECT p.id,
+    (select p.id,
          p.p_id,
          p.price
-    FROM product p
-    WHERE p.p_id is null
-    UNION all
-    SELECT pr.id,
+    from product p
+    where p.p_id is null
+    union all
+    select pr.id,
          pr.p_id,
          pr.price*12.01
-    FROM product pr
-    JOIN (select * from cte_ab_11 c where c.price between 20 and 1000)
-        ON pr.id = c.productID
-    GROUP BY  c.id, c.productID )
-SELECT *
-FROM cte_ab_11;
+    from product pr
+    join (select * from cte_ab_11 c where c.price between 20 and 1000)
+        on pr.id = c.productID
+    group by c.id, c.productID )
+select *
+from cte_ab_11;
 
 -- multi recursive cte
 WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
