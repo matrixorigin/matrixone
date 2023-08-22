@@ -29,59 +29,8 @@ import (
 )
 
 const (
-	AggregateSum = iota
-	AggregateAvg
-	AggregateMax
-	AggregateMin
-	AggregateCount
-	AggregateStarCount
-	AggregateApproxCountDistinct
-	AggregateVariance
-	AggregateBitAnd
-	AggregateBitXor
-	AggregateBitOr
-	AggregateStdDevPop
-	AggregateAnyValue
-	AggregateMedian
-	AggregateGroupConcat
-
-	WinRank
-	WinRowNumber
-	WinDenseRank
-)
-
-// TODO: It's a bad hack here, I will fix it later.
-// remove the special id from agg framwork is a better way.
-// just put these code here for now because I have no enough time to solve the import cycle problem.
-func GetFunctionIsWinOrderFunBySpecialId(id int) bool {
-	return id == WinRank || id == WinRowNumber || id == WinDenseRank
-}
-
-const (
 	groupNotMatch = 0
 )
-
-var Names = [...]string{
-	AggregateSum:                 "sum",
-	AggregateAvg:                 "avg",
-	AggregateMax:                 "max",
-	AggregateMin:                 "min",
-	AggregateCount:               "count",
-	AggregateStarCount:           "starcount",
-	AggregateApproxCountDistinct: "approx_count_distinct",
-	AggregateVariance:            "var",
-	AggregateBitAnd:              "bit_and",
-	AggregateBitXor:              "bit_xor",
-	AggregateBitOr:               "bit_or",
-	AggregateStdDevPop:           "stddev_pop",
-	AggregateAnyValue:            "any",
-	AggregateMedian:              "median",
-	AggregateGroupConcat:         "group_concat",
-
-	WinRank:      "rank",
-	WinRowNumber: "row_number",
-	WinDenseRank: "dense_rank",
-}
 
 type Aggregate struct {
 	Op     int

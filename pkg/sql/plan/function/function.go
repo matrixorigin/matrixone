@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -53,6 +54,10 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedWindowFunctions {
 		allSupportedFunctions[fn.functionId] = fn
 	}
+	agg.NewAgg = func(overloadID int64, isDistinct bool, inputTypes []types.Type) (agg.Agg[any], error) {
+		return generateAggExecutor(overloadID, isDistinct, inputTypes, nil)
+	}
+	agg.NewAggWithConfig = generateAggExecutor
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
@@ -216,6 +221,25 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 	return vec, nil
 }
 
+func generateAggExecutor(
+	overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (agg.Agg[any], error) {
+	f, exist := GetFunctionByIdWithoutError(overloadID)
+	if !exist {
+		return nil, moerr.NewInvalidInputNoCtx("function id '%d' not found", overloadID)
+	}
+
+	outputTyp := f.retType(inputTypes)
+	return f.aggFramework.aggNew(isDistinct, inputTypes, outputTyp, config)
+}
+
+func GetAggFunctionStringByID(overloadID int64) string {
+	f, exist := GetFunctionByIdWithoutError(overloadID)
+	if !exist {
+		return "unknown function"
+	}
+	return f.aggFramework.str
+}
+
 // DeduceNotNullable helps optimization sometimes.
 // deduce notNullable for function
 // for example, create table t1(c1 int not null, c2 int, c3 int not null ,c4 int);
@@ -314,6 +338,14 @@ type executeLogicOfOverload func(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process, length int) error
 
+type aggregationLogicOfOverload struct {
+	// agg related string for error message.
+	str string
+
+	// newAgg is used to create a new aggregation structure for agg framework.
+	aggNew func(dist bool, inputTypes []types.Type, outputType types.Type, config any) (agg.Agg[any], error)
+}
+
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
@@ -337,8 +369,9 @@ type overload struct {
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
-	isAgg bool
-	isWin bool
+	isAgg        bool
+	isWin        bool
+	aggFramework aggregationLogicOfOverload
 
 	// if true, overload was unable to run in parallel.
 	// For example,

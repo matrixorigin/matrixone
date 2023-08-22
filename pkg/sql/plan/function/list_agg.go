@@ -33,6 +33,10 @@ var supportedAggregateFunctions = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggMaxReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "max",
+					aggNew: newAggMax,
+				},
 			},
 		},
 	},

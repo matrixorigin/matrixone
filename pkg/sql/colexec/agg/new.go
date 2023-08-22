@@ -20,66 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func New(op int, dist bool, typ types.Type) (Agg[any], error) {
-	return NewWithConfig(op, dist, typ, nil)
-}
-
-func NewWithConfig(op int, dist bool, inputType types.Type, config any) (a Agg[any], err error) {
-	overloadID := int64(op)
-
-	f, exist := function.GetFunctionByIdWithoutError(overloadID)
-	if !exist {
-		panic(moerr.NewInternalErrorNoCtx("unsupported aggregate %d", overloadID))
-	}
-	functionID, _ := function.DecodeOverloadID(overloadID)
-
-	retTyp := f.GetReturnTypeMethod()
-	outputTyp := retTyp([]types.Type{inputType})
-
-	switch functionID {
-	case function.SUM:
-		return newSum(inputType, outputTyp, dist), nil
-	case function.AVG:
-		return newAvg(inputType, outputTyp, dist), nil
-	case function.MAX:
-		return newMax(inputType, outputTyp, dist), nil
-	case function.MIN:
-		return newMin(inputType, outputTyp, dist), nil
-	case function.COUNT:
-		return newCount(inputType, outputTyp, dist, false), nil
-	case function.STARCOUNT:
-		return newCount(inputType, outputTyp, dist, true), nil
-	case function.APPROX_COUNT_DISTINCT:
-		return newApprox(inputType, outputTyp, dist), nil
-	case function.VAR_POP:
-		return newVariance(inputType, outputTyp, dist), nil
-	case function.BIT_AND:
-		return newBitAnd(inputType, outputTyp, dist), nil
-	case function.BIT_XOR:
-		return newBitXor(inputType, outputTyp, dist), nil
-	case function.BIT_OR:
-		return newBitOr(inputType, outputTyp, dist), nil
-	case function.STDDEV_POP:
-		return newStdDevPop(inputType, outputTyp, dist), nil
-	case function.ANY_VALUE:
-		return newAnyValue(inputType, outputTyp, dist), nil
-	case function.MEDIAN:
-		return newMedian(inputType, outputTyp, dist), nil
-	case function.GROUP_CONCAT:
-		outputTyp = retTyp(nil)
-		return NewGroupConcat(inputType, outputTyp, dist, config), nil
-	case function.RANK:
-		r := NewRank()
-		return NewUnaryAgg(WinRank, r, false, inputType, outputTyp, r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
-	case function.ROW_NUMBER:
-		r := NewRowNumber()
-		return NewUnaryAgg(WinRowNumber, r, false, inputType, outputTyp, r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
-	case function.DENSE_RANK:
-		r := NewDenseRank()
-		return NewUnaryAgg(WinDenseRank, r, false, inputType, outputTyp, r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
-	}
-	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for aggregate %s", inputType, Names[functionID]))
-}
+var NewAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error)
+var NewAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (Agg[any], error)
 
 func newCount(typ types.Type, otyp types.Type, dist bool, isStar bool) Agg[any] {
 	switch typ.Oid {

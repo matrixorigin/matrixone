@@ -17,7 +17,16 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"golang.org/x/exp/constraints"
 )
+
+type numeric interface {
+	types.Ints | types.UInts | types.Floats
+}
+
+type compare interface {
+	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp
+}
 
 var (
 	// max() supported input type and output type.
