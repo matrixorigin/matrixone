@@ -241,7 +241,7 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 		types.New(types.T_int32, 10, 0),
 	}
 	offset := int64(0)
-	limit := int64(500)
+	limit := int64(50)
 
 	// Call RetrieveData
 	batch, err := RetrieveData(context.Background(), configs, attrs, types, offset, limit, mpool.MustNewZero(), NewKafkaAdapter)
