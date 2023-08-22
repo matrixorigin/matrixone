@@ -430,3 +430,40 @@ select * from alter01;
 insert into alter01 values (6,"h");
 select * from alter01;
 -- @bvt:issue
+
+----------------------------------------------------------
+-- alter table add primary key column
+-- @bvt:issue#11213
+drop table if exists alter01;
+create table alter01(col1 int,col2 varchar(25));
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+begin;
+alter table alter01 add constraint primary key (col1);
+-- @session:id=1{
+-- @wait:0:commit
+use transaction_enhance;
+insert into alter01 values (8,"h");
+select * from alter01;
+-- @session
+insert into alter01 values (6,"h");
+select * from alter01;
+-- @bvt:issue
+
+
+----------------------------------------------------------
+-- alter table drop primary key column
+-- @bvt:issue#11213
+drop table if exists alter01;
+create table alter01(col1 int primary key,col2 varchar(25));
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+begin;
+alter table alter01 drop primary key;
+-- @session:id=1{
+-- @wait:0:commit
+use transaction_enhance;
+insert into alter01 values (8,"h");
+select * from alter01;
+-- @session
+insert into alter01 values (6,"h");
+select * from alter01;
+-- @bvt:issue
