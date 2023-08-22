@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -113,6 +114,22 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 	return c
+}
+
+func putCompile(c *Compile) {
+	if c == nil {
+		return
+	}
+	if c.anal != nil {
+		for i := range c.anal.analInfos {
+			analPool.Put(c.anal.analInfos[i])
+		}
+		c.anal.analInfos = nil
+	}
+
+	c.proc.CleanValueScanBatchs()
+	// c.clear()
+	pool.Put(c)
 }
 
 func (c *Compile) clear() {
@@ -225,7 +242,7 @@ func (c *Compile) setAffectedRows(n uint64) {
 	c.affectRows.Store(n)
 }
 
-func (c *Compile) GetAffectedRows() uint64 {
+func (c *Compile) getAffectedRows() uint64 {
 	affectRows := c.affectRows.Load()
 	return affectRows
 }
@@ -327,20 +344,18 @@ func (c *Compile) run(s *Scope) error {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *Compile) Run(_ uint64) error {
+func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
+	fmt.Printf("ccccccccccccccccccc  %s", DebugShowScopes(c.scope))
+	var cc *Compile
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer task.End()
 	defer func() {
-		if c.anal != nil {
-			for i := range c.anal.analInfos {
-				analPool.Put(c.anal.analInfos[i])
-			}
-			c.anal.analInfos = nil
-		}
-
-		c.proc.CleanValueScanBatchs()
-		pool.Put(c)
+		putCompile(c)
+		// putCompile(cc)
 	}()
+	result := &util2.RunResult{
+		AffectRows: 0,
+	}
 	if c.proc.TxnOperator != nil {
 		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
@@ -357,16 +372,16 @@ func (c *Compile) Run(_ uint64) error {
 
 			// clear the workspace of the failed statement
 			if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
-				return e
+				return nil, e
 			}
 			//  increase the statement id
 			if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
-				return e
+				return nil, e
 			}
 
 			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 			// improved to refresh expression in the future.
-			cc := New(
+			cc = New(
 				c.addr,
 				c.db,
 				c.sql,
@@ -381,28 +396,31 @@ func (c *Compile) Run(_ uint64) error {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				pn, err := c.buildPlanFunc()
 				if err != nil {
-					return err
+					return nil, err
 				}
 				c.pn = pn
 			}
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 				c.fatalLog(1, err)
-				return err
+				return nil, err
 			}
 			if err := cc.runOnce(); err != nil {
 				c.fatalLog(1, err)
-				return err
+				return nil, err
 			}
 			// set affectedRows to old compile to return
-			c.setAffectedRows(cc.GetAffectedRows())
-			return c.proc.TxnOperator.GetWorkspace().Adjust()
+			c.setAffectedRows(cc.getAffectedRows())
+			result.AffectRows = cc.getAffectedRows()
+			return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 		}
-		return err
+		return nil, err
 	}
+
+	result.AffectRows = c.getAffectedRows()
 	if c.proc.TxnOperator != nil {
-		return c.proc.TxnOperator.GetWorkspace().Adjust()
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
-	return nil
+	return result, nil
 }
 
 // run once
@@ -420,6 +438,7 @@ func (c *Compile) runOnce() error {
 			wg.Done()
 		})
 	}
+	fmt.Printf("aaaaaaaaaaaaaaaaaaaaaa  %s\n", c.sql)
 	wg.Wait()
 	c.scope = nil
 	close(errC)

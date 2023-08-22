@@ -3185,7 +3185,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 		// todo: add trace
-		if err = runner.Run(0); err != nil {
+		if _, err = runner.Run(0); err != nil {
 			return err
 		}
 
@@ -3267,7 +3267,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 
-		if err = runner.Run(0); err != nil {
+		runResult, err := runner.Run(0)
+		if err != nil {
 			if loadLocalErrGroup != nil { // release resources
 				err2 = proc.LoadLocalReader.Close()
 				if err2 != nil {
@@ -3296,7 +3297,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
-		rspLen = cw.GetAffectedRows()
+		rspLen = runResult.AffectRows
 		echoTime := time.Now()
 
 		logDebug(ses, "time of SendResponse %s", time.Since(echoTime).String())
@@ -3352,7 +3353,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		/*
 			Step 1: Start
 		*/
-		if err = runner.Run(0); err != nil {
+		if _, err = runner.Run(0); err != nil {
 			return err
 		}
 
