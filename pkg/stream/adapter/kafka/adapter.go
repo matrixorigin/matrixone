@@ -756,3 +756,38 @@ func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, f
 	}
 	return totalSize, nil
 }
+
+func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []string, types []types.Type, offset int64, limit int64, mp *mpool.MPool, factory KafkaAdapterFactory) (*batch.Batch, error) {
+	err := ValidateConfig(ctx, configs, NewKafkaAdapter)
+	if err != nil {
+		return nil, err
+	}
+
+	configMap := convertToKafkaConfig(configs)
+
+	ka, err := factory(configMap)
+	if err != nil {
+		return nil, err
+	}
+	defer ka.Close()
+
+	// init schema registry client if schema registry url is set
+	if sr, ok := configs[SchemaRegistryKey]; ok {
+		err = ka.InitSchemaRegistry(sr.(string))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	messages, err := ka.ReadMessagesFromTopic(configs["topic"].(string), offset, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := populateBatchFromMSG(ctx, ka, types, attrs, messages, configs, mp)
+	if err != nil {
+		return nil, err
+	}
+
+	return b, nil
+}
