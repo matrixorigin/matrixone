@@ -110,6 +110,24 @@ func (ar *AccountRoutineManager) EnKillQueue(tenantID int64, version uint64) {
 
 }
 
+func (ar *AccountRoutineManager) AlterRoutineStatue(tenantID int64, status string) {
+	if tenantID == sysAccountID {
+		return
+	}
+
+	ar.accountRoutineMu.Lock()
+	defer ar.accountRoutineMu.Unlock()
+	if rts, ok := ar.accountId2Routine[tenantID]; ok {
+		for rt := range rts {
+			if status == "restricted" {
+				rt.setResricted(true)
+			} else {
+				rt.setResricted(false)
+			}
+		}
+	}
+}
+
 func (ar *AccountRoutineManager) deepCopyKillQueue() map[int64]KillRecord {
 	ar.killQueueMu.RLock()
 	defer ar.killQueueMu.RUnlock()

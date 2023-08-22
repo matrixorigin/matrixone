@@ -185,6 +185,7 @@ commit;
 select num_col1 ,num_col2 from test_ex_table_1;
 select num_col1 ,num_col2 from test_16;
 
+------------------------------------------------------------
 drop table if exists alter01;
 create table alter01 (col1 int, col2 decimal);
 show create table alter01;
@@ -198,8 +199,21 @@ show create table alter01;
 select * from alter01;
 drop table alter01;
 
+------------------------------------------------------------
+drop table if exists alter01;
+create table alter01 (col1 int primary key, col2 decimal);
+show create table alter01;
+insert into alter01 values(1, 3412.324);
+insert into alter01 values (-10, 323943.2343);
 
--- @bvt:issue#11264
+begin;
+alter table alter01 modify col1 float not null;
+rollback;
+show create table alter01;
+select * from alter01;
+drop table alter01;
+
+------------------------------------------------------------
 drop table if exists alter01;
 create table alter01 (col1 int primary key, col2 decimal);
 show create table alter01;
@@ -212,4 +226,30 @@ rollback;
 show create table alter01;
 select * from alter01;
 drop table alter01;
--- @bvt:issue
+
+--------------------------------------------------------
+drop table if exists rename01;
+create table rename01(c int primary key,d int);
+begin;
+insert into rename01 values(1,1);
+insert into rename01 values(2,2);
+alter table rename01 rename column c to `euwhbnfew`;
+rollback;
+select * from rename01;
+show create table rename01;
+
+drop table rename01;
+
+---------------------------------------------------------
+drop table if exists pri01;
+create table pri01(col1 int ,col2 int);
+begin;
+insert into pri01 values(1,1);
+insert into pri01 values(2,2);
+alter table pri01 add constraint primary key(col1);
+show create table pri01;
+rollback;
+select * from pri01;
+show create table pri01;
+
+drop table pri01;

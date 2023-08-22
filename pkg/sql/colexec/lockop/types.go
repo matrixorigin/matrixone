@@ -47,6 +47,7 @@ type LockOptions struct {
 	maxCountPerLock          int
 	mode                     lock.LockMode
 	lockTable                bool
+	changeDef                bool
 	parker                   *types.Packer
 	fetchFunc                FetchLockRowsFunc
 	filter                   RowsFilter
@@ -72,6 +73,7 @@ type lockTarget struct {
 	filter                       RowsFilter
 	filterColIndexInBatch        int32
 	lockTable                    bool
+	changeDef                    bool
 }
 
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.
@@ -89,6 +91,7 @@ type state struct {
 
 	parker               *types.Packer
 	retryError           error
+	defChanged           bool
 	step                 int
 	fetchers             []FetchLockRowsFunc
 	cachedBatches        []*batch.Batch

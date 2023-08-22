@@ -111,7 +111,9 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					prel.Ranges(ctx, nil)
+					if err = prel.UpdateBlockInfos(ctx); err != nil {
+						return err
+					}
 					prows, err = prel.Rows(ctx)
 					if err != nil {
 						return err
@@ -119,7 +121,9 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					rows += prows
 				}
 			} else {
-				rel.Ranges(ctx, nil)
+				if err = rel.UpdateBlockInfos(ctx); err != nil {
+					return err
+				}
 				rows, err = rel.Rows(ctx)
 				if err != nil {
 					return err
@@ -204,7 +208,9 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					prel.Ranges(ctx, nil)
+					if prel.UpdateBlockInfos(ctx); err != nil {
+						return err
+					}
 					psize, err = prel.Size(ctx, AllColumns)
 					if err != nil {
 						return err
@@ -212,7 +218,9 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					size += psize
 				}
 			} else {
-				rel.Ranges(ctx, nil)
+				if err = rel.UpdateBlockInfos(ctx); err != nil {
+					return err
+				}
 				size, err = rel.Size(ctx, AllColumns)
 				if err != nil {
 					return err
@@ -423,64 +431,23 @@ var (
 // CastIndexToValue returns enum type index according to the value
 func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	tbls := vector.GenerateFunctionStrParameter(ivecs[0])
-	colNames := vector.GenerateFunctionStrParameter(ivecs[1])
-	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[2])
-
-	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.TxnOperator == nil {
-		return moerr.NewInternalError(proc.Ctx, "CastIndexToValue: txn operator is nil")
-	}
-	txn := proc.TxnOperator
-
-	ses := proc.SessionInfo
-	dbStr := ses.Database
-
-	if len(dbStr) == 0 {
-		return moerr.NewInternalError(proc.Ctx, "not connect to a database")
-	}
+	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
+	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		tbl, tblnull := tbls.GetStrValue(i)
-		colName, colnull := colNames.GetStrValue(i)
+		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		indexVal, indexnull := indexs.GetValue(i)
-		if tblnull || colnull || indexnull {
+		if typeEnumNull || indexnull {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			var rel engine.Relation
-			tblStr := functionUtil.QuickBytesToStr(tbl)
-			colStr := functionUtil.QuickBytesToStr(colName)
-
-			ctx := proc.Ctx
-			if isClusterTable(dbStr, tblStr) {
-				//if it is the cluster table in the general account, switch into the sys account
-				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-			}
-			dbo, err := e.Database(ctx, dbStr, txn)
-			if err != nil {
-				return err
-			}
-			rel, err = dbo.Relation(ctx, tblStr, nil)
-			if err != nil {
-				return err
-			}
-
-			// get the table cols
-			cols, err := rel.TableColumns(ctx)
-			if err != nil {
-				return err
-			}
+			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			var enumVlaue string
 
-			for _, col := range cols {
-				if col.Name == colStr && col.Type.Oid == types.T_enum {
-					enumVlaue, err = types.ParseEnumIndex(col.EnumVlaues, indexVal)
-					if err != nil {
-						return err
-					}
-				}
+			enumVlaue, err := types.ParseEnumIndex(typeEnumVal, indexVal)
+			if err != nil {
+				return err
 			}
 
 			if err = rs.AppendBytes([]byte(enumVlaue), false); err != nil {
@@ -494,61 +461,24 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 // CastValueToIndex returns enum type index according to the value
 func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint16](result)
-	tbls := vector.GenerateFunctionStrParameter(ivecs[0])
-	colNames := vector.GenerateFunctionStrParameter(ivecs[1])
-	enumValues := vector.GenerateFunctionStrParameter(ivecs[2])
-
-	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.TxnOperator == nil {
-		return moerr.NewInternalError(proc.Ctx, "CastValueToIndex: txn operator is nil")
-	}
-	txn := proc.TxnOperator
-
-	ses := proc.SessionInfo
-	dbStr := ses.Database
+	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
+	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		tbl, tblnull := tbls.GetStrValue(i)
-		colName, colnull := colNames.GetStrValue(i)
+		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValue, enumValNull := enumValues.GetStrValue(i)
-		if tblnull || colnull || enumValNull {
+		if typeEnumNull || enumValNull {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 		} else {
-			var rel engine.Relation
-			tblStr := functionUtil.QuickBytesToStr(tbl)
-			colStr := functionUtil.QuickBytesToStr(colName)
+			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
 
-			ctx := proc.Ctx
-			if isClusterTable(dbStr, tblStr) {
-				//if it is the cluster table in the general account, switch into the sys account
-				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-			}
-			dbo, err := e.Database(ctx, dbStr, txn)
-			if err != nil {
-				return err
-			}
-			rel, err = dbo.Relation(ctx, tblStr, nil)
-			if err != nil {
-				return err
-			}
-
-			// get the table cols
-			cols, err := rel.TableColumns(ctx)
-			if err != nil {
-				return err
-			}
 			var index uint16
-
-			for _, col := range cols {
-				if col.Name == colStr && col.Type.Oid == types.T_enum {
-					index, err = types.ParseEnum(col.EnumVlaues, enumStr)
-					if err != nil {
-						return err
-					}
-				}
+			index, err := types.ParseEnum(typeEnumVal, enumStr)
+			if err != nil {
+				return err
 			}
 
 			if err = rs.Append(index, false); err != nil {
@@ -562,60 +492,23 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 // CastIndexValueToIndex returns enum type index according to the index value
 func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint16](result)
-	tbls := vector.GenerateFunctionStrParameter(ivecs[0])
-	colNames := vector.GenerateFunctionStrParameter(ivecs[1])
-	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[2])
-
-	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	if proc.TxnOperator == nil {
-		return moerr.NewInternalError(proc.Ctx, "CastIndexValueToIndex: txn operator is nil")
-	}
-	txn := proc.TxnOperator
-
-	ses := proc.SessionInfo
-	dbStr := ses.Database
+	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
+	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		tbl, tblnull := tbls.GetStrValue(i)
-		colName, colnull := colNames.GetStrValue(i)
+		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValueIndex, enumValNull := enumIndexValues.GetValue(i)
-		if tblnull || colnull || enumValNull {
+		if typeEnumNull || enumValNull {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 		} else {
-			var rel engine.Relation
-			tblStr := functionUtil.QuickBytesToStr(tbl)
-			colStr := functionUtil.QuickBytesToStr(colName)
-
-			ctx := proc.Ctx
-			if isClusterTable(dbStr, tblStr) {
-				//if it is the cluster table in the general account, switch into the sys account
-				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-			}
-			dbo, err := e.Database(ctx, dbStr, txn)
-			if err != nil {
-				return err
-			}
-			rel, err = dbo.Relation(ctx, tblStr, nil)
-			if err != nil {
-				return err
-			}
-
-			// get the table cols
-			cols, err := rel.TableColumns(ctx)
-			if err != nil {
-				return err
-			}
+			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			var index uint16
 
-			for _, col := range cols {
-				if col.Name == colStr && col.Type.Oid == types.T_enum {
-					index, err = types.ParseEnumValue(col.EnumVlaues, enumValueIndex)
-					if err != nil {
-						return err
-					}
-				}
+			index, err := types.ParseEnumValue(typeEnumVal, enumValueIndex)
+			if err != nil {
+				return err
 			}
 
 			if err = rs.Append(index, false); err != nil {

@@ -10,3 +10,83 @@ update dis_table_02 set b='dpqweoe' where a>1;
 commit;
 start transaction;
 drop table if exists dis_table_02;
+drop table if exists dis_table_02;
+[unknown result because it is related to issue#11268]
+create table dis_table_02(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
+[unknown result because it is related to issue#11268]
+insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
+[unknown result because it is related to issue#11268]
+insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
+[unknown result because it is related to issue#11268]
+begin;
+[unknown result because it is related to issue#11268]
+alter table dis_table_02 rename column a to newA;
+[unknown result because it is related to issue#11268]
+use ww_conflict;
+[unknown result because it is related to issue#11268]
+begin;
+[unknown result because it is related to issue#11268]
+update dis_table_02 set b='dpqweoe' where a>1;
+[unknown result because it is related to issue#11268]
+update dis_table_02 set b='dpqweoe' where newA>1;
+[unknown result because it is related to issue#11268]
+commit;
+[unknown result because it is related to issue#11268]
+select * from dis_table_02;
+[unknown result because it is related to issue#11268]
+select * from dis_table_02;
+[unknown result because it is related to issue#11268]
+drop table dis_table_02;
+[unknown result because it is related to issue#11268]
+drop table if exists dis_table_02;
+[unknown result because it is related to issue#11213]
+create table dis_table_02(a int not null default 10,b varchar(25) not null,c datetime);
+[unknown result because it is related to issue#11213]
+insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
+[unknown result because it is related to issue#11213]
+insert into dis_table_02(b,c) values ('bbbb','2020-09-08');
+[unknown result because it is related to issue#11213]
+begin;
+[unknown result because it is related to issue#11213]
+alter table dis_table_02 add constraint primary key (b);
+[unknown result because it is related to issue#11213]
+use ww_conflict;
+[unknown result because it is related to issue#11213]
+begin;
+[unknown result because it is related to issue#11213]
+update dis_table_02 set b='dpqweoe' where a>1;
+[unknown result because it is related to issue#11213]
+commit;
+[unknown result because it is related to issue#11213]
+select * from dis_table_02;
+[unknown result because it is related to issue#11213]
+select * from dis_table_02;
+[unknown result because it is related to issue#11213]
+drop table dis_table_02;
+[unknown result because it is related to issue#11213]
+drop table if exists dis_table_02;
+[unknown result because it is related to issue#11213]
+create table dis_table_02(a int not null default 10,b varchar(25) not null,c datetime,primary key (b));
+[unknown result because it is related to issue#11213]
+insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
+[unknown result because it is related to issue#11213]
+insert into dis_table_02(b,c) values ('bbbb','2020-09-08');
+[unknown result because it is related to issue#11213]
+begin;
+[unknown result because it is related to issue#11213]
+alter table dis_table_02 drop primary key;
+[unknown result because it is related to issue#11213]
+use ww_conflict;
+[unknown result because it is related to issue#11213]
+begin;
+[unknown result because it is related to issue#11213]
+insert into dis_table_02 values(10, 'aaaa', '1998-09-12');
+[unknown result because it is related to issue#11213]
+commit;
+[unknown result because it is related to issue#11213]
+select * from dis_table_02;
+[unknown result because it is related to issue#11213]
+select * from dis_table_02;
+[unknown result because it is related to issue#11213]
+drop table dis_table_02;
+[unknown result because it is related to issue#11213]

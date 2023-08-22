@@ -251,6 +251,8 @@ message ColDef {
 	bool clusterBy		= 12;
 	bool primary        = 13;
 	int32 pkidx 		= 14;
+	bool headers = 15;
+	string header = 16;
 }
 
 message Default {
@@ -454,6 +456,11 @@ enum ShuffleMethod {
 	Reshuffle = 2;
 }
 
+enum ShuffleTypeForMultiCN {
+	Simple = 0;
+	Complex = 1;
+}
+
 message HashMapStats{
 	// hashmap size for nodes which build a hashmap
 	double hashmap_size		= 1;
@@ -465,10 +472,11 @@ message HashMapStats{
 	int32 shuffleColIdx = 4;
 	// shuffle type
 	ShuffleType shuffleType = 5;
+	ShuffleTypeForMultiCN shuffleTypeForMultiCN = 6;
 	// for range shuffle on integer column, need to know its min and max value
-	int64 shuffleColMin = 6;
-	int64 shuffleColMax = 7;
-	ShuffleMethod shuffleMethod = 8;
+	int64 shuffleColMin = 7;
+	int64 shuffleColMax = 8;
+	ShuffleMethod shuffleMethod = 9;
 }
 
 message Stats {
@@ -604,6 +612,7 @@ message Node {
 		FUNCTION_SCAN = 3;
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
+		STREAM_SCAN = 6;
 
 		// Proj, for convenience
 		PROJECT = 10;

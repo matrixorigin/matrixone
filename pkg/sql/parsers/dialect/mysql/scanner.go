@@ -209,6 +209,23 @@ func (s *Scanner) Scan() (int, string) {
 		default:
 			return s.stepBackOneChar(ch)
 		}
+	case ch == '\'':
+		if !s.CommentFlag {
+			return s.stepBackOneChar(ch)
+		}
+		s.inc()
+		switch s.cur() {
+		case '+':
+			s.inc()
+			switch s.cur() {
+			case '\'':
+				return s.Scan()
+			default:
+				return s.stepBackOneChar(ch)
+			}
+		default:
+			return s.Scan()
+		}
 	default:
 		return s.stepBackOneChar(ch)
 	}
