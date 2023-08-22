@@ -847,7 +847,7 @@ func LoadCheckpointEntries(
 	return entries, closeCBs, nil
 }
 
-func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location) ([]objectio.Location, error) {
+func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32) ([]objectio.Location, error) {
 	locations := make([]objectio.Location, 0)
 	locations = append(locations, location)
 	data := NewCheckpointData()
@@ -855,11 +855,11 @@ func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileServic
 	if err != nil {
 		return nil, err
 	}
-	err = data.readMetaBatch(ctx, CheckpointVersion5, reader, nil)
+	err = data.readMetaBatch(ctx, version, reader, nil)
 	if err != nil {
 		return nil, err
 	}
-	err = data.readAll(ctx, CheckpointVersion5, fs)
+	err = data.readAll(ctx, version, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -868,11 +868,14 @@ func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileServic
 		locations = append(locations, location)
 	}
 	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
+		deltaLoc := objectio.Location(data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		metaLoc := objectio.Location(data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		if metaLoc.IsEmpty() {
-			continue
+		if !metaLoc.IsEmpty() {
+			locations = append(locations, metaLoc)
 		}
-		locations = append(locations, metaLoc)
+		if !deltaLoc.IsEmpty() {
+			locations = append(locations, deltaLoc)
+		}
 	}
 	return locations, nil
 }

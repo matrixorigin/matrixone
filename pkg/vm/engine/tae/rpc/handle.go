@@ -442,6 +442,8 @@ func (h *Handle) HandleBackup(
 	var locations string
 	for i := range data {
 		locations += data[i].GetLocation().String()
+		locations += ":"
+		locations += fmt.Sprintf("%d", data[i].GetVersion())
 		locations += ";"
 	}
 	resp.CkpLocation = locations

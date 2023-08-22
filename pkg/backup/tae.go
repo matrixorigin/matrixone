@@ -14,6 +14,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -77,12 +78,20 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if len(name) == 0 {
 			continue
 		}
-		fmt.Println(name)
-		key, err := blockio.EncodeLocationFromString(name)
+		ckpStr := strings.Split(name, ":")
+		if len(ckpStr) != 2 {
+			return moerr.NewInternalError(ctx, "invalid checkpoint string")
+		}
+		metaLoc := ckpStr[0]
+		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
 		if err != nil {
 			return err
 		}
-		locations, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key)
+		key, err := blockio.EncodeLocationFromString(metaLoc)
+		if err != nil {
+			return err
+		}
+		locations, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
 		if err != nil {
 			return err
 		}

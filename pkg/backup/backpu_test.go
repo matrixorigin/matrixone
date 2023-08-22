@@ -16,12 +16,13 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/panjf2000/ants/v2"
@@ -48,6 +49,7 @@ func TestBackupData(t *testing.T) {
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 10
+	db.BindSchema(schema)
 	testutil.CreateRelation(t, db.DB, "db", schema, true)
 
 	totalRows := uint64(schema.BlockMaxRows * 30)
@@ -84,14 +86,26 @@ func TestBackupData(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
+	//db.ForceCheckpoint()
+	for _, data := range bats {
+		txn, rel := db.GetRelation()
+		v := testutil.GetSingleSortKeyValue(data, schema, 2)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
 	db.ForceCheckpoint()
 	db.BGCheckpointRunner.DisableCheckpoint()
 	checkpoints := db.BGCheckpointRunner.GetAllCheckpoints()
 	files := make(map[string]string, 0)
 	for _, candidate := range checkpoints {
 		if files[candidate.GetLocation().Name().String()] == "" {
-			logutil.Infof("checkpoints name: %v", candidate.GetLocation().Name().String())
-			files[candidate.GetLocation().Name().String()] = candidate.GetLocation().String()
+			var locations string
+			locations = candidate.GetLocation().String()
+			locations += ":"
+			locations += fmt.Sprintf("%d", candidate.GetVersion())
+			files[candidate.GetLocation().Name().String()] = locations
 		}
 	}
 
@@ -104,6 +118,6 @@ func TestBackupData(t *testing.T) {
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, int(totalRows), false)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100), true)
 	assert.NoError(t, txn.Commit(context.Background()))
 }
