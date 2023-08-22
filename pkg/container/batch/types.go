@@ -178,7 +178,7 @@ type Batch struct {
 	Attrs []string
 	// Vecs col data
 	Vecs []*vector.Vector
-	// ring
+
 	Aggs []agg.Agg[any]
 
 	// row count of batch, to instead of old len(Zs).

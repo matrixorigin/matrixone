@@ -147,7 +147,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	bat, err := scanFileData(ctx, param, proc)
+	bat, err := scanFileData(ctx, param, proc, anal)
 	if err != nil {
 		param.Fileparam.End = true
 		return process.ExecNext, err
@@ -530,7 +530,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	return plh, nil
 }
 
-func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Process, anal process.Analyze) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
 	var cnt int
@@ -545,7 +545,11 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	}
 	plh := param.plh
 	finish := false
+
+	IObegin := time.Now()
 	cnt, finish, err = readCountStringLimitSize(plh.csvReader, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
+	anal.WaitStop(IObegin)
+
 	if err != nil {
 		logutil.Errorf("read external file meet error: %s", err.Error())
 		return nil, err
@@ -583,7 +587,7 @@ func scanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	return bat, nil
 }
 
-func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (*batch.Batch, error) {
+func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, anal process.Analyze) (*batch.Batch, error) {
 	ctx, span := trace.Start(ctx, "getBatchFromZonemapFile")
 	defer span.End()
 	bat := makeBatch(param, 0, proc)
@@ -603,10 +607,13 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
+	IOBegin := time.Now()
 	tmpBat, err := objectReader.LoadColumns(ctx, idxs, nil, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
+	anal.WaitStop(IOBegin)
+
 	filepathBytes := []byte(param.Fileparam.Filepath)
 	for i := 0; i < len(param.Attrs); i++ {
 		var vecTmp *vector.Vector
@@ -686,9 +693,13 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 		notReportErrCtx, proc, expr, meta, columnMap, zms, vecs)
 }
 
-func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) (*batch.Batch, error) {
+func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader, anal process.Analyze) (*batch.Batch, error) {
 	var err error
+
+	start := time.Now()
 	param.Zoneparam.bs, err = objectReader.LoadAllBlocks(param.Ctx, proc.GetMPool())
+	anal.WaitStop(start)
+
 	if err != nil {
 		return nil, err
 	}
@@ -702,17 +713,17 @@ func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Pr
 			param.Zoneparam.offset++
 		}
 	}
-	return getBatchFromZonemapFile(ctx, param, proc, objectReader)
+	return getBatchFromZonemapFile(ctx, param, proc, objectReader, anal)
 }
 
-func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Process, anal process.Analyze) (*batch.Batch, error) {
 	var err error
 	param.Filter.blockReader, err = blockio.NewFileReader(param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
 		return nil, err
 	}
 
-	bat, err := getZonemapBatch(ctx, param, proc, param.Filter.blockReader)
+	bat, err := getZonemapBatch(ctx, param, proc, param.Filter.blockReader, anal)
 	if err != nil {
 		return nil, err
 	}
@@ -731,11 +742,11 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 }
 
 // scanFileData read batch data from external file
-func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process, anal process.Analyze) (*batch.Batch, error) {
 	if param.Extern.QueryResult {
-		return scanZonemapFile(ctx, param, proc)
+		return scanZonemapFile(ctx, param, proc, anal)
 	} else {
-		return scanCsvFile(ctx, param, proc)
+		return scanCsvFile(ctx, param, proc, anal)
 	}
 }
 

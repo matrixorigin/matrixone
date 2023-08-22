@@ -4144,16 +4144,6 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 }
 
 func GetTimeConsumedByPlan(info PlanTimeConsumedInfo) float64 {
-	logutil.Infof(fmt.Sprintln(
-		" parseStart ", info.parseStart,
-		" parseEnd ", info.parseEnd,
-		" numStmt ", info.numStmt,
-		" numNeedToRecordStats ", info.numNeedToRecordStats,
-		" loopStart ", info.loopStart,
-		" loopEnd ", info.loopEnd,
-		" executeStmtStart ", info.executeStmtStart,
-		" runStart ", info.runStart))
-
 	var res int64 = 0
 	res += (int64(info.parseEnd.Sub(info.parseStart)/time.Nanosecond) * info.numNeedToRecordStats) / info.numStmt
 	res += int64(info.loopEnd.Sub(info.loopStart) / time.Nanosecond)
