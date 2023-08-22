@@ -115,7 +115,7 @@ AS (SELECT concat(e.FirstName," ",e.LastName) as name,
 SELECT EmployeeID, Name, Title, EmployeeLevel
 FROM DirectReports order by EmployeeID;
 
--- recursive cte :concat function
+-- recursive cte : expression
 with recursive cte_ab_11(id, productID,price) AS
     (select p.id,
          p.p_id,
@@ -173,6 +173,27 @@ insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID
 SELECT ManagerID, EmployeeID, Title, EmployeeLevel
 FROM DirectReports
 ORDER BY ManagerID;
+select * from cte_insert_table;
+
+-- transaction
+truncate table cte_insert_table;
+begin;
+insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+    SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+    FROM MyEmployees
+    WHERE ManagerID IS NULL
+    UNION ALL
+    SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+    FROM MyEmployees AS e
+        INNER JOIN DirectReports AS d
+        ON e.ManagerID = d.EmployeeID
+)
+SELECT ManagerID, EmployeeID, Title, EmployeeLevel
+FROM DirectReports
+ORDER BY ManagerID;
+select * from cte_insert_table;
+rollback;
 select * from cte_insert_table;
 
 -- recursive cte: update cte
