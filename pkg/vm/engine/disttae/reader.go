@@ -387,12 +387,12 @@ func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
 	curNumHit := numHit - lastNumHit
 
 	if curNumRead > curNumHit {
-		objectio.BlkReadStats.BlkMemCacheHitStats.Record(0, 1)
+		objectio.BlkReadStats.BlkCacheHitStats.Record(0, 1)
 	} else {
-		objectio.BlkReadStats.BlkMemCacheHitStats.Record(1, 1)
+		objectio.BlkReadStats.BlkCacheHitStats.Record(1, 1)
 	}
 
-	objectio.BlkReadStats.EntryMemCacheHitStats.Record(int(curNumHit), int(curNumRead))
+	objectio.BlkReadStats.EntryCacheHitStats.Record(int(curNumHit), int(curNumRead))
 }
 
 // -----------------------------------------------------------------

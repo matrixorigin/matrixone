@@ -30,11 +30,13 @@ type CacheConfig struct {
 	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
 }
 
+// BlockReadStats collect blk read related cache statistics,
+// include mem and disk
 type BlockReadStats struct {
 	// using this we can collect the number of blks have read and hit among them
-	BlkMemCacheHitStats hitStats
+	BlkCacheHitStats hitStats
 	// using this we can collect the number of entries have read and hit among them
-	EntryMemCacheHitStats hitStats
+	EntryCacheHitStats hitStats
 	// using this we can collect the number of blks each reader will read
 	BlksByReaderStats hitStats
 	CounterSet        *perfcounter.CounterSet

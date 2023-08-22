@@ -100,13 +100,13 @@ func (e *StatsLogWriter) gatherAndWrite(ctx context.Context) {
 }
 
 func (e *StatsLogWriter) writeBlkReadStats() {
-	blkHit, blkTotal := objectio.BlkReadStats.BlkMemCacheHitStats.ExportW()
+	blkHit, blkTotal := objectio.BlkReadStats.BlkCacheHitStats.ExportW()
 	blkHitRate := float32(1)
 	if blkTotal != 0 {
 		blkHitRate = float32(blkHit) / float32(blkTotal)
 	}
 
-	entryHit, entryTotal := objectio.BlkReadStats.EntryMemCacheHitStats.ExportW()
+	entryHit, entryTotal := objectio.BlkReadStats.EntryCacheHitStats.ExportW()
 	entryHitRate := float32(1)
 	if entryTotal != 0 {
 		entryHitRate = float32(entryHit) / float32(entryTotal)

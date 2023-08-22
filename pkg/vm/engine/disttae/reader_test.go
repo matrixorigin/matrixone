@@ -42,7 +42,7 @@ func TestGatherStats(t *testing.T) {
 
 	r.gatherStats(0, 0)
 
-	hit, total := objectio.BlkReadStats.BlkMemCacheHitStats.Export()
+	hit, total := objectio.BlkReadStats.BlkCacheHitStats.Export()
 	if hitNum < readNum {
 		require.Equal(t, hit, int64(0))
 		require.Equal(t, total, int64(1))
@@ -51,7 +51,7 @@ func TestGatherStats(t *testing.T) {
 		require.Equal(t, total, int64(1))
 	}
 
-	hit, total = objectio.BlkReadStats.EntryMemCacheHitStats.Export()
+	hit, total = objectio.BlkReadStats.EntryCacheHitStats.Export()
 	require.Equal(t, hit, hitNum)
 	require.Equal(t, total, readNum)
 }
