@@ -1,0 +1,369 @@
+create table employees_mgr(id int primary key not null,name varchar(25));
+insert into employees_mgr values(333,'ami'),(198,'lucky'),(29,'jack'),(692,'sammi');
+CREATE TABLE emp(id INT PRIMARY KEY NOT NULL,name VARCHAR(100) NOT NULL,manager_id INT NULL,INDEX (manager_id),FOREIGN KEY (manager_id) REFERENCES employees_mgr(id));
+INSERT INTO emp VALUES(333, "总经理", NULL), (198, "副总1", 333), (692, "副总2", 333),(29, "主任1", 198),(4610, "职员1", 29),(72, "职员2", 29),(123, "主任2", 692);
+create table product (id int primary key,p_id int,p_name varchar(25),price decimal(10,3));
+insert into product values (3,2,"bed",3560.98),(2,null,"chair",1599.00),(4,1,"desk",2999.99),(5,3,"door",8123.09),(6,3,"mirrors",698.00),(7,4,"tv",5678);
+with non_cte_1 as(select manager_id,id,name from emp  order by manager_id ) select * from non_cte_1;
+manager_id    id    name
+null    333    总经理
+29    72    职员2
+29    4610    职员1
+198    29    主任1
+333    198    副总1
+333    692    副总2
+692    123    主任2
+with non_cte_2 as(select a.manager_id,b.name as manger_name,a.id,a.name as job_name from emp a join employees_mgr b on a.manager_id = b.id order by manager_id ) select manager_id,count(id)  from non_cte_2 group by manager_id having count(id)>1;
+manager_id    count(id)
+29    2
+333    2
+with non_cte_3(manager_id,manager_name,employee_id,employee_name)as  (select a.manager_id,b.name as manger_name,a.id,a.name as job_name from emp a join employees_mgr b on a.manager_id = b.id order by manager_id ) select * from non_cte_3 order by employee_id;
+manager_id    manager_name    employee_id    employee_name
+198    lucky    29    主任1
+29    jack    72    职员2
+692    sammi    123    主任2
+333    ami    198    副总1
+333    ami    692    副总2
+29    jack    4610    职员1
+with non_cte_4 as (select count(id) as emp_num,manager_id from emp group by manager_id) select manager_id from non_cte_4 where emp_num>1;
+manager_id
+29
+333
+with non_cte_5(manager_id,job_name,employee_id)as (select a.manager_id,name,id from emp a where exists (select id from employees_mgr b where a.manager_id=b.id))select * from non_cte_5;
+manager_id    job_name    employee_id
+29    职员2    72
+29    职员1    4610
+198    主任1    29
+333    副总1    198
+333    副总2    692
+692    主任2    123
+with non_cte_6(manager_id,job_name,employee_id) as (select a.manager_id,name,id from emp a where exists (select id from employees_mgr b where a.manager_id=b.id))select manager_id,job_name,count(employee_id) as emp_num from non_cte_6 group by manager_id,job_name order by manager_id,job_name;
+manager_id    job_name    emp_num
+29    职员1    1
+29    职员2    1
+198    主任1    1
+333    副总1    1
+333    副总2    1
+692    主任2    1
+with non_cte_7(manager_id,emp_num)as (select manager_id ,count(id) from emp where manager_id is not null group by manager_id) select avg(emp_num) as "average emp per manager" from non_cte_7;
+average emp per manager
+1.5000
+with recursive non_cte_10(id, productID,js,price,old_price) AS (select p.id,p.p_id,'20' as js,p.price+3.65,ceil(p.price) from product p where p.p_id < 100)select id, productID,js,price,old_price from cte_ab_10 order by old_price;
+Table 'recursive_cte1.cte_ab_10' doesn't exist
+truncate table non_cte_6;
+Table 'recursive_cte1.non_cte_6' doesn't exist
+drop table non_cte_7;
+Unknown table 'recursive_cte1.non_cte_7'
+with non_cte_8(manager_id,name) as
+(SELECT a.manager_id,
+a.name AS job_name
+FROM emp a), non_cte_9(id,name) as
+(SELECT m.id,
+m.name
+FROM employees_mgr m
+WHERE m.name != "lucky")
+SELECT a.manager_id,a.name
+FROM non_cte_8 a
+JOIN non_cte_9 b
+ON a.manager_id = b.id
+ORDER BY  a.manager_id;
+manager_id    name
+29    职员2
+29    职员1
+333    副总1
+333    副总2
+692    主任2
+with non_cte_8(manager_id,name) as
+(SELECT a.manager_id,
+a.name AS job_name
+FROM emp a), non_cte_9(id,name) as
+(SELECT m.id,
+m.name
+FROM employees_mgr m
+WHERE m.name != "lucky"), non_cte_11(id,p_name) as
+(
+select p.id,p.p_name from product p
+)
+select ncte.manager_id,ncte.name from (SELECT a.manager_id,a.name
+FROM non_cte_8 a
+JOIN non_cte_9 b
+ON a.manager_id = b.id) as ncte
+union all select c.id,c.p_name from non_cte_11 c;
+manager_id    name
+29    职员2
+29    职员1
+333    副总1
+333    副总2
+692    主任2
+2    chair
+3    bed
+4    desk
+5    door
+6    mirrors
+7    tv
+with date as(select manager_id,id,name from emp  order by manager_id )select * from date;
+manager_id    id    name
+null    333    总经理
+29    72    职员2
+29    4610    职员1
+198    29    主任1
+333    198    副总1
+333    692    副总2
+692    123    主任2
+with 111 as(select manager_id,id,name from emp  order by manager_id )select * from 111;
+You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '111 as(select manager_id,id,name from emp  order by manager_id )select * from 11' at line 1
+CREATE TABLE MyEmployees
+(
+EmployeeID SMALLINT PRIMARY KEY NOT NULL,
+FirstName VARCHAR(30) NOT NULL,
+LastName VARCHAR(40) NOT NULL,
+Title VARCHAR(50) NOT NULL,
+DeptID SMALLINT NOT NULL,
+ManagerID SMALLINT NULL
+);
+INSERT INTO MyEmployees VALUES
+(1, 'Ken', 'Sánchez', 'Chief Executive Officer',16, NULL)
+,(273, 'Brian', 'Welcker', 'Vice President of Sales', 3, 1)
+,(274, 'Stephen', 'Jiang', 'North American Sales Manager', 3, 273)
+,(275, 'Michael', 'Blythe', 'Sales Representative', 3, 274)
+,(276, 'Linda', 'Mitchell', 'Sales Representative', 3, 274)
+,(285, 'Syed', 'Abbas', 'Pacific Sales Manager', 3, 273)
+,(286, 'Lynn', 'Tsoflias', 'Sales Representative', 3, 285)
+,(16, 'David', 'Bradley', 'Marketing Manager', 4, 273)
+,(23, 'Mary', 'Gibson', 'Marketing Specialist', 4, 16);
+WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+FROM MyEmployees
+WHERE ManagerID IS NULL
+UNION ALL
+SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+FROM MyEmployees AS e
+INNER JOIN DirectReports AS d
+ON e.ManagerID = d.EmployeeID
+)
+SELECT ManagerID, EmployeeID, Title, EmployeeLevel
+FROM DirectReports
+ORDER BY ManagerID;
+ManagerID    EmployeeID    Title    EmployeeLevel
+null    1    Chief Executive Officer    0
+1    273    Vice President of Sales    1
+16    23    Marketing Specialist    3
+273    16    Marketing Manager    2
+273    274    North American Sales Manager    2
+273    285    Pacific Sales Manager    2
+274    275    Sales Representative    3
+274    276    Sales Representative    3
+285    286    Sales Representative    3
+WITH  RECURSIVE DirectReports(Name, Title, EmployeeID, EmployeeLevel)
+AS (SELECT concat(e.FirstName," ",e.LastName) as name,
+e.Title,
+e.EmployeeID,
+1 as EmployeeLevel
+FROM MyEmployees AS e
+WHERE e.ManagerID IS NULL
+UNION ALL
+SELECT concat(e.FirstName," ",e.LastName) as name,
+e.Title,
+e.EmployeeID,
+EmployeeLevel + 1
+FROM MyEmployees AS e
+JOIN DirectReports AS d ON e.ManagerID = d.EmployeeID
+)
+SELECT EmployeeID, Name, Title, EmployeeLevel
+FROM DirectReports order by EmployeeID;
+EmployeeID    Name    Title    EmployeeLevel
+1    Ken Sánchez    Chief Executive Officer    1
+16    David Bradley    Marketing Manager    3
+23    Mary Gibson    Marketing Specialist    4
+273    Brian Welcker    Vice President of Sales    2
+274    Stephen Jiang    North American Sales Manager    3
+275    Michael Blythe    Sales Representative    4
+276    Linda Mitchell    Sales Representative    4
+285    Syed Abbas    Pacific Sales Manager    3
+286    Lynn Tsoflias    Sales Representative    4
+with recursive cte_ab_11(id, productID,price) AS
+(SELECT p.id,
+p.p_id,
+p.price
+FROM product p
+WHERE p.p_id is null
+UNION all
+SELECT pr.id,
+pr.p_id,
+pr.price*12.01
+FROM product pr
+JOIN (select * from cte_ab_11 c where c.price between 20 and 1000)
+ON pr.id = c.productID
+GROUP BY  c.id, c.productID )
+SELECT *
+FROM cte_ab_11;
+Every derived table must have its own alias
+WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+FROM MyEmployees
+WHERE ManagerID IS NULL
+UNION ALL
+SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+FROM MyEmployees AS e
+INNER JOIN DirectReports AS d
+ON e.ManagerID = d.EmployeeID
+),
+emp_cte as (
+select id,manager_id,name from emp where manager_id is null
+union all
+select ec.id,ec.manager_id,ec.name from emp_cte ec join emp e on ec.manager_id = e.id
+)
+SELECT ManagerID, EmployeeID, Title
+FROM DirectReports union all select id,manager_id,name from emp_cte ORDER BY ManagerID;
+ManagerID    EmployeeID    Title
+null    1    Chief Executive Officer
+1    273    Vice President of Sales
+16    23    Marketing Specialist
+273    16    Marketing Manager
+273    274    North American Sales Manager
+273    285    Pacific Sales Manager
+274    275    Sales Representative
+274    276    Sales Representative
+285    286    Sales Representative
+333    null    总经理
+create table cte_insert_table (c1 int,c2 int ,c3 varchar(50),c4 int);
+insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+FROM MyEmployees
+WHERE ManagerID IS NULL
+UNION ALL
+SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+FROM MyEmployees AS e
+INNER JOIN DirectReports AS d
+ON e.ManagerID = d.EmployeeID
+)
+SELECT ManagerID, EmployeeID, Title, EmployeeLevel
+FROM DirectReports
+ORDER BY ManagerID;
+select * from cte_insert_table;
+c1    c2    c3    c4
+null    1    Chief Executive Officer    0
+1    273    Vice President of Sales    1
+16    23    Marketing Specialist    3
+273    16    Marketing Manager    2
+273    274    North American Sales Manager    2
+273    285    Pacific Sales Manager    2
+274    275    Sales Representative    3
+274    276    Sales Representative    3
+285    286    Sales Representative    3
+update cte_insert_table set c3= (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+FROM MyEmployees
+WHERE ManagerID IS NULL
+UNION ALL
+SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+FROM MyEmployees AS e
+INNER JOIN DirectReports AS d
+ON e.ManagerID = d.EmployeeID
+)
+select title from  DirectReports where ManagerID=16) where c2=274;
+select * from cte_insert_table;
+c1    c2    c3    c4
+null    1    Chief Executive Officer    0
+1    273    Vice President of Sales    1
+16    23    Marketing Specialist    3
+273    16    Marketing Manager    2
+273    274    Marketing Specialist    2
+273    285    Pacific Sales Manager    2
+274    275    Sales Representative    3
+274    276    Sales Representative    3
+285    286    Sales Representative    3
+delete from  cte_insert_table where  c3 = (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+FROM MyEmployees
+WHERE ManagerID IS NULL
+UNION ALL
+SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+FROM MyEmployees AS e
+INNER JOIN DirectReports AS d
+ON e.ManagerID = d.EmployeeID
+)
+select Title from  DirectReports where ManagerID=16);
+select * from cte_insert_table;
+c1    c2    c3    c4
+null    1    Chief Executive Officer    0
+1    273    Vice President of Sales    1
+273    16    Marketing Manager    2
+273    285    Pacific Sales Manager    2
+274    275    Sales Representative    3
+274    276    Sales Representative    3
+285    286    Sales Representative    3
+create view cte_view as(
+WITH  RECURSIVE DirectReports(Name, Title, EmployeeID, EmployeeLevel)
+AS (SELECT concat(e.FirstName," ",e.LastName) as name,
+e.Title,
+e.EmployeeID,
+1 as EmployeeLevel
+FROM MyEmployees AS e
+WHERE e.ManagerID IS NULL
+UNION ALL
+SELECT concat(e.FirstName," ",e.LastName) as name,
+e.Title,
+e.EmployeeID,
+EmployeeLevel + 1
+FROM MyEmployees AS e
+JOIN DirectReports AS d ON e.ManagerID = d.EmployeeID
+)
+SELECT EmployeeID, Name, Title, EmployeeLevel
+FROM DirectReports order by EmployeeID);
+select * from cte_view order by EmployeeLevel;
+EmployeeID    Name    Title    EmployeeLevel
+1    Ken Sánchez    Chief Executive Officer    1
+273    Brian Welcker    Vice President of Sales    2
+16    David Bradley    Marketing Manager    3
+274    Stephen Jiang    North American Sales Manager    3
+285    Syed Abbas    Pacific Sales Manager    3
+23    Mary Gibson    Marketing Specialist    4
+275    Michael Blythe    Sales Representative    4
+276    Linda Mitchell    Sales Representative    4
+286    Lynn Tsoflias    Sales Representative    4
+with recursive cte_ab_1(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, avg(p.price) FROM product p JOIN cte_ab_1 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_1;
+Recursive Common Table Expression 'cte_ab_1' can contain neither aggregation nor window functions in recursive query block
+with recursive cte_ab_2(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, sum(p.price) FROM product p JOIN cte_ab_2 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_2;
+Recursive Common Table Expression 'cte_ab_2' can contain neither aggregation nor window functions in recursive query block
+with recursive cte_ab_3(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, count(p.price) FROM product p JOIN cte_ab_3 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_3;
+Recursive Common Table Expression 'cte_ab_3' can contain neither aggregation nor window functions in recursive query block
+with recursive cte_ab_4(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, max(p.price) FROM product p JOIN cte_ab_4 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_4;
+Recursive Common Table Expression 'cte_ab_4' can contain neither aggregation nor window functions in recursive query block
+with recursive cte_ab_5(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, min(p.price) FROM product p JOIN cte_ab_5 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_5;
+Recursive Common Table Expression 'cte_ab_5' can contain neither aggregation nor window functions in recursive query block
+with recursive cte_ab_6(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_6 c on p.manager_id= c.id order by c.id) select * from cte_ab_6 order by id;
+Table 'c' from one of the SELECTs cannot be used in global ORDER clause
+with recursive cte_ab_7(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select distinct p.id,p.manager_id,p.name from emp p join cte_ab_7 c on p.manager_id= c.id) select * from cte_ab_7;
+This version of MySQL doesn't yet support 'ORDER BY / LIMIT / SELECT DISTINCT in recursive query block of Common Table Expression'
+with recursive cte_ab_8(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name,0 as level from emp p where manager_id is null union all select p.id,p.manager_id,p.name,levels+1 from emp p join cte_ab_8 c on p.manager_id= c.id limit 5) select * from cte_ab_8;
+id    manager_id    name    levels
+333    null    总经理    0
+198    333    副总1    1
+692    333    副总2    1
+29    198    主任1    2
+123    692    主任2    2
+with recursive cte_ab_9(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name,0 as level from emp p where manager_id is null union all select p.id,p.manager_id,p.name,levels+1 from emp p where p.manager_id in(select c.id from cte_ab_9 c)) select * from cte_ab_9;
+In recursive query block of Recursive Common Table Expression 'cte_ab_9', the recursive table must be referenced only once, and not in any subquery
+with recursive cte_ab_10(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_10 c on p.manager_id= c.id ) select * from cte_ab_10 order by id;
+In definition of view, derived table or common table expression, SELECT list and column names list have different column counts
+with non_cte_8(manager_id,name) as(SELECT a.manager_id, a.id,a.name AS job_name FROM emp a), non_cte_9(id,name) as(SELECT m.id, m.name FROM employees_mgr m WHERE m.name != "lucky") select * FROM non_cte_8 a JOIN non_cte_9 b ON a.manager_id = b.id ORDER BY  a.manager_id;
+In definition of view, derived table or common table expression, SELECT list and column names list have different column counts
+WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+FROM MyEmployees
+WHERE ManagerID IS NULL
+UNION ALL
+SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+FROM MyEmployees AS e
+INNER JOIN DirectReports AS d
+ON e.ManagerID = d.EmployeeID
+)
+update DirectReports set Title='manager assistant' where ManagerID=273;
+The target table DirectReports of the UPDATE is not updatable
