@@ -167,10 +167,10 @@ func TestWriteBlkReadStats(t *testing.T) {
 	objectio.BlkReadStats.BlksByReaderStats.Record(h1, t1)
 
 	h2, t2 := rand.Int(), rand.Int()+1
-	objectio.BlkReadStats.EntryMemCacheHitStats.Record(h2, t2)
+	objectio.BlkReadStats.EntryCacheHitStats.Record(h2, t2)
 
 	h3, t3 := rand.Int(), rand.Int()+1
-	objectio.BlkReadStats.BlkMemCacheHitStats.Record(h3, t3)
+	objectio.BlkReadStats.BlkCacheHitStats.Record(h3, t3)
 
 	s := new(StatsLogWriter)
 	type threadSafeWrittenLog struct {
