@@ -15,9 +15,11 @@
 package proxy
 
 import (
+	"context"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -125,17 +127,30 @@ func (s *serverConn) RawConn() net.Conn {
 
 // HandleHandshake implements the ServerConn interface.
 func (s *serverConn) HandleHandshake(handshakeResp *frontend.Packet) (*frontend.Packet, error) {
-	// Step 1, read initial handshake from CN server.
-	if err := s.readInitialHandshake(); err != nil {
-		return nil, err
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	defer cancel()
+
+	var r *frontend.Packet
+	var err error
+	ch := make(chan struct{})
+	go func() {
+		// Step 1, read initial handshake from CN server.
+		if err = s.readInitialHandshake(); err != nil {
+			return
+		}
+		// Step 2, write the handshake response to CN server, which is
+		// received from client earlier.
+		r, err = s.writeHandshakeResp(handshakeResp)
+		ch <- struct{}{}
+	}()
+
+	select {
+	case <-ch:
+		return r, err
+	case <-ctx.Done():
+		// Return a retryable error.
+		return nil, newConnectErr(context.DeadlineExceeded)
 	}
-	// Step 2, write the handshake response to CN server, which is
-	// received from client earlier.
-	r, err := s.writeHandshakeResp(handshakeResp)
-	if err != nil {
-		return nil, err
-	}
-	return r, nil
 }
 
 // ExecStmt implements the ServerConn interface.
