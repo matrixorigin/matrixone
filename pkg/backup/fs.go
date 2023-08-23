@@ -1,9 +1,22 @@
+// Copyright 2023 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package backup
 
 import (
 	"context"
 	"encoding/csv"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
@@ -98,19 +111,6 @@ func etlFSDir(filepath string) string {
 	return filepath + "/_"
 }
 
-func directoryIsEmpty(ctx context.Context, fs fileservice.FileService, dir string) (bool, error) {
-	var err error
-	var dirEntries []fileservice.DirEntry
-	dirEntries, err = fs.List(ctx, "")
-	if err != nil {
-		return false, err
-	}
-	for i, entry := range dirEntries {
-		logutil.Debugf("%d: %s", i, dirEntryToString(entry))
-	}
-	return len(dirEntries) == 0, err
-}
-
 func writeFile(ctx context.Context, fs fileservice.FileService, path string, data []byte) error {
 	return fs.Write(ctx, fileservice.IOVector{
 		FilePath: path,
@@ -122,8 +122,4 @@ func writeFile(ctx context.Context, fs fileservice.FileService, path string, dat
 			},
 		},
 	})
-}
-
-func dirEntryToString(dir fileservice.DirEntry) string {
-	return fmt.Sprintf("Name %s Dir %v Size %d", dir.Name, dir.IsDir, dir.Size)
 }
