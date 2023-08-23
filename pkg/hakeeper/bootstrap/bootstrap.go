@@ -106,11 +106,11 @@ func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,
 
 func (bm *Manager) bootstrapDN(alloc util.IDAllocator, dn pb.TNStore) (commands []pb.ScheduleCommand) {
 	dnStores := dnStoresSortedByTick(dn.Stores)
-	if len(dnStores) < len(bm.cluster.DNShards) {
+	if len(dnStores) < len(bm.cluster.TNShards) {
 		return nil
 	}
 
-	for i, dnRecord := range bm.cluster.DNShards {
+	for i, dnRecord := range bm.cluster.TNShards {
 		if i >= len(dnStores) {
 			i = i % len(dnStores)
 		}

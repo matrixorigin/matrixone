@@ -393,7 +393,7 @@ func mockClusterInfo(ids ...uint64) pb.ClusterInfo {
 			LogShardID: id,
 		})
 	}
-	c.DNShards = records
+	c.TNShards = records
 
 	return c
 }

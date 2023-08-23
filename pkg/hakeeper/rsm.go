@@ -554,7 +554,7 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		dnShards = append(dnShards, drec)
 	}
 	s.state.ClusterInfo = pb.ClusterInfo{
-		DNShards:  dnShards,
+		TNShards:  dnShards,
 		LogShards: logShards,
 	}
 

@@ -31,7 +31,7 @@ const (
 
 func TestParseExpectedDNShardCount(t *testing.T) {
 	cluster := pb.ClusterInfo{
-		DNShards: mockDNShardRecords(10, 11, 12, 12),
+		TNShards: mockDNShardRecords(10, 11, 12, 12),
 	}
 	// expected dn shards: 10, 11, 12
 	require.Equal(t, 3, ParseExpectedDNShardCount(cluster))

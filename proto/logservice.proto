@@ -497,7 +497,7 @@ message ClusterDetails {
 // describes the logical sharding of the system, rather than physical
 // distribution of all replicas that belong to those shards.
 message ClusterInfo {
-  repeated metadata.DNShardRecord DNShards = 1 [(gogoproto.nullable) = false];
+  repeated metadata.DNShardRecord TNShards = 1 [(gogoproto.nullable) = false];
   repeated metadata.LogShardRecord LogShards = 2 [(gogoproto.nullable) = false];
 }
 

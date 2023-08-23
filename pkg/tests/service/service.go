@@ -398,7 +398,7 @@ func (c *testCluster) ListDNShards(
 	if err != nil {
 		return nil, err
 	}
-	return state.ClusterInfo.DNShards, nil
+	return state.ClusterInfo.TNShards, nil
 }
 
 func (c *testCluster) ListLogShards(

@@ -27,7 +27,7 @@ const (
 // ParseExpectedDNShardCount returns the expected count of dn shards.
 func ParseExpectedDNShardCount(cluster pb.ClusterInfo) int {
 	set := make(map[uint64]struct{})
-	for _, record := range cluster.DNShards {
+	for _, record := range cluster.TNShards {
 		set[record.ShardID] = struct{}{}
 
 	}

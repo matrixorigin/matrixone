@@ -41,7 +41,7 @@ type dnShardToLogShard map[uint64]uint64
 // parseClusterInfo parses information from `pb.ClusterInfo`
 func parseClusterInfo(cluster pb.ClusterInfo) dnShardToLogShard {
 	m := make(map[uint64]uint64)
-	for _, r := range cluster.DNShards {
+	for _, r := range cluster.TNShards {
 		// warning with duplicated dn shard ID
 		m[r.ShardID] = r.LogShardID
 	}
@@ -123,7 +123,7 @@ func checkInitiatingShards(
 	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
 	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64) []*operator.Operator {
 	// update the registered newly-created shards
-	for _, record := range cluster.DNShards {
+	for _, record := range cluster.TNShards {
 		shardID := record.ShardID
 		_, err := rs.getShard(shardID)
 		if err != nil {
