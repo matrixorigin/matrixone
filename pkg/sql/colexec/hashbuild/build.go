@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -238,6 +239,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				rate := float64(groupCount) / float64(i)
 				hashmapCount := uint64(float64(count) * rate)
 				if hashmapCount > groupCount {
+					logutil.Infof("int hashmap prealloc to %v", hashmapCount)
 					err = ctr.intHashMap.PreAlloc(hashmapCount-groupCount, proc.Mp())
 					if err != nil {
 						return err
@@ -248,6 +250,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				rate := float64(groupCount) / float64(i)
 				hashmapCount := uint64(float64(count) * rate)
 				if hashmapCount > groupCount {
+					logutil.Infof("str hashmap prealloc to %v", hashmapCount)
 					err = ctr.strHashMap.PreAlloc(hashmapCount-groupCount, proc.Mp())
 					if err != nil {
 						return err
