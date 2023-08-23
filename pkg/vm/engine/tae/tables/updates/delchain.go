@@ -274,9 +274,8 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 func (chain *DeleteChain) CollectDeletesInRange(
 	startTs, endTs types.TS,
 	rwlocker *sync.RWMutex) (mask *nulls.Bitmap, err error) {
-	var needWaitFound bool
 	for {
-		needWaitFound = false
+		needWaitFound := false
 		mask = nil
 		chain.LoopChain(func(n *DeleteNode) bool {
 			// Merged node is a loop breaker
@@ -351,9 +350,8 @@ func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
 func (chain *DeleteChain) CollectDeletesLocked(
 	txn txnif.TxnReader,
 	rwlocker *sync.RWMutex) (merged *nulls.Bitmap, err error) {
-	var needWaitFound bool
 	for {
-		needWaitFound = false
+		needWaitFound := false
 		merged = chain.mask.Clone()
 		chain.LoopChain(func(n *DeleteNode) bool {
 			needWait, txnToWait := n.NeedWaitCommitting(txn.GetStartTS())
