@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
@@ -251,7 +252,12 @@ type baseStmtExecutor struct {
 	ComputationWrapper
 	tenantName string
 	status     stmtExecStatus
+	runResult  *util.RunResult
 	err        error
+}
+
+func (bse *baseStmtExecutor) GetAffectedRows() uint64 {
+	return bse.runResult.AffectRows
 }
 
 func (bse *baseStmtExecutor) GetStatus() stmtExecStatus {
@@ -308,7 +314,9 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 }
 
 func (bse *baseStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return bse.Run(0)
+	runResult, err := bse.Run(0)
+	bse.runResult = runResult
+	return err
 }
 
 func (bse *baseStmtExecutor) Setup(ctx context.Context, ses *Session) error {
