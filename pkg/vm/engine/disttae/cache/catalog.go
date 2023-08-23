@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -374,6 +375,19 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		// invalid old name table
 		exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]})
 		if ok && exist.Name != item.Name {
+			logutil.Infof("rename invalidate %d-%s,v%d@%s", exist.Id, exist.Name, exist.Version, item.Ts.String())
+			newItem := &TableItem{
+				deleted:    true,
+				Id:         exist.Id,
+				Name:       exist.Name,
+				Rowid:      exist.Rowid,
+				AccountId:  exist.AccountId,
+				DatabaseId: exist.DatabaseId,
+				Version:    exist.Version,
+				Ts:         item.Ts,
+			}
+			cc.tables.addTableItem(newItem)
+
 			key := TableKey{
 				AccountId:  account,
 				DatabaseId: item.DatabaseId,
