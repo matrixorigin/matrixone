@@ -80,7 +80,7 @@ func TestBootstrap(t *testing.T) {
 		desc string
 
 		cluster pb.ClusterInfo
-		dn      pb.TNStore
+		tn      pb.TNStore
 		log     pb.LogState
 
 		expectedNum            int
@@ -118,7 +118,7 @@ func TestBootstrap(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: pb.TNStore{
+			tn: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"dn-a": {}},
 			},
 			log: pb.LogState{
@@ -148,7 +148,7 @@ func TestBootstrap(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: pb.TNStore{
+			tn: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{},
 			},
 			log: pb.LogState{
@@ -171,7 +171,7 @@ func TestBootstrap(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: pb.TNStore{
+			tn: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"dn-a": {}},
 			},
 			log: pb.LogState{
@@ -198,7 +198,7 @@ func TestBootstrap(t *testing.T) {
 
 		alloc := util.NewTestIDAllocator(0)
 		bm := NewBootstrapManager(c.cluster)
-		output, err := bm.Bootstrap(alloc, c.dn, c.log)
+		output, err := bm.Bootstrap(alloc, c.tn, c.log)
 		assert.Equal(t, c.err, err)
 		if err != nil {
 			continue
@@ -357,7 +357,7 @@ func TestIssue3814(t *testing.T) {
 		desc string
 
 		cluster pb.ClusterInfo
-		dn      pb.TNStore
+		tn      pb.TNStore
 		log     pb.LogState
 
 		expected error
@@ -381,7 +381,7 @@ func TestIssue3814(t *testing.T) {
 					LogShardID: 1,
 				}},
 			},
-			dn: pb.TNStore{
+			tn: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{},
 			},
 			expected: nil,
@@ -391,7 +391,7 @@ func TestIssue3814(t *testing.T) {
 	for _, c := range cases {
 		alloc := util.NewTestIDAllocator(0)
 		bm := NewBootstrapManager(c.cluster)
-		_, err := bm.Bootstrap(alloc, c.dn, c.log)
+		_, err := bm.Bootstrap(alloc, c.tn, c.log)
 		assert.Equal(t, c.expected, err)
 	}
 }
