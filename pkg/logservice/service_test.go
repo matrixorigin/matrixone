@@ -119,6 +119,20 @@ func TestNewService(t *testing.T) {
 	assert.NoError(t, service.Close())
 }
 
+func TestNotSupportCmd(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		req := pb.Request{
+			Method: 999,
+		}
+		resp, _ := s.handle(ctx, req, nil)
+		assert.Equal(t, uint32(moerr.ErrNotSupported), resp.ErrorCode)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
 func TestServiceConnect(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)

@@ -154,7 +154,7 @@ func (d *dirtyCollector) Run() {
 func (d *dirtyCollector) ScanInRangePruned(from, to types.TS) (
 	tree *DirtyTreeEntry) {
 	tree, _ = d.ScanInRange(from, to)
-	if err := d.tryCompactTree(d.interceptor, tree.tree); err != nil {
+	if err := d.tryCompactTree(d.interceptor, tree.tree, to); err != nil {
 		panic(err)
 	}
 	return
@@ -317,7 +317,7 @@ func (d *dirtyCollector) cleanupStorage() {
 			toDeletes = append(toDeletes, entry)
 			return true
 		}
-		if err := d.tryCompactTree(d.interceptor, entry.tree); err != nil {
+		if err := d.tryCompactTree(d.interceptor, entry.tree, entry.end); err != nil {
 			logutil.Warnf("error: interceptor on dirty tree: %v", err)
 		}
 		if entry.tree.IsEmpty() {
@@ -341,7 +341,7 @@ func (d *dirtyCollector) cleanupStorage() {
 // iter the tree and call interceptor to process block. flushed block, empty seg and table will be removed from the tree
 func (d *dirtyCollector) tryCompactTree(
 	interceptor DirtyEntryInterceptor,
-	tree *model.Tree) (err error) {
+	tree *model.Tree, ts types.TS) (err error) {
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
@@ -371,6 +371,14 @@ func (d *dirtyCollector) tryCompactTree(
 			}
 			break
 		}
+
+		tbl.Stats.RLock()
+		if tbl.Stats.FlushTableTailEnabled && tbl.Stats.LastFlush.GreaterEq(ts) {
+			tree.Shrink(id)
+			tbl.Stats.RUnlock()
+			continue
+		}
+		tbl.Stats.RUnlock()
 
 		for id, dirtySeg := range dirtyTable.Segs {
 			// remove empty segs
