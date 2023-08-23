@@ -204,7 +204,7 @@ func NewTAEErrorNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrTAEError, xmsg)
 }
 
-func NewDNShardNotFoundNoCtx(uuid string, id uint64) *Error {
+func NewTNShardNotFoundNoCtx(uuid string, id uint64) *Error {
 	return newError(Context(), ErrTNShardNotFound, uuid, id)
 }
 
