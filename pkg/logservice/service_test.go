@@ -262,7 +262,7 @@ func TestServiceHandleDNHeartbeat(t *testing.T) {
 		defer cancel()
 
 		req := pb.Request{
-			Method: pb.DN_HEARTBEAT,
+			Method: pb.TN_HEARTBEAT,
 			DNHeartbeat: &pb.TNStoreHeartbeat{
 				UUID: "uuid1",
 			},

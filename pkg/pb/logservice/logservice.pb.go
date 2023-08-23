@@ -93,7 +93,7 @@ const (
 	CONNECT_RO           MethodType = 6
 	LOG_HEARTBEAT        MethodType = 7
 	CN_HEARTBEAT         MethodType = 8
-	DN_HEARTBEAT         MethodType = 9
+	TN_HEARTBEAT         MethodType = 9
 	CHECK_HAKEEPER       MethodType = 10
 	GET_CLUSTER_DETAILS  MethodType = 11
 	GET_SHARD_INFO       MethodType = 12

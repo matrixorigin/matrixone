@@ -268,7 +268,7 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleCNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CN_ALLOCATE_ID:
 		return s.handleCNAllocateID(ctx, req), pb.LogRecordResponse{}
-	case pb.DN_HEARTBEAT:
+	case pb.TN_HEARTBEAT:
 		return s.handleDNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CHECK_HAKEEPER:
 		return s.handleCheckHAKeeper(ctx, req), pb.LogRecordResponse{}

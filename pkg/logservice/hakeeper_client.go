@@ -651,7 +651,7 @@ func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, key string, batch
 func (c *hakeeperClient) sendDNHeartbeat(ctx context.Context,
 	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
-		Method:      pb.DN_HEARTBEAT,
+		Method:      pb.TN_HEARTBEAT,
 		DNHeartbeat: &hb,
 	}
 	return c.sendHeartbeat(ctx, req)
