@@ -170,7 +170,7 @@ func TestParseTNState(t *testing.T) {
 			},
 		}
 
-		stores, shards := parseDnState(cfg, tnState, currTick)
+		stores, shards := parseTnState(cfg, tnState, currTick)
 
 		// check stores
 		require.Equal(t, len(stores.WorkingStores()), 0)
@@ -217,7 +217,7 @@ func TestParseTNState(t *testing.T) {
 			},
 		}
 
-		stores, shards := parseDnState(cfg, tnState, currTick)
+		stores, shards := parseTnState(cfg, tnState, currTick)
 
 		// check stores
 		require.Equal(t, len(stores.WorkingStores()), 2)

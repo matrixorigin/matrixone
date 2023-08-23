@@ -56,8 +56,8 @@ func (d dnShardToLogShard) getLogShardID(dnShardID uint64) (uint64, error) {
 	return 0, moerr.NewInvalidStateNoCtx("shard %d not recorded", dnShardID)
 }
 
-// parseDnState parses cluster dn state.
-func parseDnState(cfg hakeeper.Config,
+// parseTnState parses cluster dn state.
+func parseTnState(cfg hakeeper.Config,
 	tnState pb.TNStore, currTick uint64,
 ) (*util.ClusterStores, *reportedShards) {
 	stores := util.NewClusterStores()

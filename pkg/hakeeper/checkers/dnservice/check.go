@@ -55,7 +55,7 @@ func Check(
 	user pb.TaskTableUser,
 	currTick uint64,
 ) []*operator.Operator {
-	stores, reportedShards := parseDnState(cfg, tnState, currTick)
+	stores, reportedShards := parseTnState(cfg, tnState, currTick)
 	runtime.ProcessLevelRuntime().Logger().Debug("reported dn shards in cluster",
 		zap.Any("dn shard IDs", reportedShards.shardIDs),
 		zap.Any("dn shards", reportedShards.shards),
