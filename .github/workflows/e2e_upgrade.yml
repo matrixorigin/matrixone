@@ -54,7 +54,11 @@ jobs:
           echo "==============cn configuration of upstram=============="
           cat ./etc/launch/cn.toml
           echo "==============tn configuration of upstram=============="
-          cat ./etc/launch/tn.toml     
+          if [[ -f ./etc/launch/dn.toml ]]; then
+            cat ./etc/launch/dn.toml     
+          else 
+            cat ./etc/launch/tn.toml     
+          fi
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Clone test-tool repository
@@ -111,7 +115,11 @@ jobs:
           echo "==============cn configuration of upstram=============="
           cat ./etc/launch/cn.toml
           echo "==============tn configuration of upstram=============="
-          cat ./etc/launch/tn.toml   
+          if [[ -f ./etc/launch/dn.toml ]]; then
+            cat ./etc/launch/dn.toml     
+          else 
+            cat ./etc/launch/tn.toml     
+          fi
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Start BVT Test for MO with Version of Head
