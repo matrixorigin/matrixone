@@ -38,7 +38,7 @@ func (s *store) registerRPCHandlers() {
 	// request from other DN node
 	s.server.RegisterMethodHandler(txn.TxnMethod_Prepare, s.handlePrepare)
 	s.server.RegisterMethodHandler(txn.TxnMethod_CommitDNShard, s.handleCommitDNShard)
-	s.server.RegisterMethodHandler(txn.TxnMethod_RollbackDNShard, s.handleRollbackDNShard)
+	s.server.RegisterMethodHandler(txn.TxnMethod_RollbackTNShard, s.handleRollbackDNShard)
 	s.server.RegisterMethodHandler(txn.TxnMethod_GetStatus, s.handleGetStatus)
 
 	// debug request

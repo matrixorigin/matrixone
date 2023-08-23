@@ -379,7 +379,7 @@ func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
 		for _, tn := range txnMeta.DNShards {
 			requests = append(requests, txn.TxnRequest{
 				Txn:                    txnMeta,
-				Method:                 txn.TxnMethod_RollbackDNShard,
+				Method:                 txn.TxnMethod_RollbackTNShard,
 				RollbackDNShardRequest: &txn.TxnRollbackDNShardRequest{TNShard: tn},
 			})
 		}

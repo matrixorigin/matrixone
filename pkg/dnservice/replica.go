@@ -84,7 +84,7 @@ func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnReques
 		return r.service.Prepare(ctx, request, response)
 	case txn.TxnMethod_CommitDNShard:
 		return r.service.CommitDNShard(ctx, request, response)
-	case txn.TxnMethod_RollbackDNShard:
+	case txn.TxnMethod_RollbackTNShard:
 		return r.service.RollbackDNShard(ctx, request, response)
 	default:
 		panic("cannot handle local CN request")

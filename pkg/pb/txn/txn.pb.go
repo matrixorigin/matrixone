@@ -181,7 +181,7 @@ const (
 	TxnMethod_CommitDNShard TxnMethod = 6
 	// RollbackDNShard after the 2pc transaction is aborted, the temporary data on each DN needs
 	// to cleanup.
-	TxnMethod_RollbackDNShard TxnMethod = 7
+	TxnMethod_RollbackTNShard TxnMethod = 7
 	// RemoveMedata Remove metadata for transactions on DNShard. For a 2pc distributed transaction,
 	// after all participating DNShards have Prepared successfully, the asynchronous commit process
 	// starts, sending CommitDNShard requests to all participating DNShards in parallel. After each
