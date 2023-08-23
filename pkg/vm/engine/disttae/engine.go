@@ -57,7 +57,7 @@ func New(
 ) *Engine {
 	var services []metadata.TNService
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetDNService(clusterservice.NewSelector(),
+	cluster.GetTNService(clusterservice.NewSelector(),
 		func(d metadata.TNService) bool {
 			services = append(services, d)
 			return true
@@ -483,7 +483,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) getTNServices() []DNStore {
 	var values []DNStore
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetDNService(clusterservice.NewSelector(),
+	cluster.GetTNService(clusterservice.NewSelector(),
 		func(d metadata.TNService) bool {
 			values = append(values, d)
 			return true

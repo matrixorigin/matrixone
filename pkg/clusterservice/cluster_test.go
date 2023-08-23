@@ -75,12 +75,12 @@ func TestClusterRefresh(t *testing.T) {
 				cnt++
 				return true
 			}
-			c.GetDNService(NewServiceIDSelector("dn0"), apply)
+			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			assert.Equal(t, 0, cnt)
 
 			hc.addDN("dn0")
 			time.Sleep(time.Millisecond * 100)
-			c.GetDNService(NewServiceIDSelector("dn0"), apply)
+			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			assert.Equal(t, 1, cnt)
 		})
 }
@@ -94,7 +94,7 @@ func BenchmarkGetService(b *testing.B) {
 				cnt++
 				return true
 			}
-			c.GetDNService(NewServiceIDSelector("dn0"), apply)
+			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 
 			hc.addDN("dn0")
 			c.ForceRefresh()
@@ -102,7 +102,7 @@ func BenchmarkGetService(b *testing.B) {
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				c.GetDNService(NewServiceIDSelector("dn0"), apply)
+				c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			}
 		})
 }

@@ -136,7 +136,7 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	}
 }
 
-func (c *cluster) GetDNService(selector Selector, apply func(metadata.TNService) bool) {
+func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {
 	c.waitReady()
 
 	c.mu.RLock()

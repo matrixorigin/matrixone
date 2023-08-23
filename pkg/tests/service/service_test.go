@@ -187,7 +187,7 @@ func TestClusterAwareness(t *testing.T) {
 	hksvcs := c.ListHAKeeperServices()
 	require.NotZero(t, len(hksvcs))
 
-	tn, err := c.GetDNService(dsuuids[0])
+	tn, err := c.GetTNService(dsuuids[0])
 	require.NoError(t, err)
 	require.Equal(t, ServiceStarted, tn.Status())
 
@@ -256,7 +256,7 @@ func TestClusterOperation(t *testing.T) {
 		dsuuid := dsuuids[index]
 
 		// get the instance of dn service
-		ds, err := c.GetDNService(dsuuid)
+		ds, err := c.GetTNService(dsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
 

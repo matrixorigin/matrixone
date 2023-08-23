@@ -118,7 +118,7 @@ type ClusterAwareness interface {
 	ListHAKeeperServices() []LogService
 
 	// GetDNService fetches dn service instance by uuid.
-	GetDNService(uuid string) (DNService, error)
+	GetTNService(uuid string) (DNService, error)
 	// GetLogService fetches log service instance by index.
 	GetLogService(uuid string) (LogService, error)
 	// GetDNServiceIndexed fetches dn service instance by uuid.
@@ -891,7 +891,7 @@ func (c *testCluster) WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, 
 }
 
 func (c *testCluster) WaitDNStoreTaskServiceCreated(ctx context.Context, uuid string) {
-	ds, err := c.GetDNService(uuid)
+	ds, err := c.GetTNService(uuid)
 	require.NoError(c.t, err)
 
 	for {
@@ -1047,7 +1047,7 @@ func (c *testCluster) ListHAKeeperServices() []LogService {
 	return c.selectHAkeeperServices()
 }
 
-func (c *testCluster) GetDNService(uuid string) (DNService, error) {
+func (c *testCluster) GetTNService(uuid string) (DNService, error) {
 	c.tn.Lock()
 	defer c.tn.Unlock()
 
@@ -1126,7 +1126,7 @@ func (c *testCluster) GetClusterState(
 // The following are implements for interface `ClusterOperation`.
 // --------------------------------------------------------------
 func (c *testCluster) CloseDNService(uuid string) error {
-	ds, err := c.GetDNService(uuid)
+	ds, err := c.GetTNService(uuid)
 	if err != nil {
 		return err
 	}
@@ -1134,7 +1134,7 @@ func (c *testCluster) CloseDNService(uuid string) error {
 }
 
 func (c *testCluster) StartDNService(uuid string) error {
-	ds, err := c.GetDNService(uuid)
+	ds, err := c.GetTNService(uuid)
 	if err != nil {
 		return err
 	}
