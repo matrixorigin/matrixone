@@ -67,7 +67,7 @@ func (s *store) handleDebug(ctx context.Context, request *txn.TxnRequest, respon
 }
 
 func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validDNShard(ctx, request, response)
+	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
 	}
@@ -78,7 +78,7 @@ func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *t
 }
 
 func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validDNShard(ctx, request, response)
+	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
 	}
@@ -88,7 +88,7 @@ func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *
 }
 
 func (s *store) doDebug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validDNShard(ctx, request, response)
+	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
 	}
@@ -99,7 +99,7 @@ func (s *store) doDebug(ctx context.Context, request *txn.TxnRequest, response *
 }
 
 func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validDNShard(ctx, request, response)
+	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
 	}
@@ -119,7 +119,7 @@ func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, respo
 }
 
 func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validDNShard(ctx, request, response)
+	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
 	}
@@ -129,7 +129,7 @@ func (s *store) handleRollback(ctx context.Context, request *txn.TxnRequest, res
 }
 
 func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validDNShard(ctx, request, response)
+	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
 	}
@@ -139,7 +139,7 @@ func (s *store) handlePrepare(ctx context.Context, request *txn.TxnRequest, resp
 }
 
 func (s *store) handleCommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validDNShard(ctx, request, response)
+	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
 	}
@@ -149,7 +149,7 @@ func (s *store) handleCommitDNShard(ctx context.Context, request *txn.TxnRequest
 }
 
 func (s *store) handleRollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validDNShard(ctx, request, response)
+	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
 	}
@@ -159,7 +159,7 @@ func (s *store) handleRollbackDNShard(ctx context.Context, request *txn.TxnReque
 }
 
 func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	r := s.validDNShard(ctx, request, response)
+	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
 	}
@@ -168,7 +168,7 @@ func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, re
 	return r.service.GetStatus(ctx, request, response)
 }
 
-func (s *store) validDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) *replica {
+func (s *store) validTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) *replica {
 	shard := request.GetTargetDN()
 	r := s.getReplica(shard.ShardID)
 	if r == nil ||

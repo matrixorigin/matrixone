@@ -46,7 +46,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 
 	response.CNOpResponse = &txn.CNOpResponse{}
 	s.checkCNRequest(request)
-	if !s.validDNShard(request.GetTargetDN()) {
+	if !s.validTNShard(request.GetTargetDN()) {
 		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
@@ -125,7 +125,7 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 
 	response.CNOpResponse = &txn.CNOpResponse{}
 	s.checkCNRequest(request)
-	if !s.validDNShard(request.GetTargetDN()) {
+	if !s.validTNShard(request.GetTargetDN()) {
 		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
@@ -182,7 +182,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	defer util.LogTxnHandleResult(response)
 
 	response.CommitResponse = &txn.TxnCommitResponse{}
-	if !s.validDNShard(request.GetTargetDN()) {
+	if !s.validTNShard(request.GetTargetDN()) {
 		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}
@@ -336,7 +336,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 	defer util.LogTxnHandleResult(response)
 
 	response.RollbackResponse = &txn.TxnRollbackResponse{}
-	if !s.validDNShard(request.GetTargetDN()) {
+	if !s.validTNShard(request.GetTargetDN()) {
 		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, "", request.GetTargetDN().ShardID), 0)
 		return nil
 	}

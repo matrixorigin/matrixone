@@ -170,6 +170,6 @@ func (s *service) checkRecoveryStatus(txnMeta txn.TxnMeta) {
 	}
 
 	if txnMeta.Status == txn.TxnStatus_Committing {
-		s.validDNShard(txnMeta.DNShards[0])
+		s.validTNShard(txnMeta.DNShards[0])
 	}
 }

@@ -203,7 +203,7 @@ func (s *service) getTxnContext(txnID []byte) *txnContext {
 	return v.(*txnContext)
 }
 
-func (s *service) validDNShard(tn metadata.TNShard) bool {
+func (s *service) validTNShard(tn metadata.TNShard) bool {
 	if !s.shard.Equal(tn) {
 		// DNShard not match, so cn need to fetch latest DNShards from hakeeper.
 		s.logger.Error("DN metadata not match",
