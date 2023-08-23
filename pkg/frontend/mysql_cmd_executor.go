@@ -2633,7 +2633,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 					}
 				}
 
-			case *tree.SetVar, *tree.SetTransaction:
+			case *tree.SetVar, *tree.SetTransaction, *tree.BackupStart:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
@@ -2756,13 +2756,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			isPathChanged, err := doCheckFilePath(requestCtx, ses, st)
+			err = doCheckFilePath(requestCtx, ses, st)
 			if err != nil {
 				return err
 			}
-			if !isPathChanged {
-				ses.SetExportParam(st.Ep)
-			}
+			ses.SetExportParam(st.Ep)
 		}
 	}
 
@@ -3072,6 +3070,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 		if len(st.Hostname) == 0 || st.Hostname == "%" {
 			st.Hostname = rootHost
+		}
+	case *tree.BackupStart:
+		selfHandle = true
+		if err = mce.handleStartBackup(requestCtx, st); err != nil {
+			return err
 		}
 	}
 

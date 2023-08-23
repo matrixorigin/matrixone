@@ -589,5 +589,7 @@ func init() {
 		"credentials":                CREDENTIALS,
 		"vecf32":                     VECF32,
 		"vecf64":                     VECF64,
+		"backup":                     BACKUP,
+		"filesystem":                 FILESYSTEM,
 	}
 }
