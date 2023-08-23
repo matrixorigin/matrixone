@@ -63,7 +63,7 @@ create table t4 (
 a int unique key,
 b varchar(64)
 );
--- @bvt:issue#11324
+
 replace into t4 values (1, 'a');
 select * from t4;
 replace into t4 values (2, 'a');
@@ -72,7 +72,6 @@ replace into t4 values (1, 'replace_name_1');
 select * from t4;
 replace into t4 values (2, 'replace_name_2');
 select * from t4;
--- @bvt:issue
 
 -- Multiple uniquely constrained primary key
 create table t5(
@@ -82,14 +81,12 @@ c varchar(64),
 unique key(a, b)
 );
 
--- @bvt:issue#11324
 replace into t5 values (1, 1, '');
 select * from t5;
 replace into t5 values (1, 1, 'replace');
 select * from t5;
 replace into t5 values (1, 2, '');
 select * from t5;
--- @bvt:issue
 
 -- clear table
 drop table if exists t1;
