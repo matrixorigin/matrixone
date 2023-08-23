@@ -108,7 +108,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Map().Size())
+		anal.Alloc(ctr.mp.Size())
 	}
 	return nil
 }
@@ -142,7 +142,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	mSels := ctr.mp.Sels()
 
 	count := bat.RowCount()
-	itr := ctr.mp.Map().NewIterator()
+	itr := ctr.mp.NewIterator()
 	rowCount := 0
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
