@@ -51,11 +51,11 @@ func Check(
 	idAlloc util.IDAllocator,
 	cfg hakeeper.Config,
 	cluster pb.ClusterInfo,
-	dnState pb.DNState,
+	tnState pb.TNState,
 	user pb.TaskTableUser,
 	currTick uint64,
 ) []*operator.Operator {
-	stores, reportedShards := parseDnState(cfg, dnState, currTick)
+	stores, reportedShards := parseTnState(cfg, tnState, currTick)
 	runtime.ProcessLevelRuntime().Logger().Debug("reported dn shards in cluster",
 		zap.Any("dn shard IDs", reportedShards.shardIDs),
 		zap.Any("dn shards", reportedShards.shards),
@@ -84,9 +84,9 @@ func Check(
 
 	if user.Username != "" {
 		for _, store := range stores.WorkingStores() {
-			if !dnState.Stores[store.ID].TaskServiceCreated {
+			if !tnState.Stores[store.ID].TaskServiceCreated {
 				operators = append(operators, operator.CreateTaskServiceOp("",
-					store.ID, pb.DNService, user))
+					store.ID, pb.TNService, user))
 			}
 		}
 	}
@@ -96,7 +96,7 @@ func Check(
 
 // schedule generator operator as much as possible
 // NB: the returned order should be deterministic.
-func checkShard(shard *dnShard, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator) []operator.OpStep {
+func checkShard(shard *tnShard, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator) []operator.OpStep {
 	switch len(shard.workingReplicas()) {
 	case 0: // need add replica
 		newReplicaID, ok := idAlloc.Next()
@@ -149,7 +149,7 @@ func checkShard(shard *dnShard, mapper ShardMapper, workingStores []*util.Store,
 
 // newAddStep constructs operator to launch a dn shard replica
 func newAddStep(target string, shardID, replicaID, logShardID uint64) operator.OpStep {
-	return operator.AddDnReplica{
+	return operator.AddTnReplica{
 		StoreID:    target,
 		ShardID:    shardID,
 		ReplicaID:  replicaID,
@@ -159,7 +159,7 @@ func newAddStep(target string, shardID, replicaID, logShardID uint64) operator.O
 
 // newRemoveStep constructs operator to remove a dn shard replica
 func newRemoveStep(target string, shardID, replicaID, logShardID uint64) operator.OpStep {
-	return operator.RemoveDnReplica{
+	return operator.RemoveTnReplica{
 		StoreID:    target,
 		ShardID:    shardID,
 		ReplicaID:  replicaID,
@@ -169,7 +169,7 @@ func newRemoveStep(target string, shardID, replicaID, logShardID uint64) operato
 
 // expiredReplicas return all expired replicas.
 // NB: the returned order should be deterministic.
-func expiredReplicas(shard *dnShard) []*dnReplica {
+func expiredReplicas(shard *tnShard) []*tnReplica {
 	expired := shard.expiredReplicas()
 	// less replica first
 	sort.Slice(expired, func(i, j int) bool {
@@ -180,7 +180,7 @@ func expiredReplicas(shard *dnShard) []*dnReplica {
 
 // extraWorkingReplicas return all working replicas except the largest.
 // NB: the returned order should be deterministic.
-func extraWorkingReplicas(shard *dnShard) []*dnReplica {
+func extraWorkingReplicas(shard *tnShard) []*tnReplica {
 	working := shard.workingReplicas()
 	if len(working) == 0 {
 		return working

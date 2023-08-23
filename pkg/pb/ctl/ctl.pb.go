@@ -100,26 +100,26 @@ func (CmdMethod) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_0646114e50303026, []int{0}
 }
 
-// DNPingRequest ping request
-type DNPingRequest struct {
+// TNPingRequest ping request
+type TNPingRequest struct {
 	Parameter            string   `protobuf:"bytes,1,opt,name=parameter,proto3" json:"parameter,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *DNPingRequest) Reset()         { *m = DNPingRequest{} }
-func (m *DNPingRequest) String() string { return proto.CompactTextString(m) }
-func (*DNPingRequest) ProtoMessage()    {}
-func (*DNPingRequest) Descriptor() ([]byte, []int) {
+func (m *TNPingRequest) Reset()         { *m = TNPingRequest{} }
+func (m *TNPingRequest) String() string { return proto.CompactTextString(m) }
+func (*TNPingRequest) ProtoMessage()    {}
+func (*TNPingRequest) Descriptor() ([]byte, []int) {
 	return fileDescriptor_0646114e50303026, []int{0}
 }
-func (m *DNPingRequest) XXX_Unmarshal(b []byte) error {
+func (m *TNPingRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *DNPingRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TNPingRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_DNPingRequest.Marshal(b, m, deterministic)
+		return xxx_messageInfo_TNPingRequest.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -129,27 +129,27 @@ func (m *DNPingRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error
 		return b[:n], nil
 	}
 }
-func (m *DNPingRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_DNPingRequest.Merge(m, src)
+func (m *TNPingRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TNPingRequest.Merge(m, src)
 }
-func (m *DNPingRequest) XXX_Size() int {
+func (m *TNPingRequest) XXX_Size() int {
 	return m.Size()
 }
-func (m *DNPingRequest) XXX_DiscardUnknown() {
-	xxx_messageInfo_DNPingRequest.DiscardUnknown(m)
+func (m *TNPingRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_TNPingRequest.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_DNPingRequest proto.InternalMessageInfo
+var xxx_messageInfo_TNPingRequest proto.InternalMessageInfo
 
-func (m *DNPingRequest) GetParameter() string {
+func (m *TNPingRequest) GetParameter() string {
 	if m != nil {
 		return m.Parameter
 	}
 	return ""
 }
 
-// DNPingResponse ping response
-type DNPingResponse struct {
+// TNPingResponse ping response
+type TNPingResponse struct {
 	StoreID              string   `protobuf:"bytes,1,opt,name=storeID,proto3" json:"storeID,omitempty"`
 	ServiceAddress       string   `protobuf:"bytes,2,opt,name=serviceAddress,proto3" json:"serviceAddress,omitempty"`
 	ShardID              uint64   `protobuf:"varint,3,opt,name=shardID,proto3" json:"shardID,omitempty"`
@@ -160,18 +160,18 @@ type DNPingResponse struct {
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *DNPingResponse) Reset()         { *m = DNPingResponse{} }
-func (m *DNPingResponse) String() string { return proto.CompactTextString(m) }
-func (*DNPingResponse) ProtoMessage()    {}
-func (*DNPingResponse) Descriptor() ([]byte, []int) {
+func (m *TNPingResponse) Reset()         { *m = TNPingResponse{} }
+func (m *TNPingResponse) String() string { return proto.CompactTextString(m) }
+func (*TNPingResponse) ProtoMessage()    {}
+func (*TNPingResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_0646114e50303026, []int{1}
 }
-func (m *DNPingResponse) XXX_Unmarshal(b []byte) error {
+func (m *TNPingResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *DNPingResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TNPingResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_DNPingResponse.Marshal(b, m, deterministic)
+		return xxx_messageInfo_TNPingResponse.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -181,73 +181,73 @@ func (m *DNPingResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, erro
 		return b[:n], nil
 	}
 }
-func (m *DNPingResponse) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_DNPingResponse.Merge(m, src)
+func (m *TNPingResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TNPingResponse.Merge(m, src)
 }
-func (m *DNPingResponse) XXX_Size() int {
+func (m *TNPingResponse) XXX_Size() int {
 	return m.Size()
 }
-func (m *DNPingResponse) XXX_DiscardUnknown() {
-	xxx_messageInfo_DNPingResponse.DiscardUnknown(m)
+func (m *TNPingResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_TNPingResponse.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_DNPingResponse proto.InternalMessageInfo
+var xxx_messageInfo_TNPingResponse proto.InternalMessageInfo
 
-func (m *DNPingResponse) GetStoreID() string {
+func (m *TNPingResponse) GetStoreID() string {
 	if m != nil {
 		return m.StoreID
 	}
 	return ""
 }
 
-func (m *DNPingResponse) GetServiceAddress() string {
+func (m *TNPingResponse) GetServiceAddress() string {
 	if m != nil {
 		return m.ServiceAddress
 	}
 	return ""
 }
 
-func (m *DNPingResponse) GetShardID() uint64 {
+func (m *TNPingResponse) GetShardID() uint64 {
 	if m != nil {
 		return m.ShardID
 	}
 	return 0
 }
 
-func (m *DNPingResponse) GetReplicaID() uint64 {
+func (m *TNPingResponse) GetReplicaID() uint64 {
 	if m != nil {
 		return m.ReplicaID
 	}
 	return 0
 }
 
-func (m *DNPingResponse) GetLogShardID() uint64 {
+func (m *TNPingResponse) GetLogShardID() uint64 {
 	if m != nil {
 		return m.LogShardID
 	}
 	return 0
 }
 
-// DNStringResponse string type response
-type DNStringResponse struct {
+// TNStringResponse string type response
+type TNStringResponse struct {
 	ReturnStr            string   `protobuf:"bytes,1,opt,name=returnStr,proto3" json:"returnStr,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *DNStringResponse) Reset()         { *m = DNStringResponse{} }
-func (m *DNStringResponse) String() string { return proto.CompactTextString(m) }
-func (*DNStringResponse) ProtoMessage()    {}
-func (*DNStringResponse) Descriptor() ([]byte, []int) {
+func (m *TNStringResponse) Reset()         { *m = TNStringResponse{} }
+func (m *TNStringResponse) String() string { return proto.CompactTextString(m) }
+func (*TNStringResponse) ProtoMessage()    {}
+func (*TNStringResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_0646114e50303026, []int{2}
 }
-func (m *DNStringResponse) XXX_Unmarshal(b []byte) error {
+func (m *TNStringResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *DNStringResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TNStringResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_DNStringResponse.Marshal(b, m, deterministic)
+		return xxx_messageInfo_TNStringResponse.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -257,19 +257,19 @@ func (m *DNStringResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, er
 		return b[:n], nil
 	}
 }
-func (m *DNStringResponse) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_DNStringResponse.Merge(m, src)
+func (m *TNStringResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TNStringResponse.Merge(m, src)
 }
-func (m *DNStringResponse) XXX_Size() int {
+func (m *TNStringResponse) XXX_Size() int {
 	return m.Size()
 }
-func (m *DNStringResponse) XXX_DiscardUnknown() {
-	xxx_messageInfo_DNStringResponse.DiscardUnknown(m)
+func (m *TNStringResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_TNStringResponse.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_DNStringResponse proto.InternalMessageInfo
+var xxx_messageInfo_TNStringResponse proto.InternalMessageInfo
 
-func (m *DNStringResponse) GetReturnStr() string {
+func (m *TNStringResponse) GetReturnStr() string {
 	if m != nil {
 		return m.ReturnStr
 	}
@@ -622,9 +622,9 @@ func (m *GetCommitResponse) GetCurrentCommitTS() timestamp.Timestamp {
 
 func init() {
 	proto.RegisterEnum("ctl.CmdMethod", CmdMethod_name, CmdMethod_value)
-	proto.RegisterType((*DNPingRequest)(nil), "ctl.DNPingRequest")
-	proto.RegisterType((*DNPingResponse)(nil), "ctl.DNPingResponse")
-	proto.RegisterType((*DNStringResponse)(nil), "ctl.DNStringResponse")
+	proto.RegisterType((*TNPingRequest)(nil), "ctl.DNPingRequest")
+	proto.RegisterType((*TNPingResponse)(nil), "ctl.DNPingResponse")
+	proto.RegisterType((*TNStringResponse)(nil), "ctl.DNStringResponse")
 	proto.RegisterType((*Request)(nil), "ctl.Request")
 	proto.RegisterType((*Response)(nil), "ctl.Response")
 	proto.RegisterType((*SyncCommitRequest)(nil), "ctl.SyncCommitRequest")
@@ -678,7 +678,7 @@ var fileDescriptor_0646114e50303026 = []byte{
 	0x2c, 0x1f, 0xb9, 0xbf, 0x48, 0x05, 0x00, 0x00,
 }
 
-func (m *DNPingRequest) Marshal() (dAtA []byte, err error) {
+func (m *TNPingRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -688,12 +688,12 @@ func (m *DNPingRequest) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *DNPingRequest) MarshalTo(dAtA []byte) (int, error) {
+func (m *TNPingRequest) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *DNPingRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TNPingRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -712,7 +712,7 @@ func (m *DNPingRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *DNPingResponse) Marshal() (dAtA []byte, err error) {
+func (m *TNPingResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -722,12 +722,12 @@ func (m *DNPingResponse) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *DNPingResponse) MarshalTo(dAtA []byte) (int, error) {
+func (m *TNPingResponse) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *DNPingResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TNPingResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -768,7 +768,7 @@ func (m *DNPingResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *DNStringResponse) Marshal() (dAtA []byte, err error) {
+func (m *TNStringResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -778,12 +778,12 @@ func (m *DNStringResponse) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *DNStringResponse) MarshalTo(dAtA []byte) (int, error) {
+func (m *TNStringResponse) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *DNStringResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TNStringResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -1072,7 +1072,7 @@ func encodeVarintCtl(dAtA []byte, offset int, v uint64) int {
 	dAtA[offset] = uint8(v)
 	return base
 }
-func (m *DNPingRequest) Size() (n int) {
+func (m *TNPingRequest) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -1088,7 +1088,7 @@ func (m *DNPingRequest) Size() (n int) {
 	return n
 }
 
-func (m *DNPingResponse) Size() (n int) {
+func (m *TNPingResponse) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -1117,7 +1117,7 @@ func (m *DNPingResponse) Size() (n int) {
 	return n
 }
 
-func (m *DNStringResponse) Size() (n int) {
+func (m *TNStringResponse) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -1241,7 +1241,7 @@ func sovCtl(x uint64) (n int) {
 func sozCtl(x uint64) (n int) {
 	return sovCtl(uint64((x << 1) ^ uint64((int64(x) >> 63))))
 }
-func (m *DNPingRequest) Unmarshal(dAtA []byte) error {
+func (m *TNPingRequest) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -1324,7 +1324,7 @@ func (m *DNPingRequest) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *DNPingResponse) Unmarshal(dAtA []byte) error {
+func (m *TNPingResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -1496,7 +1496,7 @@ func (m *DNPingResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *DNStringResponse) Unmarshal(dAtA []byte) error {
+func (m *TNStringResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {

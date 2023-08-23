@@ -235,18 +235,18 @@ func (m *Checkpoint) GetFlushDuration() time.Duration {
 	return 0
 }
 
-func (m *InspectDN) Reset()         { *m = InspectDN{} }
-func (m *InspectDN) String() string { return proto.CompactTextString(m) }
-func (*InspectDN) ProtoMessage()    {}
-func (*InspectDN) Descriptor() ([]byte, []int) {
+func (m *InspectTN) Reset()         { *m = InspectTN{} }
+func (m *InspectTN) String() string { return proto.CompactTextString(m) }
+func (*InspectTN) ProtoMessage()    {}
+func (*InspectTN) Descriptor() ([]byte, []int) {
 	return fileDescriptor_1b4a5877375e491e, []int{4}
 }
-func (m *InspectDN) XXX_Unmarshal(b []byte) error {
+func (m *InspectTN) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *InspectDN) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *InspectTN) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_InspectDN.Marshal(b, m, deterministic)
+		return xxx_messageInfo_InspectTN.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -256,26 +256,26 @@ func (m *InspectDN) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return b[:n], nil
 	}
 }
-func (m *InspectDN) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_InspectDN.Merge(m, src)
+func (m *InspectTN) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_InspectTN.Merge(m, src)
 }
-func (m *InspectDN) XXX_Size() int {
+func (m *InspectTN) XXX_Size() int {
 	return m.ProtoSize()
 }
-func (m *InspectDN) XXX_DiscardUnknown() {
-	xxx_messageInfo_InspectDN.DiscardUnknown(m)
+func (m *InspectTN) XXX_DiscardUnknown() {
+	xxx_messageInfo_InspectTN.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_InspectDN proto.InternalMessageInfo
+var xxx_messageInfo_InspectTN proto.InternalMessageInfo
 
-func (m *InspectDN) GetAccessInfo() AccessInfo {
+func (m *InspectTN) GetAccessInfo() AccessInfo {
 	if m != nil {
 		return m.AccessInfo
 	}
 	return AccessInfo{}
 }
 
-func (m *InspectDN) GetOperation() string {
+func (m *InspectTN) GetOperation() string {
 	if m != nil {
 		return m.Operation
 	}
@@ -456,7 +456,7 @@ func init() {
 	proto.RegisterType((*CreateDatabaseReq)(nil), "db.CreateDatabaseReq")
 	proto.RegisterType((*FlushTable)(nil), "db.FlushTable")
 	proto.RegisterType((*Checkpoint)(nil), "db.Checkpoint")
-	proto.RegisterType((*InspectDN)(nil), "db.InspectDN")
+	proto.RegisterType((*InspectTN)(nil), "db.InspectDN")
 	proto.RegisterType((*InspectResp)(nil), "db.InspectResp")
 	proto.RegisterType((*CatalogResp)(nil), "db.CatalogResp")
 	proto.RegisterType((*FaultPoint)(nil), "db.FaultPoint")
@@ -662,7 +662,7 @@ func (m *Checkpoint) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *InspectDN) Marshal() (dAtA []byte, err error) {
+func (m *InspectTN) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -672,12 +672,12 @@ func (m *InspectDN) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *InspectDN) MarshalTo(dAtA []byte) (int, error) {
+func (m *InspectTN) MarshalTo(dAtA []byte) (int, error) {
 	size := m.ProtoSize()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *InspectDN) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *InspectTN) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -924,7 +924,7 @@ func (m *Checkpoint) ProtoSize() (n int) {
 	return n
 }
 
-func (m *InspectDN) ProtoSize() (n int) {
+func (m *InspectTN) ProtoSize() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -1475,7 +1475,7 @@ func (m *Checkpoint) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *InspectDN) Unmarshal(dAtA []byte) error {
+func (m *InspectTN) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {

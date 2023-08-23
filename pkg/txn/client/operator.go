@@ -345,17 +345,17 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 		}
 	}
 
-	for _, dn := range snapshot.Txn.DNShards {
+	for _, tn := range snapshot.Txn.TNShards {
 		has := false
-		for _, v := range tc.mu.txn.DNShards {
-			if v.ShardID == dn.ShardID {
+		for _, v := range tc.mu.txn.TNShards {
+			if v.ShardID == tn.ShardID {
 				has = true
 				break
 			}
 		}
 
 		if !has {
-			tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
+			tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, tn)
 		}
 	}
 	if tc.mu.txn.SnapshotTS.Less(snapshot.Txn.SnapshotTS) {
@@ -446,7 +446,7 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		defer tc.unlock(ctx)
 	}
 
-	if len(tc.mu.txn.DNShards) == 0 {
+	if len(tc.mu.txn.TNShards) == 0 {
 		return nil
 	}
 
@@ -574,7 +574,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if commit {
-		if len(tc.mu.txn.DNShards) == 0 { // commit no write handled txn
+		if len(tc.mu.txn.TNShards) == 0 { // commit no write handled txn
 			tc.mu.txn.Status = txn.TxnStatus_Committed
 			return nil, nil
 		}
@@ -606,13 +606,13 @@ func (tc *txnOperator) updateWritePartitions(requests []txn.TxnRequest, locked b
 	}
 }
 
-func (tc *txnOperator) addPartitionLocked(dn metadata.DNShard) {
-	for idx := range tc.mu.txn.DNShards {
-		if tc.mu.txn.DNShards[idx].ShardID == dn.ShardID {
+func (tc *txnOperator) addPartitionLocked(tn metadata.TNShard) {
+	for idx := range tc.mu.txn.TNShards {
+		if tc.mu.txn.TNShards[idx].ShardID == tn.ShardID {
 			return
 		}
 	}
-	tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, dn)
+	tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, tn)
 	util.LogTxnUpdated(tc.mu.txn)
 }
 
@@ -642,8 +642,8 @@ func (tc *txnOperator) maybeCacheWrites(requests []txn.TxnRequest, locked bool) 
 		defer tc.mu.Unlock()
 		for idx := range requests {
 			requests[idx].Flag |= txn.SkipResponseFlag
-			dn := requests[idx].CNRequest.Target.ShardID
-			tc.mu.cachedWrites[dn] = append(tc.mu.cachedWrites[dn], requests[idx])
+			tn := requests[idx].CNRequest.Target.ShardID
+			tc.mu.cachedWrites[tn] = append(tc.mu.cachedWrites[tn], requests[idx])
 		}
 		return true
 	}
@@ -668,14 +668,14 @@ func (tc *txnOperator) maybeInsertCachedWrites(ctx context.Context, requests []t
 	hasCachedWrites := false
 	insertCount := 0
 	for idx := range requests {
-		dn := requests[idx].CNRequest.Target.ShardID
-		if writes, ok := tc.getCachedWritesLocked(dn); ok {
+		tn := requests[idx].CNRequest.Target.ShardID
+		if writes, ok := tc.getCachedWritesLocked(tn); ok {
 			if !hasCachedWrites {
 				// copy all requests into newRequests if cached writes encountered
 				newRequests = append([]txn.TxnRequest(nil), requests[:idx]...)
 			}
 			newRequests = append(newRequests, writes...)
-			tc.clearCachedWritesLocked(dn)
+			tc.clearCachedWritesLocked(tn)
 			hasCachedWrites = true
 			insertCount += len(writes)
 		}
@@ -686,16 +686,16 @@ func (tc *txnOperator) maybeInsertCachedWrites(ctx context.Context, requests []t
 	return newRequests
 }
 
-func (tc *txnOperator) getCachedWritesLocked(dn uint64) ([]txn.TxnRequest, bool) {
-	writes, ok := tc.mu.cachedWrites[dn]
+func (tc *txnOperator) getCachedWritesLocked(tn uint64) ([]txn.TxnRequest, bool) {
+	writes, ok := tc.mu.cachedWrites[tn]
 	if !ok || len(writes) == 0 {
 		return nil, false
 	}
 	return writes, true
 }
 
-func (tc *txnOperator) clearCachedWritesLocked(dn uint64) {
-	delete(tc.mu.cachedWrites, dn)
+func (tc *txnOperator) clearCachedWritesLocked(tn uint64) {
+	delete(tc.mu.cachedWrites, tn)
 }
 
 func (tc *txnOperator) getTxnMeta(locked bool) txn.TxnMeta {
@@ -830,9 +830,9 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 
 	// use txn internal error code to check error
 	txnCode := uint16(txnError.TxnErrCode)
-	if txnCode == moerr.ErrDNShardNotFound {
+	if txnCode == moerr.ErrTNShardNotFound {
 		// do we still have the uuid and shard id?
-		return moerr.NewDNShardNotFoundNoCtx("", 0xDEADBEAF)
+		return moerr.NewTNShardNotFoundNoCtx("", 0xDEADBEAF)
 	}
 
 	if _, ok := possibleErrorMap[txnCode]; ok {

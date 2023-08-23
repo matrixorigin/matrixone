@@ -23,7 +23,7 @@ import (
 )
 
 func handlePing() handleFunc {
-	return getDNHandlerFunc(
+	return getTNHandlerFunc(
 		pb.CmdMethod_Ping,
 		func(parameter string) ([]uint64, error) {
 			if len(parameter) > 0 {
@@ -35,11 +35,11 @@ func handlePing() handleFunc {
 			}
 			return nil, nil
 		},
-		func(dnShardID uint64, parameter string, _ *process.Process) ([]byte, error) {
-			return protoc.MustMarshal(&pb.DNPingRequest{Parameter: parameter}), nil
+		func(tnShardID uint64, parameter string, _ *process.Process) ([]byte, error) {
+			return protoc.MustMarshal(&pb.TNPingRequest{Parameter: parameter}), nil
 		},
 		func(data []byte) (interface{}, error) {
-			pong := pb.DNPingResponse{}
+			pong := pb.TNPingResponse{}
 			protoc.MustUnmarshal(&pong, data)
 			return pong, nil
 		})

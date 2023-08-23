@@ -32,10 +32,10 @@ type fileServices struct {
 	sync.RWMutex
 
 	t            *testing.T
-	dnServiceNum int
+	tnServiceNum int
 	cnServiceNum int
 
-	dnLocalFSs []fileservice.FileService
+	tnLocalFSs []fileservice.FileService
 	cnLocalFSs []fileservice.FileService
 	s3FS       fileservice.FileService
 	etlFS      fileservice.FileService
@@ -43,7 +43,7 @@ type fileServices struct {
 
 // newFileServices constructs an instance of fileServices.
 func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
-	dnServiceNum := c.opt.initial.dnServiceNum
+	tnServiceNum := c.opt.initial.tnServiceNum
 	cnServiceNum := c.opt.initial.cnServiceNum
 
 	factory := func(_ string, name string) fileservice.FileService {
@@ -59,9 +59,9 @@ func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
 		}
 	}
 
-	dnLocals := make([]fileservice.FileService, 0, dnServiceNum)
-	for i := 0; i < dnServiceNum; i++ {
-		dnLocals = append(dnLocals, factory(c.dn.cfgs[i].DataDir, defines.LocalFileServiceName))
+	tnLocals := make([]fileservice.FileService, 0, tnServiceNum)
+	for i := 0; i < tnServiceNum; i++ {
+		tnLocals = append(tnLocals, factory(c.tn.cfgs[i].DataDir, defines.LocalFileServiceName))
 	}
 
 	cnLocals := make([]fileservice.FileService, 0, cnServiceNum)
@@ -71,9 +71,9 @@ func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
 
 	return &fileServices{
 		t:            c.t,
-		dnServiceNum: dnServiceNum,
+		tnServiceNum: tnServiceNum,
 		cnServiceNum: cnServiceNum,
-		dnLocalFSs:   dnLocals,
+		tnLocalFSs:   tnLocals,
 		cnLocalFSs:   cnLocals,
 		s3FS:         factory(c.opt.rootDataDir, defines.SharedFileServiceName),
 		etlFS:        factory(c.opt.rootDataDir, defines.ETLFileServiceName),
@@ -82,21 +82,21 @@ func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
 
 // assertFileServiceLocked asserts constructed file services.
 func (f *fileServices) assertFileServiceLocked() {
-	assert.Equal(f.t, f.dnServiceNum, len(f.dnLocalFSs))
+	assert.Equal(f.t, f.tnServiceNum, len(f.tnLocalFSs))
 	assert.Equal(f.t, f.cnServiceNum, len(f.cnLocalFSs))
 }
 
-// getDNLocalFileService gets local FileService for DN service.
-func (f *fileServices) getDNLocalFileService(index int) fileservice.FileService {
+// getTNLocalFileService gets local FileService for DN service.
+func (f *fileServices) getTNLocalFileService(index int) fileservice.FileService {
 	f.RLock()
 	defer f.RUnlock()
 
 	f.assertFileServiceLocked()
 
-	if index >= len(f.dnLocalFSs) {
+	if index >= len(f.tnLocalFSs) {
 		return nil
 	}
-	return f.dnLocalFSs[index]
+	return f.tnLocalFSs[index]
 }
 
 func (f *fileServices) getCNLocalFileService(index int) fileservice.FileService {

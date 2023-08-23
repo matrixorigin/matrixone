@@ -443,7 +443,7 @@ func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailrepl
 
 func (tbl *txnTable) GetDirtyBlksIn(state *logtailreplay.PartitionState) []types.Blockid {
 	dirtyBlks := make([]types.Blockid, 0)
-	for blk := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
+	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
 		if !state.BlockVisible(
 			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
 			continue
@@ -454,7 +454,7 @@ func (tbl *txnTable) GetDirtyBlksIn(state *logtailreplay.PartitionState) []types
 }
 
 func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
-	bats, ok := tbl.db.txn.blockId_dn_delete_metaLoc_batch[bid]
+	bats, ok := tbl.db.txn.blockId_tn_delete_metaLoc_batch[bid]
 	if !ok {
 		return nil
 	}
@@ -490,7 +490,7 @@ func (tbl *txnTable) LoadDeletesForVolatileBlocksIn(
 	state *logtailreplay.PartitionState,
 	deletesRowId map[types.Rowid]uint8) error {
 
-	for blk, bats := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
+	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
 		//if blk is in partitionState.blks, it means that blk is persisted.
 		if state.BlockVisible(
 			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
@@ -915,7 +915,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 		return err
 	}
 	if err = tbl.db.txn.WriteBatch(UPDATE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1, false, false); err != nil {
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	tbl.constraint = ct
@@ -932,7 +932,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 		return err
 	}
 	if err = tbl.db.txn.WriteBatch(ALTER, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1, false, false); err != nil {
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	tbl.constraint = ct
@@ -990,7 +990,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.tableName,
 			fileName,
 			bat,
-			tbl.db.txn.dnStores[0])
+			tbl.db.txn.tnStores[0])
 	}
 	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
 	if err != nil {
@@ -1003,7 +1003,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.db.databaseName,
 		tbl.tableName,
 		ibat,
-		tbl.db.txn.dnStores[0],
+		tbl.db.txn.tnStores[0],
 		tbl.primaryIdx,
 		false,
 		false); err != nil {
@@ -1042,11 +1042,11 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			return err
 		}
 		if err := tbl.db.txn.WriteFile(DELETE, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.dnStores[0]); err != nil {
+			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.tnStores[0]); err != nil {
 			return err
 		}
-		tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId] =
-			append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId], copBat)
+		tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId] =
+			append(tbl.db.txn.blockId_tn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
 		tbl.db.txn.hasS3Op.Store(true)
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
@@ -1057,7 +1057,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		if bat.RowCount() == 0 {
 			return nil
 		}
-		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
+		tbl.writeTnPartition(tbl.db.txn.proc.Ctx, bat)
 	default:
 		tbl.db.txn.hasS3Op.Store(true)
 		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
@@ -1125,16 +1125,16 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	if bat.RowCount() == 0 {
 		return nil
 	}
-	return tbl.writeDnPartition(ctx, bat)
+	return tbl.writeTnPartition(ctx, bat)
 }
 
-func (tbl *txnTable) writeDnPartition(ctx context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
 	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
 	if err != nil {
 		return err
 	}
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.tnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
 	return nil
@@ -1474,7 +1474,7 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 }
 
 func (tbl *txnTable) UpdateBlockInfos(ctx context.Context) (err error) {
-	tbl.dnList = []int{0}
+	tbl.tnList = []int{0}
 
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
 	// check if the table is not created in this txn, and the block infos are not updated, then update:

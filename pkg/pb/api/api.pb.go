@@ -517,7 +517,7 @@ type Entry struct {
 	FileName     string          `protobuf:"bytes,6,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`
 	Bat          *Batch          `protobuf:"bytes,7,opt,name=bat,proto3" json:"bat,omitempty"`
 	// whether DN do the PK uniqueness check against txn's workspace or not.
-	PkCheckByDn          int32    `protobuf:"varint,8,opt,name=pk_check_by_dn,json=pkCheckByDn,proto3" json:"pk_check_by_dn,omitempty"`
+	PkCheckByTn          int32    `protobuf:"varint,8,opt,name=pk_check_by_dn,json=pkCheckByDn,proto3" json:"pk_check_by_dn,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -605,9 +605,9 @@ func (m *Entry) GetBat() *Batch {
 	return nil
 }
 
-func (m *Entry) GetPkCheckByDn() int32 {
+func (m *Entry) GetPkCheckByTn() int32 {
 	if m != nil {
-		return m.PkCheckByDn
+		return m.PkCheckByTn
 	}
 	return 0
 }
@@ -1817,8 +1817,8 @@ func (m *Entry) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.PkCheckByDn != 0 {
-		i = encodeVarintApi(dAtA, i, uint64(m.PkCheckByDn))
+	if m.PkCheckByTn != 0 {
+		i = encodeVarintApi(dAtA, i, uint64(m.PkCheckByTn))
 		i--
 		dAtA[i] = 0x40
 	}
@@ -2696,8 +2696,8 @@ func (m *Entry) ProtoSize() (n int) {
 		l = m.Bat.ProtoSize()
 		n += 1 + l + sovApi(uint64(l))
 	}
-	if m.PkCheckByDn != 0 {
-		n += 1 + sovApi(uint64(m.PkCheckByDn))
+	if m.PkCheckByTn != 0 {
+		n += 1 + sovApi(uint64(m.PkCheckByTn))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -4060,7 +4060,7 @@ func (m *Entry) Unmarshal(dAtA []byte) error {
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field PkCheckByDn", wireType)
 			}
-			m.PkCheckByDn = 0
+			m.PkCheckByTn = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowApi
@@ -4070,7 +4070,7 @@ func (m *Entry) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.PkCheckByDn |= int32(b&0x7F) << shift
+				m.PkCheckByTn |= int32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

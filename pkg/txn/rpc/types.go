@@ -56,7 +56,7 @@ type SenderOption func(*sender)
 type ServerOption func(*server)
 
 // LocalDispatch used to returns request handler on local, avoid rpc
-type LocalDispatch func(metadata.DNShard) TxnRequestHandleFunc
+type LocalDispatch func(metadata.TNShard) TxnRequestHandleFunc
 
 // SendResult wrapping []txn.TxnResponse for reuse
 type SendResult struct {

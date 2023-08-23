@@ -21,7 +21,7 @@ import (
 const (
 	DefaultTickPerSecond   = 10
 	DefaultLogStoreTimeout = 5 * time.Minute
-	DefaultDNStoreTimeout  = 10 * time.Second
+	DefaultTNStoreTimeout  = 10 * time.Second
 	DefaultCNStoreTimeout  = 30 * time.Second
 )
 
@@ -36,10 +36,10 @@ type Config struct {
 	// it regards the log store as down.
 	LogStoreTimeout time.Duration
 
-	// DNStoreTimeout is the actual time limit between a dn store's heartbeat.
-	// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
+	// TNStoreTimeout is the actual time limit between a dn store's heartbeat.
+	// If HAKeeper does not receive two heartbeat within TNStoreTimeout,
 	// it regards the dn store as down.
-	DNStoreTimeout time.Duration
+	TNStoreTimeout time.Duration
 
 	// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
 	// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
@@ -58,8 +58,8 @@ func (cfg *Config) Fill() {
 	if cfg.LogStoreTimeout == 0 {
 		cfg.LogStoreTimeout = DefaultLogStoreTimeout
 	}
-	if cfg.DNStoreTimeout == 0 {
-		cfg.DNStoreTimeout = DefaultDNStoreTimeout
+	if cfg.TNStoreTimeout == 0 {
+		cfg.TNStoreTimeout = DefaultTNStoreTimeout
 	}
 	if cfg.CNStoreTimeout == 0 {
 		cfg.CNStoreTimeout = DefaultCNStoreTimeout
@@ -70,8 +70,8 @@ func (cfg Config) LogStoreExpired(start, current uint64) bool {
 	return uint64(int(cfg.LogStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
-func (cfg Config) DNStoreExpired(start, current uint64) bool {
-	return uint64(int(cfg.DNStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
+func (cfg Config) TNStoreExpired(start, current uint64) bool {
+	return uint64(int(cfg.TNStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
 func (cfg Config) CNStoreExpired(start, current uint64) bool {

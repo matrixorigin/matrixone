@@ -42,7 +42,7 @@ func (s *store) initMetadata() error {
 		return nil
 	}
 
-	v := &metadata.DNStore{}
+	v := &metadata.TNStore{}
 	protoc.MustUnmarshal(v, data)
 	if v.UUID != s.mu.metadata.UUID {
 		s.rt.Logger().Fatal("BUG: disk DNStore and start DNStore not match",
@@ -55,9 +55,9 @@ func (s *store) initMetadata() error {
 	return nil
 }
 
-func (s *store) addDNShardLocked(shard metadata.DNShard) {
-	for _, dn := range s.mu.metadata.Shards {
-		if dn.ShardID == shard.ShardID {
+func (s *store) addTNShardLocked(shard metadata.TNShard) {
+	for _, tn := range s.mu.metadata.Shards {
+		if tn.ShardID == shard.ShardID {
 			return
 		}
 	}
@@ -65,14 +65,14 @@ func (s *store) addDNShardLocked(shard metadata.DNShard) {
 	s.mustUpdateMetadataLocked()
 }
 
-func (s *store) removeDNShard(id uint64) {
+func (s *store) removeTNShard(id uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var newShards []metadata.DNShard
-	for _, dn := range s.mu.metadata.Shards {
-		if dn.ShardID != id {
-			newShards = append(newShards, dn)
+	var newShards []metadata.TNShard
+	for _, tn := range s.mu.metadata.Shards {
+		if tn.ShardID != id {
+			newShards = append(newShards, tn)
 		}
 	}
 	s.mu.metadata.Shards = newShards

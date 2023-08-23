@@ -26,9 +26,9 @@ import (
 )
 
 func TestHandleRead(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
@@ -37,40 +37,40 @@ func TestHandleRead(t *testing.T) {
 }
 
 func TestHandleReadWithRetry(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
 		req.Options = &txn.TxnRequestOptions{
-			RetryCodes: []int32{int32(moerr.ErrDNShardNotFound)},
+			RetryCodes: []int32{int32(moerr.ErrTNShardNotFound)},
 		}
 		go func() {
 			time.Sleep(time.Second)
-			shard := newTestDNShard(1, 2, 3)
-			assert.NoError(t, s.StartDNReplica(shard))
+			shard := newTestTNShard(1, 2, 3)
+			assert.NoError(t, s.StartTNReplica(shard))
 		}()
 		assert.NoError(t, s.handleRead(context.Background(), &req, &txn.TxnResponse{}))
 	})
 }
 
 func TestHandleReadWithRetryWithTimeout(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
 		req.Options = &txn.TxnRequestOptions{
-			RetryCodes: []int32{int32(moerr.ErrDNShardNotFound)},
+			RetryCodes: []int32{int32(moerr.ErrTNShardNotFound)},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		resp := &txn.TxnResponse{}
 		assert.NoError(t, s.handleRead(ctx, &req, resp))
-		assert.Equal(t, uint32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
+		assert.Equal(t, uint32(moerr.ErrTNShardNotFound), resp.TxnError.Code)
 	})
 }
 
 func TestHandleWrite(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 
 		req := service.NewTestWriteRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
@@ -79,34 +79,34 @@ func TestHandleWrite(t *testing.T) {
 }
 
 func TestHandleCommit(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 
 		req := service.NewTestCommitRequest(service.NewTestTxn(1, 1, 1))
-		req.Txn.DNShards[0].ReplicaID = 2
+		req.Txn.TNShards[0].ReplicaID = 2
 		assert.NoError(t, s.handleCommit(context.Background(), &req, &txn.TxnResponse{}))
 	})
 }
 
 func TestHandleRollback(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 
 		req := service.NewTestRollbackRequest(service.NewTestTxn(1, 1, 1))
-		req.Txn.DNShards[0].ReplicaID = 2
+		req.Txn.TNShards[0].ReplicaID = 2
 		assert.NoError(t, s.handleRollback(context.Background(), &req, &txn.TxnResponse{}))
 	})
 }
 
 func TestHandlePrepare(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 
 		req := service.NewTestPrepareRequest(service.NewTestTxn(1, 1, 1), 1)
-		req.PrepareRequest.DNShard.ReplicaID = 2
+		req.PrepareRequest.TNShard.ReplicaID = 2
 		assert.NoError(t, s.handlePrepare(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -117,12 +117,12 @@ func TestHandlePrepare(t *testing.T) {
 }
 
 func TestHandleGetStatus(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 
 		req := service.NewTestGetStatusRequest(service.NewTestTxn(1, 1, 1), 1)
-		req.GetStatusRequest.DNShard.ReplicaID = 2
+		req.GetStatusRequest.TNShard.ReplicaID = 2
 		assert.NoError(t, s.handleGetStatus(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -132,14 +132,14 @@ func TestHandleGetStatus(t *testing.T) {
 	})
 }
 
-func TestHandleCommitDNShard(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+func TestHandleCommitTNShard(t *testing.T) {
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 
 		req := service.NewTestCommitShardRequest(service.NewTestTxn(1, 1, 1))
-		req.CommitDNShardRequest.DNShard.ReplicaID = 2
-		assert.NoError(t, s.handleCommitDNShard(context.Background(), &req, &txn.TxnResponse{}))
+		req.CommitTNShardRequest.TNShard.ReplicaID = 2
+		assert.NoError(t, s.handleCommitTNShard(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -148,14 +148,14 @@ func TestHandleCommitDNShard(t *testing.T) {
 	})
 }
 
-func TestHandleRollbackDNShard(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+func TestHandleRollbackTNShard(t *testing.T) {
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
-		req.RollbackDNShardRequest.DNShard.ReplicaID = 2
-		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, &txn.TxnResponse{}))
+		req.RollbackTNShardRequest.TNShard.ReplicaID = 2
+		assert.NoError(t, s.handleRollbackTNShard(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -164,19 +164,19 @@ func TestHandleRollbackDNShard(t *testing.T) {
 	})
 }
 
-func TestHandleDNShardNotFound(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+func TestHandleTNShartnotFound(t *testing.T) {
+	runTNStoreTest(t, func(s *store) {
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
 		resp := &txn.TxnResponse{}
-		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, resp))
-		assert.Equal(t, uint32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
+		assert.NoError(t, s.handleRollbackTNShard(context.Background(), &req, resp))
+		assert.Equal(t, uint32(moerr.ErrTNShardNotFound), resp.TxnError.Code)
 	})
 }
 
 func TestHandleDebug(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.Method = txn.TxnMethod_DEBUG

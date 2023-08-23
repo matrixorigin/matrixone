@@ -187,13 +187,13 @@ func LogTxnReceivedResponses(responses []txn.TxnResponse) {
 
 // LogTxnCreateOn log Txn create on dn shard.
 func LogTxnCreateOn(txnMeta txn.TxnMeta,
-	dn metadata.DNShard) {
+	tn metadata.TNShard) {
 	logger := getSkipLogger()
 
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("txn created on DNShard",
 			TxnField(txnMeta),
-			TxnDNShardField(dn))
+			TxnTNShardField(tn))
 	}
 }
 
@@ -224,13 +224,13 @@ func LogTxnWaitUncommittedTxnsFailed(txnMeta txn.TxnMeta,
 
 // LogTxnReadFailed log Txn read failed.
 func LogTxnNotFoundOn(txnMeta txn.TxnMeta,
-	dn metadata.DNShard) {
+	tn metadata.TNShard) {
 	logger := getSkipLogger()
 
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("txn not found on DNShard",
 			TxnField(txnMeta),
-			TxnDNShardField(dn))
+			TxnTNShardField(tn))
 	}
 }
 
@@ -300,27 +300,27 @@ func LogTxnParallelPrepareCompleted(txnMeta txn.TxnMeta) {
 // LogTxnPrepareFailedOn log Tx prepare failed on DNShard
 func LogTxnPrepareFailedOn(
 	txnMeta txn.TxnMeta,
-	dn metadata.DNShard,
+	tn metadata.TNShard,
 	err *txn.TxnError) {
 	logger := getSkipLogger()
 
 	logger.Error("txn prepare failed on DNShard",
 		TxnField(txnMeta),
-		TxnDNShardField(dn),
+		TxnTNShardField(tn),
 		zap.String("error", err.DebugString()))
 }
 
 // LogTxnPrepareCompletedOn log Tx prepare completed on DNShard
 func LogTxnPrepareCompletedOn(
 	txnMeta txn.TxnMeta,
-	dn metadata.DNShard,
+	tn metadata.TNShard,
 	preparedTS timestamp.Timestamp) {
 	logger := getSkipLogger()
 
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("txn prepare completed on DNShard",
 			TxnField(txnMeta),
-			TxnDNShardField(dn),
+			TxnTNShardField(tn),
 			zap.String("prepared-ts", preparedTS.DebugString()))
 	}
 }
@@ -362,7 +362,7 @@ func LogTxnCommittingFailed(
 	logger := getSkipLogger()
 
 	logger.Error("txn committing failed, retry later",
-		TxnDNShardField(txnMeta.DNShards[0]),
+		TxnTNShardField(txnMeta.TNShards[0]),
 		TxnField(txnMeta),
 		zap.Error(err))
 }
@@ -442,9 +442,9 @@ func TxnIDFieldWithID(id []byte) zap.Field {
 	return zap.String("txn-id", hex.EncodeToString(id))
 }
 
-// TxnDNShardField returns a dn shard zap field
-func TxnDNShardField(dn metadata.DNShard) zap.Field {
-	return zap.String("dn-shard", dn.DebugString())
+// TxnTNShardField returns a dn shard zap field
+func TxnTNShardField(tn metadata.TNShard) zap.Field {
+	return zap.String("dn-shard", tn.DebugString())
 }
 
 // TxnField returns a txn zap field

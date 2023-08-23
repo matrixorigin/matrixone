@@ -30,7 +30,7 @@ import (
 type replica struct {
 	rt       runtime.Runtime
 	logger   *log.MOLogger
-	shard    metadata.DNShard
+	shard    metadata.TNShard
 	service  service.TxnService
 	startedC chan struct{}
 
@@ -40,11 +40,11 @@ type replica struct {
 	}
 }
 
-func newReplica(shard metadata.DNShard, rt runtime.Runtime) *replica {
+func newReplica(shard metadata.TNShard, rt runtime.Runtime) *replica {
 	return &replica{
 		rt:       rt,
 		shard:    shard,
-		logger:   rt.Logger().With(util.TxnDNShardField(shard)),
+		logger:   rt.Logger().With(util.TxnTNShardField(shard)),
 		startedC: make(chan struct{}),
 	}
 }
@@ -82,10 +82,10 @@ func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnReques
 		return r.service.GetStatus(ctx, request, response)
 	case txn.TxnMethod_Prepare:
 		return r.service.Prepare(ctx, request, response)
-	case txn.TxnMethod_CommitDNShard:
-		return r.service.CommitDNShard(ctx, request, response)
-	case txn.TxnMethod_RollbackDNShard:
-		return r.service.RollbackDNShard(ctx, request, response)
+	case txn.TxnMethod_CommitTNShard:
+		return r.service.CommitTNShard(ctx, request, response)
+	case txn.TxnMethod_RollbackTNShard:
+		return r.service.RollbackTNShard(ctx, request, response)
 	default:
 		panic("cannot handle local CN request")
 	}

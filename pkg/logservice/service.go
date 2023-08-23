@@ -268,8 +268,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleCNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CN_ALLOCATE_ID:
 		return s.handleCNAllocateID(ctx, req), pb.LogRecordResponse{}
-	case pb.DN_HEARTBEAT:
-		return s.handleDNHeartbeat(ctx, req), pb.LogRecordResponse{}
+	case pb.TN_HEARTBEAT:
+		return s.handleTNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CHECK_HAKEEPER:
 		return s.handleCheckHAKeeper(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_CLUSTER_DETAILS:
@@ -343,7 +343,7 @@ func (s *Service) handleTsoUpdate(ctx context.Context, req pb.Request) pb.Respon
 func (s *Service) handleConnect(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.getOrExtendDNLease(ctx, r.ShardID, r.DNID); err != nil {
+	if err := s.store.getOrExtendTNLease(ctx, r.ShardID, r.TNID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -442,10 +442,10 @@ func (s *Service) handleCNAllocateID(ctx context.Context, req pb.Request) pb.Res
 	return resp
 }
 
-func (s *Service) handleDNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
-	hb := req.DNHeartbeat
+func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	hb := req.TNHeartbeat
 	resp := getResponse(req)
-	if cb, err := s.store.addDNStoreHeartbeat(ctx, *hb); err != nil {
+	if cb, err := s.store.addTNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {

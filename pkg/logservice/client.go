@@ -122,7 +122,7 @@ func (c *managedClient) Config() ClientConfig {
 func (c *managedClient) GetLogRecord(payloadLength int) pb.LogRecord {
 	data := make([]byte, headerSize+8+payloadLength)
 	binaryEnc.PutUint32(data, uint32(pb.UserEntryUpdate))
-	binaryEnc.PutUint64(data[headerSize:], c.cfg.DNReplicaID)
+	binaryEnc.PutUint64(data[headerSize:], c.cfg.TNReplicaID)
 	return pb.LogRecord{Data: data}
 }
 
@@ -402,7 +402,7 @@ func (c *client) request(ctx context.Context,
 		Method: mt,
 		LogRequest: pb.LogRequest{
 			ShardID: c.cfg.LogShardID,
-			DNID:    c.cfg.DNReplicaID,
+			TNID:    c.cfg.TNReplicaID,
 			Lsn:     lsn,
 			MaxSize: maxSize,
 		},

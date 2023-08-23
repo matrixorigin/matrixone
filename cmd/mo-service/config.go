@@ -50,7 +50,7 @@ var (
 
 	supportServiceTypes = map[string]metadata.ServiceType{
 		metadata.ServiceType_CN.String():    metadata.ServiceType_CN,
-		metadata.ServiceType_DN.String():    metadata.ServiceType_DN,
+		metadata.ServiceType_TN.String():    metadata.ServiceType_TN,
 		metadata.ServiceType_LOG.String():   metadata.ServiceType_LOG,
 		metadata.ServiceType_PROXY.String(): metadata.ServiceType_PROXY,
 	}
@@ -60,8 +60,8 @@ var (
 type LaunchConfig struct {
 	// LogServiceConfigFiles log service config files
 	LogServiceConfigFiles []string `toml:"logservices"`
-	// DNServiceConfigsFiles log service config files
-	DNServiceConfigsFiles []string `toml:"dnservices"`
+	// TNServiceConfigsFiles log service config files
+	TNServiceConfigsFiles []string `toml:"dnservices"`
 	// CNServiceConfigsFiles log service config files
 	CNServiceConfigsFiles []string `toml:"cnservices"`
 	// CNServiceConfigsFiles log service config files
@@ -81,8 +81,8 @@ type Config struct {
 	FileServices []fileservice.Config `toml:"fileservice"`
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
-	// DN dn service config
-	DN dnservice.Config `toml:"dn"`
+	// TN dn service config
+	TN dnservice.Config `toml:"dn"`
 	// LogService is the config for log service
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
@@ -343,8 +343,8 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	return cfg
 }
 
-func (c *Config) getDNServiceConfig() dnservice.Config {
-	cfg := c.DN
+func (c *Config) getTNServiceConfig() dnservice.Config {
+	cfg := c.TN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "dn-data", cfg.UUID)
 	return cfg
@@ -410,8 +410,8 @@ func (c *Config) hashNodeID() uint16 {
 	switch st {
 	case metadata.ServiceType_CN:
 		uuid = c.CN.UUID
-	case metadata.ServiceType_DN:
-		uuid = c.DN.UUID
+	case metadata.ServiceType_TN:
+		uuid = c.TN.UUID
 	case metadata.ServiceType_LOG:
 		uuid = c.LogService.UUID
 	}
@@ -446,8 +446,8 @@ func (c *Config) mustGetServiceUUID() string {
 	switch c.mustGetServiceType() {
 	case metadata.ServiceType_CN:
 		return c.CN.UUID
-	case metadata.ServiceType_DN:
-		return c.DN.UUID
+	case metadata.ServiceType_TN:
+		return c.TN.UUID
 	case metadata.ServiceType_LOG:
 		return c.LogService.UUID
 	case metadata.ServiceType_PROXY:

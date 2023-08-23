@@ -241,7 +241,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		return err
 	}
 
-	for _, store := range db.txn.dnStores {
+	for _, store := range db.txn.tnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, false); err != nil {
 			return err
@@ -255,7 +255,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.dnStores {
+		for _, store := range db.txn.tnStores {
 			if err = db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, false, false); err != nil {
 				return err
@@ -305,7 +305,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	if err != nil {
 		return 0, err
 	}
-	for _, store := range db.txn.dnStores {
+	for _, store := range db.txn.tnStores {
 		if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, true); err != nil {
 			return 0, err
@@ -374,7 +374,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.dnStores {
+		for _, store := range db.txn.tnStores {
 			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, true, false); err != nil {
 				return err
@@ -391,7 +391,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.dnStores {
+		for _, store := range db.txn.tnStores {
 			if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, true, false); err != nil {
 				return err

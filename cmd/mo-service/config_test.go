@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParseDNConfig(t *testing.T) {
+func TestParseTNConfig(t *testing.T) {
 	data := `
 	# service node type, [DN|CN|LOG]
 	service-type = "DN"
@@ -67,11 +67,11 @@ func TestParseDNConfig(t *testing.T) {
 	cfg := &Config{}
 	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
-	assert.Equal(t, dnservice.StorageMEM, cfg.DN.Txn.Storage.Backend)
+	assert.Equal(t, dnservice.StorageMEM, cfg.TN.Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
-	assert.Equal(t, 2, len(cfg.getDNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
+	assert.Equal(t, 2, len(cfg.getTNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
 }
 
 func TestFileServiceFactory(t *testing.T) {
