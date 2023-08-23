@@ -616,11 +616,12 @@ func convertProtobufSchemaToMD(schema string, msgTypeName string) (*desc.Message
 
 func deserializeProtobuf(md *desc.MessageDescriptor, in []byte, isKafkSR bool) (*dynamic.Message, error) {
 	dm := dynamic.NewMessage(md)
-	bytesRead, _, err := readMessageIndexes(in[5:])
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	if isKafkSR {
+		bytesRead, _, err := readMessageIndexes(in[5:])
+		if err != nil {
+			return nil, err
+		}
 		err = proto.Unmarshal(in[5+bytesRead:], dm)
 	} else {
 		err = dm.Unmarshal(in)

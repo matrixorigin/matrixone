@@ -273,9 +273,9 @@ func TestRetrieveDataWIthProtobuf(t *testing.T) {
 	defer p.Close()
 
 	user := test_v1.UserMessage{
-		Name:  "test_name",
-		Age:   100,
-		Email: "test_email",
+		Name:  "dummy_name",
+		Age:   10,
+		Email: "dummy@test.com",
 	}
 	payload, _ := proto.Marshal(&user)
 
