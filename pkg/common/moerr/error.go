@@ -859,7 +859,7 @@ func NewTAEError(ctx context.Context, msg string, args ...any) *Error {
 	return newError(ctx, ErrTAEError, xmsg)
 }
 
-func NewDNShardNotFound(ctx context.Context, uuid string, id uint64) *Error {
+func NewTNShardNotFound(ctx context.Context, uuid string, id uint64) *Error {
 	return newError(ctx, ErrTNShardNotFound, uuid, id)
 }
 

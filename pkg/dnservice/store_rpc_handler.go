@@ -173,7 +173,7 @@ func (s *store) validTNShard(ctx context.Context, request *txn.TxnRequest, respo
 	r := s.getReplica(shard.ShardID)
 	if r == nil ||
 		r.shard.GetReplicaID() != shard.GetReplicaID() {
-		response.TxnError = txn.WrapError(moerr.NewDNShardNotFound(ctx, s.cfg.UUID, shard.ShardID), 0)
+		response.TxnError = txn.WrapError(moerr.NewTNShardNotFound(ctx, s.cfg.UUID, shard.ShardID), 0)
 		return nil
 	}
 	return r
