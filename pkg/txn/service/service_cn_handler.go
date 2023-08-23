@@ -434,7 +434,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 			requests = append(requests, txn.TxnRequest{
 				Txn:                  txnMeta,
 				Method:               txn.TxnMethod_CommitDNShard,
-				CommitDNShardRequest: &txn.TxnCommitDNShardRequest{TNShard: tn},
+				CommitDNShardRequest: &txn.TxnCommitTNShardRequest{TNShard: tn},
 			})
 		}
 

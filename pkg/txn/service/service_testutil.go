@@ -283,7 +283,7 @@ func NewTestCommitShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method: txn.TxnMethod_CommitDNShard,
 		Txn:    wTxn,
-		CommitDNShardRequest: &txn.TxnCommitDNShardRequest{
+		CommitDNShardRequest: &txn.TxnCommitTNShardRequest{
 			TNShard: wTxn.TNShards[0],
 		},
 	}

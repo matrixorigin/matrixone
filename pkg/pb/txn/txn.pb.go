@@ -606,7 +606,7 @@ type TxnRequest struct {
 	// TxnGetStatusRequest corresponds to TxnMethod.GetStatus
 	GetStatusRequest *TxnGetStatusRequest `protobuf:"bytes,9,opt,name=GetStatusRequest,proto3" json:"GetStatusRequest,omitempty"`
 	// TxnCommitDNShardRequest corresponds to TxnMethod.CommitDNShard
-	CommitDNShardRequest *TxnCommitDNShardRequest `protobuf:"bytes,10,opt,name=CommitDNShardRequest,proto3" json:"CommitDNShardRequest,omitempty"`
+	CommitDNShardRequest *TxnCommitTNShardRequest `protobuf:"bytes,10,opt,name=CommitDNShardRequest,proto3" json:"CommitDNShardRequest,omitempty"`
 	// TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
 	RollbackDNShardRequest *TxnRollbackTNShardRequest `protobuf:"bytes,11,opt,name=RollbackDNShardRequest,proto3" json:"RollbackDNShardRequest,omitempty"`
 	// TxnRemoveMetadataRequest  corresponds to TxnMethod.RemoveMetadata
@@ -714,7 +714,7 @@ func (m *TxnRequest) GetGetStatusRequest() *TxnGetStatusRequest {
 	return nil
 }
 
-func (m *TxnRequest) GetCommitDNShardRequest() *TxnCommitDNShardRequest {
+func (m *TxnRequest) GetCommitDNShardRequest() *TxnCommitTNShardRequest {
 	if m != nil {
 		return m.CommitDNShardRequest
 	}
@@ -1319,7 +1319,7 @@ var xxx_messageInfo_TxnGetStatusResponse proto.InternalMessageInfo
 
 // TxnCommitDNShardRequest commit txn on DNShard. Data needs to be written to the
 // LogService.
-type TxnCommitDNShardRequest struct {
+type TxnCommitTNShardRequest struct {
 	// DNShard target DN
 	TNShard              metadata.TNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
 	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
@@ -1327,16 +1327,16 @@ type TxnCommitDNShardRequest struct {
 	XXX_sizecache        int32            `json:"-"`
 }
 
-func (m *TxnCommitDNShardRequest) Reset()         { *m = TxnCommitDNShardRequest{} }
-func (m *TxnCommitDNShardRequest) String() string { return proto.CompactTextString(m) }
-func (*TxnCommitDNShardRequest) ProtoMessage()    {}
-func (*TxnCommitDNShardRequest) Descriptor() ([]byte, []int) {
+func (m *TxnCommitTNShardRequest) Reset()         { *m = TxnCommitTNShardRequest{} }
+func (m *TxnCommitTNShardRequest) String() string { return proto.CompactTextString(m) }
+func (*TxnCommitTNShardRequest) ProtoMessage()    {}
+func (*TxnCommitTNShardRequest) Descriptor() ([]byte, []int) {
 	return fileDescriptor_4f782e76b37adb9a, []int{15}
 }
-func (m *TxnCommitDNShardRequest) XXX_Unmarshal(b []byte) error {
+func (m *TxnCommitTNShardRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *TxnCommitDNShardRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TxnCommitTNShardRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_TxnCommitDNShardRequest.Marshal(b, m, deterministic)
 	} else {
@@ -1348,19 +1348,19 @@ func (m *TxnCommitDNShardRequest) XXX_Marshal(b []byte, deterministic bool) ([]b
 		return b[:n], nil
 	}
 }
-func (m *TxnCommitDNShardRequest) XXX_Merge(src proto.Message) {
+func (m *TxnCommitTNShardRequest) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_TxnCommitDNShardRequest.Merge(m, src)
 }
-func (m *TxnCommitDNShardRequest) XXX_Size() int {
+func (m *TxnCommitTNShardRequest) XXX_Size() int {
 	return m.Size()
 }
-func (m *TxnCommitDNShardRequest) XXX_DiscardUnknown() {
+func (m *TxnCommitTNShardRequest) XXX_DiscardUnknown() {
 	xxx_messageInfo_TxnCommitDNShardRequest.DiscardUnknown(m)
 }
 
 var xxx_messageInfo_TxnCommitDNShardRequest proto.InternalMessageInfo
 
-func (m *TxnCommitDNShardRequest) GetDNShard() metadata.TNShard {
+func (m *TxnCommitTNShardRequest) GetDNShard() metadata.TNShard {
 	if m != nil {
 		return m.TNShard
 	}
@@ -1679,7 +1679,7 @@ func init() {
 	proto.RegisterType((*TxnPrepareResponse)(nil), "txn.TxnPrepareResponse")
 	proto.RegisterType((*TxnGetStatusRequest)(nil), "txn.TxnGetStatusRequest")
 	proto.RegisterType((*TxnGetStatusResponse)(nil), "txn.TxnGetStatusResponse")
-	proto.RegisterType((*TxnCommitDNShardRequest)(nil), "txn.TxnCommitDNShardRequest")
+	proto.RegisterType((*TxnCommitTNShardRequest)(nil), "txn.TxnCommitDNShardRequest")
 	proto.RegisterType((*TxnCommitTNShardResponse)(nil), "txn.TxnCommitDNShardResponse")
 	proto.RegisterType((*TxnRollbackTNShardRequest)(nil), "txn.TxnRollbackDNShardRequest")
 	proto.RegisterType((*TxnRollbackDNShardResponse)(nil), "txn.TxnRollbackDNShardResponse")
@@ -2697,7 +2697,7 @@ func (m *TxnGetStatusResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *TxnCommitDNShardRequest) Marshal() (dAtA []byte, err error) {
+func (m *TxnCommitTNShardRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -2707,12 +2707,12 @@ func (m *TxnCommitDNShardRequest) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *TxnCommitDNShardRequest) MarshalTo(dAtA []byte) (int, error) {
+func (m *TxnCommitTNShardRequest) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *TxnCommitDNShardRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TxnCommitTNShardRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -3311,7 +3311,7 @@ func (m *TxnGetStatusResponse) Size() (n int) {
 	return n
 }
 
-func (m *TxnCommitDNShardRequest) Size() (n int) {
+func (m *TxnCommitTNShardRequest) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -4507,7 +4507,7 @@ func (m *TxnRequest) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.CommitDNShardRequest == nil {
-				m.CommitDNShardRequest = &TxnCommitDNShardRequest{}
+				m.CommitDNShardRequest = &TxnCommitTNShardRequest{}
 			}
 			if err := m.CommitDNShardRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
@@ -5785,7 +5785,7 @@ func (m *TxnGetStatusResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *TxnCommitDNShardRequest) Unmarshal(dAtA []byte) error {
+func (m *TxnCommitTNShardRequest) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
