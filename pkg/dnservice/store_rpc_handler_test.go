@@ -155,7 +155,7 @@ func TestHandleRollbackDNShard(t *testing.T) {
 
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
 		req.RollbackDNShardRequest.TNShard.ReplicaID = 2
-		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, &txn.TxnResponse{}))
+		assert.NoError(t, s.handleRollbackTNShard(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -168,7 +168,7 @@ func TestHandleDNShardNotFound(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
 		resp := &txn.TxnResponse{}
-		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, resp))
+		assert.NoError(t, s.handleRollbackTNShard(context.Background(), &req, resp))
 		assert.Equal(t, uint32(moerr.ErrTNShardNotFound), resp.TxnError.Code)
 	})
 }

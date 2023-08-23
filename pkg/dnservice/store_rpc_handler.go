@@ -38,7 +38,7 @@ func (s *store) registerRPCHandlers() {
 	// request from other DN node
 	s.server.RegisterMethodHandler(txn.TxnMethod_Prepare, s.handlePrepare)
 	s.server.RegisterMethodHandler(txn.TxnMethod_CommitDNShard, s.handleCommitDNShard)
-	s.server.RegisterMethodHandler(txn.TxnMethod_RollbackTNShard, s.handleRollbackDNShard)
+	s.server.RegisterMethodHandler(txn.TxnMethod_RollbackTNShard, s.handleRollbackTNShard)
 	s.server.RegisterMethodHandler(txn.TxnMethod_GetStatus, s.handleGetStatus)
 
 	// debug request
@@ -148,7 +148,7 @@ func (s *store) handleCommitDNShard(ctx context.Context, request *txn.TxnRequest
 	return r.service.CommitDNShard(ctx, request, response)
 }
 
-func (s *store) handleRollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+func (s *store) handleRollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	r := s.validTNShard(ctx, request, response)
 	if r == nil {
 		return nil
