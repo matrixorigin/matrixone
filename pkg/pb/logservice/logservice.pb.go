@@ -3241,7 +3241,7 @@ func (m *InitialClusterRequest) GetNumOfLogShards() uint64 {
 	return 0
 }
 
-func (m *InitialClusterRequest) GetNumOfDNShards() uint64 {
+func (m *InitialClusterRequest) GetNumOfTNShards() uint64 {
 	if m != nil {
 		return m.NumOfTNShards
 	}
