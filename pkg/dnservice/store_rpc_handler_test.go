@@ -139,7 +139,7 @@ func TestHandleCommitDNShard(t *testing.T) {
 
 		req := service.NewTestCommitShardRequest(service.NewTestTxn(1, 1, 1))
 		req.CommitDNShardRequest.TNShard.ReplicaID = 2
-		assert.NoError(t, s.handleCommitDNShard(context.Background(), &req, &txn.TxnResponse{}))
+		assert.NoError(t, s.handleCommitTNShard(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
