@@ -633,7 +633,6 @@ func (data *CNCheckpointData) InitMetaIdx(ctx context.Context, version uint32, r
 		metaIdx := checkpointDataReferVersions[version][MetaIDX]
 		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
 		if err != nil {
-			logutil.Infof("lalala err is %v", err)
 			return err
 		}
 		data.bats[MetaIDX] = metaBats[0]
