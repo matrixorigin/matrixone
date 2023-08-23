@@ -130,7 +130,7 @@ func TestParseDnStores(t *testing.T) {
 		},
 	}
 
-	dnStores := parseDnState(cfg, tnState, currTick)
+	dnStores := parseTnState(cfg, tnState, currTick)
 	require.Equal(t, len(tnState.Stores), dnStores.length())
 	require.Equal(t, pb.DNService, dnStores.serviceType)
 	require.Equal(t, 1, len(dnStores.expired))
