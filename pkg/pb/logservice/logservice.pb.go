@@ -1165,7 +1165,7 @@ func (m *TNShardInfo) XXX_Unmarshal(b []byte) error {
 }
 func (m *TNShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_DNShardInfo.Marshal(b, m, deterministic)
+		return xxx_messageInfo_TNShardInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -1176,16 +1176,16 @@ func (m *TNShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 	}
 }
 func (m *TNShardInfo) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_DNShardInfo.Merge(m, src)
+	xxx_messageInfo_TNShardInfo.Merge(m, src)
 }
 func (m *TNShardInfo) XXX_Size() int {
 	return m.Size()
 }
 func (m *TNShardInfo) XXX_DiscardUnknown() {
-	xxx_messageInfo_DNShardInfo.DiscardUnknown(m)
+	xxx_messageInfo_TNShardInfo.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_DNShardInfo proto.InternalMessageInfo
+var xxx_messageInfo_TNShardInfo proto.InternalMessageInfo
 
 func (m *TNShardInfo) GetShardID() uint64 {
 	if m != nil {
