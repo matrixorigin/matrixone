@@ -391,7 +391,7 @@ func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	s.state.DNState.Update(hb, s.state.Tick)
+	s.state.TNState.Update(hb, s.state.Tick)
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -628,7 +628,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 	internal := &pb.CheckerState{
 		Tick:               s.state.Tick,
 		ClusterInfo:        s.state.ClusterInfo,
-		DNState:            s.state.DNState,
+		TNState:            s.state.TNState,
 		LogState:           s.state.LogState,
 		CNState:            s.state.CNState,
 		State:              s.state.State,
@@ -656,7 +656,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 	cfg.Fill()
 	cd := &pb.ClusterDetails{
 		CNStores:  make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
-		DNStores:  make([]pb.DNStore, 0, len(s.state.DNState.Stores)),
+		DNStores:  make([]pb.DNStore, 0, len(s.state.TNState.Stores)),
 		LogStores: make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
 	}
 	for uuid, info := range s.state.CNState.Stores {
@@ -678,7 +678,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
-	for uuid, info := range s.state.DNState.Stores {
+	for uuid, info := range s.state.TNState.Stores {
 		state := pb.NormalState
 		if cfg.DNStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState

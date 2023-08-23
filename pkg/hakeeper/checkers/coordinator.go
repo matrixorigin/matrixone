@@ -49,7 +49,7 @@ func NewCoordinator(cfg hakeeper.Config) *Coordinator {
 
 func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.ScheduleCommand {
 	logState := state.LogState
-	dnState := state.DNState
+	dnState := state.TNState
 	cnState := state.CNState
 	cluster := state.ClusterInfo
 	currentTick := state.Tick

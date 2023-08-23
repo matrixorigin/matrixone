@@ -209,7 +209,7 @@ func TestClusterAwareness(t *testing.T) {
 	defer cancel3()
 	state, err := c.GetClusterState(ctx3)
 	require.NoError(t, err)
-	require.Equal(t, dnSvcNum, len(state.DNState.Stores))
+	require.Equal(t, dnSvcNum, len(state.TNState.Stores))
 	require.Equal(t, logSvcNum, len(state.LogState.Stores))
 }
 
@@ -435,7 +435,7 @@ func TestClusterState(t *testing.T) {
 	defer cancel3()
 	state, err := c.GetClusterState(ctx3)
 	require.NoError(t, err)
-	require.Equal(t, dnSvcNum, len(state.DNState.Stores))
+	require.Equal(t, dnSvcNum, len(state.TNState.Stores))
 	require.Equal(t, logSvcNum, len(state.LogState.Stores))
 
 	// FIXME: validate the result list of dn shards

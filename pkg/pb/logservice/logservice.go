@@ -47,7 +47,7 @@ func NewRSMState() HAKeeperRSMState {
 		ScheduleCommands: make(map[string]CommandBatch),
 		LogShards:        make(map[string]uint64),
 		CNState:          NewCNState(),
-		DNState:          NewDNState(),
+		TNState:          NewDNState(),
 		LogState:         NewLogState(),
 		ClusterInfo:      newClusterInfo(),
 	}

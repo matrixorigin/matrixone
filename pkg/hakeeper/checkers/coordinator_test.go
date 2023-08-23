@@ -292,7 +292,7 @@ func TestFixExpiredStore(t *testing.T) {
 		output := coordinator.Check(c.idAlloc, pb.CheckerState{
 			Tick:        c.currentTick,
 			ClusterInfo: c.cluster,
-			DNState:     c.dn,
+			TNState:     c.dn,
 			LogState:    c.log,
 		})
 		assert.Equal(t, c.expected, output)
@@ -455,7 +455,7 @@ func TestFixZombie(t *testing.T) {
 		output := coordinator.Check(c.idAlloc, pb.CheckerState{
 			Tick:        c.tick,
 			ClusterInfo: c.cluster,
-			DNState:     c.dn,
+			TNState:     c.dn,
 			LogState:    c.log,
 		})
 		assert.Equal(t, c.expected, output)

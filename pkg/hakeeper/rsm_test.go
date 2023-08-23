@@ -158,7 +158,7 @@ func TestHandleDNHeartbeat(t *testing.T) {
 	cmd = GetDNStoreHeartbeatCmd(data)
 	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
-	s := tsm1.state.DNState
+	s := tsm1.state.TNState
 	assert.Equal(t, 1, len(s.Stores))
 	dninfo, ok := s.Stores[hb.UUID]
 	assert.True(t, ok)
@@ -366,10 +366,10 @@ func TestClusterDetailsQuery(t *testing.T) {
 		Tick:           2,
 		ServiceAddress: "addr2",
 	}
-	tsm.state.DNState = pb.TNStore{
+	tsm.state.TNState = pb.TNStore{
 		Stores: make(map[string]pb.DNStoreInfo),
 	}
-	tsm.state.DNState.Stores["uuid3"] = pb.DNStoreInfo{
+	tsm.state.TNState.Stores["uuid3"] = pb.DNStoreInfo{
 		Tick:           3,
 		ServiceAddress: "addr3",
 		Shards: []pb.DNShardInfo{

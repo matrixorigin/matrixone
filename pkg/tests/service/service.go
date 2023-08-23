@@ -418,7 +418,7 @@ func (c *testCluster) GetDNStoreInfo(
 	if err != nil {
 		return logpb.DNStoreInfo{}, err
 	}
-	stores := state.DNState.Stores
+	stores := state.TNState.Stores
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
@@ -493,7 +493,7 @@ func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
 	state := c.getClusterState()
 	require.NotNil(c.t, state)
 
-	dnStore, ok := state.DNState.Stores[uuid]
+	dnStore, ok := state.TNState.Stores[uuid]
 	if !ok {
 		return false, moerr.NewShardNotReportedNoCtx(uuid, 0xDEADBEEF)
 	}
@@ -662,7 +662,7 @@ func (c *testCluster) WaitDNShardsReported(ctx context.Context) {
 
 			expected := ParseExpectedDNShardCount(state.ClusterInfo)
 			reported := ParseReportedDNShardCount(
-				state.DNState, c.GetHAKeeperConfig(), state.Tick,
+				state.TNState, c.GetHAKeeperConfig(), state.Tick,
 			)
 
 			// FIXME: what about reported larger than expected
@@ -720,7 +720,7 @@ func (c *testCluster) WaitDNReplicaReported(ctx context.Context, shardID uint64)
 			}
 
 			reported := ParseDNShardReportedSize(
-				shardID, state.DNState, c.GetHAKeeperConfig(), state.Tick,
+				shardID, state.TNState, c.GetHAKeeperConfig(), state.Tick,
 			)
 			if reported >= DNShardExpectedSize {
 				return

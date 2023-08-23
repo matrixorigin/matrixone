@@ -144,7 +144,7 @@ func TestInitialShards(t *testing.T) {
 	require.Equal(t, 0, len(ids))
 }
 
-func TestParseDNState(t *testing.T) {
+func TestParseTNState(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make heartbeat tick expired
 	cfg := hakeeper.Config{}

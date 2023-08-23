@@ -3424,7 +3424,7 @@ func (m *LogState) GetStores() map[string]LogStoreInfo {
 type CheckerState struct {
 	Tick                 uint64             `protobuf:"varint,1,opt,name=Tick,proto3" json:"Tick,omitempty"`
 	ClusterInfo          ClusterInfo        `protobuf:"bytes,2,opt,name=ClusterInfo,proto3" json:"ClusterInfo"`
-	DNState              TNStore            `protobuf:"bytes,3,opt,name=DNState,proto3" json:"DNState"`
+	TNState              TNStore            `protobuf:"bytes,3,opt,name=DNState,proto3" json:"DNState"`
 	LogState             LogState           `protobuf:"bytes,4,opt,name=LogState,proto3" json:"LogState"`
 	CNState              CNState            `protobuf:"bytes,5,opt,name=CNState,proto3" json:"CNState"`
 	State                HAKeeperState      `protobuf:"varint,6,opt,name=State,proto3,enum=logservice.HAKeeperState" json:"State,omitempty"`
@@ -3486,7 +3486,7 @@ func (m *CheckerState) GetClusterInfo() ClusterInfo {
 
 func (m *CheckerState) GetDNState() TNStore {
 	if m != nil {
-		return m.DNState
+		return m.TNState
 	}
 	return TNStore{}
 }
@@ -3554,7 +3554,7 @@ type HAKeeperRSMState struct {
 	ScheduleCommands     map[string]CommandBatch `protobuf:"bytes,8,rep,name=ScheduleCommands,proto3" json:"ScheduleCommands" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	LogShards            map[string]uint64       `protobuf:"bytes,9,rep,name=LogShards,proto3" json:"LogShards,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
 	CNState              CNState                 `protobuf:"bytes,10,opt,name=CNState,proto3" json:"CNState"`
-	DNState              TNStore                 `protobuf:"bytes,11,opt,name=DNState,proto3" json:"DNState"`
+	TNState              TNStore                 `protobuf:"bytes,11,opt,name=DNState,proto3" json:"DNState"`
 	LogState             LogState                `protobuf:"bytes,12,opt,name=LogState,proto3" json:"LogState"`
 	ClusterInfo          ClusterInfo             `protobuf:"bytes,13,opt,name=ClusterInfo,proto3" json:"ClusterInfo"`
 	TaskTableUser        TaskTableUser           `protobuf:"bytes,14,opt,name=TaskTableUser,proto3" json:"TaskTableUser"`
@@ -3668,7 +3668,7 @@ func (m *HAKeeperRSMState) GetCNState() CNState {
 
 func (m *HAKeeperRSMState) GetDNState() TNStore {
 	if m != nil {
-		return m.DNState
+		return m.TNState
 	}
 	return TNStore{}
 }
@@ -6813,7 +6813,7 @@ func (m *CheckerState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i--
 	dAtA[i] = 0x22
 	{
-		size, err := m.DNState.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.TNState.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -6895,7 +6895,7 @@ func (m *HAKeeperRSMState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i--
 	dAtA[i] = 0x62
 	{
-		size, err := m.DNState.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.TNState.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -8352,7 +8352,7 @@ func (m *CheckerState) Size() (n int) {
 	}
 	l = m.ClusterInfo.Size()
 	n += 1 + l + sovLogservice(uint64(l))
-	l = m.DNState.Size()
+	l = m.TNState.Size()
 	n += 1 + l + sovLogservice(uint64(l))
 	l = m.LogState.Size()
 	n += 1 + l + sovLogservice(uint64(l))
@@ -8434,7 +8434,7 @@ func (m *HAKeeperRSMState) Size() (n int) {
 	}
 	l = m.CNState.Size()
 	n += 1 + l + sovLogservice(uint64(l))
-	l = m.DNState.Size()
+	l = m.TNState.Size()
 	n += 1 + l + sovLogservice(uint64(l))
 	l = m.LogState.Size()
 	n += 1 + l + sovLogservice(uint64(l))
@@ -16451,7 +16451,7 @@ func (m *CheckerState) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.DNState.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TNState.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -17306,7 +17306,7 @@ func (m *HAKeeperRSMState) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.DNState.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TNState.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

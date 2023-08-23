@@ -310,7 +310,7 @@ func (l *store) getScheduleCommand(check bool,
 		return l.checker.Check(l.alloc, *state), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
-	return m.Bootstrap(l.alloc, state.DNState, state.LogState)
+	return m.Bootstrap(l.alloc, state.TNState, state.LogState)
 }
 
 func (l *store) setTaskTableUser(user pb.TaskTableUser) error {
