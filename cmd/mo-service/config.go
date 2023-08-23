@@ -343,7 +343,7 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	return cfg
 }
 
-func (c *Config) getDNServiceConfig() dnservice.Config {
+func (c *Config) getTNServiceConfig() dnservice.Config {
 	cfg := c.TN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "dn-data", cfg.UUID)

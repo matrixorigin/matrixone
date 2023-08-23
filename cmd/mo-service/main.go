@@ -244,7 +244,7 @@ func startTNService(
 		defer serviceWG.Done()
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
-		c := cfg.getDNServiceConfig()
+		c := cfg.getTNServiceConfig()
 
 		s, err := dnservice.NewService(
 			perfCounterSet,

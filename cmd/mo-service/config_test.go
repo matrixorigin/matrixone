@@ -71,7 +71,7 @@ func TestParseDNConfig(t *testing.T) {
 	assert.Equal(t, 2, len(cfg.FileServices))
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
-	assert.Equal(t, 2, len(cfg.getDNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
+	assert.Equal(t, 2, len(cfg.getTNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
 }
 
 func TestFileServiceFactory(t *testing.T) {
