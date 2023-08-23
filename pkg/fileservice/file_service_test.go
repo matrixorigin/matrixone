@@ -36,6 +36,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -619,9 +620,11 @@ func testFileService(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 	})
 
-	t.Run("object", func(t *testing.T) {
+	t.Run("cache data", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		var counterSet perfcounter.CounterSet
+		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 		m := api.Int64Map{
 			M: map[int64]int64{
@@ -641,6 +644,7 @@ func testFileService(
 		})
 		assert.Nil(t, err)
 
+		// read with ToCacheData
 		vec := &IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -662,10 +666,29 @@ func testFileService(
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
 
+		cachedData := vec.Entries[0].CachedData
+		assert.NotNil(t, cachedData)
+		assert.Equal(t, data, cachedData.Bytes())
+
 		err = m.Unmarshal(vec.Entries[0].CachedData.Bytes())
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(m.M))
 		assert.Equal(t, int64(42), m.M[42])
+
+		// ReadCache
+		vec = &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: int64(len(data)),
+				},
+			},
+		}
+		err = fs.ReadCache(ctx, vec)
+		assert.Nil(t, err)
+		if vec.Entries[0].CachedData != nil {
+			assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
+		}
 
 	})
 

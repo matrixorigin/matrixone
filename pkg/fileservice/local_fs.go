@@ -345,12 +345,6 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		}
 	}
 
-	if l.diskCache != nil {
-		if err := l.diskCache.Read(ctx, vector); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 

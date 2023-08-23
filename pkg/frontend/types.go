@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
 const (
@@ -41,7 +43,7 @@ type (
 )
 
 type ComputationRunner interface {
-	Run(ts uint64) (err error)
+	Run(ts uint64) (*util.RunResult, error)
 }
 
 // ComputationWrapper is the wrapper of the computation
@@ -55,7 +57,7 @@ type ComputationWrapper interface {
 
 	GetColumns() ([]interface{}, error)
 
-	GetAffectedRows() uint64
+	// GetAffectedRows() uint64
 
 	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
 
