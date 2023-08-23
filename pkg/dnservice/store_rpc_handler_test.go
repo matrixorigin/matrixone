@@ -132,7 +132,7 @@ func TestHandleGetStatus(t *testing.T) {
 	})
 }
 
-func TestHandleCommitDNShard(t *testing.T) {
+func TestHandleCommitTNShard(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
 		shard := newTestTNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
