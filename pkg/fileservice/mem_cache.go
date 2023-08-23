@@ -130,9 +130,6 @@ func (m *MemCache) Read(
 		if entry.done {
 			continue
 		}
-		if entry.ToCacheData == nil {
-			continue
-		}
 		key := CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
@@ -186,7 +183,6 @@ func (m *MemCache) Update(
 		}
 
 		m.cache.Set(ctx, key, entry.CachedData)
-
 	}
 	return nil
 }
