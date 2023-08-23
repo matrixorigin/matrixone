@@ -126,6 +126,14 @@ func (e *TestEngine) ForceCheckpoint() {
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS())
 	assert.NoError(e.t, err)
 }
+
+func (e *TestEngine) ForceLongCheckpoint() {
+	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.StatMaxCommitTS(), context.Background(), 20*time.Second)
+	assert.NoError(e.t, err)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS())
+	assert.NoError(e.t, err)
+}
+
 func (e *TestEngine) DropRelation(t *testing.T) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
