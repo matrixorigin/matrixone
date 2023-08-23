@@ -239,7 +239,7 @@ func NewTestTxn(txnID byte, ts int64, shards ...uint64) txn.TxnMeta {
 		SnapshotTS: NewTestTimestamp(ts),
 	}
 	for _, shard := range shards {
-		txnMeta.DNShards = append(txnMeta.DNShards, NewTestTNShard(shard))
+		txnMeta.TNShards = append(txnMeta.TNShards, NewTestTNShard(shard))
 	}
 	return txnMeta
 }
@@ -284,7 +284,7 @@ func NewTestCommitShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 		Method: txn.TxnMethod_CommitDNShard,
 		Txn:    wTxn,
 		CommitDNShardRequest: &txn.TxnCommitDNShardRequest{
-			TNShard: wTxn.DNShards[0],
+			TNShard: wTxn.TNShards[0],
 		},
 	}
 }
@@ -295,7 +295,7 @@ func NewTestRollbackShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 		Method: txn.TxnMethod_RollbackTNShard,
 		Txn:    wTxn,
 		RollbackDNShardRequest: &txn.TxnRollbackDNShardRequest{
-			TNShard: wTxn.DNShards[0],
+			TNShard: wTxn.TNShards[0],
 		},
 	}
 }

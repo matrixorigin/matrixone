@@ -247,7 +247,7 @@ type TxnMeta struct {
 	CommitTS timestamp.Timestamp `protobuf:"bytes,5,opt,name=CommitTS,proto3" json:"CommitTS"`
 	// DNShards all DNShards that have written data. The first DN is the coordinator of the
 	// transaction
-	DNShards []metadata.TNShard `protobuf:"bytes,6,rep,name=DNShards,proto3" json:"DNShards"`
+	TNShards []metadata.TNShard `protobuf:"bytes,6,rep,name=DNShards,proto3" json:"DNShards"`
 	// LockTables For pessimistic transactions, LockTables record the bind metadata of the
 	// LockTable corresponding to the successful locking of the current transaction. This data
 	// is committed to the DN at Commit time, and the DN will check once if these bindings have
@@ -336,7 +336,7 @@ func (m *TxnMeta) GetCommitTS() timestamp.Timestamp {
 
 func (m *TxnMeta) GetDNShards() []metadata.TNShard {
 	if m != nil {
-		return m.DNShards
+		return m.TNShards
 	}
 	return nil
 }
@@ -1841,10 +1841,10 @@ func (m *TxnMeta) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0x3a
 		}
 	}
-	if len(m.DNShards) > 0 {
-		for iNdEx := len(m.DNShards) - 1; iNdEx >= 0; iNdEx-- {
+	if len(m.TNShards) > 0 {
+		for iNdEx := len(m.TNShards) - 1; iNdEx >= 0; iNdEx-- {
 			{
-				size, err := m.DNShards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				size, err := m.TNShards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
 				if err != nil {
 					return 0, err
 				}
@@ -2963,8 +2963,8 @@ func (m *TxnMeta) Size() (n int) {
 	n += 1 + l + sovTxn(uint64(l))
 	l = m.CommitTS.Size()
 	n += 1 + l + sovTxn(uint64(l))
-	if len(m.DNShards) > 0 {
-		for _, e := range m.DNShards {
+	if len(m.TNShards) > 0 {
+		for _, e := range m.TNShards {
 			l = e.Size()
 			n += 1 + l + sovTxn(uint64(l))
 		}
@@ -3627,8 +3627,8 @@ func (m *TxnMeta) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.DNShards = append(m.DNShards, metadata.TNShard{})
-			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.TNShards = append(m.TNShards, metadata.TNShard{})
+			if err := m.TNShards[len(m.TNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

@@ -362,7 +362,7 @@ func LogTxnCommittingFailed(
 	logger := getSkipLogger()
 
 	logger.Error("txn committing failed, retry later",
-		TxnDNShardField(txnMeta.DNShards[0]),
+		TxnDNShardField(txnMeta.TNShards[0]),
 		TxnField(txnMeta),
 		zap.Error(err))
 }

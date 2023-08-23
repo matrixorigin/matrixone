@@ -84,7 +84,7 @@ func TestHandleCommit(t *testing.T) {
 		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestCommitRequest(service.NewTestTxn(1, 1, 1))
-		req.Txn.DNShards[0].ReplicaID = 2
+		req.Txn.TNShards[0].ReplicaID = 2
 		assert.NoError(t, s.handleCommit(context.Background(), &req, &txn.TxnResponse{}))
 	})
 }
@@ -95,7 +95,7 @@ func TestHandleRollback(t *testing.T) {
 		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestRollbackRequest(service.NewTestTxn(1, 1, 1))
-		req.Txn.DNShards[0].ReplicaID = 2
+		req.Txn.TNShards[0].ReplicaID = 2
 		assert.NoError(t, s.handleRollback(context.Background(), &req, &txn.TxnResponse{}))
 	})
 }

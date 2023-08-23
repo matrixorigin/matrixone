@@ -345,9 +345,9 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 		}
 	}
 
-	for _, tn := range snapshot.Txn.DNShards {
+	for _, tn := range snapshot.Txn.TNShards {
 		has := false
-		for _, v := range tc.mu.txn.DNShards {
+		for _, v := range tc.mu.txn.TNShards {
 			if v.ShardID == tn.ShardID {
 				has = true
 				break
@@ -355,7 +355,7 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 		}
 
 		if !has {
-			tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, tn)
+			tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, tn)
 		}
 	}
 	if tc.mu.txn.SnapshotTS.Less(snapshot.Txn.SnapshotTS) {
@@ -446,7 +446,7 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		defer tc.unlock(ctx)
 	}
 
-	if len(tc.mu.txn.DNShards) == 0 {
+	if len(tc.mu.txn.TNShards) == 0 {
 		return nil
 	}
 
@@ -574,7 +574,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	}
 
 	if commit {
-		if len(tc.mu.txn.DNShards) == 0 { // commit no write handled txn
+		if len(tc.mu.txn.TNShards) == 0 { // commit no write handled txn
 			tc.mu.txn.Status = txn.TxnStatus_Committed
 			return nil, nil
 		}
@@ -607,12 +607,12 @@ func (tc *txnOperator) updateWritePartitions(requests []txn.TxnRequest, locked b
 }
 
 func (tc *txnOperator) addPartitionLocked(tn metadata.TNShard) {
-	for idx := range tc.mu.txn.DNShards {
-		if tc.mu.txn.DNShards[idx].ShardID == tn.ShardID {
+	for idx := range tc.mu.txn.TNShards {
+		if tc.mu.txn.TNShards[idx].ShardID == tn.ShardID {
 			return
 		}
 	}
-	tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, tn)
+	tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, tn)
 	util.LogTxnUpdated(tc.mu.txn)
 }
 

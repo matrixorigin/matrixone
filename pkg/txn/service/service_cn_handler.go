@@ -187,7 +187,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		return nil
 	}
 
-	if len(request.Txn.DNShards) == 0 {
+	if len(request.Txn.TNShards) == 0 {
 		s.logger.Fatal("commit with empty dn shards")
 	}
 
@@ -232,14 +232,14 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		return nil
 	}
 
-	newTxn.DNShards = request.Txn.DNShards
+	newTxn.TNShards = request.Txn.TNShards
 	changeStatus := func(status txn.TxnStatus) {
 		newTxn.Status = status
 		txnCtx.changeStatusLocked(status)
 	}
 
 	// fast path: write in only one DNShard.
-	if len(newTxn.DNShards) == 1 {
+	if len(newTxn.TNShards) == 1 {
 		util.LogTxnStart1PCCommit(newTxn)
 
 		commitTS, err := s.storage.Commit(ctx, newTxn)
@@ -263,7 +263,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	// 1. send prepare request to all DNShards.
 	// 2. start async commit task if all prepare succeed.
 	// 3. response to client txn committed.
-	for _, tn := range newTxn.DNShards {
+	for _, tn := range newTxn.TNShards {
 		txnCtx.mu.requests = append(txnCtx.mu.requests, txn.TxnRequest{
 			Txn:            newTxn,
 			Method:         txn.TxnMethod_Prepare,
@@ -299,17 +299,17 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		if resp.TxnError != nil {
 			txnErr = resp.TxnError
 			hasError = true
-			util.LogTxnPrepareFailedOn(newTxn, newTxn.DNShards[idx], txnErr)
+			util.LogTxnPrepareFailedOn(newTxn, newTxn.TNShards[idx], txnErr)
 			continue
 		}
 
 		if resp.Txn.PreparedTS.IsEmpty() {
 			s.logger.Fatal("missing prepared timestamp",
-				zap.String("target-dn-shard", newTxn.DNShards[idx].DebugString()),
+				zap.String("target-dn-shard", newTxn.TNShards[idx].DebugString()),
 				util.TxnIDFieldWithID(newTxn.ID))
 		}
 
-		util.LogTxnPrepareCompletedOn(newTxn, newTxn.DNShards[idx], resp.Txn.PreparedTS)
+		util.LogTxnPrepareCompletedOn(newTxn, newTxn.TNShards[idx], resp.Txn.PreparedTS)
 		if newTxn.CommitTS.Less(resp.Txn.PreparedTS) {
 			newTxn.CommitTS = resp.Txn.PreparedTS
 		}
@@ -341,7 +341,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 		return nil
 	}
 
-	if len(request.Txn.DNShards) == 0 {
+	if len(request.Txn.TNShards) == 0 {
 		s.logger.Fatal("rollback with empty dn shards")
 	}
 
@@ -364,7 +364,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 	}
 
 	response.Txn = &newTxn
-	newTxn.DNShards = request.Txn.DNShards
+	newTxn.TNShards = request.Txn.TNShards
 	s.startAsyncRollbackTask(newTxn)
 
 	response.Txn.Status = txn.TxnStatus_Aborted
@@ -375,8 +375,8 @@ func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
 	err := s.stopper.RunTask(func(ctx context.Context) {
 		util.LogTxnStartAsyncRollback(txnMeta)
 
-		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards))
-		for _, tn := range txnMeta.DNShards {
+		requests := make([]txn.TxnRequest, 0, len(txnMeta.TNShards))
+		for _, tn := range txnMeta.TNShards {
 			requests = append(requests, txn.TxnRequest{
 				Txn:                    txnMeta,
 				Method:                 txn.TxnMethod_RollbackTNShard,
@@ -429,8 +429,8 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 
 		util.LogTxnCommittingCompleted(txnMeta)
 
-		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards)-1)
-		for _, tn := range txnMeta.DNShards[1:] {
+		requests := make([]txn.TxnRequest, 0, len(txnMeta.TNShards)-1)
+		for _, tn := range txnMeta.TNShards[1:] {
 			requests = append(requests, txn.TxnRequest{
 				Txn:                  txnMeta,
 				Method:               txn.TxnMethod_CommitDNShard,

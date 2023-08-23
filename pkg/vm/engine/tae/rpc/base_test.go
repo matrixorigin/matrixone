@@ -68,7 +68,7 @@ func (h *mockHandle) HandleClose(ctx context.Context) error {
 
 func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) (timestamp.Timestamp, error) {
 	//2PC
-	if len(meta.DNShards) > 1 && meta.CommitTS.IsEmpty() {
+	if len(meta.TNShards) > 1 && meta.CommitTS.IsEmpty() {
 		meta.CommitTS = meta.PreparedTS.Next()
 	}
 	return h.Handle.HandleCommit(ctx, *meta)
@@ -185,8 +185,8 @@ func mock2PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
-	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(1))
-	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(2))
+	txnMeta.TNShards = append(txnMeta.TNShards, mockDNShard(1))
+	txnMeta.TNShards = append(txnMeta.TNShards, mockDNShard(2))
 	return txnMeta
 }
 

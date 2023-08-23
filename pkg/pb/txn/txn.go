@@ -140,10 +140,10 @@ func (m TxnMeta) DebugString() string {
 		buffer.WriteString(m.CommitTS.DebugString())
 	}
 
-	n := len(m.DNShards)
+	n := len(m.TNShards)
 	var buf bytes.Buffer
 	buf.WriteString("/<")
-	for idx, tn := range m.DNShards {
+	for idx, tn := range m.TNShards {
 		buf.WriteString(tn.DebugString())
 		if idx < n-1 {
 			buf.WriteString(", ")
@@ -159,9 +159,9 @@ func (m TxnRequest) GetTargetDN() metadata.TNShard {
 	case TxnMethod_Read, TxnMethod_Write, TxnMethod_DEBUG:
 		return m.CNRequest.Target
 	case TxnMethod_Commit:
-		return m.Txn.DNShards[0]
+		return m.Txn.TNShards[0]
 	case TxnMethod_Rollback:
-		return m.Txn.DNShards[0]
+		return m.Txn.TNShards[0]
 	case TxnMethod_Prepare:
 		return m.PrepareRequest.TNShard
 	case TxnMethod_GetStatus:

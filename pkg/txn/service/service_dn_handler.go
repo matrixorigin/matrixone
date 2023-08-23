@@ -59,7 +59,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 		return nil
 	}
 
-	newTxn.DNShards = request.Txn.DNShards
+	newTxn.TNShards = request.Txn.TNShards
 	ts, err := s.storage.Prepare(ctx, newTxn)
 	if err != nil {
 		response.TxnError = txn.WrapError(err, moerr.ErrTAEPrepare)
