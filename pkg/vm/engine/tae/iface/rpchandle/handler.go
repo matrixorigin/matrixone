@@ -97,4 +97,11 @@ type Handler interface {
 		req *db.FaultPoint,
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
+
+	HandleBackup(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.Checkpoint,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 }

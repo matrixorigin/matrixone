@@ -424,6 +424,36 @@ func (h *Handle) HandleForceCheckpoint(
 	return nil, err
 }
 
+func (h *Handle) HandleBackup(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.Checkpoint,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	timeout := req.FlushDuration
+
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	currTs = types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	var locations string
+	for i := range data {
+		locations += data[i].GetLocation().String()
+		locations += ":"
+		locations += fmt.Sprintf("%d", data[i].GetVersion())
+		locations += ";"
+	}
+	resp.CkpLocation = locations
+	return nil, err
+}
+
 func (h *Handle) HandleInspectDN(
 	ctx context.Context,
 	meta txn.TxnMeta,
