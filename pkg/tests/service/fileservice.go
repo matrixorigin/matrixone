@@ -86,7 +86,7 @@ func (f *fileServices) assertFileServiceLocked() {
 	assert.Equal(f.t, f.cnServiceNum, len(f.cnLocalFSs))
 }
 
-// getTNLocalFileService gets local FileService for DN service.
+// getTNLocalFileService gets local FileService for TN service.
 func (f *fileServices) getTNLocalFileService(index int) fileservice.FileService {
 	f.RLock()
 	defer f.RUnlock()
@@ -111,7 +111,7 @@ func (f *fileServices) getCNLocalFileService(index int) fileservice.FileService 
 	return f.cnLocalFSs[index]
 }
 
-// getS3FileService gets S3 FileService for all DN services.
+// getS3FileService gets S3 FileService for all TN services.
 func (f *fileServices) getS3FileService() fileservice.FileService {
 	f.RLock()
 	defer f.RUnlock()
@@ -119,7 +119,7 @@ func (f *fileServices) getS3FileService() fileservice.FileService {
 	return f.s3FS
 }
 
-// getETLFileService gets ETL FileService for all DN services.
+// getETLFileService gets ETL FileService for all TN services.
 func (f *fileServices) getETLFileService() fileservice.FileService {
 	f.RLock()
 	defer f.RUnlock()

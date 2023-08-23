@@ -55,7 +55,7 @@ type Client interface {
 	Config() ClientConfig
 	// GetLogRecord returns a new LogRecord instance with its Data field enough
 	// to hold payloadLength bytes of payload. The layout of the Data field is
-	// 4 bytes of record type (pb.UserEntryUpdate) + 8 bytes DN replica ID +
+	// 4 bytes of record type (pb.UserEntryUpdate) + 8 bytes TN replica ID +
 	// payloadLength bytes of actual payload.
 	GetLogRecord(payloadLength int) pb.LogRecord
 	// Append appends the specified LogRecord into the Log Service. On success, the

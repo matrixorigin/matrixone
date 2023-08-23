@@ -85,13 +85,13 @@ type Config struct {
 	// no port value in it.
 	ServiceHost string `toml:"service-host"`
 	// ServiceAddress is log service's service address that can be reached by
-	// other nodes such as DN nodes. It is deprecated and will be removed.
+	// other nodes such as TN nodes. It is deprecated and will be removed.
 	ServiceAddress string `toml:"logservice-address"`
 	// ServiceListenAddress is the local listen address of the ServiceAddress.
 	// It is deprecated and will be removed.
 	ServiceListenAddress string `toml:"logservice-listen-address"`
 	// ServicePort is log service's service address port that can be reached by
-	// other nodes such as DN nodes.
+	// other nodes such as TN nodes.
 	LogServicePort int `toml:"logservice-port"`
 	// RaftAddress is the address that can be reached by other log service nodes
 	// via their raft layer. It is deprecated and will be removed.
@@ -159,7 +159,7 @@ type Config struct {
 		BootstrapCluster bool `toml:"bootstrap-cluster"`
 		// NumOfLogShards defines the number of Log shards in the initial deployment.
 		NumOfLogShards uint64 `toml:"num-of-log-shards"`
-		// NumOfTNShards defines the number of DN shards in the initial deployment.
+		// NumOfTNShards defines the number of TN shards in the initial deployment.
 		// The count must be the same as NumOfLogShards in the current implementation.
 		NumOfTNShards uint64 `toml:"num-of-tn-shards"`
 		// NumOfLogShardReplicas is the number of replicas for each shard managed by
@@ -520,7 +520,7 @@ type ClientConfig struct {
 	ReadOnly bool
 	// LogShardID is the shard ID of the log service shard to be used.
 	LogShardID uint64
-	// TNReplicaID is the replica ID of the DN that owns the created client.
+	// TNReplicaID is the replica ID of the TN that owns the created client.
 	TNReplicaID uint64
 	// DiscoveryAddress is the Log Service discovery address provided by k8s.
 	DiscoveryAddress string

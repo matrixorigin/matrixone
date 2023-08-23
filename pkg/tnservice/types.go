@@ -34,7 +34,7 @@ const (
 // Option store option
 type Option func(*store)
 
-// Service DN Service
+// Service TN Service
 type Service interface {
 	// Start start tn store. Start all DNShards currently managed by the Store and listen
 	// to and process requests from CN and other DNs.

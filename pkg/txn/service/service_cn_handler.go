@@ -54,7 +54,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 	s.waitClockTo(request.Txn.SnapshotTS)
 
 	// We do not write transaction information to sync.Map during read operations because commit and abort
-	// for read-only transactions are not sent to the DN node, so there is no way to clean up the transaction
+	// for read-only transactions are not sent to the TN node, so there is no way to clean up the transaction
 	// information in sync.Map.
 	result, err := s.storage.Read(ctx, request.Txn, request.CNRequest.OpCode, request.CNRequest.Payload)
 	if err != nil {

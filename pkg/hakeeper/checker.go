@@ -20,7 +20,7 @@ import (
 )
 
 type IDAllocator interface {
-	// Next returns a new ID that can be used as the replica ID of a DN shard or
+	// Next returns a new ID that can be used as the replica ID of a TN shard or
 	// Log shard. When the return boolean value is false, it means no more ID
 	// can be allocated at this time.
 	Next() (uint64, bool)

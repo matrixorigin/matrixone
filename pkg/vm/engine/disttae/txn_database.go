@@ -206,7 +206,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		/*
 			Even if the created table in the createMap, there is an
 			INSERT entry in the CN workspace. We need add a DELETE
-			entry in the CN workspace to tell the DN to delete the
+			entry in the CN workspace to tell the TN to delete the
 			table.
 			CORNER CASE
 			begin;

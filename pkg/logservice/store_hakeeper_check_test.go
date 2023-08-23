@@ -275,7 +275,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 
 func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 	fn := func(t *testing.T, services []*Service) {
-		// bootstrap the cluster, 1 DN 1 Log shard, Log and HAKeeper have
+		// bootstrap the cluster, 1 TN 1 Log shard, Log and HAKeeper have
 		// 3 replicas
 		store1 := services[0].store
 		state, err := store1.getCheckerState()
@@ -315,7 +315,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		}
 		sendHeartbeat(services[:3])
 
-		// fake a DN store
+		// fake a TN store
 		tnMsg := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
 			Shards: make([]pb.TNShardInfo, 0),
@@ -381,7 +381,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 			}
 		}
 
-		// get the DN bootstrap command, it contains DN shard and replica ID
+		// get the TN bootstrap command, it contains TN shard and replica ID
 		cb, err := leaderStore.getCommandBatch(ctx, tnMsg.UUID)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(cb.Commands))
@@ -393,10 +393,10 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 			ReplicaID: cmd.ConfigChange.Replica.ReplicaID,
 		}
 		tnMsg.Shards = append(tnMsg.Shards, tnShardInfo)
-		// as if DN is running
+		// as if TN is running
 		_, err = services[0].store.addTNStoreHeartbeat(ctx, tnMsg)
 		require.NoError(t, err)
-		// fake a free DN store
+		// fake a free TN store
 		tnMsg2 := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
 			Shards: make([]pb.TNShardInfo, 0),

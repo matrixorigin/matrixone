@@ -745,7 +745,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 	v := ctx.Value(defines.PkCheckByTN{})
 	for _, e := range writes {
 		//SKIP update/delete on mo_columns
-		//The DN does not counsume the update/delete on mo_columns.
+		//The TN does not counsume the update/delete on mo_columns.
 		//there are update/delete entries on mo_columns just after one on mo_tables.
 		//case 1: (DELETE,MO_TABLES),(UPDATE/DELETE,MO_COLUMNS),(UPDATE/DELETE,MO_COLUMNS),...
 		//there is none update/delete entries on mo_columns just after one on mo_tables.

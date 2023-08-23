@@ -58,7 +58,7 @@ func firstError(err1 error, err2 error) error {
 // Service is the top layer component of a log service node. It manages the
 // underlying log store which in turn manages all log shards including the
 // HAKeeper shard. The Log Service component communicates with LogService
-// clients owned by DN nodes and the HAKeeper service via network, it can
+// clients owned by TN nodes and the HAKeeper service via network, it can
 // be considered as the interface layer of the LogService.
 type Service struct {
 	cfg         Config

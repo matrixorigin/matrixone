@@ -16,7 +16,7 @@ package dnservice
 
 import "github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 
-// filterOutFull filter out full DN store
+// filterOutFull filter out full TN store
 type filterOutFull struct {
 }
 

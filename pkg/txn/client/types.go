@@ -68,7 +68,7 @@ type TxnClient interface {
 // requests for transactions, and handling distributed transactions across DN
 // nodes.
 // Note: For Error returned by Read/Write/WriteAndCommit/Commit/Rollback, need
-// to check if it is a moerr.ErrDNShardNotFound error, if so, the DN information
+// to check if it is a moerr.ErrDNShardNotFound error, if so, the TN information
 // held is out of date and needs to be reloaded by HAKeeper.
 type TxnOperator interface {
 	// Txn returns the current txn metadata
@@ -91,20 +91,20 @@ type TxnOperator interface {
 	// operation information.
 	ApplySnapshot(data []byte) error
 	// Read transaction read operation, the operator routes the message based
-	// on the given DN node information and waits for the read data synchronously.
+	// on the given TN node information and waits for the read data synchronously.
 	// The transaction has been aborted if ErrTxnAborted returned.
 	// After use, SendResult needs to call the Release method
 	Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// Write transaction write operation, and the operator will record the DN
 	// nodes written by the current transaction, and when it finds that multiple
-	// DN nodes are written, it will start distributed transaction processing.
+	// TN nodes are written, it will start distributed transaction processing.
 	// The transaction has been aborted if ErrTxnAborted returned.
 	// After use, SendResult needs to call the Release method
 	Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// WriteAndCommit is similar to Write, but commit the transaction after write.
 	// After use, SendResult needs to call the Release method
 	WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
-	// Commit the transaction. If data has been written to multiple DN nodes, a
+	// Commit the transaction. If data has been written to multiple TN nodes, a
 	// 2pc distributed transaction commit process is used.
 	Commit(ctx context.Context) error
 	// Rollback the transaction.
@@ -150,14 +150,14 @@ func SetupRuntimeTxnOptions(
 }
 
 // TimestampWaiter is used to wait for the timestamp to reach a specified timestamp.
-// In the Push mode of LogTail's Event, the DN pushes the logtail to the subscribed
+// In the Push mode of LogTail's Event, the TN pushes the logtail to the subscribed
 // CN once a transaction has been Committed. So there is a actual wait (last push commit
 // ts >= start ts). This is unfriendly to TP, so we can lose some freshness and use the
-// latest commit ts received from the current DN push as the start ts of the transaction,
+// latest commit ts received from the current TN push as the start ts of the transaction,
 // which eliminates this physical wait.
 type TimestampWaiter interface {
 	// GetTimestamp get the latest commit ts as snapshot ts of the new txn. It will keep
-	// blocking if latest commit timestamp received from DN is less than the given value.
+	// blocking if latest commit timestamp received from TN is less than the given value.
 	GetTimestamp(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
 	// NotifyLatestCommitTS notify the latest timestamp that received from DN. A applied logtail
 	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and tn is

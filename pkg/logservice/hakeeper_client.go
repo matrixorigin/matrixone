@@ -39,7 +39,7 @@ type basicHAKeeperClient interface {
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 	// AllocateIDByKey allocate a globally unique ID by key.
 	AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error)
-	// GetClusterDetails queries the HAKeeper and return CN and DN nodes that are
+	// GetClusterDetails queries the HAKeeper and return CN and TN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
 	// GetClusterState queries the cluster state
@@ -59,12 +59,12 @@ type CNHAKeeperClient interface {
 	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error)
 }
 
-// TNHAKeeperClient is the HAKeeper client used by a DN store.
+// TNHAKeeperClient is the HAKeeper client used by a TN store.
 type TNHAKeeperClient interface {
 	basicHAKeeperClient
 	// SendTNHeartbeat sends the specified heartbeat message to the HAKeeper. The
 	// returned CommandBatch contains Schedule Commands to be executed by the local
-	// DN store.
+	// TN store.
 	SendTNHeartbeat(ctx context.Context, hb pb.TNStoreHeartbeat) (pb.CommandBatch, error)
 }
 
@@ -115,7 +115,7 @@ func NewCNHAKeeperClient(ctx context.Context,
 	return newManagedHAKeeperClient(ctx, cfg)
 }
 
-// NewTNHAKeeperClient creates a HAKeeper client to be used by a DN node.
+// NewTNHAKeeperClient creates a HAKeeper client to be used by a TN node.
 //
 // NB: caller could specify options for morpc.Client via ctx.
 func NewTNHAKeeperClient(ctx context.Context,

@@ -35,7 +35,7 @@ func (s *store) registerRPCHandlers() {
 	s.server.RegisterMethodHandler(txn.TxnMethod_Commit, s.handleCommit)
 	s.server.RegisterMethodHandler(txn.TxnMethod_Rollback, s.handleRollback)
 
-	// request from other DN node
+	// request from other TN node
 	s.server.RegisterMethodHandler(txn.TxnMethod_Prepare, s.handlePrepare)
 	s.server.RegisterMethodHandler(txn.TxnMethod_CommitTNShard, s.handleCommitTNShard)
 	s.server.RegisterMethodHandler(txn.TxnMethod_RollbackTNShard, s.handleRollbackTNShard)

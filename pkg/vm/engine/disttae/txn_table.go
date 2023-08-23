@@ -603,7 +603,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 //      2>. partition state data resides in memory. read by partitionReader.
 
 //      deletes(rowids) for committed block exist in the following four places:
-//      1. in delta location formed by DN writing S3. read by blockReader.
+//      1. in delta location formed by TN writing S3. read by blockReader.
 //      2. in CN's partition state, read by partitionReader.
 //  	3. in txn's workspace(txn.writes) being deleted by txn, read by partitionReader.
 //  	4. in delta location being deleted through CN writing S3, read by blockMergeReader.
@@ -1019,9 +1019,9 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 //	blkId(string)     deltaLoc(string)                   type(int)
 //
 // |-----------|-----------------------------------|----------------|
-// |  blk_id   |   batch.Marshal(deltaLoc)         |  FlushDeltaLoc | DN Block
+// |  blk_id   |   batch.Marshal(deltaLoc)         |  FlushDeltaLoc | TN Block
 // |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
-// |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | DN Blcok
+// |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | TN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
 func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	blkId, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])

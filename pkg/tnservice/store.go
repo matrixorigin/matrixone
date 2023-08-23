@@ -120,7 +120,7 @@ type store struct {
 	addressMgr address.AddressManager
 }
 
-// NewService create DN Service
+// NewService create TN Service
 func NewService(
 	perfCounter *perfcounter.CounterSet,
 	cfg *Config,

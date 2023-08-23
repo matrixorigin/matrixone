@@ -196,7 +196,7 @@ type VarScopeKey struct{}
 // Determine if it is a stored procedure
 type InSp struct{}
 
-// PkCheckByTN whether DN does primary key uniqueness check against transaction's workspace or not.
+// PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
 
 /*

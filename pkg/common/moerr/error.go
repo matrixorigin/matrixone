@@ -174,7 +174,7 @@ const (
 	ErrUnresolvedConflict uint16 = 20603
 	// ErrTxnError TxnError wrapper
 	ErrTxnError uint16 = 20604
-	// ErrTNShardNotFound DNShard not found, need to get the latest DN list from HAKeeper
+	// ErrTNShardNotFound DNShard not found, need to get the latest TN list from HAKeeper
 	ErrTNShardNotFound  uint16 = 20605
 	ErrShardNotReported uint16 = 20606
 	// Generic TAE error
@@ -359,7 +359,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
 	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
 	ErrBackendClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState},
-		"the connection between CN and DN has been disconnected"},
+		"the connection between CN and TN has been disconnected"},
 	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
 	ErrNoAvailableBackend:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
 	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend"},

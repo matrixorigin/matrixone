@@ -112,13 +112,13 @@ func WithTxnCreateBy(createBy string) TxnOption {
 }
 
 // WithTxnCacheWrite Set cache write requests, after each Write call, the request will not be sent
-// to the DN node immediately, but stored in the Coordinator's memory, and the Coordinator will
+// to the TN node immediately, but stored in the Coordinator's memory, and the Coordinator will
 // choose the right time to send the cached requests. The following scenarios trigger the sending
 // of requests to DN:
 //  1. Before read, because the Coordinator is not aware of the format and content of the written data,
-//     it is necessary to send the cached write requests to the corresponding DN node each time Read is
+//     it is necessary to send the cached write requests to the corresponding TN node each time Read is
 //     called, used to implement "read your write".
-//  2. Before commit, obviously, the cached write requests needs to be sent to the corresponding DN node
+//  2. Before commit, obviously, the cached write requests needs to be sent to the corresponding TN node
 //     before commit.
 func WithTxnCacheWrite() TxnOption {
 	return func(tc *txnOperator) {
